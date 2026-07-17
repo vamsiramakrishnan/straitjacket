@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ctx.example/schemas/mcp-request-v1.json",
+  "title": "CTX bounded MCP request",
+  "type": "object",
+  "required": [
+    "op"
+  ],
+  "properties": {
+    "op": {
+      "enum": [
+        "search",
+        "get",
+        "stats",
+        "repo",
+        "doctor"
+      ]
+    },
+    "workspace": {
+      "type": "string"
+    },
+    "ref": {
+      "type": "string"
+    },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16
+    },
+    "selector": {
+      "type": "object"
+    },
+    "options": {
+      "type": "object"
+    },
+    "maxTokens": {
+      "type": "integer",
+      "minimum": 64,
+      "maximum": 4000
+    }
+  },
+  "additionalProperties": false
+}

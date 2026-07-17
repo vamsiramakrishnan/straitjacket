@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ctx-harness"
+version = "0.5.0"
+description = "straitjacket: artifact-backed, repository-aware context containment harness for Antigravity. Unbounded tool output becomes an immutable artifact plus a bounded deterministic digest."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "straitjacket contributors" }]
+keywords = ["antigravity", "context", "agent", "harness", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+# The PreToolUse hook hot path stays stdlib-only (hook.py imports no third-
+# party code). pathspec is a small pure-Python dep used off the hot path for
+# correct gitignore-semantics matching; ripgrep is used opportunistically at
+# runtime when present on PATH (never required).
+dependencies = ["pathspec>=0.12"]
+
+[project.scripts]
+ctx = "ctx.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "jsonschema>=4"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ctx"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"plugins/antigravity" = "ctx/data/antigravity"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/ctx", "plugins", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

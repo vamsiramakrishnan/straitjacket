@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ctx.example/schemas/invocation-v1.json",
+  "title": "CTX invocation manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "workspaceId",
+    "cwd",
+    "argv",
+    "shell",
+    "result",
+    "streams",
+    "digest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ctx.invocation/v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "workspaceId": {
+      "type": "string",
+      "minLength": 8
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "argv": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "shell": {
+      "type": "boolean"
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "exitCode",
+        "timedOut"
+      ],
+      "properties": {
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "streams": {
+      "type": "object",
+      "required": [
+        "stdout",
+        "stderr"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/stream"
+      }
+    },
+    "source": {
+      "type": "object"
+    },
+    "digest": {
+      "type": "object",
+      "required": [
+        "profile",
+        "policy",
+        "focusHash",
+        "bytesHash"
+      ],
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "policy": {
+          "type": "string"
+        },
+        "focusHash": {
+          "type": "string"
+        },
+        "bytesHash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "stream": {
+      "type": "object",
+      "required": [
+        "blob",
+        "bytes",
+        "lines",
+        "mediaType"
+      ],
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mediaType": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
