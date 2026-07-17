@@ -180,3 +180,38 @@ def test_interpreter_bypass_channel_denied(tmp_path):
         tmp_path,
     )
     assert d["decision"] in ("deny", "force_ask")
+
+
+def test_claude_code_flavor_schema():
+    import subprocess as sp
+
+    payload = json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": "pytest -q"}, "cwd": "/tmp"}
+    )
+    import os
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(SRC)
+    proc = sp.run(
+        [sys.executable, "-m", "ctx", "hook", "claude-code", "pre-tool-use"],
+        input=payload.encode(),
+        capture_output=True,
+        env=env,
+        timeout=30,
+    )
+    lines = [ln for ln in proc.stdout.decode().splitlines() if ln.strip()]
+    assert len(lines) == 1
+    out = json.loads(lines[0])
+    hso = out["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["permissionDecision"] == "deny"
+    assert "ctx run -- pytest -q" in hso["permissionDecisionReason"]
+
+
+def test_claude_code_flavor_allow_is_valid():
+    from ctx.hook import _to_claude_code_schema
+
+    out = _to_claude_code_schema({"decision": "allow"})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    out2 = _to_claude_code_schema({"decision": "force_ask", "reason": "why"})
+    assert out2["hookSpecificOutput"]["permissionDecision"] == "ask"

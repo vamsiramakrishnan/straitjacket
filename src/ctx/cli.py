@@ -14,11 +14,11 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
 
     # ------------------------------------------------------ hook fast path
-    if len(args) >= 3 and args[0] == "hook" and args[1] == "antigravity":
+    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code"):
         if args[2] == "pre-tool-use":
             from ctx.hook import main_pre_tool_use
 
-            return main_pre_tool_use()
+            return main_pre_tool_use(flavor=args[1])
         # Unknown hook stage: still emit exactly one valid decision.
         sys.stdout.write('{"decision":"allow"}\n')
         return 0

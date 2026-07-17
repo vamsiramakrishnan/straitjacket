@@ -387,9 +387,28 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
     return dict(DECISION_ALLOW)
 
 
-def main_pre_tool_use() -> int:
-    """Entry point for ``ctx hook antigravity pre-tool-use``. Reads one JSON
-    payload on stdin, writes exactly one JSON decision on stdout."""
+def _to_claude_code_schema(decision: dict[str, str]) -> dict[str, Any]:
+    """Translate the canonical decision into Claude Code's PreToolUse hook
+    schema (hookSpecificOutput.permissionDecision: allow|deny|ask)."""
+    mapping = {"allow": "allow", "deny": "deny", "force_ask": "ask"}
+    out: dict[str, Any] = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": mapping.get(decision.get("decision", "allow"), "allow"),
+        }
+    }
+    if decision.get("reason"):
+        out["hookSpecificOutput"]["permissionDecisionReason"] = decision["reason"]
+    return out
+
+
+def main_pre_tool_use(flavor: str = "antigravity") -> int:
+    """Entry point for ``ctx hook <flavor> pre-tool-use``. Reads one JSON
+    payload on stdin, writes exactly one JSON decision on stdout.
+
+    Flavors: ``antigravity`` (spec schema) and ``claude-code``
+    (hookSpecificOutput schema). Classification logic is identical.
+    """
     internal_error_policy = "allow"
     try:
         raw = sys.stdin.read()
@@ -404,7 +423,10 @@ def main_pre_tool_use() -> int:
             decision = _deny("CTX_CONTEXT_GUARD: internal guard error (fail-closed policy)")
         else:
             decision = dict(DECISION_ALLOW)
-    sys.stdout.write(json.dumps(decision, sort_keys=True))
+    emitted: dict[str, Any] = (
+        _to_claude_code_schema(decision) if flavor == "claude-code" else decision
+    )
+    sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
     sys.stdout.flush()
     return 0
