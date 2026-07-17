@@ -1,0 +1,5 @@
+{
+  "name": "ctx-harness",
+  "description": "Repo-aware context artifact harness: routes potentially unbounded command and file output through deterministic digest-plus-handle workflows.",
+  "version": "0.1.0"
+}

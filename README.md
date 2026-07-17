@@ -164,49 +164,73 @@ When operating in Plugin or Native Harness configurations, straitjacket evaluate
 ## 📂 Source Code Layout
 
 ```
-ctx-harness/
-├── src/
-│   └── ctx/
-│       ├── cli.py               # User interface layer
-│       ├── mcp.py               # MCP Server integration
-│       ├── broker.py            # Local capability coordinator
-│       ├── scope/               # Worktree, alias, and path isolation
-│       ├── artifacts/           # CAS, catalogs (SQLite WAL), and leases
-│       ├── execution/           # Subprocess runners and environment control
-│       ├── digest/              # Profile classification engines (pytest, logs, etc.)
-│       └── retrieval/           # High-speed search engines and line slicing
-├── plugins/
-│   └── antigravity/             # JSON configs, extension hooks, and rule assets
-└── tests/                       # Complete determinism and security test fixtures
+straitjacket/
+├── src/ctx/
+│   ├── cli.py               # Lazy-dispatch CLI; hook fast path bypasses argparse
+│   ├── hook.py              # PreToolUse classifier (stdlib-only hot path, ~40ms)
+│   ├── mcp.py               # Bounded MCP stdio server (single `ctx` tool, op discriminator)
+│   ├── workspace.py         # Resolution order, identity, path confinement
+│   ├── store.py             # CAS blobs, SQLite WAL catalog, leases, gc
+│   ├── execution.py         # Birth-time capture runner (spooled, never in memory)
+│   ├── refs.py              # run:/blob:/snapshot:/repo:/ws: reference grammar
+│   ├── retrieval.py         # search / get / stats with budgets + continuations
+│   ├── textutil.py          # ANSI stripping, deterministic redaction, budgets
+│   ├── config.py            # ctx.toml policy loading
+│   ├── installer.py         # Plugin rendering, init, doctor
+│   └── digest/              # Deterministic profiles: text, json, jsonl, pytest
+├── plugins/antigravity/     # Plugin template: plugin.json, hooks.json, mcp_config.json, skill
+├── spec/                    # Normative SPEC, acceptance suite, ADRs, wire schemas
+└── tests/                   # Acceptance-oriented determinism & security suite
 ```
 
 ## 🚀 Setup & Installation
 
-### Global Plugin Installation
-To install the containment layer into your global Antigravity engine profile:
+Zero runtime dependencies — pure stdlib Python ≥3.11, so the per-tool-call
+hook stays fast and `uv tool install` is instant.
 
 ```bash
-agy plugin install /path/to/straitjacket
+# Install the runtime once.
+uv tool install ctx-harness      # or: pip install -e .
+
+# Render the repo-scoped plugin (absolute executable paths baked in).
+ctx antigravity install --scope workspace --workspace .
+
+# Write committed policy (ctx.toml) and capture exclusions (.ctxignore).
+ctx init
 ```
 
+The installer renders into `<repo>/.agents/plugins/ctx-harness/` with the
+skill embedded — one installation activates all surfaces. It refuses to
+install alongside a standalone `.agents/skills/ctx-harness` (SPEC §4.3).
+
 ### Repository Configuration
-Commit a `.ctx.toml` file to your target project roots to specify token budgets, ignore patterns, and safety constraints:
+Commit a `ctx.toml` at the workspace root:
 
 ```toml
-schema = 1
-mode = "guard"
-digest_tokens = 450
-evidence_tokens = 1200
+version = 1
 
-[run]
-timeout_seconds = 600
-shell = "ask"
-redact_names = ["*TOKEN*", "*KEY*", "*SECRET*"]
+[budgets]
+digest_tokens = 480
+result_tokens = 1200
+turn_retrieval_tokens = 2800
+max_inline_bytes = 16384
+
+[guard]
+mode = "guarded"               # advisory | guarded | strict
+unknown_command = "force_ask"
+internal_error = "allow"       # fail-open: a broken guard must not brick the workspace
 ```
 
 ### Operational Checkup
-Verify hook integrity, active path configurations, and broker access permissions at any time:
+Verify hook integrity, plugin manifests, store access, and classifier behavior:
 
 ```bash
 ctx doctor --antigravity
+```
+
+### Development
+
+```bash
+pip install -e '.[dev]'
+pytest        # acceptance-oriented suite: determinism, budgets, hook contract, escapes
 ```

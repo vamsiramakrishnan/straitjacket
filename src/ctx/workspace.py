@@ -1,0 +1,261 @@
+"""Workspace resolution, identity, and path confinement (SPEC §5).
+
+Absolute paths never leave this module in model-visible form; digests and
+search results always use repo-relative POSIX paths.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import hashlib
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from ctx.config import CONFIG_FILENAME, Config, load_config, load_ctxignore
+
+
+class WorkspaceError(Exception):
+    pass
+
+
+class AmbiguousWorkspaceError(WorkspaceError):
+    pass
+
+
+class PathEscapeError(WorkspaceError):
+    """A path or symlink resolves outside the workspace root (invariant 6)."""
+
+
+@dataclass(frozen=True)
+class GitInfo:
+    head: str | None
+    remote: str | None  # normalized remote identity
+    dirty: bool
+
+
+@dataclass
+class Workspace:
+    root: Path  # absolute, internal use only — never emitted in digests
+    workspace_id: str
+    config: Config
+    ignore_globs: tuple[str, ...]
+    git: GitInfo | None
+    alias: str | None = None
+
+    # ---------------------------------------------------------------- paths
+    def confine(self, rel_or_abs: str | Path, *, must_exist: bool = False) -> Path:
+        """Resolve a path against the workspace root and refuse any escape
+        via ``..`` or symlinks unless policy explicitly allows it."""
+        p = Path(rel_or_abs)
+        candidate = p if p.is_absolute() else self.root / p
+        resolved = candidate.resolve()
+        root = self.root.resolve()
+        if not self.config.workspace.allow_outside_root:
+            if resolved != root and root not in resolved.parents:
+                raise PathEscapeError(
+                    f"path resolves outside the workspace: {self.relativize(p)!s}"
+                )
+            if not self.config.workspace.follow_symlinks:
+                # Reject a symlinked leaf/parent that points outside the root
+                # even when the final resolution lands back inside.
+                probe = candidate
+                unresolved_parts: list[Path] = []
+                while not probe.exists() and probe != probe.parent:
+                    unresolved_parts.append(probe)
+                    probe = probe.parent
+                for part in [probe, *reversed(unresolved_parts)]:
+                    if part.is_symlink():
+                        target = part.resolve()
+                        if target != root and root not in target.parents:
+                            raise PathEscapeError(
+                                f"symlink escapes the workspace: {self.relativize(part)!s}"
+                            )
+        if must_exist and not resolved.exists():
+            raise WorkspaceError(f"no such path in workspace: {self.relativize(p)!s}")
+        return resolved
+
+    def relativize(self, p: str | Path) -> str:
+        """Repo-relative POSIX path for model-visible output."""
+        try:
+            return Path(p).resolve().relative_to(self.root.resolve()).as_posix()
+        except ValueError:
+            return Path(p).name
+
+    def is_ignored(self, rel_path: str) -> bool:
+        rel = rel_path.removeprefix("./")
+        for glob in self.ignore_globs:
+            if fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch("/" + rel, "/" + glob):
+                return True
+            # Directory patterns like `**/secrets/**` should also match the
+            # directory itself and paths under a bare-name pattern.
+            if glob.endswith("/**") and fnmatch.fnmatch(rel, glob[: -len("/**")]):
+                return True
+        return False
+
+    # ---------------------------------------------------------------- files
+    def list_files(self, subtree: str | None = None) -> list[str]:
+        """Repo-relative file listing, respecting .gitignore (via git when
+        available) plus .ctxignore. Deterministically sorted."""
+        base = self.confine(subtree or ".", must_exist=True)
+        rels: list[str] = []
+        if self.git is not None and self.config.workspace.respect_gitignore:
+            try:
+                out = subprocess.run(
+                    ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                    cwd=base,
+                    capture_output=True,
+                    timeout=30,
+                    check=True,
+                )
+                prefix = "" if base == self.root else self.relativize(base) + "/"
+                for name in out.stdout.decode("utf-8", "replace").split("\0"):
+                    if name and (base / name).is_file():
+                        rels.append(prefix + Path(name).as_posix())
+            except (OSError, subprocess.SubprocessError):
+                rels = self._walk(base)
+        else:
+            rels = self._walk(base)
+        return sorted(r for r in rels if not self.is_ignored(r))
+
+    def _walk(self, base: Path) -> list[str]:
+        rels: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = sorted(
+                d
+                for d in dirnames
+                if d != ".git" and not self.is_ignored(self.relativize(Path(dirpath) / d))
+            )
+            for fn in filenames:
+                full = Path(dirpath) / fn
+                if full.is_symlink() and not self.config.workspace.follow_symlinks:
+                    continue
+                rels.append(self.relativize(full))
+        return rels
+
+
+# ------------------------------------------------------------------ identity
+def _git_toplevel(path: Path) -> Path | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=path,
+            capture_output=True,
+            timeout=10,
+        )
+        if out.returncode == 0:
+            top = out.stdout.decode().strip()
+            if top:
+                return Path(top)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def _git_info(root: Path) -> GitInfo | None:
+    if not (root / ".git").exists():
+        return None
+
+    def _run(*argv: str) -> str | None:
+        try:
+            out = subprocess.run(argv, cwd=root, capture_output=True, timeout=10)
+            return out.stdout.decode().strip() if out.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    head = _run("git", "rev-parse", "HEAD")
+    remote = _run("git", "remote", "get-url", "origin")
+    if remote:
+        remote = normalize_remote(remote)
+    status = _run("git", "status", "--porcelain")
+    return GitInfo(head=head, remote=remote, dirty=bool(status))
+
+
+def normalize_remote(url: str) -> str:
+    """Normalize git remote identity: strip scheme, credentials, and .git."""
+    u = url.strip()
+    if u.startswith("git@"):
+        u = u[len("git@") :].replace(":", "/", 1)
+    for scheme in ("https://", "http://", "ssh://", "git://"):
+        if u.startswith(scheme):
+            u = u[len(scheme) :]
+    if "@" in u.split("/", 1)[0]:
+        u = u.split("@", 1)[1]
+    if u.endswith(".git"):
+        u = u[: -len(".git")]
+    return u.lower()
+
+
+def stable_workspace_id(root: Path, config: Config, git: GitInfo | None) -> str:
+    """Opaque workspace id. With a committed ``repo_key`` (or a normalized
+    remote) the id is stable across clones; otherwise it derives from the
+    local root path but is never itself emitted as a path."""
+    seed = config.repo_key or (git.remote if git else None) or str(root.resolve())
+    return "ws_" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
+# ----------------------------------------------------------------- resolver
+def resolve_workspace(
+    explicit: str | None = None,
+    *,
+    cwd: Path | None = None,
+    hook_workspace_paths: list[str] | None = None,
+    target_path: str | None = None,
+) -> Workspace:
+    """SPEC §5.1 resolution order:
+
+    1. explicit ``--workspace``;
+    2. longest containing hook workspacePath vs target/cwd;
+    3. nearest ancestor containing ``ctx.toml``;
+    4. ``git rev-parse --show-toplevel``;
+    5. nearest ancestor containing ``.agents/``;
+    6. cwd as plain-folder workspace.
+    """
+    cwd = (cwd or Path.cwd()).resolve()
+
+    root: Path | None = None
+    if explicit:
+        root = Path(explicit).expanduser().resolve()
+        if not root.is_dir():
+            raise WorkspaceError(f"--workspace is not a directory: {explicit}")
+    elif hook_workspace_paths:
+        probe = Path(target_path).expanduser().resolve() if target_path else cwd
+        candidates = []
+        for wp in hook_workspace_paths:
+            wpr = Path(wp).expanduser().resolve()
+            if wpr == probe or wpr in probe.parents:
+                candidates.append(wpr)
+        if candidates:
+            root = max(candidates, key=lambda p: len(p.parts))
+        elif len(hook_workspace_paths) == 1:
+            root = Path(hook_workspace_paths[0]).expanduser().resolve()
+        else:
+            raise AmbiguousWorkspaceError(
+                "multiple workspaces are plausible; pass --workspace or ws:<alias>"
+            )
+
+    if root is None:
+        for anc in [cwd, *cwd.parents]:
+            if (anc / CONFIG_FILENAME).is_file():
+                root = anc
+                break
+    if root is None:
+        root = _git_toplevel(cwd)
+    if root is None:
+        for anc in [cwd, *cwd.parents]:
+            if (anc / ".agents").is_dir():
+                root = anc
+                break
+    if root is None:
+        root = cwd
+
+    config = load_config(root)
+    git = _git_info(root)
+    return Workspace(
+        root=root,
+        workspace_id=stable_workspace_id(root, config, git),
+        config=config,
+        ignore_globs=load_ctxignore(root),
+        git=git,
+    )

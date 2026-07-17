@@ -1,0 +1,17 @@
+{
+  "ctx-harness": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "run_command|Read|read_file|ListDir|list_dir|grep_search|find_by_name",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{CTX_EXECUTABLE}} hook antigravity pre-tool-use",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

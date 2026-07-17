@@ -1,0 +1,240 @@
+"""Birth-time capture runner (SPEC §6.2, §7).
+
+Output is spooled to disk as it streams — it never accumulates in process
+memory and never reaches the model before it is content-addressed.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import signal as signal_mod
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from ctx.store import Store, canonical_json
+from ctx.textutil import decode_stream
+from ctx.workspace import Workspace
+
+
+class ExecutionError(Exception):
+    pass
+
+
+@dataclass
+class CaptureResult:
+    manifest_id: str
+    manifest: dict[str, Any]
+
+
+def _count_lines(path: Path) -> int:
+    lines = 0
+    last = b"\n"
+    with path.open("rb") as fh:
+        while chunk := fh.read(1 << 20):
+            lines += chunk.count(b"\n")
+            last = chunk[-1:]
+    if last not in (b"\n", b""):
+        lines += 1
+    return lines
+
+
+def _normalize_focus(focus: str | None) -> str:
+    if not focus:
+        return ""
+    return " ".join(focus.lower().split())
+
+
+def focus_hash(focus: str | None) -> str:
+    return "sha256:" + hashlib.sha256(_normalize_focus(focus).encode("utf-8")).hexdigest()
+
+
+def run_capture(
+    ws: Workspace,
+    argv: list[str],
+    *,
+    cwd: str | None = None,
+    shell: bool = False,
+    timeout: float | None = 600.0,
+    store: Store | None = None,
+) -> CaptureResult:
+    """Execute a command, streaming stdout/stderr into distinct immutable
+    blobs, and publish a ``ctx.invocation/v1`` manifest."""
+    if not argv:
+        raise ExecutionError("empty command")
+    store = store or Store(ws.workspace_id)
+
+    workdir = ws.confine(cwd or ".", must_exist=True)
+    rel_cwd = ws.relativize(workdir) or "."
+
+    if shell:
+        if len(argv) != 1:
+            raise ExecutionError("--shell mode takes exactly one command string")
+        popen_args: Any = argv[0]
+    else:
+        popen_args = argv
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="ctx-cap-"))
+    out_path = tmpdir / "stdout"
+    err_path = tmpdir / "stderr"
+    timed_out = False
+    try:
+        with out_path.open("wb") as out_fh, err_path.open("wb") as err_fh:
+            try:
+                proc = subprocess.Popen(
+                    popen_args,
+                    cwd=workdir,
+                    shell=shell,
+                    stdout=out_fh,
+                    stderr=err_fh,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except FileNotFoundError as e:
+                raise ExecutionError(f"command not found: {argv[0]}") from e
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                try:
+                    os.killpg(proc.pid, signal_mod.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    proc.kill()
+                proc.wait()
+
+        exit_code: int | None = proc.returncode
+        sig_name: str | None = None
+        if exit_code is not None and exit_code < 0:
+            try:
+                sig_name = signal_mod.Signals(-exit_code).name
+            except ValueError:
+                sig_name = f"SIG{-exit_code}"
+            exit_code = None
+
+        streams: dict[str, dict[str, Any]] = {}
+        for name, path in (("stdout", out_path), ("stderr", err_path)):
+            blob_hash, size = store.put_blob_from_file(path)
+            head = path.open("rb").read(8192)
+            _, encoding, media_type = decode_stream(head if size else b"")
+            streams[name] = {
+                "blob": f"sha256:{blob_hash}",
+                "bytes": size,
+                "lines": _count_lines(path),
+                "mediaType": media_type if size else "text/plain",
+                "encoding": encoding if size else "utf-8",
+            }
+    finally:
+        for p in (out_path, err_path):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        try:
+            tmpdir.rmdir()
+        except OSError:
+            pass
+
+    manifest: dict[str, Any] = {
+        "schema": "ctx.invocation/v1",
+        "workspaceId": ws.workspace_id,
+        "cwd": rel_cwd,
+        "argv": list(argv),
+        "shell": shell,
+        "result": {
+            "exitCode": exit_code,
+            "signal": sig_name,
+            "timedOut": timed_out,
+        },
+        "streams": streams,
+        "source": {
+            "gitHead": ws.git.head if ws.git else None,
+            "worktreeHash": _worktree_hash(ws),
+        },
+        # digest fields are filled by the digest layer after profile
+        # selection; placeholders keep the schema shape stable.
+        "digest": {
+            "profile": "text/v1",
+            "policy": "default/v1",
+            "focusHash": focus_hash(None),
+            "bytesHash": "sha256:" + "0" * 64,
+        },
+    }
+    manifest_id = store.put_manifest(manifest, kind="run")
+    manifest["id"] = f"sha256:{manifest_id}"
+    return CaptureResult(manifest_id=manifest_id, manifest=manifest)
+
+
+def _worktree_hash(ws: Workspace) -> str | None:
+    """Stable hash of dirty-state summary; None for non-git workspaces."""
+    if ws.git is None:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=ws.root,
+            capture_output=True,
+            timeout=15,
+        )
+        if out.returncode != 0:
+            return None
+        return "sha256:" + hashlib.sha256(out.stdout).hexdigest()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def update_manifest_digest(
+    store: Store, manifest: dict[str, Any], digest_meta: dict[str, str]
+) -> tuple[str, dict[str, Any]]:
+    """Publish the final manifest with its digest identity. Content identity
+    covers artifact bytes + normalized invocation + profile/policy/focus."""
+    body = {k: v for k, v in manifest.items() if k != "id"}
+    body["digest"] = digest_meta
+    new_id = store.put_manifest(body, kind="run")
+    body["id"] = f"sha256:{new_id}"
+    return new_id, body
+
+
+def snapshot_file(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
+    """Snapshot-on-read: pin the current bytes of a workspace file so later
+    ``get`` operations remain stable even if the working tree changes."""
+    full = ws.confine(rel_path, must_exist=True)
+    if not full.is_file():
+        raise ExecutionError(f"not a file: {rel_path}")
+    if ws.is_ignored(ws.relativize(full)):
+        raise ExecutionError(
+            f"path is excluded from capture by policy: {ws.relativize(full)}"
+        )
+    data = full.read_bytes()
+    blob_hash = store.put_blob(data)
+    _, encoding, media_type = decode_stream(data[:8192] if data else b"")
+    manifest = {
+        "schema": "ctx.snapshot/v1",
+        "workspaceId": ws.workspace_id,
+        "path": ws.relativize(full),
+        "blob": f"sha256:{blob_hash}",
+        "bytes": len(data),
+        "lines": data.count(b"\n") + (0 if data.endswith(b"\n") or not data else 1),
+        "mediaType": media_type if data else "text/plain",
+        "encoding": encoding if data else "utf-8",
+        "source": {"gitHead": ws.git.head if ws.git else None},
+    }
+    mid = store.put_manifest(manifest, kind="snapshot")
+    manifest["id"] = f"sha256:{mid}"
+    return manifest
+
+
+def manifest_short_id(manifest: dict[str, Any]) -> str:
+    return str(manifest["id"]).removeprefix("sha256:")[:12]
+
+
+def verify_manifest_shape(manifest: dict[str, Any]) -> None:
+    """Lightweight structural check mirroring schemas/invocation-v1."""
+    required = ("schema", "id", "workspaceId", "cwd", "argv", "shell", "result", "streams", "digest")
+    missing = [k for k in required if k not in manifest]
+    if missing:
+        raise ExecutionError(f"manifest missing fields: {missing}")
+    if canonical_json(manifest) is None:  # pragma: no cover - sanity only
+        raise ExecutionError("manifest not serializable")
