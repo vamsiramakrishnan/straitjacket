@@ -98,6 +98,14 @@ def _main_slow(args: list[str]) -> int:
     p_cp.add_argument("--file", action="append", default=[], dest="files")
     p_cp.add_argument("--show", help="render an existing checkpoint:<id>")
 
+    p_wrap = sub.add_parser("wrap", help="run one agent session under the harness")
+    p_wrap.add_argument("host", choices=["claude", "antigravity"])
+    p_wrap.add_argument(
+        "--print-config", action="store_true", dest="print_config",
+        help="print the host configuration instead of launching",
+    )
+    p_wrap.add_argument("agent_args", nargs=argparse.REMAINDER, help="-- <agent args...>")
+
     p_agy = sub.add_parser("antigravity", help="Antigravity integration")
     agy_sub = p_agy.add_subparsers(dest="agy_cmd", required=True)
     p_install = agy_sub.add_parser("install", help="render the repo-scoped plugin")
@@ -115,6 +123,27 @@ def _main_slow(args: list[str]) -> int:
 
             print(install_antigravity(ws))
             return 0
+
+        if ns.cmd == "wrap":
+            from ctx.wrap import print_config, wrap_antigravity, wrap_claude
+
+            agent_args = list(ns.agent_args)
+            # REMAINDER swallows options placed after the host positional;
+            # recognize --print-config there too (but never past the `--`).
+            if "--print-config" in agent_args:
+                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+                if agent_args.index("--print-config") < tail:
+                    ns.print_config = True
+                    agent_args.remove("--print-config")
+            if ns.print_config:
+                print(print_config(ns.host))
+                return 0
+            ws = resolve_workspace(ns.workspace)
+            if agent_args and agent_args[0] == "--":
+                agent_args = agent_args[1:]
+            if ns.host == "claude":
+                return wrap_claude(ws.root, agent_args)
+            return wrap_antigravity(ws.root)
 
         ws = resolve_workspace(ns.workspace)
 

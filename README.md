@@ -223,6 +223,17 @@ The installer renders into `<repo>/.agents/plugins/ctx-harness/` with the
 skill embedded — one installation activates all surfaces. It refuses to
 install alongside a standalone `.agents/skills/ctx-harness` (SPEC §4.3).
 
+### Instant wrap
+
+One command puts a supported agent session under the harness with nothing to configure:
+
+```bash
+ctx wrap claude -- -p "fix the failing test"   # ephemeral: hooks injected via --settings, removed on exit
+ctx wrap antigravity                           # persistent: renders the workspace plugin
+```
+
+The Claude wrap leaves zero residue (the hook settings live in a temp file for the session's lifetime), while the Antigravity wrap is a persistent workspace install. Use `ctx wrap <host> --print-config` to print the equivalent configuration for CI or manual setup.
+
 ### Repository Configuration
 Commit a `ctx.toml` at the workspace root:
 
