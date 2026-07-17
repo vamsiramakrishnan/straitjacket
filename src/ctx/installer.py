@@ -112,11 +112,12 @@ def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
         json.loads(content)  # rendered manifests must stay valid JSON
         (dest / name).write_text(content, encoding="utf-8")
 
-    skill_src = template / "skills"
-    skill_dst = dest / "skills"
-    if skill_dst.exists():
-        shutil.rmtree(skill_dst)
-    shutil.copytree(skill_src, skill_dst)
+    for subdir in ("skills", "agents"):
+        src = template / subdir
+        dst = dest / subdir
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
     return dest
 
 
@@ -201,6 +202,14 @@ def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
                 (plugin_dir / "skills" / PLUGIN_DIRNAME / "SKILL.md").is_file(),
                 "",
             )
+            agent = plugin_dir / "agents" / "ctx-explorer.md"
+            check(
+                "explorer agent",
+                agent.is_file(),
+                "agents/ctx-explorer.md" if agent.is_file() else "missing — re-run ctx antigravity install",
+            )
+        else:
+            check("explorer agent", True, "plugin not installed")
         dup = plugin_dir.is_dir() and skill_dir.is_dir()
         check(
             "no duplicate installation",

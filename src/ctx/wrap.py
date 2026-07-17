@@ -1,9 +1,10 @@
 """Zero-friction onboarding: `ctx wrap <host>` runs an agent under the harness.
 
 Claude Code is wrapped ephemerally — hooks are passed via a temporary
-``--settings`` file and nothing persists after the session. Antigravity
-discovers plugins from the workspace, so wrapping it delegates to the
-persistent installer.
+``--settings`` file, the ctx-explorer agent definition is installed into
+``.claude/agents/`` for the session, and nothing persists after exit.
+Antigravity discovers plugins from the workspace, so wrapping it delegates
+to the persistent installer.
 """
 
 from __future__ import annotations
@@ -20,6 +21,38 @@ from pathlib import Path
 from ctx.installer import _ctx_executable
 
 _HOOK_STAGE = "hook claude-code pre-tool-use"
+_AGENT_FILENAME = "ctx-explorer.md"
+
+
+def _explorer_agent_source() -> Path:
+    """The packaged explorer agent definition (shipped with the plugin)."""
+    from ctx.installer import _template_dir
+
+    return _template_dir() / "agents" / _AGENT_FILENAME
+
+
+def _install_explorer_agent(workspace_root: Path) -> Path | None:
+    """Write the explorer agent into ``.claude/agents/`` for the session.
+
+    Returns the created path, or None when a file already exists there —
+    a user's own agent definition is never touched."""
+    dest = workspace_root / ".claude" / "agents" / _AGENT_FILENAME
+    if dest.exists():
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(_explorer_agent_source().read_bytes())
+    return dest
+
+
+def _remove_explorer_agent(created: Path | None) -> None:
+    """Undo _install_explorer_agent: remove the file we wrote and any
+    directories we created that are now empty — zero residue."""
+    if created is None:
+        return
+    created.unlink(missing_ok=True)
+    for parent in (created.parent, created.parent.parent):  # agents/, .claude/
+        with contextlib.suppress(OSError):
+            parent.rmdir()  # only succeeds when empty
 
 
 def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
@@ -63,26 +96,33 @@ def wrap_claude(workspace_root: Path, agent_args: list[str], ctx_exe: str | None
         return 127
 
     settings = prepare_claude(workspace_root, ctx_exe or _ctx_executable())
-    if not _claude_supports_settings(claude):
-        print(
-            "ctx wrap: this claude build lacks --settings; "
-            "temporarily merging into .claude/settings.json (restored on exit)",
-            file=sys.stderr,
-        )
-        return _wrap_claude_merged(workspace_root, settings, claude, agent_args)
-
-    tmp = tempfile.NamedTemporaryFile(
-        "w", prefix="ctx-wrap-", suffix=".json", delete=False, encoding="utf-8"
-    )
+    # The explorer agent lives alongside the hooks for the session's lifetime.
+    agent_file = _install_explorer_agent(workspace_root)
     try:
-        json.dump(settings, tmp)
-        tmp.close()
-        # Inherit stdio so interactive sessions work.
-        proc = subprocess.run([claude, "--settings", tmp.name, *agent_args], cwd=workspace_root)
-        return proc.returncode
+        if not _claude_supports_settings(claude):
+            print(
+                "ctx wrap: this claude build lacks --settings; "
+                "temporarily merging into .claude/settings.json (restored on exit)",
+                file=sys.stderr,
+            )
+            return _wrap_claude_merged(workspace_root, settings, claude, agent_args)
+
+        tmp = tempfile.NamedTemporaryFile(
+            "w", prefix="ctx-wrap-", suffix=".json", delete=False, encoding="utf-8"
+        )
+        try:
+            json.dump(settings, tmp)
+            tmp.close()
+            # Inherit stdio so interactive sessions work.
+            proc = subprocess.run(
+                [claude, "--settings", tmp.name, *agent_args], cwd=workspace_root
+            )
+            return proc.returncode
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp.name)
     finally:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp.name)
+        _remove_explorer_agent(agent_file)
 
 
 def _wrap_claude_merged(
