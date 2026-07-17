@@ -3,7 +3,20 @@
 import re
 import sys
 
+import pytest
 from conftest import make_store, make_ws
+
+try:
+    import grimp  # noqa: F401
+    import networkx  # noqa: F401
+
+    _HAVE_MAP_ENGINE = True
+except ImportError:
+    _HAVE_MAP_ENGINE = False
+
+needs_engine = pytest.mark.skipif(
+    not _HAVE_MAP_ENGINE, reason="optional map engine (grimp+networkx) not installed"
+)
 
 IMPORTERS = ["alpha", "beta", "delta", "echo", "foxtrot", "golf", "india", "juliet", "kilo"]
 
@@ -47,10 +60,11 @@ def _omitted(m: str) -> tuple[int, int]:
 # ------------------------------------------------------------------ ranking
 def test_most_imported_module_ranks_first(state_home, workspace_dir, monkeypatch):
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     ws = make_ws(workspace_dir)
     m = _map(ws, make_store(ws), budget=1200)
-    assert m.startswith("[ctx map 12 files · budget 1200 tok]")
+    assert m.startswith("[ctx map 12 files · budget 1200 tok · engine builtin]")
     files = _file_lines(m)
     assert files[0].startswith("repo:pkg/core.py")
     assert "imported-by 9" in files[0]
@@ -59,6 +73,7 @@ def test_most_imported_module_ranks_first(state_home, workspace_dir, monkeypatch
 # ------------------------------------------------ determinism + cache round-trip
 def test_byte_identical_and_cached(state_home, workspace_dir, monkeypatch):
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     ws = make_ws(workspace_dir)
     store = make_store(ws)
@@ -76,6 +91,7 @@ def test_byte_identical_and_cached(state_home, workspace_dir, monkeypatch):
 # ------------------------------------------------------------------- budgets
 def test_budget_compliance_and_declared_omission(state_home, workspace_dir, monkeypatch):
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     ws = make_ws(workspace_dir)
     store = make_store(ws)
@@ -92,6 +108,7 @@ def test_budget_compliance_and_declared_omission(state_home, workspace_dir, monk
 # --------------------------------------------------------------------- focus
 def test_focus_lifts_named_file(state_home, workspace_dir, monkeypatch):
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     ws = make_ws(workspace_dir)
     store = make_store(ws)
@@ -107,6 +124,7 @@ def test_symbols_resolve_via_existing_get_selector(state_home, workspace_dir, mo
     from ctx.retrieval import Selector, get
 
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     ws = make_ws(workspace_dir)
     store = make_store(ws)
@@ -122,6 +140,7 @@ def test_recent_run_evidence_boosts_mentioned_file(state_home, workspace_dir, mo
     from ctx.execution import run_capture
 
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     ws = make_ws(workspace_dir)
     store = make_store(ws)
@@ -144,6 +163,7 @@ def test_recent_run_evidence_boosts_mentioned_file(state_home, workspace_dir, mo
 # ------------------------------------------------------------ ctags fallback
 def test_ctx_no_ctags_forces_python_only_map(state_home, workspace_dir, monkeypatch):
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     (workspace_dir / "pkg" / "web.js").write_text(
         "function init(a, b) { return a + b; }\n", encoding="utf-8"
@@ -159,11 +179,12 @@ def test_cli_map_subcommand(state_home, workspace_dir, monkeypatch, capsys):
     from ctx.cli import main
 
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     rc = main(["--workspace", str(workspace_dir), "map", "--budget", "300", "--focus", "hot"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out.startswith("[ctx map 12 files · budget 300 tok]")
+    assert out.startswith("[ctx map 12 files · budget 300 tok · engine builtin]")
     assert _file_lines(out)[0].startswith("repo:pkg/hot.py")
 
 
@@ -171,8 +192,74 @@ def test_mcp_map_op(state_home, workspace_dir, monkeypatch):
     from ctx.mcp import TOOL_SCHEMA, _dispatch
 
     monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
     _build_pkg(workspace_dir)
     assert "map" in TOOL_SCHEMA["inputSchema"]["properties"]["op"]["enum"]
     out = _dispatch({"op": "map", "workspace": str(workspace_dir), "options": {"budget": 300}})
-    assert out.startswith("[ctx map 12 files · budget 300 tok]")
+    assert out.startswith("[ctx map 12 files · budget 300 tok · engine builtin]")
     assert "omitted:" in out
+
+
+# ---------------------------------------------------- engine: grimp+networkx
+@needs_engine
+def test_grimp_engine_ranks_most_imported_first(state_home, workspace_dir, monkeypatch):
+    monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.delenv("CTX_MAP_ENGINE", raising=False)
+    _build_pkg(workspace_dir)
+    ws = make_ws(workspace_dir)
+    m = _map(ws, make_store(ws), budget=1200)
+    assert m.startswith("[ctx map 12 files · budget 1200 tok · engine grimp+networkx]")
+    files = _file_lines(m)
+    assert files[0].startswith("repo:pkg/core.py")
+    assert "imported-by 9" in files[0]
+
+
+@needs_engine
+def test_grimp_engine_byte_identical_across_calls(state_home, workspace_dir, monkeypatch):
+    monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.delenv("CTX_MAP_ENGINE", raising=False)
+    _build_pkg(workspace_dir)
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    m1 = _map(ws, store, budget=600)
+    m2 = _map(ws, store, budget=600)
+    assert m1 == m2
+    # Fresh Workspace + Store over the same state: still byte-identical.
+    ws2 = make_ws(workspace_dir)
+    m3 = _map(ws2, make_store(ws2), budget=600)
+    assert m1 == m3
+
+
+@needs_engine
+def test_engine_header_discloses_selection(state_home, workspace_dir, monkeypatch):
+    monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    _build_pkg(workspace_dir)
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
+    forced = _map(ws, store, budget=1200)
+    assert "· engine builtin]" in forced.splitlines()[0]
+    monkeypatch.delenv("CTX_MAP_ENGINE", raising=False)
+    auto = _map(ws, store, budget=1200)
+    assert "· engine grimp+networkx]" in auto.splitlines()[0]
+
+
+@needs_engine
+def test_both_engines_resolve_symbols_via_get(state_home, workspace_dir, monkeypatch):
+    from ctx.retrieval import Selector, get
+
+    monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    _build_pkg(workspace_dir)
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
+    builtin_map = _map(ws, store, budget=1200)
+    monkeypatch.delenv("CTX_MAP_ENGINE", raising=False)
+    grimp_map = _map(ws, store, budget=1200)
+    # The maps may differ (different resolvers/rankers), but every emitted
+    # symbol line stays addressable through the shared get selector.
+    for m in (builtin_map, grimp_map):
+        assert "repo:pkg/core.py --symbol connect · (host, port)" in m
+        assert "repo:pkg/core.py --symbol Engine · class" in m
+    out = get(store, ws, "repo:pkg/core.py", Selector(symbol="connect"))
+    assert "def connect" in out and "return (host, port)" in out

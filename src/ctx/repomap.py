@@ -1,10 +1,17 @@
 """Ranked repository map (ROADMAP M-C): global awareness at constant cost.
 
-Files are ranked by a deterministic reference-graph score (imports, fixed
-damped iterations, alphabetical tie-breaks), boosted by recent run evidence
-held in the store, fitted greedily to a token budget, and cached under a
+Files are ranked by a deterministic reference-graph score (imports, damped
+PageRank, alphabetical tie-breaks), boosted by recent run evidence held in
+the store, fitted greedily to a token budget, and cached under a
 worktree-content key. Every emitted symbol line is addressable via the
 existing ``ctx get repo:<file> --symbol <name>`` selector.
+
+Engine policy: when the optional deps grimp (import-graph resolution) and
+networkx (converging PageRank) are importable — and ``CTX_MAP_ENGINE`` is
+not ``builtin`` — they are used and disclosed in the header as
+``engine grimp+networkx``; any engine failure at build time degrades
+silently to the builtin resolver/ranker (``engine builtin``), which is
+always available.
 """
 
 from __future__ import annotations
@@ -15,12 +22,15 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ctx.store import Store, _atomic_write
 from ctx.textutil import fmt_int
 from ctx.workspace import Workspace
 
-_FORMAT = "ctx.map/v1"
+_FORMAT = "ctx.map/v2"
+_ENGINE_BUILTIN = "builtin"
+_ENGINE_GRIMP = "grimp+networkx"
 _DAMPING = 0.85
 _ITERATIONS = 10
 _EVIDENCE_RUNS = 5  # most recent run manifests scanned
@@ -208,6 +218,128 @@ def _hot_paths(store: Store, run_ids: list[str], rels: list[str]) -> list[str]:
     return sorted(hot)
 
 
+# ------------------------------------------- engine selection (grimp+networkx)
+def _select_engine() -> str:
+    """``grimp+networkx`` when both optional deps import and CTX_MAP_ENGINE
+    does not force the builtin path; ``builtin`` otherwise."""
+    if os.environ.get("CTX_MAP_ENGINE") == _ENGINE_BUILTIN:
+        return _ENGINE_BUILTIN
+    try:
+        import grimp  # noqa: F401
+        import networkx  # noqa: F401
+    except Exception:
+        return _ENGINE_BUILTIN
+    return _ENGINE_GRIMP
+
+
+def _grimp_top_levels(ws: Workspace) -> list[tuple[str, Path]]:
+    """Top-level import targets discovered from the workspace: directories
+    containing ``__init__.py`` (plus single-module ``*.py`` top-levels) under
+    the root and, for src-layouts, under ``root/src``. Sorted (name, base)."""
+    bases = [ws.root]
+    src = ws.root / "src"
+    if src.is_dir():
+        bases.append(src)
+    found: dict[str, Path] = {}
+    for base in bases:
+        try:
+            children = sorted(base.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            name = child.name
+            if child.is_dir() and (child / "__init__.py").is_file() and name.isidentifier():
+                found.setdefault(name, base)
+            elif child.is_file() and name.endswith(".py"):
+                stem = name[: -len(".py")]
+                if stem.isidentifier() and stem not in ("__init__", "__main__"):
+                    found.setdefault(stem, base)
+    return sorted(found.items())
+
+
+def _grimp_edges(ws: Workspace, rels: set[str]) -> dict[str, set[str]]:
+    """File-level import edges resolved by grimp (namespace packages,
+    relative imports, src-layouts). The workspace root (and ``src/``) is
+    placed on sys.path for the build, per grimp's importable-package API.
+    Raises on any engine trouble; the caller falls back to the builtin path."""
+    import importlib
+    import sys
+
+    import grimp
+
+    tops = _grimp_top_levels(ws)
+    if not tops:
+        raise RuntimeError("no importable top-level packages discovered")
+    search = [str(b) for b in dict.fromkeys(base for _, base in tops)]
+    saved = list(sys.path)
+    sys.path[:0] = search
+    importlib.invalidate_caches()
+    try:
+        graph = grimp.build_graph(*[name for name, _ in tops], cache_dir=None)
+    finally:
+        sys.path[:] = saved
+        importlib.invalidate_caches()
+
+    base_for = dict(tops)
+
+    def to_rel(module: str) -> str | None:
+        parts = module.split(".")
+        base = base_for.get(parts[0])
+        if base is None:
+            return None
+        stem = base.joinpath(*parts)
+        for cand in (stem.with_suffix(".py"), stem / "__init__.py"):
+            if cand.is_file():
+                try:
+                    return cand.relative_to(ws.root).as_posix()
+                except ValueError:
+                    return None
+        return None
+
+    mod_rel: dict[str, str] = {}
+    for module in sorted(graph.modules):
+        rel = to_rel(module)
+        if rel is not None and rel in rels:
+            mod_rel[module] = rel
+
+    edges: dict[str, set[str]] = {}
+    for module in sorted(mod_rel):
+        rel = mod_rel[module]
+        for imported in sorted(graph.find_modules_directly_imported_by(module)):
+            target = mod_rel.get(imported)
+            if target and target != rel:
+                edges.setdefault(rel, set()).add(target)
+    return edges
+
+
+def _rank_networkx(files: dict[str, _FileMap], edges: dict[str, set[str]]) -> None:
+    """networkx PageRank (alpha=0.85) over a DiGraph built in sorted order.
+    Scores are rounded to 8 decimals before ranking so float-ordering noise
+    can never perturb the alphabetical tie-breaks."""
+    import networkx as nx
+
+    names = sorted(files)
+    g = nx.DiGraph()
+    g.add_nodes_from(names)
+    for importer in sorted(edges):
+        if importer not in files:
+            continue
+        for target in sorted(edges[importer]):
+            if target in files:
+                g.add_edge(importer, target)
+    try:
+        score = nx.pagerank(g, alpha=_DAMPING)
+    except ImportError:
+        # networkx>=3 backs nx.pagerank with scipy; without scipy/numpy use
+        # its pure-python power iteration (same algorithm and convergence).
+        from networkx.algorithms.link_analysis.pagerank_alg import _pagerank_python
+
+        score = _pagerank_python(g, alpha=_DAMPING)
+    for n in names:
+        files[n].score = round(float(score.get(n, 0.0)), 8)
+        files[n].imported_by = g.in_degree(n)
+
+
 # ------------------------------------------------------------------ ranking
 def _rank(files: dict[str, _FileMap], edges: dict[str, set[str]]) -> None:
     """Fixed-iteration damped reference-count ranking (PageRank-style).
@@ -233,11 +365,13 @@ def _rank(files: dict[str, _FileMap], edges: dict[str, set[str]]) -> None:
 
 # ---------------------------------------------------------------- rendering
 def _render(
-    files: list[_FileMap], hot: list[str], budget: int, n_files: int
+    files: list[_FileMap], hot: list[str], budget: int, n_files: int, engine: str
 ) -> str:
     budget_bytes = max(budget, 1) * 4
     tail_reserve = 48
-    lines: list[str] = [f"[ctx map {fmt_int(n_files)} files · budget {budget} tok]"]
+    lines: list[str] = [
+        f"[ctx map {fmt_int(n_files)} files · budget {budget} tok · engine {engine}]"
+    ]
     used = len(lines[0].encode("utf-8")) + 1 + tail_reserve
 
     hot_in_map = [h for h in hot if any(f.rel == h for f in files)]
@@ -288,9 +422,13 @@ def _cache_key(
     focus: str,
     run_ids: list[str],
     ctags: bool,
+    engine: str,
 ) -> str:
     h = hashlib.sha256()
-    h.update(f"{_FORMAT}\nbudget={budget}\nfocus={focus}\nctags={int(ctags)}\n".encode("utf-8"))
+    h.update(
+        f"{_FORMAT}\nbudget={budget}\nfocus={focus}\nctags={int(ctags)}\n"
+        f"engine={engine}\n".encode("utf-8")
+    )
     for mid in run_ids:
         h.update(f"run={mid}\n".encode("utf-8"))
     for rel in rels:
@@ -312,8 +450,9 @@ def repo_map(
     rels = ws.list_files()[:_MAX_FILES]
     run_ids = _recent_run_ids(store)
     ctags = _ctags_enabled()
+    engine = _select_engine()
 
-    key = _cache_key(ws, rels, budget, focus_norm, run_ids, ctags)
+    key = _cache_key(ws, rels, budget, focus_norm, run_ids, ctags, engine)
     cache_path = store.root / "indexes" / "maps" / key
     if cache_path.is_file():
         try:
@@ -345,7 +484,14 @@ def repo_map(
         if rel not in files and syms:
             files[rel] = _FileMap(rel=rel, symbols=list(syms))
 
-    _rank(files, edges)
+    if engine == _ENGINE_GRIMP:
+        try:
+            _rank_networkx(files, _grimp_edges(ws, set(files)))
+        except Exception:
+            engine = _ENGINE_BUILTIN  # silent fallback; header discloses it
+            _rank(files, edges)
+    else:
+        _rank(files, edges)
 
     hot = _hot_paths(store, run_ids, sorted(files))
     for rel in hot:
@@ -358,7 +504,7 @@ def repo_map(
             )
 
     ranked = sorted(files.values(), key=lambda f: (not f.focused, -f.score, f.rel))
-    rendered = _render(ranked, hot, budget, len(ranked))
+    rendered = _render(ranked, hot, budget, len(ranked), engine)
 
     try:
         _atomic_write(cache_path, rendered.encode("utf-8"))
