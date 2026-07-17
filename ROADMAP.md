@@ -118,3 +118,61 @@ Deliberately **not** planned: wire-side semantic compression (LLMLingua-class
 token pruning) and provider-side compaction reliance — both delete bytes
 without addresses, which the needle-drop eval shows is the failure mode this
 project exists to prevent.
+
+---
+
+# The unified architecture: absorbing the full taxonomy
+
+The taxonomy's quadrants are the four moments of a token's lifecycle. One
+artifact store serves all four as *gates*; each mechanism's elegant core maps
+to a gate, and its documented limit is repaired by the shared contract
+(deterministic views · resolvable addresses · declared omission · leases).
+
+## Gate 1 — Birth (source-side; shipped, extending)
+
+| Absorbed from | As | Their limit, repaired |
+|---|---|---|
+| Serena | M-B symbol verbs (`def/refs/diag`) | no provenance → every site snapshot-backed + span-tagged |
+| Aider repo map | M-C `ctx map --budget` | static view → **evidence-weighted ranking**: files implicated in recent failing runs (we hold the artifacts) rank above cold graph score |
+| Graphify | M-C index cached by worktree hash (broker-era) | staleness → content-keyed cache; uncitable answers → answers resolve to snapshots |
+| Deferred tools / skills JIT | already practiced (single MCP tool; teaching via `next:` lines) | — |
+
+## Gate 2 — Entry (wire-side, done right)
+
+The only wire-side idea worth keeping is *coverage*: content from channels we
+don't govern (foreign MCP tools, pasted blobs). Build: the **adopt tier** —
+where the host exposes tool-result interception, oversized foreign results
+are artifactized once at first entry (digest + handle), never rewritten
+per-request. LLMLingua's informativeness scoring is absorbed as a
+**deterministic salience stage** in profiles (error-first, rare-first —
+versioned scoring chooses what to *show*, never what to *keep*). Middle-out's
+position insight becomes digest layout policy (load-bearing evidence at the
+edges) and is mostly mooted by keeping digests short. Model cascades compose
+for free and become *safer* under the harness: handles are the interchange
+format — a cheap-model sub-agent's citations resolve identically for the
+strong parent, so misroutes are auditable instead of fatal.
+
+## Gate 3 — Residence (lifecycle-side)
+
+| Absorbed from | As |
+|---|---|
+| Sub-agent quarantine | M-A explorer agents reporting in checkpoint shape with handle citations |
+| MemGPT paging | the **evidence controller**: turn ledger + budgets as the paging policy; the store is the backing memory, `ctx get` is the page fault, live handles are the page table — paging without interrupts because references are cheap |
+| Filesystem-as-memory | artifact equivalence: adopt-on-first-read of agent-created files; the checkpoint doc is the principled recitation object |
+| Server-side compaction / context editing | **checkpoint-then-compact protocol**: secure evidence into handles *first*, then provider-side clearing/compaction is free and lossless — birth-time capture is what makes context editing safe rather than destructive |
+
+## Gate 4 — Emission (output-side)
+
+Cite-don't-quote and checkpoint-shaped sub-agent reports (shipped, skill
+rules 11–12) are the lossless form of Caveman. `ctx diff run:A run:B` (M-D)
+is the runtime analog of diff-based editing. Prompt caching is the economic
+proof of the whole design: append-only + byte-identical digests maximize the
+provider subsidy — measured in the overhaul benchmark, where the per-request
+rewriting proxy paid 3.6× our cache-write volume.
+
+## Not absorbed, by principle
+
+Lossy pruning without addresses (LLMLingua as-shipped, middle-out as-shipped,
+compaction *without* a prior checkpoint), and style-lossy output compression
+for human-facing text. Deleting bytes you cannot re-address is the one move
+this architecture exists to make unnecessary.
