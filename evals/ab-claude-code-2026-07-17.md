@@ -56,3 +56,42 @@ and `grep -n`'d it (252 bytes into context). Zero floods, correct answer.
    — a 487× reduction on first exposure, before any multi-turn amplification.
 6. Friction to tune: the first denial hit an innocuous `which ctx; ls -la`
    compound; chains of all-bounded commands should classify as bounded.
+
+---
+
+# Rematch after v0.4 (substitution steering + logtemplate + wrap + inline widening)
+
+Same task, same model. The harnessed arm now uses `ctx wrap claude` only:
+no CLAUDE.md, no manual settings — transparent input substitution
+(deny→rewrite), the logtemplate/v1 profile, and result-budget inlining.
+
+## Five-arm results
+
+| Arm | Turns | Cost | Cache-create | Correct |
+|---|---|---|---|---|
+| **harnessed v0.4, warm cache** | **6** | **$0.072** | 1,840 | ✅ |
+| naive, warm cache (matched control) | 9 | $0.186 | 10,042 | ✅ |
+| harnessed v0.4, cold cache | 9 | $0.383 | 43,202 | ✅ |
+| naive, cold-ish cache | 7 | $0.140 | 7,494 | ✅ |
+| harnessed v0.1 deny-mode, cold | 8 | $0.353 | 40,996 | ✅ |
+
+## Findings
+
+1. **Cache-warmth was the dominant confound in the first A/B.** A stray
+   smoke test had pre-warmed the naive project's ~34k-token system prefix
+   (≈$0.20 of 1h-cache writes) — the original "naive is cheaper" result was
+   mostly that. Matched warm-vs-warm reverses it decisively.
+2. **Transparent steering beats naive: 6 turns / $0.072 vs 9 / $0.186**
+   (2.6× cheaper, 3 turns faster). Zero denials, zero standing prompt text.
+3. **Just-in-time protocol teaching works.** With no skill text at all, the
+   agent read a digest's `next:` lines and correctly issued
+   `ctx get run:<id>#stdout --lines 1:36` unprompted.
+4. **Convergence observed in-transcript:** the agent composed naive's best
+   pattern (`python3 run.py > log 2>&1; grep -n ERROR log`) as one compound
+   command; the hook rewrote it through `ctx run --shell`, and the complete
+   bounded result inlined in a single turn — ad-hoc hygiene upgraded to
+   provenance-bearing capture at zero marginal cost.
+5. **Caveat:** N=1 per arm; naive's 7–9 turn spread across runs shows
+   exploration variance. The mechanism-level explanation (no denial
+   round-trips, smaller tool results, fewer hops) matches the direction and
+   magnitude, but a proper eval should run each arm ≥5×.
