@@ -141,7 +141,10 @@ class Profile:
         digest budget, include it verbatim (deterministic given bytes) so no
         retrieval round-trip is needed. Returns None when too large."""
         total = ctx.stdout.bytes + ctx.stderr.bytes
-        limit = ctx.ws.config.budgets.digest_tokens * 3  # ~75% of budget in bytes/4 terms
+        # Inline generously: a retrieval hop costs a full model turn, which
+        # dwarfs a few hundred extra inline tokens. Bounded by the result
+        # budget (the digest emitter's backstop bound is raised to match).
+        limit = ctx.ws.config.budgets.result_tokens * 3
         if total == 0 or total > limit:
             return None
         if ctx.stdout.media_type.startswith("application/octet-stream") or (

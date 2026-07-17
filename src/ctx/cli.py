@@ -250,7 +250,14 @@ def _cmd_run(ws, ns) -> int:
     digest, manifest = render_run_digest(store, ws, capture.manifest, focus=ns.focus)
     from ctx.textutil import bounded
 
-    print(bounded(digest, ws.config.budgets.digest_tokens))
+    # Zero-hop inline digests may exceed the summary budget by design; the
+    # result budget is the hard emission backstop either way.
+    budget = (
+        ws.config.budgets.result_tokens
+        if "output (complete):" in digest
+        else ws.config.budgets.digest_tokens
+    )
+    print(bounded(digest, budget))
     result = manifest["result"]
     if result["timedOut"]:
         return 124
