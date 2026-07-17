@@ -21,7 +21,6 @@ import os
 import sqlite3
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -108,13 +107,6 @@ CREATE TABLE IF NOT EXISTS spans (
     note TEXT NOT NULL DEFAULT ''
 );
 """
-
-
-@dataclass(frozen=True)
-class StoredObject:
-    id: str
-    kind: str
-    meta: dict[str, Any]
 
 
 class Store:
@@ -289,12 +281,6 @@ class Store:
         if len(ids) > 1:
             raise AmbiguousIdError(short, ids)
         return ids[0]
-
-    def kind_of(self, obj_id: str) -> str:
-        row = self.db.execute("SELECT kind FROM objects WHERE id=?", (obj_id,)).fetchone()
-        if row is None:
-            raise UnknownIdError(f"unknown object {obj_id[:MIN_ID_DISPLAY]}")
-        return row[0]
 
     # -------------------------------------------------------------- leases
     def lease(self, obj_id: str, reason: str, ttl_days: int | None) -> None:

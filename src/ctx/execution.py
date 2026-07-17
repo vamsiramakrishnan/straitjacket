@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ctx.store import Store, canonical_json
+from ctx.store import Store
 from ctx.textutil import decode_stream
 from ctx.workspace import Workspace
 
@@ -224,17 +224,3 @@ def snapshot_file(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
     mid = store.put_manifest(manifest, kind="snapshot")
     manifest["id"] = f"sha256:{mid}"
     return manifest
-
-
-def manifest_short_id(manifest: dict[str, Any]) -> str:
-    return str(manifest["id"]).removeprefix("sha256:")[:12]
-
-
-def verify_manifest_shape(manifest: dict[str, Any]) -> None:
-    """Lightweight structural check mirroring schemas/invocation-v1."""
-    required = ("schema", "id", "workspaceId", "cwd", "argv", "shell", "result", "streams", "digest")
-    missing = [k for k in required if k not in manifest]
-    if missing:
-        raise ExecutionError(f"manifest missing fields: {missing}")
-    if canonical_json(manifest) is None:  # pragma: no cover - sanity only
-        raise ExecutionError("manifest not serializable")

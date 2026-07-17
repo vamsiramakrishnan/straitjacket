@@ -71,9 +71,17 @@ def _main_slow(args: list[str]) -> int:
     p_get.add_argument("--symbol", help="Python def/class dotted name (stdlib ast)")
     p_get.add_argument("--span", help="opaque span token minted by a digest")
 
+    p_diff = sub.add_parser("diff", help="run-to-run regression delta digest")
+    p_diff.add_argument("ref_a", help="baseline run: reference")
+    p_diff.add_argument("ref_b", help="comparison run: reference")
+
     p_stats = sub.add_parser("stats", help="bounded schema/shape statistics")
     p_stats.add_argument("ref", nargs="?", default="repo:")
     p_stats.add_argument("--scope", help="named monorepo scope")
+
+    p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
+    p_map.add_argument("--budget", type=int, default=600, help="token budget")
+    p_map.add_argument("--focus", help="boost files whose path or symbols match")
 
     sub.add_parser("init", help="write ctx.toml and .ctxignore templates")
 
@@ -156,6 +164,10 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_retrieval(ws, ns, "get")
         if ns.cmd == "stats":
             return _cmd_retrieval(ws, ns, "stats")
+        if ns.cmd == "diff":
+            return _cmd_diff(ws, ns)
+        if ns.cmd == "map":
+            return _cmd_map(ws, ns)
         if ns.cmd == "init":
             from ctx.installer import init_workspace
 
@@ -263,6 +275,38 @@ def _cmd_run(ws, ns) -> int:
     if result["timedOut"]:
         return 124
     return 0 if result["exitCode"] == 0 else 3
+
+
+def _cmd_diff(ws, ns) -> int:
+    from ctx.retrieval import RetrievalError, charge_turn_budget
+    from ctx.rundiff import run_diff
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        out = run_diff(store, ws, ns.ref_a, ns.ref_b)
+    except RetrievalError as e:
+        print(f"ctx diff: {e}", file=sys.stderr)
+        return 1
+    warning = charge_turn_budget(store, ws, out)
+    if warning:
+        print(warning)
+    print(out)
+    return 0
+
+
+def _cmd_map(ws, ns) -> int:
+    from ctx.repomap import repo_map
+    from ctx.retrieval import charge_turn_budget
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    out = repo_map(store, ws, budget=ns.budget, focus=ns.focus)
+    warning = charge_turn_budget(store, ws, out)
+    if warning:
+        print(warning)
+    print(out)
+    return 0
 
 
 def _cmd_retrieval(ws, ns, verb: str) -> int:

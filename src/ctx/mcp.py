@@ -1,7 +1,7 @@
 """Bounded MCP retrieval server (SPEC §10.4).
 
 Exposes exactly one stable tool schema with an ``op`` discriminator:
-``search | get | stats | repo | doctor``. Arbitrary command execution stays
+``search | get | stats | map | repo | doctor``. Arbitrary command execution stays
 on ``ctx run`` through the native command tool so the user's permission flow
 remains visible; this server is bounded-only by construction.
 
@@ -24,13 +24,14 @@ TOOL_SCHEMA: dict[str, Any] = {
         "Execute bounded retrieval against repository state or captured artifacts "
         "without placing unbounded output in model context. Ops: search (multi-pattern "
         "over run:/blob:/repo: refs), get (exact line/byte/record/json-pointer slices), "
-        "stats (schema and repository shape), repo (workspace summary), doctor (health)."
+        "stats (schema and repository shape), map (ranked budget-fitted codebase map), "
+        "repo (workspace summary), doctor (health)."
     ),
     "inputSchema": {
         "type": "object",
         "required": ["op"],
         "properties": {
-            "op": {"enum": ["search", "get", "stats", "repo", "doctor"]},
+            "op": {"enum": ["search", "get", "stats", "map", "repo", "doctor"]},
             "workspace": {"type": "string", "description": "workspace path or alias"},
             "ref": {
                 "type": "string",
@@ -48,7 +49,7 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "options": {
                 "type": "object",
-                "description": "search options: {fixed,all,context,glob,scope,maxMatches}",
+                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus}",
             },
             "maxTokens": {"type": "integer", "minimum": 64, "maximum": 4000},
         },
@@ -134,6 +135,11 @@ def _dispatch(args: dict[str, Any]) -> str:
         result = get(store, ws, args["ref"], selector)
     elif op == "stats":
         result = stats(store, ws, args.get("ref") or "repo:", scope=(args.get("options") or {}).get("scope"))
+    elif op == "map":
+        from ctx.repomap import repo_map
+
+        opts = args.get("options") or {}
+        result = repo_map(store, ws, budget=int(opts.get("budget", 600)), focus=opts.get("focus"))
     elif op == "repo":
         result = stats(store, ws, "repo:")
     elif op == "doctor":
