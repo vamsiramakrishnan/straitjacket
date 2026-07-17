@@ -60,14 +60,17 @@ class WorkspacePolicy:
     respect_gitignore: bool = True
 
 
+def _all_redaction_patterns() -> tuple[str, ...]:
+    from ctx.textutil import REDACTION_PATTERNS
+
+    return tuple(REDACTION_PATTERNS)
+
+
 @dataclass(frozen=True)
 class Redaction:
     enabled: bool = True
-    patterns: tuple[str, ...] = (
-        "aws-access-key",
-        "private-key",
-        "generic-api-token",
-    )
+    # Default: every vendored pattern. A committed ctx.toml may narrow this.
+    patterns: tuple[str, ...] = field(default_factory=_all_redaction_patterns)
 
 
 @dataclass(frozen=True)

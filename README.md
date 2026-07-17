@@ -197,8 +197,16 @@ straitjacket/
 
 ## 🚀 Setup & Installation
 
-Zero runtime dependencies — pure stdlib Python ≥3.11, so the per-tool-call
-hook stays fast and `uv tool install` is instant.
+Dependency policy is tiered by path criticality:
+
+- **Hook hot path** (runs on every tool call): stdlib-only, ~40ms cold start.
+- **Runtime**: one small pure-Python dep (`pathspec`) for true gitignore
+  semantics in `.ctxignore` matching.
+- **Opportunistic**: if **ripgrep** is on PATH, `repo:` searches use it
+  (SIMD prefilter, parallel walk, no per-file Python reads) and fall back to
+  the built-in engine transparently — same output contract, same coordinates.
+- **Dev-only**: `jsonschema` validates manifests against the vendored wire
+  schemas in tests and `ctx doctor`.
 
 ```bash
 # Install the runtime once.

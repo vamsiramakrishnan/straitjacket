@@ -208,6 +208,42 @@ def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
             "plugin and standalone skill are both installed — remove one (SPEC §4.3)" if dup else "",
         )
 
+    rg = shutil.which("rg")
+    check(
+        "search engine",
+        True,
+        f"ripgrep ({rg})" if rg else "python fallback (install ripgrep for large repos)",
+    )
+
+    try:
+        import pathspec  # noqa: F401
+
+        check("ignore matching", True, "pathspec (gitignore semantics)")
+    except ImportError:
+        check("ignore matching", True, "fnmatch fallback (pip install pathspec)")
+
+    # Validate a real manifest against the vendored wire schema when the
+    # optional validator is installed — catches schema drift early.
+    try:
+        import jsonschema
+
+        schema_path = Path(__file__).resolve().parent.parent.parent / "spec" / "schemas" / "invocation-v1.schema.json"
+        if schema_path.is_file():
+            from ctx.store import Store as _S
+
+            _store = _S(ws.workspace_id)
+            row = _store.db.execute(
+                "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                manifest = _store.get_manifest(row[0])
+                jsonschema.validate(manifest, json.loads(schema_path.read_text(encoding="utf-8")))
+                check("manifest schema", True, "latest run manifest validates against invocation-v1")
+    except ImportError:
+        pass
+    except Exception as e:
+        check("manifest schema", False, str(e)[:120])
+
     # Hook self-test: classifier must emit a decision for a known flood.
     try:
         from ctx.hook import classify

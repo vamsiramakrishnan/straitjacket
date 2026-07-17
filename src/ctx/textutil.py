@@ -19,22 +19,36 @@ _ANSI_RE = re.compile(
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 # Deterministic redaction patterns (SPEC §12.4). Name -> compiled regex.
+# Curated from the rulesets battle-tested by gitleaks/detect-secrets; kept
+# vendored (no dependency) so redaction stays deterministic and offline.
 REDACTION_PATTERNS: dict[str, re.Pattern[str]] = {
-    "aws-access-key": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    "aws-access-key": re.compile(r"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b"),
+    "aws-secret-key": re.compile(
+        r"(?i)\baws_?secret_?access_?key\b\s*[=:]\s*[\"']?[A-Za-z0-9/+=]{30,}"
+    ),
     "private-key": re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
         re.DOTALL,
     ),
-    "generic-api-token": re.compile(
-        r"""\b(?:
-            gh[pousr]_[A-Za-z0-9]{20,}          # GitHub tokens
-          | sk-[A-Za-z0-9_-]{20,}               # generic sk- API keys
-          | xox[baprs]-[A-Za-z0-9-]{10,}        # Slack tokens
-          | eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}  # JWTs
-          | AIza[0-9A-Za-z_-]{35}               # Google API keys
-        )\b""",
-        re.VERBOSE,
+    "github-token": re.compile(
+        r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{60,})\b"
     ),
+    "gitlab-token": re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
+    "slack-token": re.compile(
+        r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b|https://hooks\.slack\.com/services/T[A-Za-z0-9_/]{20,}"
+    ),
+    "stripe-key": re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{20,}\b"),
+    "twilio-key": re.compile(r"\bSK[0-9a-fA-F]{32}\b"),
+    "sendgrid-key": re.compile(r"\bSG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b"),
+    "npm-token": re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
+    "pypi-token": re.compile(r"\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{20,}\b"),
+    "huggingface-token": re.compile(r"\bhf_[A-Za-z0-9]{30,}\b"),
+    "anthropic-key": re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b"),
+    "jwt": re.compile(
+        r"\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+    ),
+    "google-api-key": re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
+    "generic-api-token": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
 }
 
 

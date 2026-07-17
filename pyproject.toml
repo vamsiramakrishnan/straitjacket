@@ -18,15 +18,17 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-# Zero runtime dependencies by design: the PreToolUse hook sits on the hot
-# path of every tool call, and stdlib-only keeps cold start low.
-dependencies = []
+# The PreToolUse hook hot path stays stdlib-only (hook.py imports no third-
+# party code). pathspec is a small pure-Python dep used off the hot path for
+# correct gitignore-semantics matching; ripgrep is used opportunistically at
+# runtime when present on PATH (never required).
+dependencies = ["pathspec>=0.12"]
 
 [project.scripts]
 ctx = "ctx.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "jsonschema>=4"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ctx"]

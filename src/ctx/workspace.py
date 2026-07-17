@@ -100,6 +100,30 @@ class Workspace:
 
     def is_ignored(self, rel_path: str) -> bool:
         rel = rel_path.removeprefix("./")
+        spec = self._ignore_spec()
+        if spec is not None:
+            # Real gitignore semantics (anchoring, dir patterns, negation)
+            # via pathspec — the same matcher Black uses.
+            return spec.match_file(rel) or spec.match_file(rel + "/")
+        return self._is_ignored_fnmatch(rel)
+
+    def _ignore_spec(self):
+        cached = getattr(self, "_ignore_spec_cache", False)
+        if cached is not False:
+            return cached
+        try:
+            import pathspec
+
+            try:
+                spec = pathspec.PathSpec.from_lines("gitignore", self.ignore_globs)
+            except KeyError:  # older pathspec releases
+                spec = pathspec.PathSpec.from_lines("gitwildmatch", self.ignore_globs)
+        except Exception:
+            spec = None  # stdlib fallback keeps the harness functional
+        self._ignore_spec_cache = spec
+        return spec
+
+    def _is_ignored_fnmatch(self, rel: str) -> bool:
         for glob in self.ignore_globs:
             if fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch("/" + rel, "/" + glob):
                 return True

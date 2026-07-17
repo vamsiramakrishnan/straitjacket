@@ -159,6 +159,112 @@ class Match:
     pattern_index: int
 
 
+@dataclass
+class RgMatch:
+    target: str
+    line_no: int
+    pattern_index: int
+    line: str
+
+
+def _rg_available() -> bool:
+    import os
+    import shutil
+
+    if os.environ.get("CTX_SEARCH_ENGINE") == "python":
+        return False
+    return shutil.which("rg") is not None
+
+
+def _rg_repo_search(
+    ws: Workspace,
+    paths: list[str],
+    patterns: list[str],
+    rxs: list["re.Pattern[str]"],
+    *,
+    fixed: bool,
+    glob: str | None,
+) -> tuple[list[RgMatch], str, int] | None:
+    """Repo search via ripgrep (SIMD prefilter, parallel walk, native
+    gitignore). Returns (matches, coverage line) or None to fall back.
+
+    Determinism: ``--sort path`` plus our final (target, line, pattern) sort.
+    Ignore policy: rg's own .gitignore handling plus our deny globs; the
+    pattern-index for ordering is recovered by re-matching the emitted line.
+    """
+    import json as _json
+    import subprocess
+
+    argv = ["rg", "--json", "--no-config", "--sort", "path", "--stats"]
+    if fixed:
+        argv.append("--fixed-strings")
+    if not (ws.git is not None and ws.config.workspace.respect_gitignore):
+        argv.append("--no-ignore")
+    if not ws.config.workspace.follow_symlinks:
+        pass  # rg does not follow symlinks by default
+    argv.append("--hidden")  # parity with the Python engine's os.walk
+    if glob:
+        argv += ["--glob", glob]
+    # Deny globs come after the include glob: rg gives the last matching
+    # glob precedence, and capture exclusions must always win.
+    argv += ["--glob", "!.git/**"]
+    for deny in ws.ignore_globs:
+        argv += ["--glob", f"!{deny}"]
+    for p in patterns:
+        argv += ["-e", p]
+    argv += ["--"] + (paths or ["."])
+
+    try:
+        proc = subprocess.run(
+            argv, cwd=ws.root, capture_output=True, timeout=120
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode not in (0, 1):  # 2 = error (bad pattern already caught)
+        return None
+
+    matches: list[RgMatch] = []
+    scanned = ""
+    bytes_searched = 0
+    for raw_line in proc.stdout.splitlines():
+        try:
+            msg = _json.loads(raw_line)
+        except _json.JSONDecodeError:
+            continue
+        mtype = msg.get("type")
+        data = msg.get("data") or {}
+        if mtype == "match":
+            path_obj = data.get("path") or {}
+            lines_obj = data.get("lines") or {}
+            if "text" not in path_obj or "text" not in lines_obj:
+                continue  # non-UTF-8 path/line: python engine handles via lossy decode
+            line = lines_obj["text"].rstrip("\n")
+            pi = next((i for i, rx in enumerate(rxs) if rx.search(line)), 0)
+            rel = path_obj["text"]
+            if rel.startswith("./"):
+                rel = rel[2:]
+            matches.append(
+                RgMatch(
+                    target=rel.replace("\\", "/"),
+                    line_no=int(data.get("line_number") or 0),
+                    pattern_index=pi,
+                    line=line,
+                )
+            )
+        elif mtype == "summary":
+            stats = data.get("stats") or {}
+            bytes_searched = int(stats.get("bytes_searched", 0))
+            # rg's prefilter proves most files cannot match without a full
+            # scan; coverage over the glob/ignore-filtered corpus is complete.
+            scanned = (
+                "  scanned: complete over corpus · "
+                f"{fmt_int(int(stats.get('searches', 0)))} deep-searched · "
+                f"{fmt_bytes(bytes_searched)}"
+            )
+    matches.sort(key=lambda m: (m.target, m.line_no, m.pattern_index))
+    return matches, scanned or "  scanned: complete over corpus", bytes_searched
+
+
 def search(
     store: Store,
     ws: Workspace,
@@ -191,6 +297,30 @@ def search(
         raise RetrievalError(f"invalid pattern: {e}") from e
 
     snapshot_note: list[str] = []
+
+    # -------- repo searches prefer ripgrep when installed (auto-fallback)
+    if ref.kind == "repo" and _rg_available():
+        if scope:
+            scoped = ws.config.scopes.get(scope)
+            if not scoped:
+                raise RetrievalError(
+                    f"unknown scope {scope!r}; configured: {sorted(ws.config.scopes) or 'none'}"
+                )
+            roots = list(scoped)
+        else:
+            roots = [ref.path] if ref.path else []
+        for r in roots:
+            ws.confine(r, must_exist=True)  # workspace confinement still applies
+        rg_result = _rg_repo_search(
+            ws, roots, patterns, rxs, fixed=fixed, glob=glob
+        )
+        if rg_result is not None:
+            return _render_rg_search(
+                store, ws, ref, ref_text, patterns, rg_result,
+                mode_all=mode_all, context=context, cap=cap, rxs=rxs,
+            )
+        # else: fall through to the Python engine
+
     if ref.kind == "run":
         targets = _resolve_run_targets(store, ref)
         considered, skipped_binary = len(targets), 0
@@ -293,6 +423,94 @@ def search(
     record_telemetry(
         store, "search", sum(len(t.text) for t in targets), len(result.encode("utf-8"))
     )
+    return result
+
+
+def _render_rg_search(
+    store: Store,
+    ws: Workspace,
+    ref: Ref,
+    ref_text: str,
+    patterns: list[str],
+    rg_result: tuple[list[RgMatch], str, int],
+    *,
+    mode_all: bool,
+    context: int,
+    cap: int,
+    rxs: list["re.Pattern[str]"],
+) -> str:
+    matches, scanned_line, bytes_searched = rg_result
+    budget = ws.config.budgets
+
+    if mode_all and matches:
+        by_target: dict[str, list[RgMatch]] = {}
+        for m in matches:
+            by_target.setdefault(m.target, []).append(m)
+        keep: set[str] = set()
+        for target, ms in by_target.items():
+            lines = [m.line for m in ms]
+            if all(any(rx.search(ln) for ln in lines) for rx in rxs):
+                keep.add(target)
+        matches = [m for m in matches if m.target in keep]
+
+    shown = matches[:cap]
+
+    out: list[str] = [f"[ctx search {ref.display()}]"]
+    out.append(
+        "patterns: " + " ".join(repr(p) for p in patterns) + (" (all)" if mode_all else " (any)")
+    )
+
+    # Context rendering reads only the files that actually appear in output.
+    file_lines: dict[str, list[str]] = {}
+    if context:
+        for label in dict.fromkeys(m.target for m in shown):
+            try:
+                file_lines[label] = (
+                    (ws.root / label).read_bytes().decode("utf-8", "replace").splitlines()
+                )
+            except OSError:
+                file_lines[label] = []
+
+    last_target = None
+    for m in shown:
+        if m.target != last_target:
+            out.append(f"{m.target}:")
+            last_target = m.target
+        if context and file_lines.get(m.target):
+            lines = file_lines[m.target]
+            a = max(1, m.line_no - context)
+            b = min(len(lines), m.line_no + context)
+            for n in range(a, b + 1):
+                marker = ">" if n == m.line_no else " "
+                out.append(f" {marker}L{n}: {lines[n - 1][:200]}")
+        else:
+            out.append(f"  L{m.line_no}: {m.line[:200]}")
+
+    out.append("coverage:")
+    out.append(scanned_line)
+    out.append(
+        f"  matches: {fmt_int(len(matches))} · shown: {fmt_int(len(shown))}"
+        + (" · truncated" if len(matches) > len(shown) else "")
+    )
+
+    snapshot_note: list[str] = []
+    for label in sorted({m.target for m in shown}):
+        try:
+            snap = snapshot_file(store, ws, label)
+            snapshot_note.append(
+                f"  {label} → snapshot:{str(snap['id']).removeprefix('sha256:')[:12]}"
+            )
+        except Exception:
+            pass
+    if snapshot_note:
+        out.append("snapshots:")
+        out.extend(snapshot_note)
+
+    continuation = None
+    if len(matches) > len(shown):
+        continuation = f"ctx search {ref_text} … --max-matches {min(len(matches), cap * 2)}"
+    result = _emit(ws, "\n".join(out), budget.result_tokens, continuation)
+    record_telemetry(store, "search", bytes_searched, len(result.encode("utf-8")))
     return result
 
 
