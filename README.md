@@ -5,10 +5,11 @@ straitjacket forces tight, unyielding structural boundaries on wild, unbounded t
 ## 🔒 The Core Invariant
 > Every potentially unbounded operation MUST either execute inside straitjacket, returning a bounded artifact digest capabilitiy, or be flatly rejected before execution.
 
-* **Zero Token Bloat**: Multi-megabyte outputs are captured at the source. The model transcript functions as an index over repository state and artifacts, not a warehouse of raw payload bytes.
-* **Absolute Determinism**: PIDs, wall-clock durations, temporary paths, environment leakage, and locale differences are completely stripped from model-visible output. This drastically increases prompt reproducibility across sessions and providers.
-* **Capability-Based Retainers**: The model navigates data using project-scoped, immutable HMAC tokens (ctx:api:run:K7BXRWQX2Y4N) instead of raw text.
-* **Path Containment**: Maps multi-folder environments, nested Git structures, and worktrees to strict aliases (e.g., @api, @infra), rendering directory traversal escapes (../) physically impossible.
+* **Zero Token Bloat** *(shipped)*: Multi-megabyte outputs are captured at the source. The model transcript functions as an index over repository state and artifacts, not a warehouse of raw payload bytes.
+* **Absolute Determinism** *(shipped)*: Timings, temporary paths, ANSI noise, and locale differences are stripped from model-visible output; identical bytes yield byte-identical digests, keeping prompt-cache prefixes stable across sessions.
+* **Transparent Steering** *(shipped)*: PreToolUse hooks silently rewrite flooding commands through `ctx run` (Claude Code and Antigravity dialects) — no denial round-trips, no standing prompt text.
+* **Path Containment** *(shipped)*: repo-relative addressing with `..` and symlink-escape rejection; `ws:<alias>` roots for multi-workspace sessions.
+* **Capability HMAC handles & isolated broker** *(planned, Phase 3)*: content-hash handles become unforgeable HMAC capabilities once the broker daemon owns the store under a separate OS identity. Until then, handles are content addresses scoped per workspace.
 
 ## ⚖️ Why straitjacket vs other context-saving approaches
 
@@ -53,35 +54,30 @@ straitjacket maps directly to Antigravity's extension architecture, supporting s
 
 ## 1. Deployment Strengths
 
-| Mode | Integration | Guarantee |
-|---|---|---|
-| Skill Mode | SKILL.md only | **Advisory**: Agent is trained on protocol discipline but can bypass it. |
-| Plugin Mode | Skill + MCP + PreToolUse Hooks | **Enforced**: Intercepts recognized tool paths; highly resistant to accidental bypass. |
-| Native Harness | SDK Agent with raw built-ins stripped | **Structural**: Built-ins like run_command are removed; raw output cannot physically enter context. |
-| Hardened Mode | Native Harness + Isolated Broker | **Isolation-Backed**: Broker runs under a separate OS identity/container; sandboxed shell cannot read the CAS database. |
+| Mode | Integration | Guarantee | Status |
+|---|---|---|---|
+| Skill Mode | SKILL.md only | **Advisory**: Agent is trained on protocol discipline but can bypass it. | shipped |
+| Plugin Mode | Skill + MCP + PreToolUse Hooks | **Enforced**: Intercepts recognized tool paths; transparent substitution steering; highly resistant to accidental bypass. | shipped |
+| Native Harness | SDK Agent with raw built-ins stripped | **Structural**: Built-ins like run_command are removed; raw output cannot physically enter context. | planned (Phase 4) |
+| Hardened Mode | Native Harness + Isolated Broker | **Isolation-Backed**: Broker runs under a separate OS identity/container; sandboxed shell cannot read the CAS database. | planned (Phase 3) |
 
-## 🧭 Selector Grammar & Root Aliasing
-Absolute host paths are entirely hidden from the model. Instead, straitjacket dynamically binds mounted paths to deterministic aliases at every invocation:
+## 🧭 Selector Grammar
+Absolute host paths never appear in model-visible output. The shipped
+reference grammar has two address spaces:
 
-```
-[ctx-scope:v1 id=cts_J7KBW4H2]
-roots:
-  @api       git-worktree  payments-api
-  @infra     git-worktree  platform-infra
-  @design    folder        product-design
-default: none
-```
+* **Repository selectors** (live workspace state, snapshot-on-read):
+  * `repo:` — the active workspace root
+  * `repo:src/payments/service.py` — a current file
+  * `repo:services/payments` — a scoped subtree
+  * `ws:api/repo:src/main.py` — explicit root in multi-workspace sessions
+  * `--scope payments` — named monorepo scopes from committed `ctx.toml`
+* **Immutable artifact handles** (content-addressed, workspace-scoped):
+  * `run:7bd91f2a4c3d` / `run:7bd91f2a4c3d#stdout` — captured invocation and its exact streams
+  * `snapshot:fe21c91ad4e8` — file state pinned at read time
+  * `blob:…`, `checkpoint:…` — raw content and frozen task epochs
 
-The model targets files and processes using two crisp address spaces:
-
-* **Repository Selectors**: Target live workspace tracks.
-  * `@api` (Reference the root directory)
-  * `@api:src/payments/service.py` (Target file within specific root)
-  * `@infra:terraform/prod`
-* **Immutable Artifact Handles**: Project-scoped HMAC capabilities derived from the underlying storage manifest hash.
-  * `ctx:api:run:K7BXRWQX2Y4N` (Command output capture)
-  * `ctx:api:search:4PTMDRYV6H2K` (Prior search index snapshot)
-  * `ctx:api:evidence:A8JG9E3XM7PV` (Snapshotted file state slice)
+*(Planned, Phase 3: handles upgraded to project-scoped HMAC capabilities once
+the isolated broker owns the store.)*
 
 ## 🛠️ The Four Unified Verbs
 The entire Model-facing MCP layer is frozen into one stable tool surface (**ctx**), handling operations entirely via parameter states instead of dynamic tool injection.
@@ -89,89 +85,117 @@ The entire Model-facing MCP layer is frozen into one stable tool surface (**ctx*
 ```json
 {
   "name": "ctx",
-  "description": "Execute and inspect repository or artifact data without placing unbounded output in model context.",
+  "description": "Bounded retrieval against repository state or captured artifacts.",
   "input": {
-    "op": "run | search | get | stats",
-    "scope": "Current ctx scope identifier",
-    "root": "Mounted root alias without @",
-    "target": "Repository selector or artifact handle",
-    "argv": ["pytest", "-q"]
+    "op": "search | get | stats | repo | doctor",
+    "ref": "run:<id>[#stdout|#stderr] | snapshot:<id> | repo:[path]",
+    "patterns": ["TimeoutError", "deadline"],
+    "selector": {"lines": "8412:8440"},
+    "maxTokens": 1200
   }
 }
 ```
 
+Command execution stays on `ctx run` through the host's native command tool
+so the user's permission flow remains visible (SPEC §10.4).
+
 ### 1. run
-Executes an arbitrary process argv directly (no ambient shell by default) inside the target root. Captures stdout and stderr concurrently, records exit codes, signals, and errors, and registers a bounded artifact digest.
+Executes an arbitrary process argv directly (no ambient shell unless `--shell`) inside the workspace. Captures stdout and stderr into distinct immutable blobs, records exit codes, signals, and timeouts, and returns a bounded deterministic digest — or the complete output verbatim when it fits the budget (zero-hop inline).
 
 ```bash
-ctx run --scope cts_J7KBW4H2 --root api --cwd services/payments -- focus "find test failures" -- pytest -q
+ctx run --focus "find test failures" --cwd services/payments -- pytest -q
 ```
 
-Also acts as a passive file/directory producer proxy (e.g., `ctx run --file logs/incident.jsonl`) to swallow massive historical assets without piping through raw shell commands.
-
 ### 2. search
-Executes multi-pattern queries targeting live files or historical artifact content. Supports regex, literal, jsonpath, and symbol searches. Matches are canonicalized and token-capped.
+Multi-pattern queries over live files or captured artifacts. Uses ripgrep when installed (transparent Python fallback), respects `.gitignore` + `.ctxignore`, snapshots returned repo evidence, and reports scanned coverage, match count, and truncation.
 
 ```bash
-ctx search @api --scope cts_J7KBW4H2 --pattern 'TimeoutError' --glob '**/*.py' --context 3
+ctx search repo: 'TimeoutError' 'deadline' --glob '**/*.py' --context 3
+ctx search run:7bd91f2a4c3d 'risk-api' --context 3
 ```
 
 ### 3. get
-Retrieves an exact, bounded slice of a repository file or historical artifact payload using lines, bytes, or structural coordinates.
+Exact, bounded slice of a repository file or artifact by lines, bytes, JSONL records, JSON pointer, or Python symbol.
 
 ```bash
-ctx get ctx:api:run:K7BXRWQX2Y4N --span stdout:L8412-L8440
+ctx get run:7bd91f2a4c3d#stdout --lines 8412:8440
+ctx get repo:svc/retry.py --symbol Handler.process
 ```
 
-If a request exceeds the token window budget, it returns strict continuation tokens instead of silently dropping chunks.
+Oversized requests return a bounded preview plus continuation coordinates instead of silently dropping chunks.
 
 ### 4. stats
 Exposes high-level metadata maps detailing repository layouts, tree sizes, languages, dirty git state parameters, or internal artifact shapes without leaking raw file context.
 
 ```bash
-ctx stats @api --scope cts_J7KBW4H2
+ctx stats repo: --scope payments
+ctx stats run:7bd91f2a4c3d
 ```
 
-## 💾 Result Envelope & Digest Anatomy
-Every operational verb yields a machine-readable envelope accompanying a canonical, heavily dense plaintext serialization intended for prompt optimization.
+## 💾 Digest Anatomy
 
-### Canonical Prompt Transcript View
+Real output of `ctx run` on a 20,001-line operational log (`logtemplate/v1`,
+the deterministic Drain-style template miner):
 
 ```
-[ctx:v1 api/run/K7BXRWQX2Y4N · pytest/v3]
-source: @api/services/payments · HEAD 7f12cbe · dirty
-command: pytest -q
-status: exit 1
-payload: stdout 48,211 lines · stderr 43 lines · ~62k tok
-tests: 1,204
-  passed: 1,187 · failed: 17 · skipped: 0
-
-probable root failure:
-  tests/risk/test_client.py::test_timeout
-  stdout:L8412-L8427
-  TimeoutError while calling risk-api
-
-other failure signatures:
-  TimeoutError                         11
-  ConnectionResetError                 4
-
+[ctx run:51c70b74fa1f profile=logtemplate/v1]
+cwd: .
+command: python3 emit.py
+exit: 0
+stdout: 20,001 lines · 1.2 MiB · est 304,113 tokens
+stderr: 0 lines · 0 B
+templates: 3 cover 20,001/20,001 lines
+  19,999× L1: INFO worker-<*> checkout request req-<*> completed in budget
+  1× L14238: INFO worker-<*> checkout request req-<*> fell back to legacy gateway after circuit opened
+  1× L20001: RUN RESULT: all requests completed
+exceptional:
+  L14238: INFO worker-13 checkout request req-14237 fell back to legacy gateway after circuit opened
+coverage:
+  parsed: 20,001/20,001 lines
+  shown: 5 spans · omitted: 19,996 lines
 next:
-  ctx search ctx:api:run:K7BXRWQX2Y4N --pattern 'TimeoutError'
+  ctx get run:51c70b74fa1f#stdout --lines 14238:14241
 ```
+
+~304k tokens → ~210 model-visible tokens; the structurally anomalous line
+survives verbatim with an exact retrieval coordinate. Profiles ship for
+text, JSON, JSONL, logs, pytest, go test, jest/vitest, compilers/linters,
+and git diffs. Small outputs skip digesting entirely and return whole
+(zero-hop inline).
 
 ## 🛡️ PreToolUse Gate Policy
-When operating in Plugin or Native Harness configurations, straitjacket evaluates incoming tooling calls using a secure AST shell classifier (parsing POSIX shell, PowerShell, and cmd.exe).
 
-* **Always Allowed**: ctx MCP infrastructure, localized low-overhead actions (pwd, git status --short), exact small file reads.
-* **Denied & Redirected**: Raw cat, unbounded grep/rg, raw git diff, or direct execution of framework suites (npm test, cargo build) outside of a ctx run envelope.
-* **Forced Confirmation**: Shell allocations, structural network streams, dynamic variable execution (eval), or repository crossings.
+The shipped classifier is conservative and config-driven (shlex + wrapper
+unwrapping + bounded-chain analysis — not a full shell AST; that remains the
+Phase 3+ hardening goal). Under default `steering = "auto"` it **rewrites
+instead of denying**:
+
+* **Untouched**: ctx-routed calls, bounded commands and all-bounded chains (`pwd`, `git status --short`, `which ctx; ls`), small file reads, `cmd > file 2>&1` redirections to real files.
+* **Silently rewritten**: framework suites, raw `cat`/`find`/`git diff`, unbounded package/cloud commands → routed through `ctx run`; oversized reads → bounded `limit` reads; single-file grep → match-capped.
+* **Forced confirmation (never rewritten)**: secret-bearing paths, outside-workspace access, interactive programs.
 
 ```json
-{
-  "decision": "deny",
-  "reason": "Potentially unbounded output must be artifact-backed before execution. Reissue via: ctx run --scope cts_J7KBW4H2 --root api -- pytest -q"
-}
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+  "updatedInput": {"command": "ctx run -- pytest -q"},
+  "permissionDecisionReason": "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"}}
 ```
+
+Strict installs set `steering = "deny"` to keep the pure
+deny-with-remediation contract. Fail-open on internal error is the default;
+fail-closed is one config line.
+
+## 📊 Measured results (2026-07-17, details in `evals/`)
+
+* End-to-end debugging task under Claude Code, matched warm caches, N=5 per
+  arm: **cost parity within run variance** — harnessed median $0.115 / 6.8
+  turns vs naive $0.098 / 6.2 turns, 5/5 correct in both arms, **zero denial
+  round-trips**. Harness overhead on a small clean task: ~13% (~$0.01), down
+  ~15x from the v0.1 deny-mode design — while adding provenance, budgets,
+  redaction, and flood immunity naive has none of.
+* Needle-drop vs Headroom 0.32.0 on a 20k-line log: loud (ERROR) needle —
+  both preserve it; **quiet structural needle — Headroom silently drops it
+  (347,595 → 68 tokens, no trace), logtemplate/v1 preserves it verbatim with
+  its coordinate**.
 
 ## 📂 Source Code Layout
 

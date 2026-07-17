@@ -95,3 +95,29 @@ no CLAUDE.md, no manual settings — transparent input substitution
    exploration variance. The mechanism-level explanation (no denial
    round-trips, smaller tool results, fewer hops) matches the direction and
    magnitude, but a proper eval should run each arm ≥5×.
+
+---
+
+# N=5 batch (matched warm caches) — correction to the rematch headline
+
+| Arm | Cost median (min–max) | Turns mean | Correct | Denials |
+|---|---|---|---|---|
+| harnessed v0.4 (`ctx wrap`) | $0.115 ($0.102–$0.121) | 6.8 | 5/5 | 0 |
+| naive | $0.098 ($0.083–$0.112) | 6.2 | 5/5 | 0 |
+
+The earlier single-pair result (harnessed $0.072 vs naive $0.186) was
+within-run variance — the distributions overlap heavily and single runs of
+either arm can land anywhere in a ±40% band. The defensible claims:
+
+1. **Cost parity within noise on a small clean task**: ~13% mean overhead
+   (~$0.013/session), down from ~$0.21 (≈15×) in the v0.1 deny-mode design.
+   Zero denial round-trips across all five harnessed runs.
+2. **Quality parity**: 5/5 correct root-cause identification in both arms.
+3. What the ~13% buys, which naive lacks entirely: birth-time artifacts with
+   provenance and handles, worst-case flood immunity (this task never
+   triggered it — floods were self-limited by a competent model), quiet-needle
+   evidence preservation (see headroom-needle-drop eval), budgets, redaction,
+   and cross-session evidence reuse.
+4. The harness pays for itself the moment a session actually floods or
+   evidence must survive turns — neither of which this deliberately small
+   benchmark exercises. A flood-heavy benchmark is the right next eval.
