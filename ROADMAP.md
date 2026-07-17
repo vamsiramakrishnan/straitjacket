@@ -176,3 +176,11 @@ Lossy pruning without addresses (LLMLingua as-shipped, middle-out as-shipped,
 compaction *without* a prior checkpoint), and style-lossy output compression
 for human-facing text. Deleting bytes you cannot re-address is the one move
 this architecture exists to make unnecessary.
+
+## Out of scope, by deployment
+
+KV-cache infra (attention sinks, H2O eviction, KV quantization): invisible
+through managed LLM APIs. The only API-visible lever over provider KV state
+is prompt caching, i.e. prefix stability — already maximized by the
+append-only/byte-identical design. Revisit only if a self-hosted model
+deployment materializes in the broker era.
