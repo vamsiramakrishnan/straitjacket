@@ -8,6 +8,31 @@ artifact store, git, or the network.
 Output contract: exactly one JSON object on stdout for every code path.
 Internal errors follow the configured policy — fail-open (`allow`) in the
 default guarded mode, because a broken guard must not brick the workspace.
+
+Two-layer steering design ("rewrite, don't reject"):
+
+* Layer 1 — classification. ``classify()`` always keeps the canonical
+  ``decision`` field stable ("allow" / "deny" / "force_ask") exactly as in
+  the deny-with-remediation contract, so ``ctx doctor`` and policy tests can
+  assert on it. When ``[guard] steering`` is ``"auto"`` (default) or
+  ``"rewrite"``, an eligible deny (or compound-shell force_ask) additionally
+  carries a ``rewrite`` field: ``{"updatedInput": {...}, "reason": "..."}``
+  describing a transparent input substitution (route the command through
+  ``ctx run``, bound an oversized read with ``limit``, cap a single-file
+  grep with ``-m``). Under ``steering = "deny"`` no ``rewrite`` is ever
+  attached and behavior is byte-identical to the pure deny contract.
+
+* Layer 2 — dialect emission. Each emitter decides what a ``rewrite`` means
+  on the wire: the antigravity emitter turns it into the canonical
+  substitution form ``{"decision": "allow", "updatedInput": {...},
+  "reason": "..."}``; the claude-code emitter turns it into
+  ``hookSpecificOutput`` with ``permissionDecision: "allow"`` and
+  ``updatedInput`` (https://code.claude.com/docs/en/hooks). Decisions
+  without a ``rewrite`` pass through the emitters unchanged.
+
+Never rewritten: ctx-routed commands (already allowed), secret-path and
+outside-workspace force_asks, and interactive-suspect commands (pagers,
+bare REPLs, stdin consumers, ``head -f``).
 """
 
 from __future__ import annotations
@@ -58,6 +83,14 @@ _SECRET_PATH_RE = re.compile(
 _HEAD_TAIL_MAX = 400  # max -n allowed for native head/tail
 
 _MAX_INLINE_BYTES_DEFAULT = 16384
+_MAX_INLINE_LINES_DEFAULT = 240
+_GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
+
+_REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
+
+# Interactive/stdin-suspect programs: rewriting these into a non-interactive
+# `ctx run` capture would hang or change semantics, so they stay plain deny.
+_NO_REWRITE_PROGS = {"less", "more", "vi", "vim", "nano", "emacs", "top", "htop", "watch", "ssh", "xargs"}
 
 
 def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
@@ -66,7 +99,9 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "mode": "guarded",
         "unknown_command": "force_ask",
         "internal_error": "allow",
+        "steering": "auto",
         "max_inline_bytes": _MAX_INLINE_BYTES_DEFAULT,
+        "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
         "allow_commands": [],
         "deny_commands": [],
     }
@@ -84,8 +119,12 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         policy["mode"] = str(guard.get("mode", policy["mode"]))
         policy["unknown_command"] = str(guard.get("unknown_command", policy["unknown_command"]))
         policy["internal_error"] = str(guard.get("internal_error", policy["internal_error"]))
+        policy["steering"] = str(guard.get("steering", policy["steering"]))
         policy["max_inline_bytes"] = int(
             budgets.get("max_inline_bytes", policy["max_inline_bytes"])
+        )
+        policy["max_inline_lines"] = int(
+            budgets.get("max_inline_lines", policy["max_inline_lines"])
         )
         # Repo-tunable classification: prefix matches against canonical argv.
         policy["allow_commands"] = [str(x) for x in guard.get("allow_commands", [])]
@@ -151,6 +190,76 @@ def _remediation(argv: list[str]) -> str:
     )
 
 
+def _steering_allows(policy: dict[str, Any]) -> bool:
+    return str(policy.get("steering", "auto")) in ("auto", "rewrite")
+
+
+def _deny_cmd(
+    argv: list[str],
+    policy: dict[str, Any],
+    *,
+    original: str | None = None,
+    has_meta: bool = False,
+) -> dict[str, Any]:
+    """Command deny with remediation. Under rewrite steering, attach the
+    substitution hint (layer 1): plain argv routes through ``ctx run --``;
+    a denied command that already contained shell metacharacters routes
+    through ``ctx run --shell -- '<original string>'``."""
+    decision: dict[str, Any] = _deny(_remediation(argv))
+    if not _steering_allows(policy):
+        return decision
+    prog = os.path.basename(argv[0]) if argv else ""
+    if prog in _NO_REWRITE_PROGS:
+        return decision
+    if has_meta and original:
+        cmd = "ctx run --shell -- " + shlex.quote(original)
+    else:
+        cmd = "ctx run -- " + " ".join(shlex.quote(a) for a in argv)
+    decision["_rewrite"] = {"command": cmd, "reason": _REWRITE_REASON}
+    return decision
+
+
+def _split_simple_chain(stripped: str) -> list[str] | None:
+    """Split ``a; b && c`` into segments when the only metacharacters present
+    are the separators ``;``, ``&&``, ``||``. Returns None when any other
+    metacharacter (``| > < ` $ ( ) { } \\`` or a lone ``&``) remains in a
+    segment, so pipelines and substitutions never take this path."""
+    parts = re.split(r";|&&|\|\|", stripped)
+    if len(parts) < 2:
+        return None
+    if any(_SHELL_META_RE.search(p) for p in parts):
+        return None
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _grep_single_file_rewrite(argv: list[str], cwd: str | None) -> str | None:
+    """``grep [flags] PATTERN FILE`` with exactly one existing file argument,
+    no recursion, and no existing ``-m`` cap → the same command with
+    ``-m 25`` injected. Anything ambiguous returns None (generic path)."""
+    flags = [a for a in argv[1:] if a.startswith("-")]
+    for a in flags:
+        if a in ("--recursive", "--dereference-recursive"):
+            return None
+        if a.startswith("--max-count") or a == "-m" or re.match(r"^-m\d", a):
+            return None
+        if not a.startswith("--") and ("r" in a[1:] or "R" in a[1:]):
+            return None  # -r/-R possibly clustered (-rn)
+    positional = [a for a in argv[1:] if not a.startswith("-")]
+    if len(positional) != 2:
+        return None  # flag arguments (-e, -A, -f, …) land here too: bail out
+    file_arg = positional[1]
+    if os.path.isabs(file_arg):
+        probe = file_arg
+    elif cwd:
+        probe = os.path.join(cwd, file_arg)
+    else:
+        return None
+    if not os.path.isfile(probe):
+        return None
+    new_argv = [argv[0], "-m", str(_GREP_MATCH_CAP), *argv[1:]]
+    return " ".join(shlex.quote(a) for a in new_argv)
+
+
 def _resolve_workspace_root(payload: dict[str, Any]) -> str | None:
     """Longest containing workspacePath match against Cwd/Path/TargetFile
     (SPEC §5.1 rule 2). Never depends on the hook process CWD."""
@@ -192,7 +301,9 @@ def _path_outside(path_str: str, workspace_root: str | None) -> bool:
     return not (p == root or p.startswith(root + os.sep))
 
 
-def classify_command(command: str, policy: dict[str, Any], _depth: int = 0) -> dict[str, str]:
+def classify_command(
+    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
+) -> dict[str, str]:
     """Classify a shell command string. Conservative and config-driven; not a
     shell-security parser (SPEC §11)."""
     stripped = command.strip()
@@ -212,6 +323,16 @@ def classify_command(command: str, policy: dict[str, Any], _depth: int = 0) -> d
             target = redir.group("t1") or redir.group("t2") or redir.group("t3") or ""
             if not target.startswith("/dev/") and not target.startswith("/proc/"):
                 return dict(DECISION_ALLOW)
+        # Bounded chain: `a; b && c` with no other metacharacters. Each
+        # segment is classified independently; the chain is allowed only if
+        # every segment is independently allowed. Any deny/force_ask segment
+        # falls through to the compound-expression handling below.
+        segments = _split_simple_chain(stripped)
+        if segments and all(
+            classify_command(seg, policy, _depth + 1, cwd=cwd).get("decision") == "allow"
+            for seg in segments
+        ):
+            return dict(DECISION_ALLOW)
 
     try:
         argv = shlex.split(stripped)
@@ -236,62 +357,89 @@ def classify_command(command: str, policy: dict[str, Any], _depth: int = 0) -> d
     canonical = " ".join(argv)
     for prefix in policy.get("deny_commands", []):
         if canonical.startswith(prefix):
-            return _deny(_remediation(argv))
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
     for prefix in policy.get("allow_commands", []):
         if canonical.startswith(prefix):
             return dict(DECISION_ALLOW)
 
     # `bash -c '<inner>'`: classify the inner command, not the shell.
     if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
-        return classify_command(argv[2], policy, _depth + 1)
+        return classify_command(argv[2], policy, _depth + 1, cwd=cwd)
 
     if prog == "xargs":
-        return _deny(_remediation(argv))
+        return _deny_cmd(argv, policy)  # stdin consumer: never rewritten
 
     if has_meta:
         # A pipeline containing head is not automatically safe (SPEC §11.2).
-        return _force_ask(
+        # Canonical decision stays force_ask; under rewrite steering the
+        # whole expression is steered into a bounded `ctx run --shell`
+        # capture instead (secret/outside-workspace force_asks never are).
+        fa = _force_ask(
             "CTX_CONTEXT_GUARD: compound shell expression with unproven output bound. "
             f"Prefer: ctx run --shell -- {shlex.quote(stripped)}"
         )
+        if _steering_allows(policy):
+            fa["_rewrite"] = {
+                "command": "ctx run --shell -- " + shlex.quote(stripped),
+                "reason": _REWRITE_REASON,
+            }
+        return fa
 
     # Bounded head/tail with explicit small -n.
     if prog in ("head", "tail"):
         n = _extract_line_count(argv)
-        if n is not None and n <= _HEAD_TAIL_MAX and "-f" not in argv and "--follow" not in argv:
+        if "-f" in argv or "--follow" in argv:
+            return _deny(_remediation(argv))  # streaming: never rewritten
+        if n is not None and n <= _HEAD_TAIL_MAX:
             return dict(DECISION_ALLOW)
-        return _deny(_remediation(argv))
+        return _deny_cmd(argv, policy)
 
     if prog == "git":
         sub = next((a for a in argv[1:] if not a.startswith("-")), "")
         if sub in _GIT_UNBOUNDED:
-            return _deny(_remediation(argv))
+            return _deny_cmd(argv, policy)
         if sub == "status" and not ("--short" in argv or "-s" in argv or "--porcelain" in argv):
-            return _deny(_remediation(argv))
+            return _deny_cmd(argv, policy)
         return dict(DECISION_ALLOW)
 
     if prog == "ls":
         if any(a.startswith("-") and "R" in a for a in argv[1:]):
-            return _deny(_remediation(argv))
+            return _deny_cmd(argv, policy)
         return dict(DECISION_ALLOW)
 
     if prog in ("python", "python3", "node", "ruby", "perl", "deno"):
         # Interpreter invocations can read anything (guard-bypass channel)
         # and emit anything; route through ctx.
-        return _deny(_remediation(argv))
+        if len(argv) == 1:
+            return _deny(_remediation(argv))  # bare REPL: interactive-suspect
+        return _deny_cmd(argv, policy)
 
     if prog in _BOUNDED_CMDS:
         return dict(DECISION_ALLOW)
 
+    if prog == "grep" and _steering_allows(policy):
+        # Single-file grep gets a match cap injected instead of a reroute.
+        capped = _grep_single_file_rewrite(argv, cwd)
+        if capped:
+            decision: dict[str, Any] = _deny(_remediation(argv))
+            decision["_rewrite"] = {
+                "command": capped,
+                "reason": (
+                    f"CTX_CONTEXT_GUARD: single-file grep capped at "
+                    f"-m {_GREP_MATCH_CAP} matches for bounded output"
+                ),
+            }
+            return decision
+
     if prog in _UNBOUNDED_CMDS:
-        return _deny(_remediation(argv))
+        return _deny_cmd(argv, policy)
 
     # Unknown command → configured policy.
     unknown = policy.get("unknown_command", "force_ask")
     if unknown == "allow" or policy.get("mode") == "advisory":
         return dict(DECISION_ALLOW)
     if unknown == "deny":
-        return _deny(_remediation(argv))
+        return _deny_cmd(argv, policy)
     return _force_ask(
         f"CTX_CONTEXT_GUARD: unknown output bound for {prog!r}. "
         f"If output may be large, run: ctx run -- {' '.join(shlex.quote(a) for a in argv)}"

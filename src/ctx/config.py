@@ -44,6 +44,7 @@ class Guard:
     mode: str = "guarded"  # advisory | guarded | strict
     unknown_command: str = "force_ask"  # allow | deny | ask | force_ask
     internal_error: str = "allow"  # availability-safe default (SPEC §10.2)
+    steering: str = "auto"  # auto | rewrite | deny — deny keeps pure deny-with-remediation
 
 
 @dataclass(frozen=True)
