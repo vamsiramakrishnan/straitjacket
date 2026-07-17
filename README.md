@@ -10,6 +10,18 @@ straitjacket forces tight, unyielding structural boundaries on wild, unbounded t
 * **Capability-Based Retainers**: The model navigates data using project-scoped, immutable HMAC tokens (ctx:api:run:K7BXRWQX2Y4N) instead of raw text.
 * **Path Containment**: Maps multi-folder environments, nested Git structures, and worktrees to strict aliases (e.g., @api, @infra), rendering directory traversal escapes (../) physically impossible.
 
+## ⚖️ Why straitjacket vs other context-saving approaches
+
+| Approach | Failure mode straitjacket avoids |
+|---|---|
+| Post-hoc compaction / summarization | Rewrites history: loses evidence irrecoverably, invalidates the prompt-cache prefix, and summarizes *after* the tokens were already paid for once. straitjacket intercepts **before execution** — the raw bytes never enter the transcript. |
+| RAG / vector memory | Probabilistic recall with no provenance. straitjacket retrieval is deterministic and coordinate-exact: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever. |
+| Middleware token trimming | Silent truncation drops the failing test at line 48,000. straitjacket digests report coverage explicitly and every omission has a continuation coordinate. |
+| Advisory prompt rules ("keep output short") | The model forgets under pressure. The `PreToolUse` gate is structural: floods are denied with an executable remediation. |
+| Prompt caching alone | Orthogonal — and straitjacket makes caching *work better*: append-only transcripts and byte-identical digests keep the cached prefix stable across turns and replays. |
+
+Every artifact is also an audit trail: what ran, what it produced, and exactly which slices the model saw.
+
 ## 🏗️ Architectural Topology
 straitjacket maps directly to Antigravity's extension architecture, supporting scaling tiers of enforcement:
 

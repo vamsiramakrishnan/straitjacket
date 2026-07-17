@@ -59,7 +59,7 @@ def parse_ref(text: str) -> Ref:
             raise RefError(f"repo reference must not contain '..': {text!r}")
         return Ref(kind="repo", path=path or None, workspace_alias=alias)
 
-    for kind in ("run", "blob", "snapshot", "search"):
+    for kind in ("run", "blob", "snapshot", "search", "checkpoint"):
         prefix = kind + ":"
         if text.startswith(prefix):
             rest = text[len(prefix) :]

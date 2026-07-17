@@ -215,6 +215,43 @@ class Store:
         except FileNotFoundError:
             raise UnknownIdError(f"manifest {manifest_id[:MIN_ID_DISPLAY]} not found") from None
 
+    # -------------------------------------------------------- line indexes
+    def line_index(self, blob_hash: str) -> "array.array":
+        """Byte offsets of line starts for a blob, built lazily and cached on
+        disk. Enables O(1) line slicing without decoding the whole blob."""
+        import array
+
+        blob_hash = blob_hash.removeprefix("sha256:")
+        idx_path = self.root / "indexes" / "lines" / blob_hash[:2] / (blob_hash[2:] + ".idx")
+        arr = array.array("Q")
+        if idx_path.is_file():
+            arr.frombytes(idx_path.read_bytes())
+            return arr
+        data = self.get_blob(blob_hash)
+        arr.append(0)
+        pos = data.find(b"\n")
+        while pos != -1:
+            arr.append(pos + 1)
+            pos = data.find(b"\n", pos + 1)
+        if arr[-1] != len(data):
+            arr.append(len(data))  # sentinel: end of final unterminated line
+        _atomic_write(idx_path, arr.tobytes())
+        return arr
+
+    def read_blob_lines(self, blob_hash: str, start: int, end: int) -> bytes:
+        """Read lines [start, end] (1-indexed, inclusive) via the line index,
+        touching only the needed byte range of the blob file."""
+        blob_hash = blob_hash.removeprefix("sha256:")
+        idx = self.line_index(blob_hash)
+        n_lines = max(0, len(idx) - 1)
+        if n_lines == 0 or start > n_lines:
+            return b""
+        start = max(1, start)
+        end = min(end, n_lines)
+        with self.blob_path(self.resolve_id(blob_hash, kinds=("blob",))).open("rb") as fh:
+            fh.seek(idx[start - 1])
+            return fh.read(idx[end] - idx[start - 1])
+
     # ------------------------------------------------------------- lookups
     def resolve_id(self, short: str, kinds: tuple[str, ...] | None = None) -> str:
         """Expand a short id; refuse ambiguity (SPEC §6.1)."""

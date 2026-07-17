@@ -32,7 +32,6 @@ class PathEscapeError(WorkspaceError):
 class GitInfo:
     head: str | None
     remote: str | None  # normalized remote identity
-    dirty: bool
 
 
 @dataclass
@@ -43,6 +42,22 @@ class Workspace:
     ignore_globs: tuple[str, ...]
     git: GitInfo | None
     alias: str | None = None
+
+    def git_dirty(self) -> bool | None:
+        """Worktree dirty state, computed on demand (spawns one git process).
+        Kept off the resolution hot path — retrieval never needs it."""
+        if self.git is None:
+            return None
+        try:
+            out = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.root,
+                capture_output=True,
+                timeout=15,
+            )
+            return bool(out.stdout) if out.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
 
     # ---------------------------------------------------------------- paths
     def confine(self, rel_or_abs: str | Path, *, must_exist: bool = False) -> Path:
@@ -153,23 +168,63 @@ def _git_toplevel(path: Path) -> Path | None:
     return None
 
 
+def _git_dir(root: Path) -> Path | None:
+    git_path = root / ".git"
+    if git_path.is_dir():
+        return git_path
+    if git_path.is_file():  # worktree / submodule gitdir pointer
+        try:
+            content = git_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return None
+        if content.startswith("gitdir: "):
+            target = Path(content[len("gitdir: ") :])
+            return target if target.is_absolute() else (root / target).resolve()
+    return None
+
+
 def _git_info(root: Path) -> GitInfo | None:
-    if not (root / ".git").exists():
+    """Latency-critical path: git identity from direct file reads — HEAD,
+    refs, packed-refs, and config — with zero subprocess spawns."""
+    git_dir = _git_dir(root)
+    if git_dir is None:
         return None
 
-    def _run(*argv: str) -> str | None:
-        try:
-            out = subprocess.run(argv, cwd=root, capture_output=True, timeout=10)
-            return out.stdout.decode().strip() if out.returncode == 0 else None
-        except (OSError, subprocess.SubprocessError):
-            return None
+    head: str | None = None
+    try:
+        head_content = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if head_content.startswith("ref: "):
+            ref = head_content[len("ref: ") :]
+            ref_path = git_dir / ref
+            if ref_path.is_file():
+                head = ref_path.read_text(encoding="utf-8").strip() or None
+            else:
+                packed = git_dir / "packed-refs"
+                if packed.is_file():
+                    for line in packed.read_text(encoding="utf-8").splitlines():
+                        if line.endswith(" " + ref):
+                            head = line.split(" ", 1)[0]
+                            break
+        elif len(head_content) >= 40:
+            head = head_content  # detached HEAD
+    except (OSError, UnicodeDecodeError):
+        pass
 
-    head = _run("git", "rev-parse", "HEAD")
-    remote = _run("git", "remote", "get-url", "origin")
-    if remote:
-        remote = normalize_remote(remote)
-    status = _run("git", "status", "--porcelain")
-    return GitInfo(head=head, remote=remote, dirty=bool(status))
+    remote: str | None = None
+    try:
+        in_origin = False
+        for line in (git_dir / "config").read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                in_origin = line.replace(" ", "") in ('[remote"origin"]',)
+            elif in_origin and line.startswith("url"):
+                _, _, value = line.partition("=")
+                remote = normalize_remote(value.strip())
+                break
+    except (OSError, UnicodeDecodeError):
+        pass
+
+    return GitInfo(head=head, remote=remote)
 
 
 def normalize_remote(url: str) -> str:

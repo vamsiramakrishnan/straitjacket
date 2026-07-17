@@ -13,6 +13,7 @@ from typing import Any
 from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
+from ctx.digest.moreprofs import BuildProfile, GitDiffProfile, GoTestProfile, JestProfile
 from ctx.digest.pytestprof import PytestProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
@@ -23,6 +24,10 @@ from ctx.workspace import Workspace
 # Fixed probe order — first match wins; text/v1 always matches last.
 _PROFILES: tuple[Profile, ...] = (
     PytestProfile(),
+    GoTestProfile(),
+    JestProfile(),
+    GitDiffProfile(),
+    BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),
     TextProfile(),
@@ -68,4 +73,9 @@ def render_run_digest(
 
     header = f"[ctx run:{short} profile={profile.version}]"
     digest = header + "\n" + body.replace("run:PENDING", f"run:{short}")
+
+    from ctx.retrieval import record_telemetry
+
+    raw = sum(int(s["bytes"]) for s in manifest["streams"].values())
+    record_telemetry(store, "run", raw, len(digest.encode("utf-8")))
     return digest, final_manifest

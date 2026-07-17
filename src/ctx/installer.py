@@ -223,6 +223,21 @@ def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
     except Exception as e:
         check("hook classifier", False, str(e))
 
+    # Cumulative savings from the telemetry ledger (operational, not identity).
+    try:
+        from ctx.retrieval import telemetry_summary
+        from ctx.store import Store as _Store
+
+        t = telemetry_summary(_Store(ws.workspace_id))
+        if t["events"]:
+            check(
+                "telemetry",
+                True,
+                f"{t['events']} ops · est {t['est_tokens_avoided']:,} prompt tokens avoided",
+            )
+    except Exception:
+        pass
+
     ok_all = all(ok for _, ok, _ in checks)
     lines = [f"[ctx doctor v{__version__}] {'OK' if ok_all else 'PROBLEMS FOUND'}"]
     for name, ok, detail in checks:

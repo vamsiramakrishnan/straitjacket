@@ -68,6 +68,7 @@ def _main_slow(args: list[str]) -> int:
     p_get.add_argument("--bytes", help="A:B byte span")
     p_get.add_argument("--records", help="A:B record span (JSONL)")
     p_get.add_argument("--json-pointer", dest="json_pointer", help="RFC 6901 pointer")
+    p_get.add_argument("--symbol", help="Python def/class dotted name (stdlib ast)")
 
     p_stats = sub.add_parser("stats", help="bounded schema/shape statistics")
     p_stats.add_argument("ref", nargs="?", default="repo:")
@@ -83,6 +84,19 @@ def _main_slow(args: list[str]) -> int:
 
     p_pin = sub.add_parser("pin", help="pin an artifact against garbage collection")
     p_pin.add_argument("ref")
+
+    p_cp = sub.add_parser("checkpoint", help="freeze task state into a new cache epoch")
+    p_cp.add_argument("--goal", help="task goal (required to create)")
+    p_cp.add_argument("--state", help="current state summary")
+    p_cp.add_argument("--decision", action="append", default=[], dest="decisions")
+    p_cp.add_argument("--hypothesis", action="append", default=[], dest="hypotheses")
+    p_cp.add_argument(
+        "--evidence", action="append", default=[],
+        help="'<ref> [note]' — handle plus optional coordinates/note; pinned",
+    )
+    p_cp.add_argument("--attempted", action="append", default=[])
+    p_cp.add_argument("--file", action="append", default=[], dest="files")
+    p_cp.add_argument("--show", help="render an existing checkpoint:<id>")
 
     p_agy = sub.add_parser("antigravity", help="Antigravity integration")
     agy_sub = p_agy.add_subparsers(dest="agy_cmd", required=True)
@@ -142,6 +156,30 @@ def _main_slow(args: list[str]) -> int:
             store = Store(ws.workspace_id)
             store.pin(ref.id or "")
             print(f"pinned {ref.display()}")
+            return 0
+        if ns.cmd == "checkpoint":
+            from ctx.checkpoint import create_checkpoint, show_checkpoint
+            from ctx.store import Store
+
+            store = Store(ws.workspace_id)
+            if ns.show:
+                print(show_checkpoint(store, ws, ns.show))
+                return 0
+            if not ns.goal:
+                print("ctx checkpoint: --goal is required (or --show <checkpoint:id>)", file=sys.stderr)
+                return 2
+            _, doc = create_checkpoint(
+                store,
+                ws,
+                goal=ns.goal,
+                state=ns.state,
+                decisions=ns.decisions,
+                hypotheses=ns.hypotheses,
+                evidence=ns.evidence,
+                attempted=ns.attempted,
+                files=ns.files,
+            )
+            print(doc)
             return 0
     except WorkspaceError as e:
         print(f"ctx: workspace error: {e}", file=sys.stderr)
@@ -215,6 +253,7 @@ def _cmd_retrieval(ws, ns, verb: str) -> int:
                 bytes=_span(ns.bytes) if ns.bytes else None,
                 records=_span(ns.records) if ns.records else None,
                 json_pointer=ns.json_pointer,
+                symbol=ns.symbol,
             )
             out = get(store, ws, ns.ref, selector)
         else:

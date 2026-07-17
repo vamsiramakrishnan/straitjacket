@@ -135,3 +135,23 @@ class Profile:
 
     def next_lines(self, ctx: DigestContext, suggestions: list[str]) -> list[str]:
         return ["next:"] + [f"  {s}" for s in suggestions[:3]] if suggestions else []
+
+    def inline_body(self, ctx: DigestContext) -> list[str] | None:
+        """Zero-hop path: when the complete output fits well inside the
+        digest budget, include it verbatim (deterministic given bytes) so no
+        retrieval round-trip is needed. Returns None when too large."""
+        total = ctx.stdout.bytes + ctx.stderr.bytes
+        limit = ctx.ws.config.budgets.digest_tokens * 3  # ~75% of budget in bytes/4 terms
+        if total == 0 or total > limit:
+            return None
+        if ctx.stdout.media_type.startswith("application/octet-stream") or (
+            ctx.stderr.media_type.startswith("application/octet-stream")
+        ):
+            return None
+        lines = ["output (complete):"]
+        for view in (ctx.stdout, ctx.stderr):
+            if view.bytes:
+                if view is ctx.stderr and ctx.stdout.bytes:
+                    lines.append(f"--- {view.name} ---")
+                lines.extend("  " + ln for ln in view.text_lines)
+        return lines

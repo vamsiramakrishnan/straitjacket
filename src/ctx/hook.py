@@ -62,11 +62,13 @@ _MAX_INLINE_BYTES_DEFAULT = 16384
 
 def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     """Minimal ctx.toml read for the guard section only. Never raises."""
-    policy = {
+    policy: dict[str, Any] = {
         "mode": "guarded",
         "unknown_command": "force_ask",
         "internal_error": "allow",
         "max_inline_bytes": _MAX_INLINE_BYTES_DEFAULT,
+        "allow_commands": [],
+        "deny_commands": [],
     }
     if not workspace_root:
         return policy
@@ -85,9 +87,51 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         policy["max_inline_bytes"] = int(
             budgets.get("max_inline_bytes", policy["max_inline_bytes"])
         )
+        # Repo-tunable classification: prefix matches against canonical argv.
+        policy["allow_commands"] = [str(x) for x in guard.get("allow_commands", [])]
+        policy["deny_commands"] = [str(x) for x in guard.get("deny_commands", [])]
     except Exception:
         pass
     return policy
+
+
+# Wrappers that prefix another command; unwrap to classify the real program.
+_WRAPPERS = {"env", "sudo", "doas", "nice", "nohup", "time", "stdbuf", "timeout", "command", "xvfb-run"}
+
+# Redirection-only tail: `cmd ... > file 2>&1` — console output proven small.
+_REDIR_ALL_RE = re.compile(
+    r"^(?P<cmd>[^|;&<>`$(){}]+?)\s*(?:>>?\s*(?P<t1>\S+)\s*2>&1|&>>?\s*(?P<t2>\S+)|2>&1\s*>>?\s*(?P<t3>\S+))\s*$"
+)
+
+
+def _unwrap(argv: list[str]) -> list[str]:
+    """Strip wrapper programs, env assignments, and their option arguments so
+    classification sees the real command (defeats `env FOO=1 timeout 5 pytest`)."""
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        prog = os.path.basename(tok)
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tok):
+            i += 1
+            continue
+        if prog in _WRAPPERS:
+            i += 1
+            if prog == "timeout":  # skip duration (and -k/-s options)
+                while i < len(argv) and argv[i].startswith("-"):
+                    i += 2 if argv[i] in ("-k", "-s", "--signal", "--kill-after") else 1
+                if i < len(argv):
+                    i += 1  # the DURATION argument
+            elif prog in ("stdbuf", "nice", "nohup", "xvfb-run"):
+                while i < len(argv) and argv[i].startswith("-"):
+                    i += 2 if argv[i] in ("-n", "--adjustment", "-s", "-a") else 1
+            elif prog == "env":
+                while i < len(argv) and (
+                    argv[i].startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[i])
+                ):
+                    i += 1
+            continue
+        break
+    return argv[i:]
 
 
 def _deny(reason: str) -> dict[str, str]:
@@ -148,14 +192,27 @@ def _path_outside(path_str: str, workspace_root: str | None) -> bool:
     return not (p == root or p.startswith(root + os.sep))
 
 
-def classify_command(command: str, policy: dict[str, Any]) -> dict[str, str]:
+def classify_command(command: str, policy: dict[str, Any], _depth: int = 0) -> dict[str, str]:
     """Classify a shell command string. Conservative and config-driven; not a
     shell-security parser (SPEC §11)."""
     stripped = command.strip()
-    if not stripped:
-        return dict(DECISION_ALLOW)
+    if not stripped or _depth > 3:
+        return dict(DECISION_ALLOW) if not stripped else _force_ask(
+            "CTX_CONTEXT_GUARD: deeply nested shell invocation; use ctx run --shell"
+        )
 
     has_meta = bool(_SHELL_META_RE.search(stripped))
+
+    # `cmd > file 2>&1`: both streams redirected to a real file — console
+    # output is proven small, and the follow-up read of the file is itself
+    # guarded (SPEC §11.2). Pseudo-devices would defeat the redirect.
+    if has_meta:
+        redir = _REDIR_ALL_RE.match(stripped)
+        if redir:
+            target = redir.group("t1") or redir.group("t2") or redir.group("t3") or ""
+            if not target.startswith("/dev/") and not target.startswith("/proc/"):
+                return dict(DECISION_ALLOW)
+
     try:
         argv = shlex.split(stripped)
     except ValueError:
@@ -166,11 +223,30 @@ def classify_command(command: str, policy: dict[str, Any]) -> dict[str, str]:
     if not argv:
         return dict(DECISION_ALLOW)
 
+    argv = _unwrap(argv)
+    if not argv:
+        return dict(DECISION_ALLOW)
     prog = os.path.basename(argv[0])
 
     # Already routed through ctx → always allow.
     if prog == "ctx":
         return dict(DECISION_ALLOW)
+
+    # Repo-configured overrides win over built-in tables.
+    canonical = " ".join(argv)
+    for prefix in policy.get("deny_commands", []):
+        if canonical.startswith(prefix):
+            return _deny(_remediation(argv))
+    for prefix in policy.get("allow_commands", []):
+        if canonical.startswith(prefix):
+            return dict(DECISION_ALLOW)
+
+    # `bash -c '<inner>'`: classify the inner command, not the shell.
+    if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
+        return classify_command(argv[2], policy, _depth + 1)
+
+    if prog == "xargs":
+        return _deny(_remediation(argv))
 
     if has_meta:
         # A pipeline containing head is not automatically safe (SPEC §11.2).

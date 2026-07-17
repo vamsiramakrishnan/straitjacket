@@ -21,6 +21,11 @@ class TextProfile(Profile):
 
     def render(self, ctx: DigestContext) -> str:
         lines = ctx.header_lines()
+
+        inline = self.inline_body(ctx)
+        if inline is not None:
+            return "\n".join(lines + inline)
+
         shown = 0
         summary: list[str] = ["summary:"]
 

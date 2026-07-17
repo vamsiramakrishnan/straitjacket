@@ -40,20 +40,53 @@ def _emit(ws: Workspace, text: str, budget_tokens: int, continuation: str | None
     return bounded(text, budget_tokens, continuation)
 
 
-def _stream_lines(store: Store, blob_ref: str) -> list[str]:
+def _stream_text(store: Store, blob_ref: str) -> str:
     data = store.get_blob(str(blob_ref).removeprefix("sha256:"))
     if b"\x00" in data[:8192]:
         raise RetrievalError("binary stream: use --bytes selectors on blob content")
-    return data.decode("utf-8", "replace").splitlines()
+    return data.decode("utf-8", "replace")
 
 
 @dataclass
 class SearchTarget:
-    """One searchable unit: a named source with lines and a citation prefix."""
+    """One searchable unit addressed by character offsets.
+
+    All line geometry runs on C-speed primitives (``count``/``find``/
+    ``rfind``) computed only where needed — no O(lines) Python loop, no
+    line-start index materialization. Matching is ``finditer`` whole-text.
+    """
 
     label: str  # e.g. run:ab12cd34ef56#stdout or repo path
-    lines: list[str]
-    snapshot_id: str | None = None
+    text: str
+
+    @property
+    def n_lines(self) -> int:
+        if not self.text:
+            return 0
+        return self.text.count("\n") + (0 if self.text.endswith("\n") else 1)
+
+    def line_start_of(self, char_pos: int) -> int:
+        """Offset of the start of the line containing char_pos."""
+        return self.text.rfind("\n", 0, char_pos) + 1
+
+    def line_no_of(self, line_start: int) -> int:
+        """1-indexed line number for a line-start offset (O(offset) memchr)."""
+        return self.text.count("\n", 0, line_start) + 1
+
+    def line_text_at(self, line_start: int) -> str:
+        end = self.text.find("\n", line_start)
+        return self.text[line_start : end if end != -1 else len(self.text)]
+
+    def prev_line_start(self, line_start: int) -> int | None:
+        if line_start <= 0:
+            return None
+        return self.text.rfind("\n", 0, line_start - 1) + 1
+
+    def next_line_start(self, line_start: int) -> int | None:
+        end = self.text.find("\n", line_start)
+        if end == -1 or end + 1 >= len(self.text):
+            return None
+        return end + 1
 
 
 def _resolve_run_targets(store: Store, ref: Ref) -> list[SearchTarget]:
@@ -66,7 +99,7 @@ def _resolve_run_targets(store: Store, ref: Ref) -> list[SearchTarget]:
         if not meta or not meta["bytes"]:
             continue
         targets.append(
-            SearchTarget(label=f"run:{short}#{name}", lines=_stream_lines(store, meta["blob"]))
+            SearchTarget(label=f"run:{short}#{name}", text=_stream_text(store, meta["blob"]))
         )
     return targets
 
@@ -103,17 +136,18 @@ def _resolve_repo_targets(
 
     targets: list[SearchTarget] = []
     skipped_binary = 0
+    root = ws.root
     for rel in rels:
-        full = ws.confine(rel)
+        # rels come from ws.list_files (already confined + ignore-filtered);
+        # skip per-file re-confinement syscalls on the hot loop.
         try:
-            data = full.read_bytes()
+            data = (root / rel).read_bytes()
         except OSError:
             continue
         if b"\x00" in data[:8192]:
             skipped_binary += 1
             continue
-        text = data.decode("utf-8", "replace")
-        targets.append(SearchTarget(label=rel, lines=text.splitlines()))
+        targets.append(SearchTarget(label=rel, text=data.decode("utf-8", "replace")))
     return targets, len(rels), skipped_binary
 
 
@@ -121,9 +155,8 @@ def _resolve_repo_targets(
 @dataclass
 class Match:
     target: str
-    line_no: int
+    line_start: int  # char offset; line number/text computed only if shown
     pattern_index: int
-    line: str
 
 
 def search(
@@ -147,7 +180,8 @@ def search(
     budget = ws.config.budgets
     cap = max_matches or budget.max_matches
 
-    flags = 0
+    # MULTILINE keeps ^/$ line-anchored now that matching runs whole-text.
+    flags = re.MULTILINE
     try:
         rxs = [
             re.compile(re.escape(p) if fixed else p, flags)
@@ -162,7 +196,7 @@ def search(
         considered, skipped_binary = len(targets), 0
     elif ref.kind == "blob":
         blob_id = store.resolve_id(ref.id or "", kinds=("blob",))
-        targets = [SearchTarget(label=f"blob:{blob_id[:12]}", lines=_stream_lines(store, blob_id))]
+        targets = [SearchTarget(label=f"blob:{blob_id[:12]}", text=_stream_text(store, blob_id))]
         considered, skipped_binary = 1, 0
     elif ref.kind == "repo":
         targets, considered, skipped_binary = _resolve_repo_targets(
@@ -173,21 +207,25 @@ def search(
 
     matches: list[Match] = []
     scanned_lines = 0
-    matched_targets: set[str] = set()
     for target in targets:
-        scanned_lines += len(target.lines)
-        if mode_all:
-            # every pattern must appear somewhere in the target
-            if not all(any(rx.search(ln) for ln in target.lines) for rx in rxs):
-                continue
-        for i, ln in enumerate(target.lines, start=1):
-            for pi, rx in enumerate(rxs):
-                if rx.search(ln):
-                    matches.append(Match(target.label, i, pi, ln))
-                    matched_targets.add(target.label)
-                    break  # one match record per line; pattern index is the first hit
+        scanned_lines += target.n_lines
+        if mode_all and not all(rx.search(target.text) for rx in rxs):
+            continue
+        # C-speed scan: finditer per pattern over the whole text; dedup to one
+        # record per line via the line-start offset (lowest pattern index
+        # wins). Line numbers are resolved later, only for shown matches.
+        per_line: dict[int, int] = {}
+        text = target.text
+        for pi, rx in enumerate(rxs):
+            for m in rx.finditer(text):
+                ls = text.rfind("\n", 0, m.start()) + 1
+                prev = per_line.get(ls)
+                if prev is None or pi < prev:
+                    per_line[ls] = pi
+        for ls, pi in per_line.items():
+            matches.append(Match(target.label, ls, pi))
 
-    matches.sort(key=lambda m: (m.target, m.line_no, m.pattern_index))
+    matches.sort(key=lambda m: (m.target, m.line_start, m.pattern_index))
     shown = matches[:cap]
 
     # Snapshot-on-read for repo evidence (SPEC §6.3).
@@ -204,19 +242,36 @@ def search(
     out: list[str] = [f"[ctx search {ref.display()}]"]
     out.append("patterns: " + " ".join(repr(p) for p in patterns) + (" (all)" if mode_all else " (any)"))
     last_target = None
+    by_label = {t.label: t for t in targets}
     for m in shown:
         if m.target != last_target:
             out.append(f"{m.target}:")
             last_target = m.target
-        target_obj = next(t for t in targets if t.label == m.target)
-        a = max(1, m.line_no - context)
-        b = min(len(target_obj.lines), m.line_no + context)
+        t = by_label[m.target]
+        line_no = t.line_no_of(m.line_start)
         if context:
-            for ln_no in range(a, b + 1):
-                marker = ">" if ln_no == m.line_no else " "
-                out.append(f" {marker}L{ln_no}: {target_obj.lines[ln_no - 1][:200]}")
+            back: list[int] = []
+            ls: int | None = m.line_start
+            for _ in range(context):
+                ls = t.prev_line_start(ls)  # type: ignore[arg-type]
+                if ls is None:
+                    break
+                back.append(ls)
+            back.reverse()
+            fwd: list[int] = []
+            ls = m.line_start
+            for _ in range(context):
+                ls = t.next_line_start(ls)  # type: ignore[arg-type]
+                if ls is None:
+                    break
+                fwd.append(ls)
+            for i, ls_k in enumerate(back):
+                out.append(f"  L{line_no - len(back) + i}: {t.line_text_at(ls_k)[:200]}")
+            out.append(f" >L{line_no}: {t.line_text_at(m.line_start)[:200]}")
+            for i, ls_k in enumerate(fwd, start=1):
+                out.append(f"  L{line_no + i}: {t.line_text_at(ls_k)[:200]}")
         else:
-            out.append(f"  L{m.line_no}: {m.line[:200]}")
+            out.append(f"  L{line_no}: {t.line_text_at(m.line_start)[:200]}")
 
     out.append("coverage:")
     out.append(
@@ -234,7 +289,11 @@ def search(
     continuation = None
     if len(matches) > len(shown):
         continuation = f"ctx search {ref_text} … --max-matches {min(len(matches), cap * 2)}"
-    return _emit(ws, "\n".join(out), budget.result_tokens, continuation)
+    result = _emit(ws, "\n".join(out), budget.result_tokens, continuation)
+    record_telemetry(
+        store, "search", sum(len(t.text) for t in targets), len(result.encode("utf-8"))
+    )
+    return result
 
 
 # ---------------------------------------------------------------------- get
@@ -244,6 +303,7 @@ class Selector:
     bytes: tuple[int, int] | None = None
     records: tuple[int, int] | None = None
     json_pointer: str | None = None
+    symbol: str | None = None  # Python: dotted def/class name via stdlib ast
 
 
 def _parse(ref_text: str) -> Ref:
@@ -275,6 +335,9 @@ def get(
     data: bytes
     divergence: str | None = None
 
+    fast_lines: tuple[str, int] | None = None  # (blob_hash, total_lines)
+    fast_lines_raw = 0
+
     if ref.kind == "run":
         manifest = store.get_manifest(ref.id or "")
         short = str(manifest["id"]).removeprefix("sha256:")[:12]
@@ -282,8 +345,19 @@ def get(
         meta = manifest["streams"].get(stream)
         if meta is None:
             raise RetrievalError(f"run:{short} has no stream {stream!r}")
-        data = store.get_blob(str(meta["blob"]).removeprefix("sha256:"))
+        blob_hash = str(meta["blob"]).removeprefix("sha256:")
         label = f"run:{short}#{stream}"
+        if (
+            selector.lines is not None
+            and selector.json_pointer is None
+            and not str(meta["mediaType"]).startswith("application/octet-stream")
+        ):
+            # Line-index fast path: touch only the requested byte range.
+            fast_lines = (blob_hash, int(meta["lines"]))
+            fast_lines_raw = int(meta["bytes"])
+            data = b""
+        else:
+            data = store.get_blob(blob_hash)
     elif ref.kind in ("blob", "snapshot"):
         if ref.kind == "snapshot":
             manifest = store.get_manifest(ref.id or "")
@@ -312,6 +386,19 @@ def get(
     header = [f"[ctx get {label}]"]
     body: str
     continuation: str | None = None
+
+    if selector.symbol is not None:
+        if fast_lines is not None:
+            data = store.get_blob(fast_lines[0])
+            fast_lines = None
+        span = _python_symbol_span(data.decode("utf-8", "replace"), selector.symbol)
+        if span is None:
+            raise RetrievalError(
+                f"symbol {selector.symbol!r} not found (Python ast parser; "
+                "for other languages use ctx search + --lines)"
+            )
+        header.append(f"symbol: {selector.symbol} → lines {span[0]}:{span[1]}")
+        selector = Selector(lines=span)
 
     if selector.json_pointer is not None:
         try:
@@ -349,27 +436,111 @@ def get(
         if b < len(data):
             continuation = f"ctx get {ref_text} --bytes {b + 1}:{min(len(data), b + (b - a + 1))}"
     else:
-        if b"\x00" in data[:8192]:
-            raise RetrievalError("binary content: use --bytes A:B for exact slices")
-        all_lines = data.decode("utf-8", "replace").splitlines()
-        if selector.lines is None:
-            a, b = 1, min(len(all_lines), ws.config.budgets.max_inline_lines)
+        if fast_lines is not None:
+            blob_hash, total = fast_lines
+            a, b = selector.lines  # type: ignore[misc]
+            b = min(b, total)
+            if b - a + 1 > budget.max_inline_lines:
+                b = a + budget.max_inline_lines - 1
+                continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
+            chunk = store.read_blob_lines(blob_hash, a, b)
+            all_lines = chunk.decode("utf-8", "replace").splitlines()
+            header.append(f"selector: --lines {a}:{b} of {fmt_int(total)}")
+            body = "\n".join(f"L{a + i}: {ln}" for i, ln in enumerate(all_lines))
         else:
-            a, b = selector.lines
-        b = min(b, len(all_lines))
-        requested = b - a + 1 if b >= a else 0
-        if requested > budget.max_inline_lines:
-            b = a + budget.max_inline_lines - 1
-            continuation = f"ctx get {ref_text} --lines {b + 1}:{min(len(all_lines), b + budget.max_inline_lines)}"
-        header.append(f"selector: --lines {a}:{b} of {fmt_int(len(all_lines))}")
-        numbered = [f"L{n}: {all_lines[n - 1]}" for n in range(max(1, a), b + 1)]
-        body = "\n".join(numbered)
-        if continuation is None and b < len(all_lines) and selector.lines is not None:
-            pass  # exact request satisfied; no continuation needed
+            if b"\x00" in data[:8192]:
+                raise RetrievalError("binary content: use --bytes A:B for exact slices")
+            all_lines = data.decode("utf-8", "replace").splitlines()
+            if selector.lines is None:
+                a, b = 1, min(len(all_lines), ws.config.budgets.max_inline_lines)
+            else:
+                a, b = selector.lines
+            b = min(b, len(all_lines))
+            if b - a + 1 > budget.max_inline_lines:
+                b = a + budget.max_inline_lines - 1
+                continuation = f"ctx get {ref_text} --lines {b + 1}:{min(len(all_lines), b + budget.max_inline_lines)}"
+            header.append(f"selector: --lines {a}:{b} of {fmt_int(len(all_lines))}")
+            body = "\n".join(f"L{n}: {all_lines[n - 1]}" for n in range(max(1, a), b + 1))
 
     if divergence:
         header.append(f"divergence: {divergence}")
-    return _emit(ws, "\n".join(header) + "\n" + body, budget.result_tokens, continuation)
+    result = _emit(ws, "\n".join(header) + "\n" + body, budget.result_tokens, continuation)
+    raw_len = fast_lines_raw if fast_lines is not None else len(data)
+    record_telemetry(store, "get", raw_len, len(result.encode("utf-8")))
+    return result
+
+
+def _python_symbol_span(source: str, dotted: str) -> tuple[int, int] | None:
+    """Line span of a def/class by dotted-name suffix using stdlib ast.
+    Matches ``func``, ``Class.method``, or ``module-level path`` suffixes."""
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    want = dotted.split(".")
+
+    def walk(node: Any, path: list[str]) -> tuple[int, int] | None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                new_path = path + [child.name]
+                if new_path[-len(want) :] == want:
+                    end = getattr(child, "end_lineno", child.lineno)
+                    # Include decorators in the span.
+                    start = min(
+                        [child.lineno] + [d.lineno for d in child.decorator_list]
+                    )
+                    return (start, end)
+                found = walk(child, new_path)
+                if found:
+                    return found
+        return None
+
+    return walk(tree, [])
+
+
+# ---------------------------------------------------------------- telemetry
+def record_telemetry(store: Store, op: str, raw_bytes: int, emitted_bytes: int) -> None:
+    """Append an operational telemetry event. Kept strictly outside stable
+    digests (SPEC §17); failures are swallowed — telemetry must never block."""
+    import json as _json
+    import time as _time
+
+    try:
+        path = store.audit_dir / "telemetry.jsonl"
+        event = {
+            "ts": _time.time(),
+            "op": op,
+            "raw_bytes": raw_bytes,
+            "emitted_bytes": emitted_bytes,
+            "est_tokens_avoided": max(0, (raw_bytes - emitted_bytes) // 4),
+        }
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(event, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def telemetry_summary(store: Store) -> dict[str, int]:
+    import json as _json
+
+    totals = {"events": 0, "raw_bytes": 0, "emitted_bytes": 0, "est_tokens_avoided": 0}
+    path = store.audit_dir / "telemetry.jsonl"
+    if not path.is_file():
+        return totals
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                ev = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            totals["events"] += 1
+            for key in ("raw_bytes", "emitted_bytes", "est_tokens_avoided"):
+                totals[key] += int(ev.get(key, 0))
+    except OSError:
+        pass
+    return totals
 
 
 # -------------------------------------------------------------------- stats
@@ -422,7 +593,7 @@ def stats(store: Store, ws: Workspace, ref_text: str, *, scope: str | None = Non
         largest: list[tuple[int, str]] = []
         for rel in rels:
             try:
-                size = ws.confine(rel).stat().st_size
+                size = (ws.root / rel).stat().st_size
             except OSError:
                 continue
             total_bytes += size
@@ -432,9 +603,10 @@ def stats(store: Store, ws: Workspace, ref_text: str, *, scope: str | None = Non
             largest.append((size, rel))
         out.append(f"files (exact): {fmt_int(len(rels))} · {fmt_bytes(total_bytes)}")
         if ws.git:
+            dirty = ws.git_dirty()
+            state = " · dirty" if dirty else (" · clean" if dirty is not None else "")
             out.append(
-                f"git (exact): HEAD {ws.git.head[:12] if ws.git.head else 'none'}"
-                + (" · dirty" if ws.git.dirty else " · clean")
+                f"git (exact): HEAD {ws.git.head[:12] if ws.git.head else 'none'}" + state
             )
         out.append(
             "languages (exact): "

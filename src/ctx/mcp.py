@@ -57,28 +57,51 @@ TOOL_SCHEMA: dict[str, Any] = {
 }
 
 
-def _dispatch(args: dict[str, Any]) -> str:
-    # Heavy modules load lazily so server startup stays fast.
-    from ctx.retrieval import Selector, RetrievalError, get, search, stats, charge_turn_budget, _span
+# Long-lived server: cache workspace resolution + store connections so each
+# tool call avoids re-spawning git subprocesses and reopening SQLite.
+_WS_CACHE: dict[str | None, tuple[float, Any, Any]] = {}
+_WS_CACHE_TTL = 10.0
+
+
+def _resolve_cached(workspace_arg: str | None) -> tuple[Any, Any]:
+    import time
+
     from ctx.store import Store
     from ctx.workspace import resolve_workspace
 
-    op = args.get("op")
-    ws = resolve_workspace(args.get("workspace"))
+    now = time.monotonic()
+    hit = _WS_CACHE.get(workspace_arg)
+    if hit and now - hit[0] < _WS_CACHE_TTL:
+        return hit[1], hit[2]
+    ws = resolve_workspace(workspace_arg)
     store = Store(ws.workspace_id)
+    _WS_CACHE[workspace_arg] = (now, ws, store)
+    return ws, store
+
+
+def _dispatch(args: dict[str, Any]) -> str:
+    # Heavy modules load lazily so server startup stays fast.
+    from ctx.retrieval import Selector, RetrievalError, get, search, stats, charge_turn_budget, _span
+
+    op = args.get("op")
+    ws, store = _resolve_cached(args.get("workspace"))
 
     max_tokens = args.get("maxTokens")
     if isinstance(max_tokens, int):
-        # Tighten budgets to the caller's cap; never loosen beyond policy.
+        # Tighten budgets to the caller's cap (never loosen beyond policy),
+        # on a per-call copy so the cached workspace stays pristine.
         from dataclasses import replace
 
         b = ws.config.budgets
-        ws.config = replace(  # type: ignore[misc]
-            ws.config,
-            budgets=replace(
-                b,
-                result_tokens=min(b.result_tokens, max_tokens),
-                digest_tokens=min(b.digest_tokens, max_tokens),
+        ws = replace(
+            ws,
+            config=replace(
+                ws.config,
+                budgets=replace(
+                    b,
+                    result_tokens=min(b.result_tokens, max_tokens),
+                    digest_tokens=min(b.digest_tokens, max_tokens),
+                ),
             ),
         )
 
