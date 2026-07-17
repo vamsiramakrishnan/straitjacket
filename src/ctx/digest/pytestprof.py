@@ -69,12 +69,16 @@ class PytestProfile(Profile):
         if fail_spans:
             nodeid, start = fail_spans[0]
             end = min(start + 12, ctx.stdout.lines)
-            summary.append(f"  first failure stdout:L{start}-L{end}: {nodeid}")
+            sid = ctx.mint_span(ctx.stdout, "region", a=start, b=end)
+            tag = f" · span {sid}" if sid else ""
+            summary.append(f"  first failure stdout:L{start}-L{end}: {nodeid}{tag}")
             shown += 1
             if len(fail_spans) > 1:
                 nodeid, start = fail_spans[-1]
                 end = min(start + 12, ctx.stdout.lines)
-                summary.append(f"  terminal failure stdout:L{start}-L{end}: {nodeid}")
+                sid = ctx.mint_span(ctx.stdout, "region", a=start, b=end)
+                tag = f" · span {sid}" if sid else ""
+                summary.append(f"  terminal failure stdout:L{start}-L{end}: {nodeid}{tag}")
                 shown += 1
         elif failed_tests:
             summary.append(f"  first failure: {failed_tests[0][0]} - {failed_tests[0][1][:120]}")

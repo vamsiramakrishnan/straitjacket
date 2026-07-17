@@ -42,6 +42,32 @@ def _mask_token(tok: str) -> str:
     return _COLLAPSE_RE.sub("<*>", tok)
 
 
+def mask_line(raw: str) -> str:
+    """Public template key for a line — shared by digesting and span zoom."""
+    return " ".join(_mask_token(t) for t in raw.split())
+
+
+def mine_templates(
+    lines: list[str], first_line_no: int = 1
+) -> tuple[dict[str, list[int]], list[tuple[int, str, str]]]:
+    """Mine (templates -> [count, first_line_no], mined records). Line
+    numbers are absolute via ``first_line_no`` so span zoom can mine a
+    region slice while preserving artifact coordinates."""
+    templates: dict[str, list[int]] = {}
+    mined: list[tuple[int, str, str]] = []
+    for i, raw in enumerate(lines, start=first_line_no):
+        if not raw.strip():
+            continue
+        tpl = mask_line(raw)
+        rec = templates.get(tpl)
+        if rec is None:
+            templates[tpl] = [1, i]
+        else:
+            rec[0] += 1
+        mined.append((i, tpl, raw))
+    return templates, mined
+
+
 class LogTemplateProfile(Profile):
     version = "logtemplate/v1"
 
@@ -59,18 +85,7 @@ class LogTemplateProfile(Profile):
         )
 
     def render(self, ctx: DigestContext) -> str:
-        templates: dict[str, list[int]] = {}  # template -> [count, first_line]
-        mined: list[tuple[int, str, str]] = []  # (line_no, template, raw)
-        for i, raw in enumerate(ctx.stdout.text_lines, start=1):
-            if not raw.strip():
-                continue
-            tpl = " ".join(_mask_token(t) for t in raw.split())
-            rec = templates.get(tpl)
-            if rec is None:
-                templates[tpl] = [1, i]
-            else:
-                rec[0] += 1
-            mined.append((i, tpl, raw))
+        templates, mined = mine_templates(ctx.stdout.text_lines)
 
         ranked = sorted(templates.items(), key=lambda kv: (-kv[1][0], kv[1][1], kv[0]))
         top = ranked[:10]
@@ -80,7 +95,14 @@ class LogTemplateProfile(Profile):
             f"{fmt_int(covered)}/{fmt_int(len(mined))} lines"
         ]
         for tpl, (count, first) in top:
-            body.append(f"  {fmt_int(count)}× L{first}: {tpl[:160]}")
+            line = f"  {fmt_int(count)}× L{first}: {tpl[:160]}"
+            if count > 1:
+                # Point-attached retrieval affordance: a deterministic span
+                # token minted exactly at the omission site (SPEC §6.4).
+                sid = ctx.mint_span(ctx.stdout, "template", template=tpl)
+                if sid:
+                    line += f" · span {sid}"
+            body.append(line)
         shown = len(top)
 
         rare = [(i, raw) for i, tpl, raw in mined if templates[tpl][0] <= 2]

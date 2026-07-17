@@ -120,7 +120,14 @@ Exact, bounded slice of a repository file or artifact by lines, bytes, JSONL rec
 ```bash
 ctx get run:7bd91f2a4c3d#stdout --lines 8412:8440
 ctx get repo:svc/retry.py --symbol Handler.process
+ctx get run:7bd91f2a4c3d#stdout --span e37f99e4a5   # token minted in the digest
 ```
+
+Digests attach deterministic **span tokens** at every omission point
+(template groups, failure blocks). Resolving a span is always bounded:
+small regions return exact lines, large regions return a zoom sub-digest
+that mints further sub-spans — retrieval structurally cannot re-flood the
+transcript, and tokens are content-derived (replayable, leased, no TTL).
 
 Oversized requests return a bounded preview plus continuation coordinates instead of silently dropping chunks.
 

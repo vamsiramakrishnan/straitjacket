@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS turn_usage (
     tokens INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (conversation_id, turn_id)
 );
+CREATE TABLE IF NOT EXISTS spans (
+    span_id TEXT PRIMARY KEY,     -- deterministic: sha256(blob|kind|params)[:10]
+    blob TEXT NOT NULL,           -- full blob hash the span addresses
+    kind TEXT NOT NULL,           -- region | template
+    a INTEGER,                    -- region: first line (1-indexed)
+    b INTEGER,                    -- region: last line (inclusive)
+    template TEXT,                -- template: masked template string
+    note TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -353,6 +362,52 @@ class Store:
                 self.db.execute("DELETE FROM objects WHERE id=?", (obj_id,))
                 self.db.execute("DELETE FROM leases WHERE id=?", (obj_id,))
         return {"blobs_removed": removed_blobs, "manifests_removed": removed_manifests}
+
+    # --------------------------------------------------------------- spans
+    @staticmethod
+    def span_id_for(blob_hash: str, kind: str, *params: object) -> str:
+        """Deterministic span identity: a pure function of the artifact bytes'
+        hash plus the span parameters — replayable across sessions, machines,
+        and re-digests (unlike a TTL'd cache token)."""
+        blob_hash = blob_hash.removeprefix("sha256:")
+        seed = "|".join([blob_hash, kind, *(str(p) for p in params)])
+        return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:10]
+
+    def register_span(
+        self,
+        blob_hash: str,
+        kind: str,
+        *,
+        a: int | None = None,
+        b: int | None = None,
+        template: str | None = None,
+        note: str = "",
+    ) -> str:
+        blob_hash = blob_hash.removeprefix("sha256:")
+        params = (a, b) if kind == "region" else (template,)
+        sid = self.span_id_for(blob_hash, kind, *params)
+        with self.db:
+            self.db.execute(
+                "INSERT OR IGNORE INTO spans (span_id, blob, kind, a, b, template, note) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (sid, blob_hash, kind, a, b, template, note),
+            )
+        return sid
+
+    def get_span(self, span_id: str) -> dict[str, Any]:
+        row = self.db.execute(
+            "SELECT span_id, blob, kind, a, b, template, note FROM spans WHERE span_id = ?",
+            (span_id.strip(),),
+        ).fetchone()
+        if row is None:
+            raise UnknownIdError(
+                f"unknown span {span_id!r} in this workspace; span tokens come "
+                "from digests — re-run the digest or use --lines coordinates"
+            )
+        return {
+            "span_id": row[0], "blob": row[1], "kind": row[2],
+            "a": row[3], "b": row[4], "template": row[5], "note": row[6],
+        }
 
     # ----------------------------------------------------- per-turn budget
     def add_turn_tokens(self, conversation_id: str, turn_id: str, tokens: int) -> int:

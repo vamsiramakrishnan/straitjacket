@@ -44,7 +44,7 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "selector": {
                 "type": "object",
-                "description": "get selector: {lines:'A:B'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'}",
+                "description": "get selector: {lines:'A:B'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {symbol:'Cls.meth'} | {span:'<token from digest>'}",
             },
             "options": {
                 "type": "object",
@@ -126,6 +126,8 @@ def _dispatch(args: dict[str, Any]) -> str:
             bytes=_span(sel_raw["bytes"]) if sel_raw.get("bytes") else None,
             records=_span(sel_raw["records"]) if sel_raw.get("records") else None,
             json_pointer=sel_raw.get("jsonPointer"),
+            symbol=sel_raw.get("symbol"),
+            span=sel_raw.get("span"),
         )
         if not args.get("ref"):
             raise RetrievalError("get requires a ref")

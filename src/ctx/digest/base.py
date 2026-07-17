@@ -42,6 +42,15 @@ class DigestContext:
     stdout: StreamView
     stderr: StreamView
     focus_terms: tuple[str, ...] = field(default_factory=tuple)
+    # Store access lets profiles mint deterministic span tokens at omission
+    # points (SPEC §6.4). Optional so rendering stays testable store-free.
+    store: Store | None = None
+
+    def mint_span(self, stream: "StreamView", kind: str, **kw: Any) -> str | None:
+        if self.store is None:
+            return None
+        blob = str(self.manifest["streams"][stream.name]["blob"])
+        return self.store.register_span(blob, kind, **kw)
 
     @classmethod
     def load(
@@ -67,7 +76,14 @@ class DigestContext:
                 name, size, int(meta["lines"]), meta["mediaType"], text, parsed_fully
             )
         terms = tuple(t for t in re.split(r"\W+", (focus or "").lower()) if len(t) >= 2)
-        return cls(ws=ws, manifest=manifest, stdout=views["stdout"], stderr=views["stderr"], focus_terms=terms)
+        return cls(
+            ws=ws,
+            manifest=manifest,
+            stdout=views["stdout"],
+            stderr=views["stderr"],
+            focus_terms=terms,
+            store=store,
+        )
 
     # ------------------------------------------------------------- helpers
     def command_line(self) -> str:

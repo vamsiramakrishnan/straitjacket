@@ -69,6 +69,7 @@ def _main_slow(args: list[str]) -> int:
     p_get.add_argument("--records", help="A:B record span (JSONL)")
     p_get.add_argument("--json-pointer", dest="json_pointer", help="RFC 6901 pointer")
     p_get.add_argument("--symbol", help="Python def/class dotted name (stdlib ast)")
+    p_get.add_argument("--span", help="opaque span token minted by a digest")
 
     p_stats = sub.add_parser("stats", help="bounded schema/shape statistics")
     p_stats.add_argument("ref", nargs="?", default="repo:")
@@ -290,6 +291,7 @@ def _cmd_retrieval(ws, ns, verb: str) -> int:
                 records=_span(ns.records) if ns.records else None,
                 json_pointer=ns.json_pointer,
                 symbol=ns.symbol,
+                span=ns.span,
             )
             out = get(store, ws, ns.ref, selector)
         else:
