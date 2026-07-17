@@ -52,6 +52,26 @@ REDACTION_PATTERNS: dict[str, re.Pattern[str]] = {
 }
 
 
+try:  # optional fast path (Rust); stdlib retry keeps acceptance identical
+    import orjson as _orjson
+except ImportError:  # pragma: no cover - environment-dependent
+    _orjson = None
+
+
+def loads_fast(text: str | bytes):
+    """json.loads with an opportunistic orjson fast path. orjson is ~6-10x
+    faster on large documents but stricter (rejects NaN/Infinity); any
+    orjson failure retries with stdlib json so semantics never narrow."""
+    import json as _json
+
+    if _orjson is not None:
+        try:
+            return _orjson.loads(text)
+        except Exception:
+            pass
+    return _json.loads(text)
+
+
 def estimate_tokens(n_bytes: int) -> int:
     """Cheap deterministic token estimate: ~4 bytes per token."""
     return max(1, n_bytes // 4) if n_bytes else 0

@@ -7,7 +7,7 @@ from collections import Counter
 from typing import Any
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int
+from ctx.textutil import fmt_int, loads_fast
 
 
 def _shape(value: Any, depth: int = 0) -> str:
@@ -37,7 +37,7 @@ class JsonProfile(Profile):
         if not ctx.stdout.parsed_fully:
             return None
         try:
-            self._doc = json.loads(ctx.stdout.text)
+            self._doc = loads_fast(ctx.stdout.text)
         except json.JSONDecodeError:
             return None
         return "stdout parses as a single JSON document"
@@ -69,7 +69,7 @@ class JsonLinesProfile(Profile):
         parsed = []
         for ln in lines[:5]:
             try:
-                parsed.append(json.loads(ln))
+                parsed.append(loads_fast(ln))
             except json.JSONDecodeError:
                 return None
         if not all(isinstance(p, dict) for p in parsed):
@@ -86,7 +86,7 @@ class JsonLinesProfile(Profile):
                 continue
             records += 1
             try:
-                obj = json.loads(ln)
+                obj = loads_fast(ln)
             except json.JSONDecodeError:
                 continue
             if isinstance(obj, dict):

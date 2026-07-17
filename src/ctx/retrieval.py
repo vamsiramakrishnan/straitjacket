@@ -657,7 +657,9 @@ def get(
 
     if selector.json_pointer is not None:
         try:
-            doc = json.loads(data.decode("utf-8", "replace"))
+            from ctx.textutil import loads_fast
+
+            doc = loads_fast(data.decode("utf-8", "replace"))
         except json.JSONDecodeError as e:
             raise RetrievalError(f"content is not JSON: {e}") from e
         node: Any = doc

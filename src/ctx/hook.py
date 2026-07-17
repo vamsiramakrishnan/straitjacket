@@ -498,16 +498,31 @@ def _ledger_charge(workspace_root: str | None, session_id: str, nbytes: int) -> 
         ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
         os.makedirs(ledger_dir, exist_ok=True)
         path = os.path.join(ledger_dir, safe + ".count")
-        total = 0
+        # Parallel tool calls fire hooks concurrently; an advisory flock
+        # makes the read-modify-write atomic so charges are never lost.
+        # fcntl is stdlib (POSIX); on platforms without it the original
+        # racy-but-fail-open behavior is preserved.
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
         try:
-            with open(path, "r", encoding="ascii") as f:
-                total = int(f.read().strip() or 0)
-        except (OSError, ValueError):
-            total = 0
-        total += int(nbytes)
-        with open(path, "w", encoding="ascii") as f:
-            f.write(str(total))
-        return total
+            try:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            raw = os.read(fd, 64)
+            try:
+                total = int(raw.decode("ascii").strip() or 0)
+            except ValueError:
+                total = 0
+            total += int(nbytes)
+            payload = str(total).encode("ascii")
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, payload)
+            os.ftruncate(fd, len(payload))
+            return total
+        finally:
+            os.close(fd)  # closing releases the flock
     except Exception:
         return 0
 
