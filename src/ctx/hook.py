@@ -33,6 +33,21 @@ Two-layer steering design ("rewrite, don't reject"):
 Never rewritten: ctx-routed commands (already allowed), secret-path and
 outside-workspace force_asks, and interactive-suspect commands (pagers,
 bare REPLs, stdin consumers, ``head -f``).
+
+Session read ledger ("death by a thousand small reads"): single native reads
+under ``max_inline_bytes`` pass raw, but a session that walks a codebase
+file-by-file is cumulatively unbounded. Every allowed native Read is charged
+to a per-session byte counter stored at
+``<workspace>/.ctx-session-reads/<session_id>.count`` (a single ASCII
+integer; rewritten oversized reads are charged ``max_inline_bytes``). Once
+the cumulative total exceeds ``[budgets] session_read_budget_bytes``
+(default 256 KiB), further reads come under graduated pressure: under
+rewrite steering they are allowed but bounded via ``updatedInput`` with a
+small ``limit`` window; under ``steering = "deny"`` they are denied with the
+ctx remediation. All ledger IO is fail-open — any error degrades to counting
+nothing, never blocking a read. Reads of the ledger directory itself are
+never counted. Projects should add ``.ctx-session-reads/`` to their
+``.gitignore``; the leading dot keeps it out of casual listings.
 """
 
 from __future__ import annotations
@@ -84,6 +99,8 @@ _HEAD_TAIL_MAX = 400  # max -n allowed for native head/tail
 
 _MAX_INLINE_BYTES_DEFAULT = 16384
 _MAX_INLINE_LINES_DEFAULT = 240
+_SESSION_READ_BUDGET_DEFAULT = 262144  # 256 KiB of raw native reads per session
+_LEDGER_DIR_NAME = ".ctx-session-reads"
 _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
 
 _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
@@ -102,6 +119,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "steering": "auto",
         "max_inline_bytes": _MAX_INLINE_BYTES_DEFAULT,
         "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
+        "session_read_budget_bytes": _SESSION_READ_BUDGET_DEFAULT,
         "allow_commands": [],
         "deny_commands": [],
     }
@@ -125,6 +143,9 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         )
         policy["max_inline_lines"] = int(
             budgets.get("max_inline_lines", policy["max_inline_lines"])
+        )
+        policy["session_read_budget_bytes"] = int(
+            budgets.get("session_read_budget_bytes", policy["session_read_budget_bytes"])
         )
         # Repo-tunable classification: prefix matches against canonical argv.
         policy["allow_commands"] = [str(x) for x in guard.get("allow_commands", [])]
@@ -464,8 +485,47 @@ def _extract_line_count(argv: list[str]) -> int | None:
     return 10  # head/tail default is bounded
 
 
+def _ledger_charge(workspace_root: str | None, session_id: str, nbytes: int) -> int:
+    """Add ``nbytes`` to the per-session native-read counter and return the
+    new cumulative total. The ledger is a single ASCII integer at
+    ``<workspace>/.ctx-session-reads/<session_id>.count``. Fail-open by
+    contract: any IO or parse problem returns 0 (no pressure is ever applied
+    because of a broken ledger, and this function never raises)."""
+    if not workspace_root:
+        return 0
+    try:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id)[:80] or "unknown"
+        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        os.makedirs(ledger_dir, exist_ok=True)
+        path = os.path.join(ledger_dir, safe + ".count")
+        total = 0
+        try:
+            with open(path, "r", encoding="ascii") as f:
+                total = int(f.read().strip() or 0)
+        except (OSError, ValueError):
+            total = 0
+        total += int(nbytes)
+        with open(path, "w", encoding="ascii") as f:
+            f.write(str(total))
+        return total
+    except Exception:
+        return 0
+
+
+def _read_budget_reason(total: int) -> str:
+    return (
+        f"CTX_CONTEXT_GUARD: session native-read budget exceeded "
+        f"(~{total // 1024} KiB raw reads); reads are now bounded — use "
+        "ctx search repo: '<pattern>' or ctx get repo:<path> "
+        "--symbol/--lines for targeted evidence"
+    )
+
+
 def classify_read(
-    path_str: str, workspace_root: str | None, policy: dict[str, Any]
+    path_str: str,
+    workspace_root: str | None,
+    policy: dict[str, Any],
+    session_id: str = "unknown",
 ) -> dict[str, str]:
     if _SECRET_PATH_RE.search(path_str.replace("\\", "/")):
         return _force_ask(
@@ -481,6 +541,9 @@ def classify_read(
         size = os.stat(path_str).st_size
     except OSError:
         return dict(DECISION_ALLOW)  # nonexistent/new file: let the tool error
+    # The session ledger itself is bookkeeping, never evidence: reads of it
+    # are neither counted nor pressured.
+    in_ledger = _LEDGER_DIR_NAME in path_str.replace("\\", "/").split("/")
     limit = int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT))
     if size > limit:
         decision: dict[str, Any] = _deny(
@@ -498,7 +561,27 @@ def classify_read(
                     "slices use: ctx get repo:<relative-path> --lines A:B"
                 ),
             }
+            if not in_ledger:
+                # A rewritten read still lands ~max_inline_bytes of content.
+                _ledger_charge(workspace_root, session_id, limit)
         return decision
+    if in_ledger:
+        return dict(DECISION_ALLOW)
+    total = _ledger_charge(workspace_root, session_id, size)
+    budget = int(
+        policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT)
+    )
+    if total > budget:
+        reason = _read_budget_reason(total)
+        if _steering_allows(policy):
+            max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+            pressured: dict[str, Any] = dict(DECISION_ALLOW)
+            pressured["_rewrite"] = {
+                "fields": {"limit": max_lines // 4},
+                "reason": reason,
+            }
+            return pressured
+        return _deny(reason)
     return dict(DECISION_ALLOW)
 
 
@@ -555,10 +638,15 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
         return _apply_rewrite(decision, tool_input, command_key)
 
     if "read" in lowered or lowered in ("open_file", "view_file"):
+        session_id = str(
+            payload.get("session_id") or payload.get("conversation_id") or "unknown"
+        )
         for key in ("AbsolutePath", "TargetFile", "file_path", "path", "Path"):
             v = tool_input.get(key)
             if isinstance(v, str) and v:
-                return _apply_rewrite(classify_read(v, workspace_root, policy), tool_input)
+                return _apply_rewrite(
+                    classify_read(v, workspace_root, policy, session_id), tool_input
+                )
         return dict(DECISION_ALLOW)
 
     if "list" in lowered or "find_by_name" in lowered or "grep" in lowered:

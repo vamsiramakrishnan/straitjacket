@@ -37,6 +37,7 @@ class Budgets:
     max_inline_bytes: int = 16384
     max_inline_lines: int = 240
     max_matches: int = 80
+    session_read_budget_bytes: int = 262144
 
 
 @dataclass(frozen=True)
