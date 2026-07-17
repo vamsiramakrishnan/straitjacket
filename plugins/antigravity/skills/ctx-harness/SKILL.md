@@ -27,6 +27,12 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 8. Never re-run a command merely to recover output already stored under a handle.
 9. Never inspect the CTX backing-store path directly and never paste a complete blob into the conversation.
 10. Prefer one multi-pattern search over serial single-pattern searches.
+11. Cite evidence by handle and coordinate (`run:<id>#stdout L14238`), never
+    by re-quoting it: quoted evidence duplicates context and burns output
+    tokens, while the citation resolves exactly for any reader.
+12. Keep intermediate narration to one terse line per step; reserve full
+    prose for the final user-facing report. Sub-agent reports use the
+    checkpoint shape (goal, findings, evidence handles, negatives).
 
 ## Repository references
 
