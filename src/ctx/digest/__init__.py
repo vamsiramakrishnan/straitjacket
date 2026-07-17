@@ -13,6 +13,7 @@ from typing import Any
 from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
+from ctx.digest.logprof import LogTemplateProfile
 from ctx.digest.moreprofs import BuildProfile, GitDiffProfile, GoTestProfile, JestProfile
 from ctx.digest.pytestprof import PytestProfile
 from ctx.digest.text import TextProfile
@@ -30,6 +31,7 @@ _PROFILES: tuple[Profile, ...] = (
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),
+    LogTemplateProfile(),
     TextProfile(),
 )
 
