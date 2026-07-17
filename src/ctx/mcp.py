@@ -74,7 +74,7 @@ def _resolve_cached(workspace_arg: str | None) -> tuple[Any, Any]:
     if hit and now - hit[0] < _WS_CACHE_TTL:
         return hit[1], hit[2]
     ws = resolve_workspace(workspace_arg)
-    store = Store(ws.workspace_id)
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     _WS_CACHE[workspace_arg] = (now, ws, store)
     return ws, store
 

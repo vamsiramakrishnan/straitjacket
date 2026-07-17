@@ -169,7 +169,7 @@ def _main_slow(args: list[str]) -> int:
         if ns.cmd == "gc":
             from ctx.store import Store
 
-            store = Store(ws.workspace_id)
+            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
             days = ns.retention_days or ws.config.store.retention_days
             result = store.gc(days)
             print(
@@ -182,7 +182,7 @@ def _main_slow(args: list[str]) -> int:
             from ctx.store import Store
 
             ref = parse_ref(ns.ref)
-            store = Store(ws.workspace_id)
+            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
             store.pin(ref.id or "")
             print(f"pinned {ref.display()}")
             return 0
@@ -190,7 +190,7 @@ def _main_slow(args: list[str]) -> int:
             from ctx.checkpoint import create_checkpoint, show_checkpoint
             from ctx.store import Store
 
-            store = Store(ws.workspace_id)
+            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
             if ns.show:
                 print(show_checkpoint(store, ws, ns.show))
                 return 0
@@ -233,7 +233,7 @@ def _cmd_run(ws, ns) -> int:
         print("ctx run: no command given (use: ctx run -- <command> [args...])", file=sys.stderr)
         return 2
 
-    store = Store(ws.workspace_id)
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
         capture = run_capture(
             ws,
@@ -268,7 +268,7 @@ def _cmd_retrieval(ws, ns, verb: str) -> int:
     from ctx.retrieval import RetrievalError, Selector, _span, charge_turn_budget, get, search, stats
     from ctx.store import Store
 
-    store = Store(ws.workspace_id)
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
         if verb == "search":
             out = search(

@@ -138,6 +138,10 @@ class Workspace:
         """Repo-relative file listing, respecting .gitignore (via git when
         available) plus .ctxignore. Deterministically sorted."""
         base = self.confine(subtree or ".", must_exist=True)
+        if base.is_file():
+            # File selector (repo:<path-to-file>): the corpus is that file.
+            rel = self.relativize(base)
+            return [] if self.is_ignored(rel) else [rel]
         rels: list[str] = []
         if self.git is not None and self.config.workspace.respect_gitignore:
             try:

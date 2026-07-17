@@ -112,8 +112,14 @@ class Store:
     """Per-workspace artifact store. Handles are scoped to the workspace
     (SPEC §12.2); raw store paths are never emitted to the model."""
 
-    def __init__(self, workspace_id: str, state_root: Path | None = None):
+    def __init__(
+        self,
+        workspace_id: str,
+        state_root: Path | None = None,
+        retention_days: int = 30,
+    ):
         self.workspace_id = workspace_id
+        self.retention_days = retention_days
         self.root = (state_root or default_state_root()) / "workspaces" / workspace_id
         self.blob_dir = self.root / "blobs" / "sha256"
         self.manifest_dir = self.root / "manifests"
@@ -203,8 +209,9 @@ class Store:
         manifest["id"] = f"sha256:{h}"
         _atomic_write(self.manifest_dir / f"{h}.json", canonical_json(manifest))
         self._register(h, kind, {})
-        # Retention lease so gc keeps recent artifacts (SPEC §12.3).
-        self.lease(h, "retention", ttl_days=None)
+        # Time-bounded retention lease (SPEC §12.3): keeps the artifact alive
+        # for the retention window; pins/checkpoints extend indefinitely.
+        self.lease(h, "retention", ttl_days=self.retention_days)
         return h
 
     def get_manifest(self, manifest_id: str) -> dict[str, Any]:
@@ -298,17 +305,20 @@ class Store:
         now = time.time()
         cutoff = now - retention_days * 86400
         live: set[str] = set()
-        pinned = {
+        # Every unexpired lease keeps its object alive — pins (NULL expiry)
+        # and time-bounded retention/checkpoint leases alike. Expired leases
+        # no longer protect anything.
+        leased = {
             r[0]
             for r in self.db.execute(
-                "SELECT id FROM leases WHERE reason='pin' AND expires_at IS NULL"
+                "SELECT id FROM leases WHERE expires_at IS NULL OR expires_at > ?", (now,)
             )
         }
         recent = {
             r[0]
             for r in self.db.execute("SELECT id FROM objects WHERE created_at >= ?", (cutoff,))
         }
-        live |= pinned | recent
+        live |= leased | recent
         # Mark blobs referenced by live manifests.
         for mid in list(live):
             mpath = self.manifest_dir / f"{mid}.json"

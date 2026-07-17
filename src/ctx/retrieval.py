@@ -283,6 +283,7 @@ def search(
     if not patterns:
         raise RetrievalError("at least one pattern is required")
     ref = _parse(ref_text)
+    store, ws = _route_workspace(store, ws, ref)
     budget = ws.config.budgets
     cap = max_matches or budget.max_matches
 
@@ -528,6 +529,33 @@ def _parse(ref_text: str) -> Ref:
     return parse_ref(ref_text)
 
 
+def _route_workspace(store: Store, ws: Workspace, ref: Ref) -> tuple[Store, Workspace]:
+    """Resolve a ws:<alias>/ reference to its target workspace and store.
+
+    A reference carrying an alias must never silently execute against the
+    current workspace (wrong-repository evidence). Unknown aliases are
+    rejected with the fix, not guessed (SPEC §5.1, §15).
+    """
+    if ref.workspace_alias is None:
+        return store, ws
+    from pathlib import Path as _Path
+
+    from ctx.workspace import resolve_workspace
+
+    path = ws.config.aliases.get(ref.workspace_alias)
+    if path is None:
+        known = ", ".join(sorted(ws.config.aliases)) or "none configured"
+        raise RetrievalError(
+            f"unknown workspace alias {ref.workspace_alias!r} (known: {known}); "
+            "define it under [aliases] in ctx.toml or pass --workspace"
+        )
+    target_path = _Path(path)
+    if not target_path.is_absolute():
+        target_path = ws.root / target_path
+    target = resolve_workspace(str(target_path))
+    return Store(target.workspace_id), target
+
+
 def _span(spec: str) -> tuple[int, int]:
     m = re.match(r"^(\d+):(\d+)$", spec.strip())
     if not m:
@@ -547,6 +575,7 @@ def get(
     """Exact bounded slice with provenance. Oversized requests return a
     bounded preview plus continuation coordinates (never silent flooding)."""
     ref = _parse(ref_text)
+    store, ws = _route_workspace(store, ws, ref)
     budget = ws.config.budgets
 
     label: str
@@ -774,6 +803,7 @@ _LANG_BY_EXT = {
 
 def stats(store: Store, ws: Workspace, ref_text: str, *, scope: str | None = None) -> str:
     ref = _parse(ref_text)
+    store, ws = _route_workspace(store, ws, ref)
     budget = ws.config.budgets
     out: list[str] = []
 

@@ -84,6 +84,9 @@ class Config:
     store: StorePolicy = field(default_factory=StorePolicy)
     redaction: Redaction = field(default_factory=Redaction)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # ws:<alias> routing targets: alias -> workspace path (absolute, or
+    # relative to this workspace root). Committed in ctx.toml [aliases].
+    aliases: dict[str, str] = field(default_factory=dict)
     deny_globs: tuple[str, ...] = BUILTIN_DENY_GLOBS
 
 
@@ -124,6 +127,12 @@ def load_config(workspace_root: Path | None) -> Config:
         patterns=tuple(red_raw.get("patterns", Redaction().patterns)),
     )
 
+    aliases = {
+        str(k): str(v)
+        for k, v in (raw.get("aliases") or {}).items()
+        if isinstance(v, str)
+    }
+
     return Config(
         version=int(raw.get("version", 1)),
         repo_key=raw.get("repo_key"),
@@ -133,6 +142,7 @@ def load_config(workspace_root: Path | None) -> Config:
         store=store,
         redaction=redaction,
         scopes=scopes,
+        aliases=aliases,
     )
 
 
