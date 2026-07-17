@@ -483,12 +483,45 @@ def classify_read(
         return dict(DECISION_ALLOW)  # nonexistent/new file: let the tool error
     limit = int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT))
     if size > limit:
-        return _deny(
+        decision: dict[str, Any] = _deny(
             f"CTX_CONTEXT_GUARD: file is {size} bytes (> {limit} inline budget).\n"
             f"Use: ctx get repo:<relative-path> --lines A:B\n"
             f"or:  ctx search repo:<relative-path> '<pattern>' --context 3"
         )
+        if _steering_allows(policy):
+            max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+            decision["_rewrite"] = {
+                "fields": {"limit": max_lines},
+                "reason": (
+                    f"CTX_CONTEXT_GUARD: file is {size} bytes (> {limit} inline "
+                    f"budget); bounded to the first {max_lines} lines. For other "
+                    "slices use: ctx get repo:<relative-path> --lines A:B"
+                ),
+            }
+        return decision
     return dict(DECISION_ALLOW)
+
+
+def _apply_rewrite(
+    decision: dict[str, Any],
+    tool_input: dict[str, Any],
+    command_key: str | None = None,
+) -> dict[str, Any]:
+    """Convert the layer-1 ``_rewrite`` hint into the public ``rewrite``
+    field, preserving the original tool_input key names and every unrelated
+    field (description, timeout, …) untouched in ``updatedInput``."""
+    hint = decision.pop("_rewrite", None)
+    if not hint:
+        return decision
+    updated = dict(tool_input)
+    if "command" in hint:
+        if not command_key:
+            return decision  # no command field to substitute: keep plain decision
+        updated[command_key] = hint["command"]
+    else:
+        updated.update(hint.get("fields", {}))
+    decision["rewrite"] = {"updatedInput": updated, "reason": hint["reason"]}
+    return decision
 
 
 def classify(payload: dict[str, Any]) -> dict[str, str]:
@@ -506,18 +539,26 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
     lowered = tool_name.lower()
     if "command" in lowered or lowered in ("bash", "shell", "exec"):
         command = ""
+        command_key = None
         for key in ("CommandLine", "command", "Command", "cmd"):
             v = tool_input.get(key)
             if isinstance(v, str):
-                command = v
+                command, command_key = v, key
                 break
-        return classify_command(command, policy)
+        cwd = None
+        for key in ("Cwd", "cwd"):
+            v = tool_input.get(key)
+            if isinstance(v, str) and v:
+                cwd = v
+                break
+        decision = classify_command(command, policy, cwd=cwd or workspace_root)
+        return _apply_rewrite(decision, tool_input, command_key)
 
     if "read" in lowered or lowered in ("open_file", "view_file"):
         for key in ("AbsolutePath", "TargetFile", "file_path", "path", "Path"):
             v = tool_input.get(key)
             if isinstance(v, str) and v:
-                return classify_read(v, workspace_root, policy)
+                return _apply_rewrite(classify_read(v, workspace_root, policy), tool_input)
         return dict(DECISION_ALLOW)
 
     if "list" in lowered or "find_by_name" in lowered or "grep" in lowered:
@@ -535,9 +576,24 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
     return dict(DECISION_ALLOW)
 
 
-def _to_claude_code_schema(decision: dict[str, str]) -> dict[str, Any]:
+def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
     """Translate the canonical decision into Claude Code's PreToolUse hook
-    schema (hookSpecificOutput.permissionDecision: allow|deny|ask)."""
+    schema (hookSpecificOutput.permissionDecision: allow|deny|ask).
+
+    Layer 2: a decision carrying a ``rewrite`` becomes a transparent input
+    substitution — ``permissionDecision: "allow"`` with ``updatedInput``
+    directly under ``hookSpecificOutput``, which replaces the tool's
+    arguments before it runs (https://code.claude.com/docs/en/hooks)."""
+    rewrite = decision.get("rewrite")
+    if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": rewrite["updatedInput"],
+                "permissionDecisionReason": str(rewrite.get("reason", "")),
+            }
+        }
     mapping = {"allow": "allow", "deny": "deny", "force_ask": "ask"}
     out: dict[str, Any] = {
         "hookSpecificOutput": {
@@ -548,6 +604,26 @@ def _to_claude_code_schema(decision: dict[str, str]) -> dict[str, Any]:
     if decision.get("reason"):
         out["hookSpecificOutput"]["permissionDecisionReason"] = decision["reason"]
     return out
+
+
+def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
+    """Layer 2 for the antigravity dialect. A decision carrying a ``rewrite``
+    becomes the canonical substitution form; everything else passes through
+    unchanged (byte-identical to the pure deny contract).
+
+    Assumed Antigravity input-substitution contract (mirrors the decision
+    schema; not yet published upstream):
+
+        {"decision": "allow", "updatedInput": {...}, "reason": "..."}
+    """
+    rewrite = decision.get("rewrite")
+    if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
+        return {
+            "decision": "allow",
+            "updatedInput": rewrite["updatedInput"],
+            "reason": str(rewrite.get("reason", "")),
+        }
+    return {k: v for k, v in decision.items() if k != "rewrite" and not k.startswith("_")}
 
 
 def main_pre_tool_use(flavor: str = "antigravity") -> int:
@@ -572,7 +648,9 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
         else:
             decision = dict(DECISION_ALLOW)
     emitted: dict[str, Any] = (
-        _to_claude_code_schema(decision) if flavor == "claude-code" else decision
+        _to_claude_code_schema(decision)
+        if flavor == "claude-code"
+        else _to_antigravity_schema(decision)
     )
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")

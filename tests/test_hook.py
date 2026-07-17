@@ -37,6 +37,14 @@ def _classify(tool_name, tool_input, workspace=None):
     return classify(payload)
 
 
+def _steering_deny(workspace):
+    """Pin the workspace to the pure deny-with-remediation contract so the
+    deny assertions below stay covered verbatim (steering off)."""
+    (workspace / "ctx.toml").write_text(
+        'version = 1\n[guard]\nsteering = "deny"\n', encoding="utf-8"
+    )
+
+
 def test_hook_emits_single_json_on_garbage_stdin():
     decision = _invoke_hook("this is not json {{{")
     assert decision == {"decision": "allow"}  # fail-open in default mode
@@ -48,9 +56,11 @@ def test_hook_emits_single_json_on_empty_stdin():
 
 
 def test_deny_unbounded_command_with_remediation(tmp_path):
+    _steering_deny(tmp_path)
     d = _classify("run_command", {"CommandLine": "pytest -q", "Cwd": str(tmp_path)}, tmp_path)
     assert d["decision"] == "deny"
     assert "ctx run -- pytest -q" in d["reason"]
+    assert set(d) == {"decision", "reason"}  # no rewrite attached under steering=deny
 
 
 def test_allow_ctx_routed_command(tmp_path):
@@ -65,12 +75,14 @@ def test_allow_bounded_commands(tmp_path):
 
 
 def test_deny_unbounded_git_and_cat(tmp_path):
+    _steering_deny(tmp_path)
     for cmd in ("git log", "git diff", "cat big.log", "find . -name '*.py'", "rg pattern"):
         d = _classify("run_command", {"CommandLine": cmd}, tmp_path)
         assert d["decision"] == "deny", cmd
 
 
 def test_pipeline_with_head_is_not_auto_safe(tmp_path):
+    _steering_deny(tmp_path)
     d = _classify("run_command", {"CommandLine": "cat huge.log | head -n 5"}, tmp_path)
     assert d["decision"] == "force_ask"
 
@@ -91,6 +103,7 @@ def test_force_ask_outside_workspace_read(tmp_path):
 
 
 def test_deny_large_file_read(tmp_path):
+    _steering_deny(tmp_path)
     big = tmp_path / "big.txt"
     big.write_text("x" * 20000, encoding="utf-8")
     d = _classify("Read", {"file_path": str(big)}, tmp_path)
@@ -182,11 +195,12 @@ def test_interpreter_bypass_channel_denied(tmp_path):
     assert d["decision"] in ("deny", "force_ask")
 
 
-def test_claude_code_flavor_schema():
+def test_claude_code_flavor_schema(tmp_path):
     import subprocess as sp
 
+    _steering_deny(tmp_path)
     payload = json.dumps(
-        {"tool_name": "Bash", "tool_input": {"command": "pytest -q"}, "cwd": "/tmp"}
+        {"tool_name": "Bash", "tool_input": {"command": "pytest -q"}, "cwd": str(tmp_path)}
     )
     import os
 
