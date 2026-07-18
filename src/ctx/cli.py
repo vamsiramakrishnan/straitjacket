@@ -83,6 +83,22 @@ def _main_slow(args: list[str]) -> int:
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
     p_map.add_argument("--focus", help="boost files whose path or symbols match")
 
+    p_def = sub.add_parser("def", help="symbol definition site (snapshot + span)")
+    p_def.add_argument("target", help="repo:<path>:<Symbol.dotted>")
+
+    p_refs = sub.add_parser("refs", help="reference sites for a symbol")
+    p_refs.add_argument("symbol", help="name or Class.method dotted name")
+    p_refs.add_argument("--path", help="restrict sites to a subtree")
+
+    p_diag = sub.add_parser("diag", help="deterministic lint/syntax digest")
+    p_diag.add_argument("path", nargs="?", help="restrict to a subtree")
+
+    p_policy = sub.add_parser("policy", help="compiled steering policy")
+    pol_sub = p_policy.add_subparsers(dest="policy_cmd", required=True)
+    p_pc = pol_sub.add_parser("compile", help="compile policy from telemetry")
+    p_pc.add_argument("--min-runs", type=int, dest="min_runs")
+    pol_sub.add_parser("show", help="print the compiled policy")
+
     sub.add_parser("init", help="write ctx.toml and .ctxignore templates")
 
     p_doctor = sub.add_parser("doctor", help="validate installation and store health")
@@ -190,6 +206,10 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_diff(ws, ns)
         if ns.cmd == "map":
             return _cmd_map(ws, ns)
+        if ns.cmd in ("def", "refs", "diag"):
+            return _cmd_code(ws, ns)
+        if ns.cmd == "policy":
+            return _cmd_policy(ws, ns)
         if ns.cmd == "init":
             from ctx.installer import init_workspace
 
@@ -328,6 +348,52 @@ def _cmd_map(ws, ns) -> int:
     if warning:
         print(warning)
     print(out)
+    return 0
+
+
+def _cmd_code(ws, ns) -> int:
+    from ctx.codeverbs import cmd_def, cmd_diag, cmd_refs
+    from ctx.retrieval import RetrievalError, charge_turn_budget
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        if ns.cmd == "def":
+            out = cmd_def(store, ws, ns.target)
+        elif ns.cmd == "refs":
+            out = cmd_refs(store, ws, ns.symbol, ns.path)
+        else:
+            out = cmd_diag(store, ws, ns.path)
+    except RetrievalError as e:
+        print(f"ctx {ns.cmd}: {e}", file=sys.stderr)
+        return 1
+    warning = charge_turn_budget(store, ws, out)
+    if warning:
+        print(warning)
+    print(out)
+    return 0
+
+
+def _cmd_policy(ws, ns) -> int:
+    if ns.policy_cmd == "show":
+        path = ws.root / "ctx-policy.toml"
+        if path.is_file():
+            print(path.read_text(encoding="utf-8"))
+        else:
+            print("no compiled policy")
+        return 0
+    try:
+        from ctx.policy import compile_policy, render_policy, write_policy
+    except ImportError:
+        print("policy module not available", file=sys.stderr)
+        return 1
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    kwargs = {"min_runs": ns.min_runs} if ns.min_runs is not None else {}
+    policy = compile_policy(store, ws, **kwargs)
+    print(render_policy(policy))
+    print(f"written: {write_policy(ws, policy)}")
     return 0
 
 
