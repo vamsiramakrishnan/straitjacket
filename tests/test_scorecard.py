@@ -81,6 +81,30 @@ def test_scorecard_effort_mix_and_timing(proxy_dir):
     assert sc["per_model"]["claude-sonnet-5"]["out"] == 520
 
 
+def test_interleaved_threads_are_not_invalidations(tmp_path):
+    """Metrology regression (declared debt, now resolved): a parallel side
+    thread's small cache_read must not be judged against the main thread's
+    running max. Only a genuine same-thread regression counts."""
+    d = tmp_path / "proxy"
+    d.mkdir()
+    recs = []
+    # Main thread grows 10→20→30 msgs with growing reads.
+    for i, (m, r) in enumerate([(10, 50_000), (20, 60_000), (30, 70_000)], 1):
+        recs.append(_wire_record(i, msgs=m, cre=500, read=r))
+    # Side thread interleaves at small msg counts with small reads.
+    recs.append(_wire_record(4, msgs=2, cre=300, read=5_000))
+    recs.append(_wire_record(5, msgs=4, cre=300, read=8_000))
+    # Genuine regression WITHIN the main thread: msgs grew, read shrank.
+    recs.append(_wire_record(6, msgs=32, cre=9_000, read=40_000))
+    (d / "wire.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8"
+    )
+    from ctx.scorecard import compute_scorecard
+
+    sc = compute_scorecard(d)
+    assert sc["invalidations"] == 1  # the real one; zero false positives
+
+
 def test_scorecard_none_without_observations(tmp_path):
     from ctx.scorecard import compute_scorecard
 

@@ -9,7 +9,9 @@
     "S1": "0dbfb88dbba08643",
     "S2": "d4626ff59f933018",
     "S3": "37ce89523e10dd29",
-    "S4": "7f8f3ee6f639eeb0"
+    "S4": "7f8f3ee6f639eeb0",
+    "S5": "15a3ab12e7ccdb57",
+    "S6": "d03569eff903b011"
   },
   "tools": "Bash Read Grep Glob Edit Write MultiEdit"
 }
