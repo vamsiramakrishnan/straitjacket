@@ -121,10 +121,23 @@ class LintProfile(Profile):
             parts = path.replace("\\", "/").split("/")
             return "/".join(parts[-2:]) if len(parts) > 2 else path
 
-        body.append(
-            "  by file (exact): "
-            + " · ".join(f"{_short(f)}×{n}" for f, n in sorted(by_file.most_common(8)))
-        )
+        # Repair-mode affordance (measured: in the live lint-fix benchmark
+        # the census alone LOST to naive — for bulk repair the full list is
+        # the work queue). Each file's diagnostic block gets its own span,
+        # so fixing file-by-file is one retrieval per file, not per question.
+        stream = ctx.stdout if ctx.stdout.lines else ctx.stderr
+        file_lines: dict[str, list[int]] = {}
+        for lineno, f, _, _ in diags:
+            file_lines.setdefault(f, []).append(lineno)
+        file_bits = []
+        for f, n in sorted(by_file.most_common(8)):
+            span_lines = file_lines[f]
+            fsid = ctx.mint_span(
+                stream, "region", a=min(span_lines), b=max(span_lines)
+            )
+            tag = f" span {fsid}" if fsid else ""
+            file_bits.append(f"{_short(f)}×{n}{tag}")
+        body.append("  by file (exact): " + " · ".join(file_bits))
         first_line = diags[0][0]
         end = min(first_line + 6, len(self._lines))
         stream = ctx.stdout if ctx.stdout.lines >= end else ctx.stderr
