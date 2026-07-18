@@ -184,6 +184,7 @@ class _Observer:
         self._lock = threading.Lock()
         self._requests = 0
         self._cum = {"cache_read": 0, "cache_creation": 0, "output": 0}
+        self.last_window_pct: float | None = None  # read by the rescue tier
 
     def record(
         self,
@@ -232,6 +233,8 @@ class _Observer:
             "ms": {k: round(v, 1) for k, v in sorted((ms or {}).items())},
             "reused_conn": reused_conn,
         }
+        if req_obs.get("rescued"):
+            record["rescued"] = int(req_obs["rescued"])
         with (self._dir / "wire.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
 
@@ -245,6 +248,8 @@ class _Observer:
             + usage.get("cache_creation_input_tokens", 0)
         )
         limit = _context_limit(model, beta_1m_header)
+        if last_input:
+            self.last_window_pct = round(100 * last_input / limit, 1)
         doc = {
             "model": model,
             "last_input_tokens": last_input,
@@ -271,6 +276,7 @@ class _ProxyServer(ThreadingHTTPServer):
     ctx_ssl: ssl.SSLContext | None = None
     ctx_pool: list | None = None  # idle upstream connections
     ctx_pool_lock: threading.Lock | None = None
+    ctx_rescue = None  # RescueState when Tier-1 rescue is opted in
 
 
 class _RelayHandler(BaseHTTPRequestHandler):
@@ -289,6 +295,17 @@ class _RelayHandler(BaseHTTPRequestHandler):
             return
 
         server: _ProxyServer = self.server  # type: ignore[assignment]
+        rescued = 0
+        if (
+            server.ctx_rescue is not None
+            and self.command == "POST"
+            and self.path.split("?", 1)[0].endswith("/messages")
+        ):
+            # Tier-1 (opt-in) lossless rescue: deterministic epoch-latched
+            # elision; the default observer never enters this branch.
+            body, rescued = server.ctx_rescue.maybe_rescue(
+                body, server.ctx_observer.last_window_pct
+            )
         resp = conn = None
         reused = False
         connect_ms = ttfb_ms = 0.0
@@ -368,10 +385,13 @@ class _RelayHandler(BaseHTTPRequestHandler):
         try:
             usage = scanner.usage if is_sse else _usage_from_json(bytes(accumulated))
             beta_1m = "1m" in (self.headers.get("anthropic-beta") or "")
+            req_obs = _observe_request(self.path, body)
+            if rescued:
+                req_obs["rescued"] = rescued  # elided blocks, disclosed on the wire
             server.ctx_observer.record(
                 path=self.path,
                 status=status,
-                req_obs=_observe_request(self.path, body),
+                req_obs=req_obs,
                 usage=usage,
                 beta_1m_header=beta_1m,
                 ms={"connect": connect_ms, "ttfb": ttfb_ms, "total": total_ms},
@@ -391,15 +411,21 @@ class _RelayHandler(BaseHTTPRequestHandler):
             fwd_path = upstream.path.rstrip("/") + self.path
         conn.putrequest(self.command, fwd_path, skip_host=True, skip_accept_encoding=True)
         conn.putheader("Host", upstream.netloc)
-        has_length = False
+        had_length = False
         for name, value in self.headers.items():
-            if name.lower() in _HOP_BY_HOP:
+            lower = name.lower()
+            if lower in _HOP_BY_HOP:
                 continue
-            if name.lower() == "content-length":
-                has_length = True
+            if lower == "content-length":
+                # Always recomputed below: the body may have been de-chunked
+                # or (Tier-1 rescue) deterministically rewritten.
+                had_length = True
+                continue
             conn.putheader(name, value)
-        if body and not has_length:  # request arrived chunked
+        if body:
             conn.putheader("Content-Length", str(len(body)))
+        elif had_length:
+            conn.putheader("Content-Length", "0")
         conn.endheaders(body if body else None)
 
     def _acquire(self, server: _ProxyServer) -> tuple[http.client.HTTPConnection, bool]:
@@ -465,7 +491,11 @@ class _RelayHandler(BaseHTTPRequestHandler):
 
 # -------------------------------------------------------------- entry point
 def _make_server(
-    port: int, upstream: str, state_dir: Path, workspace_id: str = ""
+    port: int,
+    upstream: str,
+    state_dir: Path,
+    workspace_id: str = "",
+    rescue_pct: float = 0.0,
 ) -> _ProxyServer:
     if "://" not in upstream:
         upstream = "https://" + upstream
@@ -477,14 +507,31 @@ def _make_server(
     server.ctx_ssl = ssl.create_default_context()
     server.ctx_pool = []
     server.ctx_pool_lock = threading.Lock()
+    if rescue_pct and rescue_pct > 0:
+        from ctx.rescue import RescueState
+
+        server.ctx_rescue = RescueState(state_dir, rescue_pct)
     return server
 
 
-def serve_proxy(port: int, upstream: str, state_dir: Path, workspace_id: str = "") -> None:
+def serve_proxy(
+    port: int,
+    upstream: str,
+    state_dir: Path,
+    workspace_id: str = "",
+    rescue_pct: float = 0.0,
+) -> None:
     """Run the observer proxy in the foreground until SIGINT."""
-    server = _make_server(port, upstream, state_dir, workspace_id)
+    server = _make_server(port, upstream, state_dir, workspace_id, rescue_pct)
     host, bound_port = server.server_address[:2]
     print(f"ctx proxy: listening on {host}:{bound_port} -> {upstream}", file=sys.stderr)
+    if server.ctx_rescue is not None:
+        print(
+            f"ctx proxy: Tier-1 rescue ENABLED at {rescue_pct:g}% window — "
+            "old large tool_results elide to file-backed stubs (lossless); "
+            "this mode is not byte-exact",
+            file=sys.stderr,
+        )
     try:
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:

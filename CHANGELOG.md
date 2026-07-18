@@ -4,6 +4,26 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.10.0] - 2026-07-18
+
+Lossless mid-session rescue (docs/LOSSLESS-RESCUE.md) — the rewriting
+proxy's last structural edge, taken without its costs. Opt-in Tier-1:
+`ctx wrap claude --rescue-pct 70` (or `ctx proxy --rescue-pct`); the
+default proxy remains the byte-exact Tier-0 observer.
+
+- Epoch-latched elision: at a window-pressure crossing, ONE deterministic
+  set freezes (tool_results older than the 6 most recent, >1 KiB); every
+  subsequent request rewrites to a byte-identical prefix, so the cache is
+  re-bought once at the smaller size and stays stable. Simulated with
+  measured prices and real S4 wire shapes: ~18× less cache overhead than
+  per-request rewriting, 18 turns of lossless runway per 27k elided.
+- Nothing destroyed: elided bytes persist verbatim to
+  `<state>/elided/<sha256>.txt` before the stub exists; stubs carry hash,
+  size, and retrieval path; `rescued: N` disclosed on every wire record;
+  startup banner marks the mode non-byte-exact. Fail-open on any parse
+  problem. Property-tested: determinism, grown-transcript prefix
+  stability, epoch latching across restarts.
+
 ## [0.9.0] - 2026-07-18
 
 The priced-context wave (thesis: docs/PRICED-CONTEXT.md — metadata as

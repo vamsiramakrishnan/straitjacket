@@ -139,6 +139,11 @@ def _main_slow(args: list[str]) -> int:
     p_proxy.add_argument("--upstream", required=True, help="e.g. https://api.anthropic.com")
     p_proxy.add_argument("--state-dir", required=True, dest="state_dir")
     p_proxy.add_argument("--workspace-id", default="", dest="workspace_id")
+    p_proxy.add_argument(
+        "--rescue-pct", type=float, default=0.0, dest="rescue_pct",
+        help="opt-in Tier-1 lossless rescue: at this window %%, elide old "
+        "large tool_results to file-backed stubs (0 = pure observer)",
+    )
 
     p_wrap = sub.add_parser("wrap", help="run one agent session under the harness")
     p_wrap.add_argument("host", choices=["claude", "antigravity"])
@@ -171,7 +176,13 @@ def _main_slow(args: list[str]) -> int:
 
             from ctx.proxy import serve_proxy
 
-            serve_proxy(ns.port, ns.upstream, _Path(ns.state_dir), ns.workspace_id)
+            serve_proxy(
+                ns.port,
+                ns.upstream,
+                _Path(ns.state_dir),
+                ns.workspace_id,
+                rescue_pct=ns.rescue_pct,
+            )
             return 0
 
         if ns.cmd == "wrap":
@@ -191,6 +202,17 @@ def _main_slow(args: list[str]) -> int:
                 if agent_args.index("--proxy") < tail:
                     use_proxy = True
                     agent_args.remove("--proxy")
+            rescue_pct = 0.0
+            if "--rescue-pct" in agent_args:
+                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+                i = agent_args.index("--rescue-pct")
+                if i < tail and i + 1 < len(agent_args):
+                    try:
+                        rescue_pct = float(agent_args[i + 1])
+                    except ValueError:
+                        rescue_pct = 0.0
+                    del agent_args[i : i + 2]
+                    use_proxy = True  # rescue implies the proxy
             if ns.print_config:
                 print(print_config(ns.host))
                 return 0
@@ -198,7 +220,9 @@ def _main_slow(args: list[str]) -> int:
             if agent_args and agent_args[0] == "--":
                 agent_args = agent_args[1:]
             if ns.host == "claude":
-                return wrap_claude(ws.root, agent_args, use_proxy=use_proxy)
+                return wrap_claude(
+                    ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct
+                )
             return wrap_antigravity(ws.root)
 
         ws = resolve_workspace(ns.workspace)

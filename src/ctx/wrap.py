@@ -134,7 +134,7 @@ def _wait_for_port(port: int, timeout: float = 5.0) -> bool:
 
 
 def _start_proxy(
-    workspace_root: Path, ctx_exe: str
+    workspace_root: Path, ctx_exe: str, rescue_pct: float = 0.0
 ) -> tuple[subprocess.Popen | None, dict[str, str] | None]:
     """Spawn the Tier-0 observer proxy and return (process, child env).
 
@@ -144,16 +144,16 @@ def _start_proxy(
     port = _free_port()
     upstream = os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
     state_dir = workspace_root / ".ctx-session-reads" / "proxy"
-    proc = subprocess.Popen(
-        [
-            *shlex.split(ctx_exe),
-            "proxy",
-            "--port", str(port),
-            "--upstream", upstream,
-            "--state-dir", str(state_dir),
-        ],
-        cwd=workspace_root,
-    )
+    argv = [
+        *shlex.split(ctx_exe),
+        "proxy",
+        "--port", str(port),
+        "--upstream", upstream,
+        "--state-dir", str(state_dir),
+    ]
+    if rescue_pct > 0:
+        argv += ["--rescue-pct", str(rescue_pct)]
+    proc = subprocess.Popen(argv, cwd=workspace_root)
     if not _wait_for_port(port, 5.0):
         _stop_proxy(proc)
         print("ctx wrap: observer proxy failed to start; continuing without it", file=sys.stderr)
@@ -202,6 +202,7 @@ def wrap_claude(
     agent_args: list[str],
     ctx_exe: str | None = None,
     use_proxy: bool = False,
+    rescue_pct: float = 0.0,
 ) -> int:
     """Launch `claude` with harness hooks injected; leave zero residue."""
     claude = shutil.which("claude")
@@ -223,7 +224,7 @@ def wrap_claude(
     child_env: dict[str, str] | None = None
     try:
         if use_proxy:
-            proxy_proc, child_env = _start_proxy(workspace_root, exe)
+            proxy_proc, child_env = _start_proxy(workspace_root, exe, rescue_pct)
         if not _claude_supports_settings(claude):
             print(
                 "ctx wrap: this claude build lacks --settings; "
