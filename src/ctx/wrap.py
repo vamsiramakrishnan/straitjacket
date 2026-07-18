@@ -34,7 +34,12 @@ _OUTPUT_DISCIPLINE = (
     "Output discipline: narrate tersely. Never restate or quote file or tool "
     "output back into the conversation — cite coordinates instead (file:line, "
     "run:/blob: handles from ctx digests). Summaries are a few sentences, not "
-    "a report; prefer acting over describing what you will do."
+    "a report; prefer acting over describing what you will do. "
+    "Solution ladder — before writing any code, prefer in this order: "
+    "(1) not needed at all, (2) reuse what already exists here, (3) the "
+    "standard library, (4) a one-liner, (5) minimal new code. Be lazy about "
+    "the solution, never about reading. If you deliberately defer an "
+    "improvement, declare it in one line instead of building it."
 )
 
 

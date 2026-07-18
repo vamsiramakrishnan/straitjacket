@@ -181,14 +181,27 @@ def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
             ["git", "status", "--porcelain"],
             cwd=workspace_root, capture_output=True, text=True, timeout=20,
         )
-        untracked = sum(
-            1 for ln in status.stdout.splitlines() if ln.startswith("??")
-        ) if status.returncode == 0 else 0
+        untracked_paths = [
+            ln[3:] for ln in status.stdout.splitlines() if ln.startswith("??")
+        ] if status.returncode == 0 else []
+        # Creation tasks do all their work in untracked files; count their
+        # lines too (bounded: text-decodable, first 200 files).
+        lines_new = 0
+        for rel in untracked_paths[:200]:
+            p = Path(workspace_root) / rel
+            try:
+                if p.is_file() and p.stat().st_size < 1_048_576:
+                    lines_new += len(
+                        p.read_bytes().decode("utf-8").splitlines()
+                    )
+            except (OSError, UnicodeDecodeError):
+                continue
         sc["deliverable"] = {
             "insertions": ins,
             "deletions": dels,
             "files_changed": files,
-            "files_new": untracked,
+            "files_new": len(untracked_paths),
+            "lines_new": lines_new,
         }
     except Exception:
         pass

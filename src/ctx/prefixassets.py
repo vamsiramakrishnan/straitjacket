@@ -23,9 +23,13 @@ import hashlib
 import json
 from pathlib import Path
 
-# Bump on any intentional prefix change; the changelog entry for the bump
-# should note that users pay one cold cache write per model.
-PREFIX_VERSION = 1
+# Bump ONLY when prefix-resident bytes change (the changelog entry must
+# note that users pay one cold cache write per model). Invocation-loaded
+# tiers (skill BODY, loaded on trigger) are tracked separately below and
+# may change without a bump — that is the progressive-disclosure split.
+# v2: solution ladder adopted into the wrap discipline prompt after a
+# measured A/B win (evals/rtk-corpus eval doc).
+PREFIX_VERSION = 2
 
 _MANIFEST_NAME = "prefix-manifest.json"
 
@@ -34,26 +38,43 @@ def manifest_path() -> Path:
     return Path(__file__).resolve().parent / _MANIFEST_NAME
 
 
+def _split_skill(raw: bytes) -> tuple[bytes, bytes]:
+    """(frontmatter, body) — the frontmatter description is prefix-resident;
+    the body loads on invocation (progressive disclosure tiers)."""
+    text = raw.decode("utf-8")
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            head = text[: end + 4]
+            return head.encode("utf-8"), text[end + 4 :].encode("utf-8")
+    return raw, b""
+
+
 def prefix_assets() -> dict[str, bytes]:
-    """Every injected text that lands in a host prompt prefix.
+    """Every injected text that lands in a host prompt prefix, plus the
+    invocation-loaded skill body (tracked, but changes to it are not
+    cache-relevant — see PREFIX_VERSION policy above).
 
     - wrap discipline prompt (appended system prompt, wrap print mode)
     - explorer agent definition (agent description enters the system prompt)
     - MCP tool description (tool definitions are prefix content)
-    - skill definition (its description is listed in the prompt)
+    - skill frontmatter (its description is listed in the prompt)
+    - skill body (loaded only when the skill triggers)
     """
     from ctx.installer import _template_dir
     from ctx.mcp import TOOL_SCHEMA
     from ctx.wrap import _OUTPUT_DISCIPLINE
 
     template = _template_dir()
+    skill_head, skill_body = _split_skill(
+        (template / "skills" / "ctx-harness" / "SKILL.md").read_bytes()
+    )
     assets: dict[str, bytes] = {
         "wrap.output_discipline": _OUTPUT_DISCIPLINE.encode("utf-8"),
         "mcp.tool_description": str(TOOL_SCHEMA["description"]).encode("utf-8"),
         "agent.ctx-explorer": (template / "agents" / "ctx-explorer.md").read_bytes(),
-        "skill.ctx-harness": (
-            template / "skills" / "ctx-harness" / "SKILL.md"
-        ).read_bytes(),
+        "skill.ctx-harness.frontmatter": skill_head,
+        "skill.ctx-harness.body": skill_body,
     }
     return assets
 

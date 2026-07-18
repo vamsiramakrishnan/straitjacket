@@ -33,18 +33,32 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 12. Keep intermediate narration to one terse line per step; reserve full
     prose for the final user-facing report. Sub-agent reports use the
     checkpoint shape (goal, findings, evidence handles, negatives).
+13. Apply the solution ladder before writing any code — prefer in order:
+    not needed at all, reuse what exists, standard library, a one-liner,
+    minimal new code. Be lazy about the solution, never about reading.
+    Deliberately deferred improvements are declared
+    (`ctx debt add "<note>" --ref repo:file:line`), never silently skipped.
+
+## Verb index
+
+`run` (capture) · `search` (batched patterns) · `get` (exact slices incl.
+`--span`) · `stats` (shape; on one code file: priced symbol outline) ·
+`map` (ranked codebase map) · `def`/`refs`/`diag` (symbol verbs) ·
+`diff run:A run:B` (regression delta) · `stats --session` / `gain`
+(economics) · `checkpoint` (cache epoch) · `debt` (deferral ledger).
+Full flags and when-to-use detail: read `references/verbs.md`.
 
 ## Repository references
 
-- `repo:` — current workspace.
-- `repo:path/to/file` — current file; CTX snapshots returned evidence.
-- `repo:path/to/folder` — scoped subtree.
-- `run:<id>#stdout` and `run:<id>#stderr` — captured invocation streams.
-- `ws:<alias>/repo:<path>` — explicit root in a multi-workspace session.
+- `repo:` — current workspace; `repo:path` — file or subtree
+  (snapshot-on-read). `run:<id>#stdout|#stderr` — captured streams.
+- `ws:<alias>/repo:<path>` — explicit root in multi-workspace sessions.
+- Addressing edge cases (ignores, symlinks, nested repos): read
+  `references/repository-addressing.md`.
 
 ## Decision rule
 
-Use native Antigravity reads only when the result is statically bounded and small. Otherwise use CTX. Typical CTX operations include tests, builds, linters, type-checkers, logs, traces, recursive listings, broad searches, API/CLI dumps, large JSON/CSV, Git history, and large diffs.
+Use native Antigravity reads only when the result is statically bounded and small. Otherwise use CTX. Typical CTX operations include tests, builds, linters, type-checkers, logs, traces, recursive listings, broad searches, API/CLI dumps, large JSON/CSV, Git history, and large diffs. Borderline cases: read `references/routing-policy.md`.
 
 ## Degraded mode
 

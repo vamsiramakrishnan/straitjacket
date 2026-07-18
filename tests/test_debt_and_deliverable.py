@@ -75,7 +75,8 @@ def test_deliverable_metrics_from_git(ws):
           "invalidations": 0, "cold_prefix_tok": 0}
     attach_deliverable(sc, ws)
     d = sc["deliverable"]
-    assert d == {"insertions": 2, "deletions": 1, "files_changed": 1, "files_new": 1}
+    assert d == {"insertions": 2, "deletions": 1, "files_changed": 1,
+                 "files_new": 1, "lines_new": 1}
     assert "Δcode +2/-1 in 1+1 files" in summary_line(sc)
     json.dumps(sc)  # history-serializable
 

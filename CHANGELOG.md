@@ -4,6 +4,36 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.12.0] - 2026-07-18
+
+The open-threads wave: both remaining designed-but-unbuilt items, each
+gated by an isolated live experiment (both on haiku, one variable per test).
+
+- **Solution ladder adopted into the wrap discipline prompt** after a
+  measured A/B win on a creation task: -28% turns, -33% time, -17% cost,
+  -28% output tokens, 9% less product code with MORE test code (effort
+  floor held), quality green. **This is a prefix-resident change:
+  PREFIX_VERSION 2 — every user pays one cold cache write per model on
+  first post-upgrade session.** The same ladder is skill rule 13, paired
+  with debt declaration.
+- **Emission governor validated live** for the first time: fired exactly
+  once at the 20k tier on a verbose doc-gen session, correct dedup, zero
+  quality damage (non-inferior on every axis; efficiency effect size needs
+  longer sessions and stays under scorecard watch).
+- **`ctx debt`**: declared-omission ledger for engineering decisions
+  (append-only committed JSONL, content-derived idempotent ids,
+  add/list/resolve) — SPEC §8's no-silent-omission rule applied to scope.
+- **Deliverable-level scorecard metrics**: LOC delta, files touched, and
+  untracked-file line counts from git, in the summary line and history —
+  over-engineering and effort-thinning are now measured regressions.
+- **Skill shipped for real progressive disclosure**: body now advertises
+  its reference tier (`references/verbs.md` — full verb/flag detail — plus
+  routing-policy and repository-addressing pointers), carries a compact
+  verb index covering everything since v0.2, and the prefix manifest
+  splits the skill into frontmatter (prefix-resident, cache-relevant) vs
+  body (invocation-loaded, tracked but bump-free) so future body
+  improvements are not mispriced as cache invalidations.
+
 ## [0.11.0] - 2026-07-18
 
 The rtk-inspired wave, hypotheses revised by real-corpus measurement before
