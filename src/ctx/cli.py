@@ -90,6 +90,15 @@ def _main_slow(args: list[str]) -> int:
 
     sub.add_parser("gain", help="cumulative token/cost savings from telemetry")
 
+    p_debt = sub.add_parser("debt", help="declared-omission ledger for deferred decisions")
+    debt_sub = p_debt.add_subparsers(dest="debt_cmd", required=True)
+    p_da = debt_sub.add_parser("add", help="declare a deferred decision")
+    p_da.add_argument("note", help="what was deferred and why")
+    p_da.add_argument("--ref", default="", help="coordinates, e.g. repo:src/x.py:120")
+    debt_sub.add_parser("list", help="show outstanding declared debt")
+    p_dr = debt_sub.add_parser("resolve", help="mark a debt entry resolved")
+    p_dr.add_argument("id", help="entry id from `ctx debt list`")
+
     p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
     p_map.add_argument("--focus", help="boost files whose path or symbols match")
@@ -251,6 +260,19 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_retrieval(ws, ns, "stats")
         if ns.cmd == "gain":
             return _cmd_gain(ws)
+        if ns.cmd == "debt":
+            from ctx import debt as _debt
+
+            if ns.debt_cmd == "add":
+                eid = _debt.add(ws.root, ns.note, ref=ns.ref)
+                print(f"declared: {eid}")
+                return 0
+            if ns.debt_cmd == "resolve":
+                ok = _debt.resolve(ws.root, ns.id)
+                print("resolved" if ok else f"unknown debt id: {ns.id}")
+                return 0 if ok else 1
+            print(_debt.render(ws.root))
+            return 0
         if ns.cmd == "diff":
             return _cmd_diff(ws, ns)
         if ns.cmd == "map":

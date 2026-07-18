@@ -178,11 +178,17 @@ def _emit_scorecard(workspace_root: Path) -> None:
     to stderr and appended to scorecard history for the policy learner.
     Fail-open: a scorecard problem never affects the session's exit."""
     try:
-        from ctx.scorecard import append_history, compute_scorecard, summary_line
+        from ctx.scorecard import (
+            append_history,
+            attach_deliverable,
+            compute_scorecard,
+            summary_line,
+        )
 
         sc = compute_scorecard(workspace_root / ".ctx-session-reads" / "proxy")
         if sc is None:
             return
+        attach_deliverable(sc, workspace_root)
         append_history(workspace_root, sc)
         print(summary_line(sc), file=sys.stderr)
     except Exception:

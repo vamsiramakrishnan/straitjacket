@@ -139,12 +139,60 @@ def render_scorecard(sc: dict) -> str:
 
 def summary_line(sc: dict) -> str:
     """One-liner for wrap's session-end stderr note."""
-    return (
+    line = (
         f"ctx scorecard: {sc['requests']} req · est ${sc['est_cost_usd']:.2f} · "
         f"out {sc['tokens']['output']:,} tok ({sc['output_per_request']}/req) · "
         f"cache hit {sc['cache_hit_pct']}% · invalidations {sc['invalidations']}"
         + (f" · cold-prefix {sc['cold_prefix_tok']:,}" if sc["cold_prefix_tok"] else "")
     )
+    d = sc.get("deliverable")
+    if d:
+        line += (
+            f" · Δcode +{d['insertions']}/-{d['deletions']} in "
+            f"{d['files_changed']}+{d['files_new']} files"
+        )
+    return line
+
+
+def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
+    """Deliverable-level effort metrics (the ponytail lesson: measure the
+    artifact, not just the wire). LOC delta and files touched from git —
+    together with edit_share this makes both over-engineering and
+    effort-thinning measurable regressions. Fail-open: metrics are absent
+    rather than wrong when git is unavailable."""
+    import subprocess
+
+    try:
+        num = subprocess.run(
+            ["git", "diff", "HEAD", "--numstat"],
+            cwd=workspace_root, capture_output=True, text=True, timeout=20,
+        )
+        ins = dels = files = 0
+        if num.returncode == 0:
+            for line in num.stdout.splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    files += 1
+                    if parts[0].isdigit():
+                        ins += int(parts[0])
+                    if parts[1].isdigit():
+                        dels += int(parts[1])
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=workspace_root, capture_output=True, text=True, timeout=20,
+        )
+        untracked = sum(
+            1 for ln in status.stdout.splitlines() if ln.startswith("??")
+        ) if status.returncode == 0 else 0
+        sc["deliverable"] = {
+            "insertions": ins,
+            "deletions": dels,
+            "files_changed": files,
+            "files_new": untracked,
+        }
+    except Exception:
+        pass
+    return sc
 
 
 def append_history(workspace_root: Path, sc: dict) -> None:
