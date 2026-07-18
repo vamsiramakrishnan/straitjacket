@@ -53,7 +53,11 @@ def test_file_selector_python_fallback(state_home, workspace_dir, monkeypatch):
     assert "b.py" not in out
 
     st = stats(store, ws, "repo:a.py")
-    assert "files (exact): 1" in st
+    # Since the priced-context wave, stats on a single .py file returns the
+    # priced outline (still a non-empty single-file corpus, the original
+    # regression this test guards).
+    assert "[ctx stats repo:a.py]" in st
+    assert "file (exact): 1 lines" in st
 
 
 def test_file_selector_git_workspace_fallback(state_home, git_workspace, monkeypatch):

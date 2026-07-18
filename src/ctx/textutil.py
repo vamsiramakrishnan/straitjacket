@@ -77,6 +77,19 @@ def estimate_tokens(n_bytes: int) -> int:
     return max(1, n_bytes // 4) if n_bytes else 0
 
 
+def fmt_tokens_coarse(tok: int) -> str:
+    """Price-tag formatting (docs/PRICED-CONTEXT.md, P3): precision only
+    needs to cross decision thresholds, so buckets get coarser with size.
+    Deterministic; never emits false precision like '8,432'."""
+    if tok < 1000:
+        return f"~{max(1, round(tok / 50) * 50)}"
+    if tok < 10_000:
+        return f"~{max(1, round(tok / 1000))}k"
+    if tok < 100_000:
+        return f"~{5 * max(2, round(tok / 5000))}k"
+    return f"~{25 * round(tok / 25_000)}k"
+
+
 def strip_control(text: str) -> str:
     """Remove ANSI escape sequences and non-printable control characters,
     preserving newlines and tabs."""

@@ -4,6 +4,37 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.9.0] - 2026-07-18
+
+The priced-context wave (thesis: docs/PRICED-CONTEXT.md — metadata as
+economic signposting; every mechanism survived a measured cheap test, and
+the rejects are recorded there too).
+
+- **Price tags in guard steering (M1).** Oversized-read deny/rewrite
+  reasons now carry the cost in the agent's native currency —
+  "~30k tok ≈ 15% of window" — computed from the stat the hook already
+  performs and the proxy's window ground truth when present (measured
+  cost: 0.003 ms). Coarse buckets by design: precision only needs to
+  cross decision thresholds (`textutil.fmt_tokens_coarse`).
+- **Priced symbol outlines (M2).** `ctx stats repo:<file>.py` returns the
+  menu instead of an aggregate: every top-level symbol and method with
+  line range, ~token price, and a resolvable span handle (snapshot-backed,
+  deterministic). Measured 12.8–54.5× cheaper than the file it describes
+  across src/ctx. The guard's oversized-read remediation names this verb —
+  degrading a read is now structured-lossy, not truncated-lossy.
+- **Priced map survivors (M3).** `ctx map` entries carry "~⟨tok⟩ tok · ⟨n⟩d"
+  for ranked survivors only (flat inventories were measured and rejected:
+  5× waste that scales with repo size). Map cache format bumped to
+  ctx.map/v3.
+- Deliberately NOT changed: the MCP tool description — advertising the new
+  verb there would cold-invalidate every user's prompt cache; the prefix
+  manifest holds at version 1 and the outline is discoverable through
+  mid-stream steering instead. (The prefix-stability contract shaping its
+  first real decision.)
+- Benchmark harness: fixture agents can no longer hijack the host's
+  editable install (`PIP_REQUIRE_VIRTUALENV=1` in matrix runner env — an
+  S4 overhaul agent actually did this).
+
 ## [0.8.0] - 2026-07-18
 
 The measurement-loop wave: six mechanisms that convert benchmark

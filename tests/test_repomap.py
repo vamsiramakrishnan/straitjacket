@@ -155,8 +155,13 @@ def test_recent_run_evidence_boosts_mentioned_file(state_home, workspace_dir, mo
     hot = _map(ws, store, budget=1200)
     assert "hot (recent run evidence):" in hot
     assert "  pkg/hot.py" in hot
-    cold_rank = _file_lines(cold).index("repo:pkg/hot.py")
-    hot_rank = _file_lines(hot).index("repo:pkg/hot.py")
+    def _rank(m: str) -> int:
+        return next(
+            i for i, ln in enumerate(_file_lines(m)) if ln.startswith("repo:pkg/hot.py")
+        )
+
+    cold_rank = _rank(cold)
+    hot_rank = _rank(hot)
     assert hot_rank < cold_rank
 
 

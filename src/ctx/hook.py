@@ -664,6 +664,39 @@ def _ledger_charge(workspace_root: str | None, session_id: str, nbytes: int) -> 
         return 0
 
 
+def _price_note(size_bytes: int, workspace_root: str | None) -> str:
+    """Priced-context signpost (docs/PRICED-CONTEXT.md, M1): the cost of a
+    read in the agent's native currency, relativized to its window when the
+    proxy's ground truth is available. Measured cost: ~0.003 ms. Fail-open
+    to an empty string — a price tag must never break a decision."""
+    try:
+        tok = max(1, size_bytes // 4)
+        from ctx.textutil import fmt_tokens_coarse
+
+        note = f"{fmt_tokens_coarse(tok)} tok"
+        if workspace_root:
+            try:
+                path = os.path.join(
+                    workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json"
+                )
+                with open(path, "r", encoding="utf-8") as fh:
+                    limit = json.load(fh).get("context_limit")
+                if isinstance(limit, int) and limit > 0:
+                    note += f" ≈ {max(1, round(100 * tok / limit))}% of window"
+            except Exception:
+                pass
+        return f" ({note})"
+    except Exception:
+        return ""
+
+
+def _outline_hint(path_str: str) -> str:
+    """Menu line for structured files: the priced symbol outline verb."""
+    if path_str.endswith(".py"):
+        return "or:  ctx stats repo:<relative-path>   (priced symbol outline)\n"
+    return ""
+
+
 def _read_budget_reason(total: int) -> str:
     return (
         f"CTX_CONTEXT_GUARD: session native-read budget exceeded "
@@ -699,9 +732,11 @@ def classify_read(
     limit = int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT))
     note = str(policy.get("_window_note", ""))  # window pressure, "" when idle
     if size > limit:
+        price = _price_note(size, workspace_root)
         decision: dict[str, Any] = _deny(
-            f"CTX_CONTEXT_GUARD: file is {size} bytes (> {limit} inline budget).\n"
-            f"Use: ctx get repo:<relative-path> --lines A:B\n"
+            f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline budget).\n"
+            + _outline_hint(path_str)
+            + f"Use: ctx get repo:<relative-path> --lines A:B\n"
             f"or:  ctx search repo:<relative-path> '<pattern>' --context 3" + note
         )
         if _steering_allows(policy):
@@ -709,9 +744,11 @@ def classify_read(
             decision["_rewrite"] = {
                 "fields": {"limit": max_lines},
                 "reason": (
-                    f"CTX_CONTEXT_GUARD: file is {size} bytes (> {limit} inline "
-                    f"budget); bounded to the first {max_lines} lines. For other "
-                    "slices use: ctx get repo:<relative-path> --lines A:B" + note
+                    f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline "
+                    f"budget); bounded to the first {max_lines} lines. "
+                    + _outline_hint(path_str).replace("\n", " ")
+                    + "For other slices use: ctx get repo:<relative-path> --lines A:B"
+                    + note
                 ),
             }
             if not in_ledger:

@@ -160,7 +160,14 @@ def run_pair(scenario: str, model: str, out: pathlib.Path, repo: pathlib.Path) -
         make_fixture(scenario, base, repo)
         cfg = out / f"cc-{scenario}-{model}-{arm}"
         cfg.mkdir(parents=True, exist_ok=True)
-        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg)}
+        # PIP_REQUIRE_VIRTUALENV blocks a fixture agent from `pip install -e .`
+        # hijacking the host's editable ctx install mid-benchmark (it happened:
+        # an S4 overhaul agent re-pointed the global `ctx` at its own clone).
+        env = {
+            **os.environ,
+            "CLAUDE_CONFIG_DIR": str(cfg),
+            "PIP_REQUIRE_VIRTUALENV": "1",
+        }
         argv = ["claude", "-p", task, "--max-turns", str(max_turns),
                 "--output-format", "json", "--allowedTools", TOOLS]
         if MODELS[model]:

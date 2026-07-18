@@ -28,7 +28,7 @@ from ctx.store import Store, _atomic_write
 from ctx.textutil import fmt_int
 from ctx.workspace import Workspace
 
-_FORMAT = "ctx.map/v2"
+_FORMAT = "ctx.map/v3"  # v3: priced survivors (~tok · defs on each entry)
 _ENGINE_BUILTIN = "builtin"
 _ENGINE_GRIMP = "grimp+networkx"
 _DAMPING = 0.85
@@ -48,6 +48,7 @@ class _FileMap:
     imported_by: int = 0
     score: float = 1.0
     focused: bool = False
+    size: int = 0  # bytes — the price tag on survivors (PRICED-CONTEXT M3)
 
 
 # ------------------------------------------------------------- python (ast)
@@ -389,6 +390,10 @@ def _render(
     exhausted = False
     for fm in files:
         header = f"repo:{fm.rel}"
+        if fm.size:
+            from ctx.textutil import fmt_tokens_coarse
+
+            header += f" · {fmt_tokens_coarse(max(1, fm.size // 4))} tok · {len(fm.symbols)}d"
         if fm.imported_by:
             header += f" · imported-by {fm.imported_by}"
         cost = len(header.encode("utf-8")) + 1
@@ -470,7 +475,7 @@ def repo_map(
             source = (ws.root / rel).read_bytes().decode("utf-8", "replace")
         except OSError:
             continue
-        fm = _FileMap(rel=rel)
+        fm = _FileMap(rel=rel, size=len(source.encode("utf-8")))
         try:
             tree = ast.parse(source)
         except SyntaxError:
@@ -482,7 +487,11 @@ def repo_map(
 
     for rel, syms in sorted(_ctags_symbols(ws, [r for r in rels if not r.endswith(".py")]).items()):
         if rel not in files and syms:
-            files[rel] = _FileMap(rel=rel, symbols=list(syms))
+            try:
+                size = (ws.root / rel).stat().st_size
+            except OSError:
+                size = 0
+            files[rel] = _FileMap(rel=rel, symbols=list(syms), size=size)
 
     if engine == _ENGINE_GRIMP:
         try:
