@@ -119,6 +119,9 @@ _MAX_INLINE_BYTES_DEFAULT = 16384
 _MAX_INLINE_LINES_DEFAULT = 240
 _SESSION_READ_BUDGET_DEFAULT = 262144  # 256 KiB of raw native reads per session
 _WINDOW_PRESSURE_PCT_DEFAULT = 70  # window fullness (%) at which budgets tighten
+# Universal emission gate: a PostToolUse tool result larger than this many
+# bytes is replaced by a bounded digest. Keep in sync with config.Budgets.
+_MAX_TOOL_OUTPUT_BYTES_DEFAULT = 16384
 _LEDGER_DIR_NAME = ".ctx-session-reads"
 _POLICY_FILENAME = "ctx-policy.toml"  # compiled learned-policy epoch
 _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
@@ -142,6 +145,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
         "session_read_budget_bytes": _SESSION_READ_BUDGET_DEFAULT,
         "window_pressure_pct": _WINDOW_PRESSURE_PCT_DEFAULT,
+        "max_tool_output_bytes": _MAX_TOOL_OUTPUT_BYTES_DEFAULT,
         "allow_commands": [],
         "deny_commands": [],
         "promoted_commands": [],
@@ -175,6 +179,9 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             )
             policy["window_pressure_pct"] = int(
                 budgets.get("window_pressure_pct", policy["window_pressure_pct"])
+            )
+            policy["max_tool_output_bytes"] = int(
+                budgets.get("max_tool_output_bytes", policy["max_tool_output_bytes"])
             )
             # Repo-tunable classification: prefix matches against canonical argv.
             policy["allow_commands"] = [str(x) for x in guard.get("allow_commands", [])]
@@ -269,6 +276,10 @@ def _apply_window_pressure(
             int(policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT))
             * factor
         ),
+    )
+    tightened["max_tool_output_bytes"] = max(
+        1,
+        int(int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT)) * factor),
     )
     tightened["_head_tail_max"] = max(1, int(_HEAD_TAIL_MAX * factor))
     tightened["_window_note"] = f" [window {pct:g}% full — budgets tightened]"
@@ -499,18 +510,25 @@ def classify_command(
     for prefix in policy.get("deny_commands", []):
         if canonical.startswith(prefix):
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
-    for prefix in policy.get("allow_commands", []):
-        if canonical.startswith(prefix):
-            return dict(DECISION_ALLOW)
-    # Learned policy epoch (ctx-policy.toml): promoted signatures behave
-    # exactly like allow_commands canonical prefixes. Demoted signatures are
-    # checked FIRST and are never allowed via promotion (belt against a
-    # conflicting or hand-edited epoch); a demoted command is not denied
-    # here — it simply falls through to normal classification.
-    if not any(canonical.startswith(p) for p in policy.get("demoted_commands", [])):
-        for prefix in policy.get("promoted_commands", []):
+    # A prefix allow/promotion applies to a single command only. When shell
+    # metacharacters survived the chain/redirect handling above (e.g.
+    # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary
+    # token, so ``canonical`` would still start with an allowed prefix — a
+    # compound-command bypass. Prefix allows are therefore gated on
+    # ``not has_meta`` (deny prefixes are not: denying more is always safe).
+    if not has_meta:
+        for prefix in policy.get("allow_commands", []):
             if canonical.startswith(prefix):
                 return dict(DECISION_ALLOW)
+        # Learned policy epoch (ctx-policy.toml): promoted signatures behave
+        # exactly like allow_commands canonical prefixes. Demoted signatures
+        # are checked FIRST and are never allowed via promotion (belt against
+        # a conflicting or hand-edited epoch); a demoted command is not
+        # denied here — it simply falls through to normal classification.
+        if not any(canonical.startswith(p) for p in policy.get("demoted_commands", [])):
+            for prefix in policy.get("promoted_commands", []):
+                if canonical.startswith(prefix):
+                    return dict(DECISION_ALLOW)
 
     # `bash -c '<inner>'`: classify the inner command, not the shell.
     if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
@@ -605,17 +623,23 @@ def classify_command(
 
 
 def _extract_line_count(argv: list[str]) -> int | None:
+    # A sign-prefixed argument flips head/tail into unbounded mode:
+    # ``tail -n +N`` prints from line N to EOF; ``head -n -N`` prints all but
+    # the last N. Both are effectively ``cat`` and must NOT be read as a small
+    # bounded count. Return None (→ the deny/rewrite path) for those.
+    def _count(raw: str) -> int | None:
+        if raw[:1] in ("+", "-"):
+            return None
+        try:
+            return abs(int(raw))
+        except ValueError:
+            return None
+
     for i, a in enumerate(argv[1:], start=1):
         if a in ("-n", "--lines") and i + 1 < len(argv):
-            try:
-                return abs(int(argv[i + 1].lstrip("+-")))
-            except ValueError:
-                return None
-        if a.startswith("-n"):
-            try:
-                return abs(int(a[2:].lstrip("+-")))
-            except ValueError:
-                return None
+            return _count(argv[i + 1])
+        if a.startswith("-n") and len(a) > 2:
+            return _count(a[2:])
         m = re.match(r"^-(\d+)$", a)
         if m:
             return int(m.group(1))
@@ -861,19 +885,66 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 )
         return dict(DECISION_ALLOW)
 
-    if "list" in lowered or "find_by_name" in lowered or "grep" in lowered:
-        # Directory listings and native search: allow shallow, redirect broad.
-        recursive = bool(
-            tool_input.get("Recursive") or tool_input.get("recursive")
-        )
-        if recursive:
+    if lowered in ("grep", "glob") or "grep" in lowered or "glob" in lowered or (
+        "list" in lowered or "find_by_name" in lowered
+    ):
+        return _apply_rewrite(_classify_native_search(tool_name, tool_input, policy), tool_input)
+
+    return dict(DECISION_ALLOW)
+
+
+# Claude Code native Grep/Glob tools bypass the Bash path entirely (they are
+# their own tools, not shell commands) — so their content output is never
+# wrapped through ``ctx run`` and never digested. We cannot touch their output
+# from a PreToolUse hook, but we CAN bound it transparently: a content-mode
+# grep with no ``head_limit`` gets one injected via ``updatedInput``. The tool
+# still runs, the model adopts nothing, and a flood becomes a bounded slice
+# with a pointer to the structured search digest (measured gap: the model
+# navigates with native Grep, which our old Bash-only matcher never saw).
+_NATIVE_GREP_CAP = 60  # matches returned before the model should narrow
+
+
+def _classify_native_search(
+    tool_name: str, tool_input: dict[str, Any], policy: dict[str, Any]
+) -> dict[str, Any]:
+    lowered = tool_name.lower()
+    recursive = bool(tool_input.get("Recursive") or tool_input.get("recursive"))
+    # Glob / file-name search / listings return paths (bounded-ish); only a
+    # recursive one under strict steering is worth redirecting.
+    if "grep" not in lowered:
+        if recursive and not _steering_allows(policy):
             return _deny(
-                "CTX_CONTEXT_GUARD: recursive listing/search may flood the transcript.\n"
+                "CTX_CONTEXT_GUARD: recursive listing/search may flood.\n"
                 "Use: ctx search repo: '<pattern>' --glob '<glob>'  or  ctx stats repo:"
             )
         return dict(DECISION_ALLOW)
 
-    return dict(DECISION_ALLOW)
+    # Native Grep. files_with_matches / count modes are already small — allow.
+    mode = str(tool_input.get("output_mode") or "files_with_matches")
+    if mode != "content":
+        return dict(DECISION_ALLOW)
+    # Content mode already bounded by the model → respect it.
+    for k in ("head_limit", "headLimit"):
+        v = tool_input.get(k)
+        if isinstance(v, int) and v > 0:
+            return dict(DECISION_ALLOW)
+    if not _steering_allows(policy):
+        return _deny(
+            "CTX_CONTEXT_GUARD: unbounded content grep may flood the transcript.\n"
+            "Add head_limit, or use: ctx run -- grep -rn '<pattern>' <path>  "
+            "(digested, structured by file)"
+        )
+    cap = int(policy.get("_grep_native_cap", _NATIVE_GREP_CAP))
+    decision: dict[str, Any] = dict(DECISION_ALLOW)
+    decision["_rewrite"] = {
+        "fields": {"head_limit": cap},
+        "reason": (
+            f"CTX_CONTEXT_GUARD: content grep bounded to {cap} matches. "
+            "For the full set structured by file (counts, top hits, span): "
+            "ctx run -- grep -rn '<pattern>' <path>"
+        ),
+    }
+    return decision
 
 
 def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
@@ -966,29 +1037,188 @@ def _emission_nudge(payload: dict[str, Any]) -> str | None:
         return None
 
 
+# Navigation governor (docs/CALL-GRAPH): the impact benchmark proved that a
+# capable model, asked for a transitive call graph, hand-traces it with grep —
+# undercounting 18x (22 vs the true 399) or failing outright — even when
+# `ctx impact` is built and taught. Teaching is ignored; forcing backfires
+# (rtk bash-only failed). The measured-correct middle path: detect the
+# dominated pattern (repeated grep for bare identifiers = hand-tracing calls)
+# and price the better verb at the point of friction, exactly once.
+_IDENT_RE = re.compile(r"^[A-Za-z_]\w{2,}$")
+_GREP_PROGS = ("grep", "rg", "egrep", "ag", "ack")
+_NAV_THRESHOLD = 3  # bare-identifier greps before the nudge fires
+
+
+def _grep_symbol(command: str) -> str | None:
+    """If ``command`` is a grep/rg searching for a bare identifier (the
+    signature of tracing a symbol's call sites), return that identifier."""
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return None
+    argv = _unwrap(argv)
+    if not argv or os.path.basename(argv[0]) not in _GREP_PROGS:
+        return None
+    for a in argv[1:]:
+        if a.startswith("-"):
+            continue
+        term = a.strip("'\"")
+        # A bare identifier — not a regex, not a path — is a symbol trace.
+        if _IDENT_RE.match(term):
+            return term
+        return None  # first positional is the pattern; if not an ident, skip
+    return None
+
+
+def _navigation_nudge(payload: dict[str, Any]) -> str | None:
+    """Fire once when the session has grepped for >= _NAV_THRESHOLD distinct
+    bare identifiers — the hand-traced-call-graph pattern. Fail-open."""
+    try:
+        tool = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+        if "bash" not in tool and "command" not in tool:
+            return None
+        ti = payload.get("tool_input") or payload.get("toolInput") or {}
+        command = ""
+        for k in ("command", "Command", "CommandLine", "cmd"):
+            if isinstance(ti.get(k), str):
+                command = ti[k]
+                break
+        symbol = _grep_symbol(command)
+        if not symbol:
+            return None
+        workspace_root = _resolve_workspace_root(payload)
+        if not workspace_root:
+            return None
+        from ctx.engagement import note_symbol_grep
+
+        distinct, fired = note_symbol_grep(workspace_root, symbol)
+        if fired or distinct < _NAV_THRESHOLD:
+            return None
+        return (
+            f"CTX_NAV_GOVERNOR: you have grepped for {distinct} distinct symbols "
+            "— that is hand-tracing a call graph, which grep computes "
+            "unreliably (transitive closure is easy to undercount). One call "
+            "gives the exact graph: `ctx callers <sym>` (direct) or "
+            f"`ctx impact <sym>` (transitive blast radius, e.g. `ctx impact {symbol}`)."
+        )
+    except Exception:
+        return None
+
+
+def _normalize_tool_response(tr: Any) -> tuple[str, str]:
+    """Reduce any tool_response shape to ``(stdout, stderr)`` text.
+
+    Handles the shapes a PostToolUse result actually arrives in: a plain
+    string; a list of ``{type,text}`` content blocks (MCP / Claude tool
+    results); a ``{content: [...]}`` wrapper; a ``{stdout, stderr}`` capture;
+    else a canonical JSON dump (so the JSON profile can still fire)."""
+    if isinstance(tr, str):
+        return tr, ""
+    if isinstance(tr, list):
+        # Collapse to text ONLY when EVERY block is a text block. If any block
+        # is non-text (image / resource / audio), the joined text would
+        # silently drop it — and since this text is exactly what gets
+        # persisted, that would violate lossless-on-disk (the dropped block
+        # would be unrecoverable via `ctx get`). Serialize the whole structure
+        # instead so the artifact is complete.
+        if tr and all(isinstance(b, dict) and isinstance(b.get("text"), str) for b in tr):
+            return "\n".join(b["text"] for b in tr), ""
+        return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
+    if isinstance(tr, dict):
+        if isinstance(tr.get("content"), list):
+            return _normalize_tool_response(tr["content"])
+        if isinstance(tr.get("stdout"), str):
+            return tr["stdout"], tr.get("stderr") if isinstance(tr.get("stderr"), str) else ""
+        if isinstance(tr.get("text"), str):
+            return tr["text"], ""
+    return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
+
+
+def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
+    """The universal output-side gate. When a tool result exceeds the byte
+    budget, persist it losslessly and return a bounded digest (with a working
+    ``ctx get`` ref) to substitute for the raw output via ``updatedToolOutput``.
+    Returns None to pass the result through untouched. Fail-open: any error →
+    None (the raw output is never lost, only un-digested).
+
+    Claude Code only this wave — the Antigravity output-replacement field is
+    unverified upstream, so there we stay nudge-only.
+    """
+    if flavor != "claude-code":
+        return None
+    try:
+        tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
+        tr = None
+        for k in ("tool_response", "toolResponse", "tool_output", "toolOutput", "output", "result", "content"):
+            if k in payload:
+                tr = payload[k]
+                break
+        if tr is None:
+            return None
+        stdout, stderr = _normalize_tool_response(tr)
+
+        # Never digest our own digests or ctx's own tool results (recursion /
+        # double-wrap guard). "[ctx " covers every ctx header — run: (digest),
+        # get / search / stats (retrieval) — so a large `ctx get` slice run via
+        # Bash is not itself re-digested.
+        if stdout.lstrip().startswith("[ctx ") or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
+            return None
+
+        ws_root = _resolve_workspace_root(payload)
+        policy = _apply_window_pressure(_load_guard_policy(ws_root), ws_root)
+        if str(policy.get("mode")) == "advisory":
+            return None
+        threshold = int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT))
+        if len(stdout.encode("utf-8")) + len(stderr.encode("utf-8")) <= threshold:
+            return None  # under budget → byte-identical pass-through
+
+        is_error = bool(
+            payload.get("is_error")
+            or payload.get("isError")
+            or (isinstance(tr, dict) and tr.get("is_error"))
+        )
+        # Lazy: only pay the Store/digest import cost on the over-budget path.
+        from ctx.digest import digest_output
+        from ctx.store import Store
+        from ctx.workspace import resolve_workspace
+
+        ws = resolve_workspace(ws_root or ".")
+        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+        text, _short = digest_output(store, ws, tool_name, stdout, stderr, is_error=is_error)
+        return text
+    except Exception:
+        return None
+
+
 def main_post_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> post-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON object on stdout: either a
-    no-op ``{}`` or an emission-governor nudge in the host dialect."""
+    no-op ``{}`` or a governor nudge (emission or navigation) in the host
+    dialect."""
+    replacement = None
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
             payload = {}
-        nudge = _emission_nudge(payload)
+        # Navigation first: it targets a specific, high-cost wrong pattern;
+        # emission is the ambient volume backstop.
+        nudge = _navigation_nudge(payload) or _emission_nudge(payload)
+        # Universal emission gate: replace over-budget output with a digest.
+        replacement = _emission_gate(payload, flavor)
     except Exception:
         nudge = None
-    if nudge is None:
-        emitted: dict[str, Any] = {}
-    elif flavor == "claude-code":
-        emitted = {
-            "hookSpecificOutput": {
-                "hookEventName": "PostToolUse",
-                "additionalContext": nudge,
-            }
-        }
-    else:  # antigravity dialect mirrors its decision schema
+    if flavor == "claude-code":
+        hso: dict[str, Any] = {"hookEventName": "PostToolUse"}
+        if replacement is not None:
+            hso["updatedToolOutput"] = replacement
+        if nudge is not None:
+            hso["additionalContext"] = nudge
+        emitted: dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
+    elif nudge is not None:  # antigravity dialect: nudge-only (no replacement)
         emitted = {"decision": "allow", "reason": nudge}
+    else:
+        emitted = {}
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
     sys.stdout.flush()

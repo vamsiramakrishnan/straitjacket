@@ -120,6 +120,14 @@ def _main_slow(args: list[str]) -> int:
     p_diag = sub.add_parser("diag", help="deterministic lint/syntax digest")
     p_diag.add_argument("path", nargs="?", help="restrict to a subtree")
 
+    p_callers = sub.add_parser("callers", help="who calls this symbol (call graph)")
+    p_callers.add_argument("symbol", help="name or Class.method dotted name")
+    p_callees = sub.add_parser("callees", help="what this symbol calls (call graph)")
+    p_callees.add_argument("symbol", help="name or Class.method dotted name")
+    p_impact = sub.add_parser("impact", help="transitive callers / blast radius")
+    p_impact.add_argument("symbol", help="name or Class.method dotted name")
+    p_impact.add_argument("--depth", type=int, default=6, help="max hops (≤6)")
+
     p_policy = sub.add_parser("policy", help="compiled steering policy")
     pol_sub = p_policy.add_subparsers(dest="policy_cmd", required=True)
     p_pc = pol_sub.add_parser("compile", help="compile policy from telemetry")
@@ -302,6 +310,18 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_map(ws, ns)
         if ns.cmd in ("def", "refs", "diag"):
             return _cmd_code(ws, ns)
+        if ns.cmd in ("callers", "callees", "impact"):
+            from ctx.callgraph import cmd_callees, cmd_callers, cmd_impact
+            from ctx.store import Store as _S
+
+            store = _S(ws.workspace_id, retention_days=ws.config.store.retention_days)
+            if ns.cmd == "callers":
+                print(cmd_callers(store, ws, ns.symbol))
+            elif ns.cmd == "callees":
+                print(cmd_callees(store, ws, ns.symbol))
+            else:
+                print(cmd_impact(store, ws, ns.symbol, depth=ns.depth))
+            return 0
         if ns.cmd == "policy":
             return _cmd_policy(ws, ns)
         if ns.cmd == "init":

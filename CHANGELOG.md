@@ -4,6 +4,134 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.18.0] - 2026-07-18
+
+The universal emission gate: one output-side gate for every faucet. Prior
+waves plugged faucets one tool at a time (Bash wrapped, Read/Grep/Glob
+input-bounded) — a per-tool if-ladder that never terminates. This wave
+replaces it with a single PostToolUse gate that dispatches on output *shape*,
+not tool name: a new tool needs no new code. Motivated by measurement — a
+routine `mcp__github__list_commits(perPage=100)` returns ~79 KB / ~19.8k
+tokens and is re-sent every turn; its `json/v1` digest is ~0.4–1.4 KB
+(≈57–190×), and the full payload stays retrievable.
+
+- **Universal PostToolUse gate** (`ctx.hook._emission_gate`, claude-code):
+  any tool result over `budgets.max_tool_output_bytes` (default 16384) is
+  replaced — via the documented `hookSpecificOutput.updatedToolOutput` — with
+  a bounded deterministic digest carrying a working `ctx get run:<short>`
+  ref. Under budget → byte-identical no-op. The raw bytes are persisted
+  losslessly first (lossy-in-window, lossless-on-disk); nothing the model
+  needed is ever destroyed, only relocated to an addressable artifact.
+- **Shape-dispatched, name-agnostic**: the gate synthesizes `argv=[tool_name]`
+  and reuses the existing digest registry (`digest.digest_output`), so MCP
+  JSON lands on `json/v1`, grep-shaped output on `search/v1`, prose on
+  `text/v1` — no per-tool branches. Idempotent (never re-digests its own
+  output or `ctx`'s), fail-open (any error → pass-through), deterministic
+  (content-addressed id is a pure function of bytes + tool name).
+- **`json/v1` head-N record inlining**: a shape line alone forced a re-fetch;
+  the digest now inlines the first records' scalar fields + a json-pointer
+  span to the rest (mirrors `search/v1`'s top-matches+span). Byte-stable.
+- **`search/v1`** now recognizes a synthesized `argv=[tool_name]` (native
+  `Grep`, mcp `*search_code` / `*grep*`) so those faucets reach it through
+  the gate; narrow suffix/exact match preserves the log-line theft guard.
+- **Matchers broadened** to every emitting faucet — Claude Code PostToolUse
+  `Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*` (Edit/Write/Todo
+  excluded as tiny), Antigravity nudge-path likewise. Antigravity stays
+  nudge-only (output-replacement contract unverified upstream). Matcher
+  strings are host settings, not prefix assets → no `PREFIX_VERSION` bump.
+- Removed the now-unwired `_post_hook_exe` native-shim selector: the gate
+  needs the Store/digest layer, so PostToolUse runs in Python. A shim that
+  measures bytes and re-execs only over budget is a possible follow-up.
+
+## [0.17.0] - 2026-07-18
+
+The native-search wave: close the model-ignoring gap. Measurement showed
+the model navigates with the *native* `Grep`/`Glob` tools — not shell
+`grep` — so our `Bash|Read` matcher never saw the flood, and the
+navigation governor never fired. This wave intercepts the tools the model
+actually reaches for.
+
+- Matcher extended to `Bash|Read|Grep|Glob` (Claude Code) and
+  `…|grep_search|glob_search|codebase_search` (Antigravity). The tools the
+  model uses to navigate are now in scope, not just shell commands.
+- Native content-mode `Grep` with no `head_limit` gets one injected
+  transparently via `updatedInput` (`head_limit: 60`) — the tool still
+  runs, the model adopts nothing, and an unbounded flood becomes a bounded
+  slice with a pointer to the structured digest. `files_with_matches` /
+  `count` / already-bounded greps pass through raw. Under strict
+  `steering = "deny"` the same case is redirected to `ctx run -- grep`
+  instead (never silently rewritten).
+- `search/v1` digest profile: a wrapped `grep`/`rg` (via `ctx run`) is now
+  rendered as *search results* — exact match count, per-file histogram,
+  top hits with coordinates, and a span to the full set — instead of the
+  generic text profile's byte counts. Sibling of `lint/v1`; the two share
+  the `file:line:content` shape, so `search/v1` is argv-anchored to actual
+  `grep`/`rg`/`ack`/`ag` invocations (a content-ratio trigger was tried and
+  dropped — it stole log and lint lines) and ordered *after* `lint/v1` so
+  diagnostics claim their own output first.
+- No prefix asset changed (matcher strings are host-settings, not
+  resident prompts), so no `PREFIX_VERSION` bump: zero cold-cache cost.
+
+## [0.16.0] - 2026-07-18
+
+The call-graph wave: edges, done in-doctrine. We had nodes (`def`/`refs`);
+this adds the edges that turn a recursive grep-and-read trace into one
+query — the one capability that makes tokensave enviable, built the
+straitjacket way (pure stdlib `ast`, zero new deps, deterministic,
+worktree-hash cached, no daemon, span-backed, addressable).
+
+- `ctx callers <Symbol>` — direct callers, each with file:line.
+- `ctx callees <Symbol>` — in-repo functions it calls.
+- `ctx impact <Symbol> [--depth N]` — transitive callers (blast radius),
+  grouped by hop distance; bounded recursion (≤6). "What breaks if I change
+  this?" in one call. On our own repo, `ctx impact register_span` returns
+  the full 179-node reachable set in ~0.8s (cached thereafter).
+- Name-resolved edges (a call to `foo` binds to any in-repo `def foo`):
+  approximate but disclosed like the ctags map engine; ambiguous names
+  report every candidate, never hidden (SPEC §8). Python-only for now;
+  tree-sitter breadth deferred to an optional `[polyglot]` extra pending a
+  measured win.
+- Ships CLI-first + skill-taught (bump-free). The MCP `op` enum is a prefix
+  asset, so exposing the verbs there is a deliberate future PREFIX_VERSION
+  decision, not paid on spec (same discipline as the v0.9.0 priced outline).
+
+## [0.15.0] - 2026-07-18
+
+The cross-validation wave: two dual-use benchmark cells (S5 library-hunt,
+S6 bug-bash) whose output is repo work — held-out by construction, novel
+regimes, findings adversarially re-verified by hand before harvest
+(evals/cross-validation-2026-07-18.md).
+
+- **6 real defects found and fixed** (of 15 S6 claims; verification
+  refuted 1 and deferred 8 to `ctx debt`). All regression-tested in
+  tests/test_bugbash_s6.py:
+  - compound-command bypass: `allow_commands=["echo"]` let
+    `echo hi && rm -rf x` through — prefix allows now gated on `not
+    has_meta`.
+  - `tail -n +N` / `head -n -N` (whole-file reads) were classified bounded
+    — sign-prefixed counts now route to the unbounded path.
+  - mid-path directory-symlink escape survived `confine` when the full
+    path already existed — now checks each symlink's immediate (one-hop,
+    lexical) target.
+  - `window.json` was clobbered to `window_pct:0` by any usage-less
+    response, silently disengaging the window-pressure throttle — the
+    write is now skipped when a response carries no usage.
+  - `create_checkpoint` crashed (`IndexError`) on a blank evidence line.
+  - a string `patterns` typo in ctx.toml silently disabled ALL secret
+    redaction (chars iterated as patterns) — now isinstance-guarded to
+    the full default set. (Two of these — redaction, window throttle —
+    are security/safety bugs that survived 14 versions + a hand audit.)
+- **Library adoptions** from the doctrine-faithful S5 audit: `_mask_token`'s
+  hand-rolled bounded dict → `functools.lru_cache`; the containment check →
+  `Path.is_relative_to`. Three larger candidates deferred to `ctx debt`.
+- **Metrology fix**: cache-read invalidations are judged within
+  reconstructed transcript threads, not a single global max — parallel
+  tool-call models no longer produce false invalidations (declared
+  metrology debt resolved).
+- **Emission governor validated in the wild**: a 208k-output bug-hunt
+  session crossed all 10 pressure tiers, one nudge each, correct dedup —
+  the first real-load exercise of the mechanism.
+
 ## [0.14.0] - 2026-07-18
 
 The cleanup wave: audit with receipts, debt paid down, and Rust exactly

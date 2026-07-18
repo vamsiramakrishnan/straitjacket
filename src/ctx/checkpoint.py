@@ -34,6 +34,8 @@ def create_checkpoint(
     for item in evidence or []:
         # "run:abc123#stdout L100:120  note text" — first token is the ref.
         parts = item.split(None, 1)
+        if not parts:
+            continue  # blank/whitespace-only evidence line: skip, don't crash
         ref_text = parts[0]
         note = parts[1] if len(parts) > 1 else ""
         try:

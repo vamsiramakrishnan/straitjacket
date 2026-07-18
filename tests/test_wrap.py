@@ -18,12 +18,21 @@ def test_prepare_claude_settings_shape(tmp_path):
     settings = prepare_claude(tmp_path, "/opt/bin/ctx")
     json.dumps(settings)  # must be JSON-serializable
     entry = settings["hooks"]["PreToolUse"][0]
-    assert entry["matcher"] == "Bash|Read"
+    assert entry["matcher"] == "Bash|Read|Grep|Glob"
     hook = entry["hooks"][0]
     assert hook["type"] == "command"
     assert hook["timeout"] == 10
     assert "hook claude-code pre-tool-use" in hook["command"]
     assert hook["command"].startswith("/opt/bin/ctx")
+
+    # PostToolUse: the universal emission gate covers every faucet that emits
+    # into the window (incl. MCP), excludes tiny status tools, and runs in
+    # Python (the Rust shim can't digest).
+    post = settings["hooks"]["PostToolUse"][0]
+    assert post["matcher"] == "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*"
+    assert "Edit" not in post["matcher"] and "Write" not in post["matcher"]
+    post_cmd = post["hooks"][0]["command"]
+    assert post_cmd == "/opt/bin/ctx hook claude-code post-tool-use"
 
 
 def test_prepare_claude_default_exe_is_absolute_or_module(tmp_path):

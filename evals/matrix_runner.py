@@ -99,6 +99,32 @@ TASKS = {
         "Finish with the three answers in a numbered list.",
         25,
     ),
+    "S5": (
+        "Audit src/ctx in this repository for HAND-ROLLED implementations "
+        "that mature, well-maintained libraries could replace. The project "
+        "has a strict dependency doctrine (see README.md and CONTRIBUTING.md): "
+        "stdlib-first hot paths, opportunistic external binaries, optional "
+        "pip extras with deterministic fallbacks — judge candidates against "
+        "that doctrine, not against generic best practice. For each candidate "
+        "report: the code (file:line range), what it hand-rolls, the specific "
+        "replacement library, ADOPT or DECLINE with doctrine-consistent "
+        "reasoning, and estimated replacement diff size. Do NOT modify any "
+        "code. Finish with a ranked table of candidates (most valuable "
+        "first), including the ones you recommend declining.",
+        25,
+    ),
+    "S6": (
+        "Bug hunt in src/ctx of this repository: find REAL defects — logic "
+        "errors, race conditions, resource leaks, incorrect edge-case "
+        "handling, broken invariants — not style issues. For each finding "
+        "report: file:line, a one-paragraph explanation, a concrete failing "
+        "scenario (specific inputs/state -> specific wrong behavior), and "
+        "severity (high/medium/low). Verify each candidate by reading the "
+        "surrounding code carefully; discard anything speculative. Do NOT "
+        "modify any code. Aim for at least 5 findings; quality over "
+        "quantity. Finish with the findings ranked by severity.",
+        30,
+    ),
     "S4": (
         "Do a tech-debt, documentation, and DevEx overhaul of this Python "
         "repository (straitjacket / ctx-harness):\n"
@@ -126,7 +152,7 @@ def make_fixture(scenario: str, dest: pathlib.Path, repo: pathlib.Path) -> None:
             p.write_text(content, encoding="utf-8")
     elif scenario == "S2":
         pass  # empty repository
-    elif scenario in ("S3", "S4"):
+    elif scenario in ("S3", "S4", "S5", "S6"):
         # No pip install: tests/conftest.py puts src/ on sys.path, and the
         # `ctx` executable must stay bound to the host repo — an editable
         # install from a fixture clone would cross-link concurrent pairs.
@@ -147,7 +173,7 @@ def current_branch(repo: pathlib.Path) -> str:
 
 
 def workdir_for(scenario: str, base: pathlib.Path) -> pathlib.Path:
-    return base / "r" if scenario in ("S3", "S4") else base
+    return base / "r" if scenario in ("S3", "S4", "S5", "S6") else base
 
 
 def run_pair(scenario: str, model: str, out: pathlib.Path, repo: pathlib.Path) -> None:

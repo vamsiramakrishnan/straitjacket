@@ -163,6 +163,19 @@ def _dispatch(args: dict[str, Any]) -> str:
             result = cmd_refs(store, ws, symbol, opts.get("path"))
         else:
             result = cmd_diag(store, ws, opts.get("path"))
+    elif op in ("callers", "callees", "impact"):
+        from ctx.callgraph import cmd_callees, cmd_callers, cmd_impact
+
+        opts = args.get("options") or {}
+        symbol = opts.get("symbol") or args.get("ref")
+        if not symbol:
+            raise RetrievalError(f"{op} requires options.symbol")
+        if op == "callers":
+            result = cmd_callers(store, ws, symbol)
+        elif op == "callees":
+            result = cmd_callees(store, ws, symbol)
+        else:
+            result = cmd_impact(store, ws, symbol, depth=int(opts.get("depth", 6)))
     elif op == "repo":
         result = stats(store, ws, "repo:")
     elif op == "doctor":

@@ -52,7 +52,13 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
     rounds = 0  # main-thread model rounds (multi-message requests) — the
     # true unit of session cost (Tura wave): each is ttfb + a suffix write
     cold_prefix = 0
-    max_read = 0
+    # Per-thread read tracking (metrology fix): parallel tool-call models
+    # interleave requests from several transcript threads; comparing a side
+    # thread's cache_read against a single global max misreported prefix
+    # regressions. Each request joins the thread with the largest message
+    # count <= its own (transcripts only grow); regressions are judged
+    # within that thread only.
+    threads: list[dict] = []  # {"msgs": int, "max_read": int}
     est_cost = 0.0
     first_rescued_round: int | None = None
     rescued_blocks = 0
@@ -95,11 +101,21 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
         est_cost += (
             u_in * p["in"] + u_read * p["read"] + u_cre * p["write"] + u_out * p["out"]
         ) / 1e6
+        msgs = int(rec.get("messages", 0) or 0)
         if u_read == 0 and u_cre > 4096 and cold_prefix == 0:
             cold_prefix = u_cre
-        elif u_read and u_read < max_read and rec.get("messages", 0) > 1:
-            invalidations += 1
-        max_read = max(max_read, u_read)
+        elif msgs > 1:
+            thread = None
+            for t in threads:
+                if t["msgs"] <= msgs and (thread is None or t["msgs"] > thread["msgs"]):
+                    thread = t
+            if thread is None:
+                thread = {"msgs": 0, "max_read": 0}
+                threads.append(thread)
+            if u_read and u_read < thread["max_read"]:
+                invalidations += 1
+            thread["msgs"] = msgs
+            thread["max_read"] = max(thread["max_read"], u_read)
         m = rec.get("ms") or {}
         ms["connect"] += m.get("connect", 0.0)
         ms["ttfb"] += m.get("ttfb", 0.0)

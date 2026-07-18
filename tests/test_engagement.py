@@ -184,3 +184,41 @@ def test_post_tool_use_fails_open_on_garbage(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("not json{{{"))
     assert main(["hook", "claude-code", "post-tool-use"]) == 0
     assert json.loads(capsys.readouterr().out) == {}
+
+
+# ------------------------------------------------- navigation governor
+def test_symbol_grep_detection():
+    from ctx.hook import _grep_symbol
+
+    assert _grep_symbol("grep -rn register_span src/") == "register_span"
+    assert _grep_symbol("rg mint_span") == "mint_span"
+    assert _grep_symbol("grep -rn 'def foo' src/") is None  # not a bare ident
+    assert _grep_symbol("cat foo.py") is None
+    assert _grep_symbol("grep -rn foo.bar src/") is None  # dotted, not bare
+
+
+def test_navigation_governor_fires_once_at_threshold(ws):
+    from ctx.hook import _navigation_nudge
+
+    def call(sym):
+        return _navigation_nudge(
+            {"tool_name": "Bash",
+             "tool_input": {"command": f"grep -rn {sym} src/"}, "cwd": str(ws)}
+        )
+    assert call("alpha") is None       # 1 distinct
+    assert call("beta") is None        # 2 distinct
+    n = call("gamma")                  # 3rd → fire
+    assert n is not None and "CTX_NAV_GOVERNOR" in n and "ctx impact gamma" in n
+    assert call("delta") is None       # already fired: silent
+    # a repeat of an already-seen symbol does not re-count
+    assert call("alpha") is None
+
+
+def test_navigation_governor_ignores_non_symbol_greps(ws):
+    from ctx.hook import _navigation_nudge
+
+    for _ in range(5):
+        assert _navigation_nudge(
+            {"tool_name": "Bash",
+             "tool_input": {"command": "grep -rn 'TODO fix' src/"}, "cwd": str(ws)}
+        ) is None  # multi-word pattern is not symbol-tracing

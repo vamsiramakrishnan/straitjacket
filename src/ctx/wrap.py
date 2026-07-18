@@ -89,23 +89,6 @@ def _remove_explorer_agent(created: Path | None) -> None:
             parent.rmdir()  # only succeeds when empty
 
 
-def _post_hook_exe(ctx_exe: str) -> str:
-    """Opportunistic native accelerator for the highest-frequency stage.
-
-    CPython's startup floor is ~29 ms and PostToolUse fires on every
-    Bash/Read/Edit/Write call; the Rust shim (native/ctx-hook-native) does
-    the identical work in ~3 ms (parity-tested byte-for-byte). Selection:
-    CTX_NATIVE_HOOK env, then PATH, else the canonical Python entry —
-    the accelerator is never required."""
-    override = os.environ.get("CTX_NATIVE_HOOK")
-    if override and Path(override).is_file():
-        return override
-    found = shutil.which("ctx-hook-native")
-    if found:
-        return found
-    return ctx_exe
-
-
 def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
     """Claude Code settings dict that routes tool calls through the harness.
 
@@ -116,7 +99,7 @@ def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
         "hooks": {
             "PreToolUse": [
                 {
-                    "matcher": "Bash|Read",
+                    "matcher": "Bash|Read|Grep|Glob",
                     "hooks": [
                         {
                             "type": "command",
@@ -128,11 +111,16 @@ def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
             ],
             "PostToolUse": [
                 {
-                    "matcher": "Bash|Read|Edit|Write",
+                    # Every faucet that emits into the window. Edit/Write/Todo are
+                    # excluded (tiny status results). The universal emission gate
+                    # needs the Store/digest layer, so it runs in Python — the
+                    # Rust shim (which only does the nudge fast-path) is not used
+                    # here.
+                    "matcher": "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*",
                     "hooks": [
                         {
                             "type": "command",
-                            "command": f"{_post_hook_exe(ctx_exe)} hook claude-code post-tool-use",
+                            "command": f"{ctx_exe} hook claude-code post-tool-use",
                             "timeout": 10,
                         }
                     ],

@@ -181,6 +181,32 @@ def claim_emission_tier(workspace_root: Path | str | None, tier: int) -> bool:
     return claimed["new"]
 
 
+def note_symbol_grep(workspace_root: Path | str | None, symbol: str) -> tuple[int, bool]:
+    """Record a bare-identifier grep (navigation governor). Returns
+    (distinct_symbols_grepped, already_nudged). Concurrency-safe; fail-open."""
+    if workspace_root is None:
+        return 0, True
+    result = {"count": 0, "fired": False}
+
+    def step(state: dict[str, Any]) -> dict[str, Any]:
+        syms = state.get("grep_symbols")
+        if not isinstance(syms, list):
+            syms = []
+        if symbol not in syms:
+            syms.append(symbol[:64])
+        state["grep_symbols"] = syms[:64]  # bounded
+        result["count"] = len(state["grep_symbols"])
+        result["fired"] = bool(state.get("nav_nudged"))
+        # Latch the nudge the moment the threshold is first reached, so the
+        # governor fires exactly once per session.
+        if not result["fired"] and result["count"] >= 3:
+            state["nav_nudged"] = True
+        return state
+
+    _mutate_state(workspace_root, step)
+    return result["count"], result["fired"]
+
+
 def filter_digest(text: str, cap: int) -> str:
     """Emission-boundary affordance filter. The stored digest is canonical
     and deterministic (SPEC §8); what enters model context is this filtered

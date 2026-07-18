@@ -10,6 +10,41 @@ from ctx.digest.base import DigestContext, Profile
 from ctx.textutil import fmt_int, loads_fast
 
 
+HEAD_RECORDS = 5  # records inlined verbatim before a span to the rest
+HEAD_WIDTH = 200  # per-record character cap
+
+
+def _project(rec: Any) -> str:
+    """One deterministic line per record: scalar top-level fields only, nested
+    containers collapsed to ``{…}`` / ``[…]``. Byte-stable (sorted keys)."""
+    if isinstance(rec, dict):
+        flat = {
+            k: v
+            for k, v in rec.items()
+            if isinstance(v, (str, int, float, bool)) or v is None
+        }
+        s = json.dumps(flat, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    elif isinstance(rec, list):
+        s = "[…]"
+    else:
+        s = json.dumps(rec, ensure_ascii=False)
+    return s if len(s) <= HEAD_WIDTH else s[: HEAD_WIDTH - 1] + "…"
+
+
+def _dominant_array(doc: Any) -> tuple[list[Any], str] | None:
+    """The array a reader most likely wants to page through, plus its
+    json-pointer prefix. Top-level list → the doc itself; else the first
+    list-valued key (sorted, for determinism)."""
+    if isinstance(doc, list):
+        return doc, ""
+    if isinstance(doc, dict):
+        for k in sorted(doc.keys()):
+            v = doc[k]
+            if isinstance(v, list) and v:
+                return v, f"/{k}"
+    return None
+
+
 def _shape(value: Any, depth: int = 0) -> str:
     if isinstance(value, dict):
         if depth >= 2:
@@ -49,13 +84,35 @@ class JsonProfile(Profile):
             summary.append(f"  records (exact): {fmt_int(len(doc))}")
         elif isinstance(doc, dict):
             summary.append(f"  top-level keys (exact): {fmt_int(len(doc))}")
+
+        # Head-N record inlining: a shape line alone forces a re-fetch to see
+        # any actual data. Inline the first records (scalar fields) + a span to
+        # the rest, mirroring search/v1's top-matches+span. run:PENDING is
+        # rewritten to the real id by render_run_digest.
         rid = "run:PENDING"
+        head: list[str] = []
+        dom = _dominant_array(doc)
+        if dom is not None:
+            arr, ptr_prefix = dom
+            head.append("records (head):")
+            for rec in arr[:HEAD_RECORDS]:
+                head.append("  " + _project(rec))
+            if len(arr) > HEAD_RECORDS:
+                head.append(
+                    f"  … +{fmt_int(len(arr) - HEAD_RECORDS)} more records · "
+                    f"ctx get {rid}#stdout --json-pointer {ptr_prefix}/{HEAD_RECORDS}"
+                )
+
         suggestions = [
             f"ctx get {rid}#stdout --json-pointer /<path>",
             f"ctx stats {rid}",
         ]
         return "\n".join(
-            ctx.header_lines() + summary + self.coverage_lines(ctx, 1) + self.next_lines(ctx, suggestions)
+            ctx.header_lines()
+            + summary
+            + head
+            + self.coverage_lines(ctx, 1)
+            + self.next_lines(ctx, suggestions)
         )
 
 

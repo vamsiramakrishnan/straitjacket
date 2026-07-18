@@ -249,8 +249,14 @@ class _Observer:
             + usage.get("cache_creation_input_tokens", 0)
         )
         limit = _context_limit(model, beta_1m_header)
-        if last_input:
-            self.last_window_pct = round(100 * last_input / limit, 1)
+        if not last_input:
+            # A response with no parseable usage (HTTP error, truncated
+            # stream, non-/messages call) carries no window signal. Writing
+            # window_pct=0 here would clobber a correct prior value and
+            # silently disengage the guard's window-pressure throttle exactly
+            # when the window may be full — so skip the update entirely.
+            return
+        self.last_window_pct = round(100 * last_input / limit, 1)
         doc = {
             "model": model,
             "last_input_tokens": last_input,
