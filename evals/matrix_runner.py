@@ -12,12 +12,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import pathlib
 import shutil
 import subprocess
-import sys
 import textwrap
 
 MODELS = {
@@ -127,14 +127,13 @@ def make_fixture(scenario: str, dest: pathlib.Path, repo: pathlib.Path) -> None:
     elif scenario == "S2":
         pass  # empty repository
     elif scenario in ("S3", "S4"):
+        # No pip install: tests/conftest.py puts src/ on sys.path, and the
+        # `ctx` executable must stay bound to the host repo — an editable
+        # install from a fixture clone would cross-link concurrent pairs.
         subprocess.run(["git", "clone", "-q", str(repo), str(dest / "r")], check=True)
         inner = dest / "r"
         subprocess.run(
             ["git", "checkout", "-q", current_branch(repo)], cwd=inner, check=True
-        )
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", ".", "-q"],
-            cwd=inner, check=True, capture_output=True,
         )
         return
     subprocess.run(["git", "init", "-q", "."], cwd=dest, check=True)
@@ -189,11 +188,17 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=pathlib.Path)
     ap.add_argument("--pairs", nargs="+", required=True,
                     help="scenario:model, e.g. S1:sonnet S1:haiku")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="pairs to run concurrently (each pair is 2 agents)")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    for pair in args.pairs:
-        scenario, model = pair.split(":")
-        run_pair(scenario, model, args.out, args.repo)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futures = []
+        for pair in args.pairs:
+            scenario, model = pair.split(":")
+            futures.append(pool.submit(run_pair, scenario, model, args.out, args.repo))
+        for f in futures:
+            f.result()
     print("MATRIX_DONE", flush=True)
     return 0
 
