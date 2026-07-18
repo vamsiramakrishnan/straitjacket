@@ -120,12 +120,18 @@ head-to-head this iteration (receipts in `evals/`).
   generalization of `ctx seq`: the script is a content-addressed blob
   cited in the digest header, streams stay span-addressable, tracebacks
   are path-free (`File "<stdin>"`), sub-steps opt into per-step handles
-  via nested `ctx run`. Not yet benchmarked head-to-head. Still better
-  than us at: OS-level sandbox isolation (ours arrives with the broker,
-  Phase 3), skeleton indexing across 15 languages (ours: priced outline +
-  map, Python-deep only), model-tier subagent selection. Structurally
-  behind: no provenance — script and output vanish into the chat log with
-  no address.
+  via nested `ctx run`. Measured same-day (evals/eval-collapse doc):
+  mechanically the collapse is decisive exactly where intermediates are
+  structured (146 tok vs 96k naive on a 30-file aggregate; a bash
+  pipeline under `ctx run --shell` already covers stream-shaped chains),
+  and the live A/B found the one-script *discipline* wins (−15–63% cost,
+  fewer turns) while the *verb* went unadopted in bare sessions — a
+  teaching-surface gap, recorded as debt. Still better than us at:
+  OS-level sandbox isolation (ours arrives with the broker, Phase 3),
+  skeleton indexing across 15 languages (ours: priced outline + map,
+  Python-deep only), model-tier subagent selection. Structurally behind:
+  no provenance — script and output vanish into the chat log with no
+  address.
 
 **Regime scoreboard** (worst case and best case, all measured):
 

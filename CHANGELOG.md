@@ -42,6 +42,18 @@ piece keeps one.
   `seq`, computed → `eval`); prefix manifest regenerated — the skill body
   is invocation-tier, so PREFIX_VERSION stays 3 and there is **no cache
   impact**.
+- **Eval set + first measurements** (`evals/evalset_collapse.py`,
+  `evals/ab_eval_live.py`, results in `evals/eval-collapse-2026-07-18.md`,
+  smoke-guarded by `tests/test_evalset_collapse.py`): mechanical arms on
+  real fixtures (fan-out aggregate 146 tok vs 96k naive with the
+  best-play baseline provably unable to finish; bash-pipeline control
+  showing `run --shell` already covers stream-shaped chains; flood/needle
+  provenance net; 299-tok wrong-script recovery vs 192k re-pay) plus a
+  live mechanism-isolated A/B (haiku, n=2) and a wrapped condition. Live
+  findings recorded honestly: the one-script discipline wins (−15–63%
+  cost, fewer turns, −79% cache churn at best) but the verb itself went
+  unadopted (0/3 sessions) and the terse doctrine leaked into final
+  deliverables — both filed in the debt ledger with coordinates.
 
 ## [0.18.0] - 2026-07-18
 
