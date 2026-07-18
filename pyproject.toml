@@ -24,6 +24,11 @@ classifiers = [
 # runtime when present on PATH (never required).
 dependencies = ["pathspec>=0.12"]
 
+[project.urls]
+Homepage = "https://github.com/vamsiramakrishnan/straitjacket"
+Repository = "https://github.com/vamsiramakrishnan/straitjacket"
+Changelog = "https://github.com/vamsiramakrishnan/straitjacket/blob/main/CHANGELOG.md"
+
 [project.scripts]
 ctx = "ctx.cli:main"
 
@@ -31,6 +36,7 @@ ctx = "ctx.cli:main"
 dev = ["pytest>=8", "jsonschema>=4"]
 map = ["grimp>=3", "networkx>=3"]
 fast = ["orjson>=3"]
+code = ["jedi>=0.19"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ctx"]

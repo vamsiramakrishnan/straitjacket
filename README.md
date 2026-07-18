@@ -1,4 +1,7 @@
 # straitjacket 🧥
+
+**Status:** v0.6.0 (pre-1.0, minor bump per mechanism wave) · 195 tests · hosts: Claude Code + Antigravity · Apache-2.0
+
 An artifact-backed, repository-aware context containment harness and execution broker for the Antigravity engine.
 straitjacket forces tight, unyielding structural boundaries on wild, unbounded tool outputs. When an AI agent attempts to run massive cat pipelines, recursive directory listings, or verbose test suites, straitjacket intercepts, digests, and summarizes the output, registering only a tiny, deterministic artifact handle in the model transcript.
 
@@ -79,7 +82,7 @@ reference grammar has two address spaces:
 *(Planned, Phase 3: handles upgraded to project-scoped HMAC capabilities once
 the isolated broker owns the store.)*
 
-## 🛠️ The Four Unified Verbs
+## 🛠️ The Unified Verbs
 The entire Model-facing MCP layer is frozen into one stable tool surface (**ctx**), handling operations entirely via parameter states instead of dynamic tool injection.
 
 ```json
@@ -87,7 +90,7 @@ The entire Model-facing MCP layer is frozen into one stable tool surface (**ctx*
   "name": "ctx",
   "description": "Bounded retrieval against repository state or captured artifacts.",
   "input": {
-    "op": "search | get | stats | repo | doctor",
+    "op": "search | get | stats | map | repo | doctor",
     "ref": "run:<id>[#stdout|#stderr] | snapshot:<id> | repo:[path]",
     "patterns": ["TimeoutError", "deadline"],
     "selector": {"lines": "8412:8440"},
@@ -137,6 +140,30 @@ Exposes high-level metadata maps detailing repository layouts, tree sizes, langu
 ```bash
 ctx stats repo: --scope payments
 ctx stats run:7bd91f2a4c3d
+```
+
+### 5. map
+Deterministic, budget-fitted codebase map: files ranked by a reference graph
+(imports + symbol usage, evidence-weighted — files implicated in recent
+captured runs rank hotter), top symbols per file, every entry addressable via
+`repo:file --symbol X`. Uses grimp+networkx when the `[map]` extra is
+installed and universal-ctags opportunistically for non-Python; transparent
+builtin fallback otherwise. The active engine is disclosed in the map header
+(`engine grimp+networkx` / `engine builtin`) and cache key; identical
+worktrees yield byte-identical maps.
+
+```bash
+ctx map --budget 500 --focus payments
+```
+
+### 6. diff
+Run-to-run regression digest between two captured invocations: exit/signal
+and stream-size deltas, test failure-set deltas with traceback coordinates,
+log template deltas (new-in-B templates carry minted spans), and a `next:`
+line pointing at the most salient new evidence.
+
+```bash
+ctx diff run:7bd91f2a4c3d run:9ae02c17b5ff
 ```
 
 ## 💾 Digest Anatomy
@@ -191,6 +218,26 @@ Strict installs set `steering = "deny"` to keep the pure
 deny-with-remediation contract. Fail-open on internal error is the default;
 fail-closed is one config line.
 
+**Cumulative read-budget governor**: beyond per-command classification, every
+allowed native file read charges a per-session byte ledger. Past
+`[budgets] session_read_budget_bytes` (default 256 KiB) reads come under
+graduated pressure — bounded limit-window rewrites under auto steering,
+deny-with-remediation under strict — teaching targeted alternatives
+(`ctx search`, `--symbol`, `--lines`). Below budget, behavior is
+byte-identical to the ungoverned contract; the ledger fails open on any IO
+error.
+
+## 🕵️ Auditable delegation: ctx-explorer
+
+Sub-agent quarantine with provenance: the shipped `ctx-explorer` agent
+definition (installed ephemerally by `ctx wrap claude`, persistently by the
+Antigravity plugin) instructs forked explorers to gather evidence via ctx
+verbs and report in checkpoint shape — conclusion, evidence handles with
+coordinates, searches attempted including negative ones. Fork tool calls flow
+through the same PreToolUse steering, so their evidence lands in the shared
+artifact store and every claim in the report resolves via `ctx get`; a claim
+without a handle must be labeled a hypothesis.
+
 ## 📊 Measured results (2026-07-17, details in `evals/`)
 
 * End-to-end debugging task under Claude Code, matched warm caches, N=5 per
@@ -203,6 +250,22 @@ fail-closed is one config line.
   both preserve it; **quiet structural needle — Headroom silently drops it
   (347,595 → 68 tokens, no trace), logtemplate/v1 preserves it verbatim with
   its coordinate**.
+* Repo-overhaul rematch on v0.6: **harnessed arm 40% cheaper than naive
+  ($2.21 vs $3.70) and faster (6.1 vs 7.2 min) at quality parity**.
+
+### Evals
+
+* [`evals/ab-claude-code-2026-07-17.md`](evals/ab-claude-code-2026-07-17.md)
+  — harnessed vs naive Claude Code on a buried-evidence debugging task:
+  487× first-exposure token reduction; N=5 batch shows cost parity (~13%
+  overhead) at 5/5 correctness in both arms, zero denial round-trips.
+* [`evals/headroom-needle-drop-2026-07-17.md`](evals/headroom-needle-drop-2026-07-17.md)
+  — quiet-needle head-to-head vs Headroom 0.32.0: their needle-drop rate
+  100%, ours 0%, because rarity is structural, not lexical.
+* [`evals/overhaul-3arm-2026-07-17.md`](evals/overhaul-3arm-2026-07-17.md)
+  — three-arm repo-overhaul benchmark (naive / straitjacket / Headroom): no
+  quality degradation from context mediation; the v0.6 rematch flips the
+  cost sign to **−40% vs naive**.
 
 ## 📂 Source Code Layout
 
@@ -217,11 +280,16 @@ straitjacket/
 │   ├── execution.py         # Birth-time capture runner (spooled, never in memory)
 │   ├── refs.py              # run:/blob:/snapshot:/repo:/ws: reference grammar
 │   ├── retrieval.py         # search / get / stats with budgets + continuations
+│   ├── repomap.py           # ctx map: ranked, budget-fitted codebase map
+│   ├── rundiff.py           # ctx diff: run-to-run regression digests
+│   ├── checkpoint.py        # ctx checkpoint: pinned task-epoch manifests
+│   ├── wrap.py              # ctx wrap: one-command harnessed sessions
+│   ├── proxy.py             # ctx proxy: Tier-0 pass-through wire observer
 │   ├── textutil.py          # ANSI stripping, deterministic redaction, budgets
 │   ├── config.py            # ctx.toml policy loading
 │   ├── installer.py         # Plugin rendering, init, doctor
-│   └── digest/              # Deterministic profiles: text, json, jsonl, pytest
-├── plugins/antigravity/     # Plugin template: plugin.json, hooks.json, mcp_config.json, skill
+│   └── digest/              # Deterministic profiles: text, json, jsonl, pytest, logs, builds
+├── plugins/antigravity/     # Plugin template: plugin.json, hooks.json, mcp_config.json, skills, agents (ctx-explorer)
 ├── spec/                    # Normative SPEC, acceptance suite, ADRs, wire schemas
 └── tests/                   # Acceptance-oriented determinism & security suite
 ```
@@ -263,7 +331,17 @@ ctx wrap claude -- -p "fix the failing test"   # ephemeral: hooks injected via -
 ctx wrap antigravity                           # persistent: renders the workspace plugin
 ```
 
-The Claude wrap leaves zero residue (the hook settings live in a temp file for the session's lifetime), while the Antigravity wrap is a persistent workspace install. Use `ctx wrap <host> --print-config` to print the equivalent configuration for CI or manual setup.
+The Claude wrap leaves zero residue (the hook settings live in a temp file for the session's lifetime), while the Antigravity wrap is a persistent workspace install. Use `ctx wrap --print-config <host>` to print the equivalent configuration for CI or manual setup.
+
+### Wire observer (Tier 0)
+
+`ctx wrap claude --proxy` additionally routes the session's Anthropic API
+traffic through `ctx proxy`, a localhost-only pass-through observer:
+byte-exact relay (SSE unbuffered) plus a fail-open observation tap recording
+provider-reported usage and context-window fullness (`window.json`) and a
+per-exchange block census with tool_result sizes (`wire.jsonl`) — no request
+bodies, no auth headers. `ANTHROPIC_BASE_URL` is injected only into the child
+process; if the proxy fails to start, the session continues unproxied.
 
 ### Repository Configuration
 Commit a `ctx.toml` at the workspace root:
