@@ -31,8 +31,10 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     by re-quoting it: quoted evidence duplicates context and burns output
     tokens, while the citation resolves exactly for any reader.
 12. Keep intermediate narration to one terse line per step; reserve full
-    prose for the final user-facing report. Sub-agent reports use the
-    checkpoint shape (goal, findings, evidence handles, negatives).
+    prose for the final user-facing report. Terseness governs scripts and
+    intermediate narration only — never the final deliverable, which must
+    satisfy the task's required output format in full. Sub-agent reports
+    use the checkpoint shape (goal, findings, evidence handles, negatives).
 13. Apply the solution ladder before writing any code — prefer in order:
     not needed at all, reuse what exists, standard library, a one-liner,
     minimal new code. Be lazy about the solution, never about reading.

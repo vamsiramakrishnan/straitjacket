@@ -33,7 +33,9 @@ index entry is not enough; each verb's output is bounded and deterministic.
   a short Python script instead of N rounds of tool calls. It runs under
   the birth gate (`python -I`, script fed on stdin) and only its bounded
   digest returns — print exactly what the transcript needs; intermediates
-  stay local. The script itself is stored and cited as `blob:<id>` in the
+  stay local. That terseness scopes to the script's output only: the final
+  user-facing answer must still satisfy the task's required output format
+  in full. The script itself is stored and cited as `blob:<id>` in the
   digest header (reproduce: `ctx get blob:<id> | python3 -I -`); both
   streams stay span-addressable. Sub-steps that deserve their own handles
   call `ctx run` from inside the script. Isolated mode means repo imports

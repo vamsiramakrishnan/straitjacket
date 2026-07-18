@@ -346,6 +346,71 @@ def _steering_allows(policy: dict[str, Any]) -> bool:
     return str(policy.get("steering", "auto")) in ("auto", "rewrite")
 
 
+# ------------------------------------------------- eval teaching surface
+# Measured gap (evals/eval-collapse-2026-07-18.md, finding 2): agents write
+# raw `python3 << 'EOF'` heredocs / `python -c` chains instead of `ctx eval`
+# — 0/3 live adoption, because the verb has no teaching surface on this
+# host. When such a command hits the guard, the remediation additionally
+# teaches the collapse move. Teaching-only this wave: heredocs are NEVER
+# auto-rewritten into `ctx eval` (quoting hazards).
+_EVAL_TEACH = (
+    "Or collapse the chain: ctx eval '<python script>' — the script becomes "
+    "an addressable blob and only a bounded digest returns."
+)
+
+_PY_PROG_RE = re.compile(r"^python(3(\.\d+)?)?$")
+
+
+def _eval_opportunity(command: str) -> bool:
+    """True when ``command`` is a raw python invocation carrying inline code
+    — a heredoc/herestring (``<<``) or a ``-c`` flag — i.e. the chain shape
+    ``ctx eval`` collapses. Conservative by construction: the program must
+    be python/python3/python3.N after unwrapping, and ``-c`` counts only
+    among python's own leading options (before ``-m``, ``--``, or a script
+    path), so ``python3 -m pytest`` and ``python3 script.py`` never match."""
+    if "python" not in command:
+        return False
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        argv = command.split()
+    argv = _unwrap(argv)
+    if not argv or not _PY_PROG_RE.match(os.path.basename(argv[0])):
+        return False
+    if "<<" in command:
+        return True
+    for tok in argv[1:]:
+        if tok.startswith("-c"):  # "-c" / "-c<code>"; long opts start "--", not "-c"
+            return True
+        if tok in ("-m", "--") or not tok.startswith("-"):
+            return False  # module mode or script path: -c beyond here is not python's
+    return False
+
+
+def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
+    """Adoption telemetry for the eval teaching surface: append one JSON
+    line to ``<workspace>/.ctx-session-reads/eval-adoption.jsonl``. This is
+    the denominator of the measurement loop (actual ``ctx eval`` use is
+    counted in store telemetry as op="eval"). Fail-open by contract: any IO
+    error counts nothing and never blocks a decision."""
+    if not workspace_root:
+        return
+    try:
+        import time
+
+        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        os.makedirs(ledger_dir, exist_ok=True)
+        path = os.path.join(ledger_dir, "eval-adoption.jsonl")
+        line = json.dumps(
+            {"op": "eval_opportunity", "taught": taught, "ts": time.time()},
+            sort_keys=True,
+        )
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
+
+
 def _deny_cmd(
     argv: list[str],
     policy: dict[str, Any],
@@ -871,6 +936,18 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 cwd = v
                 break
         decision = classify_command(command, policy, cwd=cwd or workspace_root)
+        # Eval teaching surface: a raw python heredoc / -c chain that hits
+        # the guard gets the collapse move appended to its remediation (and
+        # to the rewrite reason, so wrapped sessions see it too). Every
+        # detected opportunity is ledgered — taught or not — as the
+        # adoption denominator. Teaching-only: never auto-rewritten.
+        if _eval_opportunity(command):
+            taught = decision.get("decision") in ("deny", "force_ask")
+            if taught:
+                decision["reason"] = decision.get("reason", "") + "\n" + _EVAL_TEACH
+                if "_rewrite" in decision:
+                    decision["_rewrite"]["reason"] += "\n" + _EVAL_TEACH
+            _note_eval_opportunity(workspace_root, taught)
         return _apply_rewrite(decision, tool_input, command_key)
 
     if "read" in lowered or lowered in ("open_file", "view_file"):
