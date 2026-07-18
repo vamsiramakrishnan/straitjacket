@@ -1,18 +1,35 @@
 # straitjacket 🧥
 
-**Status:** v0.20.0 (pre-1.0, minor bump per mechanism wave) · 359 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.20.0 (pre-1.0, minor bump per mechanism wave) · 361 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
-An artifact-backed, repository-aware context containment harness for coding
-agents (Claude Code and Antigravity). Unbounded tool output becomes an
-immutable artifact plus a bounded, deterministic, span-addressed digest —
-the transcript stays an *index* over evidence, never a warehouse of it.
+One `pytest -q` can dump 300k tokens into your agent's transcript. Every
+turn after that re-sends them — a routine `mcp__github__list_commits` alone
+is ~19.8k tokens, paid again on every round. Then compaction "saves" you by
+deleting the one line you needed, with no trace it ever existed.
 
-The operating thesis, proven wave by wave in `evals/`: **skills bias, hooks
-bound, mechanisms measure.** Doctrine nudges the model, structural hooks
-enforce budgets it can't forget, and a wire-level observer measures every
-session so the next mechanism is built on receipts, not vibes. Every
-omission — bytes, transcript blocks, or engineering decisions — keeps an
-address (`run:`/span/elided-file/`ctx debt`).
+straitjacket is an artifact-backed context containment harness for coding
+agents. Unbounded tool output becomes an immutable artifact plus a bounded,
+deterministic, span-addressed digest. The transcript stays an **index over
+evidence, never a warehouse of it** — and every omission, whether bytes,
+transcript blocks, or engineering decisions, keeps an address.
+
+The operating thesis, proven wave by wave in [`evals/`](evals/): **skills
+bias, hooks bound, mechanisms measure.** Doctrine nudges the model,
+structural hooks enforce budgets it can't forget, and a wire-level observer
+measures every session so the next mechanism is built on receipts, not vibes.
+
+```mermaid
+flowchart LR
+    T["tool output<br/>unbounded: 10 lines or 304k tokens"] --> G{"birth gate<br/>ctx run / seq / eval"}
+    G -->|"raw bytes, all of them"| A[("immutable artifact<br/>blobs + manifest")]
+    A --> D["deterministic digest<br/>bounded · span-addressed"]
+    D --> X["transcript<br/>index over evidence"]
+    X -.->|"ctx search / ctx get<br/>address in → exact bytes out"| A
+```
+
+*The whole product in one picture: raw bytes stop at the gate, the
+transcript carries addresses, and any address resolves back to the exact
+bytes — forever.*
 
 ## ⚡ Quickstart
 
@@ -20,212 +37,436 @@ address (`run:`/span/elided-file/`ctx debt`).
 pip install -e .            # runtime (stdlib-only core; extras optional)
 ctx init                    # write ctx.toml + .ctxignore
 ctx wrap claude --proxy -- -p "fix the failing tests"   # one harnessed session
-ctx stats --session         # wire scorecard: rounds, cache, effort mix
-ctx gain                    # cumulative containment savings
+ctx stats --session         # wire scorecard: rounds, cache classes, effort mix
+ctx gain                    # cumulative containment savings, by verb
 ```
 
-`ctx wrap` is ephemeral (hooks via --settings, zero residue); the
-Antigravity plugin (`ctx antigravity install`) is the persistent form.
+`ctx wrap` is ephemeral (hooks injected via `--settings`, zero residue);
+the Antigravity plugin (`ctx antigravity install`) is the persistent form.
 Opt-in extras: `--rescue-pct 70` (lossless mid-session rescue),
 `[map]`/`[code]`/`[fast]` pip extras, `rg`/`ctags` binaries, and a Rust
 post-hook accelerator (`native/ctx-hook-native`, ~3 ms vs Python's ~29 ms
 startup floor — parity-tested byte-for-byte, never required).
 
-## 🚪 The four gates
+## 🆕 New in v0.19–0.20
 
-| Gate | Question it answers | Mechanisms (all shipped) |
+- **Head/tail evidence windows.** CLIs put conclusions at the END of
+  output. Large `text/v1` digests now show the first 5 and last 5 lines
+  (configurable) with real coordinates; the omitted middle carries a
+  deterministic span and a `ctx get --lines` continuation. Built from a
+  measured failure: a flood scenario's own SUMMARY line was being omitted.
+- **Long-runner backgrounding.** `ctx run --bg-after 30 -- <cmd>`: finish
+  within 30s and you get the normal digest, byte-identical to a foreground
+  run. Outlive it and the transcript gets `job:<id>` immediately while
+  output spools to the store. `ctx job <id>` is a bounded live tail — never
+  a flood; finalized jobs are ordinary `run:` artifacts.
+- **Programmable capture: `ctx eval`** (the Maki absorption). One Python
+  script chains N operations with computed control flow; only its bounded
+  digest returns, and the script itself is an addressable `blob:` cited in
+  the digest header. Measured: 146 tokens vs 96k naive on a 30-file
+  aggregate ([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)).
+- **Adoption-measured steering.** The hook detects eval opportunities
+  (python heredocs, `-c`, ephemeral scripts), teaches the collapse at the
+  friction point, and ledgers every opportunity — so adoption is a measured
+  ratio per session, not an anecdote.
+
+Full history: [`CHANGELOG.md`](CHANGELOG.md).
+
+## 🔒 The core invariant
+
+> Every potentially unbounded operation MUST either execute inside
+> straitjacket, returning a bounded artifact digest, or be flatly rejected
+> before execution.
+
+- **Zero token bloat** *(shipped)*: multi-megabyte outputs are captured at
+  the source; the transcript indexes repository state and artifacts instead
+  of warehousing payload bytes.
+- **Absolute determinism** *(shipped)*: timings, temp paths, ANSI noise,
+  and locale differences are stripped; identical bytes yield byte-identical
+  digests, keeping prompt-cache prefixes stable across sessions.
+- **Transparent steering** *(shipped)*: PreToolUse hooks silently rewrite
+  flooding commands through `ctx run` — no denial round-trips, no standing
+  prompt text.
+- **Path containment** *(shipped)*: repo-relative addressing with `..` and
+  symlink-escape rejection; `ws:<alias>` roots for multi-workspace sessions.
+- **Capability HMAC handles + isolated broker** *(planned, Phase 3)*:
+  content-hash handles become unforgeable capabilities once the broker
+  daemon owns the store under a separate OS identity.
+
+## 🚪 What you get: the four gates
+
+Every token has four moments in its lifecycle. One artifact store serves
+all four as gates; every shipped mechanism hangs off exactly one.
+
+```mermaid
+flowchart LR
+    G1["Gate 1 · Birth<br/>can it flood at the source?"] --> G2["Gate 2 · Entry<br/>what crosses the wire?"] --> G3["Gate 3 · Residence<br/>what may stay, how long?"] --> G4["Gate 4 · Emission<br/>what goes back out?"]
+    G1 --- M1["run / seq / eval capture<br/>head+tail windows<br/>failure ×2 budgets"]
+    G2 --- M2["Tier-0 observer proxy<br/>universal PostToolUse gate<br/>wire.jsonl · window.json"]
+    G3 --- M3["session read ledger<br/>window-pressure loop<br/>epoch-latched rescue"]
+    G4 --- M4["emission governor tiers<br/>cite-don't-quote<br/>solution ladder"]
+```
+
+*The taxonomy that organizes everything: prevention at birth, observation
+at entry, lifecycle control in residence, discipline at emission.*
+
+| Gate | Question | Mechanisms (all shipped) |
 |---|---|---|
-| **1 · Birth** | can this output flood at the source? | `ctx run`/`seq`/`eval` capture, supervised backgrounding (`--bg`/`job`), head/tail evidence windows, deterministic digests, lint/pytest/log profiles, anticipatory inlining, failure-asymmetric budgets |
-| **2 · Entry** | what actually crosses the wire? | Tier-0 byte-exact observer proxy: `window.json`, `wire.jsonl` (usage, timing, tool census), scorecards |
+| **1 · Birth** | can this output flood at the source? | `ctx run`/`seq`/`eval` capture, supervised backgrounding (`--bg`/`job`), head/tail evidence windows, deterministic digest profiles (lint/pytest/log/search/…), anticipatory inlining, failure-asymmetric budgets |
+| **2 · Entry** | what actually crosses the wire? | Tier-0 byte-exact observer proxy (`window.json`, `wire.jsonl`), shape-dispatched PostToolUse gate for every faucet (MCP, WebFetch, Task, …), scorecards |
 | **3 · Residence** | what may stay, and for how long? | session read ledger, window-pressure loop, priced steering, epoch-latched lossless rescue, checkpoints |
 | **4 · Emission** | what does the model put back? | emission governor tiers, cite-don't-quote, solution ladder + backward planning (each A/B-adopted), deliverable metrics |
 
-## 🔒 The Core Invariant
-> Every potentially unbounded operation MUST either execute inside straitjacket, returning a bounded artifact digest, or be flatly rejected before execution.
+Sub-agents inherit all four: the shipped `ctx-explorer` agent reports in
+checkpoint shape — conclusion, evidence handles with coordinates, negative
+searches included — and a claim without a handle must be labeled a
+hypothesis. Fork evidence lands in the shared store; every claim resolves
+via `ctx get`.
 
-* **Zero Token Bloat** *(shipped)*: Multi-megabyte outputs are captured at the source. The model transcript functions as an index over repository state and artifacts, not a warehouse of raw payload bytes.
-* **Absolute Determinism** *(shipped)*: Timings, temporary paths, ANSI noise, and locale differences are stripped from model-visible output; identical bytes yield byte-identical digests, keeping prompt-cache prefixes stable across sessions.
-* **Transparent Steering** *(shipped)*: PreToolUse hooks silently rewrite flooding commands through `ctx run` (Claude Code and Antigravity dialects) — no denial round-trips, no standing prompt text.
-* **Path Containment** *(shipped)*: repo-relative addressing with `..` and symlink-escape rejection; `ws:<alias>` roots for multi-workspace sessions.
-* **Capability HMAC handles & isolated broker** *(planned, Phase 3)*: content-hash handles become unforgeable HMAC capabilities once the broker daemon owns the store under a separate OS identity. Until then, handles are content addresses scoped per workspace.
+## 🪜 Choosing a verb: the capture ladder
 
-## ⚖️ Why straitjacket vs other context-saving approaches
+The most common question, answered as a flowchart:
 
-| Approach | Failure mode straitjacket avoids |
-|---|---|
-| Post-hoc compaction / summarization | Rewrites history: loses evidence irrecoverably, invalidates the prompt-cache prefix, and summarizes *after* the tokens were already paid for once. straitjacket intercepts **before execution** — the raw bytes never enter the transcript. |
-| RAG / vector memory | Probabilistic recall with no provenance. straitjacket retrieval is deterministic and coordinate-exact: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever. |
-| Middleware token trimming | Silent truncation drops the failing test at line 48,000. straitjacket digests report coverage explicitly and every omission has a continuation coordinate. |
-| Advisory prompt rules ("keep output short") | The model forgets under pressure. The `PreToolUse` gate is structural: floods are denied with an executable remediation. |
-| Prompt caching alone | Orthogonal — and straitjacket makes caching *work better*: append-only transcripts and byte-identical digests keep the cached prefix stable across turns and replays. |
+```mermaid
+flowchart LR
+    A{"statically bounded<br/>and small?"} -->|yes| N["native read"]
+    A -->|no| B{"one noisy<br/>command?"}
+    B -->|yes| R["ctx run -- cmd"]
+    B -->|no| C{"stream-shaped<br/>pipe chain?"}
+    C -->|yes| S["ctx run --shell"]
+    C -->|no| D{"N steps you can<br/>declare upfront?"}
+    D -->|yes| Q["ctx seq"]
+    D -->|no| V["computed control flow<br/>branch · loop · aggregate<br/>→ ctx eval"]
+    R -.->|"outlives the wait?<br/>add --bg-after T"| J["job:id"]
+    S -.-> J
+    Q -.-> J
+    V -.-> J
+```
 
-Every artifact is also an audit trail: what ran, what it produced, and exactly which slices the model saw.
+*Escalate only as far as the work demands; anything that outlives the wait
+backgrounds into a `job:` handle instead of idling the session.*
 
-## 🥊 The stack, compared: straitjacket vs rtk, Headroom, Ponytail, Caveman
+Measured, so you know the ladder is honest
+([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)):
+a bash pipeline under `ctx run --shell` already collapses stream-shaped
+chains (266 tok, one round) — `ctx eval`'s round economy is decisive only
+where intermediates are *structured*: the 30-file aggregate is 146 tok in
+one round vs 96k naive, and the perfect-play bounded-slice baseline
+provably cannot finish the task at all. When a script fails mid-corpus,
+debug is retrieval, not re-execution: 299 tok to fix and rerun vs 192k to
+re-pay the raw chain.
 
-Named systems, mapped onto the four-gate taxonomy (birth → entry →
-residence → emission; see ROADMAP.md). Studied and, where marked, measured
-head-to-head this iteration (receipts in `evals/`).
+### Long runners
 
-| | **straitjacket** | **rtk** | **Headroom** | **Ponytail** | **Caveman** |
-|---|---|---|---|---|---|
-| Mechanism class | hooks + observer proxy + verbs + skill | Bash-hook filter binary | rewriting wire proxy | ruleset injection | prompting style |
-| Gate 1 · Birth (at-source) | ✅ artifactize + deterministic digest | ✅ filter (lossy on success) | — | — | — |
-| Gate 2 · Entry (wire) | ✅ byte-exact observer (Tier-0) | — | ⚠️ per-request rewriting (lossy) | — | — |
-| Gate 3 · Residence (lifecycle) | ✅ read budgets, window pressure, epoch rescue, checkpoints | — | ⚠️ implicit (continuous compression) | — | — |
-| Gate 4 · Emission (output + deliverable) | ✅ governor + discipline + solution ladder | — | — | ✅ ladder (advisory only) | ✅ terse narration (advisory, lossy) |
-| Lossless with addresses | **always** (spans, elided-file stubs, debt ledger) | failures only (tee) | ❌ silent drops | n/a | ❌ |
-| Deterministic | yes, spec'd + tested | mostly | no | n/a | n/a |
-| Cache doctrine | prefix contract, epoch-latched rescue, scorecards | none | **anti**: measured 12–16 pt hit deficit, 3–6× write churn | none | none |
-| Runtime measurement loop | wire scorecards → policy epochs → `gain` | `gain` analytics | dashboards | none | none |
-| Enforcement | structural (hooks, budgets) | rewrite hook | proxy force | none (rules) | none |
-| Host reach | 2 deep (Claude Code, Antigravity) | 15 | any client (wire) | 20+ | any |
+```mermaid
+flowchart LR
+    L["ctx run --bg-after 30 -- cmd"] --> Q{"finished<br/>within 30s?"}
+    Q -->|yes| D["normal digest<br/>byte-identical to foreground"]
+    Q -->|no| J["transcript gets job:id<br/>output spools to the store"]
+    J --> I["ctx job id<br/>bounded tail · --wait · --kill"]
+    I --> F["finalized job =<br/>ordinary run: artifact"]
+```
 
-**Measured head-to-heads and absorptions** (all 2026-07-18, `evals/`):
+*Never idle on a long process (skill rule 15): background it, keep
+working, collect the digest when you need it.*
 
-- **Headroom** — benchmarked 3-way on four scenarios behind our observer.
-  Its cache churn confirmed at request level (hit 80.6–84.2% vs our
-  96.5–98.1%); on the long task our mechanisms beat it outright (42 turns /
-  243s vs 53 / 279s). Its one structural edge — rescuing an already-bloated
-  transcript — was taken losslessly in v0.10.0 (epoch-latched elision:
-  ~18× less cache churn than per-request rewriting, every elided byte
-  file-backed and addressed). Still better than us at: zero-integration
-  generality (any client, no workspace) and cross-session memory — out of
-  scope here by principle.
-- **rtk** — ideas stress-tested on real corpora rather than benchmarked
-  head-to-head. Two hypothesis reversals followed: diagnostics needed
-  *structure not compression* (→ `lint/v1` exact censuses + per-file
-  spans; live lint-fix benchmark went honest-loss → iterate → parity), and
-  our own scaffold was inflating small outputs (→ slim inline emission).
-  Absorbed: failure-asymmetric budgets, `ctx gain`. Still better than us
-  at: 100+ bespoke filters, single-binary <10ms packaging, 15-host reach.
-  Structurally behind: lossy success paths, no native-tool (Read/Grep)
-  coverage, no cache or measurement doctrine.
-- **Ponytail** — its core idea (the solution ladder) A/B-tested on a live
-  creation task and **adopted on evidence**: −28% turns, −33% time, −17%
-  cost, 9% less product code with *more* test code. Shipped as discipline
-  prompt + skill rule 13 + `ctx debt` (its debt index, rebuilt as our
-  declared-omission principle applied to decisions). Still better than us
-  at: 20-host reach via rule files. Structurally behind: advisory-only —
-  no enforcement, no measurement of whether the ladder held (we measure
-  it per session via deliverable scorecard metrics).
-- **Caveman** — lossy telegraphic narration, absorbed in lossless form:
-  cite-don't-quote with resolvable handles (skill rules 11–12) instead of
-  compressed prose. Its quiet-needle-style failure mode (evidence
-  destroyed to save tokens) is the exact anti-pattern our spans/stubs
-  exist to prevent.
-- **Maki** (maki.sh) — its sandboxed-interpreter collapse (a script chains
-  N operations; intermediates never reach the transcript — their demo:
-  1300× context reduction) absorbed by design as `ctx eval`, the computed
-  generalization of `ctx seq`: the script is a content-addressed blob
-  cited in the digest header, streams stay span-addressable, tracebacks
-  are path-free (`File "<stdin>"`), sub-steps opt into per-step handles
-  via nested `ctx run`. Measured same-day (evals/eval-collapse doc):
-  mechanically the collapse is decisive exactly where intermediates are
-  structured (146 tok vs 96k naive on a 30-file aggregate; a bash
-  pipeline under `ctx run --shell` already covers stream-shaped chains),
-  and the live A/B found the one-script *discipline* wins (−15–63% cost,
-  fewer turns) while the *verb* went unadopted in bare sessions — a
-  teaching-surface gap, recorded as debt. Still better than us at:
-  OS-level sandbox isolation (ours arrives with the broker, Phase 3),
-  skeleton indexing across 15 languages (ours: priced outline + map,
-  Python-deep only), model-tier subagent selection. Structurally behind:
-  no provenance — script and output vanish into the chat log with no
-  address.
+Six launch/kill/finalize races were identified and closed (single-writer
+meta, idempotent finalization, orphan adoption). Job ids, pids, and
+timestamps never enter content identity.
 
-**Regime scoreboard** (worst case and best case, all measured):
+## 💾 Digest anatomy
+
+Real output. First, the v0.20 head/tail window on a 4,809-line run with no
+error keywords — note the tail carrying the conclusions, and the omitted
+middle keeping an address:
+
+```
+[ctx run:ba3d1020ee8f profile=text/v1]
+command: python3 emit2.py
+exit: 0
+stdout: 4,809 lines · 126.8 KiB · est 32,452 tokens
+summary:
+  head stdout:L1: processed item-0001 in 3ms
+  head stdout:L2: processed item-0002 in 3ms
+  ...
+  … omitted stdout:L6-L4804 (4,799 lines) · span f40f9ab8c1
+  tail stdout:L4807: p95 latency: 4ms
+  tail stdout:L4808: slowest shard: catalog
+  tail stdout:L4809: done at rev 8c1f
+coverage:
+  parsed: 4,809/4,809 lines
+  shown: 10 spans · omitted: 4,799 lines
+next:
+  ctx get run:ba3d1020ee8f#stdout --lines 6:4804
+```
+
+Second, `logtemplate/v1` (deterministic Drain-style template mining) on a
+20,001-line operational log:
+
+```
+[ctx run:51c70b74fa1f profile=logtemplate/v1]
+command: python3 emit.py
+exit: 0
+stdout: 20,001 lines · 1.2 MiB · est 304,113 tokens
+templates: 3 cover 20,001/20,001 lines
+  19,999× L1: INFO worker-<*> checkout request req-<*> completed in budget
+  1× L14238: INFO worker-<*> checkout request req-<*> fell back to legacy gateway after circuit opened
+  1× L20001: RUN RESULT: all requests completed
+exceptional:
+  L14238: INFO worker-13 checkout request req-14237 fell back to legacy gateway after circuit opened
+coverage:
+  parsed: 20,001/20,001 lines
+  shown: 5 spans · omitted: 19,996 lines
+next:
+  ctx get run:51c70b74fa1f#stdout --lines 14238:14241
+```
+
+~304k tokens → ~210 model-visible tokens, and the structurally anomalous
+line survives verbatim with an exact retrieval coordinate — because rarity
+is structural, not lexical. Profiles ship for text, JSON, JSONL, logs,
+pytest, go test, jest/vitest, compilers/linters, search results, and git
+diffs. Small outputs skip digesting entirely and return whole (zero-hop
+inline, ~20 tokens of scaffold). Failing runs get 2× the digest budget of
+successes: **failure is evidence; success is boilerplate.**
+
+Span resolution is structurally bounded: small regions return exact lines,
+large regions return a zoom sub-digest minting further sub-spans —
+retrieval cannot re-flood the transcript.
+
+## 📐 The measurement loop
+
+Mechanisms measure. Every session generates wire-level ground truth; the
+loop turns it into committed policy, and `ctx gain` is your readout.
+
+```mermaid
+flowchart LR
+    W["wire observer<br/>Tier-0 byte-exact proxy"] --> S["scorecards + telemetry<br/>wire.jsonl · scorecards.jsonl<br/>adoption ledger"]
+    S --> P["policy epochs<br/>compiled offline, committed<br/>ctx policy compile"]
+    P --> ST["tightened steering<br/>hook rewrites · budgets"]
+    ST --> W
+    S --> G["ctx gain<br/>cumulative savings, by verb"]
+```
+
+*Nothing steers on vibes: every branch a mechanism takes emits a receipt,
+and receipts compile into the next epoch's policy.*
+
+Concretely:
+
+- `ctx proxy` (Tier-0) relays Anthropic API traffic byte-exact and records
+  provider-reported usage, window fullness, and a per-exchange block census
+  — no request bodies, no auth headers. Fail-open: no proxy, no harm.
+- `ctx stats --session` renders the scorecard: token classes, cache-hit
+  breakdown (cold-prefix vs true invalidation vs suffix growth), ttfb vs
+  generation, effort mix, deliverable metrics (LOC delta, files touched).
+- The **prefix-stability contract** golden-hashes every injected prefix
+  byte behind `PREFIX_VERSION` — because a 9-token prompt edit measurably
+  cost one full cold cache rewrite per model (~56k tokens).
+- A/B adoption is the bar for doctrine: the solution ladder shipped only
+  after measuring −28% turns / −33% time / −17% cost; backward planning
+  after −17% cost / −16% turns. The `ctx eval` wave's adoption ledger
+  exists because the live A/B showed the discipline winning while the verb
+  went unadopted — recorded as debt, then instrumented.
+
+## 🧾 Receipts
+
+### The field, in one table
+
+Every system in this space has one good idea held back by a missing layer.
+We benchmarked or stress-tested each, absorbed the idea losslessly, and
+recorded what each still does better (all receipts in [`evals/`](evals/)).
+
+| Approach | Its one good idea | Held back by (measured where marked) | Absorbed as |
+|---|---|---|---|
+| Post-hoc compaction / summarization | reclaim a bloated window | rewrites history; evidence irrecoverable, prefix cache invalidated | checkpoint-then-rescue: secure handles first, then clearing is lossless |
+| RAG / vector memory | recall without resending | probabilistic, no provenance | deterministic addresses: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever |
+| **Headroom** (rewriting wire proxy) | rescue an already-bloated transcript | silent evidence drops (347,595→68 tok, no trace); cache hit 80.6–84.2% vs our 96.5–98.1%; 3–6× cache-write churn | v0.10 epoch-latched lossless rescue: ~18× less cache churn, every elided byte file-backed and addressed |
+| **rtk** (bash-hook filter binary) | filter floods at the source | lossy on success paths; no addresses, no cache doctrine | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` |
+| **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
+| **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
+| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx eval`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+
+Headroom is the only one we ran head-to-head behind our own observer: on
+the quiet structural needle it silently dropped the evidence 100% of the
+time (347,595 → 68 tokens, no trace) where `logtemplate/v1` dropped 0%,
+and on the long task our mechanisms beat it outright — 42 turns / 243s vs
+53 / 279s at comparable cost. The `ctx eval` live A/B ran four pairs: the
+one-script discipline won every pair (−15–63% cost, fewer turns), the verb
+itself went unadopted in bare sessions — filed as debt; the v0.20 teaching
+surface now detects, teaches, and ledgers every opportunity, and conversion
+is the next metric to move. Still better than us, on principle not
+capability: Headroom's zero-integration generality, rtk's 15-host reach
+and <10ms single binary, Ponytail's 20-host rule files, Maki's OS-level
+sandbox (ours arrives with the broker, Phase 3).
+
+### Regime scoreboard (worst case and best case, all measured)
 
 | Regime | straitjacket vs naive | vs the field |
 |---|---|---|
-| Catastrophic floods | 456 tok vs ~222k | Headroom silently dropped the needle (347,595→68) |
+| Catastrophic floods | 456 tok vs ~222k first exposure (487×) | Headroom silently dropped the needle (347,595→68) |
 | Repo comprehension | only-correct-answers across rounds; first-ever haiku pass | untested by others |
 | Long overhaul | −21% turns, −9% time, −16% output | beats Headroom on turns/time at par cost |
-| Tiny surgical tasks | parity (was 4.5×; graduated engagement) | rtk-class tasks: parity is the ceiling |
+| Tiny surgical tasks | parity (was 4.5×; graduated engagement fixed it) | rtk-class tasks: parity is the ceiling |
 | Mechanical bulk repair | parity after per-file-span iteration | our structurally worst regime, no longer a loss |
+| Small spec-driven creation (haiku) | **current loss**: 33 turns (cap) vs naive's 11–26 at 2.7–3.8× cost; quality tied (16/16 holdout all arms), cache hit still best (96–98%) | diagnosed to one loop — pytest digest lacks the failing-test census — fix candidates ranked, referee frozen ([`evals/spec3-haiku-2026-07-18.md`](evals/spec3-haiku-2026-07-18.md)) |
 
-The through-line: every system above has one good idea held back by a
-missing layer — rtk filters without addresses, Headroom rescues without
-cache stability, Ponytail biases without measurement, Caveman compresses
-without provenance. straitjacket's claim is not a better single trick; it
-is that **skills bias, hooks bound, mechanisms measure** — one system
-where each layer catches what the previous one can't guarantee, and every
-omission (bytes, blocks, or decisions) keeps an address.
+Depth, per topic:
+[`evals/matrix-2026-07-18.md`](evals/matrix-2026-07-18.md) (scenario matrix
++ cache economics) ·
+[`evals/headroom-needle-drop-2026-07-17.md`](evals/headroom-needle-drop-2026-07-17.md)
+(needle-drop head-to-head) ·
+[`evals/ab-claude-code-2026-07-17.md`](evals/ab-claude-code-2026-07-17.md)
+(N=5 A/B: cost parity, 5/5 correct both arms, zero denials) ·
+[`evals/overhaul-3arm-2026-07-17.md`](evals/overhaul-3arm-2026-07-17.md)
+(v0.6 rematch: −40% cost vs naive at quality parity) ·
+[`evals/rtk-corpus-2026-07-18.md`](evals/rtk-corpus-2026-07-18.md)
+(real-corpus reversals + live lint-fix rounds) ·
+[`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)
+(programmable capture) ·
+[`docs/LOSSLESS-RESCUE.md`](docs/LOSSLESS-RESCUE.md) ·
+[`docs/PRICED-CONTEXT.md`](docs/PRICED-CONTEXT.md) ·
+[`docs/LADDERS.md`](docs/LADDERS.md) (the conditionality audit behind v0.20).
 
-## 🏗️ Architectural Topology
-straitjacket maps directly to Antigravity's extension architecture, supporting scaling tiers of enforcement:
+### The absorptions, in brief
+
+- **rtk** → hypotheses reversed by real corpora before building:
+  diagnostics needed *structure, not compression* (`lint/v1` exact
+  censuses; the live lint-fix benchmark went honest-loss → iterate →
+  parity), and our own scaffold was inflating small outputs (slim inline:
+  ~100–400 tok overhead → ~20).
+- **Headroom** → its one structural edge (rescuing a bloated transcript)
+  taken losslessly: epoch-latched elision, +$0.05 where per-request
+  rewriting pays $0.90 in churn, 18 turns of lossless runway per 27k
+  elided; live-validated with 10/10 facts correct including elided ones.
+- **Ponytail** → solution ladder adopted only after the A/B won on every
+  axis; rebuilt with enforcement (`ctx debt`) and per-session measurement.
+- **Caveman** → terse narration kept, loss dropped: citations resolve,
+  compressed prose doesn't.
+- **Maki** → the interpreter collapse generalized (`ctx seq` declared →
+  `ctx eval` computed) with the provenance a raw sandbox drops.
+
+## 🏗️ Architecture & deployment
 
 ```
-╔════════════════════════════════════════════════════════════════════╗
-║                    Antigravity Engine Context                      ║
-║                                                                    ║
-║  ┌──────────────────────────┐      ┌───────────────────────────┐  ║
-║  │   ctx-harness skill      │      │   ctx-harness plugin      │  ║
-║  │  (Protocol Training)     │      │  (MCP + PreToolUse Hooks) │  ║
-║  └────────────┬─────────────┘      └──────────────┬────────────┘  ║
-╠════════════════╪═══════════════════════════════════╪════════════════╣
-                 │                                    │
-                 ▼                                    ▼
-╔════════════════════════════════════════════════════════════════════╗
-║                      straitjacket Core                             ║
-║                                                                    ║
-║  ┌────────────────────────────────────────────────────────────┐   ║
-║  │           ctx-core harness                                 │   ║
-║  │  (Execution Scoping, CAS Persistence, Digest Generation)   │   ║
-║  └────────────────────────────┬─────────────────────────────┘   ║
-╠═══════════════════════════════╪═════════════════════════════════╣
-                                 ▼
-╔════════════════════════════════════════════════════════════════════╗
-║                       Hardened Broker                              ║
-║  (Isolated OS/Container Identity, Unix Socket, Encrypted Catalog)  ║
-╚════════════════════════════════════════════════════════════════════╝
+skill (doctrine)        plugin (MCP + hooks)
+        │                        │
+        └──────────┬─────────────┘
+                   ▼
+        ctx-core harness
+        execution scoping · CAS store (SQLite WAL) · deterministic digests
+                   │
+                   ▼   (Phase 3)
+        hardened broker — isolated OS identity, unix socket, encrypted catalog
 ```
-
-## 🧩 Deployment Strengths
 
 | Mode | Integration | Guarantee | Status |
 |---|---|---|---|
-| Skill Mode | SKILL.md only | **Advisory**: Agent is trained on protocol discipline but can bypass it. | shipped |
-| Plugin Mode | Skill + MCP + PreToolUse Hooks | **Enforced**: Intercepts recognized tool paths; transparent substitution steering; highly resistant to accidental bypass. | shipped |
-| Native Harness | SDK Agent with raw built-ins stripped | **Structural**: Built-ins like run_command are removed; raw output cannot physically enter context. | planned (Phase 4) |
-| Hardened Mode | Native Harness + Isolated Broker | **Isolation-Backed**: Broker runs under a separate OS identity/container; sandboxed shell cannot read the CAS database. | planned (Phase 3) |
+| Skill | SKILL.md only | **Advisory**: protocol-trained, bypassable | shipped |
+| Plugin | skill + MCP + hooks | **Enforced**: transparent substitution steering on recognized tool paths | shipped |
+| Native harness | SDK agent, raw built-ins stripped | **Structural**: raw output cannot physically enter context | planned (Phase 4) |
+| Hardened | native + isolated broker | **Isolation-backed**: sandboxed shell cannot read the CAS database | planned (Phase 3) |
 
-## 🧭 Selector Grammar
-Absolute host paths never appear in model-visible output. The shipped
-reference grammar has two address spaces:
+### Steering policy (the hooks)
 
-* **Repository selectors** (live workspace state, snapshot-on-read):
-  * `repo:` — the active workspace root
-  * `repo:src/payments/service.py` — a current file
-  * `repo:services/payments` — a scoped subtree
-  * `ws:api/repo:src/main.py` — explicit root in multi-workspace sessions
-  * `--scope payments` — named monorepo scopes from committed `ctx.toml`
-* **Immutable artifact handles** (content-addressed, workspace-scoped):
-  * `run:7bd91f2a4c3d` / `run:7bd91f2a4c3d#stdout` — captured invocation and its exact streams
-  * `snapshot:fe21c91ad4e8` — file state pinned at read time
-  * `blob:…`, `checkpoint:…` — raw content and frozen task epochs
+The PreToolUse classifier is conservative and config-driven. Under default
+`steering = "auto"` it **rewrites instead of denying**:
 
-*(Planned, Phase 3: handles upgraded to project-scoped HMAC capabilities once
-the isolated broker owns the store.)*
+- **Untouched**: ctx-routed calls, bounded commands and all-bounded chains,
+  small reads, redirections to real files.
+- **Silently rewritten**: framework suites, raw `cat`/`find`/`git diff`,
+  unbounded package/cloud commands → `ctx run`; oversized reads → bounded
+  limit windows; unbounded native `Grep` → capped with a pointer to the
+  structured digest. Rewrite reasons carry the price: "~30k tok ≈ 15% of
+  window" ([`docs/PRICED-CONTEXT.md`](docs/PRICED-CONTEXT.md)).
+- **Forced confirmation, never rewritten**: secret-bearing paths,
+  outside-workspace access, interactive programs.
 
-## 🛠️ The Unified Verbs
+Beyond per-command classification: a cumulative session read ledger puts
+native reads under graduated pressure past 256 KiB, and the universal
+PostToolUse gate replaces any tool result over 16 KiB — from any faucet,
+MCP included — with a digest carrying a working `ctx get` ref, raw bytes
+persisted losslessly first. Strict installs set `steering = "deny"`;
+fail-open on internal error is the default, fail-closed is one config line.
 
-Full surface at a glance (details for the core verbs below; flags in
-`plugins/antigravity/skills/ctx-harness/references/verbs.md`):
+### Source layout
+
+```
+straitjacket/
+├── src/ctx/           # cli, hook (stdlib-only hot path), mcp, store (CAS+SQLite),
+│                      # execution, refs, retrieval, repomap, rundiff, jobs, pyeval,
+│                      # rescue, proxy, wrap, scorecard, digest/ (profiles)
+├── native/ctx-hook-native/  # optional Rust post-hook shim (~3 ms), parity-tested
+├── plugins/antigravity/     # plugin template: hooks, MCP config, skill, ctx-explorer agent
+├── spec/              # normative SPEC, acceptance suite, ADRs, wire schemas
+├── evals/             # every measured claim in this README
+└── tests/             # 361 acceptance-oriented determinism & security tests
+```
+
+## 📖 Reference
+
+### Verbs
+
+Full flags and when-to-use detail:
+[`plugins/antigravity/skills/ctx-harness/references/verbs.md`](plugins/antigravity/skills/ctx-harness/references/verbs.md).
 
 | Verb | One line |
 |---|---|
 | `run` / `seq` | birth-gate capture; `seq` runs a declared N-step tree in one round, each step addressable |
-| `eval` | programmable capture: a Python script chains N ops with computed control flow in one round; only its digest returns, and the script itself is an addressable `blob:` (the Maki absorption) |
-| `run --bg` / `job` / `jobs` | long-runner backgrounding: outlive `--bg-after T` and the transcript gets `job:<id>` while output spools to an artifact; bounded live tail, `--wait`, `--kill`; finalized jobs are ordinary `run:` artifacts |
-| `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/...`) · shape stats, or a **priced symbol outline** on a single code file |
+| `eval` | programmable capture: a Python script chains N ops with computed control flow in one round; only its digest returns, and the script itself is an addressable `blob:` |
+| `run --bg` / `--bg-after T` / `job` / `jobs` | long-runner backgrounding: `job:<id>` in the transcript, bounded live tail, `--wait`, `--kill`; finalized jobs are ordinary `run:` artifacts |
+| `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/--records/--json-pointer/--bytes`) · shape stats, or a priced symbol outline on a single code file |
 | `map` / `def` / `refs` / `diag` | ranked priced codebase map · symbol definition/reference/diagnostic verbs |
+| `callers` / `callees` / `impact` | call graph: direct callers, callees, transitive blast radius (`--depth ≤6`) — one query replaces a recursive grep trace |
 | `diff run:A run:B` | regression delta between captured runs, span-backed |
 | `stats --session` / `gain` | wire scorecard (rounds, cache classes, effort mix) · cumulative savings |
 | `checkpoint` / `pin` / `gc` | cache epochs · retention leases · mark-and-sweep |
-| `debt` | declared-omission ledger for deferred engineering decisions |
+| `debt` | declared-omission ledger for deferred engineering decisions (`add`/`list`/`resolve`) |
+| `policy` | compiled steering policy from telemetry (`compile`/`show`) |
 | `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages |
+| `init` / `doctor` | write `ctx.toml` + `.ctxignore` · validate hooks, manifests, store, classifier |
 
-The Model-facing MCP layer is frozen into one stable tool surface (**ctx**), handling operations entirely via parameter states instead of dynamic tool injection.
+Examples:
+
+```bash
+ctx run --focus "find test failures" --cwd services/payments -- pytest -q
+ctx run --bg-after 30 -- npm run build          # backgrounds if it outlives 30s
+ctx seq 'pytest -q' 'ruff check .' 'npm run build'
+ctx eval - <<'EOF'                              # computed control flow, one round
+import json, glob, statistics
+lat = [json.loads(l)["ms"] for f in glob.glob("runs/*.jsonl") for l in open(f)]
+print(f"p95: {statistics.quantiles(lat, n=20)[18]:.0f}ms over {len(lat)} records")
+EOF
+ctx search repo: 'TimeoutError' 'deadline' --glob '**/*.py' --context 3
+ctx get run:7bd91f2a4c3d#stdout --lines 8412:8440
+ctx get run:7bd91f2a4c3d#stdout --span e37f99e4a5   # token minted in the digest
+ctx get repo:svc/retry.py --symbol Handler.process
+ctx stats repo:src/ctx/hook.py     # priced symbol outline: 12.8–54.5× cheaper than the file
+ctx map --budget 500 --focus payments
+ctx impact register_span --depth 4
+ctx diff run:7bd91f2a4c3d run:9ae02c17b5ff
+```
+
+### Selector grammar
+
+Absolute host paths never appear in model-visible output. Two address
+spaces:
+
+- **Repository selectors** (live workspace state, snapshot-on-read):
+  `repo:` · `repo:src/payments/service.py` · `repo:services/payments`
+  (subtree) · `ws:api/repo:src/main.py` (multi-workspace) · `--scope
+  payments` (named monorepo scopes from committed `ctx.toml`)
+- **Immutable artifact handles** (content-addressed, workspace-scoped):
+  `run:7bd91f2a4c3d` / `run:…#stdout` / `run:…#stderr` ·
+  `snapshot:fe21c91ad4e8` (file state pinned at read time) · `blob:…`
+  (raw content, incl. eval scripts) · `checkpoint:…` (frozen task epochs) ·
+  `job:…` (backgrounded runs, until finalized into `run:`)
+
+*(Planned, Phase 3: handles upgraded to HMAC capabilities once the
+isolated broker owns the store.)*
+
+### MCP surface
+
+One stable tool (**ctx**), operations via parameter states — no dynamic
+tool injection, so the prompt-cache prefix never churns:
 
 ```json
 {
@@ -244,255 +485,8 @@ The Model-facing MCP layer is frozen into one stable tool surface (**ctx**), han
 Command execution stays on `ctx run` through the host's native command tool
 so the user's permission flow remains visible (SPEC §10.4).
 
-### 1. run
-Executes an arbitrary process argv directly (no ambient shell unless `--shell`) inside the workspace. Captures stdout and stderr into distinct immutable blobs, records exit codes, signals, and timeouts, and returns a bounded deterministic digest — or the complete output verbatim when it fits the budget (zero-hop inline).
+### Configuration
 
-```bash
-ctx run --focus "find test failures" --cwd services/payments -- pytest -q
-```
-
-### 2. search
-Multi-pattern queries over live files or captured artifacts. Uses ripgrep when installed (transparent Python fallback), respects `.gitignore` + `.ctxignore`, snapshots returned repo evidence, and reports scanned coverage, match count, and truncation.
-
-```bash
-ctx search repo: 'TimeoutError' 'deadline' --glob '**/*.py' --context 3
-ctx search run:7bd91f2a4c3d 'risk-api' --context 3
-```
-
-### 3. get
-Exact, bounded slice of a repository file or artifact by lines, bytes, JSONL records, JSON pointer, or Python symbol.
-
-```bash
-ctx get run:7bd91f2a4c3d#stdout --lines 8412:8440
-ctx get repo:svc/retry.py --symbol Handler.process
-ctx get run:7bd91f2a4c3d#stdout --span e37f99e4a5   # token minted in the digest
-```
-
-Digests attach deterministic **span tokens** at every omission point
-(template groups, failure blocks). Resolving a span is always bounded:
-small regions return exact lines, large regions return a zoom sub-digest
-that mints further sub-spans — retrieval structurally cannot re-flood the
-transcript, and tokens are content-derived (replayable, leased, no TTL).
-
-Oversized requests return a bounded preview plus continuation coordinates instead of silently dropping chunks.
-
-### 4. stats
-Exposes high-level metadata maps detailing repository layouts, tree sizes, languages, dirty git state parameters, or internal artifact shapes without leaking raw file context.
-
-```bash
-ctx stats repo: --scope payments
-ctx stats run:7bd91f2a4c3d
-```
-
-### 5. map
-Deterministic, budget-fitted codebase map: files ranked by a reference graph
-(imports + symbol usage, evidence-weighted — files implicated in recent
-captured runs rank hotter), top symbols per file, every entry addressable via
-`repo:file --symbol X`. Uses grimp+networkx when the `[map]` extra is
-installed and universal-ctags opportunistically for non-Python; transparent
-builtin fallback otherwise. The active engine is disclosed in the map header
-(`engine grimp+networkx` / `engine builtin`) and cache key; identical
-worktrees yield byte-identical maps.
-
-```bash
-ctx map --budget 500 --focus payments
-```
-
-### 6. diff
-Run-to-run regression digest between two captured invocations: exit/signal
-and stream-size deltas, test failure-set deltas with traceback coordinates,
-log template deltas (new-in-B templates carry minted spans), and a `next:`
-line pointing at the most salient new evidence.
-
-```bash
-ctx diff run:7bd91f2a4c3d run:9ae02c17b5ff
-```
-
-## 💾 Digest Anatomy
-
-Real output of `ctx run` on a 20,001-line operational log (`logtemplate/v1`,
-the deterministic Drain-style template miner):
-
-```
-[ctx run:51c70b74fa1f profile=logtemplate/v1]
-cwd: .
-command: python3 emit.py
-exit: 0
-stdout: 20,001 lines · 1.2 MiB · est 304,113 tokens
-stderr: 0 lines · 0 B
-templates: 3 cover 20,001/20,001 lines
-  19,999× L1: INFO worker-<*> checkout request req-<*> completed in budget
-  1× L14238: INFO worker-<*> checkout request req-<*> fell back to legacy gateway after circuit opened
-  1× L20001: RUN RESULT: all requests completed
-exceptional:
-  L14238: INFO worker-13 checkout request req-14237 fell back to legacy gateway after circuit opened
-coverage:
-  parsed: 20,001/20,001 lines
-  shown: 5 spans · omitted: 19,996 lines
-next:
-  ctx get run:51c70b74fa1f#stdout --lines 14238:14241
-```
-
-~304k tokens → ~210 model-visible tokens; the structurally anomalous line
-survives verbatim with an exact retrieval coordinate. Profiles ship for
-text, JSON, JSONL, logs, pytest, go test, jest/vitest, compilers/linters,
-and git diffs. Small outputs skip digesting entirely and return whole
-(zero-hop inline).
-
-## 🛡️ PreToolUse Gate Policy
-
-The shipped classifier is conservative and config-driven (shlex + wrapper
-unwrapping + bounded-chain analysis — not a full shell AST; that remains the
-Phase 3+ hardening goal). Under default `steering = "auto"` it **rewrites
-instead of denying**:
-
-* **Untouched**: ctx-routed calls, bounded commands and all-bounded chains (`pwd`, `git status --short`, `which ctx; ls`), small file reads, `cmd > file 2>&1` redirections to real files.
-* **Silently rewritten**: framework suites, raw `cat`/`find`/`git diff`, unbounded package/cloud commands → routed through `ctx run`; oversized reads → bounded `limit` reads; single-file grep → match-capped.
-* **Forced confirmation (never rewritten)**: secret-bearing paths, outside-workspace access, interactive programs.
-
-```json
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
-  "updatedInput": {"command": "ctx run -- pytest -q"},
-  "permissionDecisionReason": "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"}}
-```
-
-Strict installs set `steering = "deny"` to keep the pure
-deny-with-remediation contract. Fail-open on internal error is the default;
-fail-closed is one config line.
-
-**Cumulative read-budget governor**: beyond per-command classification, every
-allowed native file read charges a per-session byte ledger. Past
-`[budgets] session_read_budget_bytes` (default 256 KiB) reads come under
-graduated pressure — bounded limit-window rewrites under auto steering,
-deny-with-remediation under strict — teaching targeted alternatives
-(`ctx search`, `--symbol`, `--lines`). Below budget, behavior is
-byte-identical to the ungoverned contract; the ledger fails open on any IO
-error.
-
-## 🕵️ Auditable delegation: ctx-explorer
-
-Sub-agent quarantine with provenance: the shipped `ctx-explorer` agent
-definition (installed ephemerally by `ctx wrap claude`, persistently by the
-Antigravity plugin) instructs forked explorers to gather evidence via ctx
-verbs and report in checkpoint shape — conclusion, evidence handles with
-coordinates, searches attempted including negative ones. Fork tool calls flow
-through the same PreToolUse steering, so their evidence lands in the shared
-artifact store and every claim in the report resolves via `ctx get`; a claim
-without a handle must be labeled a hypothesis.
-
-## 📊 Measured results (2026-07-17, details in `evals/`)
-
-* End-to-end debugging task under Claude Code, matched warm caches, N=5 per
-  arm: **cost parity within run variance** — harnessed median $0.115 / 6.8
-  turns vs naive $0.098 / 6.2 turns, 5/5 correct in both arms, **zero denial
-  round-trips**. Harness overhead on a small clean task: ~13% (~$0.01), down
-  ~15x from the v0.1 deny-mode design — while adding provenance, budgets,
-  redaction, and flood immunity naive has none of.
-* Needle-drop vs Headroom 0.32.0 on a 20k-line log: loud (ERROR) needle —
-  both preserve it; **quiet structural needle — Headroom silently drops it
-  (347,595 → 68 tokens, no trace), logtemplate/v1 preserves it verbatim with
-  its coordinate**.
-* Repo-overhaul rematch on v0.6: **harnessed arm 40% cheaper than naive
-  ($2.21 vs $3.70) and faster (6.1 vs 7.2 min) at quality parity**.
-* 2026-07-18 mechanism waves (scenario matrix, cache-economics study,
-  Headroom 3-way, lint-fix rounds, ladder A/B, live rescue validation):
-  see the regime scoreboard above and
-  [`evals/matrix-2026-07-18.md`](evals/matrix-2026-07-18.md) ·
-  [`evals/rtk-corpus-2026-07-18.md`](evals/rtk-corpus-2026-07-18.md) ·
-  [`docs/LOSSLESS-RESCUE.md`](docs/LOSSLESS-RESCUE.md) ·
-  [`docs/PRICED-CONTEXT.md`](docs/PRICED-CONTEXT.md).
-
-### Evals
-
-* [`evals/ab-claude-code-2026-07-17.md`](evals/ab-claude-code-2026-07-17.md)
-  — harnessed vs naive Claude Code on a buried-evidence debugging task:
-  487× first-exposure token reduction; N=5 batch shows cost parity (~13%
-  overhead) at 5/5 correctness in both arms, zero denial round-trips.
-* [`evals/headroom-needle-drop-2026-07-17.md`](evals/headroom-needle-drop-2026-07-17.md)
-  — quiet-needle head-to-head vs Headroom 0.32.0: their needle-drop rate
-  100%, ours 0%, because rarity is structural, not lexical.
-* [`evals/overhaul-3arm-2026-07-17.md`](evals/overhaul-3arm-2026-07-17.md)
-  — three-arm repo-overhaul benchmark (naive / straitjacket / Headroom): no
-  quality degradation from context mediation; the v0.6 rematch flips the
-  cost sign to **−40% vs naive**.
-
-## 📂 Source Code Layout
-
-```
-straitjacket/
-├── src/ctx/
-│   ├── cli.py               # Lazy-dispatch CLI; hook fast path bypasses argparse
-│   ├── hook.py              # PreToolUse classifier (stdlib-only hot path, ~40ms)
-│   ├── mcp.py               # Bounded MCP stdio server (single `ctx` tool, op discriminator)
-│   ├── workspace.py         # Resolution order, identity, path confinement
-│   ├── store.py             # CAS blobs, SQLite WAL catalog, leases, gc
-│   ├── execution.py         # Birth-time capture runner (spooled, never in memory)
-│   ├── refs.py              # run:/blob:/snapshot:/repo:/ws: reference grammar
-│   ├── retrieval.py         # search / get / stats with budgets + continuations
-│   ├── repomap.py           # ctx map: ranked, budget-fitted codebase map
-│   ├── rundiff.py           # ctx diff: run-to-run regression digests
-│   ├── checkpoint.py        # ctx checkpoint: pinned task-epoch manifests
-│   ├── wrap.py              # ctx wrap: one-command harnessed sessions
-│   ├── proxy.py             # ctx proxy: Tier-0 pass-through wire observer
-│   ├── textutil.py          # ANSI stripping, deterministic redaction, budgets
-│   ├── config.py            # ctx.toml policy loading
-│   ├── installer.py         # Plugin rendering, init, doctor
-│   └── digest/              # Deterministic profiles: text, json, jsonl, pytest, logs, builds
-├── plugins/antigravity/     # Plugin template: plugin.json, hooks.json, mcp_config.json, skills, agents (ctx-explorer)
-├── spec/                    # Normative SPEC, acceptance suite, ADRs, wire schemas
-└── tests/                   # Acceptance-oriented determinism & security suite
-```
-
-## 🚀 Setup & Installation
-
-Dependency policy is tiered by path criticality:
-
-- **Hook hot path** (runs on every tool call): stdlib-only, ~40ms cold start.
-- **Runtime**: one small pure-Python dep (`pathspec`) for true gitignore
-  semantics in `.ctxignore` matching.
-- **Opportunistic**: if **ripgrep** is on PATH, `repo:` searches use it
-  (SIMD prefilter, parallel walk, no per-file Python reads) and fall back to
-  the built-in engine transparently — same output contract, same coordinates.
-- **Dev-only**: `jsonschema` validates manifests against the vendored wire
-  schemas in tests and `ctx doctor`.
-
-```bash
-# Install the runtime once.
-uv tool install ctx-harness      # or: pip install -e .
-
-# Render the repo-scoped plugin (absolute executable paths baked in).
-ctx antigravity install --scope workspace --workspace .
-
-# Write committed policy (ctx.toml) and capture exclusions (.ctxignore).
-ctx init
-```
-
-The installer renders into `<repo>/.agents/plugins/ctx-harness/` with the
-skill embedded — one installation activates all surfaces. It refuses to
-install alongside a standalone `.agents/skills/ctx-harness` (SPEC §4.3).
-
-### Instant wrap
-
-One command puts a supported agent session under the harness with nothing to configure:
-
-```bash
-ctx wrap claude -- -p "fix the failing test"   # ephemeral: hooks injected via --settings, removed on exit
-ctx wrap antigravity                           # persistent: renders the workspace plugin
-```
-
-The Claude wrap leaves zero residue (the hook settings live in a temp file for the session's lifetime), while the Antigravity wrap is a persistent workspace install. Use `ctx wrap --print-config <host>` to print the equivalent configuration for CI or manual setup.
-
-### Wire observer (Tier 0)
-
-`ctx wrap claude --proxy` additionally routes the session's Anthropic API
-traffic through `ctx proxy`, a localhost-only pass-through observer:
-byte-exact relay (SSE unbuffered) plus a fail-open observation tap recording
-provider-reported usage and context-window fullness (`window.json`) and a
-per-exchange block census with tool_result sizes (`wire.jsonl`) — no request
-bodies, no auth headers. `ANTHROPIC_BASE_URL` is injected only into the child
-process; if the proxy fails to start, the session continues unproxied.
-
-### Repository Configuration
 Commit a `ctx.toml` at the workspace root:
 
 ```toml
@@ -503,6 +497,9 @@ digest_tokens = 480
 result_tokens = 1200
 turn_retrieval_tokens = 2800
 max_inline_bytes = 16384
+digest_head_lines = 5          # head/tail evidence windows (v0.20)
+digest_tail_lines = 5
+failure_budget_factor = 2.0    # failure is evidence; success is boilerplate
 
 [guard]
 mode = "guarded"               # advisory | guarded | strict
@@ -510,16 +507,43 @@ unknown_command = "force_ask"
 internal_error = "allow"       # fail-open: a broken guard must not brick the workspace
 ```
 
-### Operational Checkup
-Verify hook integrity, plugin manifests, store access, and classifier behavior:
+Dependency policy is tiered by path criticality: the hook hot path is
+stdlib-only; the runtime carries one pure-Python dep (`pathspec`);
+`ripgrep`/`ctags`/`grimp`/`jedi`/`orjson` are opportunistic accelerators
+with transparent fallbacks — same output contract, same coordinates, the
+active engine disclosed in headers.
 
 ```bash
-ctx doctor --antigravity
+pip install -e .                            # from a clone (not yet on PyPI)
+ctx antigravity install --scope workspace --workspace .   # persistent plugin
+ctx wrap claude -- -p "fix the failing test"              # or: ephemeral wrap
+ctx wrap --print-config claude              # equivalent config for CI/manual setup
+ctx doctor --antigravity                    # verify hooks, manifests, store, classifier
 ```
 
-### Development
+`ctx wrap claude --proxy` additionally routes the session's Anthropic API
+traffic through the localhost-only observer: byte-exact relay (SSE
+unbuffered), fail-open tap recording usage and window fullness — no request
+bodies, no auth headers. `ANTHROPIC_BASE_URL` is injected only into the
+child process; if the proxy fails to start, the session continues
+unproxied.
+
+Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # acceptance-oriented suite: determinism, budgets, hook contract, escapes
+pytest        # 361 tests: determinism, budgets, hook contract, escapes
 ```
+
+## 🗺️ Roadmap & license
+
+[`ROADMAP.md`](ROADMAP.md) — the house rule is **replace bytes with
+addresses**; next up is the broker era (Phase 3: isolated OS identity, HMAC
+capability handles, warm LSP servers) and the conditionality audit's ranked
+candidates ([`docs/LADDERS.md`](docs/LADDERS.md)): pressure-aware budgets
+through a single resolver, hint follow-through telemetry, guard-mode
+outcome accounting. Deliberately not planned: lossy pruning without
+addresses — deleting bytes you cannot re-address is the failure mode this
+project exists to prevent.
+
+Apache-2.0.
