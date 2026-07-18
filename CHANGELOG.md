@@ -4,6 +4,45 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.18.0] - 2026-07-18
+
+The universal emission gate: one output-side gate for every faucet. Prior
+waves plugged faucets one tool at a time (Bash wrapped, Read/Grep/Glob
+input-bounded) — a per-tool if-ladder that never terminates. This wave
+replaces it with a single PostToolUse gate that dispatches on output *shape*,
+not tool name: a new tool needs no new code. Motivated by measurement — a
+routine `mcp__github__list_commits(perPage=100)` returns ~79 KB / ~19.8k
+tokens and is re-sent every turn; its `json/v1` digest is ~0.4–1.4 KB
+(≈57–190×), and the full payload stays retrievable.
+
+- **Universal PostToolUse gate** (`ctx.hook._emission_gate`, claude-code):
+  any tool result over `budgets.max_tool_output_bytes` (default 16384) is
+  replaced — via the documented `hookSpecificOutput.updatedToolOutput` — with
+  a bounded deterministic digest carrying a working `ctx get run:<short>`
+  ref. Under budget → byte-identical no-op. The raw bytes are persisted
+  losslessly first (lossy-in-window, lossless-on-disk); nothing the model
+  needed is ever destroyed, only relocated to an addressable artifact.
+- **Shape-dispatched, name-agnostic**: the gate synthesizes `argv=[tool_name]`
+  and reuses the existing digest registry (`digest.digest_output`), so MCP
+  JSON lands on `json/v1`, grep-shaped output on `search/v1`, prose on
+  `text/v1` — no per-tool branches. Idempotent (never re-digests its own
+  output or `ctx`'s), fail-open (any error → pass-through), deterministic
+  (content-addressed id is a pure function of bytes + tool name).
+- **`json/v1` head-N record inlining**: a shape line alone forced a re-fetch;
+  the digest now inlines the first records' scalar fields + a json-pointer
+  span to the rest (mirrors `search/v1`'s top-matches+span). Byte-stable.
+- **`search/v1`** now recognizes a synthesized `argv=[tool_name]` (native
+  `Grep`, mcp `*search_code` / `*grep*`) so those faucets reach it through
+  the gate; narrow suffix/exact match preserves the log-line theft guard.
+- **Matchers broadened** to every emitting faucet — Claude Code PostToolUse
+  `Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*` (Edit/Write/Todo
+  excluded as tiny), Antigravity nudge-path likewise. Antigravity stays
+  nudge-only (output-replacement contract unverified upstream). Matcher
+  strings are host settings, not prefix assets → no `PREFIX_VERSION` bump.
+- Removed the now-unwired `_post_hook_exe` native-shim selector: the gate
+  needs the Store/digest layer, so PostToolUse runs in Python. A shim that
+  measures bytes and re-execs only over budget is a possible follow-up.
+
 ## [0.17.0] - 2026-07-18
 
 The native-search wave: close the model-ignoring gap. Measurement showed

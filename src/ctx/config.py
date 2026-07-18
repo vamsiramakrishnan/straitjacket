@@ -38,6 +38,11 @@ class Budgets:
     max_inline_lines: int = 240
     max_matches: int = 80
     session_read_budget_bytes: int = 262144
+    # Universal emission gate (ctx.hook._emission_gate): a PostToolUse tool
+    # result larger than this many bytes is replaced by a bounded digest with
+    # a working retrieval ref. Decoupled from max_inline_bytes (input path) on
+    # purpose; keep in sync with hook._MAX_TOOL_OUTPUT_BYTES_DEFAULT.
+    max_tool_output_bytes: int = 16384
     # Window-pressure threshold (percent): when the Tier-0 proxy reports the
     # context window at or above this fullness, the guard tightens its inline
     # and session read budgets (see ctx.hook._apply_window_pressure).

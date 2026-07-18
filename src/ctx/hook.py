@@ -119,6 +119,9 @@ _MAX_INLINE_BYTES_DEFAULT = 16384
 _MAX_INLINE_LINES_DEFAULT = 240
 _SESSION_READ_BUDGET_DEFAULT = 262144  # 256 KiB of raw native reads per session
 _WINDOW_PRESSURE_PCT_DEFAULT = 70  # window fullness (%) at which budgets tighten
+# Universal emission gate: a PostToolUse tool result larger than this many
+# bytes is replaced by a bounded digest. Keep in sync with config.Budgets.
+_MAX_TOOL_OUTPUT_BYTES_DEFAULT = 16384
 _LEDGER_DIR_NAME = ".ctx-session-reads"
 _POLICY_FILENAME = "ctx-policy.toml"  # compiled learned-policy epoch
 _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
@@ -142,6 +145,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
         "session_read_budget_bytes": _SESSION_READ_BUDGET_DEFAULT,
         "window_pressure_pct": _WINDOW_PRESSURE_PCT_DEFAULT,
+        "max_tool_output_bytes": _MAX_TOOL_OUTPUT_BYTES_DEFAULT,
         "allow_commands": [],
         "deny_commands": [],
         "promoted_commands": [],
@@ -175,6 +179,9 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             )
             policy["window_pressure_pct"] = int(
                 budgets.get("window_pressure_pct", policy["window_pressure_pct"])
+            )
+            policy["max_tool_output_bytes"] = int(
+                budgets.get("max_tool_output_bytes", policy["max_tool_output_bytes"])
             )
             # Repo-tunable classification: prefix matches against canonical argv.
             policy["allow_commands"] = [str(x) for x in guard.get("allow_commands", [])]
@@ -269,6 +276,10 @@ def _apply_window_pressure(
             int(policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT))
             * factor
         ),
+    )
+    tightened["max_tool_output_bytes"] = max(
+        1,
+        int(int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT)) * factor),
     )
     tightened["_head_tail_max"] = max(1, int(_HEAD_TAIL_MAX * factor))
     tightened["_window_note"] = f" [window {pct:g}% full — budgets tightened]"
@@ -1094,11 +1105,90 @@ def _navigation_nudge(payload: dict[str, Any]) -> str | None:
         return None
 
 
+def _normalize_tool_response(tr: Any) -> tuple[str, str]:
+    """Reduce any tool_response shape to ``(stdout, stderr)`` text.
+
+    Handles the shapes a PostToolUse result actually arrives in: a plain
+    string; a list of ``{type,text}`` content blocks (MCP / Claude tool
+    results); a ``{content: [...]}`` wrapper; a ``{stdout, stderr}`` capture;
+    else a canonical JSON dump (so the JSON profile can still fire)."""
+    if isinstance(tr, str):
+        return tr, ""
+    if isinstance(tr, list):
+        parts = [b["text"] for b in tr if isinstance(b, dict) and isinstance(b.get("text"), str)]
+        if parts:
+            return "\n".join(parts), ""
+        return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
+    if isinstance(tr, dict):
+        if isinstance(tr.get("content"), list):
+            return _normalize_tool_response(tr["content"])
+        if isinstance(tr.get("stdout"), str):
+            return tr["stdout"], tr.get("stderr") if isinstance(tr.get("stderr"), str) else ""
+        if isinstance(tr.get("text"), str):
+            return tr["text"], ""
+    return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
+
+
+def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
+    """The universal output-side gate. When a tool result exceeds the byte
+    budget, persist it losslessly and return a bounded digest (with a working
+    ``ctx get`` ref) to substitute for the raw output via ``updatedToolOutput``.
+    Returns None to pass the result through untouched. Fail-open: any error →
+    None (the raw output is never lost, only un-digested).
+
+    Claude Code only this wave — the Antigravity output-replacement field is
+    unverified upstream, so there we stay nudge-only.
+    """
+    if flavor != "claude-code":
+        return None
+    try:
+        tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
+        tr = None
+        for k in ("tool_response", "toolResponse", "tool_output", "toolOutput", "output", "result", "content"):
+            if k in payload:
+                tr = payload[k]
+                break
+        if tr is None:
+            return None
+        stdout, stderr = _normalize_tool_response(tr)
+
+        # Never digest our own digests or ctx's own tool results (recursion /
+        # double-wrap guard).
+        if stdout.lstrip().startswith("[ctx run:") or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
+            return None
+
+        ws_root = _resolve_workspace_root(payload)
+        policy = _apply_window_pressure(_load_guard_policy(ws_root), ws_root)
+        if str(policy.get("mode")) == "advisory":
+            return None
+        threshold = int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT))
+        if len(stdout.encode("utf-8")) + len(stderr.encode("utf-8")) <= threshold:
+            return None  # under budget → byte-identical pass-through
+
+        is_error = bool(
+            payload.get("is_error")
+            or payload.get("isError")
+            or (isinstance(tr, dict) and tr.get("is_error"))
+        )
+        # Lazy: only pay the Store/digest import cost on the over-budget path.
+        from ctx.digest import digest_output
+        from ctx.store import Store
+        from ctx.workspace import resolve_workspace
+
+        ws = resolve_workspace(ws_root or ".")
+        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+        text, _short = digest_output(store, ws, tool_name, stdout, stderr, is_error=is_error)
+        return text
+    except Exception:
+        return None
+
+
 def main_post_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> post-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON object on stdout: either a
     no-op ``{}`` or a governor nudge (emission or navigation) in the host
     dialect."""
+    replacement = None
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
@@ -1107,19 +1197,21 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         # Navigation first: it targets a specific, high-cost wrong pattern;
         # emission is the ambient volume backstop.
         nudge = _navigation_nudge(payload) or _emission_nudge(payload)
+        # Universal emission gate: replace over-budget output with a digest.
+        replacement = _emission_gate(payload, flavor)
     except Exception:
         nudge = None
-    if nudge is None:
-        emitted: dict[str, Any] = {}
-    elif flavor == "claude-code":
-        emitted = {
-            "hookSpecificOutput": {
-                "hookEventName": "PostToolUse",
-                "additionalContext": nudge,
-            }
-        }
-    else:  # antigravity dialect mirrors its decision schema
+    if flavor == "claude-code":
+        hso: dict[str, Any] = {"hookEventName": "PostToolUse"}
+        if replacement is not None:
+            hso["updatedToolOutput"] = replacement
+        if nudge is not None:
+            hso["additionalContext"] = nudge
+        emitted: dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
+    elif nudge is not None:  # antigravity dialect: nudge-only (no replacement)
         emitted = {"decision": "allow", "reason": nudge}
+    else:
+        emitted = {}
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
     sys.stdout.flush()

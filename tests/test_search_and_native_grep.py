@@ -2,8 +2,6 @@
 Grep/Glob interception (transparent head_limit bounding)."""
 
 import subprocess
-import sys
-import textwrap
 
 import pytest
 
@@ -41,6 +39,17 @@ def test_search_profile_digests_grep(tmp_path):
     assert "top matches:" in body
     assert "compute(x, 0)" in body  # top hit verbatim with coordinate
     assert "more matches" in body  # span to the rest
+
+
+def test_search_recognizes_tool_name_argv(tmp_path):
+    from ctx.digest.searchprof import SearchProfile
+
+    # The emission gate synthesizes argv=[tool_name]; the native Grep tool and
+    # mcp grep-shaped faucets must still reach search/v1.
+    for tool in ("Grep", "mcp__code__search_code", "mcp__x__grep_files"):
+        assert SearchProfile().detect(_ctx_for(tmp_path, GREP_OUT, [tool])), tool
+    # a non-search tool with the same shape must NOT be stolen
+    assert SearchProfile().detect(_ctx_for(tmp_path, GREP_OUT, ["mcp__github__list_commits"])) is None
 
 
 def test_search_declines_non_grep(tmp_path):

@@ -21,7 +21,7 @@ from ctx.digest.pytestprof import PytestProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
-from ctx.textutil import sanitize_for_model
+from ctx.textutil import decode_stream, sanitize_for_model
 from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
@@ -93,3 +93,85 @@ def render_run_digest(
 
         note_truncation(ws.root)
     return digest, final_manifest
+
+
+def digest_output(
+    store: Store,
+    ws: Workspace,
+    tool_name: str,
+    stdout: str,
+    stderr: str = "",
+    *,
+    is_error: bool = False,
+) -> tuple[str, str]:
+    """Digest an already-produced tool result (not a shell capture).
+
+    The universal emission gate (``ctx.hook._emission_gate``) calls this when a
+    PostToolUse tool result exceeds the byte budget: it persists the raw bytes
+    losslessly, synthesizes a ``ctx.invocation/v1`` manifest, and reuses
+    :func:`render_run_digest` to produce a bounded digest carrying a working
+    ``ctx get run:<short>#stdout`` retrieval ref.
+
+    ``argv`` is ``[tool_name]`` only — never the tool's arguments — so the
+    command-anchored profiles (git-diff, pytest, search, build) decline and the
+    result is classified purely on its *shape*. That is the if-ladder cure: a
+    new tool needs no new code because dispatch is by output shape.
+
+    Returns ``(bounded_digest_text, short_run_id)``.
+    """
+    out_b = stdout.encode("utf-8")
+    err_b = stderr.encode("utf-8")
+    out_hash = store.put_blob(out_b)
+    err_hash = store.put_blob(err_b)
+
+    def _stream(blob_hash: str, data: bytes) -> dict[str, Any]:
+        size = len(data)
+        _, encoding, media_type = decode_stream(data[:8192] if size else b"")
+        lines = data.count(b"\n") + (0 if (not data or data.endswith(b"\n")) else 1)
+        return {
+            "blob": f"sha256:{blob_hash}",
+            "bytes": size,
+            "lines": lines,
+            "mediaType": media_type if size else "text/plain",
+            "encoding": encoding if size else "utf-8",
+        }
+
+    manifest: dict[str, Any] = {
+        "schema": "ctx.invocation/v1",
+        "workspaceId": ws.workspace_id,
+        "cwd": ".",
+        "argv": [tool_name],
+        "shell": False,
+        "result": {"exitCode": 0, "signal": None, "timedOut": False},
+        "streams": {
+            "stdout": _stream(out_hash, out_b),
+            "stderr": _stream(err_hash, err_b),
+        },
+        # Source nulled: the identity of a hook-captured result is a pure
+        # function of (bytes, tool_name), so the same payload always mints the
+        # same run id — no git head / worktree hash / timestamps.
+        "source": {"gitHead": None, "worktreeHash": None},
+        "digest": {
+            "profile": "text/v1",
+            "policy": POLICY_VERSION,
+            "focusHash": focus_hash(None),
+            "bytesHash": "sha256:" + "0" * 64,
+        },
+    }
+
+    digest, final = render_run_digest(store, ws, manifest, focus=None)
+    short = str(final.get("id", "")).removeprefix("sha256:")[:12]
+
+    from ctx.engagement import filter_digest, suggestion_cap
+    from ctx.textutil import bounded
+
+    budget = (
+        ws.config.budgets.result_tokens
+        if "output (complete):" in digest
+        else ws.config.budgets.digest_tokens
+    )
+    if is_error:
+        budget = int(budget * ws.config.budgets.failure_budget_factor)
+    eng = ws.config.engagement
+    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
+    return bounded(filter_digest(digest, cap), budget), short

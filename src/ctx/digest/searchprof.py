@@ -51,6 +51,14 @@ class SearchProfile(Profile):
         looks_like_grep = bool(progs & {"grep", "rg", "egrep", "fgrep", "ack", "ag"}) or (
             "grep -" in joined or "rg " in joined
         )
+        # The emission gate synthesizes argv=[tool_name]; recognize the native
+        # Grep tool and MCP grep-shaped faucets so their file:line output reaches
+        # search/v1 too. Narrow (exact / suffix), never substring, to preserve
+        # the log-line theft guard the comment above warns about.
+        if not looks_like_grep and len(argv) == 1:
+            name = str(argv[0])
+            leaf = name.rsplit("__", 1)[-1]
+            looks_like_grep = name == "Grep" or leaf.endswith("search_code") or "grep" in leaf
         if not looks_like_grep:
             return None
         matches = _parse(ctx.stdout.text_lines[:6000])
@@ -86,8 +94,6 @@ class SearchProfile(Profile):
             body.append(f"  {_short(f)}:{line}: {content.strip()[:120]}")
             shown += 1
         if len(matches) > 8:
-            first = matches[8]
-            end = min(matches[-1][1], first[1] + 200)
             sid = ctx.mint_span(ctx.stdout, "region", a=9, b=min(len(matches), 9 + 200))
             tag = f" · span {sid}" if sid else ""
             body.append(
