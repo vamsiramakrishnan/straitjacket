@@ -979,16 +979,87 @@ def _emission_nudge(payload: dict[str, Any]) -> str | None:
         return None
 
 
+# Navigation governor (docs/CALL-GRAPH): the impact benchmark proved that a
+# capable model, asked for a transitive call graph, hand-traces it with grep —
+# undercounting 18x (22 vs the true 399) or failing outright — even when
+# `ctx impact` is built and taught. Teaching is ignored; forcing backfires
+# (rtk bash-only failed). The measured-correct middle path: detect the
+# dominated pattern (repeated grep for bare identifiers = hand-tracing calls)
+# and price the better verb at the point of friction, exactly once.
+_IDENT_RE = re.compile(r"^[A-Za-z_]\w{2,}$")
+_GREP_PROGS = ("grep", "rg", "egrep", "ag", "ack")
+_NAV_THRESHOLD = 3  # bare-identifier greps before the nudge fires
+
+
+def _grep_symbol(command: str) -> str | None:
+    """If ``command`` is a grep/rg searching for a bare identifier (the
+    signature of tracing a symbol's call sites), return that identifier."""
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return None
+    argv = _unwrap(argv)
+    if not argv or os.path.basename(argv[0]) not in _GREP_PROGS:
+        return None
+    for a in argv[1:]:
+        if a.startswith("-"):
+            continue
+        term = a.strip("'\"")
+        # A bare identifier — not a regex, not a path — is a symbol trace.
+        if _IDENT_RE.match(term):
+            return term
+        return None  # first positional is the pattern; if not an ident, skip
+    return None
+
+
+def _navigation_nudge(payload: dict[str, Any]) -> str | None:
+    """Fire once when the session has grepped for >= _NAV_THRESHOLD distinct
+    bare identifiers — the hand-traced-call-graph pattern. Fail-open."""
+    try:
+        tool = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+        if "bash" not in tool and "command" not in tool:
+            return None
+        ti = payload.get("tool_input") or payload.get("toolInput") or {}
+        command = ""
+        for k in ("command", "Command", "CommandLine", "cmd"):
+            if isinstance(ti.get(k), str):
+                command = ti[k]
+                break
+        symbol = _grep_symbol(command)
+        if not symbol:
+            return None
+        workspace_root = _resolve_workspace_root(payload)
+        if not workspace_root:
+            return None
+        from ctx.engagement import note_symbol_grep
+
+        distinct, fired = note_symbol_grep(workspace_root, symbol)
+        if fired or distinct < _NAV_THRESHOLD:
+            return None
+        return (
+            f"CTX_NAV_GOVERNOR: you have grepped for {distinct} distinct symbols "
+            "— that is hand-tracing a call graph, which grep computes "
+            "unreliably (transitive closure is easy to undercount). One call "
+            "gives the exact graph: `ctx callers <sym>` (direct) or "
+            f"`ctx impact <sym>` (transitive blast radius, e.g. `ctx impact {symbol}`)."
+        )
+    except Exception:
+        return None
+
+
 def main_post_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> post-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON object on stdout: either a
-    no-op ``{}`` or an emission-governor nudge in the host dialect."""
+    no-op ``{}`` or a governor nudge (emission or navigation) in the host
+    dialect."""
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
             payload = {}
-        nudge = _emission_nudge(payload)
+        # Navigation first: it targets a specific, high-cost wrong pattern;
+        # emission is the ambient volume backstop.
+        nudge = _navigation_nudge(payload) or _emission_nudge(payload)
     except Exception:
         nudge = None
     if nudge is None:
