@@ -56,6 +56,7 @@ def render_run_digest(
     *,
     focus: str | None = None,
     op: str = "run",
+    dense: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Produce the bounded deterministic digest for a captured invocation and
     republish the manifest with its final digest identity.
@@ -63,9 +64,16 @@ def render_run_digest(
     ``op`` names the verb for telemetry attribution only (`ctx gain` by-verb
     rows); it never participates in digest bytes or content identity.
 
+    ``dense`` is the reflex arc's densify-on-starvation switch (docs/REFLEX.md
+    layer 3): profiles may render the full census instead of first-failure
+    detail. The flag itself is never written into digest meta — identity
+    remains a pure function of the rendered bytes, and the caller declares
+    the densified rendering in the *printed* header only.
+
     Returns (digest_text, final_manifest).
     """
     ctx = DigestContext.load(store, ws, manifest, focus=focus)
+    ctx.dense = bool(dense)
     profile, reason = detect_profile(ctx)
 
     body = profile.render(ctx)

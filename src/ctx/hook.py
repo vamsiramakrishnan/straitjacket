@@ -957,6 +957,23 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 if "_rewrite" in decision:
                     decision["_rewrite"]["reason"] += "\n" + _EVAL_TEACH
             _note_eval_opportunity(workspace_root, taught)
+        # Reflex arc (docs/REFLEX.md layers 1-3): score this command against
+        # the session's recorded interventions. A `ctx get`/`ctx search` on a
+        # known run handle is a landing (the positive class); anything else
+        # is checked for the starvation pattern (same signature re-issued
+        # after its digest — the spec3 re-run loop). The result NEVER changes
+        # the decision — reflexes act through rendering (`ctx run` reads the
+        # densify latch), not through blocking. Fail-open by contract.
+        try:
+            from ctx import reflex
+
+            handle = reflex.landing_ref(command)
+            if handle:
+                reflex.note_landing(workspace_root, handle)
+            else:
+                reflex.check_command(workspace_root, command)
+        except Exception:
+            pass
         return _apply_rewrite(decision, tool_input, command_key)
 
     if "read" in lowered or lowered in ("open_file", "view_file"):
@@ -1246,8 +1263,9 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         # Never digest our own digests or ctx's own tool results (recursion /
         # double-wrap guard). "[ctx " covers every ctx header — run: (digest),
         # get / search / stats (retrieval) — so a large `ctx get` slice run via
-        # Bash is not itself re-digested.
-        if stdout.lstrip().startswith("[ctx ") or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
+        # Bash is not itself re-digested. "densified:" is the reflex arc's
+        # declared-densification header prepended above the "[ctx run:" line.
+        if stdout.lstrip().startswith(("[ctx ", "densified:")) or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
             return None
 
         ws_root = _resolve_workspace_root(payload)

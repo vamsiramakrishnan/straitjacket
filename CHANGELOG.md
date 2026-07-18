@@ -4,6 +4,42 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.21.0] - 2026-07-18
+
+The reflex wave: closed-loop conditionality (docs/REFLEX.md), built
+against the spec3 receipt where every conditional fired to spec on the
+flood axis while the failure lived on the uninstrumented information
+axis. Every intervention is now a hypothesis about the model's next
+action; the system scores the hypothesis per event and adapts on the axis
+the evidence names.
+
+- **`pytest/v1` failing-test census** (debt 74db82e027): one line per
+  failing test — node id, output coordinates, traceback span — rendered
+  above and outliving the inline first-failure detail under budget
+  pressure; overflow declared with a continuation span. Dense mode adds
+  one evidence line per test. Bare `-q` summaries, `--tb=line/no`, and
+  pipe-truncated output all parse (the spec3 "summary line not found"
+  breakage fixed); all-pass runs byte-identical to before.
+- **Reflex arc v1** (`ctx.reflex`, hook + cli wiring): slicer-normalized
+  command signatures (`pytest -v`, `… | head -100`, `… --tb=short | tail`
+  → one signature); starvation detector — a signature re-issued after its
+  digest-with-omissions appends an outcome event and latches densify for
+  the session; landing detector on `ctx get`/`search` of known handles.
+  Reflexes act through rendering only (`densified: re-run detected` header
+  on the printed digest; dense flag never in digest meta — content
+  identity stays a pure function of bytes). All state fail-open,
+  replay-deterministic from the command sequence. Outcome ledger:
+  `.ctx-session-reads/reflex-outcomes.jsonl` (frozen schema).
+- **Behavioral-anomalies scorecard**: `ctx stats --session` renders
+  starvation/landing/densify counts per signature when present — the
+  single-session instrument that would have caught spec3 without a
+  benchmark. Summary line flags `⚠ N starvation/M landings`.
+- **Slow-loop epoch schema**: `ctx policy compile` aggregates reflex
+  outcomes into `[digest_density]` — signatures with ≥2 starvations and
+  landings < starvations start dense in future epochs; address-following
+  readers keep lean digests. Additive to ctx.policy/v1 (hook parser
+  verified tolerant); consumption deliberately deferred.
+
 ## [0.20.0] - 2026-07-18
 
 The measurement-driven wave: three mechanisms built in parallel by

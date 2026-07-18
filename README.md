@@ -1,6 +1,6 @@
 # straitjacket 🧥
 
-**Status:** v0.20.0 (pre-1.0, minor bump per mechanism wave) · 361 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.21.0 (pre-1.0, minor bump per mechanism wave) · 399 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
 One `pytest -q` can dump 300k tokens into your agent's transcript. Every
 turn after that re-sends them — a routine `mcp__github__list_commits` alone

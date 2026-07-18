@@ -15,6 +15,16 @@ benchmark postmortems had to reconstruct by hand:
 
 Cost totals come from the host when available; the decomposition here uses
 published per-MTok prices and is labeled an estimate.
+
+Axis discovery (REFLEX): the scorecard additionally folds the session's
+behavioral ledgers (``.ctx-session-reads/reflex-outcomes.jsonl``,
+``.ctx-session-reads/eval-adoption.jsonl``) into a behavioral-anomalies
+section — starvation re-runs per command signature, landings, densify
+actions, eval opportunities vs taught. This is the single-session view of
+the spec3 failure (8× pytest re-runs, 0 hint follow-through) that no
+benchmark should be needed to see. Fail-open like everything else here:
+missing or corrupt ledgers mean the section is absent, never an error, and
+zero events render no block — the scorecard must not grow noise.
 """
 
 from __future__ import annotations
@@ -39,8 +49,88 @@ def _price_key(model_id: str) -> str:
     return "sonnet"
 
 
+def _behavioral_anomalies(session_reads_dir: Path) -> dict | None:
+    """Fold the behavioral ledgers into an anomalies dict, or None when
+    there is nothing to say (no parseable events at all).
+
+    Reads two append-only fail-open ledgers from ``.ctx-session-reads/``:
+
+    - ``reflex-outcomes.jsonl`` — one line per behavioral event scored by
+      the reflex arc: ``{"ts", "event": "starvation"|"landing"|"friction",
+      "signature", "run", "action": "densify"|"none"}``
+    - ``eval-adoption.jsonl`` — ``{"op": "eval_opportunity", "taught",
+      "ts"}`` (the teaching denominator)
+
+    Corrupt lines are skipped individually; unreadable files contribute
+    nothing. Never raises."""
+    starvation = landings = friction = densified = 0
+    per_sig: dict[str, int] = {}
+    try:
+        lines = (
+            (session_reads_dir / "reflex-outcomes.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        event = rec.get("event")
+        if event == "starvation":
+            starvation += 1
+            sig = str(rec.get("signature") or "?")
+            per_sig[sig] = per_sig.get(sig, 0) + 1
+        elif event == "landing":
+            landings += 1
+        elif event == "friction":
+            friction += 1
+        else:
+            continue  # unknown event kinds are future schema, not errors
+        if rec.get("action") == "densify":
+            densified += 1
+    opportunities = taught = 0
+    try:
+        elines = (
+            (session_reads_dir / "eval-adoption.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    except OSError:
+        elines = []
+    for line in elines:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("op") == "eval_opportunity":
+            opportunities += 1
+            if rec.get("taught"):
+                taught += 1
+    if starvation + landings + friction == 0 and opportunities == 0:
+        return None
+    return {
+        "starvation": starvation,
+        "starvation_signatures": dict(sorted(per_sig.items())),
+        "landings": landings,
+        "friction": friction,
+        "ratio": f"{starvation}:{landings}",
+        "densified": densified,
+        "eval_opportunities": opportunities,
+        "eval_taught": taught,
+    }
+
+
 def compute_scorecard(proxy_state_dir: Path) -> dict | None:
-    """Fold wire.jsonl into a scorecard dict. None when no observations."""
+    """Fold wire.jsonl into a scorecard dict. None when no observations.
+
+    When the session dir's parent (``.ctx-session-reads/``) carries
+    behavioral ledgers with events, the dict gains an ``anomalies`` section
+    (see ``_behavioral_anomalies``)."""
     wire = Path(proxy_state_dir) / "wire.jsonl"
     if not wire.is_file():
         return None
@@ -142,6 +232,12 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
         "edit_share_pct": round(100 * edits / total_tools, 1) if total_tools else 0.0,
         "per_model": {k: dict(v) for k, v in sorted(per_model.items())},
     }
+    try:
+        anomalies = _behavioral_anomalies(Path(proxy_state_dir).parent)
+        if anomalies:
+            sc["anomalies"] = anomalies
+    except Exception:
+        pass  # fail-open: the anomalies section is absent, never an error
     if first_rescued_round is not None:
         # Post-rescue recovery cost (Tura's best metric, adopted): how much
         # of the session ran after rescue began — the price of regaining
@@ -171,6 +267,27 @@ def render_scorecard(sc: dict) -> str:
     if sc["tools"]:
         census = " ".join(f"{k}×{v}" for k, v in list(sc["tools"].items())[:8])
         lines.append(f"  effort: edit-share {sc['edit_share_pct']}% · {census}")
+    an = sc.get("anomalies")
+    if an:
+        # Behavioral anomalies (REFLEX axis discovery): rendered only when
+        # the ledgers had something to say — a zero-event session shows no
+        # block, keeping the scorecard byte-identical to the pre-reflex one.
+        sigs = an.get("starvation_signatures") or {}
+        head = f"{an['starvation']} starvation"
+        if sigs:
+            shown = ", ".join(f"'{s}'" for s in list(sigs)[:4])
+            plural = "s" if len(sigs) != 1 else ""
+            head += f" ({len(sigs)} signature{plural}: {shown})"
+        parts = [head, f"{an['landings']} landings"]
+        if an.get("friction"):
+            parts.append(f"{an['friction']} friction")
+        parts.append(f"densified: {'yes' if an.get('densified') else 'no'}")
+        lines.append("  anomalies: " + " · ".join(parts))
+        if an.get("eval_opportunities"):
+            lines.append(
+                f"  eval adoption: {an['eval_opportunities']} opportunities "
+                f"· {an['eval_taught']} taught"
+            )
     return "\n".join(lines)
 
 
@@ -195,6 +312,11 @@ def summary_line(sc: dict) -> str:
             f" · Δcode +{d['insertions']}/-{d['deletions']} in "
             f"{d['files_changed']}+{d['files_new']} files"
         )
+    an = sc.get("anomalies")
+    if an and an.get("starvation"):
+        # Flagged only when starvation happened — landings alone are the
+        # system working and earn no warning glyph.
+        line += f" · ⚠ {an['starvation']} starvation/{an['landings']} landings"
     return line
 
 

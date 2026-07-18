@@ -550,7 +550,51 @@ def _cmd_run(ws, ns) -> int:
         print(f"ctx run: {e}", file=sys.stderr)
         return 1
 
-    digest, manifest = render_run_digest(store, ws, capture.manifest, focus=ns.focus)
+    # Reflex arc (docs/REFLEX.md layer 3): a signature already intervened on
+    # this session re-arriving here IS the starvation loop — check_command
+    # scores it (deduped against the hook's sighting of the same re-run) and
+    # reports the densify latch. Latched → render the dense census and
+    # declare it in the printed header. Fail-open: broken reflex state means
+    # a plain digest, never a failed run.
+    sig = None
+    dense = False
+    try:
+        import shlex
+
+        from ctx import reflex
+
+        cmd_str = command[0] if ns.shell else shlex.join(command)
+        sig = reflex.command_signature(cmd_str)
+        if sig:
+            dense = reflex.check_command(ws.root, cmd_str) == "densify" or (
+                reflex.densify_latched(ws.root, sig)
+            )
+    except Exception:
+        sig, dense = None, False
+
+    digest, manifest = render_run_digest(
+        store, ws, capture.manifest, focus=ns.focus, dense=dense
+    )
+    # A digest that omitted content is an intervention (hypothesis: the model
+    # uses the digest, not a re-run). Record it so the reflex arc can score
+    # the next command against it.
+    try:
+        if sig:
+            from ctx import reflex
+
+            if reflex.has_omissions(digest):
+                short = str(manifest.get("id", "")).removeprefix("sha256:")[:12]
+                reflex.note_intervention(
+                    ws.root, sig, short, hints=reflex.count_hints(digest)
+                )
+    except Exception:
+        pass
+    if dense:
+        # Printed declaration only — the stored digest identity/meta hash is
+        # computed inside render_run_digest and never sees reflex state.
+        from ctx.reflex import DENSIFY_HEADER
+
+        digest = DENSIFY_HEADER + "\n" + digest
     return _emit_run_digest(ws, digest, manifest)
 
 

@@ -48,6 +48,14 @@ class DigestContext:
     # Graduated engagement (mechanism C): how many "next:" suggestions this
     # digest may carry. 0 = passive session, 1 = lean-model profile, 3 = full.
     suggestion_cap: int = 3
+    # Reflex arc (docs/REFLEX.md layer 3): densify-on-starvation. When True,
+    # a profile should spend its budget on the full census — every failing
+    # test name, every diagnostic, inline evidence instead of hints.
+    # Profiles read it via ``getattr(ctx, "dense", False)``; rendering stays
+    # deterministic — dense selects WHICH deterministic rendering, and the
+    # choice is declared in the printed header by the caller, never baked
+    # into stored digest identity by this flag alone.
+    dense: bool = False
 
     def mint_span(self, stream: "StreamView", kind: str, **kw: Any) -> str | None:
         if self.store is None:
