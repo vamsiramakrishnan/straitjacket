@@ -18,7 +18,7 @@ def test_prepare_claude_settings_shape(tmp_path):
     settings = prepare_claude(tmp_path, "/opt/bin/ctx")
     json.dumps(settings)  # must be JSON-serializable
     entry = settings["hooks"]["PreToolUse"][0]
-    assert entry["matcher"] == "Bash|Read"
+    assert entry["matcher"] == "Bash|Read|Grep|Glob"
     hook = entry["hooks"][0]
     assert hook["type"] == "command"
     assert hook["timeout"] == 10

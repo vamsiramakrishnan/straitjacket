@@ -874,19 +874,66 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 )
         return dict(DECISION_ALLOW)
 
-    if "list" in lowered or "find_by_name" in lowered or "grep" in lowered:
-        # Directory listings and native search: allow shallow, redirect broad.
-        recursive = bool(
-            tool_input.get("Recursive") or tool_input.get("recursive")
-        )
-        if recursive:
+    if lowered in ("grep", "glob") or "grep" in lowered or "glob" in lowered or (
+        "list" in lowered or "find_by_name" in lowered
+    ):
+        return _apply_rewrite(_classify_native_search(tool_name, tool_input, policy), tool_input)
+
+    return dict(DECISION_ALLOW)
+
+
+# Claude Code native Grep/Glob tools bypass the Bash path entirely (they are
+# their own tools, not shell commands) — so their content output is never
+# wrapped through ``ctx run`` and never digested. We cannot touch their output
+# from a PreToolUse hook, but we CAN bound it transparently: a content-mode
+# grep with no ``head_limit`` gets one injected via ``updatedInput``. The tool
+# still runs, the model adopts nothing, and a flood becomes a bounded slice
+# with a pointer to the structured search digest (measured gap: the model
+# navigates with native Grep, which our old Bash-only matcher never saw).
+_NATIVE_GREP_CAP = 60  # matches returned before the model should narrow
+
+
+def _classify_native_search(
+    tool_name: str, tool_input: dict[str, Any], policy: dict[str, Any]
+) -> dict[str, Any]:
+    lowered = tool_name.lower()
+    recursive = bool(tool_input.get("Recursive") or tool_input.get("recursive"))
+    # Glob / file-name search / listings return paths (bounded-ish); only a
+    # recursive one under strict steering is worth redirecting.
+    if "grep" not in lowered:
+        if recursive and not _steering_allows(policy):
             return _deny(
-                "CTX_CONTEXT_GUARD: recursive listing/search may flood the transcript.\n"
+                "CTX_CONTEXT_GUARD: recursive listing/search may flood.\n"
                 "Use: ctx search repo: '<pattern>' --glob '<glob>'  or  ctx stats repo:"
             )
         return dict(DECISION_ALLOW)
 
-    return dict(DECISION_ALLOW)
+    # Native Grep. files_with_matches / count modes are already small — allow.
+    mode = str(tool_input.get("output_mode") or "files_with_matches")
+    if mode != "content":
+        return dict(DECISION_ALLOW)
+    # Content mode already bounded by the model → respect it.
+    for k in ("head_limit", "headLimit"):
+        v = tool_input.get(k)
+        if isinstance(v, int) and v > 0:
+            return dict(DECISION_ALLOW)
+    if not _steering_allows(policy):
+        return _deny(
+            "CTX_CONTEXT_GUARD: unbounded content grep may flood the transcript.\n"
+            "Add head_limit, or use: ctx run -- grep -rn '<pattern>' <path>  "
+            "(digested, structured by file)"
+        )
+    cap = int(policy.get("_grep_native_cap", _NATIVE_GREP_CAP))
+    decision: dict[str, Any] = dict(DECISION_ALLOW)
+    decision["_rewrite"] = {
+        "fields": {"head_limit": cap},
+        "reason": (
+            f"CTX_CONTEXT_GUARD: content grep bounded to {cap} matches. "
+            "For the full set structured by file (counts, top hits, span): "
+            "ctx run -- grep -rn '<pattern>' <path>"
+        ),
+    }
+    return decision
 
 
 def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:

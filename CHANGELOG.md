@@ -4,6 +4,35 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.17.0] - 2026-07-18
+
+The native-search wave: close the model-ignoring gap. Measurement showed
+the model navigates with the *native* `Grep`/`Glob` tools — not shell
+`grep` — so our `Bash|Read` matcher never saw the flood, and the
+navigation governor never fired. This wave intercepts the tools the model
+actually reaches for.
+
+- Matcher extended to `Bash|Read|Grep|Glob` (Claude Code) and
+  `…|grep_search|glob_search|codebase_search` (Antigravity). The tools the
+  model uses to navigate are now in scope, not just shell commands.
+- Native content-mode `Grep` with no `head_limit` gets one injected
+  transparently via `updatedInput` (`head_limit: 60`) — the tool still
+  runs, the model adopts nothing, and an unbounded flood becomes a bounded
+  slice with a pointer to the structured digest. `files_with_matches` /
+  `count` / already-bounded greps pass through raw. Under strict
+  `steering = "deny"` the same case is redirected to `ctx run -- grep`
+  instead (never silently rewritten).
+- `search/v1` digest profile: a wrapped `grep`/`rg` (via `ctx run`) is now
+  rendered as *search results* — exact match count, per-file histogram,
+  top hits with coordinates, and a span to the full set — instead of the
+  generic text profile's byte counts. Sibling of `lint/v1`; the two share
+  the `file:line:content` shape, so `search/v1` is argv-anchored to actual
+  `grep`/`rg`/`ack`/`ag` invocations (a content-ratio trigger was tried and
+  dropped — it stole log and lint lines) and ordered *after* `lint/v1` so
+  diagnostics claim their own output first.
+- No prefix asset changed (matcher strings are host-settings, not
+  resident prompts), so no `PREFIX_VERSION` bump: zero cold-cache cost.
+
 ## [0.16.0] - 2026-07-18
 
 The call-graph wave: edges, done in-doctrine. We had nodes (`def`/`refs`);

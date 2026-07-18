@@ -14,6 +14,7 @@ from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
+from ctx.digest.searchprof import SearchProfile
 from ctx.digest.logprof import LogTemplateProfile
 from ctx.digest.moreprofs import BuildProfile, GitDiffProfile, GoTestProfile, JestProfile
 from ctx.digest.pytestprof import PytestProfile
@@ -30,6 +31,8 @@ _PROFILES: tuple[Profile, ...] = (
     JestProfile(),
     GitDiffProfile(),
     LintProfile(),  # before Build/LogTemplate: both would misclaim lint shapes
+    SearchProfile(),  # grep/rg file:line:content — AFTER Lint: diagnostics
+    #                   (which share the shape but carry severity tokens) win first
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),

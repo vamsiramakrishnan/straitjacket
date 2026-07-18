@@ -116,7 +116,7 @@ def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
         "hooks": {
             "PreToolUse": [
                 {
-                    "matcher": "Bash|Read",
+                    "matcher": "Bash|Read|Grep|Glob",
                     "hooks": [
                         {
                             "type": "command",
