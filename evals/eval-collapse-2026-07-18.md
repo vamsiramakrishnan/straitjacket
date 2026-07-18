@@ -119,6 +119,32 @@ discoverable.** The mechanism's gate/provenance benefits are real
 (layer 1) but currently unclaimed in live sessions — a teaching-surface
 problem, not a mechanism problem.
 
+### Layer 2c — post-fix re-measurement (v0.20.0, run 3 + wrapped run 2)
+
+| run | arm | turns | cost | strict format | used `ctx eval` |
+|---|---|---|---|---|---|
+| 3 | no-eval | 4 | $0.0298 | ✅ | — |
+| 3 | eval | 3 | $0.0257 | ❌ | ❌ |
+| wrap 2 | wrapped | 4 | $0.0353 | ❌ (wrap 1 ✅ — n=1 variance) | ❌ |
+
+The economy delta held a third time (fewer turns, lower cost). Two more
+findings, each with a shipped fix:
+
+4. **The runner's own doctrine line invalidated the format test.** The
+   doctrine-scoping fix went into the *skill* (Antigravity tier), but the
+   A/B runner's eval-arm prompt still carried the unscoped "print only
+   what the transcript needs" — so runs 1–3 measured the *bug's*
+   phrasing, not the fix. Fixed in `ab_eval_live.py` (scoped phrasing
+   mirroring the skill); a validation pair runs under it.
+5. **The dominant evasion is the ephemeral-script pattern.** Wrapped run 2
+   wrote `cat > /tmp/.../analyze_p95.py` then ran it — each half
+   individually innocent to the detector (not a heredoc, not `-c`, "just
+   a script path"), so the adoption ledger recorded **zero** entries.
+   Detector extended: a python invocation whose script path lives in a
+   temp/scratch dir (ephemeral, unaddressed) now counts as an
+   eval-opportunity; workspace-resident scripts remain non-opportunities
+   (they are addressable code).
+
 ## What this changes
 
 - **Adoption gap is the bottleneck, not the mechanism.** On the

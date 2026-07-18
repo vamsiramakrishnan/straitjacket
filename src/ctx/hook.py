@@ -382,8 +382,17 @@ def _eval_opportunity(command: str) -> bool:
     for tok in argv[1:]:
         if tok.startswith("-c"):  # "-c" / "-c<code>"; long opts start "--", not "-c"
             return True
-        if tok in ("-m", "--") or not tok.startswith("-"):
-            return False  # module mode or script path: -c beyond here is not python's
+        if tok == "-m" or tok == "--":
+            return False  # module mode: -c beyond here is not python's
+        if not tok.startswith("-"):
+            # Script path. An EPHEMERAL script (written to a temp/scratch
+            # dir moments earlier, run once, never addressed) is the
+            # measured real-world evasion of this detector: agents do
+            # `cat > /tmp/.../x.py` then `python3 /tmp/.../x.py`
+            # (eval-collapse doc, layer 2b — 0 ledger entries because both
+            # halves individually looked innocent). Workspace-resident
+            # scripts stay non-opportunities: they are addressable code.
+            return tok.startswith("/tmp/") or "/scratchpad/" in tok
     return False
 
 

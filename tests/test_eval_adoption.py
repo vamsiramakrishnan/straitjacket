@@ -84,6 +84,11 @@ def test_detection_positive():
         'python -c "print(1)"',
         "python3.12 -c 'x=1'",
         "PYTHONPATH=. timeout 5 python3 -c 'import mod'",  # unwrapped
+        # Ephemeral-script pattern (the measured evasion: cat > /tmp/x.py
+        # then run it — eval-collapse doc layer 2b, 0 ledger entries).
+        "python3 /tmp/scratch/analyze_p95.py",
+        "python /tmp/claude-x/scratchpad/job.py --fast",
+        "python3 /home/user/.cache/scratchpad/tmp_script.py",
     ):
         assert _eval_opportunity(cmd), cmd
 
@@ -96,6 +101,8 @@ def test_detection_negative():
         "python3 -m pytest -c pytest.ini",  # -c belongs to pytest, not python
         "python3 script.py",
         "python3 script.py -c whatever",  # -c after the script path
+        "python3 tools/gen.py",  # workspace-resident: addressable code
+        "python3 /usr/share/doc/python3/examples/x.py",  # system path
         "python3",
         "python3 --version",
         "pytest -q",

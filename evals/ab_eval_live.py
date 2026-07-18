@@ -52,12 +52,17 @@ DOCTRINE = {
         "ctx run / ctx search / ctx get / ctx stats and cite handles. "
         "Do NOT use ctx eval."
     ),
+    # Scoped phrasing (debt c23a8ccdf5): terseness governs the SCRIPT's
+    # output only. Runs 1-3 used an unscoped "print only what the
+    # transcript needs" and 3/3 eval arms dropped the task's required
+    # final line — the doctrine leak measured in the eval-collapse doc.
     "eval": (
         "ctx is installed. Route potentially large output through "
         "ctx run / ctx search / ctx get / ctx stats and cite handles. "
         "For multi-step data-dependent work (parse, aggregate, branch), "
-        "prefer writing ONE short python script run as: ctx eval '<script>' "
-        "— print only what the transcript needs."
+        "prefer writing ONE short python script run as: ctx eval '<script>'. "
+        "Keep the script's printed output minimal — but your final answer "
+        "must still satisfy the task's required output format in full."
     ),
 }
 
