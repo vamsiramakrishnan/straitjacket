@@ -26,6 +26,78 @@ straitjacket forces tight, unyielding structural boundaries on wild, unbounded t
 
 Every artifact is also an audit trail: what ran, what it produced, and exactly which slices the model saw.
 
+## 🥊 The stack, compared: straitjacket vs rtk, Headroom, Ponytail, Caveman
+
+Named systems, mapped onto the four-gate taxonomy (birth → entry →
+residence → emission; see ROADMAP.md). Studied and, where marked, measured
+head-to-head this iteration (receipts in `evals/`).
+
+| | **straitjacket** | **rtk** | **Headroom** | **Ponytail** | **Caveman** |
+|---|---|---|---|---|---|
+| Mechanism class | hooks + observer proxy + verbs + skill | Bash-hook filter binary | rewriting wire proxy | ruleset injection | prompting style |
+| Gate 1 · Birth (at-source) | ✅ artifactize + deterministic digest | ✅ filter (lossy on success) | — | — | — |
+| Gate 2 · Entry (wire) | ✅ byte-exact observer (Tier-0) | — | ⚠️ per-request rewriting (lossy) | — | — |
+| Gate 3 · Residence (lifecycle) | ✅ read budgets, window pressure, epoch rescue, checkpoints | — | ⚠️ implicit (continuous compression) | — | — |
+| Gate 4 · Emission (output + deliverable) | ✅ governor + discipline + solution ladder | — | — | ✅ ladder (advisory only) | ✅ terse narration (advisory, lossy) |
+| Lossless with addresses | **always** (spans, elided-file stubs, debt ledger) | failures only (tee) | ❌ silent drops | n/a | ❌ |
+| Deterministic | yes, spec'd + tested | mostly | no | n/a | n/a |
+| Cache doctrine | prefix contract, epoch-latched rescue, scorecards | none | **anti**: measured 12–16 pt hit deficit, 3–6× write churn | none | none |
+| Runtime measurement loop | wire scorecards → policy epochs → `gain` | `gain` analytics | dashboards | none | none |
+| Enforcement | structural (hooks, budgets) | rewrite hook | proxy force | none (rules) | none |
+| Host reach | 2 deep (Claude Code, Antigravity) | 15 | any client (wire) | 20+ | any |
+
+**Measured head-to-heads and absorptions** (all 2026-07-18, `evals/`):
+
+- **Headroom** — benchmarked 3-way on four scenarios behind our observer.
+  Its cache churn confirmed at request level (hit 80.6–84.2% vs our
+  96.5–98.1%); on the long task our mechanisms beat it outright (42 turns /
+  243s vs 53 / 279s). Its one structural edge — rescuing an already-bloated
+  transcript — was taken losslessly in v0.10.0 (epoch-latched elision:
+  ~18× less cache churn than per-request rewriting, every elided byte
+  file-backed and addressed). Still better than us at: zero-integration
+  generality (any client, no workspace) and cross-session memory — out of
+  scope here by principle.
+- **rtk** — ideas stress-tested on real corpora rather than benchmarked
+  head-to-head. Two hypothesis reversals followed: diagnostics needed
+  *structure not compression* (→ `lint/v1` exact censuses + per-file
+  spans; live lint-fix benchmark went honest-loss → iterate → parity), and
+  our own scaffold was inflating small outputs (→ slim inline emission).
+  Absorbed: failure-asymmetric budgets, `ctx gain`. Still better than us
+  at: 100+ bespoke filters, single-binary <10ms packaging, 15-host reach.
+  Structurally behind: lossy success paths, no native-tool (Read/Grep)
+  coverage, no cache or measurement doctrine.
+- **Ponytail** — its core idea (the solution ladder) A/B-tested on a live
+  creation task and **adopted on evidence**: −28% turns, −33% time, −17%
+  cost, 9% less product code with *more* test code. Shipped as discipline
+  prompt + skill rule 13 + `ctx debt` (its debt index, rebuilt as our
+  declared-omission principle applied to decisions). Still better than us
+  at: 20-host reach via rule files. Structurally behind: advisory-only —
+  no enforcement, no measurement of whether the ladder held (we measure
+  it per session via deliverable scorecard metrics).
+- **Caveman** — lossy telegraphic narration, absorbed in lossless form:
+  cite-don't-quote with resolvable handles (skill rules 11–12) instead of
+  compressed prose. Its quiet-needle-style failure mode (evidence
+  destroyed to save tokens) is the exact anti-pattern our spans/stubs
+  exist to prevent.
+
+**Regime scoreboard** (worst case and best case, all measured):
+
+| Regime | straitjacket vs naive | vs the field |
+|---|---|---|
+| Catastrophic floods | 456 tok vs ~222k | Headroom silently dropped the needle (347,595→68) |
+| Repo comprehension | only-correct-answers across rounds; first-ever haiku pass | untested by others |
+| Long overhaul | −21% turns, −9% time, −16% output | beats Headroom on turns/time at par cost |
+| Tiny surgical tasks | parity (was 4.5×; graduated engagement) | rtk-class tasks: parity is the ceiling |
+| Mechanical bulk repair | parity after per-file-span iteration | our structurally worst regime, no longer a loss |
+
+The through-line: every system above has one good idea held back by a
+missing layer — rtk filters without addresses, Headroom rescues without
+cache stability, Ponytail biases without measurement, Caveman compresses
+without provenance. straitjacket's claim is not a better single trick; it
+is that **skills bias, hooks bound, mechanisms measure** — one system
+where each layer catches what the previous one can't guarantee, and every
+omission (bytes, blocks, or decisions) keeps an address.
+
 ## 🏗️ Architectural Topology
 straitjacket maps directly to Antigravity's extension architecture, supporting scaling tiers of enforcement:
 
@@ -252,6 +324,13 @@ without a handle must be labeled a hypothesis.
   its coordinate**.
 * Repo-overhaul rematch on v0.6: **harnessed arm 40% cheaper than naive
   ($2.21 vs $3.70) and faster (6.1 vs 7.2 min) at quality parity**.
+* 2026-07-18 mechanism waves (scenario matrix, cache-economics study,
+  Headroom 3-way, lint-fix rounds, ladder A/B, live rescue validation):
+  see the regime scoreboard above and
+  [`evals/matrix-2026-07-18.md`](evals/matrix-2026-07-18.md) ·
+  [`evals/rtk-corpus-2026-07-18.md`](evals/rtk-corpus-2026-07-18.md) ·
+  [`docs/LOSSLESS-RESCUE.md`](docs/LOSSLESS-RESCUE.md) ·
+  [`docs/PRICED-CONTEXT.md`](docs/PRICED-CONTEXT.md).
 
 ### Evals
 
