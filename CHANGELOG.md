@@ -4,6 +4,29 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.16.0] - 2026-07-18
+
+The call-graph wave: edges, done in-doctrine. We had nodes (`def`/`refs`);
+this adds the edges that turn a recursive grep-and-read trace into one
+query — the one capability that makes tokensave enviable, built the
+straitjacket way (pure stdlib `ast`, zero new deps, deterministic,
+worktree-hash cached, no daemon, span-backed, addressable).
+
+- `ctx callers <Symbol>` — direct callers, each with file:line.
+- `ctx callees <Symbol>` — in-repo functions it calls.
+- `ctx impact <Symbol> [--depth N]` — transitive callers (blast radius),
+  grouped by hop distance; bounded recursion (≤6). "What breaks if I change
+  this?" in one call. On our own repo, `ctx impact register_span` returns
+  the full 179-node reachable set in ~0.8s (cached thereafter).
+- Name-resolved edges (a call to `foo` binds to any in-repo `def foo`):
+  approximate but disclosed like the ctags map engine; ambiguous names
+  report every candidate, never hidden (SPEC §8). Python-only for now;
+  tree-sitter breadth deferred to an optional `[polyglot]` extra pending a
+  measured win.
+- Ships CLI-first + skill-taught (bump-free). The MCP `op` enum is a prefix
+  asset, so exposing the verbs there is a deliberate future PREFIX_VERSION
+  decision, not paid on spec (same discipline as the v0.9.0 priced outline).
+
 ## [0.15.0] - 2026-07-18
 
 The cross-validation wave: two dual-use benchmark cells (S5 library-hunt,

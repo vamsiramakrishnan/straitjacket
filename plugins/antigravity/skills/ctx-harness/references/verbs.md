@@ -50,3 +50,12 @@ index entry is not enough; each verb's output is bounded and deterministic.
 - `ctx debt add "<note>" [--ref repo:file:line]` — declare a deliberately
   deferred improvement instead of silently skipping it.
 - `ctx debt list` / `ctx debt resolve <id>` — review and close.
+
+## Call graph (Python, ast — zero-dep, always-current)
+
+- `ctx callers <Symbol>` — direct callers of a function/method, each with `file:line`.
+- `ctx callees <Symbol>` — the in-repo functions it calls.
+- `ctx impact <Symbol> [--depth N]` — transitive callers (blast radius): everything
+  that reaches the symbol, grouped by hop distance. Use before changing a shared
+  function — one query replaces recursive grep. Name-resolved (ambiguous names
+  report every candidate); deterministic; worktree-hash cached, no daemon.

@@ -49,7 +49,9 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 round, per-step provenance) · `search` (batched patterns) · `get` (exact
 slices incl. `--span`) · `stats` (shape; on one code file: priced symbol
 outline) · `map` (ranked codebase map) · `def`/`refs`/`diag` (symbol
-verbs) · `diff run:A run:B` (regression delta) · `stats --session` /
+verbs) · `callers`/`callees`/`impact` (call graph — direct/transitive, one
+query replaces a recursive grep trace) · `diff run:A run:B` (regression
+delta) · `stats --session` /
 `gain` (economics) · `checkpoint` (cache epoch) · `debt` (deferral ledger).
 Full flags and when-to-use detail: read `references/verbs.md`.
 
