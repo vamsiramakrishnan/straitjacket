@@ -14,3 +14,6 @@
 {"id": "c23a8ccdf5", "op": "resolve"}
 {"id": "74db82e027", "note": "pytest/v1 shows first-failure only where the task needs the failing-test census (the lint/v1 rtk lesson never applied to pytest) \u2014 measured: haiku re-ran the suite 8x with slicers, sj hit the 32-turn cap on both spec3 tasks", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
 {"id": "51604cfe7b", "note": "bare-wrap tier teaches no retrieval vocabulary to lean models (LADDERS edge 7 with a measured failure): emission-gate digests' spans went unresolved, converted to re-execution", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
+{"id": "3f483592c4", "note": "reflex v2: starvation must require no intervening Edit/Write between digest and re-run (v1 counts healthy edit-verify cycles as starvation \u2014 6 false-ish events on the r2 referee; also pollutes [digest_density] training data). Hook already sees Edit/Write; one re-arm flag per signature.", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
+{"id": "74db82e027", "op": "resolve"}
+{"id": "51604cfe7b", "op": "resolve"}
