@@ -122,6 +122,30 @@ def test_error_result_gets_larger_budget(ws):
     assert len(err_uto) >= len(ok_uto)
 
 
+def test_mixed_content_blocks_persisted_losslessly(ws):
+    # A mixed [big text + image] result must not silently drop the image:
+    # the persisted artifact must contain it (lossless-on-disk). Regression
+    # for the review-panel finding at hook.py:_normalize_tool_response.
+    from ctx.hook import _normalize_tool_response
+
+    img = "A" * 2000  # stand-in base64 blob
+    tr = [{"type": "text", "text": "x" * 20000}, {"type": "image", "data": img}]
+    stdout, _ = _normalize_tool_response(tr)
+    assert img in stdout  # the image block survived into what gets persisted
+    # all-text still takes the clean join path (no json wrapping)
+    txt, _ = _normalize_tool_response([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}])
+    assert txt == "a\nb"
+
+
+def test_ctx_retrieval_output_not_redigested(ws):
+    # A large `ctx get` slice run via Bash starts with "[ctx get …]"; the
+    # recursion guard must let it pass through untouched (not re-digest it).
+    for header in ("[ctx get run:abc123#stdout]", "[ctx search run:abc123]", "[ctx stats run:abc123]"):
+        d = _run_post({"tool_name": "Bash", "cwd": str(ws),
+                       "tool_response": {"stdout": header + "\n" + "z" * 40000, "stderr": ""}})
+        assert d == {}, header
+
+
 def test_fail_open_on_garbage(ws):
     # Missing tool_response, non-dict, unresolvable — all yield {} not a crash.
     assert _run_post({"tool_name": "Bash", "cwd": str(ws)}) == {}

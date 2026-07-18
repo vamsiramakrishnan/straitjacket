@@ -1115,9 +1115,14 @@ def _normalize_tool_response(tr: Any) -> tuple[str, str]:
     if isinstance(tr, str):
         return tr, ""
     if isinstance(tr, list):
-        parts = [b["text"] for b in tr if isinstance(b, dict) and isinstance(b.get("text"), str)]
-        if parts:
-            return "\n".join(parts), ""
+        # Collapse to text ONLY when EVERY block is a text block. If any block
+        # is non-text (image / resource / audio), the joined text would
+        # silently drop it — and since this text is exactly what gets
+        # persisted, that would violate lossless-on-disk (the dropped block
+        # would be unrecoverable via `ctx get`). Serialize the whole structure
+        # instead so the artifact is complete.
+        if tr and all(isinstance(b, dict) and isinstance(b.get("text"), str) for b in tr):
+            return "\n".join(b["text"] for b in tr), ""
         return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
     if isinstance(tr, dict):
         if isinstance(tr.get("content"), list):
@@ -1153,8 +1158,10 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         stdout, stderr = _normalize_tool_response(tr)
 
         # Never digest our own digests or ctx's own tool results (recursion /
-        # double-wrap guard).
-        if stdout.lstrip().startswith("[ctx run:") or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
+        # double-wrap guard). "[ctx " covers every ctx header — run: (digest),
+        # get / search / stats (retrieval) — so a large `ctx get` slice run via
+        # Bash is not itself re-digested.
+        if stdout.lstrip().startswith("[ctx ") or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
             return None
 
         ws_root = _resolve_workspace_root(payload)
