@@ -17,3 +17,4 @@
 {"id": "3f483592c4", "note": "reflex v2: starvation must require no intervening Edit/Write between digest and re-run (v1 counts healthy edit-verify cycles as starvation \u2014 6 false-ish events on the r2 referee; also pollutes [digest_density] training data). Hook already sees Edit/Write; one re-arm flag per signature.", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
 {"id": "74db82e027", "op": "resolve"}
 {"id": "51604cfe7b", "op": "resolve"}
+{"id": "3f483592c4", "op": "resolve"}
