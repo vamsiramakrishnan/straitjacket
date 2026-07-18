@@ -10,3 +10,6 @@ venv/
 .coverage
 .agents/
 native/ctx-hook-native/target/
+
+# Runtime session state (never source)
+.ctx-session-reads/
