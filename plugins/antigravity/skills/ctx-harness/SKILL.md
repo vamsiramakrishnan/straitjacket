@@ -41,12 +41,16 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 14. Plan backward: state the final acceptance check first, then the step
     before it, back to your first action — then execute forward without
     re-planning. Mechanical chains you can declare upfront run as one
-    round via `ctx seq`.
+    round via `ctx seq`; chains that need computed control flow (branch
+    on a result, loop over files, aggregate before emitting) run as one
+    round via `ctx eval` — print only what the transcript needs.
 
 ## Verb index
 
 `run` (capture) · `seq` (declared command tree — N mechanical steps, one
-round, per-step provenance) · `search` (batched patterns) · `get` (exact
+round, per-step provenance) · `eval` (programmable capture — a Python
+script chains N ops with computed control flow; only its digest returns,
+the script itself is an addressable blob) · `search` (batched patterns) · `get` (exact
 slices incl. `--span`) · `stats` (shape; on one code file: priced symbol
 outline) · `map` (ranked codebase map) · `def`/`refs`/`diag` (symbol
 verbs) · `callers`/`callees`/`impact` (call graph — direct/transitive, one

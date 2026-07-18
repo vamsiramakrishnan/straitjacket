@@ -88,6 +88,17 @@ def _main_slow(args: list[str]) -> int:
         help="render the current session's wire scorecard (proxy required)",
     )
 
+    p_eval = sub.add_parser(
+        "eval", help="run a Python script under the birth gate; only its digest returns"
+    )
+    p_eval.add_argument(
+        "script", nargs="?", help="script text ('-' or omitted reads stdin/heredoc)"
+    )
+    p_eval.add_argument("--file", help="read the script from a workspace file")
+    p_eval.add_argument("--cwd", help="working directory relative to the workspace")
+    p_eval.add_argument("--timeout", type=float, default=600.0)
+    p_eval.add_argument("--focus", help="deterministic evidence-selection query")
+
     p_seq = sub.add_parser("seq", help="declared command tree: N steps, one round")
     p_seq.add_argument("steps", nargs="+", help="shell command strings, run in order")
     p_seq.add_argument("--keep-going", action="store_true", dest="keep_going",
@@ -255,6 +266,8 @@ def _main_slow(args: list[str]) -> int:
 
         if ns.cmd == "run":
             return _cmd_run(ws, ns)
+        if ns.cmd == "eval":
+            return _cmd_eval(ws, ns)
         if ns.cmd == "search":
             return _cmd_retrieval(ws, ns, "search")
         if ns.cmd == "get":
@@ -488,6 +501,57 @@ def _cmd_run(ws, ns) -> int:
     if result["timedOut"]:
         return 124
     return 0 if result["exitCode"] == 0 else 3
+
+
+def _cmd_eval(ws, ns) -> int:
+    from ctx.execution import ExecutionError
+    from ctx.pyeval import run_eval
+    from ctx.store import Store
+
+    if ns.file:
+        full = ws.confine(ns.file, must_exist=True)
+        rel = ws.relativize(full)
+        if ws.is_ignored(rel):
+            print(f"ctx eval: path is excluded from capture by policy: {rel}", file=sys.stderr)
+            return 1
+        script = full.read_text(encoding="utf-8")
+    elif ns.script in (None, "-"):
+        if sys.stdin.isatty():
+            print(
+                "ctx eval: no script given (pass text, --file <path>, or pipe stdin)",
+                file=sys.stderr,
+            )
+            return 2
+        script = sys.stdin.read()
+    else:
+        script = ns.script
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        text, code = run_eval(
+            ws, store, script, timeout=ns.timeout, cwd=ns.cwd, focus=ns.focus
+        )
+    except ExecutionError as e:
+        print(f"ctx eval: {e}", file=sys.stderr)
+        return 1
+
+    from ctx.engagement import filter_digest, suggestion_cap
+    from ctx.textutil import bounded
+
+    budget = (
+        ws.config.budgets.result_tokens
+        if "output (complete):" in text
+        else ws.config.budgets.digest_tokens
+    )
+    # Failure asymmetry: a failing script's traceback is evidence.
+    if code != 0:
+        budget = int(budget * ws.config.budgets.failure_budget_factor)
+    eng = ws.config.engagement
+    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
+    print(bounded(filter_digest(text, cap), budget))
+    if code == 124:
+        return 124
+    return 0 if code == 0 else 3
 
 
 def _cmd_diff(ws, ns) -> int:

@@ -4,6 +4,45 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.19.0] - 2026-07-18
+
+Programmable capture: the Maki absorption. Maki (maki.sh) demonstrated the
+strongest form of tool-chain collapse — the model writes one script that
+chains N operations, and intermediates never enter the transcript (their
+demo: 1300× context reduction). `ctx seq` already performed this collapse
+for *declared* trees; this wave generalizes it to *computed* control flow
+(branch on a result, loop over files, aggregate before emitting) while
+keeping what a raw interpreter sandbox drops: provenance. Maki's script and
+its intermediates vanish into the chat log with no address; here every
+piece keeps one.
+
+- **`ctx eval`** (`ctx.pyeval`): a Python script runs under birth-gate
+  capture and only its bounded digest returns. The script is stored first
+  as a content-addressed blob, cited in the digest header
+  (`script blob:<id>`) and in the final manifest (`eval.script`) —
+  reproduce with `ctx get blob:<id> | python3 -I -`. Streams are the usual
+  span-addressable blobs; the existing profile registry digests the output
+  (flood → bounded digest with continuation coordinates; small result →
+  complete inline). Failure asymmetry applies: a failing script's
+  traceback rides on the failure budget, and frames are deterministic and
+  path-free (`File "<stdin>"` — the script feeds stdin, never a temp
+  file). `python -I` isolated mode blocks cwd/PYTHONPATH injection.
+  Sub-steps that deserve their own handles call `ctx run` from inside the
+  script. Trust envelope identical to `ctx run` (bounded capture, not OS
+  isolation — that remains the broker's job, Phase 3). Deterministic:
+  identical script + identical worktree → byte-identical digest.
+- **Capture runner**: `run_capture` gains `stdin_bytes` (spooled to disk
+  and fed as the child's stdin — never a pipe, so no deadlock and no size
+  limit) and `record_argv` (normalized model-visible argv, so the
+  host-specific interpreter path never appears in manifests or digests).
+- **Telemetry attribution**: `render_run_digest` takes an `op` name so
+  `ctx gain` reports eval under its own by-verb row; `op` never
+  participates in digest bytes or content identity.
+- Skill body rule 14 + verb index teach the seq/eval split (declared →
+  `seq`, computed → `eval`); prefix manifest regenerated — the skill body
+  is invocation-tier, so PREFIX_VERSION stays 3 and there is **no cache
+  impact**.
+
 ## [0.18.0] - 2026-07-18
 
 The universal emission gate: one output-side gate for every faucet. Prior

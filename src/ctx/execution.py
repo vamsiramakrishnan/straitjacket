@@ -60,9 +60,18 @@ def run_capture(
     shell: bool = False,
     timeout: float | None = 600.0,
     store: Store | None = None,
+    stdin_bytes: bytes | None = None,
+    record_argv: list[str] | None = None,
 ) -> CaptureResult:
     """Execute a command, streaming stdout/stderr into distinct immutable
-    blobs, and publish a ``ctx.invocation/v1`` manifest."""
+    blobs, and publish a ``ctx.invocation/v1`` manifest.
+
+    ``stdin_bytes`` is spooled to disk and fed as the child's stdin (never a
+    pipe, so no deadlock and no size limit). ``record_argv`` substitutes the
+    manifest's model-visible argv when the executed argv carries a
+    host-specific absolute path (e.g. ``sys.executable``) that must never
+    appear in manifests or digests.
+    """
     if not argv:
         raise ExecutionError("empty command")
     store = store or Store(ws.workspace_id)
@@ -80,8 +89,13 @@ def run_capture(
     tmpdir = Path(tempfile.mkdtemp(prefix="ctx-cap-"))
     out_path = tmpdir / "stdout"
     err_path = tmpdir / "stderr"
+    in_path: Path | None = None
+    if stdin_bytes is not None:
+        in_path = tmpdir / "stdin"
+        in_path.write_bytes(stdin_bytes)
     timed_out = False
     try:
+        in_fh = in_path.open("rb") if in_path is not None else None
         with out_path.open("wb") as out_fh, err_path.open("wb") as err_fh:
             try:
                 proc = subprocess.Popen(
@@ -90,11 +104,14 @@ def run_capture(
                     shell=shell,
                     stdout=out_fh,
                     stderr=err_fh,
-                    stdin=subprocess.DEVNULL,
+                    stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
                     start_new_session=True,
                 )
             except FileNotFoundError as e:
                 raise ExecutionError(f"command not found: {argv[0]}") from e
+            finally:
+                if in_fh is not None:
+                    in_fh.close()
             try:
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -127,7 +144,7 @@ def run_capture(
                 "encoding": encoding if size else "utf-8",
             }
     finally:
-        for p in (out_path, err_path):
+        for p in (out_path, err_path) + ((in_path,) if in_path is not None else ()):
             try:
                 p.unlink()
             except OSError:
@@ -141,7 +158,7 @@ def run_capture(
         "schema": "ctx.invocation/v1",
         "workspaceId": ws.workspace_id,
         "cwd": rel_cwd,
-        "argv": list(argv),
+        "argv": list(record_argv if record_argv is not None else argv),
         "shell": shell,
         "result": {
             "exitCode": exit_code,

@@ -55,9 +55,13 @@ def render_run_digest(
     manifest: dict[str, Any],
     *,
     focus: str | None = None,
+    op: str = "run",
 ) -> tuple[str, dict[str, Any]]:
     """Produce the bounded deterministic digest for a captured invocation and
     republish the manifest with its final digest identity.
+
+    ``op`` names the verb for telemetry attribution only (`ctx gain` by-verb
+    rows); it never participates in digest bytes or content identity.
 
     Returns (digest_text, final_manifest).
     """
@@ -84,7 +88,7 @@ def render_run_digest(
     from ctx.retrieval import record_telemetry
 
     raw = sum(int(s["bytes"]) for s in manifest["streams"].values())
-    record_telemetry(store, "run", raw, len(digest.encode("utf-8")))
+    record_telemetry(store, op, raw, len(digest.encode("utf-8")))
 
     # Graduated engagement (mechanism C): an output too large to inline is
     # the measured proof the task outgrew "small" — graduate the session.
