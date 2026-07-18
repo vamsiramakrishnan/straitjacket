@@ -4,7 +4,7 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
-## [Unreleased]
+## [0.7.0] - 2026-07-18
 
 Tier-0 wire observer shipped: `ctx proxy` is a localhost-only pass-through
 proxy for Anthropic-API traffic (byte-exact relay, SSE unbuffered) with a
