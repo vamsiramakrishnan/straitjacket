@@ -9,6 +9,7 @@ omission (SPEC §8).
 
 from __future__ import annotations
 
+import functools
 import re
 
 from ctx.digest.base import DigestContext, Profile
@@ -32,28 +33,21 @@ _MASK_RES = (
 _COLLAPSE_RE = re.compile(r"<\*>(?:[-:.,/]<\*>)+")
 _HAS_DIGIT_RE = re.compile(r"\d")
 
-# Token-level memoization: real logs repeat the same volatile tokens
-# (pids, ports, level words) across thousands of lines. The mask is a pure
-# function of the token, so a bounded cache changes nothing but speed.
-_MASK_CACHE: dict[str, str] = {}
-_MASK_CACHE_MAX = 65536
 
-
+# Token-level memoization: real logs repeat the same volatile tokens (pids,
+# ports, level words) across thousands of lines. The mask is a pure function
+# of the token, so a bounded LRU changes nothing but speed. (S5 library-hunt
+# ADOPT #2: a hand-rolled "stop caching when full" dict → stdlib lru_cache.)
+@functools.lru_cache(maxsize=65536)
 def _mask_token(tok: str) -> str:
     # Digit-free tokens are stable words; masking them would merge unrelated
     # templates (all-letter hex like "facade" stays literal by design).
     if _HAS_DIGIT_RE.search(tok) is None:
         return tok
-    hit = _MASK_CACHE.get(tok)
-    if hit is not None:
-        return hit
     masked = tok
     for rx in _MASK_RES:
         masked = rx.sub("<*>", masked)
-    masked = _COLLAPSE_RE.sub("<*>", masked)
-    if len(_MASK_CACHE) < _MASK_CACHE_MAX:
-        _MASK_CACHE[tok] = masked
-    return masked
+    return _COLLAPSE_RE.sub("<*>", masked)
 
 
 def mask_line(raw: str) -> str:

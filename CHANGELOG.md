@@ -4,6 +4,43 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.15.0] - 2026-07-18
+
+The cross-validation wave: two dual-use benchmark cells (S5 library-hunt,
+S6 bug-bash) whose output is repo work — held-out by construction, novel
+regimes, findings adversarially re-verified by hand before harvest
+(evals/cross-validation-2026-07-18.md).
+
+- **6 real defects found and fixed** (of 15 S6 claims; verification
+  refuted 1 and deferred 8 to `ctx debt`). All regression-tested in
+  tests/test_bugbash_s6.py:
+  - compound-command bypass: `allow_commands=["echo"]` let
+    `echo hi && rm -rf x` through — prefix allows now gated on `not
+    has_meta`.
+  - `tail -n +N` / `head -n -N` (whole-file reads) were classified bounded
+    — sign-prefixed counts now route to the unbounded path.
+  - mid-path directory-symlink escape survived `confine` when the full
+    path already existed — now checks each symlink's immediate (one-hop,
+    lexical) target.
+  - `window.json` was clobbered to `window_pct:0` by any usage-less
+    response, silently disengaging the window-pressure throttle — the
+    write is now skipped when a response carries no usage.
+  - `create_checkpoint` crashed (`IndexError`) on a blank evidence line.
+  - a string `patterns` typo in ctx.toml silently disabled ALL secret
+    redaction (chars iterated as patterns) — now isinstance-guarded to
+    the full default set. (Two of these — redaction, window throttle —
+    are security/safety bugs that survived 14 versions + a hand audit.)
+- **Library adoptions** from the doctrine-faithful S5 audit: `_mask_token`'s
+  hand-rolled bounded dict → `functools.lru_cache`; the containment check →
+  `Path.is_relative_to`. Three larger candidates deferred to `ctx debt`.
+- **Metrology fix**: cache-read invalidations are judged within
+  reconstructed transcript threads, not a single global max — parallel
+  tool-call models no longer produce false invalidations (declared
+  metrology debt resolved).
+- **Emission governor validated in the wild**: a 208k-output bug-hunt
+  session crossed all 10 pressure tiers, one nudge each, correct dedup —
+  the first real-load exercise of the mechanism.
+
 ## [0.14.0] - 2026-07-18
 
 The cleanup wave: audit with receipts, debt paid down, and Rust exactly

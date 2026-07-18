@@ -499,18 +499,25 @@ def classify_command(
     for prefix in policy.get("deny_commands", []):
         if canonical.startswith(prefix):
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
-    for prefix in policy.get("allow_commands", []):
-        if canonical.startswith(prefix):
-            return dict(DECISION_ALLOW)
-    # Learned policy epoch (ctx-policy.toml): promoted signatures behave
-    # exactly like allow_commands canonical prefixes. Demoted signatures are
-    # checked FIRST and are never allowed via promotion (belt against a
-    # conflicting or hand-edited epoch); a demoted command is not denied
-    # here — it simply falls through to normal classification.
-    if not any(canonical.startswith(p) for p in policy.get("demoted_commands", [])):
-        for prefix in policy.get("promoted_commands", []):
+    # A prefix allow/promotion applies to a single command only. When shell
+    # metacharacters survived the chain/redirect handling above (e.g.
+    # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary
+    # token, so ``canonical`` would still start with an allowed prefix — a
+    # compound-command bypass. Prefix allows are therefore gated on
+    # ``not has_meta`` (deny prefixes are not: denying more is always safe).
+    if not has_meta:
+        for prefix in policy.get("allow_commands", []):
             if canonical.startswith(prefix):
                 return dict(DECISION_ALLOW)
+        # Learned policy epoch (ctx-policy.toml): promoted signatures behave
+        # exactly like allow_commands canonical prefixes. Demoted signatures
+        # are checked FIRST and are never allowed via promotion (belt against
+        # a conflicting or hand-edited epoch); a demoted command is not
+        # denied here — it simply falls through to normal classification.
+        if not any(canonical.startswith(p) for p in policy.get("demoted_commands", [])):
+            for prefix in policy.get("promoted_commands", []):
+                if canonical.startswith(prefix):
+                    return dict(DECISION_ALLOW)
 
     # `bash -c '<inner>'`: classify the inner command, not the shell.
     if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
@@ -605,17 +612,23 @@ def classify_command(
 
 
 def _extract_line_count(argv: list[str]) -> int | None:
+    # A sign-prefixed argument flips head/tail into unbounded mode:
+    # ``tail -n +N`` prints from line N to EOF; ``head -n -N`` prints all but
+    # the last N. Both are effectively ``cat`` and must NOT be read as a small
+    # bounded count. Return None (→ the deny/rewrite path) for those.
+    def _count(raw: str) -> int | None:
+        if raw[:1] in ("+", "-"):
+            return None
+        try:
+            return abs(int(raw))
+        except ValueError:
+            return None
+
     for i, a in enumerate(argv[1:], start=1):
         if a in ("-n", "--lines") and i + 1 < len(argv):
-            try:
-                return abs(int(argv[i + 1].lstrip("+-")))
-            except ValueError:
-                return None
-        if a.startswith("-n"):
-            try:
-                return abs(int(a[2:].lstrip("+-")))
-            except ValueError:
-                return None
+            return _count(argv[i + 1])
+        if a.startswith("-n") and len(a) > 2:
+            return _count(a[2:])
         m = re.match(r"^-(\d+)$", a)
         if m:
             return int(m.group(1))

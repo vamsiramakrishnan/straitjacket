@@ -68,25 +68,38 @@ class Workspace:
         resolved = candidate.resolve()
         root = self.root.resolve()
         if not self.config.workspace.allow_outside_root:
-            if resolved != root and root not in resolved.parents:
+            if not resolved.is_relative_to(root):  # S5 ADOPT #5 (stdlib ≥3.9)
                 raise PathEscapeError(
                     f"path resolves outside the workspace: {self.relativize(p)!s}"
                 )
             if not self.config.workspace.follow_symlinks:
-                # Reject a symlinked leaf/parent that points outside the root
-                # even when the final resolution lands back inside.
-                probe = candidate
-                unresolved_parts: list[Path] = []
-                while not probe.exists() and probe != probe.parent:
-                    unresolved_parts.append(probe)
-                    probe = probe.parent
-                for part in [probe, *reversed(unresolved_parts)]:
-                    if part.is_symlink():
-                        target = part.resolve()
-                        if target != root and root not in target.parents:
+                # Reject any symlinked component that points outside the root,
+                # even when the final resolution lands back inside. Walk EVERY
+                # component from the leaf up to (not including) the root — the
+                # earlier `while not exists` walk skipped intermediate
+                # directory symlinks whenever the full path already existed,
+                # so a mid-path `evil -> /outside/back_inside` was never
+                # inspected (bug bash S6 #3).
+                root_abs = self.root.absolute()
+                probe = candidate.absolute()
+                while probe != probe.parent and probe != root_abs:
+                    if probe.is_symlink():
+                        # Check the IMMEDIATE target (one readlink hop),
+                        # resolved relative to the link's own directory — not
+                        # the fully-collapsed path. A hop that leaves the
+                        # workspace is an escape even when a later hop lands
+                        # back inside (bug bash S6 #3).
+                        raw = Path(os.readlink(probe))
+                        base = raw if raw.is_absolute() else (probe.parent / raw)
+                        # Lexical normalization only (os.path.normpath) — do
+                        # NOT .resolve(), which would follow the NEXT symlink
+                        # and collapse an outside hop back inside.
+                        hop = Path(os.path.normpath(base))
+                        if hop != root and root not in hop.parents:
                             raise PathEscapeError(
-                                f"symlink escapes the workspace: {self.relativize(part)!s}"
+                                f"symlink escapes the workspace: {self.relativize(probe)!s}"
                             )
+                    probe = probe.parent
         if must_exist and not resolved.exists():
             raise WorkspaceError(f"no such path in workspace: {self.relativize(p)!s}")
         return resolved

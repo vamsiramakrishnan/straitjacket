@@ -151,9 +151,15 @@ def load_config(workspace_root: Path | None) -> Config:
     )
 
     red_raw = raw.get("redaction") or {}
+    # A non-list `patterns` (e.g. a bare string from a missing-brackets typo)
+    # would be iterated character-by-character, silently disabling all secret
+    # redaction. Fall back to the full default set unless it is a real list.
+    red_patterns = red_raw.get("patterns", None)
+    if not isinstance(red_patterns, list):
+        red_patterns = list(Redaction().patterns)
     redaction = Redaction(
         enabled=bool(red_raw.get("enabled", True)),
-        patterns=tuple(red_raw.get("patterns", Redaction().patterns)),
+        patterns=tuple(str(p) for p in red_patterns),
     )
 
     aliases = {
