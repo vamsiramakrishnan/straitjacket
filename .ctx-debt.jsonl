@@ -1,0 +1,2 @@
+{"id": "53855e41a6", "note": "graceful-degradation packaging (plugin -> rules-dir -> AGENTS.md fallback) for rule-file-only hosts \u2014 ponytail steal-list item 4, deferred: reach vs enforcement trade needs its own wave", "op": "add", "ref": "docs/PRICED-CONTEXT.md"}
+{"id": "628536902a", "note": "single-file distribution (zipapp/shiv) \u2014 rtk packaging lesson; deferred: our own H3 measurement says hook latency is not a wall-clock driver yet", "op": "add", "ref": "evals/hotpath-profile-2026-07-18.md"}
