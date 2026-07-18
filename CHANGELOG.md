@@ -4,6 +4,26 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.11.0] - 2026-07-18
+
+The rtk-inspired wave, hypotheses revised by real-corpus measurement before
+building (evals/rtk-corpus-2026-07-18.md — two reversals: diagnostics
+needed structure not compression; small outputs were being inflated by our
+own scaffold).
+
+- lint/v1 digest profile: eslint/ruff(rustc-style)/tsc/cargo/go/mypy
+  diagnostics rendered as exact censuses (by severity, rule, file) with a
+  span-backed first-diagnostic region — decision-grade structure at ~2x
+  the blind text digest's budget.
+- Scaffold-slim inline emission: small complete outputs emit command +
+  exit + unindented content (~20 token overhead, was 100-400; pip digests
+  were literally 2x the size of the output they contained).
+- Failure-asymmetric budgets: `[budgets] failure_budget_factor` (default
+  2.0) — failing runs get twice the emission budget; success is
+  boilerplate, failure is evidence.
+- `ctx gain`: cumulative containment savings by verb from telemetry, with
+  token and dollar framing.
+
 ## [0.10.0] - 2026-07-18
 
 Lossless mid-session rescue (docs/LOSSLESS-RESCUE.md) — the rewriting

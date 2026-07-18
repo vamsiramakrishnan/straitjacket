@@ -88,6 +88,8 @@ def _main_slow(args: list[str]) -> int:
         help="render the current session's wire scorecard (proxy required)",
     )
 
+    sub.add_parser("gain", help="cumulative token/cost savings from telemetry")
+
     p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
     p_map.add_argument("--focus", help="boost files whose path or symbols match")
@@ -247,6 +249,8 @@ def _main_slow(args: list[str]) -> int:
                 print(render_scorecard(sc))
                 return 0
             return _cmd_retrieval(ws, ns, "stats")
+        if ns.cmd == "gain":
+            return _cmd_gain(ws)
         if ns.cmd == "diff":
             return _cmd_diff(ws, ns)
         if ns.cmd == "map":
@@ -321,6 +325,54 @@ def _main_slow(args: list[str]) -> int:
     return 2  # pragma: no cover
 
 
+def _cmd_gain(ws) -> int:
+    """Cumulative containment savings, made legible (rtk's `gain` lesson:
+    the metric users can watch is the metric that keeps the harness on)."""
+    import json as _json
+
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    path = store.audit_dir / "telemetry.jsonl"
+    per_op: dict[str, dict[str, int]] = {}
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                ev = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            op = str(ev.get("op") or "?")
+            slot = per_op.setdefault(op, {"events": 0, "raw": 0, "emitted": 0})
+            slot["events"] += 1
+            slot["raw"] += int(ev.get("raw_bytes", 0))
+            slot["emitted"] += int(ev.get("emitted_bytes", 0))
+    if not per_op:
+        print("no telemetry yet — run some commands under the harness first")
+        return 1
+    total_raw = sum(s["raw"] for s in per_op.values())
+    total_emitted = sum(s["emitted"] for s in per_op.values())
+    saved_tok = max(0, (total_raw - total_emitted) // 4)
+    print(f"[ctx gain · workspace {ws.workspace_id[:12]}]")
+    print(
+        f"contained: {total_raw:,} bytes raw -> {total_emitted:,} bytes emitted "
+        f"({total_raw / max(1, total_emitted):.1f}x)"
+    )
+    print(f"est tokens kept out of context: {saved_tok:,}")
+    # Input-price framing only; the real savings compound through cache reads.
+    print(
+        f"est spend avoided (input-priced): ~${saved_tok * 3 / 1e6:.2f} sonnet · "
+        f"~${saved_tok * 1 / 1e6:.2f} haiku"
+    )
+    print("by verb:")
+    for op, s in sorted(per_op.items(), key=lambda kv: -kv[1]["raw"]):
+        ratio = s["raw"] / max(1, s["emitted"])
+        print(
+            f"  {op:7s} {s['events']:>5,} events · {s['raw']:>12,} B -> "
+            f"{s['emitted']:>10,} B ({ratio:.1f}x)"
+        )
+    return 0
+
+
 def _cmd_run(ws, ns) -> int:
     from ctx.digest import render_run_digest
     from ctx.execution import ExecutionError, run_capture
@@ -357,6 +409,9 @@ def _cmd_run(ws, ns) -> int:
         if "output (complete):" in digest
         else ws.config.budgets.digest_tokens
     )
+    # Failure asymmetry: a failing run's output is evidence, not boilerplate.
+    if manifest["result"]["exitCode"] not in (0, None):
+        budget = int(budget * ws.config.budgets.failure_budget_factor)
     # Graduated engagement (mechanism C): affordances are filtered at this
     # emission boundary only — the stored digest identity stays canonical.
     from ctx.engagement import filter_digest, suggestion_cap

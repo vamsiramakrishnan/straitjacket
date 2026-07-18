@@ -13,6 +13,7 @@ from typing import Any
 from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
+from ctx.digest.lintprof import LintProfile
 from ctx.digest.logprof import LogTemplateProfile
 from ctx.digest.moreprofs import BuildProfile, GitDiffProfile, GoTestProfile, JestProfile
 from ctx.digest.pytestprof import PytestProfile
@@ -28,6 +29,7 @@ _PROFILES: tuple[Profile, ...] = (
     GoTestProfile(),
     JestProfile(),
     GitDiffProfile(),
+    LintProfile(),  # before Build/LogTemplate: both would misclaim lint shapes
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),

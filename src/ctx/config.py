@@ -42,6 +42,10 @@ class Budgets:
     # context window at or above this fullness, the guard tightens its inline
     # and session read budgets (see ctx.hook._apply_window_pressure).
     window_pressure_pct: int = 70
+    # Failure asymmetry (measured, rtk-corpus eval): success output is
+    # boilerplate, failure output is evidence. A failing run's digest gets
+    # this multiple of the standard emission budget.
+    failure_budget_factor: float = 2.0
 
 
 @dataclass(frozen=True)
