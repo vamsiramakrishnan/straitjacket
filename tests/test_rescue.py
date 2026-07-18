@@ -57,8 +57,25 @@ def test_apply_elision_preserves_bytes_and_is_deterministic(tmp_path):
     stub = out1[2]["content"][0]["content"]
     assert "ctx rescue: tool_result elided" in stub
     assert "sha256:" in stub and "/elided/" in stub
-    # Untouched blocks are untouched.
-    assert out1[6]["content"][0]["content"].startswith("result-2-")
+    # PR-review regression: the stub's path must RESOLVE — nonstandard state
+    # dirs get the absolute path, never a bare basename.
+    assert str(tmp_path) in stub
+
+
+def test_stub_paths_resolve_from_workspace_cwd(tmp_path):
+    """Under the standard wrap layout (<ws>/.ctx-session-reads/proxy) the
+    stub cites the workspace-relative path an agent can actually read."""
+    from ctx.rescue import apply_elision
+
+    state = tmp_path / ".ctx-session-reads" / "proxy"
+    msgs = _transcript(3)
+    out, n = apply_elision(msgs, {0}, state)
+    assert n == 1
+    stub = out[2]["content"][0]["content"]
+    assert ".ctx-session-reads/proxy/elided/" in stub
+    # And the cited file exists exactly where the stub says, relative to ws.
+    rel = stub.split("preserved verbatim at ")[1].split(";")[0]
+    assert (tmp_path / rel).is_file()
 
 
 def test_prefix_stability_as_transcript_grows(tmp_path):

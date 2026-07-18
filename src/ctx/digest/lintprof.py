@@ -91,19 +91,24 @@ class LintProfile(Profile):
     version = "lint/v1"
 
     def detect(self, ctx: DigestContext) -> str | None:
-        text_lines = (ctx.stdout.text + "\n" + ctx.stderr.text).splitlines()
-        diags = _parse(text_lines[:4000])
+        # Streams are parsed SEPARATELY so every diagnostic keeps its own
+        # stream + local line number — a span minted with combined-text
+        # coordinates would point at the wrong region whenever a linter
+        # writes stdout noise before stderr diagnostics (found by PR review).
+        diags: list[tuple[str, int, str, str, str]] = []
+        for stream_name, view in (("stdout", ctx.stdout), ("stderr", ctx.stderr)):
+            for lineno, f, sev, rule in _parse(view.text_lines[:4000]):
+                diags.append((stream_name, lineno, f, sev, rule))
         if len(diags) < _MIN_DIAGS:
             return None
         self._diags = diags
-        self._lines = text_lines
         return f"{len(diags)} diagnostic lines in linter/compiler shape"
 
     def render(self, ctx: DigestContext) -> str:
         diags = self._diags
-        by_sev = Counter(sev for _, _, sev, _ in diags)
-        by_rule = Counter(rule for _, _, _, rule in diags if rule)
-        by_file = Counter(f for _, f, _, _ in diags)
+        by_sev = Counter(sev for _, _, _, sev, _ in diags)
+        by_rule = Counter(rule for _, _, _, _, rule in diags if rule)
+        by_file = Counter(f for _, _, f, _, _ in diags)
 
         body = [
             "summary:",
@@ -125,33 +130,34 @@ class LintProfile(Profile):
         # the census alone LOST to naive — for bulk repair the full list is
         # the work queue). Each file's diagnostic block gets its own span,
         # so fixing file-by-file is one retrieval per file, not per question.
-        stream = ctx.stdout if ctx.stdout.lines else ctx.stderr
-        file_lines: dict[str, list[int]] = {}
-        for lineno, f, _, _ in diags:
-            file_lines.setdefault(f, []).append(lineno)
+        views = {"stdout": ctx.stdout, "stderr": ctx.stderr}
+        file_lines: dict[str, tuple[str, list[int]]] = {}
+        for stream_name, lineno, f, _, _ in diags:
+            file_lines.setdefault(f, (stream_name, []))[1].append(lineno)
         file_bits = []
         for f, n in sorted(by_file.most_common(8)):
-            span_lines = file_lines[f]
+            stream_name, span_lines = file_lines[f]
             fsid = ctx.mint_span(
-                stream, "region", a=min(span_lines), b=max(span_lines)
+                views[stream_name], "region", a=min(span_lines), b=max(span_lines)
             )
             tag = f" span {fsid}" if fsid else ""
             file_bits.append(f"{_short(f)}×{n}{tag}")
         body.append("  by file (exact): " + " · ".join(file_bits))
-        first_line = diags[0][0]
-        end = min(first_line + 6, len(self._lines))
-        stream = ctx.stdout if ctx.stdout.lines >= end else ctx.stderr
-        sid = ctx.mint_span(stream, "region", a=first_line, b=end)
+        first_stream, first_line = diags[0][0], diags[0][1]
+        first_view = views[first_stream]
+        n_lines = first_view.lines or len(first_view.text_lines)
+        end = min(first_line + 6, n_lines)
+        sid = ctx.mint_span(first_view, "region", a=first_line, b=end)
         tag = f" · span {sid}" if sid else ""
-        body.append(f"  first diagnostic L{first_line}-L{end}:{tag}")
-        for raw in self._lines[first_line - 1 : end]:
+        body.append(f"  first diagnostic {first_stream}:L{first_line}-L{end}:{tag}")
+        for raw in first_view.text_lines[first_line - 1 : end]:
             body.append(f"    | {raw[:160]}")
 
         rid = "run:PENDING"
         top_rule = by_rule.most_common(1)[0][0] if by_rule else "error"
         suggestions = [
             f"ctx search {rid} '{top_rule}' --context 1",
-            f"ctx get {rid}#stdout --lines {first_line}:{end}",
+            f"ctx get {rid}#{first_stream} --lines {first_line}:{end}",
         ]
         shown = 1
         return "\n".join(

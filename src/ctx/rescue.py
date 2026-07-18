@@ -49,13 +49,27 @@ def _content_text(content: Any) -> str:
     return json.dumps(content, ensure_ascii=False, sort_keys=True)
 
 
-def stub_for(text: str, sha: str, state_dir_name: str) -> str:
+def _stub_prefix(state_dir: Path) -> str:
+    """A path for stubs that RESOLVES from the agent's workspace cwd.
+
+    Under `ctx wrap` the state dir is `<ws>/.ctx-session-reads/proxy` by
+    construction, so the workspace-relative prefix is
+    `.ctx-session-reads/proxy`. Nonstandard layouts fall back to the
+    absolute path — a stub whose address cannot be followed would make the
+    'lossless' claim a lie (found by PR review)."""
+    parent = Path(state_dir).parent
+    if parent.name == ".ctx-session-reads":
+        return f"{parent.name}/{Path(state_dir).name}"
+    return str(state_dir)
+
+
+def stub_for(text: str, sha: str, prefix: str) -> str:
     """The replacement content — pure function of the elided bytes."""
     nbytes = len(text.encode("utf-8"))
     return (
         f"[ctx rescue: tool_result elided ({nbytes} bytes, sha256:{sha[:12]}) — "
         f"full content preserved verbatim at "
-        f"{state_dir_name}/elided/{sha}.txt; read that file for any detail]"
+        f"{prefix}/elided/{sha}.txt; read that file for any detail]"
     )
 
 
@@ -104,7 +118,7 @@ def apply_elision(
                         tmp.write_text(text, encoding="utf-8")
                         os.replace(tmp, path)
                     new_block = dict(block)
-                    new_block["content"] = stub_for(text, sha, state_dir.name)
+                    new_block["content"] = stub_for(text, sha, _stub_prefix(state_dir))
                     new_content.append(new_block)
                     n_elided += 1
                 else:

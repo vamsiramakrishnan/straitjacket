@@ -61,7 +61,7 @@ def test_lint_profile_eslint_stylish(tmp_path):
     assert "diagnostics (exact): 8 · error 7 · warning 1" in body
     assert "no-var×2" in body and "semi×3" in body  # by rule
     assert "src/app1.js×4" in body  # by file, shortened to 2 components
-    assert "first diagnostic L" in body
+    assert "first diagnostic stdout:L" in body  # stream-qualified coordinates
     assert "|    1:1   error" in body  # region inlined
 
 
@@ -79,6 +79,35 @@ def test_lint_profile_ruff_new_format_and_tsc(tmp_path):
     ctx2 = _ctx_for(tmp_path, TSC_OUT)
     assert p2.detect(ctx2)
     assert "TS2322×11" in p2.render(ctx2)
+
+
+def test_lint_stderr_diagnostics_get_local_coordinates(tmp_path):
+    """PR-review regression: stdout noise before stderr diagnostics must not
+    shift span coordinates — each diagnostic keeps its stream + local line."""
+    from ctx.digest.base import DigestContext, StreamView
+    from ctx.digest.lintprof import LintProfile
+    from ctx.workspace import resolve_workspace
+
+    (tmp_path / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    ws = resolve_workspace(str(tmp_path))
+    noise = "\n".join(f"building chunk {i}..." for i in range(50))
+    out = StreamView("stdout", len(noise.encode()), 50, "text/plain", noise, True)
+    err = StreamView("stderr", len(TSC_OUT.encode()), len(TSC_OUT.splitlines()),
+                     "text/plain", TSC_OUT, True)
+    manifest = {
+        "argv": ["tsc"], "cwd": ".", "shell": False,
+        "result": {"exitCode": 1, "signal": None, "timedOut": False},
+        "streams": {"stdout": {"blob": "sha256:x"}, "stderr": {"blob": "sha256:y"}},
+    }
+    ctx = DigestContext(ws=ws, manifest=manifest, stdout=out, stderr=err)
+    p = LintProfile()
+    assert p.detect(ctx)
+    body = p.render(ctx)
+    # First diagnostic is stderr line 1 — NOT combined line 51.
+    assert "first diagnostic stderr:L1-" in body
+    assert "L51" not in body
+    assert "#stderr --lines 1:" in body  # suggestion targets the right stream
+    assert "| main.ts(1,7)" in body  # inline slice from stderr, not stdout
 
 
 def test_lint_profile_declines_prose(tmp_path):
