@@ -52,9 +52,42 @@ REDACTION_PATTERNS: dict[str, re.Pattern[str]] = {
 }
 
 
+try:  # optional fast path (Rust); stdlib retry keeps acceptance identical
+    import orjson as _orjson
+except ImportError:  # pragma: no cover - environment-dependent
+    _orjson = None
+
+
+def loads_fast(text: str | bytes):
+    """json.loads with an opportunistic orjson fast path. orjson is ~6-10x
+    faster on large documents but stricter (rejects NaN/Infinity); any
+    orjson failure retries with stdlib json so semantics never narrow."""
+    import json as _json
+
+    if _orjson is not None:
+        try:
+            return _orjson.loads(text)
+        except Exception:
+            pass
+    return _json.loads(text)
+
+
 def estimate_tokens(n_bytes: int) -> int:
     """Cheap deterministic token estimate: ~4 bytes per token."""
     return max(1, n_bytes // 4) if n_bytes else 0
+
+
+def fmt_tokens_coarse(tok: int) -> str:
+    """Price-tag formatting (docs/PRICED-CONTEXT.md, P3): precision only
+    needs to cross decision thresholds, so buckets get coarser with size.
+    Deterministic; never emits false precision like '8,432'."""
+    if tok < 1000:
+        return f"~{max(1, round(tok / 50) * 50)}"
+    if tok < 10_000:
+        return f"~{max(1, round(tok / 1000))}k"
+    if tok < 100_000:
+        return f"~{5 * max(2, round(tok / 5000))}k"
+    return f"~{25 * round(tok / 25_000)}k"
 
 
 def strip_control(text: str) -> str:

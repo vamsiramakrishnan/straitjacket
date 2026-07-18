@@ -73,6 +73,18 @@ class PytestProfile(Profile):
             tag = f" · span {sid}" if sid else ""
             summary.append(f"  first failure stdout:L{start}-L{end}: {nodeid}{tag}")
             shown += 1
+            # Anticipatory inlining (mechanism E): the first failure region
+            # is the one slice the model asks for next in almost every
+            # failing-test loop, and a retrieval hop costs a full turn of
+            # ttfb + suffix cache write. Inline it when the budget allows —
+            # deterministic: pure function of bytes + committed budget.
+            if ctx.ws.config.budgets.result_tokens >= 600:
+                for raw in out_lines[start - 1 : end]:
+                    # Stop at the next section: separator banners carry
+                    # elapsed-time noise and belong to other regions.
+                    if raw.startswith("=") and raw.rstrip().endswith("="):
+                        break
+                    summary.append(f"    | {raw[:160]}")
             if len(fail_spans) > 1:
                 nodeid, start = fail_spans[-1]
                 end = min(start + 12, ctx.stdout.lines)

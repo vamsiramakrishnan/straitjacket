@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: full (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install opportunistic engine binaries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep universal-ctags
+
+      - name: Install package with all extras
+        run: |
+          pip install -e '.[dev,map,fast]'
+          pip install jedi
+
+      - name: Run acceptance suite
+        run: python -m pytest tests/ -q
+
+  minimal:
+    name: minimal (py3.11, builtin engines, stdlib fallbacks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Deliberately NO ripgrep, NO universal-ctags, NO optional extras:
+      # this job proves the deterministic-fallback story. The env pins
+      # force the builtin engines even if a binary happens to be present.
+      - name: Install package (dev extra only)
+        run: pip install -e '.[dev]'
+
+      - name: Run acceptance suite on builtin engines
+        env:
+          CTX_SEARCH_ENGINE: python
+          CTX_MAP_ENGINE: builtin
+          CTX_CODE_ENGINE: ast
+        run: python -m pytest tests/ -q

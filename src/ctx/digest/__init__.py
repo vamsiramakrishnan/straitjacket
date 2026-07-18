@@ -13,6 +13,7 @@ from typing import Any
 from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
+from ctx.digest.lintprof import LintProfile
 from ctx.digest.logprof import LogTemplateProfile
 from ctx.digest.moreprofs import BuildProfile, GitDiffProfile, GoTestProfile, JestProfile
 from ctx.digest.pytestprof import PytestProfile
@@ -28,6 +29,7 @@ _PROFILES: tuple[Profile, ...] = (
     GoTestProfile(),
     JestProfile(),
     GitDiffProfile(),
+    LintProfile(),  # before Build/LogTemplate: both would misclaim lint shapes
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),
@@ -80,4 +82,11 @@ def render_run_digest(
 
     raw = sum(int(s["bytes"]) for s in manifest["streams"].values())
     record_telemetry(store, "run", raw, len(digest.encode("utf-8")))
+
+    # Graduated engagement (mechanism C): an output too large to inline is
+    # the measured proof the task outgrew "small" — graduate the session.
+    if raw > ws.config.budgets.result_tokens * 3 and ws.config.engagement.mode == "auto":
+        from ctx.engagement import note_truncation
+
+        note_truncation(ws.root)
     return digest, final_manifest

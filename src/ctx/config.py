@@ -37,6 +37,15 @@ class Budgets:
     max_inline_bytes: int = 16384
     max_inline_lines: int = 240
     max_matches: int = 80
+    session_read_budget_bytes: int = 262144
+    # Window-pressure threshold (percent): when the Tier-0 proxy reports the
+    # context window at or above this fullness, the guard tightens its inline
+    # and session read budgets (see ctx.hook._apply_window_pressure).
+    window_pressure_pct: int = 70
+    # Failure asymmetry (measured, rtk-corpus eval): success output is
+    # boilerplate, failure output is evidence. A failing run's digest gets
+    # this multiple of the standard emission budget.
+    failure_budget_factor: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,16 @@ class Guard:
     unknown_command: str = "force_ask"  # allow | deny | ask | force_ask
     internal_error: str = "allow"  # availability-safe default (SPEC §10.2)
     steering: str = "auto"  # auto | rewrite | deny — deny keeps pure deny-with-remediation
+
+
+@dataclass(frozen=True)
+class Engagement:
+    """Graduated engagement (mechanism C): affordance surface scales with
+    measured task scale. See ctx.engagement for the graduation rules."""
+
+    mode: str = "auto"  # auto | active | passive
+    activate_after_calls: int = 8
+    lean_models: tuple[str, ...] = ("haiku",)
 
 
 @dataclass(frozen=True)
@@ -81,6 +100,7 @@ class Config:
     workspace: WorkspacePolicy = field(default_factory=WorkspacePolicy)
     budgets: Budgets = field(default_factory=Budgets)
     guard: Guard = field(default_factory=Guard)
+    engagement: Engagement = field(default_factory=Engagement)
     store: StorePolicy = field(default_factory=StorePolicy)
     redaction: Redaction = field(default_factory=Redaction)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
@@ -121,6 +141,15 @@ def load_config(workspace_root: Path | None) -> Config:
     store = _pick(raw.get("store") or {}, StorePolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
 
+    eng_raw = raw.get("engagement") or {}
+    engagement = Engagement(
+        mode=str(eng_raw.get("mode", "auto")),
+        activate_after_calls=int(eng_raw.get("activate_after_calls", 8)),
+        lean_models=tuple(
+            str(m) for m in eng_raw.get("lean_models", Engagement().lean_models)
+        ),
+    )
+
     red_raw = raw.get("redaction") or {}
     redaction = Redaction(
         enabled=bool(red_raw.get("enabled", True)),
@@ -139,6 +168,7 @@ def load_config(workspace_root: Path | None) -> Config:
         workspace=ws,
         budgets=budgets,
         guard=guard,
+        engagement=engagement,
         store=store,
         redaction=redaction,
         scopes=scopes,

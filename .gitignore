@@ -9,3 +9,4 @@ build/
 venv/
 .coverage
 .agents/
+native/ctx-hook-native/target/

@@ -12,6 +12,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "run_command|Read|read_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{CTX_EXECUTABLE}} hook antigravity post-tool-use",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

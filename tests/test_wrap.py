@@ -58,6 +58,29 @@ def test_print_config_unknown_host():
         print_config("cursor")
 
 
+def test_output_discipline_injected_in_print_mode(monkeypatch):
+    from ctx.wrap import _with_output_discipline
+
+    monkeypatch.delenv("CTX_WRAP_NO_DISCIPLINE", raising=False)
+    args = _with_output_discipline(["-p", "fix it"])
+    assert args[0] == "--append-system-prompt"
+    assert "Output discipline" in args[1]
+    assert args[-2:] == ["-p", "fix it"]
+    # --print spelling counts too
+    assert _with_output_discipline(["--print", "x"])[0] == "--append-system-prompt"
+
+
+def test_output_discipline_not_injected_interactive_or_opted_out(monkeypatch):
+    from ctx.wrap import _with_output_discipline
+
+    monkeypatch.delenv("CTX_WRAP_NO_DISCIPLINE", raising=False)
+    assert _with_output_discipline([]) == []  # interactive: untouched
+    own = ["--append-system-prompt", "mine", "-p", "x"]
+    assert _with_output_discipline(own) == own  # user's prompt wins
+    monkeypatch.setenv("CTX_WRAP_NO_DISCIPLINE", "1")
+    assert _with_output_discipline(["-p", "x"]) == ["-p", "x"]  # env opt-out
+
+
 def _install_fake_claude(bin_dir: Path, body: str) -> Path:
     bin_dir.mkdir(parents=True, exist_ok=True)
     script = bin_dir / "claude"

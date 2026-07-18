@@ -170,6 +170,17 @@ proof of the whole design: append-only + byte-identical digests maximize the
 provider subsidy — measured in the overhaul benchmark, where the per-request
 rewriting proxy paid 3.6× our cache-write volume.
 
+Shipped v0.8.0, the measurement-loop wave: the prefix-stability contract
+(injected prefix bytes are golden-hashed; changing them is a versioned
+decision), the session scorecard (wire ground truth → cache economics,
+timing split, effort mix, per-session history for the policy learner),
+graduated engagement (affordance surface scales with measured task scale;
+lean-model profiles), the emission governor (post-tool-use nudges when
+proxy-measured output volume crosses tiers — the symmetric partner of the
+read budget), and anticipatory inlining (the first pytest failure region
+rides the digest, saving a retrieval hop). Each traces to a measured
+failure in evals/matrix-2026-07-18.md.
+
 ## Not absorbed, by principle
 
 Lossy pruning without addresses (LLMLingua as-shipped, middle-out as-shipped,

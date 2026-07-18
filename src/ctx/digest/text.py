@@ -24,7 +24,27 @@ class TextProfile(Profile):
 
         inline = self.inline_body(ctx)
         if inline is not None:
-            return "\n".join(lines + inline)
+            # Scaffold-slim emission (measured: full headers + indentation
+            # inflated small runs to 0.5-0.9x of raw — the digest cost MORE
+            # than the output). Provenance keeps command + exit; the content
+            # rides unindented. rtk lesson inverted: our tax was overhead,
+            # not under-compression.
+            r = ctx.manifest["result"]
+            status = (
+                f"exit {r['exitCode']}" if r["exitCode"] is not None else f"signal {r['signal']}"
+            )
+            if r["timedOut"]:
+                status += " · timed out"
+            slim = [
+                f"command: {ctx.command_line()}",
+                f"{status} · output (complete):",
+            ]
+            for view in (ctx.stdout, ctx.stderr):
+                if view.bytes:
+                    if view is ctx.stderr and ctx.stdout.bytes:
+                        slim.append("--- stderr ---")
+                    slim.extend(view.text_lines)
+            return "\n".join(slim)
 
         shown = 0
         summary: list[str] = ["summary:"]

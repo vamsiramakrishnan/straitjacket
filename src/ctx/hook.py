@@ -33,6 +33,39 @@ Two-layer steering design ("rewrite, don't reject"):
 Never rewritten: ctx-routed commands (already allowed), secret-path and
 outside-workspace force_asks, and interactive-suspect commands (pagers,
 bare REPLs, stdin consumers, ``head -f``).
+
+Session read ledger ("death by a thousand small reads"): single native reads
+under ``max_inline_bytes`` pass raw, but a session that walks a codebase
+file-by-file is cumulatively unbounded. Every allowed native Read is charged
+to a per-session byte counter stored at
+``<workspace>/.ctx-session-reads/<session_id>.count`` (a single ASCII
+integer; rewritten oversized reads are charged ``max_inline_bytes``). Once
+the cumulative total exceeds ``[budgets] session_read_budget_bytes``
+(default 256 KiB), further reads come under graduated pressure: under
+rewrite steering they are allowed but bounded via ``updatedInput`` with a
+small ``limit`` window; under ``steering = "deny"`` they are denied with the
+ctx remediation. All ledger IO is fail-open — any error degrades to counting
+nothing, never blocking a read. Reads of the ledger directory itself are
+never counted. Projects should add ``.ctx-session-reads/`` to their
+``.gitignore``; the leading dot keeps it out of casual listings.
+
+Window-pressure loop: the Tier-0 observer proxy writes ground truth about
+context-window fullness to ``<workspace>/.ctx-session-reads/proxy/window.json``
+(``{"window_pct": float, ...}``). When ``window_pct`` reaches
+``[budgets] window_pressure_pct`` (default 70), the guard tightens: the
+effective ``max_inline_bytes``, ``session_read_budget_bytes``, and head/tail
+``-n`` cap are scaled by ``max(0.25, 1 - (window_pct - threshold)/100*2)``
+and affected reason strings gain a suffix like
+`` [window 84% full — budgets tightened]``. Reading the window file is
+fail-open (missing/corrupt → no pressure); below the threshold behavior is
+byte-identical to the unpressured guard.
+
+Learned policy epochs: ``<workspace>/ctx-policy.toml`` (compiled by
+``ctx.policy`` from run telemetry, reviewed and committed like code) may
+promote command signatures whose observed output is reliably small. Promoted
+signatures behave exactly like ``guard.allow_commands`` canonical prefixes;
+demoted signatures are never allowed via promotion (checked first). The file
+is read fail-open — a corrupt policy changes nothing.
 """
 
 from __future__ import annotations
@@ -84,6 +117,10 @@ _HEAD_TAIL_MAX = 400  # max -n allowed for native head/tail
 
 _MAX_INLINE_BYTES_DEFAULT = 16384
 _MAX_INLINE_LINES_DEFAULT = 240
+_SESSION_READ_BUDGET_DEFAULT = 262144  # 256 KiB of raw native reads per session
+_WINDOW_PRESSURE_PCT_DEFAULT = 70  # window fullness (%) at which budgets tighten
+_LEDGER_DIR_NAME = ".ctx-session-reads"
+_POLICY_FILENAME = "ctx-policy.toml"  # compiled learned-policy epoch
 _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
 
 _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
@@ -94,7 +131,8 @@ _NO_REWRITE_PROGS = {"less", "more", "vi", "vim", "nano", "emacs", "top", "htop"
 
 
 def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
-    """Minimal ctx.toml read for the guard section only. Never raises."""
+    """Minimal ctx.toml read for the guard section, plus the compiled
+    ctx-policy.toml learned-policy epoch. Never raises."""
     policy: dict[str, Any] = {
         "mode": "guarded",
         "unknown_command": "force_ask",
@@ -102,36 +140,139 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "steering": "auto",
         "max_inline_bytes": _MAX_INLINE_BYTES_DEFAULT,
         "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
+        "session_read_budget_bytes": _SESSION_READ_BUDGET_DEFAULT,
+        "window_pressure_pct": _WINDOW_PRESSURE_PCT_DEFAULT,
         "allow_commands": [],
         "deny_commands": [],
+        "promoted_commands": [],
+        "demoted_commands": [],
+        "engagement_mode": "auto",
+        "engagement_activate_after": 8,
+        "emission_nudge_tokens": 20000,
     }
     if not workspace_root:
         return policy
     path = Path(workspace_root) / "ctx.toml"
-    if not path.is_file():
-        return policy
-    try:
-        import tomllib
+    if path.is_file():
+        try:
+            import tomllib
 
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-        guard = raw.get("guard") or {}
-        budgets = raw.get("budgets") or {}
-        policy["mode"] = str(guard.get("mode", policy["mode"]))
-        policy["unknown_command"] = str(guard.get("unknown_command", policy["unknown_command"]))
-        policy["internal_error"] = str(guard.get("internal_error", policy["internal_error"]))
-        policy["steering"] = str(guard.get("steering", policy["steering"]))
-        policy["max_inline_bytes"] = int(
-            budgets.get("max_inline_bytes", policy["max_inline_bytes"])
-        )
-        policy["max_inline_lines"] = int(
-            budgets.get("max_inline_lines", policy["max_inline_lines"])
-        )
-        # Repo-tunable classification: prefix matches against canonical argv.
-        policy["allow_commands"] = [str(x) for x in guard.get("allow_commands", [])]
-        policy["deny_commands"] = [str(x) for x in guard.get("deny_commands", [])]
-    except Exception:
-        pass
+            raw = tomllib.loads(path.read_text(encoding="utf-8"))
+            guard = raw.get("guard") or {}
+            budgets = raw.get("budgets") or {}
+            policy["mode"] = str(guard.get("mode", policy["mode"]))
+            policy["unknown_command"] = str(guard.get("unknown_command", policy["unknown_command"]))
+            policy["internal_error"] = str(guard.get("internal_error", policy["internal_error"]))
+            policy["steering"] = str(guard.get("steering", policy["steering"]))
+            policy["max_inline_bytes"] = int(
+                budgets.get("max_inline_bytes", policy["max_inline_bytes"])
+            )
+            policy["max_inline_lines"] = int(
+                budgets.get("max_inline_lines", policy["max_inline_lines"])
+            )
+            policy["session_read_budget_bytes"] = int(
+                budgets.get("session_read_budget_bytes", policy["session_read_budget_bytes"])
+            )
+            policy["window_pressure_pct"] = int(
+                budgets.get("window_pressure_pct", policy["window_pressure_pct"])
+            )
+            # Repo-tunable classification: prefix matches against canonical argv.
+            policy["allow_commands"] = [str(x) for x in guard.get("allow_commands", [])]
+            policy["deny_commands"] = [str(x) for x in guard.get("deny_commands", [])]
+            eng = raw.get("engagement") or {}
+            policy["engagement_mode"] = str(eng.get("mode", policy["engagement_mode"]))
+            policy["engagement_activate_after"] = int(
+                eng.get("activate_after_calls", policy["engagement_activate_after"])
+            )
+            policy["emission_nudge_tokens"] = int(
+                eng.get("emission_nudge_tokens", policy["emission_nudge_tokens"])
+            )
+        except Exception:
+            pass
+    # Learned policy epoch (compiled, committed ctx-policy.toml): promoted
+    # signatures act like allow_commands prefixes; demoted never do. Read in
+    # its own fail-open block so a corrupt epoch cannot poison ctx.toml
+    # settings (and vice versa).
+    ppath = Path(workspace_root) / _POLICY_FILENAME
+    if ppath.is_file():
+        try:
+            import tomllib
+
+            praw = tomllib.loads(ppath.read_text(encoding="utf-8"))
+            if str(praw.get("schema", "")) == "ctx.policy/v1":
+                promoted: list[str] = []
+                for item in praw.get("promoted") or []:
+                    sig = item.get("signature") if isinstance(item, dict) else item
+                    if isinstance(sig, str) and sig.strip():
+                        promoted.append(sig.strip())
+                demoted: list[str] = []
+                for item in praw.get("demoted") or []:
+                    sig = item.get("signature") if isinstance(item, dict) else item
+                    if isinstance(sig, str) and sig.strip():
+                        demoted.append(sig.strip())
+                policy["promoted_commands"] = promoted
+                policy["demoted_commands"] = demoted
+        except Exception:
+            pass
     return policy
+
+
+def _window_pct(workspace_root: str | None) -> float | None:
+    """Ground-truth context-window fullness written by the Tier-0 proxy at
+    ``<workspace>/.ctx-session-reads/proxy/window.json``. Fail-open by
+    contract: any missing file, IO error, or malformed document → None
+    (no pressure is ever applied because of broken telemetry)."""
+    if not workspace_root:
+        return None
+    try:
+        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json")
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+        pct = doc.get("window_pct")
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+            return None
+        return float(pct)
+    except Exception:
+        return None
+
+
+def _apply_window_pressure(
+    policy: dict[str, Any], workspace_root: str | None
+) -> dict[str, Any]:
+    """Close the window-pressure loop. When the proxy-reported window
+    fullness reaches ``window_pressure_pct``, return a tightened copy of the
+    policy; otherwise return ``policy`` unchanged (byte-identical decisions).
+
+    Tightening is the deterministic linear ramp
+
+        factor = max(0.25, 1 - (window_pct - threshold) / 100 * 2)
+
+    i.e. budgets shrink 2 percentage points per point of window fullness
+    above the threshold, floored at a quarter of their configured values
+    (threshold 70: 84% full → factor 0.72; ≥ 107.5% would floor at 0.25).
+    The factor scales ``max_inline_bytes``, ``session_read_budget_bytes``,
+    and the head/tail ``-n`` cap; affected reasons carry ``_window_note``."""
+    pct = _window_pct(workspace_root)
+    if pct is None:
+        return policy
+    threshold = int(policy.get("window_pressure_pct", _WINDOW_PRESSURE_PCT_DEFAULT))
+    if pct < threshold:
+        return policy
+    factor = max(0.25, 1 - (pct - threshold) / 100 * 2)
+    tightened = dict(policy)
+    tightened["max_inline_bytes"] = max(
+        1, int(int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT)) * factor)
+    )
+    tightened["session_read_budget_bytes"] = max(
+        1,
+        int(
+            int(policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT))
+            * factor
+        ),
+    )
+    tightened["_head_tail_max"] = max(1, int(_HEAD_TAIL_MAX * factor))
+    tightened["_window_note"] = f" [window {pct:g}% full — budgets tightened]"
+    return tightened
 
 
 # Wrappers that prefix another command; unwrap to classify the real program.
@@ -361,6 +502,15 @@ def classify_command(
     for prefix in policy.get("allow_commands", []):
         if canonical.startswith(prefix):
             return dict(DECISION_ALLOW)
+    # Learned policy epoch (ctx-policy.toml): promoted signatures behave
+    # exactly like allow_commands canonical prefixes. Demoted signatures are
+    # checked FIRST and are never allowed via promotion (belt against a
+    # conflicting or hand-edited epoch); a demoted command is not denied
+    # here — it simply falls through to normal classification.
+    if not any(canonical.startswith(p) for p in policy.get("demoted_commands", [])):
+        for prefix in policy.get("promoted_commands", []):
+            if canonical.startswith(prefix):
+                return dict(DECISION_ALLOW)
 
     # `bash -c '<inner>'`: classify the inner command, not the shell.
     if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
@@ -385,14 +535,22 @@ def classify_command(
             }
         return fa
 
-    # Bounded head/tail with explicit small -n.
+    # Bounded head/tail with explicit small -n. Under window pressure the
+    # cap shrinks with the same factor as the byte budgets.
     if prog in ("head", "tail"):
         n = _extract_line_count(argv)
         if "-f" in argv or "--follow" in argv:
             return _deny(_remediation(argv))  # streaming: never rewritten
-        if n is not None and n <= _HEAD_TAIL_MAX:
+        cap = int(policy.get("_head_tail_max", _HEAD_TAIL_MAX))
+        if n is not None and n <= cap:
             return dict(DECISION_ALLOW)
-        return _deny_cmd(argv, policy)
+        decision = _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+        note = str(policy.get("_window_note", ""))
+        if note:
+            decision["reason"] += note
+            if "_rewrite" in decision:
+                decision["_rewrite"]["reason"] += note
+        return decision
 
     if prog == "git":
         sub = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -421,7 +579,7 @@ def classify_command(
         # Single-file grep gets a match cap injected instead of a reroute.
         capped = _grep_single_file_rewrite(argv, cwd)
         if capped:
-            decision: dict[str, Any] = _deny(_remediation(argv))
+            decision = _deny(_remediation(argv))
             decision["_rewrite"] = {
                 "command": capped,
                 "reason": (
@@ -464,8 +622,95 @@ def _extract_line_count(argv: list[str]) -> int | None:
     return 10  # head/tail default is bounded
 
 
+def _ledger_charge(workspace_root: str | None, session_id: str, nbytes: int) -> int:
+    """Add ``nbytes`` to the per-session native-read counter and return the
+    new cumulative total. The ledger is a single ASCII integer at
+    ``<workspace>/.ctx-session-reads/<session_id>.count``. Fail-open by
+    contract: any IO or parse problem returns 0 (no pressure is ever applied
+    because of a broken ledger, and this function never raises)."""
+    if not workspace_root:
+        return 0
+    try:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id)[:80] or "unknown"
+        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        os.makedirs(ledger_dir, exist_ok=True)
+        path = os.path.join(ledger_dir, safe + ".count")
+        # Parallel tool calls fire hooks concurrently; an advisory flock
+        # makes the read-modify-write atomic so charges are never lost.
+        # fcntl is stdlib (POSIX); on platforms without it the original
+        # racy-but-fail-open behavior is preserved.
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            try:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            raw = os.read(fd, 64)
+            try:
+                total = int(raw.decode("ascii").strip() or 0)
+            except ValueError:
+                total = 0
+            total += int(nbytes)
+            payload = str(total).encode("ascii")
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, payload)
+            os.ftruncate(fd, len(payload))
+            return total
+        finally:
+            os.close(fd)  # closing releases the flock
+    except Exception:
+        return 0
+
+
+def _price_note(size_bytes: int, workspace_root: str | None) -> str:
+    """Priced-context signpost (docs/PRICED-CONTEXT.md, M1): the cost of a
+    read in the agent's native currency, relativized to its window when the
+    proxy's ground truth is available. Measured cost: ~0.003 ms. Fail-open
+    to an empty string — a price tag must never break a decision."""
+    try:
+        tok = max(1, size_bytes // 4)
+        from ctx.textutil import fmt_tokens_coarse
+
+        note = f"{fmt_tokens_coarse(tok)} tok"
+        if workspace_root:
+            try:
+                path = os.path.join(
+                    workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json"
+                )
+                with open(path, "r", encoding="utf-8") as fh:
+                    limit = json.load(fh).get("context_limit")
+                if isinstance(limit, int) and limit > 0:
+                    note += f" ≈ {max(1, round(100 * tok / limit))}% of window"
+            except Exception:
+                pass
+        return f" ({note})"
+    except Exception:
+        return ""
+
+
+def _outline_hint(path_str: str) -> str:
+    """Menu line for structured files: the priced symbol outline verb."""
+    if path_str.endswith(".py"):
+        return "or:  ctx stats repo:<relative-path>   (priced symbol outline)\n"
+    return ""
+
+
+def _read_budget_reason(total: int) -> str:
+    return (
+        f"CTX_CONTEXT_GUARD: session native-read budget exceeded "
+        f"(~{total // 1024} KiB raw reads); reads are now bounded — use "
+        "ctx search repo: '<pattern>' or ctx get repo:<path> "
+        "--symbol/--lines for targeted evidence"
+    )
+
+
 def classify_read(
-    path_str: str, workspace_root: str | None, policy: dict[str, Any]
+    path_str: str,
+    workspace_root: str | None,
+    policy: dict[str, Any],
+    session_id: str = "unknown",
 ) -> dict[str, str]:
     if _SECRET_PATH_RE.search(path_str.replace("\\", "/")):
         return _force_ask(
@@ -481,24 +726,52 @@ def classify_read(
         size = os.stat(path_str).st_size
     except OSError:
         return dict(DECISION_ALLOW)  # nonexistent/new file: let the tool error
+    # The session ledger itself is bookkeeping, never evidence: reads of it
+    # are neither counted nor pressured.
+    in_ledger = _LEDGER_DIR_NAME in path_str.replace("\\", "/").split("/")
     limit = int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT))
+    note = str(policy.get("_window_note", ""))  # window pressure, "" when idle
     if size > limit:
+        price = _price_note(size, workspace_root)
         decision: dict[str, Any] = _deny(
-            f"CTX_CONTEXT_GUARD: file is {size} bytes (> {limit} inline budget).\n"
-            f"Use: ctx get repo:<relative-path> --lines A:B\n"
-            f"or:  ctx search repo:<relative-path> '<pattern>' --context 3"
+            f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline budget).\n"
+            + _outline_hint(path_str)
+            + "Use: ctx get repo:<relative-path> --lines A:B\n"
+            "or:  ctx search repo:<relative-path> '<pattern>' --context 3" + note
         )
         if _steering_allows(policy):
             max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
             decision["_rewrite"] = {
                 "fields": {"limit": max_lines},
                 "reason": (
-                    f"CTX_CONTEXT_GUARD: file is {size} bytes (> {limit} inline "
-                    f"budget); bounded to the first {max_lines} lines. For other "
-                    "slices use: ctx get repo:<relative-path> --lines A:B"
+                    f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline "
+                    f"budget); bounded to the first {max_lines} lines. "
+                    + _outline_hint(path_str).replace("\n", " ")
+                    + "For other slices use: ctx get repo:<relative-path> --lines A:B"
+                    + note
                 ),
             }
+            if not in_ledger:
+                # A rewritten read still lands ~max_inline_bytes of content.
+                _ledger_charge(workspace_root, session_id, limit)
         return decision
+    if in_ledger:
+        return dict(DECISION_ALLOW)
+    total = _ledger_charge(workspace_root, session_id, size)
+    budget = int(
+        policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT)
+    )
+    if total > budget:
+        reason = _read_budget_reason(total) + note
+        if _steering_allows(policy):
+            max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+            pressured: dict[str, Any] = dict(DECISION_ALLOW)
+            pressured["_rewrite"] = {
+                "fields": {"limit": max_lines // 4},
+                "reason": reason,
+            }
+            return pressured
+        return _deny(reason)
     return dict(DECISION_ALLOW)
 
 
@@ -536,6 +809,28 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
     if policy.get("mode") == "advisory":
         return dict(DECISION_ALLOW)
 
+    # Window-pressure loop: proxy-observed window fullness tightens budgets.
+    # Below threshold (or with no/broken window.json) this is a no-op and
+    # every decision below is byte-identical to the unpressured guard.
+    policy = _apply_window_pressure(policy, workspace_root)
+
+    # Graduated engagement (mechanism C): count this interception and let
+    # the session graduate passive→active on measured signals. The level
+    # affects digest affordances, never guard decisions. Fail-open.
+    try:
+        from ctx.engagement import note_call
+
+        note_call(
+            workspace_root,
+            mode=str(policy.get("engagement_mode", "auto")),
+            activate_after_calls=int(policy.get("engagement_activate_after", 8)),
+            window_pressure_pct=int(
+                policy.get("window_pressure_pct", _WINDOW_PRESSURE_PCT_DEFAULT)
+            ),
+        )
+    except Exception:
+        pass
+
     lowered = tool_name.lower()
     if "command" in lowered or lowered in ("bash", "shell", "exec"):
         command = ""
@@ -555,10 +850,15 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
         return _apply_rewrite(decision, tool_input, command_key)
 
     if "read" in lowered or lowered in ("open_file", "view_file"):
+        session_id = str(
+            payload.get("session_id") or payload.get("conversation_id") or "unknown"
+        )
         for key in ("AbsolutePath", "TargetFile", "file_path", "path", "Path"):
             v = tool_input.get(key)
             if isinstance(v, str) and v:
-                return _apply_rewrite(classify_read(v, workspace_root, policy), tool_input)
+                return _apply_rewrite(
+                    classify_read(v, workspace_root, policy, session_id), tool_input
+                )
         return dict(DECISION_ALLOW)
 
     if "list" in lowered or "find_by_name" in lowered or "grep" in lowered:
@@ -624,6 +924,75 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
             "reason": str(rewrite.get("reason", "")),
         }
     return {k: v for k, v in decision.items() if k != "rewrite" and not k.startswith("_")}
+
+
+def _emission_nudge(payload: dict[str, Any]) -> str | None:
+    """Emission governor (mechanism B): the symmetric partner of the read
+    budget. The proxy measures cumulative output tokens; when the session
+    crosses a new pressure tier (``emission_nudge_tokens`` each, default
+    20k) AND the per-request average is verbose, return a one-line nudge to
+    inject after the tool result. Each tier nudges exactly once. Returns
+    None (silence) in every other case — including any error."""
+    try:
+        workspace_root = _resolve_workspace_root(payload)
+        if not workspace_root:
+            return None
+        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json")
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+        cum_output = int(doc.get("cum_output") or 0)
+        requests = int(doc.get("requests") or 0)
+        if requests <= 0 or cum_output <= 0:
+            return None
+        policy = _load_guard_policy(workspace_root)
+        step = max(1, int(policy.get("emission_nudge_tokens", 20000)))
+        tier = cum_output // step
+        if tier < 1:
+            return None
+        per_request = cum_output / requests
+        if per_request < 500:  # already terse: no nudge, ever
+            return None
+        from ctx.engagement import claim_emission_tier
+
+        if not claim_emission_tier(workspace_root, tier):
+            return None
+        return (
+            f"CTX_EMISSION_GOVERNOR: session output ~{cum_output:,} tokens "
+            f"(avg {per_request:.0f}/turn). Output volume is the dominant "
+            "cost+latency driver. Keep narration terse; cite coordinates "
+            "(file:line, run:/span handles) instead of restating content."
+        )
+    except Exception:
+        return None
+
+
+def main_post_tool_use(flavor: str = "antigravity") -> int:
+    """Entry point for ``ctx hook <flavor> post-tool-use``. Reads one JSON
+    payload on stdin, writes exactly one JSON object on stdout: either a
+    no-op ``{}`` or an emission-governor nudge in the host dialect."""
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        nudge = _emission_nudge(payload)
+    except Exception:
+        nudge = None
+    if nudge is None:
+        emitted: dict[str, Any] = {}
+    elif flavor == "claude-code":
+        emitted = {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": nudge,
+            }
+        }
+    else:  # antigravity dialect mirrors its decision schema
+        emitted = {"decision": "allow", "reason": nudge}
+    sys.stdout.write(json.dumps(emitted, sort_keys=True))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0
 
 
 def main_pre_tool_use(flavor: str = "antigravity") -> int:
