@@ -15,6 +15,7 @@ catalog and never participates in content identity.
 
 from __future__ import annotations
 
+import array
 import hashlib
 import json
 import os
@@ -227,8 +228,6 @@ class Store:
     def line_index(self, blob_hash: str) -> "array.array":
         """Byte offsets of line starts for a blob, built lazily and cached on
         disk. Enables O(1) line slicing without decoding the whole blob."""
-        import array
-
         blob_hash = blob_hash.removeprefix("sha256:")
         idx_path = self.root / "indexes" / "lines" / blob_hash[:2] / (blob_hash[2:] + ".idx")
         arr = array.array("Q")
