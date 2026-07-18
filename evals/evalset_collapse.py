@@ -303,11 +303,13 @@ def scenario_flood_needle(root: Path) -> tuple[list[Arm], list[str]]:
     text, code = run_eval(ws, store, script)
     evalarm.round(script + text)
     assert code == 0
-    # The flood swallows even the intended SUMMARY tail — the digest omits
-    # it WITH an address instead of inlining it. Both the needle and the
-    # summary must be recoverable from the stored stream.
-    assert "SUMMARY" not in text and NEEDLE not in text
-    assert "omitted" in text  # declared, never silent
+    # The HEAD/TAIL evidence window surfaces the script's own SUMMARY tail
+    # line directly in the digest (CLIs put conclusions at the END); the
+    # quiet mid-stream needle stays out of the digest and must be recovered
+    # from the stored stream by search, with coordinates.
+    assert "SUMMARY frames=20000 anomalies=1" in text
+    assert NEEDLE not in text
+    assert "omitted" in text  # the middle is declared, never silent
     rid = text.split("[ctx run:")[1].split(" ")[0]
     hit = search(store, ws, f"run:{rid}", [NEEDLE])
     assert NEEDLE in hit and "14238" in hit.replace(",", ""), hit
@@ -322,9 +324,9 @@ def scenario_flood_needle(root: Path) -> tuple[list[Arm], list[str]]:
         "with its line coordinate"
     )
     checks.append(
-        "lesson surfaced by the eval itself: a flood omits even your "
-        "intended summary line — recovered via `ctx get --lines 20001` "
-        "(scripting rule: print ONLY what the transcript needs)"
+        "intended SUMMARY tail line rides IN the digest via the head/tail "
+        "evidence window (conclusions live at the END of CLI output); the "
+        "omitted middle keeps a span + `ctx get --lines` address"
     )
     return [evalarm], checks
 

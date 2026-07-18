@@ -10,3 +10,5 @@
 {"id": "ebb61ce277", "note": "S5 library ADOPT #4: unidiff as optional git-diff engine (regex path becomes deterministic fallback, engine-disclosure plumbing)", "op": "add", "ref": "src/ctx/digest/moreprofs.py:170"}
 {"id": "02fe21864a", "note": "eval verb has no teaching surface on the claude-code host: skill ships Antigravity-only, MCP is bounded-only by policy, hook remediation never mentions eval \u2014 live A/B measured 0/5 adoption while the one-script discipline won on cost/turns", "op": "add", "ref": "evals/eval-collapse-2026-07-18.md"}
 {"id": "c23a8ccdf5", "note": "terse-output doctrine leaks into final deliverables (2/2 strict-format failures in eval arms) \u2014 scope 'print only what the transcript needs' to scripts, not answers", "op": "add", "ref": "plugins/antigravity/skills/ctx-harness/SKILL.md:44"}
+{"id": "02fe21864a", "op": "resolve"}
+{"id": "c23a8ccdf5", "op": "resolve"}

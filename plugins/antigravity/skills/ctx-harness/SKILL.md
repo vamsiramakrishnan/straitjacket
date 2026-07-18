@@ -46,6 +46,10 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     round via `ctx seq`; chains that need computed control flow (branch
     on a result, loop over files, aggregate before emitting) run as one
     round via `ctx eval` — print only what the transcript needs.
+15. Never idle on a long-running command: `ctx run --bg-after 30 -- <cmd>`
+    backgrounds it if it outlives the wait, returning `job:<id>` while the
+    output spools to an artifact. Keep working; `ctx job <id>` shows a
+    bounded live tail, `--wait` collects the digest when you need it.
 
 ## Verb index
 
@@ -57,7 +61,9 @@ slices incl. `--span`) · `stats` (shape; on one code file: priced symbol
 outline) · `map` (ranked codebase map) · `def`/`refs`/`diag` (symbol
 verbs) · `callers`/`callees`/`impact` (call graph — direct/transitive, one
 query replaces a recursive grep trace) · `diff run:A run:B` (regression
-delta) · `stats --session` /
+delta) · `run --bg`/`job`/`jobs` (long-runner backgrounding — live tail,
+wait, kill; finalized jobs are ordinary `run:` artifacts) ·
+`stats --session` /
 `gain` (economics) · `checkpoint` (cache epoch) · `debt` (deferral ledger).
 Full flags and when-to-use detail: read `references/verbs.md`.
 

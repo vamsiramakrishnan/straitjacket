@@ -27,6 +27,14 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write('{"decision":"allow"}\n')
         return 0
 
+    # ------------------------------------------------- supervisor fast path
+    # Hidden: `ctx job _supervise <jobdir>` is spawned detached by
+    # `ctx run --bg`; it must not resolve a workspace or parse the full CLI.
+    if len(args) >= 3 and args[0] == "job" and args[1] == "_supervise":
+        from ctx.jobs import supervise_main
+
+        return supervise_main(args[2])
+
     if args and args[0] == "mcp":
         from ctx.mcp import serve
 
@@ -54,6 +62,14 @@ def _main_slow(args: list[str]) -> int:
     p_run.add_argument("--cwd", help="working directory relative to the workspace")
     p_run.add_argument("--shell", action="store_true", help="run one string through the shell")
     p_run.add_argument("--timeout", type=float, default=600.0)
+    p_run.add_argument(
+        "--bg", action="store_true",
+        help="background immediately: supervised run, transcript gets a job handle",
+    )
+    p_run.add_argument(
+        "--bg-after", type=float, dest="bg_after", metavar="T",
+        help="stay foreground up to T seconds; if still running, background",
+    )
     p_run.add_argument("command", nargs=argparse.REMAINDER, help="-- <command> [args...]")
 
     p_search = sub.add_parser("search", help="multi-pattern bounded search")
@@ -98,6 +114,18 @@ def _main_slow(args: list[str]) -> int:
     p_eval.add_argument("--cwd", help="working directory relative to the workspace")
     p_eval.add_argument("--timeout", type=float, default=600.0)
     p_eval.add_argument("--focus", help="deterministic evidence-selection query")
+
+    p_job = sub.add_parser("job", help="inspect or control a backgrounded run")
+    p_job.add_argument("job_id", help="job id from `ctx run --bg` (prefix ok)")
+    p_job.add_argument("--tail", type=int, metavar="N", help="show last N spool lines")
+    p_job.add_argument("--wait", action="store_true", help="block until done, then digest")
+    p_job.add_argument("--timeout", type=float, help="give up --wait after T seconds")
+    p_job.add_argument(
+        "--kill", action="store_true",
+        help="SIGKILL the process group; finalize what spooled",
+    )
+
+    sub.add_parser("jobs", help="list this workspace's backgrounded runs")
 
     p_seq = sub.add_parser("seq", help="declared command tree: N steps, one round")
     p_seq.add_argument("steps", nargs="+", help="shell command strings, run in order")
@@ -266,6 +294,10 @@ def _main_slow(args: list[str]) -> int:
 
         if ns.cmd == "run":
             return _cmd_run(ws, ns)
+        if ns.cmd == "job":
+            return _cmd_job(ws, ns)
+        if ns.cmd == "jobs":
+            return _cmd_jobs(ws)
         if ns.cmd == "eval":
             return _cmd_eval(ws, ns)
         if ns.cmd == "search":
@@ -300,7 +332,13 @@ def _main_slow(args: list[str]) -> int:
             budget = ws.config.budgets.result_tokens
             if code != 0:
                 budget = int(budget * ws.config.budgets.failure_budget_factor)
-            print(_bounded(text, budget))
+            # Engagement parity with run/eval (docs/LADDERS.md edge 1): lean
+            # or passive sessions must not pay for suggestion lines here either.
+            from ctx.engagement import filter_digest, suggestion_cap
+
+            eng = ws.config.engagement
+            cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
+            print(_bounded(filter_digest(text, cap), budget))
             return 0 if code == 0 else 3
         if ns.cmd == "gain":
             return _cmd_gain(ws)
@@ -451,6 +489,37 @@ def _cmd_gain(ws) -> int:
     return 0
 
 
+def _emit_run_digest(ws, digest: str, manifest: dict) -> int:
+    """Shared emission tail for foreground runs and finalized background
+    jobs: budget selection, failure asymmetry, engagement filtering, and
+    the run's exit-code semantics (124 timeout, 3 nonzero, 0 success)."""
+    from ctx.textutil import bounded
+
+    # Zero-hop inline digests may exceed the summary budget by design; the
+    # result budget is the hard emission backstop either way.
+    budget = (
+        ws.config.budgets.result_tokens
+        if "output (complete):" in digest
+        else ws.config.budgets.digest_tokens
+    )
+    # Failure asymmetry: a failing run's output is evidence, not boilerplate.
+    # exitCode != 0 covers None too: timeouts and signal deaths are failures
+    # (docs/LADDERS.md edge 4 — parity with eval's treatment).
+    if manifest["result"]["exitCode"] != 0:
+        budget = int(budget * ws.config.budgets.failure_budget_factor)
+    # Graduated engagement (mechanism C): affordances are filtered at this
+    # emission boundary only — the stored digest identity stays canonical.
+    from ctx.engagement import filter_digest, suggestion_cap
+
+    eng = ws.config.engagement
+    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
+    print(bounded(filter_digest(digest, cap), budget))
+    result = manifest["result"]
+    if result["timedOut"]:
+        return 124
+    return 0 if result["exitCode"] == 0 else 3
+
+
 def _cmd_run(ws, ns) -> int:
     from ctx.digest import render_run_digest
     from ctx.execution import ExecutionError, run_capture
@@ -464,6 +533,10 @@ def _cmd_run(ws, ns) -> int:
         return 2
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+
+    if ns.bg or ns.bg_after is not None:
+        return _cmd_run_bg(ws, store, ns, command)
+
     try:
         capture = run_capture(
             ws,
@@ -478,29 +551,93 @@ def _cmd_run(ws, ns) -> int:
         return 1
 
     digest, manifest = render_run_digest(store, ws, capture.manifest, focus=ns.focus)
-    from ctx.textutil import bounded
+    return _emit_run_digest(ws, digest, manifest)
 
-    # Zero-hop inline digests may exceed the summary budget by design; the
-    # result budget is the hard emission backstop either way.
-    budget = (
-        ws.config.budgets.result_tokens
-        if "output (complete):" in digest
-        else ws.config.budgets.digest_tokens
+
+def _cmd_run_bg(ws, store, ns, command: list[str]) -> int:
+    """`ctx run --bg / --bg-after T`: supervised launch, then a bounded
+    patience window. Finished in time → the normal digest, byte-identical
+    to a foreground run. Still running → job handle, exit 0."""
+    from ctx.jobs import (
+        JobError,
+        backgrounded_status,
+        finalize_job,
+        start_job,
+        wait_for_done,
     )
-    # Failure asymmetry: a failing run's output is evidence, not boilerplate.
-    if manifest["result"]["exitCode"] not in (0, None):
-        budget = int(budget * ws.config.budgets.failure_budget_factor)
-    # Graduated engagement (mechanism C): affordances are filtered at this
-    # emission boundary only — the stored digest identity stays canonical.
-    from ctx.engagement import filter_digest, suggestion_cap
+    from ctx.workspace import WorkspaceError
 
-    eng = ws.config.engagement
-    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
-    print(bounded(filter_digest(digest, cap), budget))
-    result = manifest["result"]
-    if result["timedOut"]:
-        return 124
-    return 0 if result["exitCode"] == 0 else 3
+    patience = ns.bg_after if ns.bg_after is not None else 0.0  # --bg ⇒ 0
+    try:
+        job_id = start_job(
+            ws, store, command,
+            cwd=ns.cwd, shell=ns.shell, timeout=ns.timeout, focus=ns.focus,
+        )
+    except (JobError, WorkspaceError) as e:
+        print(f"ctx run: {e}", file=sys.stderr)
+        return 1
+    try:
+        if wait_for_done(store, job_id, timeout=max(0.0, patience)):
+            digest, manifest = finalize_job(ws, store, job_id)
+            return _emit_run_digest(ws, digest, manifest)
+        print(backgrounded_status(store, job_id))
+        return 0
+    except JobError as e:
+        print(f"ctx run: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_job(ws, ns) -> int:
+    from ctx.jobs import (
+        JobError,
+        finalize_job,
+        job_state,
+        job_status,
+        kill_job,
+        resolve_job_id,
+        wait_for_done,
+    )
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        job_id = resolve_job_id(store, ns.job_id)
+        if ns.kill:
+            digest, manifest = kill_job(ws, store, job_id)
+            short = manifest["id"].removeprefix("sha256:")[:12]
+            print(f"[ctx job:{job_id} killed · finalized → run:{short}]")
+            _emit_run_digest(ws, digest, manifest)
+            return 0
+        if ns.wait:
+            if not wait_for_done(store, job_id, timeout=ns.timeout):
+                print(job_status(store, job_id, tail=ns.tail))
+                return 124
+            digest, manifest = finalize_job(ws, store, job_id)
+            short = manifest["id"].removeprefix("sha256:")[:12]
+            print(f"[ctx job:{job_id} finalized → run:{short}]")
+            return _emit_run_digest(ws, digest, manifest)
+        state = job_state(store, job_id)
+        if state in ("done", "finalized"):
+            digest, manifest = finalize_job(ws, store, job_id)
+            short = manifest["id"].removeprefix("sha256:")[:12]
+            print(f"[ctx job:{job_id} finalized → run:{short}]")
+            _emit_run_digest(ws, digest, manifest)
+            return 0
+        status = job_status(store, job_id, tail=ns.tail)
+        print(status)
+        return 1 if state == "failed" else 0
+    except JobError as e:
+        print(f"ctx job: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_jobs(ws) -> int:
+    from ctx.jobs import list_jobs
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(list_jobs(store))
+    return 0
 
 
 def _cmd_eval(ws, ns) -> int:

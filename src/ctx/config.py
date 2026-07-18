@@ -51,6 +51,12 @@ class Budgets:
     # boilerplate, failure output is evidence. A failing run's digest gets
     # this multiple of the standard emission budget.
     failure_budget_factor: float = 2.0
+    # HEAD/TAIL evidence window for text/v1 floods (eval-collapse S-C: CLIs
+    # put conclusions at the END — the script's own SUMMARY tail line was
+    # omitted when only "head stdout:L1" rode). First H and last T lines are
+    # shown; the middle is declared-omitted with a span/--lines address.
+    digest_head_lines: int = 5
+    digest_tail_lines: int = 5
 
 
 @dataclass(frozen=True)

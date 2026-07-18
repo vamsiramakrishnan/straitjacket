@@ -55,7 +55,8 @@ def run_seq(
         rid = str(manifest["id"]).removeprefix("sha256:")[:12]
         result = manifest["result"]
         exit_code = result["exitCode"]
-        failed = bool(result["timedOut"]) or (exit_code not in (0, None))
+        # exitCode None means signal death — failure, not success (S6 finding).
+        failed = bool(result["timedOut"]) or exit_code != 0
         mark = "✗" if failed else "✓"
         status = f"exit {exit_code}" if exit_code is not None else f"signal {result['signal']}"
         if result["timedOut"]:

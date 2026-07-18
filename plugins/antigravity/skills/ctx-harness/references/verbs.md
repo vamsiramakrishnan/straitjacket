@@ -43,6 +43,20 @@ index entry is not enough; each verb's output is bounded and deterministic.
   `ctx run`; failing scripts get the failure digest budget (traceback is
   evidence, and frames say `File "<stdin>"` — never a host path).
 
+## Long runners
+
+- `ctx run --bg | --bg-after T -- <cmd>` — supervised backgrounding: the
+  run starts under a detached supervisor either way. Finishes within `T`
+  → the normal digest returns as if foreground (byte-identical, same
+  `run:` id). Still running at `T` → the transcript gets `job:<id>`
+  immediately and the output exists only as a spooled artifact. Inspect
+  with `ctx job <id>` (bounded live tail, never a flood), `--wait`
+  (block, then digest), `--kill` (SIGKILL the group; what spooled is
+  finalized and addressable); `ctx jobs` lists. Finalized jobs are
+  ordinary `run:` artifacts — `search`/`get` address them identically.
+  Never idle a session on a long process: background it, keep working,
+  collect the digest when you need it.
+
 ## Repository comprehension
 
 - `ctx map [--budget N] [--focus term]` — ranked, budget-fitted codebase

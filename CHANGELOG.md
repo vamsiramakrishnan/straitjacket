@@ -4,6 +4,50 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.20.0] - 2026-07-18
+
+The measurement-driven wave: three mechanisms built in parallel by
+independent engineers against the receipts of the eval-collapse
+measurements (evals/eval-collapse-2026-07-18.md) and the conditionality
+audit (docs/LADDERS.md), then assembled with the audit's consistency fixes.
+
+- **Head/tail evidence windows** (`digest/text.py`): large text/v1 digests
+  now show the first `digest_head_lines` AND last `digest_tail_lines`
+  lines (both configurable via `[budgets]` in ctx.toml, default 5/5), each
+  with real coordinates; the omitted middle carries a deterministic region
+  span plus a `ctx get --lines` continuation. Motivated by a measured
+  failure: CLIs put conclusions at the END of output, and the S-C flood
+  scenario's own SUMMARY line was being omitted. Budget fitting shrinks
+  tail first, then head; small-output and error-signal paths byte-identical
+  to before.
+- **Long-runner backgrounding** (`jobs.py`, `run --bg`/`--bg-after T`,
+  `job`, `jobs`): every `--bg*` run starts under a detached supervisor
+  spooling to the store; finish within T → the normal digest, byte-for-byte
+  identical to a foreground run including the same `run:` id. Outlive T →
+  the transcript gets `job:<id>` immediately; `ctx job <id>` shows a
+  bounded live tail (never a flood), `--wait` blocks then digests,
+  `--kill` finalizes what spooled. Finalized jobs are ordinary `run:`
+  artifacts — search/get address them identically; job ids, pids, and
+  timestamps never enter content identity. Six launch/kill/finalize races
+  identified and closed (single-writer meta, idempotent finalization,
+  orphan adoption).
+- **Adoption steering** (hook + skill, shipped mid-wave as its own commit):
+  eval-opportunity detection (python heredoc/-c) appends the collapse
+  teaching to remediations at every friction point and ledgers each
+  opportunity fail-open (`.ctx-session-reads/eval-adoption.jsonl`) — the
+  adoption ratio's denominator. Doctrine scoping fix: terseness governs
+  scripts and narration, never the final deliverable.
+- **Conditionality audit applied** (docs/LADDERS.md): seq emissions now
+  respect the engagement filter like run/eval (edge 1); timeouts and
+  signal deaths get the failure budget in `run` (edge 4, parity with
+  eval); seq marks signal-death steps as failures (S6 finding). Remaining
+  audit items (pressure-aware budgets via a single resolve_budget choke
+  point, hint follow-through telemetry, MCP schema drift) are the next
+  wave's candidates, ranked in the doc.
+- Skill: verb index + rule 15 (never idle on a long runner) + long-runners
+  reference section. Prefix manifest regenerated; PREFIX_VERSION unchanged
+  (invocation-tier assets only — no cache impact).
+
 ## [0.19.0] - 2026-07-18
 
 Programmable capture: the Maki absorption. Maki (maki.sh) demonstrated the

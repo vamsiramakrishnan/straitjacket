@@ -1,6 +1,6 @@
 # straitjacket 🧥
 
-**Status:** v0.19.0 (pre-1.0, minor bump per mechanism wave) · 330 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.20.0 (pre-1.0, minor bump per mechanism wave) · 359 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
 An artifact-backed, repository-aware context containment harness for coding
 agents (Claude Code and Antigravity). Unbounded tool output becomes an
@@ -35,7 +35,7 @@ startup floor — parity-tested byte-for-byte, never required).
 
 | Gate | Question it answers | Mechanisms (all shipped) |
 |---|---|---|
-| **1 · Birth** | can this output flood at the source? | `ctx run`/`seq`/`eval` capture, deterministic digests, lint/pytest/log profiles, anticipatory inlining, failure-asymmetric budgets |
+| **1 · Birth** | can this output flood at the source? | `ctx run`/`seq`/`eval` capture, supervised backgrounding (`--bg`/`job`), head/tail evidence windows, deterministic digests, lint/pytest/log profiles, anticipatory inlining, failure-asymmetric budgets |
 | **2 · Entry** | what actually crosses the wire? | Tier-0 byte-exact observer proxy: `window.json`, `wire.jsonl` (usage, timing, tool census), scorecards |
 | **3 · Residence** | what may stay, and for how long? | session read ledger, window-pressure loop, priced steering, epoch-latched lossless rescue, checkpoints |
 | **4 · Emission** | what does the model put back? | emission governor tiers, cite-don't-quote, solution ladder + backward planning (each A/B-adopted), deliverable metrics |
@@ -216,6 +216,7 @@ Full surface at a glance (details for the core verbs below; flags in
 |---|---|
 | `run` / `seq` | birth-gate capture; `seq` runs a declared N-step tree in one round, each step addressable |
 | `eval` | programmable capture: a Python script chains N ops with computed control flow in one round; only its digest returns, and the script itself is an addressable `blob:` (the Maki absorption) |
+| `run --bg` / `job` / `jobs` | long-runner backgrounding: outlive `--bg-after T` and the transcript gets `job:<id>` while output spools to an artifact; bounded live tail, `--wait`, `--kill`; finalized jobs are ordinary `run:` artifacts |
 | `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/...`) · shape stats, or a **priced symbol outline** on a single code file |
 | `map` / `def` / `refs` / `diag` | ranked priced codebase map · symbol definition/reference/diagnostic verbs |
 | `diff run:A run:B` | regression delta between captured runs, span-backed |
