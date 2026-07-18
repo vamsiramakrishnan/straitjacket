@@ -160,6 +160,21 @@ fixed-and-verified live, not just reworded. (Verb adoption in bare arms
 remains 0 as expected — no hook runs there; the extended detector's live
 receipt comes from wrapped runs.)
 
+### Layer 2e — wrapped run 3: the instrument sees (detector fix verified)
+
+Wrapped session, extended detector live: the agent opened with a
+`python3 << 'EOF'` heredoc chain, the hook detected it, delivered the
+`ctx eval` teaching at the friction point, and the adoption ledger
+recorded its first live entry — `{"op": "eval_opportunity", "taught":
+true}`. Session completed 5 turns / $0.039, **strict format ✅**.
+
+Adoption scoreboard the loop can now actually compute: opportunities 1,
+teachings delivered 1, verb conversions 0. The teaching surface works
+end-to-end; *conversion* is the next metric to move, and the audit's
+ranked candidate for it (escalate teach → steer per session once the
+ledger shows repeated unconverted opportunities) is ready if the ratio
+stays at zero.
+
 ## What this changes
 
 - **Adoption gap is the bottleneck, not the mechanism.** On the
