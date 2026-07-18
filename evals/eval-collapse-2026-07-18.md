@@ -145,6 +145,21 @@ findings, each with a shipped fix:
    eval-opportunity; workspace-resident scripts remain non-opportunities
    (they are addressable code).
 
+### Layer 2d — validation pair (run 4, scoped doctrine)
+
+| run | arm | turns | cost | out tok | strict format | content |
+|---|---|---|---|---|---|---|
+| 4 | no-eval | 4 | $0.0313 | 1,133 | ✅ | ✅ |
+| 4 | eval | 4 | $0.0285 | 970 | ✅ | ✅ |
+
+**The doctrine leak is cured on first fair test**: with the scoped
+phrasing ("script output minimal; final answer must satisfy the required
+format in full"), the eval arm passed strict format for the first time in
+four runs while keeping its cost/output edge. Finding 3 is closed:
+fixed-and-verified live, not just reworded. (Verb adoption in bare arms
+remains 0 as expected — no hook runs there; the extended detector's live
+receipt comes from wrapped runs.)
+
 ## What this changes
 
 - **Adoption gap is the bottleneck, not the mechanism.** On the
