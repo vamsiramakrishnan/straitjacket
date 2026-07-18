@@ -12,3 +12,5 @@
 {"id": "c23a8ccdf5", "note": "terse-output doctrine leaks into final deliverables (2/2 strict-format failures in eval arms) \u2014 scope 'print only what the transcript needs' to scripts, not answers", "op": "add", "ref": "plugins/antigravity/skills/ctx-harness/SKILL.md:44"}
 {"id": "02fe21864a", "op": "resolve"}
 {"id": "c23a8ccdf5", "op": "resolve"}
+{"id": "74db82e027", "note": "pytest/v1 shows first-failure only where the task needs the failing-test census (the lint/v1 rtk lesson never applied to pytest) \u2014 measured: haiku re-ran the suite 8x with slicers, sj hit the 32-turn cap on both spec3 tasks", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
+{"id": "51604cfe7b", "note": "bare-wrap tier teaches no retrieval vocabulary to lean models (LADDERS edge 7 with a measured failure): emission-gate digests' spans went unresolved, converted to re-execution", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
