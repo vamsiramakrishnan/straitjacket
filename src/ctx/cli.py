@@ -88,6 +88,13 @@ def _main_slow(args: list[str]) -> int:
         help="render the current session's wire scorecard (proxy required)",
     )
 
+    p_seq = sub.add_parser("seq", help="declared command tree: N steps, one round")
+    p_seq.add_argument("steps", nargs="+", help="shell command strings, run in order")
+    p_seq.add_argument("--keep-going", action="store_true", dest="keep_going",
+                       help="run remaining steps after a failure (default: halt)")
+    p_seq.add_argument("--timeout", type=float, help="per-step timeout seconds")
+    p_seq.add_argument("--focus", help="bias step digests toward this question")
+
     sub.add_parser("gain", help="cumulative token/cost savings from telemetry")
 
     p_debt = sub.add_parser("debt", help="declared-omission ledger for deferred decisions")
@@ -258,6 +265,22 @@ def _main_slow(args: list[str]) -> int:
                 print(render_scorecard(sc))
                 return 0
             return _cmd_retrieval(ws, ns, "stats")
+        if ns.cmd == "seq":
+            from ctx.seq import run_seq
+            from ctx.store import Store as _Store
+            from ctx.textutil import bounded as _bounded
+
+            store = _Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+            text, code = run_seq(
+                ws, store, ns.steps,
+                halt_on_fail=not ns.keep_going,
+                timeout=ns.timeout, focus=ns.focus,
+            )
+            budget = ws.config.budgets.result_tokens
+            if code != 0:
+                budget = int(budget * ws.config.budgets.failure_budget_factor)
+            print(_bounded(text, budget))
+            return 0 if code == 0 else 3
         if ns.cmd == "gain":
             return _cmd_gain(ws)
         if ns.cmd == "debt":

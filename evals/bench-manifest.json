@@ -1,0 +1,15 @@
+{
+  "fixtures": "310bb6a5dbccabe3",
+  "models": {
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": null
+  },
+  "schema": "ctx.bench/v1",
+  "tasks": {
+    "S1": "0dbfb88dbba08643",
+    "S2": "d4626ff59f933018",
+    "S3": "37ce89523e10dd29",
+    "S4": "7f8f3ee6f639eeb0"
+  },
+  "tools": "Bash Read Grep Glob Edit Write MultiEdit"
+}

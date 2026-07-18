@@ -49,9 +49,13 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
     tools: dict[str, int] = {}
     per_model: dict[str, dict[str, int]] = {}
     requests = invalidations = 0
+    rounds = 0  # main-thread model rounds (multi-message requests) — the
+    # true unit of session cost (Tura wave): each is ttfb + a suffix write
     cold_prefix = 0
     max_read = 0
     est_cost = 0.0
+    first_rescued_round: int | None = None
+    rescued_blocks = 0
     try:
         lines = wire.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -67,6 +71,12 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
         if not usage:
             continue
         requests += 1
+        if rec.get("messages", 0) > 1:
+            rounds += 1
+            if rec.get("rescued"):
+                rescued_blocks = max(rescued_blocks, int(rec["rescued"]))
+                if first_rescued_round is None:
+                    first_rescued_round = rounds
         u_in = usage.get("input_tokens", 0)
         u_read = usage.get("cache_read_input_tokens", 0)
         u_cre = usage.get("cache_creation_input_tokens", 0)
@@ -101,9 +111,10 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
     prompt = tok["input"] + tok["read"] + tok["creation"]
     total_tools = sum(tools.values())
     edits = sum(n for name, n in tools.items() if name in _EDIT_TOOLS)
-    return {
+    sc: dict = {
         "schema": "ctx.scorecard/v1",
         "requests": requests,
+        "rounds": rounds,
         "tokens": dict(tok),
         "cache_hit_pct": round(100 * tok["read"] / prompt, 1) if prompt else 0.0,
         "cold_prefix_tok": cold_prefix,
@@ -115,6 +126,16 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
         "edit_share_pct": round(100 * edits / total_tools, 1) if total_tools else 0.0,
         "per_model": {k: dict(v) for k, v in sorted(per_model.items())},
     }
+    if first_rescued_round is not None:
+        # Post-rescue recovery cost (Tura's best metric, adopted): how much
+        # of the session ran after rescue began — the price of regaining
+        # momentum on an elided transcript.
+        sc["rescue_recovery"] = {
+            "first_rescued_round": first_rescued_round,
+            "rounds_after": rounds - first_rescued_round,
+            "blocks_elided": rescued_blocks,
+        }
+    return sc
 
 
 def render_scorecard(sc: dict) -> str:
@@ -140,11 +161,18 @@ def render_scorecard(sc: dict) -> str:
 def summary_line(sc: dict) -> str:
     """One-liner for wrap's session-end stderr note."""
     line = (
-        f"ctx scorecard: {sc['requests']} req · est ${sc['est_cost_usd']:.2f} · "
+        f"ctx scorecard: {sc.get('rounds', sc['requests'])} rounds · "
+        f"est ${sc['est_cost_usd']:.2f} · "
         f"out {sc['tokens']['output']:,} tok ({sc['output_per_request']}/req) · "
         f"cache hit {sc['cache_hit_pct']}% · invalidations {sc['invalidations']}"
         + (f" · cold-prefix {sc['cold_prefix_tok']:,}" if sc["cold_prefix_tok"] else "")
     )
+    rr = sc.get("rescue_recovery")
+    if rr:
+        line += (
+            f" · rescue@r{rr['first_rescued_round']} "
+            f"(+{rr['rounds_after']} rounds after)"
+        )
     d = sc.get("deliverable")
     if d:
         line += (

@@ -19,6 +19,15 @@ index entry is not enough; each verb's output is bounded and deterministic.
   returns the priced symbol outline: every symbol with line range, ~token
   price, and a span handle — prefer it over reading a large file.
 
+## Round economy
+
+- `ctx seq '<cmd1>' '<cmd2>' ... [--keep-going] [--focus q]` — declared
+  command tree: N steps execute in one round with `&&` semantics. Every
+  step is a full birth-gate capture addressable as `run:<id>`; a failing
+  step's digest rides in full, a green tree stays terse. Use for
+  mechanical chains you can declare upfront (test → build → lint):
+  measured, 65–70% of repair/creation rounds were such chains.
+
 ## Repository comprehension
 
 - `ctx map [--budget N] [--focus term]` — ranked, budget-fitted codebase
