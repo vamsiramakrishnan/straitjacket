@@ -26,6 +26,28 @@ from ctx.installer import _ctx_executable
 _HOOK_STAGE = "hook claude-code pre-tool-use"
 _AGENT_FILENAME = "ctx-explorer.md"
 
+# The Caveman lesson: retrieval discipline without emission discipline just
+# moves tokens from tool results to narration. Injected in print mode only;
+# opt out with CTX_WRAP_NO_DISCIPLINE=1 or by passing your own
+# --append-system-prompt.
+_OUTPUT_DISCIPLINE = (
+    "Output discipline: narrate tersely. Never restate or quote file or tool "
+    "output back into the conversation — cite coordinates instead (file:line, "
+    "run:/blob: handles from ctx digests). Summaries are a few sentences, not "
+    "a report; prefer acting over describing what you will do."
+)
+
+
+def _with_output_discipline(agent_args: list[str]) -> list[str]:
+    """Prepend the emission-discipline system prompt for print-mode runs."""
+    if os.environ.get("CTX_WRAP_NO_DISCIPLINE"):
+        return agent_args
+    if "--append-system-prompt" in agent_args:
+        return agent_args  # the user's own instruction wins
+    if "-p" not in agent_args and "--print" not in agent_args:
+        return agent_args  # interactive session: leave the human in charge
+    return ["--append-system-prompt", _OUTPUT_DISCIPLINE, *agent_args]
+
 
 def _explorer_agent_source() -> Path:
     """The packaged explorer agent definition (shipped with the plugin)."""
@@ -161,6 +183,7 @@ def wrap_claude(
         return 127
 
     exe = ctx_exe or _ctx_executable()
+    agent_args = _with_output_discipline(agent_args)
     settings = prepare_claude(workspace_root, exe)
     # The explorer agent lives alongside the hooks for the session's lifetime.
     agent_file = _install_explorer_agent(workspace_root)

@@ -4,6 +4,26 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.7.1] - 2026-07-18
+
+Benchmark-diagnosis fixes, all three grounded in measured evidence rather
+than suspicion. The proxy now passes `Accept-Encoding` through untouched and
+decompresses only the observer's private copy (`_Decoder`, zlib
+auto-detect; unknown encodings fail open to no-usage) — the earlier
+forced-identity workaround is gone. The proxy keeps a small pool of warm
+upstream connections (TLS handshake amortization for remote upstreams;
+stale pooled connections retry once on a fresh socket) and stamps every
+`wire.jsonl` record with `ms: {connect, ttfb, total}` and `reused_conn`, so
+per-exchange latency attribution is now ground truth instead of guesswork.
+`ctx wrap claude` injects an emission-discipline system prompt in print
+mode (the v0.7 rematch showed the entire wall-clock gap was output-token
+volume: 69k vs 42k tokens ≈ the whole duration delta at ~80 tok/s); opt out
+with `CTX_WRAP_NO_DISCIPLINE=1` or by supplying your own
+`--append-system-prompt`. The profiled digest hot path
+(`logprof._mask_token`: 180k per-character digit scans over 20k lines) now
+uses a compiled digit regex plus a bounded token-mask memo — same masks,
+~6× faster (0.82s → 0.14s on the 20k-line profile fixture).
+
 ## [0.7.0] - 2026-07-18
 
 Tier-0 wire observer shipped: `ctx proxy` is a localhost-only pass-through

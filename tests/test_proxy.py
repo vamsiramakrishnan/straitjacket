@@ -5,6 +5,7 @@ the relay is byte-exact. Observation artifacts (window.json / wire.jsonl)
 must carry usage ground truth and never a secret or a body.
 """
 
+import gzip
 import http.client
 import json
 import os
@@ -102,23 +103,41 @@ class _Upstream(BaseHTTPRequestHandler):
             stream = bool(json.loads(body).get("stream"))
         except Exception:
             pass
-        if stream:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            for event in SSE_EVENTS:  # split each event across two flushes
-                mid = len(event) // 2
-                self.wfile.write(event[:mid])
-                self.wfile.flush()
-                time.sleep(0.02)
-                self.wfile.write(event[mid:])
-                self.wfile.flush()
-        else:
+        # Honor the client's negotiation, like the real API: gzip when the
+        # forwarded Accept-Encoding offers it. "br" replies with opaque bytes
+        # the observer cannot decode (fail-open path).
+        enc = self.headers.get("Accept-Encoding") or ""
+        if "br" in enc and not stream:
+            payload = b"\x00\x01OPAQUE-BROTLI-ISH"
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(JSON_RESPONSE)))
+            self.send_header("Content-Encoding", "br")
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(JSON_RESPONSE)
+            self.wfile.write(payload)
+            return
+        gz = "gzip" in enc
+        if stream:
+            payload = b"".join(SSE_EVENTS)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            if gz:
+                payload = gzip.compress(payload)
+                self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            for i in range(0, len(payload), 40):  # dribble in small pieces
+                self.wfile.write(payload[i : i + 40])
+                self.wfile.flush()
+                time.sleep(0.005)
+        else:
+            payload = gzip.compress(JSON_RESPONSE) if gz else JSON_RESPONSE
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            if gz:
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
 
 
 @pytest.fixture()
@@ -291,6 +310,9 @@ def test_non_messages_path_passthrough_and_status(proxy):
     assert resp.read() == b"teapot"
     conn.close()
     rec = _wait_wire(state, 1)[0]
+    ms = rec.pop("ms")
+    assert set(ms) == {"connect", "ttfb", "total"}
+    assert ms["total"] >= 0
     assert rec == {
         "seq": 1,
         "path": "/health",
@@ -300,6 +322,7 @@ def test_non_messages_path_passthrough_and_status(proxy):
         "blocks": {},
         "tool_result_top": [],
         "usage": {},
+        "reused_conn": False,
     }
 
 
@@ -325,6 +348,95 @@ def test_chunked_request_body_forwarded(proxy, upstream):
     assert raw.split(b"\r\n", 1)[0].endswith(b"200 OK")
     assert raw.endswith(JSON_RESPONSE)
     assert upstream.captured[0]["body"] == payload  # de-chunked, byte-identical
+
+
+def test_gzip_json_relayed_compressed_and_observed(proxy, upstream):
+    """Compression negotiation passes through; the relay carries the gzip
+    bytes untouched while the observer decodes its own copy for usage."""
+    srv, state = proxy
+    status, data = _post(
+        srv.server_address[1], "/v1/messages", REQ_BODY, {"Accept-Encoding": "gzip"}
+    )
+    assert status == 200
+    assert data == gzip.compress(JSON_RESPONSE)  # compressed bytes, byte-exact
+    # The client's Accept-Encoding reached the upstream unmodified.
+    assert upstream.captured[0]["headers"]["accept-encoding"] == "gzip"
+    window = _wait_window(state, requests=1)
+    assert window["last_input_tokens"] == 1200 + 8500 + 300  # decoded observation
+    assert _wait_wire(state, 1)[0]["usage"] == JSON_USAGE
+
+
+def test_gzip_sse_relayed_and_observed(proxy, upstream):
+    srv, state = proxy
+    body = json.dumps(
+        {"model": "claude-sonnet-5", "stream": True,
+         "messages": [{"role": "user", "content": "go"}]}
+    ).encode()
+    status, data = _post(
+        srv.server_address[1], "/v1/messages", body, {"Accept-Encoding": "gzip"}
+    )
+    assert status == 200
+    assert gzip.decompress(data) == b"".join(SSE_EVENTS)  # stream intact
+    window = _wait_window(state, requests=1)
+    assert window["cum_output"] == 40  # usage scanned through incremental gunzip
+
+
+def test_unknown_encoding_fails_open(proxy, upstream):
+    """An encoding the observer cannot decode (br/zstd) must not affect the
+    relay: bytes pass through byte-exact, usage is simply absent."""
+    srv, state = proxy
+    status, data = _post(
+        srv.server_address[1], "/v1/messages", REQ_BODY, {"Accept-Encoding": "br"}
+    )
+    assert status == 200
+    assert data == b"\x00\x01OPAQUE-BROTLI-ISH"
+    rec = _wait_wire(state, 1)[0]
+    assert rec["usage"] == {}  # observation degraded, relay unharmed
+    assert rec["req_bytes"] == len(REQ_BODY)  # request-side facts still land
+
+
+class _Upstream11(_Upstream):
+    protocol_version = "HTTP/1.1"  # keep-alive capable → poolable by the relay
+
+
+@pytest.fixture()
+def upstream11():
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Upstream11)
+    srv.captured = []
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv
+    srv.shutdown()
+    srv.server_close()
+
+
+@pytest.fixture()
+def proxy11(upstream11, tmp_path):
+    from ctx.proxy import _make_server
+
+    state = tmp_path / "proxy-state"
+    srv = _make_server(
+        0, f"http://127.0.0.1:{upstream11.server_address[1]}", state, "ws-test"
+    )
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv, state
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_upstream_connection_pooled_and_timed(proxy11):
+    srv, state = proxy11
+    port = srv.server_address[1]
+    _post(port, "/v1/messages", REQ_BODY)
+    recs = _wait_wire(state, 1)
+    assert recs[0]["reused_conn"] is False
+    assert recs[0]["ms"]["connect"] >= 0  # fresh connection paid the handshake
+
+    _post(port, "/v1/messages", REQ_BODY)
+    recs = _wait_wire(state, 2)
+    by_seq = {r["seq"]: r for r in recs}
+    assert by_seq[2]["reused_conn"] is True  # second exchange rode the pool
+    assert by_seq[2]["ms"]["connect"] == 0
+    assert by_seq[2]["ms"]["total"] >= by_seq[2]["ms"]["ttfb"]
 
 
 def test_context_limit_table():

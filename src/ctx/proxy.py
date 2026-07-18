@@ -6,9 +6,11 @@ ground truth the hook tier cannot see — true token usage and window
 fullness — and writes it to ``<state_dir>/window.json`` (atomic snapshot)
 and ``<state_dir>/wire.jsonl`` (one line per exchange).
 
-Invariants: not a single byte of any request or response body is mutated;
-observation is fail-open (an observation error never breaks the relay);
-Authorization/x-api-key headers and bodies are never logged or persisted.
+Invariants: not a single byte of any request or response body is mutated
+(compressed upstream responses are relayed compressed; decompression happens
+only on the observer's private copy); observation is fail-open (an
+observation error never breaks the relay); Authorization/x-api-key headers
+and bodies are never logged or persisted.
 """
 
 from __future__ import annotations
@@ -20,17 +22,20 @@ import re
 import ssl
 import sys
 import threading
+import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
 _CHUNK = 8192  # relay granularity: small enough to preserve SSE latency
 _OBSERVE_CAP = 8 * 1024 * 1024  # stop accumulating response bytes for observation
+_POOL_MAX = 4  # idle upstream connections kept warm (TLS handshake amortization)
 
 # Hop-by-hop headers are owned by each connection leg, never forwarded.
-# accept-encoding is stripped deliberately: forcing identity from the
-# upstream keeps the relayed stream observable (usage extraction reads
-# plaintext, not gzip). Localhost bandwidth is free; observation is not.
+# Accept-Encoding passes through untouched: the client negotiates compression
+# with the upstream as if the relay were not there, and observation
+# decompresses its own copy of the stream (see _Decoder).
 _HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -43,7 +48,6 @@ _HOP_BY_HOP = {
     "transfer-encoding",
     "upgrade",
     "host",
-    "accept-encoding",
 }
 
 _USAGE_KEYS = (
@@ -127,6 +131,33 @@ class _UsageScanner:
             self._tail = b""
 
 
+class _Decoder:
+    """Incremental content-decoding for the observer's copy of the response.
+
+    The relayed bytes are never touched. gzip/deflate decode via zlib with
+    header auto-detection; identity passes through; any other encoding (br,
+    zstd) or a decode error disables observation for the exchange — the
+    relay itself is indifferent to what it carries."""
+
+    def __init__(self, encoding: str) -> None:
+        enc = (encoding or "").strip().lower()
+        self._z = None
+        self.ok = enc in ("", "identity", "gzip", "x-gzip", "deflate")
+        if self.ok and enc not in ("", "identity"):
+            self._z = zlib.decompressobj(32 + zlib.MAX_WBITS)  # gzip/zlib auto
+
+    def feed(self, chunk: bytes) -> bytes:
+        if not self.ok:
+            return b""
+        if self._z is None:
+            return chunk
+        try:
+            return self._z.decompress(chunk)
+        except zlib.error:
+            self.ok = False
+            return b""
+
+
 def _usage_from_json(body: bytes) -> dict[str, int]:
     try:
         u = json.loads(body).get("usage") or {}
@@ -154,6 +185,8 @@ class _Observer:
         req_obs: dict,
         usage: dict[str, int],
         beta_1m_header: bool,
+        ms: dict[str, float] | None = None,
+        reused_conn: bool = False,
     ) -> None:
         try:
             with self._lock:
@@ -162,13 +195,20 @@ class _Observer:
                 self._cum["cache_read"] += usage.get("cache_read_input_tokens", 0)
                 self._cum["cache_creation"] += usage.get("cache_creation_input_tokens", 0)
                 self._cum["output"] += usage.get("output_tokens", 0)
-                self._append_wire(seq, path, status, req_obs, usage)
+                self._append_wire(seq, path, status, req_obs, usage, ms, reused_conn)
                 self._write_window(req_obs, usage, beta_1m_header)
         except Exception:
             pass
 
     def _append_wire(
-        self, seq: int, path: str, status: int, req_obs: dict, usage: dict[str, int]
+        self,
+        seq: int,
+        path: str,
+        status: int,
+        req_obs: dict,
+        usage: dict[str, int],
+        ms: dict[str, float] | None,
+        reused_conn: bool,
     ) -> None:
         record = {
             "seq": seq,
@@ -179,6 +219,8 @@ class _Observer:
             "blocks": req_obs.get("blocks", {}),
             "tool_result_top": req_obs.get("tool_result_top", []),
             "usage": dict(sorted(usage.items())),
+            "ms": {k: round(v, 1) for k, v in sorted((ms or {}).items())},
+            "reused_conn": reused_conn,
         }
         with (self._dir / "wire.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
@@ -217,6 +259,8 @@ class _ProxyServer(ThreadingHTTPServer):
     ctx_upstream = None  # urlsplit result
     ctx_observer: _Observer | None = None
     ctx_ssl: ssl.SSLContext | None = None
+    ctx_pool: list | None = None  # idle upstream connections
+    ctx_pool_lock: threading.Lock | None = None
 
 
 class _RelayHandler(BaseHTTPRequestHandler):
@@ -227,6 +271,7 @@ class _RelayHandler(BaseHTTPRequestHandler):
 
     # One relay routine serves every method.
     def _relay(self) -> None:
+        t_start = time.monotonic()
         try:
             body = self._read_request_body()
         except Exception:
@@ -234,26 +279,30 @@ class _RelayHandler(BaseHTTPRequestHandler):
             return
 
         server: _ProxyServer = self.server  # type: ignore[assignment]
-        upstream = server.ctx_upstream
-        try:
-            conn = self._connect(server)
-            fwd_path = self.path
-            if upstream.path and upstream.path != "/":
-                fwd_path = upstream.path.rstrip("/") + self.path
-            conn.putrequest(self.command, fwd_path, skip_host=True, skip_accept_encoding=True)
-            conn.putheader("Host", upstream.netloc)
-            has_length = False
-            for name, value in self.headers.items():
-                if name.lower() in _HOP_BY_HOP:
-                    continue
-                if name.lower() == "content-length":
-                    has_length = True
-                conn.putheader(name, value)
-            if body and not has_length:  # request arrived chunked
-                conn.putheader("Content-Length", str(len(body)))
-            conn.endheaders(body if body else None)
-            resp = conn.getresponse()
-        except Exception:
+        resp = conn = None
+        reused = False
+        connect_ms = ttfb_ms = 0.0
+        # A pooled connection can be stale (upstream idled it out); retry
+        # exactly once on a fresh one. A fresh-connection failure is real.
+        for _attempt in (0, 1):
+            conn, reused = self._acquire(server)
+            try:
+                t0 = time.monotonic()
+                if not reused:
+                    conn.connect()
+                    connect_ms = (time.monotonic() - t0) * 1000
+                t_send = time.monotonic()
+                self._send_upstream(server, conn, body)
+                resp = conn.getresponse()
+                ttfb_ms = (time.monotonic() - t_send) * 1000
+                break
+            except Exception:
+                conn.close()
+                resp = None
+                if not reused:
+                    self._bad_gateway()
+                    return
+        if resp is None:  # two stale pooled connections in a row
             self._bad_gateway()
             return
 
@@ -275,8 +324,10 @@ class _RelayHandler(BaseHTTPRequestHandler):
             return
 
         is_sse = "text/event-stream" in (resp.getheader("Content-Type") or "")
+        decoder = _Decoder(resp.getheader("Content-Encoding") or "")
         scanner = _UsageScanner()
         accumulated = bytearray()
+        upstream_done = False
         try:
             # Unbuffered relay: read whatever bytes are available (read1 does
             # not wait to fill the window) and write+flush immediately, so
@@ -284,20 +335,25 @@ class _RelayHandler(BaseHTTPRequestHandler):
             while True:
                 chunk = resp.read1(_CHUNK)
                 if not chunk:
+                    upstream_done = True
                     break
                 self.wfile.write(chunk)
                 self.wfile.flush()
                 try:  # observation only — never allowed to break the relay
                     if is_sse:
-                        scanner.feed(chunk)
+                        scanner.feed(decoder.feed(chunk))
                     elif len(accumulated) < _OBSERVE_CAP:
-                        accumulated += chunk
+                        accumulated += decoder.feed(chunk)
                 except Exception:
                     pass
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # client went away mid-stream; nothing to salvage
         finally:
-            conn.close()
+            if upstream_done and not resp.will_close:
+                self._release(server, conn)
+            else:
+                conn.close()
+        total_ms = (time.monotonic() - t_start) * 1000
 
         try:
             usage = scanner.usage if is_sse else _usage_from_json(bytes(accumulated))
@@ -308,19 +364,53 @@ class _RelayHandler(BaseHTTPRequestHandler):
                 req_obs=_observe_request(self.path, body),
                 usage=usage,
                 beta_1m_header=beta_1m,
+                ms={"connect": connect_ms, "ttfb": ttfb_ms, "total": total_ms},
+                reused_conn=reused,
             )
         except Exception:
             pass
 
     do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _relay
 
-    def _connect(self, server: _ProxyServer) -> http.client.HTTPConnection:
+    def _send_upstream(
+        self, server: _ProxyServer, conn: http.client.HTTPConnection, body: bytes
+    ) -> None:
+        upstream = server.ctx_upstream
+        fwd_path = self.path
+        if upstream.path and upstream.path != "/":
+            fwd_path = upstream.path.rstrip("/") + self.path
+        conn.putrequest(self.command, fwd_path, skip_host=True, skip_accept_encoding=True)
+        conn.putheader("Host", upstream.netloc)
+        has_length = False
+        for name, value in self.headers.items():
+            if name.lower() in _HOP_BY_HOP:
+                continue
+            if name.lower() == "content-length":
+                has_length = True
+            conn.putheader(name, value)
+        if body and not has_length:  # request arrived chunked
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body if body else None)
+
+    def _acquire(self, server: _ProxyServer) -> tuple[http.client.HTTPConnection, bool]:
+        with server.ctx_pool_lock:
+            if server.ctx_pool:
+                return server.ctx_pool.pop(), True
         u = server.ctx_upstream
         if u.scheme == "https":
-            return http.client.HTTPSConnection(
+            conn = http.client.HTTPSConnection(
                 u.hostname, u.port or 443, context=server.ctx_ssl, timeout=600
             )
-        return http.client.HTTPConnection(u.hostname, u.port or 80, timeout=600)
+        else:
+            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=600)
+        return conn, False
+
+    def _release(self, server: _ProxyServer, conn: http.client.HTTPConnection) -> None:
+        with server.ctx_pool_lock:
+            if len(server.ctx_pool) < _POOL_MAX:
+                server.ctx_pool.append(conn)
+                return
+        conn.close()
 
     def _read_request_body(self) -> bytes:
         te = (self.headers.get("Transfer-Encoding") or "").lower()
@@ -375,6 +465,8 @@ def _make_server(
     server.ctx_upstream = urlsplit(upstream)
     server.ctx_observer = _Observer(state_dir, workspace_id)
     server.ctx_ssl = ssl.create_default_context()
+    server.ctx_pool = []
+    server.ctx_pool_lock = threading.Lock()
     return server
 
 
