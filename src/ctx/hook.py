@@ -146,6 +146,9 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "deny_commands": [],
         "promoted_commands": [],
         "demoted_commands": [],
+        "engagement_mode": "auto",
+        "engagement_activate_after": 8,
+        "emission_nudge_tokens": 20000,
     }
     if not workspace_root:
         return policy
@@ -176,6 +179,14 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             # Repo-tunable classification: prefix matches against canonical argv.
             policy["allow_commands"] = [str(x) for x in guard.get("allow_commands", [])]
             policy["deny_commands"] = [str(x) for x in guard.get("deny_commands", [])]
+            eng = raw.get("engagement") or {}
+            policy["engagement_mode"] = str(eng.get("mode", policy["engagement_mode"]))
+            policy["engagement_activate_after"] = int(
+                eng.get("activate_after_calls", policy["engagement_activate_after"])
+            )
+            policy["emission_nudge_tokens"] = int(
+                eng.get("emission_nudge_tokens", policy["emission_nudge_tokens"])
+            )
         except Exception:
             pass
     # Learned policy epoch (compiled, committed ctx-policy.toml): promoted
@@ -766,6 +777,23 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
     # every decision below is byte-identical to the unpressured guard.
     policy = _apply_window_pressure(policy, workspace_root)
 
+    # Graduated engagement (mechanism C): count this interception and let
+    # the session graduate passive→active on measured signals. The level
+    # affects digest affordances, never guard decisions. Fail-open.
+    try:
+        from ctx.engagement import note_call
+
+        note_call(
+            workspace_root,
+            mode=str(policy.get("engagement_mode", "auto")),
+            activate_after_calls=int(policy.get("engagement_activate_after", 8)),
+            window_pressure_pct=int(
+                policy.get("window_pressure_pct", _WINDOW_PRESSURE_PCT_DEFAULT)
+            ),
+        )
+    except Exception:
+        pass
+
     lowered = tool_name.lower()
     if "command" in lowered or lowered in ("bash", "shell", "exec"):
         command = ""
@@ -859,6 +887,75 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
             "reason": str(rewrite.get("reason", "")),
         }
     return {k: v for k, v in decision.items() if k != "rewrite" and not k.startswith("_")}
+
+
+def _emission_nudge(payload: dict[str, Any]) -> str | None:
+    """Emission governor (mechanism B): the symmetric partner of the read
+    budget. The proxy measures cumulative output tokens; when the session
+    crosses a new pressure tier (``emission_nudge_tokens`` each, default
+    20k) AND the per-request average is verbose, return a one-line nudge to
+    inject after the tool result. Each tier nudges exactly once. Returns
+    None (silence) in every other case — including any error."""
+    try:
+        workspace_root = _resolve_workspace_root(payload)
+        if not workspace_root:
+            return None
+        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json")
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+        cum_output = int(doc.get("cum_output") or 0)
+        requests = int(doc.get("requests") or 0)
+        if requests <= 0 or cum_output <= 0:
+            return None
+        policy = _load_guard_policy(workspace_root)
+        step = max(1, int(policy.get("emission_nudge_tokens", 20000)))
+        tier = cum_output // step
+        if tier < 1:
+            return None
+        per_request = cum_output / requests
+        if per_request < 500:  # already terse: no nudge, ever
+            return None
+        from ctx.engagement import claim_emission_tier
+
+        if not claim_emission_tier(workspace_root, tier):
+            return None
+        return (
+            f"CTX_EMISSION_GOVERNOR: session output ~{cum_output:,} tokens "
+            f"(avg {per_request:.0f}/turn). Output volume is the dominant "
+            "cost+latency driver. Keep narration terse; cite coordinates "
+            "(file:line, run:/span handles) instead of restating content."
+        )
+    except Exception:
+        return None
+
+
+def main_post_tool_use(flavor: str = "antigravity") -> int:
+    """Entry point for ``ctx hook <flavor> post-tool-use``. Reads one JSON
+    payload on stdin, writes exactly one JSON object on stdout: either a
+    no-op ``{}`` or an emission-governor nudge in the host dialect."""
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        nudge = _emission_nudge(payload)
+    except Exception:
+        nudge = None
+    if nudge is None:
+        emitted: dict[str, Any] = {}
+    elif flavor == "claude-code":
+        emitted = {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": nudge,
+            }
+        }
+    else:  # antigravity dialect mirrors its decision schema
+        emitted = {"decision": "allow", "reason": nudge}
+    sys.stdout.write(json.dumps(emitted, sort_keys=True))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0
 
 
 def main_pre_tool_use(flavor: str = "antigravity") -> int:

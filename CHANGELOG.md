@@ -4,6 +4,46 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.8.0] - 2026-07-18
+
+The measurement-loop wave: six mechanisms that convert benchmark
+postmortems into runtime feedback, each grounded in a measured failure
+from evals/matrix-2026-07-18.md.
+
+- **Prefix-stability contract (A).** Every injected prefix byte (wrap
+  discipline prompt, explorer agent, MCP tool description, skill) is
+  locked behind `src/ctx/prefix-manifest.json` + `PREFIX_VERSION`; the
+  golden-hash test fails on unacknowledged change, because a 9-token edit
+  measurably cost one full cold cache rewrite per model (~56k tokens).
+- **Session scorecard (D) + effort mix (F).** `wire.jsonl` now records the
+  request model and a tool_use census (names only); `ctx.scorecard`
+  computes token classes, cold-prefix vs true invalidations vs suffix
+  growth, ttfb/generation split, per-model usage, and edit-share.
+  `ctx wrap` prints a one-line scorecard at session end and appends
+  history to `.ctx-session-reads/scorecards.jsonl`; `ctx stats --session`
+  renders the full card.
+- **Graduated engagement (C).** Sessions start passive under
+  `[engagement] mode = "auto"`: digests carry no "next:" affordances until
+  a measured signal graduates the session (hook call count, window
+  pressure, or a digest that actually truncated). Lean models (haiku by
+  default) keep a single suggestion even when active — measured: haiku
+  over-executes affordances as work items. Filtering happens at the
+  emission boundary only; stored digests remain byte-identical pure
+  functions (SPEC §8).
+- **Emission governor (B).** New `ctx hook <host> post-tool-use` stage —
+  the symmetric partner of the read-budget governor. When proxy-measured
+  cumulative output crosses a 20k-token tier AND the per-request average
+  is verbose, it injects one terse-narration nudge (Claude Code
+  `additionalContext`; Antigravity decision dialect), exactly once per
+  tier. Registered by `ctx wrap` and the plugin hooks template.
+- **Anticipatory inlining (E).** The pytest digest inlines the first
+  failure region (budget-gated, separator-bounded, deterministic) so the
+  most common follow-up costs zero retrieval hops — each avoided hop is
+  ~2s of ttfb plus a suffix cache write.
+
+No injected prefix text changed in this release: the prefix manifest holds
+at version 1, so v0.8.0 causes no cache cold-write.
+
 ## [0.7.1] - 2026-07-18
 
 Benchmark-diagnosis fixes, all three grounded in measured evidence rather

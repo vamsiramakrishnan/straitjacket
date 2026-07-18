@@ -79,6 +79,7 @@ def _observe_request(path: str, body: bytes) -> dict:
         "req_bytes": len(body),
         "messages": 0,
         "blocks": {},
+        "tools": {},
         "tool_result_top": [],
         "model": "",
         "stream": False,
@@ -92,6 +93,7 @@ def _observe_request(path: str, body: bytes) -> dict:
         msgs = doc.get("messages") or []
         obs["messages"] = len(msgs)
         blocks: dict[str, int] = {}
+        tools: dict[str, int] = {}
         tool_result_sizes: list[int] = []
         for msg in msgs:
             content = msg.get("content")
@@ -101,11 +103,17 @@ def _observe_request(path: str, body: bytes) -> dict:
             for block in content or []:
                 btype = str(block.get("type") or "unknown")
                 blocks[btype] = blocks.get(btype, 0) + 1
+                if btype == "tool_use":
+                    # Tool NAMES only (never inputs): the effort-mix signal
+                    # for the session scorecard.
+                    tname = str(block.get("name") or "unknown")[:64]
+                    tools[tname] = tools.get(tname, 0) + 1
                 if btype == "tool_result":
                     tool_result_sizes.append(
                         len(json.dumps(block.get("content", ""), ensure_ascii=False))
                     )
         obs["blocks"] = blocks
+        obs["tools"] = tools
         obs["tool_result_top"] = sorted(tool_result_sizes, reverse=True)[:3]
     except Exception:
         pass
@@ -216,7 +224,9 @@ class _Observer:
             "status": status,
             "req_bytes": req_obs.get("req_bytes", 0),
             "messages": req_obs.get("messages", 0),
+            "model": req_obs.get("model", ""),
             "blocks": req_obs.get("blocks", {}),
+            "tools": req_obs.get("tools", {}),
             "tool_result_top": req_obs.get("tool_result_top", []),
             "usage": dict(sorted(usage.items())),
             "ms": {k: round(v, 1) for k, v in sorted((ms or {}).items())},

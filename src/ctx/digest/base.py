@@ -45,6 +45,9 @@ class DigestContext:
     # Store access lets profiles mint deterministic span tokens at omission
     # points (SPEC §6.4). Optional so rendering stays testable store-free.
     store: Store | None = None
+    # Graduated engagement (mechanism C): how many "next:" suggestions this
+    # digest may carry. 0 = passive session, 1 = lean-model profile, 3 = full.
+    suggestion_cap: int = 3
 
     def mint_span(self, stream: "StreamView", kind: str, **kw: Any) -> str | None:
         if self.store is None:
@@ -76,6 +79,10 @@ class DigestContext:
                 name, size, int(meta["lines"]), meta["mediaType"], text, parsed_fully
             )
         terms = tuple(t for t in re.split(r"\W+", (focus or "").lower()) if len(t) >= 2)
+        # Note: engagement (mechanism C) deliberately does NOT influence
+        # rendering — the stored digest is a pure function of bytes+config
+        # (SPEC §8). Affordance filtering happens at the emission boundary
+        # (ctx.engagement.filter_digest), keeping re-digests byte-identical.
         return cls(
             ws=ws,
             manifest=manifest,
@@ -150,7 +157,13 @@ class Profile:
         return lines
 
     def next_lines(self, ctx: DigestContext, suggestions: list[str]) -> list[str]:
-        return ["next:"] + [f"  {s}" for s in suggestions[:3]] if suggestions else []
+        # Graduated engagement (mechanism C): a passive session gets zero
+        # suggestions (small models over-execute them as work items), a
+        # lean-model session gets one, an active session gets up to three.
+        cap = min(3, max(0, getattr(ctx, "suggestion_cap", 3)))
+        if not suggestions or cap == 0:
+            return []
+        return ["next:"] + [f"  {s}" for s in suggestions[:cap]]
 
     def inline_body(self, ctx: DigestContext) -> list[str] | None:
         """Zero-hop path: when the complete output fits well inside the

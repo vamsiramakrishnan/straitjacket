@@ -1,0 +1,10 @@
+{
+  "schema": "ctx.prefix/v1",
+  "prefix_version": 1,
+  "assets": {
+    "agent.ctx-explorer": "sha256:9818ea52833f7c9bbd17cd974c3f7c22f979a217b87b53652abd4955590471fc",
+    "mcp.tool_description": "sha256:c9f9f45936e1fee1478d6dbbbe13e74ca5641a1da8468970df023e61ce0aa913",
+    "skill.ctx-harness": "sha256:2eb5c2cbbcefe8f2714e3026e2e7e73a186f22c8f07db1f25690e04104ea5772",
+    "wrap.output_discipline": "sha256:c163ca19849cdcd6f4f7412df9adba84398564a790d4eb35fabcefc239b54f2f"
+  }
+}

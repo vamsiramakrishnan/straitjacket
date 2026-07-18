@@ -80,4 +80,11 @@ def render_run_digest(
 
     raw = sum(int(s["bytes"]) for s in manifest["streams"].values())
     record_telemetry(store, "run", raw, len(digest.encode("utf-8")))
+
+    # Graduated engagement (mechanism C): an output too large to inline is
+    # the measured proof the task outgrew "small" — graduate the session.
+    if raw > ws.config.budgets.result_tokens * 3 and ws.config.engagement.mode == "auto":
+        from ctx.engagement import note_truncation
+
+        note_truncation(ws.root)
     return digest, final_manifest

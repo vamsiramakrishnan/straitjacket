@@ -19,6 +19,10 @@ def main(argv: list[str] | None = None) -> int:
             from ctx.hook import main_pre_tool_use
 
             return main_pre_tool_use(flavor=args[1])
+        if args[2] == "post-tool-use":
+            from ctx.hook import main_post_tool_use
+
+            return main_post_tool_use(flavor=args[1])
         # Unknown hook stage: still emit exactly one valid decision.
         sys.stdout.write('{"decision":"allow"}\n')
         return 0
@@ -78,6 +82,11 @@ def _main_slow(args: list[str]) -> int:
     p_stats = sub.add_parser("stats", help="bounded schema/shape statistics")
     p_stats.add_argument("ref", nargs="?", default="repo:")
     p_stats.add_argument("--scope", help="named monorepo scope")
+    p_stats.add_argument(
+        "--session",
+        action="store_true",
+        help="render the current session's wire scorecard (proxy required)",
+    )
 
     p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
@@ -201,6 +210,18 @@ def _main_slow(args: list[str]) -> int:
         if ns.cmd == "get":
             return _cmd_retrieval(ws, ns, "get")
         if ns.cmd == "stats":
+            if getattr(ns, "session", False):
+                from ctx.scorecard import compute_scorecard, render_scorecard
+
+                sc = compute_scorecard(ws.root / ".ctx-session-reads" / "proxy")
+                if sc is None:
+                    print(
+                        "no wire observations for this workspace "
+                        "(run under `ctx wrap claude --proxy`)"
+                    )
+                    return 1
+                print(render_scorecard(sc))
+                return 0
             return _cmd_retrieval(ws, ns, "stats")
         if ns.cmd == "diff":
             return _cmd_diff(ws, ns)
@@ -312,7 +333,13 @@ def _cmd_run(ws, ns) -> int:
         if "output (complete):" in digest
         else ws.config.budgets.digest_tokens
     )
-    print(bounded(digest, budget))
+    # Graduated engagement (mechanism C): affordances are filtered at this
+    # emission boundary only — the stored digest identity stays canonical.
+    from ctx.engagement import filter_digest, suggestion_cap
+
+    eng = ws.config.engagement
+    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
+    print(bounded(filter_digest(digest, cap), budget))
     result = manifest["result"]
     if result["timedOut"]:
         return 124

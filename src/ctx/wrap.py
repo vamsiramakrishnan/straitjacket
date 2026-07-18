@@ -81,7 +81,11 @@ def _remove_explorer_agent(created: Path | None) -> None:
 
 
 def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
-    """Claude Code settings dict that routes tool calls through the harness."""
+    """Claude Code settings dict that routes tool calls through the harness.
+
+    PreToolUse is the guard; PostToolUse is the emission governor
+    (mechanism B) — it injects a terse one-line nudge when the proxy-measured
+    cumulative output crosses a pressure tier, and stays silent otherwise."""
     return {
         "hooks": {
             "PreToolUse": [
@@ -95,7 +99,19 @@ def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
                         }
                     ],
                 }
-            ]
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "Bash|Read|Edit|Write",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{ctx_exe} hook claude-code post-tool-use",
+                            "timeout": 10,
+                        }
+                    ],
+                }
+            ],
         }
     }
 
@@ -155,6 +171,22 @@ def _stop_proxy(proc: subprocess.Popen | None) -> None:
         proc.kill()
         with contextlib.suppress(Exception):
             proc.wait(timeout=5)
+
+
+def _emit_scorecard(workspace_root: Path) -> None:
+    """Session-end economics from wire ground truth (mechanism D). Printed
+    to stderr and appended to scorecard history for the policy learner.
+    Fail-open: a scorecard problem never affects the session's exit."""
+    try:
+        from ctx.scorecard import append_history, compute_scorecard, summary_line
+
+        sc = compute_scorecard(workspace_root / ".ctx-session-reads" / "proxy")
+        if sc is None:
+            return
+        append_history(workspace_root, sc)
+        print(summary_line(sc), file=sys.stderr)
+    except Exception:
+        pass
 
 
 def _claude_supports_settings(claude: str) -> bool:
@@ -218,6 +250,8 @@ def wrap_claude(
                 os.unlink(tmp.name)
     finally:
         _stop_proxy(proxy_proc)
+        if proxy_proc is not None:
+            _emit_scorecard(workspace_root)
         _remove_explorer_agent(agent_file)
 
 
