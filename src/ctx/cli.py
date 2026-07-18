@@ -107,6 +107,14 @@ def _main_slow(args: list[str]) -> int:
     p_cp.add_argument("--file", action="append", default=[], dest="files")
     p_cp.add_argument("--show", help="render an existing checkpoint:<id>")
 
+    p_proxy = sub.add_parser(
+        "proxy", help="pass-through observer proxy for Anthropic API traffic"
+    )
+    p_proxy.add_argument("--port", type=int, required=True)
+    p_proxy.add_argument("--upstream", required=True, help="e.g. https://api.anthropic.com")
+    p_proxy.add_argument("--state-dir", required=True, dest="state_dir")
+    p_proxy.add_argument("--workspace-id", default="", dest="workspace_id")
+
     p_wrap = sub.add_parser("wrap", help="run one agent session under the harness")
     p_wrap.add_argument("host", choices=["claude", "antigravity"])
     p_wrap.add_argument(
@@ -133,6 +141,14 @@ def _main_slow(args: list[str]) -> int:
             print(install_antigravity(ws))
             return 0
 
+        if ns.cmd == "proxy":
+            from pathlib import Path as _Path
+
+            from ctx.proxy import serve_proxy
+
+            serve_proxy(ns.port, ns.upstream, _Path(ns.state_dir), ns.workspace_id)
+            return 0
+
         if ns.cmd == "wrap":
             from ctx.wrap import print_config, wrap_antigravity, wrap_claude
 
@@ -144,6 +160,12 @@ def _main_slow(args: list[str]) -> int:
                 if agent_args.index("--print-config") < tail:
                     ns.print_config = True
                     agent_args.remove("--print-config")
+            use_proxy = False
+            if "--proxy" in agent_args:
+                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+                if agent_args.index("--proxy") < tail:
+                    use_proxy = True
+                    agent_args.remove("--proxy")
             if ns.print_config:
                 print(print_config(ns.host))
                 return 0
@@ -151,7 +173,7 @@ def _main_slow(args: list[str]) -> int:
             if agent_args and agent_args[0] == "--":
                 agent_args = agent_args[1:]
             if ns.host == "claude":
-                return wrap_claude(ws.root, agent_args)
+                return wrap_claude(ws.root, agent_args, use_proxy=use_proxy)
             return wrap_antigravity(ws.root)
 
         ws = resolve_workspace(ns.workspace)

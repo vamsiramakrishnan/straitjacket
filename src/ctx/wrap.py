@@ -12,10 +12,13 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from ctx.installer import _ctx_executable
@@ -75,6 +78,63 @@ def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
     }
 
 
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _wait_for_port(port: int, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
+
+def _start_proxy(
+    workspace_root: Path, ctx_exe: str
+) -> tuple[subprocess.Popen | None, dict[str, str] | None]:
+    """Spawn the Tier-0 observer proxy and return (process, child env).
+
+    The child env carries ANTHROPIC_BASE_URL pointed at the local proxy;
+    the parent process env is never modified. Fail-open: if the proxy does
+    not come up within 5s, the session runs unproxied."""
+    port = _free_port()
+    upstream = os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+    state_dir = workspace_root / ".ctx-session-reads" / "proxy"
+    proc = subprocess.Popen(
+        [
+            *shlex.split(ctx_exe),
+            "proxy",
+            "--port", str(port),
+            "--upstream", upstream,
+            "--state-dir", str(state_dir),
+        ],
+        cwd=workspace_root,
+    )
+    if not _wait_for_port(port, 5.0):
+        _stop_proxy(proc)
+        print("ctx wrap: observer proxy failed to start; continuing without it", file=sys.stderr)
+        return None, None
+    return proc, {**os.environ, "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}"}
+
+
+def _stop_proxy(proc: subprocess.Popen | None) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=5)
+
+
 def _claude_supports_settings(claude: str) -> bool:
     try:
         proc = subprocess.run([claude, "--help"], capture_output=True, text=True, timeout=30)
@@ -83,7 +143,12 @@ def _claude_supports_settings(claude: str) -> bool:
     return "--settings" in (proc.stdout + proc.stderr)
 
 
-def wrap_claude(workspace_root: Path, agent_args: list[str], ctx_exe: str | None = None) -> int:
+def wrap_claude(
+    workspace_root: Path,
+    agent_args: list[str],
+    ctx_exe: str | None = None,
+    use_proxy: bool = False,
+) -> int:
     """Launch `claude` with harness hooks injected; leave zero residue."""
     claude = shutil.which("claude")
     if claude is None:
@@ -95,17 +160,22 @@ def wrap_claude(workspace_root: Path, agent_args: list[str], ctx_exe: str | None
         )
         return 127
 
-    settings = prepare_claude(workspace_root, ctx_exe or _ctx_executable())
+    exe = ctx_exe or _ctx_executable()
+    settings = prepare_claude(workspace_root, exe)
     # The explorer agent lives alongside the hooks for the session's lifetime.
     agent_file = _install_explorer_agent(workspace_root)
+    proxy_proc: subprocess.Popen | None = None
+    child_env: dict[str, str] | None = None
     try:
+        if use_proxy:
+            proxy_proc, child_env = _start_proxy(workspace_root, exe)
         if not _claude_supports_settings(claude):
             print(
                 "ctx wrap: this claude build lacks --settings; "
                 "temporarily merging into .claude/settings.json (restored on exit)",
                 file=sys.stderr,
             )
-            return _wrap_claude_merged(workspace_root, settings, claude, agent_args)
+            return _wrap_claude_merged(workspace_root, settings, claude, agent_args, child_env)
 
         tmp = tempfile.NamedTemporaryFile(
             "w", prefix="ctx-wrap-", suffix=".json", delete=False, encoding="utf-8"
@@ -115,18 +185,25 @@ def wrap_claude(workspace_root: Path, agent_args: list[str], ctx_exe: str | None
             tmp.close()
             # Inherit stdio so interactive sessions work.
             proc = subprocess.run(
-                [claude, "--settings", tmp.name, *agent_args], cwd=workspace_root
+                [claude, "--settings", tmp.name, *agent_args],
+                cwd=workspace_root,
+                env=child_env,
             )
             return proc.returncode
         finally:
             with contextlib.suppress(OSError):
                 os.unlink(tmp.name)
     finally:
+        _stop_proxy(proxy_proc)
         _remove_explorer_agent(agent_file)
 
 
 def _wrap_claude_merged(
-    workspace_root: Path, settings: dict, claude: str, agent_args: list[str]
+    workspace_root: Path,
+    settings: dict,
+    claude: str,
+    agent_args: list[str],
+    child_env: dict[str, str] | None = None,
 ) -> int:
     """Fallback for claude builds without --settings: merge hooks into the
     workspace settings file, run, then restore the previous state exactly."""
@@ -139,7 +216,9 @@ def _wrap_claude_merged(
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-        return subprocess.run([claude, *agent_args], cwd=workspace_root).returncode
+        return subprocess.run(
+            [claude, *agent_args], cwd=workspace_root, env=child_env
+        ).returncode
     finally:
         if original is None:
             path.unlink(missing_ok=True)
