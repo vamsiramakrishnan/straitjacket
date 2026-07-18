@@ -414,3 +414,88 @@ def test_cli_dense_rendering_identity_is_deterministic(
     main(argv)
     out_b = capsys.readouterr().out
     assert out_a == out_b  # dense re-runs of identical bytes: byte-identical
+
+
+# ------------------------------------------------------------- reflex v2
+def test_edit_disarms_starvation(tmp_path):
+    """run → digest → EDIT → re-run is verification, not starvation (the
+    spec3 round-2 false-positive class)."""
+    from ctx import reflex
+
+    ws = tmp_path
+    (ws / ".ctx-session-reads").mkdir()
+    reflex.note_intervention(ws, "pytest tests/x.py", "abc123def456")
+    reflex.note_edit(ws)  # the model edited code
+    assert reflex.check_command(ws, "python -m pytest tests/x.py -v") is None
+    ledger = ws / ".ctx-session-reads" / "reflex-outcomes.jsonl"
+    assert not ledger.exists()  # no starvation event, no densify action
+
+
+def test_rerun_without_edit_still_scores(tmp_path):
+    from ctx import reflex
+
+    ws = tmp_path
+    (ws / ".ctx-session-reads").mkdir()
+    reflex.note_intervention(ws, "pytest tests/x.py", "abc123def456")
+    assert reflex.check_command(ws, "python -m pytest tests/x.py | head -50") == "densify"
+
+
+def test_next_digest_rearms_after_edit(tmp_path):
+    """edit disarms; the following run's digest re-arms; a slicer re-run
+    after THAT digest scores starvation again."""
+    from ctx import reflex
+
+    ws = tmp_path
+    (ws / ".ctx-session-reads").mkdir()
+    reflex.note_intervention(ws, "pytest tests/x.py", "aaa111aaa111")
+    reflex.note_edit(ws)
+    assert reflex.check_command(ws, "pytest tests/x.py") is None  # verification
+    reflex.note_intervention(ws, "pytest tests/x.py", "bbb222bbb222")  # its digest
+    assert reflex.check_command(ws, "pytest tests/x.py --tb=line") == "densify"
+
+
+def test_densify_latch_survives_disarm(tmp_path):
+    """A genuinely-starved signature keeps its dense rendering through
+    later edit cycles (latching by design)."""
+    from ctx import reflex
+
+    ws = tmp_path
+    (ws / ".ctx-session-reads").mkdir()
+    sig = "pytest tests/x.py"
+    reflex.note_intervention(ws, sig, "aaa111aaa111")
+    assert reflex.check_command(ws, "pytest tests/x.py | tail -5") == "densify"
+    reflex.note_edit(ws)
+    assert reflex.check_command(ws, "pytest tests/x.py") is None  # no new event
+    assert reflex.densify_latched(ws, sig) is True  # rendering stays dense
+
+
+def test_hook_edit_tool_disarms_and_allows(tmp_path):
+    """End-to-end: an Edit tool event through the claude-code hook disarms
+    the signature and emits a valid allow decision."""
+    import io
+    import json as _json
+    import sys as _sys
+
+    from ctx import reflex
+    from ctx.hook import main_pre_tool_use
+
+    ws = tmp_path
+    (ws / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    (ws / ".ctx-session-reads").mkdir()
+    reflex.note_intervention(ws, "pytest tests/x.py", "abc123def456")
+
+    payload = _json.dumps({
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(ws / "mod.py")},
+        "cwd": str(ws),
+    })
+    old_in, old_out = _sys.stdin, _sys.stdout
+    _sys.stdin, _sys.stdout = io.StringIO(payload), io.StringIO()
+    try:
+        assert main_pre_tool_use(flavor="claude-code") == 0
+        out = _sys.stdout.getvalue()
+    finally:
+        _sys.stdin, _sys.stdout = old_in, old_out
+    decision = _json.loads(out)
+    assert decision  # exactly one valid JSON decision
+    assert reflex.check_command(ws, "pytest tests/x.py") is None  # disarmed

@@ -930,6 +930,20 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
         pass
 
     lowered = tool_name.lower()
+
+    # Reflex v2 (spec3 round-2 finding): an Edit/Write disarms starvation
+    # detection — run → census → edit → re-run is healthy verification, and
+    # v1 counted it as starvation (6 spurious events on the referee). Pure
+    # observation: always allow, never rewrite, fail-open.
+    if "edit" in lowered or "write" in lowered or lowered in ("create_file", "replace_file_content"):
+        try:
+            from ctx import reflex
+
+            reflex.note_edit(workspace_root)
+        except Exception:
+            pass
+        return dict(DECISION_ALLOW)
+
     if "command" in lowered or lowered in ("bash", "shell", "exec"):
         command = ""
         command_key = None

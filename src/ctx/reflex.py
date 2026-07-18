@@ -310,8 +310,38 @@ def note_intervention(
         rec["last_run"] = str(run_short_id) if run_short_id else None
         rec["hints"] = int(rec.get("hints") or 0) + max(0, int(hints))
         rec["starved"] = False
+        # v2 (spec3 round-2 finding): the intervention ARMS the signature.
+        # Only an armed signature can score starvation; an Edit/Write
+        # disarms (note_edit) because run → census → edit → re-run is the
+        # healthy verification loop, not the slicer flail.
+        rec["armed"] = True
         state["interventions"][signature] = rec
         _write_state(ws_root, state)
+    except Exception:
+        pass
+
+
+def note_edit(ws_root: Path | str | None) -> None:
+    """An Edit/Write happened: disarm every intervened signature. The next
+    re-run of each is verification of the edit, not starvation; the run's
+    own digest re-arms via :func:`note_intervention`. Deliberately coarse
+    (any edit disarms all signatures): mapping edited paths to tested
+    signatures is guesswork, and the asymmetric loss prior says false
+    negatives (missed starvation, costs tokens) beat false positives
+    (spurious densify + polluted [digest_density] training data). Fail-open."""
+    if ws_root is None:
+        return
+    try:
+        state = _normalized(read_state(ws_root))
+        if not state["interventions"]:
+            return
+        changed = False
+        for rec in state["interventions"].values():
+            if isinstance(rec, dict) and rec.get("armed", True):
+                rec["armed"] = False
+                changed = True
+        if changed:
+            _write_state(ws_root, state)
     except Exception:
         pass
 
@@ -335,6 +365,11 @@ def check_command(ws_root: Path | str | None, command: str) -> str | None:
         state = _normalized(read_state(ws_root))
         rec = state["interventions"].get(sig)
         if not isinstance(rec, dict):
+            return None
+        # v2: an Edit/Write since the digest disarmed this signature — the
+        # re-run is verification, not starvation. (Default True keeps v1
+        # state files and the hook/cli same-re-run dedup working.)
+        if not rec.get("armed", True):
             return None
         fresh = not bool(rec.get("starved"))
         rec["starved"] = True
