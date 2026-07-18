@@ -26,6 +26,7 @@ import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 _CHUNK = 8192  # relay granularity: small enough to preserve SSE latency
@@ -270,13 +271,14 @@ class _Observer:
 class _ProxyServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
-    # Set by _make_server:
-    ctx_upstream = None  # urlsplit result
-    ctx_observer: _Observer | None = None
-    ctx_ssl: ssl.SSLContext | None = None
-    ctx_pool: list | None = None  # idle upstream connections
-    ctx_pool_lock: threading.Lock | None = None
-    ctx_rescue = None  # RescueState when Tier-1 rescue is opted in
+    # Dynamic server slots, always set by _make_server before serving —
+    # typed Any because their None defaults never survive construction.
+    ctx_upstream: Any = None  # urlsplit result
+    ctx_observer: Any = None  # _Observer
+    ctx_ssl: Any = None  # ssl.SSLContext
+    ctx_pool: Any = None  # list of idle upstream connections
+    ctx_pool_lock: Any = None  # threading.Lock
+    ctx_rescue: Any = None  # RescueState when Tier-1 rescue is opted in
 
 
 class _RelayHandler(BaseHTTPRequestHandler):
@@ -523,7 +525,7 @@ def serve_proxy(
 ) -> None:
     """Run the observer proxy in the foreground until SIGINT."""
     server = _make_server(port, upstream, state_dir, workspace_id, rescue_pct)
-    host, bound_port = server.server_address[:2]
+    host, bound_port = str(server.server_address[0]), int(server.server_address[1])
     print(f"ctx proxy: listening on {host}:{bound_port} -> {upstream}", file=sys.stderr)
     if server.ctx_rescue is not None:
         print(

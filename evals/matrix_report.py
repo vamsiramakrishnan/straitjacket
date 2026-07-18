@@ -29,20 +29,18 @@ import argparse
 import json
 import pathlib
 
-# Published per-MTok prices, for cost *decomposition* only (totals always
-# come from the host-reported costUSD). write = 1.25x input, read = 0.1x.
+# Single source of truth for prices lives in the package (ctx.scorecard);
+# this report reuses it so the two can never drift.
+import sys as _sys
+
+_sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
+from ctx.scorecard import PRICES as _SC_PRICES  # noqa: E402
+from ctx.scorecard import _price_key  # noqa: E402
+
 PRICES = {
-    "sonnet": {"in": 3.0, "out": 15.0, "write": 3.75, "read": 0.30},
-    "haiku": {"in": 1.0, "out": 5.0, "write": 1.25, "read": 0.10},
-    "opus": {"in": 15.0, "out": 75.0, "write": 18.75, "read": 1.50},
+    k: {"in": v["in"], "out": v["out"], "write": v["write"], "read": v["read"]}
+    for k, v in _SC_PRICES.items()
 }
-
-
-def _price_key(model_id: str) -> str:
-    for key in PRICES:
-        if key in model_id:
-            return key
-    return "sonnet"
 
 
 def read_result(path: pathlib.Path) -> dict | None:

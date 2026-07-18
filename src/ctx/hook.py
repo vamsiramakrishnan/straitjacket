@@ -579,7 +579,7 @@ def classify_command(
         # Single-file grep gets a match cap injected instead of a reroute.
         capped = _grep_single_file_rewrite(argv, cwd)
         if capped:
-            decision: dict[str, Any] = _deny(_remediation(argv))
+            decision = _deny(_remediation(argv))
             decision["_rewrite"] = {
                 "command": capped,
                 "reason": (
@@ -736,8 +736,8 @@ def classify_read(
         decision: dict[str, Any] = _deny(
             f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline budget).\n"
             + _outline_hint(path_str)
-            + f"Use: ctx get repo:<relative-path> --lines A:B\n"
-            f"or:  ctx search repo:<relative-path> '<pattern>' --context 3" + note
+            + "Use: ctx get repo:<relative-path> --lines A:B\n"
+            "or:  ctx search repo:<relative-path> '<pattern>' --context 3" + note
         )
         if _steering_allows(policy):
             max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))

@@ -10,8 +10,8 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-from dataclasses import dataclass, field
-from typing import Any, Iterator
+from dataclasses import dataclass
+from typing import Any
 
 from ctx.execution import snapshot_file
 from ctx.refs import Ref, parse_ref

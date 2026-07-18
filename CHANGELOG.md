@@ -4,6 +4,33 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.14.0] - 2026-07-18
+
+The cleanup wave: audit with receipts, debt paid down, and Rust exactly
+where measurement says it makes sense.
+
+- **Audit results:** lint debt was 4 findings (fixed, ruff clean); type
+  debt 43 mypy findings → 24 (real fixes in proxy/hook/codeverbs; the
+  runtime-safe residual is declared in `ctx debt` with coordinates).
+  Hand-rolled-vs-library review: the stdlib-first doctrine holds — every
+  remaining hand-rolled piece is deliberate, documented, and has an
+  opportunistic accelerator path (rg, ctags, orjson, jedi, grimp).
+- **Real bug found by the audit:** the no-`--settings` fallback path
+  merged only PreToolUse hooks, silently dropping the emission governor —
+  fixed to merge every stage.
+- **Rust where it makes sense (`native/ctx-hook-native`):** CPython's
+  startup floor is a measured ~29 ms and PostToolUse fires on every
+  Bash/Read/Edit/Write (~80 spawns/session ≈ 2.7 s). The Rust shim does
+  identical work in ~3 ms (12×), is selected opportunistically
+  (CTX_NATIVE_HOOK / PATH), and is parity-tested byte-for-byte against
+  the canonical Python — including shared flock'd tier state and both
+  host dialects. A full Rust rewrite remains declined by measurement:
+  hook time is ~1% of session wall-clock.
+- Price tables deduplicated (matrix_report now imports ctx.scorecard's).
+- **README overhauled:** quickstart, the four-gate model, current verb
+  table (seq/gain/debt/outlines), the five-system stack comparison with
+  receipts, and the regime scoreboard.
+
 ## [0.13.0] - 2026-07-18
 
 The Tura wave: round economy. Wire replay over five real sessions showed

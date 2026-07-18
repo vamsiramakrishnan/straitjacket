@@ -48,7 +48,7 @@ def _within_root(ws: Workspace, module_path: object) -> str | None:
     if module_path is None:
         return None
     try:
-        return Path(module_path).resolve().relative_to(ws.root.resolve()).as_posix()
+        return Path(str(module_path)).resolve().relative_to(ws.root.resolve()).as_posix()
     except (ValueError, OSError):
         return None
 

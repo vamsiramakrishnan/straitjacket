@@ -1,12 +1,47 @@
 # straitjacket 🧥
 
-**Status:** v0.13.0 (pre-1.0, minor bump per mechanism wave) · 269 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.14.0 (pre-1.0, minor bump per mechanism wave) · 274 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
-An artifact-backed, repository-aware context containment harness and execution broker for the Antigravity engine.
-straitjacket forces tight, unyielding structural boundaries on wild, unbounded tool outputs. When an AI agent attempts to run massive cat pipelines, recursive directory listings, or verbose test suites, straitjacket intercepts, digests, and summarizes the output, registering only a tiny, deterministic artifact handle in the model transcript.
+An artifact-backed, repository-aware context containment harness for coding
+agents (Claude Code and Antigravity). Unbounded tool output becomes an
+immutable artifact plus a bounded, deterministic, span-addressed digest —
+the transcript stays an *index* over evidence, never a warehouse of it.
+
+The operating thesis, proven wave by wave in `evals/`: **skills bias, hooks
+bound, mechanisms measure.** Doctrine nudges the model, structural hooks
+enforce budgets it can't forget, and a wire-level observer measures every
+session so the next mechanism is built on receipts, not vibes. Every
+omission — bytes, transcript blocks, or engineering decisions — keeps an
+address (`run:`/span/elided-file/`ctx debt`).
+
+## ⚡ Quickstart
+
+```bash
+pip install -e .            # runtime (stdlib-only core; extras optional)
+ctx init                    # write ctx.toml + .ctxignore
+ctx wrap claude --proxy -- -p "fix the failing tests"   # one harnessed session
+ctx stats --session         # wire scorecard: rounds, cache, effort mix
+ctx gain                    # cumulative containment savings
+```
+
+`ctx wrap` is ephemeral (hooks via --settings, zero residue); the
+Antigravity plugin (`ctx antigravity install`) is the persistent form.
+Opt-in extras: `--rescue-pct 70` (lossless mid-session rescue),
+`[map]`/`[code]`/`[fast]` pip extras, `rg`/`ctags` binaries, and a Rust
+post-hook accelerator (`native/ctx-hook-native`, ~3 ms vs Python's ~29 ms
+startup floor — parity-tested byte-for-byte, never required).
+
+## 🚪 The four gates
+
+| Gate | Question it answers | Mechanisms (all shipped) |
+|---|---|---|
+| **1 · Birth** | can this output flood at the source? | `ctx run`/`seq` capture, deterministic digests, lint/pytest/log profiles, anticipatory inlining, failure-asymmetric budgets |
+| **2 · Entry** | what actually crosses the wire? | Tier-0 byte-exact observer proxy: `window.json`, `wire.jsonl` (usage, timing, tool census), scorecards |
+| **3 · Residence** | what may stay, and for how long? | session read ledger, window-pressure loop, priced steering, epoch-latched lossless rescue, checkpoints |
+| **4 · Emission** | what does the model put back? | emission governor tiers, cite-don't-quote, solution ladder + backward planning (each A/B-adopted), deliverable metrics |
 
 ## 🔒 The Core Invariant
-> Every potentially unbounded operation MUST either execute inside straitjacket, returning a bounded artifact digest capabilitiy, or be flatly rejected before execution.
+> Every potentially unbounded operation MUST either execute inside straitjacket, returning a bounded artifact digest, or be flatly rejected before execution.
 
 * **Zero Token Bloat** *(shipped)*: Multi-megabyte outputs are captured at the source. The model transcript functions as an index over repository state and artifacts, not a warehouse of raw payload bytes.
 * **Absolute Determinism** *(shipped)*: Timings, temporary paths, ANSI noise, and locale differences are stripped from model-visible output; identical bytes yield byte-identical digests, keeping prompt-cache prefixes stable across sessions.
@@ -127,7 +162,7 @@ straitjacket maps directly to Antigravity's extension architecture, supporting s
 ╚════════════════════════════════════════════════════════════════════╝
 ```
 
-## 1. Deployment Strengths
+## 🧩 Deployment Strengths
 
 | Mode | Integration | Guarantee | Status |
 |---|---|---|---|
@@ -155,7 +190,22 @@ reference grammar has two address spaces:
 the isolated broker owns the store.)*
 
 ## 🛠️ The Unified Verbs
-The entire Model-facing MCP layer is frozen into one stable tool surface (**ctx**), handling operations entirely via parameter states instead of dynamic tool injection.
+
+Full surface at a glance (details for the core verbs below; flags in
+`plugins/antigravity/skills/ctx-harness/references/verbs.md`):
+
+| Verb | One line |
+|---|---|
+| `run` / `seq` | birth-gate capture; `seq` runs a declared N-step tree in one round, each step addressable |
+| `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/...`) · shape stats, or a **priced symbol outline** on a single code file |
+| `map` / `def` / `refs` / `diag` | ranked priced codebase map · symbol definition/reference/diagnostic verbs |
+| `diff run:A run:B` | regression delta between captured runs, span-backed |
+| `stats --session` / `gain` | wire scorecard (rounds, cache classes, effort mix) · cumulative savings |
+| `checkpoint` / `pin` / `gc` | cache epochs · retention leases · mark-and-sweep |
+| `debt` | declared-omission ledger for deferred engineering decisions |
+| `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages |
+
+The Model-facing MCP layer is frozen into one stable tool surface (**ctx**), handling operations entirely via parameter states instead of dynamic tool injection.
 
 ```json
 {
