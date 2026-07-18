@@ -38,6 +38,10 @@ class Budgets:
     max_inline_lines: int = 240
     max_matches: int = 80
     session_read_budget_bytes: int = 262144
+    # Window-pressure threshold (percent): when the Tier-0 proxy reports the
+    # context window at or above this fullness, the guard tightens its inline
+    # and session read budgets (see ctx.hook._apply_window_pressure).
+    window_pressure_pct: int = 70
 
 
 @dataclass(frozen=True)
