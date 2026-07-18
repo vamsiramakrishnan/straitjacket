@@ -1,6 +1,6 @@
 # straitjacket 🧥
 
-**Status:** v0.12.0 (pre-1.0, minor bump per mechanism wave) · 262 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.13.0 (pre-1.0, minor bump per mechanism wave) · 269 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
 An artifact-backed, repository-aware context containment harness and execution broker for the Antigravity engine.
 straitjacket forces tight, unyielding structural boundaries on wild, unbounded tool outputs. When an AI agent attempts to run massive cat pipelines, recursive directory listings, or verbose test suites, straitjacket intercepts, digests, and summarizes the output, registering only a tiny, deterministic artifact handle in the model transcript.

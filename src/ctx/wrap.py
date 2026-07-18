@@ -39,7 +39,11 @@ _OUTPUT_DISCIPLINE = (
     "(1) not needed at all, (2) reuse what already exists here, (3) the "
     "standard library, (4) a one-liner, (5) minimal new code. Be lazy about "
     "the solution, never about reading. If you deliberately defer an "
-    "improvement, declare it in one line instead of building it."
+    "improvement, declare it in one line instead of building it. "
+    "Backward planning: before your first action, state the final "
+    "acceptance check (what command proves the task done), then the step "
+    "immediately before it, and plan backward to your first action; then "
+    "execute forward without re-planning."
 )
 
 

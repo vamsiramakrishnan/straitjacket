@@ -4,6 +4,31 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.13.0] - 2026-07-18
+
+The Tura wave: round economy. Wire replay over five real sessions showed
+32% of tool-bearing rounds were mechanical bash-after-bash chains (70% on
+lint-fix, 65% on creation) — each ~1.5-2s ttfb plus a suffix cache write.
+
+- `ctx seq`: declared command trees — N steps, one round, `&&` semantics,
+  every step a full birth-gate capture addressable as `run:<id>`; failing
+  step's digest rides in full, green trees stay terse. The runtime-owner
+  advantage (Tura's macro execution) taken at harness level, losslessly.
+- Scorecard: `rounds` is now the headline metric; `rescue_recovery`
+  (first rescued round, rounds after, blocks elided) adopted from Tura's
+  best measurement.
+- **Backward planning adopted into the discipline prompt after a held-out
+  A/B win on every axis (haiku, fresh task): -17% cost, -16% turns, -14%
+  time, -18% output, 9 tests vs 7. PREFIX_VERSION 3 — one cold cache
+  write per model, disclosed.** Skill rule 14 teaches the same plus seq.
+- Benchmark manifest (`evals/bench-manifest.json` + test): task
+  definitions frozen behind hashes; held-out rule recorded — a mechanism
+  tuned against a task records its win only on an unseen variant.
+- Declared in `ctx debt`: state-projection context (needs a runtime
+  channel hosts do not expose) and an invalidation-metric investigation
+  (first nonzero readings look like parallel-request interleaving, not
+  real prefix regressions).
+
 ## [0.12.0] - 2026-07-18
 
 The open-threads wave: both remaining designed-but-unbuilt items, each

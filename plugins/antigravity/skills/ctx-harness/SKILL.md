@@ -38,6 +38,10 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     minimal new code. Be lazy about the solution, never about reading.
     Deliberately deferred improvements are declared
     (`ctx debt add "<note>" --ref repo:file:line`), never silently skipped.
+14. Plan backward: state the final acceptance check first, then the step
+    before it, back to your first action — then execute forward without
+    re-planning. Mechanical chains you can declare upfront run as one
+    round via `ctx seq`.
 
 ## Verb index
 
