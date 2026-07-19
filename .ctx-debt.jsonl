@@ -36,3 +36,4 @@
 {"id": "6db9f7011b", "op": "resolve"}
 {"id": "6611d8c899", "op": "resolve"}
 {"id": "19520be4f7", "op": "resolve"}
+{"id": "fac2339eff", "note": "q fails-stage precondition opacity (live A/B receipt: 3 identical dry joins + 1 malformed before abandonment): 'fails last' with no derivable run must auto-capture the family's test command under the birth gate OR emit a teaching empty-result digest naming the precondition; then n>=3 taught-vs-untaught referee", "op": "add", "ref": "src/ctx/facts.py"}
