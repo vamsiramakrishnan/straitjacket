@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="t d">
+  <title id="t">Reading path for straitjacket design docs</title>
+  <desc id="d">Two shipped mechanism theses (PRICED-CONTEXT, LOSSLESS-RESCUE), then the current architecture wave in reading order: LADDERS, REFLEX, EDC, ALGEBRA.</desc>
+  <rect width="1200" height="300" rx="14" fill="#0A0C10"/>
+  <rect x="0.5" y="0.5" width="1199" height="299" rx="14" fill="none" stroke="#1C232D"/>
+  <text x="56" y="52" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1.5" fill="#3FB950">SHIPPED THESES</text>
+  <rect x="56" y="68" width="320" height="64" rx="8" fill="#0F141B" stroke="#1E3A28"/>
+  <text x="216" y="96" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#E6EDF3">PRICED-CONTEXT</text>
+  <text x="216" y="118" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#58606A">price at decision time</text>
+
+  <rect x="416" y="68" width="320" height="64" rx="8" fill="#0F141B" stroke="#1E3A28"/>
+  <text x="576" y="96" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#E6EDF3">LOSSLESS-RESCUE</text>
+  <text x="576" y="118" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#58606A">elide bytes, keep addresses</text>
+
+  <text x="800" y="104" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#58606A">…every mechanism prices, none forgets</text>
+  <text x="56" y="188" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1.5" fill="#F0B429">THE CURRENT WAVE · READ IN ORDER</text>
+  <rect x="56" y="204" width="240" height="64" rx="8" fill="#0F141B" stroke="#463A18"/>
+  <text x="176" y="232" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#E6EDF3">LADDERS</text>
+  <text x="176" y="254" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#58606A">the conditionality audit</text>
+
+  <text x="304" y="242" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" fill="#F0B429">→</text>
+  <rect x="338" y="204" width="240" height="64" rx="8" fill="#0F141B" stroke="#463A18"/>
+  <text x="458" y="232" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#E6EDF3">REFLEX</text>
+  <text x="458" y="254" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#58606A">closed-loop control</text>
+
+  <text x="586" y="242" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" fill="#F0B429">→</text>
+  <rect x="620" y="204" width="240" height="64" rx="8" fill="#0F141B" stroke="#463A18"/>
+  <text x="740" y="232" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#E6EDF3">EDC</text>
+  <text x="740" y="254" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#58606A">evidence delivery</text>
+
+  <text x="868" y="242" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" fill="#F0B429">→</text>
+  <rect x="902" y="204" width="240" height="64" rx="8" fill="#0F141B" stroke="#463A18"/>
+  <text x="1022" y="232" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#E6EDF3">ALGEBRA</text>
+  <text x="1022" y="254" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#58606A">facts + composition</text>
+</svg>

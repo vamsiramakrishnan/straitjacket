@@ -1,4 +1,6 @@
-<sub><a href="README.md">straitjacket / docs</a></sub>
+<img src="../assets/readme/docs/ladders.svg" width="100%" alt="Ladders — the conditionality audit. Architecture wave, doc 1 of 4."/>
+
+<sub><a href="README.md">« straitjacket / docs</a></sub>
 
 # Ladders: the conditionality audit
 

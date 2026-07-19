@@ -1,19 +1,26 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="150" viewBox="0 0 1200 150" role="img" aria-labelledby="title desc">
-  <title id="title">straitjacket docs</title>
-  <desc id="desc">Design notes and mechanism specs for straitjacket. House rule: bytes become addresses; every claim traces to a receipt.</desc>
-  <rect width="1200" height="150" rx="14" fill="#0A0C10"/>
-  <rect x="0.5" y="0.5" width="1199" height="149" rx="14" fill="none" stroke="#1C232D"/>
-
-  <text x="56" y="76" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="40" font-weight="700">
-    <tspan fill="#E6EDF3">straitjacket</tspan>
-    <tspan fill="#58606A"> / </tspan>
-    <tspan fill="#F0B429">docs</tspan>
-  </text>
-  <text x="56" y="112" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#7D8590">design notes · mechanism specs · every claim backed by a receipt in evals/</text>
-
-  <text x="1144" y="76" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">
-    <tspan fill="#58606A">bytes</tspan>
-    <tspan fill="#F0B429"> → </tspan>
-    <tspan fill="#3FB950">addresses</tspan>
-  </text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="200" viewBox="0 0 1200 200" role="img" aria-labelledby="t d">
+  <title id="t">straitjacket docs</title>
+  <desc id="d">Design notes and mechanism specs. Every claim backed by a receipt in evals; bytes become addresses. Current wave: LADDERS, REFLEX, EDC, ALGEBRA.</desc>
+  <rect width="1200" height="200" rx="14" fill="#0A0C10"/>
+  <rect x="0.5" y="0.5" width="1199" height="199" rx="14" fill="none" stroke="#1C232D"/>
+  <text x="56" y="62" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" letter-spacing="1.5" fill="#58606A">DESIGN NOTES · MECHANISM SPECS</text>
+  <text x="56" y="118" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="44" font-weight="700"><tspan fill="#E6EDF3">straitjacket</tspan><tspan fill="#58606A"> / </tspan><tspan fill="#F0B429">docs</tspan></text>
+  <rect x="59" y="132" width="90" height="4" fill="#F0B429"/>
+  <text x="56" y="168" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#7D8590">every claim backed by a receipt in evals/ · <tspan fill="#58606A">bytes</tspan> <tspan fill="#F0B429">→</tspan> <tspan fill="#3FB950">addresses</tspan></text>
+  <rect x="668" y="58" width="106" height="56" rx="8" fill="#0F141B" stroke="#232B36"/>
+  <text x="721" y="82" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" fill="#E6EDF3">LADDERS</text>
+  <text x="721" y="102" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#58606A">audit</text>
+  <text x="782" y="90" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#F0B429">→</text>
+  <rect x="796" y="58" width="106" height="56" rx="8" fill="#0F141B" stroke="#232B36"/>
+  <text x="849" y="82" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" fill="#E6EDF3">REFLEX</text>
+  <text x="849" y="102" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#58606A">closed loop</text>
+  <text x="910" y="90" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#F0B429">→</text>
+  <rect x="924" y="58" width="106" height="56" rx="8" fill="#0F141B" stroke="#232B36"/>
+  <text x="977" y="82" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" fill="#E6EDF3">EDC</text>
+  <text x="977" y="102" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#58606A">delivery</text>
+  <text x="1038" y="90" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#F0B429">→</text>
+  <rect x="1052" y="58" width="106" height="56" rx="8" fill="#0F141B" stroke="#232B36"/>
+  <text x="1105" y="82" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" fill="#E6EDF3">ALGEBRA</text>
+  <text x="1105" y="102" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#58606A">composition</text>
+  <text x="721" y="44" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" letter-spacing="1" fill="#58606A">THE CURRENT WAVE</text>
 </svg>

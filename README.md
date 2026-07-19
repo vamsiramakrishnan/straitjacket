@@ -183,6 +183,14 @@ timestamps never enter content identity.
 
 ## 💾 Digest anatomy
 
+<div align="center">
+
+<img src="assets/readme/containment.gif" width="100%" alt="Animated terminal: ctx run captures a 20,001-line flood streaming past; it collapses through the gate into a six-line logtemplate/v1 digest — 304,113 tokens become ~210 model-visible, and the needle line keeps an exact retrieval address."/>
+
+<sub>The loop in six seconds: flood → gate → digest. (Editable static source: [`containment.svg`](assets/readme/containment.svg))</sub>
+
+</div>
+
 Real output. First, the v0.20 head/tail window on a 4,809-line run with no
 error keywords — note the tail carrying the conclusions, and the omitted
 middle keeping an address:

@@ -1,4 +1,6 @@
-<sub><a href="README.md">straitjacket / docs</a></sub>
+<img src="../assets/readme/docs/lossless-rescue.svg" width="100%" alt="Lossless mid-session rescue — the rewriting proxy's last edge, without its costs. Mechanism thesis, shipped."/>
+
+<sub><a href="README.md">« straitjacket / docs</a></sub>
 
 # Lossless mid-session rescue: taking the rewriting proxy's last edge, without its costs
 

@@ -1,4 +1,6 @@
-<sub><a href="README.md">straitjacket / docs</a></sub>
+<img src="../assets/readme/docs/edc.svg" width="100%" alt="The Evidence Delivery Controller. Architecture wave, doc 3 of 4."/>
+
+<sub><a href="README.md">« straitjacket / docs</a></sub>
 
 # Evidence Delivery Controller (EDC)
 
