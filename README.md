@@ -1,5 +1,9 @@
 <div align="center">
-
+[![PyPI](https://img.shields.io/pypi/v/ctx-harness?label=PyPI)](...)
+[![Python](https://img.shields.io/pypi/pyversions/ctx-harness)](...)
+[![Tests](https://github.com/vamsiramakrishnan/straitjacket/actions/workflows/test.yml/badge.svg)](...)
+[![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](...)
+[![Docs](https://img.shields.io/badge/docs-architecture-blue)](...)
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero.svg">
   <img src="assets/readme/hero-light.svg" width="100%" alt="straitjacket — context containment harness for coding agents. A 304,113-token log becomes a ~210-token digest, and the one anomalous line keeps an exact retrieval address.">
