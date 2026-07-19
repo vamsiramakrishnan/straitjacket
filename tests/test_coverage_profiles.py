@@ -227,3 +227,29 @@ def test_gotest_v2_census_and_implicated_frame(tmp_path):
     assert "failing: TestMethodNotAllowedNoRoute · stdout:L1" in body
     assert "implicated frame stdout:L6: gin.go:693" in body
     assert "assertions.go" not in body and "testing.go" not in body
+
+
+def test_unittest_profile_accepts_ok_with_metadata(tmp_path):
+    """PR #5 review: `OK (skipped=1)` is a standard verdict; rejecting it
+    dropped whole suites back to text/v1."""
+    from ctx.digest.moreprofs import UnittestProfile
+
+    out = ".s..\n----------------------------------------------------------------------\nRan 4 tests in 0.100s\n\nOK (skipped=1)\n"
+    ctx = _ctx_for(tmp_path, out, argv=("python", "-m", "unittest"))
+    assert UnittestProfile().detect(ctx)
+    assert "ran 4 · failures 0 · errors 0" in UnittestProfile().render(ctx)
+
+
+def test_gotest_nonverbose_passed_count_not_claimed(tmp_path):
+    """PR #5 review: non-verbose go test prints no --- PASS lines; a
+    'passed 0' claim under an (exact) label would be false."""
+    from ctx.digest.moreprofs import GoTestProfile
+
+    out = (
+        "--- FAIL: TestX (0.00s)\n    x_test.go:9: boom\n"
+        "FAIL\nFAIL\texample.com/m\t0.01s\n"
+    )
+    ctx = _ctx_for(tmp_path, out, argv=("go", "test"), exit_code=1)
+    body = GoTestProfile().render(ctx)
+    assert "passed" not in body.split("coverage:")[0]
+    assert "failed 1" in body

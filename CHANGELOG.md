@@ -55,8 +55,10 @@ the record (evals/coverage-corpus-2026-07-19.md).
   priority list mined from real sessions). Read-only by construction;
   read results counted under the read path, never shape-digested.
   Measured: the naive dev session replays at 46% residency saved; spec3
-  harnessed archives replay at zero delta with 11/11 and 42/42
-  downstream-used facts inline. Pathway mining receipts:
+  harnessed archives replay at zero delta with 71/71 and 21/21
+  downstream-used facts inline (figures regenerated after review fixes:
+  already-harnessed digests are fact-scored — they ARE the regression
+  surface — and read-path results are excluded). Pathway mining receipts:
   evals/pathways-spec3-2026-07-19.md (70% of commands are pytest; 15
   starvations, zero retrieval-verb adoption — command-channel
   continuations filed as the fix).

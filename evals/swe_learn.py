@@ -221,22 +221,47 @@ def reproduce_failure(inst: dict, work: Path) -> tuple[str, int] | None:
 
 
 def score_digest(digest: str, raw: str, gold: dict[str, list[tuple[int, int]]]) -> dict:
-    """Gold-anchored evidence: for each gold file, is it named inline in
-    the digest, present in raw (one ctx-get hop), or absent entirely?"""
-    inline = hop = absent = 0
+    """Gold-anchored evidence per gold file. Inline requires real evidence:
+    the full repo-relative path, or a basename:LINE / `File "...", line N`
+    coordinate — a bare basename anywhere in prose is not credit. When a
+    coordinate lands within ±20 lines of a gold hunk, that's a region hit
+    (the digest didn't just name the file, it pointed at the fix site).
+    One-hop keeps the loose containment test: any mention in raw means one
+    ``ctx get`` recovers it."""
+    _REGION_SLOP = 20
+    inline = hop = absent = region_hits = 0
     detail = {}
-    for f in gold:
-        base = f.rsplit("/", 1)[-1]
-        if f in digest or base in digest:
+    for f, regions in gold.items():
+        base = re.escape(f.rsplit("/", 1)[-1])
+        coords = [
+            int(n)
+            for n in re.findall(rf"{base}:(\d+)", digest)
+            + re.findall(rf'{base}", line (\d+)', digest)
+        ]
+        if f in digest or coords:
             inline += 1
-            detail[f] = "inline"
-        elif f in raw or base in raw:
+            verdict = "inline"
+            if any(
+                a - _REGION_SLOP <= n <= b + _REGION_SLOP
+                for n in coords
+                for a, b in regions
+            ):
+                region_hits += 1
+                verdict = "inline+region"
+            detail[f] = verdict
+        elif f in raw or f.rsplit("/", 1)[-1] in raw:
             hop += 1
             detail[f] = "one-hop"
         else:
             absent += 1
             detail[f] = "absent"
-    return {"inline": inline, "one_hop": hop, "absent": absent, "files": detail}
+    return {
+        "inline": inline,
+        "one_hop": hop,
+        "absent": absent,
+        "region_hits": region_hits,
+        "files": detail,
+    }
 
 
 def main() -> None:
@@ -297,8 +322,9 @@ def main() -> None:
             # digest (THE actionable defect class — the profile-improvement
             # queue); absent = not in the output at all — that evidence
             # belongs to the search lane (code verbs / repo map).
+            region = f" ({score['region_hits']} at fix region)" if score["region_hits"] else ""
             print(
-                f"  gold: {score['inline']} digest-inline · "
+                f"  gold: {score['inline']} digest-inline{region} · "
                 f"{score['one_hop']} digest-dropped (DEFECT) · "
                 f"{score['absent']} not-in-output (search-lane)"
             )

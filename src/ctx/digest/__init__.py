@@ -142,6 +142,7 @@ def digest_output(
     stderr: str = "",
     *,
     is_error: bool = False,
+    argv: list[str] | None = None,
 ) -> tuple[str, str]:
     """Digest an already-produced tool result (not a shell capture).
 
@@ -151,10 +152,14 @@ def digest_output(
     :func:`render_run_digest` to produce a bounded digest carrying a working
     ``ctx get run:<short>#stdout`` retrieval ref.
 
-    ``argv`` is ``[tool_name]`` only — never the tool's arguments — so the
-    command-anchored profiles (git-diff, pytest, search, build) decline and the
-    result is classified purely on its *shape*. That is the if-ladder cure: a
-    new tool needs no new code because dispatch is by output shape.
+    By default the manifest ``argv`` is ``[tool_name]`` only — never the
+    tool's arguments — so the command-anchored profiles (git-diff, pytest,
+    search, build) decline and the result is classified purely on its
+    *shape*. That is the if-ladder cure: a new tool needs no new code
+    because dispatch is by output shape. A caller that *knows* the true
+    command (session replay reconstructing a steered `ctx run`) may pass
+    ``argv`` explicitly to restore command-anchored detection; identity is
+    then a pure function of (bytes, argv).
 
     Returns ``(bounded_digest_text, short_run_id)``.
     """
@@ -179,7 +184,7 @@ def digest_output(
         "schema": "ctx.invocation/v1",
         "workspaceId": ws.workspace_id,
         "cwd": ".",
-        "argv": [tool_name],
+        "argv": list(argv) if argv else [tool_name],
         "shell": False,
         "result": {"exitCode": 0, "signal": None, "timedOut": False},
         "streams": {

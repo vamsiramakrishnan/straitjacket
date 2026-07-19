@@ -38,9 +38,13 @@ class GoTestProfile(Profile):
         passes = len(re.findall(r"^--- PASS: ", text, re.MULTILINE))
         pkg_ok = len(re.findall(r"^ok\s", text, re.MULTILINE))
         pkg_fail = len(re.findall(r"^FAIL\s", text, re.MULTILINE))
+        # Non-verbose go test prints no --- PASS lines: a passed count is
+        # only knowable (and only claimed exact) when verbose markers show.
+        verbose = "=== RUN" in text or passes > 0
+        passed_part = f"passed {fmt_int(passes)} · " if verbose else ""
         summary = [
             "summary:",
-            f"  tests (exact): passed {fmt_int(passes)} · failed {fmt_int(len(fails))}"
+            f"  tests (exact): {passed_part}failed {fmt_int(len(fails))}"
             f" · packages ok {pkg_ok} · packages failed {pkg_fail}",
         ]
         shown = 1
@@ -194,8 +198,9 @@ class CargoTestProfile(Profile):
 
 
 _UNITTEST_RAN_RE = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
+# OK may carry metadata: `OK (skipped=1)`, `OK (expected failures=2)`.
 _UNITTEST_VERDICT_RE = re.compile(
-    r"^(?:OK|FAILED \((?P<detail>[^)]+)\))\s*$", re.MULTILINE
+    r"^(?:OK(?: \([^)]+\))?|FAILED \((?P<detail>[^)]+)\))\s*$", re.MULTILINE
 )
 _UNITTEST_FAIL_RE = re.compile(r"^(FAIL|ERROR): (\S+) \(([\w.]+)\)")
 

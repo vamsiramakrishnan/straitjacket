@@ -46,6 +46,24 @@ from pathlib import Path
 from typing import Any
 
 _SLICER_RE = re.compile(r"\|\s*(head|tail|grep|sed|awk|cut|wc)\b")
+_ENV_PREFIX_RE = re.compile(r"^(?:\w+=\S*\s+)*")
+
+
+def _argv_of(call: dict[str, Any]) -> list[str] | None:
+    """Best-effort argv of a recorded Bash command: env-prefix stripped,
+    first pipe segment, shell-split. None when unparseable — dispatch then
+    falls back to output shape, never crashes the replay."""
+    import shlex
+
+    cmd = str(call["input"].get("command") or "").strip()
+    if not cmd:
+        return None
+    first = _ENV_PREFIX_RE.sub("", cmd.split("|", 1)[0].split("&&", 1)[0].strip())
+    try:
+        argv = shlex.split(first)
+    except ValueError:
+        argv = first.split()
+    return argv or None
 _EVAL_OPP_RE = re.compile(r"<<|python3? -c |python3? - ")
 _COORD_RE = re.compile(r"[\w./-]+\.\w+:\d+")
 _NODEID_RE = re.compile(r"[\w./-]+::[\w:]+")
@@ -66,7 +84,7 @@ def parse_transcript(path: str | Path) -> list[dict[str, Any]]:
                 entries.append(json.loads(ln))
             except json.JSONDecodeError:
                 continue  # partial trailing line in a live session file
-    results: dict[str, str] = {}
+    results: dict[str, tuple[str, bool]] = {}
     for d in entries:
         if d.get("type") != "user":
             continue
@@ -78,18 +96,20 @@ def parse_transcript(path: str | Path) -> list[dict[str, Any]]:
                 t = b.get("content")
                 if isinstance(t, list):
                     t = "\n".join(x.get("text", "") for x in t if isinstance(x, dict))
-                results[b.get("tool_use_id")] = t or ""
+                results[b.get("tool_use_id")] = (t or "", bool(b.get("is_error")))
     calls: list[dict[str, Any]] = []
     for d in entries:
         if d.get("type") != "assistant":
             continue
         for b in d.get("message", {}).get("content", []):
             if isinstance(b, dict) and b.get("type") == "tool_use":
+                res, is_err = results.get(b.get("id"), ("", False))
                 calls.append(
                     {
                         "tool": b["name"],
                         "input": b.get("input", {}),
-                        "result": results.get(b.get("id"), ""),
+                        "result": res,
+                        "is_error": is_err,
                     }
                 )
     return calls
@@ -162,8 +182,19 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
         r_tok = estimate_tokens(len(res.encode("utf-8")))
         raw_tok += r_tok
         if "[ctx run:" in res or res.startswith("[ctx "):
+            # Already a ctx digest: passes the gate unchanged — but its
+            # evidence sufficiency IS scorable (this is the regression gate
+            # on sessions the harness actually served): a downstream-used
+            # fact is inline if the digest the model saw carried it, and
+            # one-hop otherwise (raw bytes are in the store by contract).
             already_harnessed += 1
             sim_tok += r_tok
+            for fact in downstream_facts(calls, i):
+                if fact in res:
+                    facts_inline += 1
+                else:
+                    facts_hop += 1
+                    misses.append(fact[:80])
             continue
         if c["tool"] not in ("Bash",) and not c["tool"].startswith("mcp__"):
             # Read/Grep/Glob run under the read path (budgets, native caps),
@@ -173,7 +204,14 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
             sim_tok += r_tok
             profile_tok["read-path"] += r_tok
             continue
-        digest, _short = digest_output(store, ws, c["tool"].lower(), res)
+        # Command-anchored detection: the real steering path hands ctx run
+        # the full argv, so replay must too — shape-only dispatch would
+        # misattribute e.g. quiet go-test output to text/v1.
+        argv = _argv_of(c) if c["tool"] == "Bash" else None
+        digest, _short = digest_output(
+            store, ws, c["tool"].lower(), res, is_error=c.get("is_error", False),
+            argv=argv,
+        )
         d_tok = estimate_tokens(len(digest.encode("utf-8")))
         inline = "output (complete):" in digest
         sim_tok += min(d_tok, r_tok) if inline else d_tok

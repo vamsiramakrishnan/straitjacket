@@ -102,8 +102,8 @@ Our additions, from mechanisms this repo already has:
   model *provably used downstream* as inline vs one-hop against simulated
   digests (src/ctx/replay.py). This is evidence density's cheap sibling:
   it needs no paid runs and no gold labels, and it regression-gates
-  profile changes against archived transcripts (measured: 11/11 and
-  42/42 on spec3 archives). SWE-Explore's gold regions, when we ingest
+  profile changes against archived transcripts (measured: 71/71 and
+  21/21 on spec3 archives, digests fact-scored directly). SWE-Explore's gold regions, when we ingest
   them, upgrade this from "facts used" to "facts needed."
 - **Unresolved-omission rate** — every omission must carry an address
   that resolves; the store can verify this mechanically per digest.
