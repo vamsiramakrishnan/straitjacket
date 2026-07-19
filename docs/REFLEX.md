@@ -93,6 +93,11 @@ deterministically, with the change declared in the output:
 - friction loop → escalate teaching once, then stand down for that
   signature this session (a guard that loses twice stops paying the
   denial round-trip — availability over purity, logged as an outcome).
+  **Scope correction (EDC §11): stand-down applies to the evidence
+  plane only — discretionary steering and containment may concede.
+  Safety-class denials (secret paths, confinement, authorization) sit
+  outside the adaptive system and never stand down, regardless of
+  repetition.**
 
 Reflex state is session-scoped, latching per command-signature, and a
 pure function of the session's command sequence — same transcript prefix,

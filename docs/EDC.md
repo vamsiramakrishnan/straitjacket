@@ -294,6 +294,42 @@ generations.
    flaky tests (deterministic source ⇒ deterministic failures). A
    `flaky` event joins the schema-v2 vocabulary at zero collection cost.
 
+## Intervention events, the breaker state machine, the three planes (§9–11)
+
+**§9 adopted** — emissions become first-class events
+(ctx.intervention/v1) carrying coverage vectors and explicit hypotheses
+with bounded windows; outcomes (ctx.intervention-outcome/v1) resolve
+them. This upgrades the shipped ledger, which records outcomes only —
+P(outcome | coverage, plan) is uncomputable when coverage was never
+recorded at emission. Full outcome vocabulary adopted (adds
+`workaround`, `validation_after_edit` as a typed positive,
+`expired_unresolved`, session terminals). Amendments: interventionId is
+deterministically derived (session-seq × signature — replay holds);
+handles are minted span tokens; the hypothesis window counts any
+tool-bearing command; **expired events are censored observations,
+excluded from rate denominators** — silence must not train pessimism.
+
+**§10 adopted** — NORMAL → DENSE → BYPASS as a bounded state machine
+with episode semantics (one transition per signature × generation
+episode; continued starvation is countable but never re-transitions —
+the shipped reflex logged six events for one round-2 episode, which
+this forbids) and **hysteresis replacing the permanent latch**:
+BYPASS→DENSE after 2 positive outcomes, DENSE→NORMAL after 3
+(epoch-tunable defaults). Generation change resets episode state,
+preserves reader-capability history. BYPASS renders structured census +
+capped raw + declared truncation + full-evidence address, headed
+`containment circuit open`.
+
+**§11 adopted** — the three-plane constraint order: safety > evidence
+contract > economics. Safety plane is non-adaptive by construction (its
+inventory adopted; noted gap: the store has retention-GC but no size
+ceiling — filed). **Cross-doc correction**: REFLEX.md's friction
+stand-down applies to the evidence plane only (discretionary steering
+may concede); safety-class denials never stand down, no matter how
+often the command repeats. The evidence plane hosts the fast loop
+within hard bounds; the economic plane sets reviewed defaults and may
+never override the planes above it.
+
 ## The canonical picture
 
 ```
