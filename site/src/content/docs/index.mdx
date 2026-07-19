@@ -6,8 +6,9 @@ hero:
   title: straitjacket
   tagline: >-
     Unbounded tool output becomes an immutable artifact plus a bounded,
-    deterministic, span-addressed digest. The transcript stays an index over
-    evidence — never a warehouse of it.
+    deterministic, span-addressed digest. The transcript keeps small digests
+    and exact addresses instead of the raw bytes, so your context window and
+    per-turn cost stay down and any omitted byte is retrievable later.
   actions:
     - text: Read the design docs
       link: /straitjacket/shipped/priced-context/
@@ -21,10 +22,19 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
+## How it works
+
+Raw bytes stop at the gate. The transcript carries the digest and its
+addresses, and any address resolves back to the exact original bytes later.
+
+<div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow);">
+  <img src="/straitjacket/diagrams/flow.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time." style="display:block" />
+</div>
+
 ## The four gates
 
-Every token has four moments in its lifecycle. One artifact store serves all
-four as gates; every shipped mechanism hangs off exactly one.
+A token passes four points in its life. One artifact store handles all four as
+gates, and every shipped mechanism attaches to exactly one of them.
 
 <CardGrid>
   <Card title="1 · Birth" icon="rocket">
@@ -46,12 +56,12 @@ four as gates; every shipped mechanism hangs off exactly one.
   </Card>
 </CardGrid>
 
-## The receipts
+## The measured results
 
-The operating thesis, proven wave by wave in
-[`evals/`](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals):
-**skills bias, hooks bound, mechanisms measure.** A 304,113-token log becomes
-~210 model-visible tokens — and the one anomalous line survives verbatim with
-an exact retrieval coordinate. Nothing steers on vibes: every branch a
-mechanism takes emits a receipt, and receipts compile into the next epoch's
-policy.
+Every steering change ships only after a measured A/B or head-to-head, all
+recorded in
+[`evals/`](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals).
+A 304,113-token log becomes ~210 model-visible tokens, and the one anomalous
+line survives verbatim with an exact retrieval coordinate. Every branch a
+mechanism takes records what it did, and those records compile into the next
+epoch's steering policy.
