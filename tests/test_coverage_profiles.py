@@ -200,3 +200,30 @@ def test_unittest_profile_declines_pass_free_prose(tmp_path):
     from ctx.digest.moreprofs import UnittestProfile
 
     assert UnittestProfile().detect(_ctx_for(tmp_path, "Ran a marathon in 4 hours\n")) is None
+
+
+GO_FAIL_WITH_FRAMES = textwrap.dedent("""\
+    --- FAIL: TestMethodNotAllowedNoRoute (0.00s)
+        gin_integration_test.go:44: assertion failed
+        	Error Trace:	/w/gin_integration_test.go:44
+        	            	/root/go/pkg/mod/github.com/stretchr/testify@v1.9.0/assert/assertions.go:56
+        	            	/usr/local/go1.24.7/src/testing/testing.go:1734
+        	            	/w/gin.go:693
+    FAIL
+    FAIL	github.com/gin-gonic/gin	0.028s
+    """)
+
+
+def test_gotest_v2_census_and_implicated_frame(tmp_path):
+    """SWE-bench multilingual receipt (gin-4003): the implicated frame must
+    skip test files, module-cache deps, and GOROOT scaffolding to land on
+    the product file the gold patch touches."""
+    from ctx.digest.moreprofs import GoTestProfile
+
+    p = GoTestProfile()
+    ctx = _ctx_for(tmp_path, GO_FAIL_WITH_FRAMES, argv=("go", "test"), exit_code=1)
+    assert p.detect(ctx)
+    body = p.render(ctx)
+    assert "failing: TestMethodNotAllowedNoRoute · stdout:L1" in body
+    assert "implicated frame stdout:L6: gin.go:693" in body
+    assert "assertions.go" not in body and "testing.go" not in body

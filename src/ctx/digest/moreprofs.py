@@ -14,7 +14,13 @@ _GO_PKG_RE = re.compile(r"^(ok|FAIL|---)\s", re.MULTILINE)
 
 
 class GoTestProfile(Profile):
-    version = "gotest/v1"
+    """v2 (SWE-bench multilingual mine, gin-4003): v1 named only the first
+    failure; the failing census is the work queue, and the innermost
+    non-test .go frame in the failure block names the implicated product
+    file — gold-anchored replay flagged its omission as a digest-dropped
+    defect."""
+
+    version = "gotest/v2"
 
     def detect(self, ctx: DigestContext) -> str | None:
         argv = ctx.manifest["argv"]
@@ -27,20 +33,56 @@ class GoTestProfile(Profile):
 
     def render(self, ctx: DigestContext) -> str:
         text = ctx.stdout.text
+        lines = text.splitlines()
         fails = _GO_FAIL_RE.findall(text)
         passes = len(re.findall(r"^--- PASS: ", text, re.MULTILINE))
         pkg_ok = len(re.findall(r"^ok\s", text, re.MULTILINE))
         pkg_fail = len(re.findall(r"^FAIL\s", text, re.MULTILINE))
         summary = [
             "summary:",
-            f"  tests: passed {fmt_int(passes)} · failed {fmt_int(len(fails))}"
+            f"  tests (exact): passed {fmt_int(passes)} · failed {fmt_int(len(fails))}"
             f" · packages ok {pkg_ok} · packages failed {pkg_fail}",
         ]
-        shown = 0
-        for i, line in enumerate(text.splitlines(), start=1):
+        shown = 1
+        cap = len(fails) if getattr(ctx, "dense", False) else 10
+        listed = 0
+        first_fail_i = None
+        for i, line in enumerate(lines, start=1):
             m = re.match(r"^--- FAIL: (\S+)", line)
             if m:
-                summary.append(f"  first failure stdout:L{i}: {m.group(1)}")
+                if first_fail_i is None:
+                    first_fail_i = i
+                if listed < cap:
+                    summary.append(f"  failing: {m.group(1)} · stdout:L{i}")
+                    shown += 1
+                listed += 1
+        if listed > cap:
+            summary.append(f"  … {fmt_int(listed - cap)} more failing tests")
+        if first_fail_i is not None:
+            # First detail line of the first failure block.
+            for j in range(first_fail_i, min(first_fail_i + 8, len(lines))):
+                if re.match(r"^\s+\S", lines[j]):
+                    summary.append(
+                        f"  first failure stdout:L{j + 1}: {lines[j].strip()[:160]}"
+                    )
+                    shown += 1
+                    break
+            # Implicated frame: the first .go:line reference that is repo
+            # code — not the test file, not a dependency from the module
+            # cache, not GOROOT/runtime/testing. That frame names the
+            # product file under test (gin-4003: gin.go:693 rode testify's
+            # Error Trace while every earlier frame was scaffolding).
+            _SCAFFOLD = ("/pkg/mod/", "/go/src/", "/usr/local/go", "/libexec/go")
+            for j in range(first_fail_i, len(lines)):
+                fm = re.search(r"(\S+?\.go):(\d+)", lines[j])
+                if not fm:
+                    continue
+                p = fm.group(1)
+                if p.endswith("_test.go") or any(s in p for s in _SCAFFOLD):
+                    continue
+                summary.append(
+                    f"  implicated frame stdout:L{j + 1}: {p.rsplit('/', 1)[-1]}:{fm.group(2)}"
+                )
                 shown += 1
                 break
         rid = "run:PENDING"
@@ -48,7 +90,7 @@ class GoTestProfile(Profile):
         if fails:
             suggestions.insert(0, f"ctx search {rid} '{fails[0]}' --context 6")
         return "\n".join(
-            ctx.header_lines() + summary + self.coverage_lines(ctx, shown or 1) + self.next_lines(ctx, suggestions)
+            ctx.header_lines() + summary + self.coverage_lines(ctx, shown) + self.next_lines(ctx, suggestions)
         )
 
 

@@ -98,7 +98,7 @@ def test_gotest_profile(state_home, workspace_dir):
     ) + "pad\n" * 300
     cap = _run_text(ws, store, fake)
     digest, m = render_run_digest(store, ws, cap.manifest)
-    assert m["digest"]["profile"] == "gotest/v1"
+    assert m["digest"]["profile"] == "gotest/v2"
     assert "failed 1" in digest and "TestTimeout" in digest
 
 

@@ -41,7 +41,53 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 API = "https://datasets-server.huggingface.co/filter"
-DATASET = "SWE-bench/SWE-bench_Verified"
+DATASETS = {
+    "verified": "SWE-bench/SWE-bench_Verified",
+    "multilingual": "SWE-bench/SWE-bench_Multilingual",
+}
+DATASET = DATASETS["verified"]
+
+# Language families for the multilingual mine, keyed by repo. Breadth is
+# data: a new repo is a table row naming its family. Families runnable in
+# this container: cargo (rust), gotest (go), maven (jvm). JS (npm-family
+# runners), ruby (rspec/minitest), and C/C++ (cmake/gtest, make) are the
+# next rows — each needs its runner bootstrapped, none needs new scoring.
+LANG_FAMILY = {
+    "burntsushi/ripgrep": "cargo",
+    "sharkdp/bat": "cargo",
+    "tokio-rs/axum": "cargo",
+    "tokio-rs/tokio": "cargo",
+    "uutils/coreutils": "cargo",
+    "nushell/nushell": "cargo",
+    "astral-sh/ruff": "cargo",
+    "gin-gonic/gin": "gotest",
+    "caddyserver/caddy": "gotest",
+    "gohugoio/hugo": "gotest",
+    "prometheus/prometheus": "gotest",
+    "hashicorp/terraform": "gotest",
+    "google/gson": "maven",
+    "javaparser/javaparser": "maven",
+    "apache/druid": "maven",
+}
+
+
+def _family_argv(family: str, tests: list[str]) -> list[str]:
+    if family == "cargo":
+        # Rust test ids are full paths (mod::test); libtest takes multiple
+        # --exact filters after `--`.
+        return ["cargo", "test", "--no-fail-fast", "--", "--exact", *tests]
+    if family == "gotest":
+        # Subtests ('TestX/case') run via their root test name.
+        roots = sorted({t.split("/")[0] for t in tests})
+        return ["go", "test", "./...", "-run", "^(" + "|".join(roots) + ")$"]
+    if family == "maven":
+        return [
+            "mvn", "-B", "-q", "test",
+            "-Dtest=" + ",".join(tests),
+            "-DfailIfNoTests=false",
+            "-Dsurefire.failIfNoSpecifiedTests=false",
+        ]
+    raise ValueError(family)
 
 
 def _django_spec(test: str) -> str:
@@ -69,14 +115,14 @@ def _run_argv(repo: str, vpy: Path, tests: list[str]) -> list[str]:
     return [str(vpy), "-m", "pytest", "-v", *tests]
 
 
-def fetch_instances(repo: str, limit: int) -> list[dict]:
+def fetch_instances(repo: str, limit: int, dataset: str = DATASET) -> list[dict]:
     """Newest-first: this container has one interpreter (3.11), and only
     the recent era of each repo imports on it. Pre-2022 instances need the
     official per-instance Docker images — deferred to a docker-capable
     environment, recorded honestly rather than scored as noise."""
     where = urllib.parse.quote(f'"repo"=\'{repo}\'')
     url = (
-        f"{API}?dataset={urllib.parse.quote(DATASET)}&config=default&split=test"
+        f"{API}?dataset={urllib.parse.quote(dataset)}&config=default&split=test"
         f"&where={where}&offset=0&length=100"
     )
     with urllib.request.urlopen(url, timeout=60) as r:
@@ -126,6 +172,17 @@ def reproduce_failure(inst: dict, work: Path) -> tuple[str, int] | None:
     if p.returncode != 0 and "already exists" not in p.stderr:
         print(f"  test_patch failed to apply: {p.stderr[:200]}", file=sys.stderr)
         return None
+    tests_raw = inst["FAIL_TO_PASS"]
+    tests = json.loads(tests_raw) if isinstance(tests_raw, str) else tests_raw
+
+    family = LANG_FAMILY.get(inst["repo"])
+    if family:  # non-Python: toolchain runs in place, no venv
+        r = subprocess.run(
+            _family_argv(family, tests),
+            cwd=repo_dir, capture_output=True, text=True, timeout=900,
+        )
+        return r.stdout + r.stderr, r.returncode
+
     venv = repo_dir / ".sj-venv"
     vpy = venv / "bin" / "python"
     if not vpy.exists():
@@ -144,9 +201,6 @@ def reproduce_failure(inst: dict, work: Path) -> tuple[str, int] | None:
                 [str(vpy), "-m", "pip", "install", "-q", "pytest"],
                 capture_output=True, timeout=300,
             )
-    tests = json.loads(inst["FAIL_TO_PASS"]) if isinstance(
-        inst["FAIL_TO_PASS"], str
-    ) else inst["FAIL_TO_PASS"]
     r = subprocess.run(
         _run_argv(inst["repo"], vpy, tests),
         cwd=repo_dir, capture_output=True, text=True, timeout=600,
@@ -190,6 +244,7 @@ def main() -> None:
     ap.add_argument("--repo", default="pytest-dev/pytest", help="comma-separated repo list")
     ap.add_argument("--limit", type=int, default=1, help="instances per repo")
     ap.add_argument("--workdir", required=True)
+    ap.add_argument("--dataset", choices=sorted(DATASETS), default="verified")
     ap.add_argument(
         "--keep", action="store_true",
         help="keep clones+venvs (default: delete after scoring — disk hygiene)",
@@ -214,7 +269,7 @@ def main() -> None:
     totals = {"inline": 0, "one_hop": 0, "absent": 0, "instances": 0, "skipped": 0}
     defects: list[tuple[str, str]] = []
     for repo in [r.strip() for r in args.repo.split(",") if r.strip()]:
-        for inst in fetch_instances(repo, args.limit):
+        for inst in fetch_instances(repo, args.limit, DATASETS[args.dataset]):
             print(f"== {inst['instance_id']} ==", flush=True)
             gold = gold_regions(inst["patch"])
             try:
