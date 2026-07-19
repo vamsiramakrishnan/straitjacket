@@ -1,3 +1,5 @@
+<sub><a href="README.md">straitjacket / docs</a></sub>
+
 # Ladders: the conditionality audit
 
 **Date:** 2026-07-18 · analysis pass over every tiered/conditional construct

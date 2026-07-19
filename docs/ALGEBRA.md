@@ -1,3 +1,5 @@
+<sub><a href="README.md">straitjacket / docs</a></sub>
+
 # Facts and the composition algebra
 
 **Date:** 2026-07-19 · design for the post-EDC wave. Four questions

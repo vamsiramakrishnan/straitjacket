@@ -1,3 +1,5 @@
+<sub><a href="README.md">straitjacket / docs</a></sub>
+
 # Reflex: closed-loop conditionality
 
 **Date:** 2026-07-18 · design doc for the intelligence layer, written

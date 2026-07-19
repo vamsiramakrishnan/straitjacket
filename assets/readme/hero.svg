@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
+  <title id="title">straitjacket</title>
+  <desc id="desc">Context containment harness for coding agents. A 304,113-token log becomes a roughly 210-token digest, and the one anomalous line keeps an exact retrieval address.</desc>
+  <rect width="1200" height="400" rx="16" fill="#0A0C10"/>
+  <rect x="0.5" y="0.5" width="1199" height="399" rx="16" fill="none" stroke="#1C232D"/>
+
+  <!-- title block -->
+  <g transform="translate(56 0)">
+    <text y="78" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" letter-spacing="1.5" fill="#7D8590">CONTEXT CONTAINMENT FOR CODING AGENTS</text>
+    <text y="150" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="72" font-weight="700" fill="#E6EDF3">straitjacket</text>
+    <rect x="3" y="168" width="122" height="5" fill="#F0B429"/>
+    <text y="216" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="21" fill="#C9D1D9">Unbounded tool output becomes an immutable</text>
+    <text y="246" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="21" fill="#C9D1D9">artifact plus a bounded, span-addressed digest.</text>
+    <text y="282" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" fill="#7D8590">The transcript stays an index over evidence —</text>
+    <text y="306" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" fill="#7D8590">never a warehouse of it.</text>
+
+    <!-- four gates motif -->
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#7D8590">
+      <rect x="0" y="333" width="8" height="14" fill="#F0B429"/>
+      <text x="16" y="345">birth</text>
+      <rect x="86" y="333" width="8" height="14" fill="#F0B429"/>
+      <text x="102" y="345">entry</text>
+      <rect x="172" y="333" width="8" height="14" fill="#F0B429"/>
+      <text x="188" y="345">residence</text>
+      <rect x="296" y="333" width="8" height="14" fill="#F0B429"/>
+      <text x="312" y="345">emission</text>
+    </g>
+    <text y="378" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#58606A">v0.24.0 · 714 tests · Apache-2.0</text>
+  </g>
+
+  <!-- proof: real digest output -->
+  <g transform="translate(620 48)">
+    <rect width="524" height="304" rx="10" fill="#0F141B" stroke="#232B36"/>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">
+      <text x="24" y="42" fill="#F0B429">[run:51c70b74fa1f · logtemplate/v1]</text>
+      <text x="24" y="70" fill="#C9D1D9">stdout: 20,001 lines · est 304,113 tok</text>
+      <text x="24" y="98" fill="#C9D1D9">templates: 3 cover 20,001/20,001</text>
+      <text x="24" y="126" fill="#58606A">  19,999× worker-&lt;*&gt; checkout ok</text>
+      <text x="24" y="154" fill="#E6EDF3">  1× L14238 fell back to legacy gw</text>
+      <text x="24" y="182" fill="#58606A">coverage: 20,001/20,001 parsed</text>
+      <text x="24" y="210" fill="#3FB950">ctx get …#stdout --lines 14238:14241</text>
+    </g>
+    <line x1="24" y1="234" x2="500" y2="234" stroke="#232B36"/>
+    <text x="24" y="272" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20">
+      <tspan fill="#58606A">304,113 tokens</tspan>
+      <tspan fill="#F0B429"> → </tspan>
+      <tspan fill="#3FB950" font-weight="700">~210 visible</tspan>
+    </text>
+    <text x="24" y="296" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#58606A">the needle survives, with an address</text>
+  </g>
+</svg>

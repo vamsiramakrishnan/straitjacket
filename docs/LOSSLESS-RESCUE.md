@@ -1,3 +1,5 @@
+<sub><a href="README.md">straitjacket / docs</a></sub>
+
 # Lossless mid-session rescue: taking the rewriting proxy's last edge, without its costs
 
 **The gap.** All our gates are forward-looking: they prevent bloat at birth,

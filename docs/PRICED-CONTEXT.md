@@ -1,3 +1,5 @@
+<sub><a href="README.md">straitjacket / docs</a></sub>
+
 # Priced Context: a thesis on metadata as economic signposting
 
 **Claim.** An agent's retrieval choices are economically rational only to

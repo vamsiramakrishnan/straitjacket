@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="150" viewBox="0 0 1200 150" role="img" aria-labelledby="title desc">
+  <title id="title">straitjacket docs</title>
+  <desc id="desc">Design notes and mechanism specs for straitjacket. House rule: bytes become addresses; every claim traces to a receipt.</desc>
+  <rect width="1200" height="150" rx="14" fill="#0A0C10"/>
+  <rect x="0.5" y="0.5" width="1199" height="149" rx="14" fill="none" stroke="#1C232D"/>
+
+  <text x="56" y="76" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="40" font-weight="700">
+    <tspan fill="#E6EDF3">straitjacket</tspan>
+    <tspan fill="#58606A"> / </tspan>
+    <tspan fill="#F0B429">docs</tspan>
+  </text>
+  <text x="56" y="112" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#7D8590">design notes · mechanism specs · every claim backed by a receipt in evals/</text>
+
+  <text x="1144" y="76" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">
+    <tspan fill="#58606A">bytes</tspan>
+    <tspan fill="#F0B429"> → </tspan>
+    <tspan fill="#3FB950">addresses</tspan>
+  </text>
+</svg>

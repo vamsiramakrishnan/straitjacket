@@ -1,15 +1,21 @@
-# straitjacket 🧥
+<div align="center">
+
+<img src="assets/readme/hero.svg" width="100%" alt="straitjacket — context containment harness for coding agents. A 304,113-token log becomes a ~210-token digest, and the one anomalous line keeps an exact retrieval address."/>
+
+[Quickstart](#-quickstart) · [The four gates](#-what-you-get-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Receipts](#-receipts) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
 **Status:** v0.24.0 (pre-1.0, minor bump per mechanism wave) · 714 tests · hosts: Claude Code + Antigravity · Apache-2.0
+
+</div>
 
 One `pytest -q` can dump 300k tokens into your agent's transcript. Every
 turn after that re-sends them — a routine `mcp__github__list_commits` alone
 is ~19.8k tokens, paid again on every round. Then compaction "saves" you by
 deleting the one line you needed, with no trace it ever existed.
 
-straitjacket is an artifact-backed context containment harness for coding
-agents. Unbounded tool output becomes an immutable artifact plus a bounded,
-deterministic, span-addressed digest. The transcript stays an **index over
+straitjacket contains the flood at the source: raw bytes become an
+immutable artifact, and the transcript gets a bounded, deterministic,
+span-addressed digest instead. The transcript stays an **index over
 evidence, never a warehouse of it** — and every omission, whether bytes,
 transcript blocks, or engineering decisions, keeps an address.
 
@@ -398,7 +404,9 @@ straitjacket/
 ├── native/ctx-hook-native/  # optional Rust post-hook shim (~3 ms), parity-tested
 ├── plugins/antigravity/     # plugin template: hooks, MCP config, skill, ctx-explorer agent
 ├── spec/              # normative SPEC, acceptance suite, ADRs, wire schemas
+├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
+├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
 └── tests/             # 361 acceptance-oriented determinism & security tests
 ```
 
@@ -535,6 +543,15 @@ Development:
 pip install -e '.[dev]'
 pytest        # 361 tests: determinism, budgets, hook contract, escapes
 ```
+
+## 📚 Going deeper
+
+[`docs/`](docs/README.md) — the design docs index: mechanism theses
+(priced context, lossless rescue) and the current architecture wave (EDC,
+reflex, the composition algebra). [`spec/`](spec/) is normative;
+[`evals/`](evals/) holds every receipt; [`CHANGELOG.md`](CHANGELOG.md) is
+the wave-by-wave history; [`CONTRIBUTING.md`](CONTRIBUTING.md) explains
+the house rules for landing a mechanism.
 
 ## 🗺️ Roadmap & license
 

@@ -1,3 +1,5 @@
+<sub><a href="README.md">straitjacket / docs</a></sub>
+
 # Evidence Delivery Controller (EDC)
 
 **Status:** adopted target architecture (2026-07-19) for the digest layer —
