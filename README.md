@@ -561,6 +561,11 @@ reflex, the composition algebra). [`spec/`](spec/) is normative;
 the wave-by-wave history; [`CONTRIBUTING.md`](CONTRIBUTING.md) explains
 the house rules for landing a mechanism.
 
+The same docs also build into a browsable site ([`site/`](site/), Astro +
+Starlight): `cd site && npm install && npm run dev`, or deploy via the
+manual [`docs-site` workflow](.github/workflows/docs-site.yml) once GitHub
+Pages is enabled for the repo.
+
 ## 🗺️ Roadmap & license
 
 [`ROADMAP.md`](ROADMAP.md) — the house rule is **replace bytes with

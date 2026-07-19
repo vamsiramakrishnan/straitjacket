@@ -1,0 +1,19 @@
+{
+  "name": "straitjacket-docs",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "dev": "npm run sync-docs && astro dev",
+    "build": "npm run sync-docs && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.36.0",
+    "@fontsource-variable/space-grotesk": "^5.2.0",
+    "@fontsource/jetbrains-mono": "^5.2.0",
+    "astro": "^5.6.0",
+    "sharp": "^0.34.0"
+  }
+}

@@ -1,0 +1,57 @@
+---
+title: straitjacket
+description: Artifact-backed context containment harness for coding agents.
+template: splash
+hero:
+  title: straitjacket
+  tagline: >-
+    Unbounded tool output becomes an immutable artifact plus a bounded,
+    deterministic, span-addressed digest. The transcript stays an index over
+    evidence — never a warehouse of it.
+  actions:
+    - text: Read the design docs
+      link: /straitjacket/shipped/priced-context/
+      icon: right-arrow
+      variant: primary
+    - text: GitHub
+      link: https://github.com/vamsiramakrishnan/straitjacket
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## The four gates
+
+Every token has four moments in its lifecycle. One artifact store serves all
+four as gates; every shipped mechanism hangs off exactly one.
+
+<CardGrid>
+  <Card title="1 · Birth" icon="rocket">
+    Can this output flood at the source? `ctx run`/`seq`/`eval` capture,
+    supervised backgrounding, head/tail evidence windows, deterministic
+    digest profiles, failure-asymmetric budgets.
+  </Card>
+  <Card title="2 · Entry" icon="magnifier">
+    What actually crosses the wire? Tier-0 byte-exact observer proxy,
+    shape-dispatched PostToolUse gate for every faucet, scorecards.
+  </Card>
+  <Card title="3 · Residence" icon="seti:clock">
+    What may stay, and for how long? Session read ledger, window-pressure
+    loop, priced steering, epoch-latched lossless rescue, checkpoints.
+  </Card>
+  <Card title="4 · Emission" icon="pencil">
+    What does the model put back? Emission governor tiers, cite-don't-quote,
+    solution ladder + backward planning, deliverable metrics.
+  </Card>
+</CardGrid>
+
+## The receipts
+
+The operating thesis, proven wave by wave in
+[`evals/`](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals):
+**skills bias, hooks bound, mechanisms measure.** A 304,113-token log becomes
+~210 model-visible tokens — and the one anomalous line survives verbatim with
+an exact retrieval coordinate. Nothing steers on vibes: every branch a
+mechanism takes emits a receipt, and receipts compile into the next epoch's
+policy.
