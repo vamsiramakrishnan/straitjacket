@@ -23,6 +23,27 @@ _LANG_BY_EXT = {
 _OUTLINE_MAX_ENTRIES = 48
 
 
+def _skeleton_stats_outline(
+    store: Store, ws: Workspace, rel: str, budget_tokens: int
+) -> str | None:
+    """Priced outline for non-Python code files via the skeleton tier
+    (docs/ALGEBRA.md M-F: tree-sitter → ctags → none). Returns None when no
+    backend supports the file so the caller falls through to the generic
+    stats path unchanged. Python never routes here — the existing exact
+    ast outline above stays byte-identical."""
+    from ctx.skeleton import language_for, skeleton_for, skeleton_outline
+
+    if language_for(rel) in (None, "python"):
+        return None
+    try:
+        sk = skeleton_for(store, ws, rel)
+    except Exception:
+        return None  # absence/parse trouble degrades, never errors
+    if sk.get("parser") == "none" or not sk.get("symbols"):
+        return None
+    return _emit(ws, skeleton_outline(sk, budget_tokens), budget_tokens)
+
+
 def _stats_outline(store: Store, ws: Workspace, rel: str) -> str:
     """Priced symbol outline for one code file: name · lines · ~tokens ·
     span handle per entry. Deterministic given file bytes; spans are minted
@@ -117,6 +138,17 @@ def stats(store: Store, ws: Workspace, ref_text: str, *, scope: str | None = Non
             target = ws.confine(ref.path, must_exist=False)
             if target.is_file():
                 return _stats_outline(store, ws, ws.relativize(target))
+        # M-F: the same priced-outline capability for non-Python code files,
+        # via the skeleton tier. Additive only — files no backend can parse
+        # fall through to the aggregate path exactly as before.
+        if ref.path and not scope:
+            target = ws.confine(ref.path, must_exist=False)
+            if target.is_file():
+                rendered = _skeleton_stats_outline(
+                    store, ws, ws.relativize(target), budget.result_tokens
+                )
+                if rendered is not None:
+                    return rendered
         rels = ws.list_files(ref.path) if not scope else None
         if scope:
             scoped = ws.config.scopes.get(scope)
