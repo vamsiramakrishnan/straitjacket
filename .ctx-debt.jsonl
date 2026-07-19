@@ -18,3 +18,5 @@
 {"id": "74db82e027", "op": "resolve"}
 {"id": "51604cfe7b", "op": "resolve"}
 {"id": "3f483592c4", "op": "resolve"}
+{"id": "34e21fe2dc", "note": "spec3 gate needs n>=3 paired seeds per cell: baseline variance (naive 26->13->19 turns on identical code) exceeds the <=1.5x effect being resolved \u2014 single-seed referee rounds cannot adjudicate mechanism iterations", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
+{"id": "c273b8d3d0", "note": "graduated steering: apply the engagement ladder to steering strength \u2014 small-scale sessions keep native test runs until measured scale proves containment pays (three referee rounds of motivation; the 'parity is the ceiling' regime made actionable)", "op": "add", "ref": "docs/LADDERS.md"}
