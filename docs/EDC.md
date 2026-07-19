@@ -207,6 +207,33 @@ are adopted as proposed, with:
    pinned to graph bytes (not rendering bytes), and an independently
    testable seam between layers 1 and 3.
 
+## Resolver, renderer, executable contract, outcome tracker (§5.3–5.6)
+
+Adopted: the executable contract; the five-input resolver emitting a
+DeliveryPlan (mode incl. the bypass/flood split — steering's null plan
+vs the breaker's capped concession — with census/item_summary/detail
+knobs, budget triple, and typed `reasons`); the plan-obeying renderer;
+the outcome-tracker event vocabulary. Five amendments:
+
+1. **Validate at the selection seam, not the rendering**:
+   `validate_selection(selected_facts, contract, graph)` over typed
+   facts; rendered-text substring checks are a secondary smoke layer.
+   A `required_fraction == 1.0` assert is satisfiable on attested-
+   incomplete extractions only relative to parsed facts + a mandatory
+   declared-partiality marker.
+2. **Reasons are a closed vocabulary** (ledger-event-shaped) — free text
+   cannot train epoch tables.
+3. **Plans carry a stable `plan_id`** (hash of non-reason fields);
+   outcome events record it — P_rerun(p) is unestimable otherwise.
+4. **`census="bounded"` means hierarchically compacted and
+   identity-preserving** (the ladder), never identity-dropping.
+   **The renderer is a pure function** — no signals, no state, no clock.
+5. **"Materially narrower execution" is a first-class positive
+   ("narrowing")**: a single-test run using a census-delivered identity
+   is the census consumed *without* retrieval — stronger than a landing.
+   Ledger vocabulary extension is a schema-v2 bump with tolerant readers
+   (unknown events → "other"), scorecard updated in lockstep.
+
 ## The canonical picture
 
 ```
