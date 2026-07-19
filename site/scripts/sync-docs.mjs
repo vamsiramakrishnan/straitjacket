@@ -20,11 +20,16 @@ const PAGES = [
 
 for (const [src, dest, title, description] of PAGES) {
   let text = readFileSync(join(docsDir, src), 'utf8');
-  // strip GitHub-only chrome: leading banner <img>, breadcrumb <sub>, and the H1
+  // Strip GitHub-only chrome: the leading banner (a <picture> block, or a bare
+  // <img> fallback), the breadcrumb <sub>, and the H1. Starlight renders its own
+  // title from frontmatter, so these would otherwise leak as a broken banner
+  // image, a stray breadcrumb, and a duplicate heading. Each strip tolerates
+  // leading blank lines so a failed match earlier does not cascade.
   text = text
-    .replace(/^<img[^>]*>\s*\n/, '')
-    .replace(/^<sub>.*<\/sub>\s*\n/, '')
-    .replace(/^\s*# .*\n/, '');
+    .replace(/^\s*<picture>[\s\S]*?<\/picture>\s*/, '')
+    .replace(/^\s*<img[^>]*>\s*/, '')
+    .replace(/^\s*<sub>[\s\S]*?<\/sub>\s*/, '')
+    .replace(/^\s*#\s.*(?:\n|$)/, '');
   const fm = `---\ntitle: "${title}"\ndescription: "${description.replaceAll('"', '\\"')}"\n---\n\n`;
   const outPath = join(outDir, dest);
   mkdirSync(dirname(outPath), { recursive: true });
