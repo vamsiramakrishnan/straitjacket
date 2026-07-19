@@ -105,6 +105,72 @@ absence of that suite is how pytest/v1 shipped structurally starved.
    denies, and containment are applied after rendering and are not
    selectable, degradable, or adaptable by any plan, reflex, or epoch.
 
+## The objective function (§2, adopted with three amendments)
+
+For a delivery plan *p*, minimize expected total downstream cost:
+
+```
+E[J(p)] = C_emit(p) · R(session)          ← residency-scaled, not one-shot
+        + P_rerun(p) · C_rerun
+        + P_retrieval(p) · C_retrieval
+subject to: EvidenceContract(p) satisfied   ← sufficiency is a constraint,
+                                              never a priced term
+```
+
+Amendments to the proposed form:
+
+1. **Residency term** — emitted tokens are re-sent every subsequent
+   request and occupy window (measured as `resend` in evalset_collapse).
+   Without R(session), the objective justifies unlimited inlining and
+   rebuilds the flood at the planner level.
+2. **Sufficiency as hard constraint** — pricing P_miss·C_quality puts
+   correctness on the market (rule 7's failure mode in economics
+   clothing). The contract is the constraint; costs are minimized
+   subject to it.
+3. **The ledger is the estimator** — P_rerun per family×tier IS the
+   starvation rate; P_retrieval IS the landing rate; both accumulate in
+   reflex-outcomes.jsonl today. Policy tables are compiled, reviewed,
+   conservative snapshots of these estimates (the epoch pipeline). No
+   runtime ML, and no invented constants either.
+
+**Why the taxonomy below is the practical form of this objective:** under
+measured cost dominance (C_rerun ≈ a turn + execution + cache append +
+state-loss risk ≫ ΔC_emit ≈ tens of tokens per census row), the argmin
+collapses to a rule — batch-critical inline and complete, drill-down
+behind addresses. The planner is a table lookup except at regime
+boundaries (huge censuses, starved windows), where the summarization
+ladder governs.
+
+## The information taxonomy (§3, adopted)
+
+- **Batch-critical structure**: the complete item set needed to decide
+  the next batch of work (every failing test / lint diagnostic / type
+  error / failed target / conflicting file / invalid record). Delivered
+  inline and completely — omitting one item risks a tool call, a turn,
+  a re-execution, a digest, a cache append, and a state-loss
+  opportunity, each individually more expensive than the row.
+- **Drill-down evidence**: detail needed after the model selects an item
+  (full traceback, source context, complete stdout, one large diff).
+  Content-addressed retrieval is the correct home.
+
+**The pytest delivery hierarchy** (the plan space; densify = descent
+depth, breaker = the floor, null plan = level 0):
+
+| level | content | status v0.21 |
+|---|---|---|
+| 1 | outcome + counts | ✅ |
+| 2 | complete failing-test census | ✅ |
+| 3 | file, line, failure class per failing test | ⚠️ class missing — pytest/v2 |
+| 4 | one-line failure summary per failing test | ⚠️ dense-only today — pytest/v2 makes it default |
+| 5 | detailed evidence, root/first failure | ✅ |
+| 6 | full traceback per failure behind stable addresses | ✅ (census spans) |
+| 7 | teaching / retrieval prose | ✅ (engagement-filtered) |
+
+This ladder unifies three shipped mechanisms into one knob: the reflex
+escalates descent depth per starvation; the circuit breaker is the
+ladder's floor (capped raw); graduated steering is its ceiling (level 0,
+the null plan).
+
 ## Build path
 
 1. **pytest/v2 = the first EDC instance** (no new framework): explicit
