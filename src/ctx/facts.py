@@ -326,6 +326,36 @@ def derive_file(store: Store, ws: Workspace, rel: str) -> dict[str, Any]:
         conn.close()
 
 
+_LOCUS_LINE_RE = re.compile(r"^(?P<file>[^\s:][^:]*\.py):(?P<line>\d+):(?:\s|$)")
+
+
+def _deepest_locus(out_lines: list[str], item: Any, store: Store) -> str | None:
+    """The deepest ``file.py:N:`` locus line inside this item's traceback
+    block (pytest prints frames shallow→deep, so the LAST locus wins).
+    Block bounds come from the item's detail_ref selector (``lines:a:b``
+    or ``span:<id>``). None when unresolvable — caller falls back to
+    item.location. Never raises."""
+    try:
+        ref = getattr(item, "detail_ref", None)
+        sel = str(getattr(ref, "selector", "") or "")
+        a = b = None
+        if sel.startswith("lines:"):
+            a, b = (int(x) for x in sel[6:].split(":", 1))
+        elif sel.startswith("span:"):
+            span = store.get_span(sel[5:])
+            a, b = span.get("a"), span.get("b")
+        if not a or not b:
+            return None
+        best: str | None = None
+        for line in out_lines[a - 1 : b]:
+            m = _LOCUS_LINE_RE.match(line.strip())
+            if m:
+                best = f"{m.group('file')}:{m.group('line')}"
+        return best
+    except Exception:
+        return None
+
+
 def derive_run(
     store: Store, ws: Workspace, run_ref_or_manifest: str | dict[str, Any]
 ) -> dict[str, Any]:
@@ -378,10 +408,17 @@ def derive_run(
         result["outcome"] = graph.outcome
         generation = current_generation(ws)
         rows: list[tuple] = []
+        out_lines = (dctx.stdout.text if dctx.stdout is not None else "").splitlines()
         for item in graph.items:
             if item.kind != "failing_test":
                 continue
-            m = _LOCATION_RE.match(str(item.location or ""))
+            # Frame semantics (found by the pre-live smoke): digests want
+            # the reported locus; the JOIN wants the deepest raise frame.
+            # An assertion failing in a test body locates in tests/, but a
+            # ValueError raised in src/ locates there only on the block's
+            # BOTTOM locus line (pytest prints deepest last). Prefer it.
+            deep = _deepest_locus(out_lines, item, store)
+            m = _LOCATION_RE.match(deep or str(item.location or ""))
             if not m:
                 result["no_location"] += 1
                 continue
@@ -973,6 +1010,19 @@ def _stage_in_changed(qc, stream, args: list[str]):
     for a in args:
         if not a.startswith("--"):
             generation = a
+    # Live-path auto-derive (found by the pre-live smoke, not the referee:
+    # the referee derived explicitly). With no explicit generation, ensure
+    # the current worktree's changed() facts exist — derive_generation is
+    # content-keyed/idempotent, so repeated calls are cheap no-ops — and
+    # derive decl facts for the changed files so the join has symbol
+    # precision instead of the file-level degradation.
+    if generation is None:
+        try:
+            derived = derive_generation(qc.ws, store=qc.store)
+            for rel in changed_files_snapshot(qc.ws) if derived.get("ok") else []:
+                derive_file(qc.store, qc.ws, rel)
+        except Exception as e:
+            _note_error("facts.stage_in_changed.autoderive", e)
     rows = sites_in_changed(qc.ws, qc.store, stream.rows, generation)
     return Stream("sites", rows, omitted=stream.omitted)
 

@@ -661,3 +661,59 @@ def test_derive_file_with_real_skeleton_module(fixture_repo, state_home):
         assert r["decl"] >= 1
         decls = facts.decls_rows(ws, store)
         assert any(d["symbol"] == "stable" for d in decls)
+
+
+def test_frame_semantics_and_autoderive_live_path(tmp_path, monkeypatch):
+    """Regression for the two pre-live-smoke findings: (1) exceptions
+    raised in src/ must produce fail rows at the deepest frame, not the
+    test-body location; (2) the in-changed q stage auto-derives the
+    current generation + changed-file decls (nothing else calls
+    derive_generation in the live path)."""
+    import subprocess as sp
+
+    monkeypatch.setenv("CTX_STATE_HOME", str(tmp_path / "state"))
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+    from ctx import facts
+    from ctx.execution import run_capture
+
+    d = tmp_path / "proj"
+    (d / "src").mkdir(parents=True)
+    (d / "tests").mkdir()
+    (d / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    (d / "src" / "__init__.py").write_text("", encoding="utf-8")
+    (d / "src" / "mod.py").write_text(
+        "def go(x):\n    return x + 1\n", encoding="utf-8"
+    )
+    (d / "tests" / "conftest.py").write_text(
+        "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parent.parent))\n",
+        encoding="utf-8",
+    )
+    (d / "tests" / "test_m.py").write_text(
+        "from src.mod import go\n\n\ndef test_go():\n    assert go(1) == 2\n",
+        encoding="utf-8",
+    )
+    sp.run(["git", "init", "-q", "."], cwd=d, check=True)
+    sp.run(["git", "add", "-A"], cwd=d, check=True)
+    sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+            "commit", "-qm", "base"], cwd=d, check=True)
+    # Uncommitted change introduces a raise INSIDE src (deep frame).
+    (d / "src" / "mod.py").write_text(
+        "def go(x):\n    raise ValueError('introduced')\n", encoding="utf-8"
+    )
+    ws = resolve_workspace(str(d))
+    store = Store(ws.workspace_id)
+    import sys as _sys
+    cap = run_capture(ws, [_sys.executable, "-m", "pytest", "tests", "-q"], store=store)
+    r = facts.derive_run(store, ws, cap.manifest)
+    assert r["ok"] and r["fail"] == 1
+    # (1) frame semantics: the fail row locates in src/, not tests/.
+    sites = facts.fails_sites(ws, store, run=r["run"])
+    assert sites and sites[0]["file"] == "src/mod.py", sites
+    # (2) auto-derive: the q stage populates changed()+decl() itself.
+    from ctx.query import Stream
+    out = facts._stage_in_changed(
+        type("QC", (), {"ws": ws, "store": store})(), Stream("sites", sites), []
+    )
+    assert len(out.rows) == 1 and out.rows[0]["file"] == "src/mod.py"
+    assert out.rows[0].get("symbol") == "go"
