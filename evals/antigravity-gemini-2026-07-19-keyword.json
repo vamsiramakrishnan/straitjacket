@@ -1,0 +1,40 @@
+[
+  {
+    "arm": "naive",
+    "model": "gemini-3.5-flash",
+    "billed_total_tokens": 99964,
+    "billed_input_tokens": 98038,
+    "billed_output_tokens": 688,
+    "billed_thoughts_tokens": 1238,
+    "billed_cached_tokens": 57043,
+    "tool_output_tokens_into_context": 157,
+    "raw_command_bytes": 550,
+    "tool_calls": 6,
+    "compactions": 0,
+    "wall_s": 18.4,
+    "timed_out": false,
+    "completed": true,
+    "correct": true,
+    "needle_cited": true,
+    "final_text": "I will first run the tests to see the current failure.I will run the diagnostics tool and filter for \"INCIDENT NOTE\" to locate the fix requirements.I will locate router.py in the project directory.I will view the contents of [router.py](file://<fixture>).I will edit [router.py](file://<fixture>) to remove the 'apac' region from `FALLBACK_REGIONS`.I will run the tests to verify the fix works.To resolve the routing issue, I applied the source fix described in the inci"
+  },
+  {
+    "arm": "sj",
+    "model": "gemini-3.5-flash",
+    "billed_total_tokens": 159389,
+    "billed_input_tokens": 156681,
+    "billed_output_tokens": 1032,
+    "billed_thoughts_tokens": 1676,
+    "billed_cached_tokens": 81554,
+    "tool_output_tokens_into_context": 1110,
+    "raw_command_bytes": 389028,
+    "tool_calls": 9,
+    "compactions": 0,
+    "wall_s": 26.3,
+    "timed_out": false,
+    "completed": true,
+    "correct": true,
+    "needle_cited": true,
+    "final_text": "I'll start by listing the directory contents to understand the structure of the project.I'll now run the test suite to observe the failure.I'll check the current working directory or specify the absolute path to run the test.I'll run the test inside my target workspace directory `<fixture> run the `diagnose.py` script inside the correct workspace to generate the incident log.I'll pull the exact line of the INCIDENT NOTE to see the complete message using `ctx_query`.I'll view [router.py](file://<fixture>"
+  }
+]

@@ -13,3 +13,13 @@ native/ctx-hook-native/target/
 
 # Runtime session state (never source)
 .ctx-session-reads/
+
+# Eval working dirs (fixtures embed their own .git; receipts are committed
+# separately under evals/*.md)
+evals/_runs/
+
+# Local `ctx antigravity install` artifacts for this workspace (the plugin
+# under .agents/ is already ignored above). straitjacket's own repo does not
+# track a root ctx.toml — the test suite provisions isolated workspaces.
+/ctx.toml
+/.ctxignore

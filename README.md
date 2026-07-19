@@ -419,6 +419,9 @@ cache economics) ·
 (original needle-drop head-to-head) ·
 [`evals/ab-claude-code-2026-07-17.md`](evals/ab-claude-code-2026-07-17.md)
 (N=5 A/B: cost parity, 5/5 correct both arms, zero denials) ·
+[`evals/antigravity-gemini-2026-07-19.md`](evals/antigravity-gemini-2026-07-19.md)
+(first non-Claude host: Antigravity SDK + `gemini-3.5-flash`, −30% total / 152×
+less tool-output on an unavoidable flood, honest parity-loss on the greppable one) ·
 [`evals/overhaul-3arm-2026-07-17.md`](evals/overhaul-3arm-2026-07-17.md)
 (v0.6 rematch: −40% cost vs naive at quality parity) ·
 [`evals/rtk-corpus-2026-07-18.md`](evals/rtk-corpus-2026-07-18.md)
