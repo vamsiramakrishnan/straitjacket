@@ -675,10 +675,80 @@ def test_recovered_event_after_dry(tmp_path):
     assert len(_q_events(tmp_path)) == 1
 
 
-def test_q_json_state_fallback_scores_sighted_rerun_once(tmp_path):
-    """No op lines, only q-dry.json: the hook sighting of an identical q
-    while the ledger marks it dry IS the rerun — scored once per dry
-    episode (hook/cli double-sighting dedup), recovered on rows>0."""
+def test_q_engine_ledger_contract_end_to_end(tmp_path):
+    """The ACTUAL writer contract (ctx.query's self-healing wave): op
+    lines carry the RAW pipeline text under "pipeline" (no rows key);
+    q-dry.json is {"dry": [<raw pipeline text>...]}, and a pipeline
+    leaving that census after a non-empty result is the recovery signal
+    (rows unknown → null)."""
+    from ctx import reflex
+
+    raw = "fails  last |   in-changed"  # raw text normalizes to Q_SIG
+    led = tmp_path / LEDGER
+    led.mkdir()
+    (led / "q-dry.json").write_text(json.dumps({"dry": [raw]}), encoding="utf-8")
+    (led / "q-dry.jsonl").write_text(
+        json.dumps({"op": "q_dry_rerun", "pipeline": raw, "ts": 1.0}) + "\n",
+        encoding="utf-8",
+    )
+    reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'")
+    evs = _q_events(tmp_path)
+    assert [(e["event"], e["signature"], e["rows"]) for e in evs] == [
+        ("dry_query_rerun", Q_SIG, 0)
+    ]
+    # The engine drops the pipeline from the dry census on its first
+    # non-empty result: recovered (row count unknown → null).
+    (led / "q-dry.json").write_text(json.dumps({"dry": []}), encoding="utf-8")
+    reflex.sync_query_outcomes(tmp_path)
+    evs = _q_events(tmp_path)
+    assert [(e["event"], e["rows"]) for e in evs] == [
+        ("dry_query_rerun", 0), ("recovered", None),
+    ]
+    # Census now empty and nothing dry: further syncs are silent.
+    reflex.sync_query_outcomes(tmp_path)
+    assert len(_q_events(tmp_path)) == 2
+
+
+def test_q_real_engine_handshake(state_home, workspace_dir):
+    """Cross-module integration: the REAL query engine executes an
+    identical dry pipeline twice (writing its q-dry ledger); reflex folds
+    it into exactly one dry_query_rerun event — the live-A/B loop, now
+    visible end-to-end."""
+    import pytest as _pytest
+
+    query = _pytest.importorskip("ctx.query")
+    from conftest import make_store, make_ws
+
+    from ctx import reflex
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    (workspace_dir / "a.py").write_text("x = 1\n", encoding="utf-8")
+    pipeline = "search zzz_matches_nothing"
+    out1, code1 = query.run_query(ws, store, pipeline)
+    assert code1 == 0 and "rows (census): 0" in out1
+    out2, code2 = query.run_query(ws, store, pipeline)  # identical dry rerun
+    assert code2 == 0
+    sig = reflex.query_signature(pipeline)
+    assert reflex.check_command(workspace_dir, f"ctx q '{pipeline}'") is None
+    evs = _q_events(workspace_dir)
+    assert [(e["event"], e["signature"]) for e in evs] == [
+        ("dry_query_rerun", sig)
+    ]
+    # The pipeline recovers (matches appear): the engine drops it from the
+    # dry census; the next fold ledgers the recovered positive.
+    (workspace_dir / "b.py").write_text("zzz_matches_nothing = 2\n", encoding="utf-8")
+    out3, code3 = query.run_query(ws, store, pipeline)
+    assert code3 == 0 and "rows (census): 1" in out3
+    reflex.sync_query_outcomes(workspace_dir)
+    evs = _q_events(workspace_dir)
+    assert [e["event"] for e in evs] == ["dry_query_rerun", "recovered"]
+
+
+def test_q_provisional_mapping_shape_tolerated(tmp_path):
+    """The provisional {"pipelines": {sig: {"rows": N}}} state shape stays
+    readable: rows 0 marks dryness (no event — a dry result alone is not
+    a rerun); rows>0 after dry is recovered with the count."""
     from ctx import reflex
 
     led = tmp_path / LEDGER
@@ -687,16 +757,13 @@ def test_q_json_state_fallback_scores_sighted_rerun_once(tmp_path):
         json.dumps({"pipelines": {Q_SIG: {"rows": 0}}}), encoding="utf-8"
     )
     reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'")
-    reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'")  # dedup
-    assert [e["event"] for e in _q_events(tmp_path)] == ["dry_query_rerun"]
-    # The pipeline recovers: any later q sighting folds the transition.
+    assert _q_events(tmp_path) == []  # dryness recorded, no event yet
     (led / "q-dry.json").write_text(
         json.dumps({"pipelines": {Q_SIG: {"rows": 5}}}), encoding="utf-8"
     )
     reflex.check_command(tmp_path, "ctx q 'decls'")
     evs = _q_events(tmp_path)
-    assert [e["event"] for e in evs] == ["dry_query_rerun", "recovered"]
-    assert evs[1]["rows"] == 5
+    assert [(e["event"], e["rows"]) for e in evs] == [("recovered", 5)]
 
 
 def test_q_ledger_absent_scores_nothing_and_writes_nothing(tmp_path):

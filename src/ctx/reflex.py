@@ -33,7 +33,7 @@ State: ``<workspace>/.ctx-session-reads/reflex.json`` —
      "circuit_shadow": {signature: {"state", "episode", "positives",
                                     "transitioned_in_episode",
                                     "starved_in_episode"}},
-     "q_dry": {q_signature: {"dry": bool, "scored": bool}},  # q-dry fold
+     "q_dry": {q_signature: {"dry": bool}},  # q-dry ledger fold state
      "q_ops": int}          # q-dry op-line cursor (lines consumed once)
 
 (``starved`` is operational dedup state: it marks that a starvation event
@@ -70,32 +70,44 @@ nothing — ctx verbs other than ``run`` had no signature. Now:
   ``--trace``).
 * Retrieval purity: ``q`` is a READ verb, so a repeated q is NOT
   starvation-after-intervention in the EDC §8 sense. It is its own event
-  class, fed by the q-dry ledger the query engine writes (fail-open —
-  ledger absent means nothing is scored, never guessed):
+  class, fed EXCLUSIVELY by the q-dry ledger the query engine writes
+  (``ctx.query`` self-healing wave) — read fail-open; ledger absent means
+  nothing is scored and nothing is written, never guessed:
 
-      ``.ctx-session-reads/q-dry.json``   — state: {"pipelines":
-          {"<q signature>": {"rows": <int last result rows>}}}
-          (a bare top-level mapping and bare-int values are tolerated)
+      ``.ctx-session-reads/q-dry.json``   — state: {"dry": [<raw
+          pipeline text>, ...]} — the engine's last-N 0-row pipelines;
+          a pipeline leaving the list after a non-empty result is the
+          recovery signal. (The provisional {"pipelines": {"<q
+          signature>": {"rows": <int>}}} mapping shape is tolerated.)
       ``.ctx-session-reads/q-dry.jsonl``  — op lines: {"op":
-          "q_dry_rerun" | <other>, "signature": "<q signature>",
-          "rows": <int>, "ts": <float>}
+          "q_dry_rerun", "pipeline": "<raw pipeline text>", "ts":
+          <float>} — one per identical dry re-issue. ("signature" and
+          "rows" keys are tolerated variants.)
 
-  Reflex folds that ledger (cursor ``q_ops``, dryness map ``q_dry`` in
-  reflex state) into ADDITIVE schema-v2 events on
-  ``interventions.jsonl`` (scorecard readers skip unknown events by
-  design):
+  Raw pipeline texts normalize through :func:`query_signature` so ledger
+  identity and hook-sighted command identity agree. Reflex folds the
+  ledger (cursor ``q_ops``, dryness map ``q_dry`` in reflex state) into
+  ADDITIVE schema-v2 events on ``interventions.jsonl`` (scorecard
+  readers skip unknown events by design):
 
       {"schema": "ctx.q/v1", "event": "dry_query_rerun",
        "signature": "<q signature>", "rows": 0, "ts": <float>}
           — an identical q re-issued after a 0-row result this session
             (the live-A/B "3 identical dry joins" loop, now counted);
       {"schema": "ctx.q/v1", "event": "recovered",
-       "signature": "<q signature>", "rows": <int > 0>, "ts": <float>}
+       "signature": "<q signature>", "rows": <int > 0 | null>,
+       "ts": <float>}
           — a q pipeline that returns rows following a prior dry
-            identical pipeline: the landing extension (teaching worked).
+            identical pipeline: the landing extension (the teaching
+            worked). ``rows`` is null when the ledger shape carries no
+            row count (the dry-list recovery signal).
 
-  Signatures in the ledger are reflex-normalized; the writer side uses
-  :func:`query_signature` on the raw pipeline text.
+  Ledger-driven ONLY (no sighting heuristics): the engine sees execution
+  and priors, so one physical rerun folds to one event — the asymmetric
+  loss prior prefers a missed event over a double-counted one. Caveat,
+  declared: the engine's dry list is a ring (last N); eviction of a
+  still-dry pipeline can masquerade as recovery once N+1 distinct dry
+  pipelines accumulate — rare, positive-class only, accepted.
 
 --------------------------------------------------------------------------
 Controller State wave (EDC §7–§10 + phase 6b) — everything below ships in
@@ -1089,9 +1101,12 @@ def check_command(
         # repeated q is never §8 starvation). Routed BEFORE the run
         # machinery so q commands never touch the commands counter,
         # hypothesis windows, or the densify latch: pre-wave behavior for
-        # run signatures stays byte-identical.
+        # run signatures stays byte-identical. Detection is ledger-driven
+        # (the query engine's q-dry ledger); the sighting only triggers
+        # the fold.
         if sig.startswith("q "):
-            return _check_q(ws_root, sig)
+            sync_query_outcomes(ws_root)
+            return None
         state = _normalized(read_state(ws_root))
         # Nothing recorded, nothing open → nothing to score: return WITHOUT
         # writing (v1 behavior kept). This matters beyond IO thrift: writing
@@ -1341,34 +1356,45 @@ def note_steer_shadow(ws_root: Path | str | None, command: str) -> None:
 #
 # q is a READ verb: a repeated q is NOT §8 starvation-after-intervention.
 # It is its own event class (dry_query_rerun / recovered), derived ONLY
-# from the q-dry ledger the query engine writes — read fail-open; a
-# missing ledger scores nothing (never guess from run-intervention state,
-# which carries no row counts).
+# from the q-dry ledger the query engine writes (ctx.query's self-healing
+# wave: `_qdry_write` state + `_qdry_ledger_append` op lines) — read
+# fail-open; a missing ledger scores nothing (never guess from
+# run-intervention state, which carries no row counts). The engine sees
+# execution and priors, so one physical rerun folds to exactly one event.
 
 
-def _q_outcome_doc(event: str, signature: str, rows: int) -> dict[str, Any]:
+def _q_outcome_doc(event: str, signature: str, rows: int | None) -> dict[str, Any]:
     """One additive ctx.q/v1 event line for ``interventions.jsonl``.
     Scorecard v2 readers skip unknown event kinds by design (future
-    schema, never errors), so this vocabulary is additive-safe."""
+    schema, never errors), so this vocabulary is additive-safe. ``rows``
+    is null when the ledger shape carries no row count."""
     return {
         "schema": "ctx.q/v1",
         "event": event,
         "signature": signature,
-        "rows": int(rows),
+        "rows": int(rows) if rows is not None else None,
         "ts": time.time(),
     }
 
 
 def _qrec(qd: dict[str, Any], signature: str) -> dict[str, Any]:
-    """Normalized per-signature dryness record: ``dry`` (last known result
-    was 0 rows) and ``scored`` (a hook-sighted rerun already scored this
-    dry episode — the op-line-less dedup; conservative undercount per the
-    asymmetric-loss prior)."""
+    """Normalized per-signature dryness record (``dry``: the engine's last
+    result for this pipeline was 0 rows)."""
     rec = qd.get(signature)
     if not isinstance(rec, dict):
-        rec = {"dry": bool(rec), "scored": False}
+        rec = {"dry": bool(rec)}
         qd[signature] = rec
     return rec
+
+
+def _q_line_signature(rec: dict[str, Any]) -> str:
+    """Signature of one op line / census entry: a pre-normalized
+    ``signature`` key wins; otherwise the engine's raw ``pipeline`` text
+    normalizes through :func:`query_signature`."""
+    sig = rec.get("signature")
+    if isinstance(sig, str) and sig:
+        return sig
+    return query_signature(str(rec.get("pipeline") or "")) or ""
 
 
 def _fold_q_ledger(
@@ -1397,7 +1423,7 @@ def _fold_q_ledger(
                     continue
                 if not isinstance(rec, dict):
                     continue
-                sig = str(rec.get("signature") or "")
+                sig = _q_line_signature(rec)
                 if not sig:
                     continue
                 rows = rec.get("rows")
@@ -1409,57 +1435,91 @@ def _fold_q_ledger(
                 qrec = _qrec(qd, sig)
                 if str(rec.get("op") or "") == "q_dry_rerun":
                     # The engine confirmed an identical re-issue of a
-                    # dry pipeline (it sees execution + priors).
-                    docs.append(_q_outcome_doc("dry_query_rerun", sig, rows_i or 0))
-                    qrec["dry"], qrec["scored"] = True, True
+                    # dry pipeline (it sees execution + priors). The
+                    # engine's lines carry no rows key — a dry rerun is
+                    # 0 rows by definition.
+                    docs.append(
+                        _q_outcome_doc("dry_query_rerun", sig, rows_i or 0)
+                    )
+                    qrec["dry"] = True
                 elif rows_i == 0:
-                    qrec["dry"], qrec["scored"] = True, False  # fresh dry episode
+                    qrec["dry"] = True  # tolerated variant: explicit dry result
                 elif rows_i is not None and rows_i > 0:
                     if qrec.get("dry"):
                         # The landing extension: rows after a dry
                         # identical pipeline — the teaching worked.
                         docs.append(_q_outcome_doc("recovered", sig, rows_i))
-                    qrec["dry"], qrec["scored"] = False, False
+                    qrec["dry"] = False
             if len(lines) != start:
                 state["q_ops"] = len(lines)
                 changed = True
     if json_path is not None:
-        mapping: dict[str, Any] = {}
+        blob: Any = None
         try:
             blob = json.loads(json_path.read_text(encoding="utf-8"))
-            if isinstance(blob, dict):
-                pipelines = blob.get("pipelines")
-                mapping = pipelines if isinstance(pipelines, dict) else blob
         except Exception:
-            mapping = {}
-        for sig in sorted(mapping):
-            val = mapping[sig]
-            rows_i = None
-            if isinstance(val, int) and not isinstance(val, bool):
-                rows_i = val
-            elif isinstance(val, dict):
-                rv = val.get("rows")
-                if isinstance(rv, int) and not isinstance(rv, bool):
-                    rows_i = rv
-            if rows_i is None:
-                continue  # unrecognized shape: skipped, never guessed
-            qrec = _qrec(qd, sig)
-            if rows_i == 0 and not qrec.get("dry"):
-                qrec["dry"], qrec["scored"] = True, False
-                changed = True
-            elif rows_i > 0 and qrec.get("dry"):
-                docs.append(_q_outcome_doc("recovered", sig, rows_i))
-                qrec["dry"], qrec["scored"] = False, False
-                changed = True
+            blob = None
+        if isinstance(blob, dict) and isinstance(blob.get("dry"), list):
+            # The engine's actual shape: {"dry": [<raw pipeline text>...]}
+            # — an authoritative census of currently-dry pipelines. New
+            # entries mark dryness (a dry result alone is not an event);
+            # a previously-dry signature ABSENT from the census recovered
+            # (the engine removes a pipeline on its first non-empty
+            # result). Declared caveat: ring eviction (last N) can
+            # masquerade as recovery — rare, positive-class, accepted.
+            census = {
+                s
+                for s in (
+                    query_signature(str(p)) for p in blob["dry"]
+                )
+                if s
+            }
+            for sig in sorted(census):
+                qrec = _qrec(qd, sig)
+                if not qrec.get("dry"):
+                    qrec["dry"] = True
+                    changed = True
+            for sig in sorted(qd):
+                rec = qd[sig]
+                if isinstance(rec, dict) and rec.get("dry") and sig not in census:
+                    docs.append(_q_outcome_doc("recovered", sig, None))
+                    rec["dry"] = False
+                    changed = True
+        elif isinstance(blob, dict):
+            # Provisional mapping shape, tolerated: {"pipelines":
+            # {<signature>: {"rows": N}}} or a bare signature→rows map.
+            pipelines = blob.get("pipelines")
+            mapping = pipelines if isinstance(pipelines, dict) else blob
+            for sig in sorted(mapping):
+                val = mapping[sig]
+                rows_i = None
+                if isinstance(val, int) and not isinstance(val, bool):
+                    rows_i = val
+                elif isinstance(val, dict):
+                    rv = val.get("rows")
+                    if isinstance(rv, int) and not isinstance(rv, bool):
+                        rows_i = rv
+                if rows_i is None:
+                    continue  # unrecognized shape: skipped, never guessed
+                qrec = _qrec(qd, sig)
+                if rows_i == 0 and not qrec.get("dry"):
+                    qrec["dry"] = True
+                    changed = True
+                elif rows_i > 0 and qrec.get("dry"):
+                    docs.append(_q_outcome_doc("recovered", sig, rows_i))
+                    qrec["dry"] = False
+                    changed = True
     return docs, changed or bool(docs)
 
 
 def sync_query_outcomes(ws_root: Path | str | None) -> None:
     """Fold the q-dry ledger into reflex state and append any derived
-    ctx.q/v1 events. Public so the cli's q verb can sync right after
-    writing its ledger; the hook path syncs via :func:`check_command` on
-    every q-signature command. Fail-open: absent ledger → no reads, no
-    writes (the ledger dir is never created here — worktreeHash golden)."""
+    ctx.q/v1 events. The hook path syncs via :func:`check_command` on
+    every q-signature command; public so the cli's q verb can sync right
+    after writing its ledger. Fail-open: absent ledger → no reads, no
+    writes (the ledger dir is never created here — worktreeHash golden).
+    Never changes a guard decision; never touches the run-signature
+    machinery (retrieval purity: q reruns are not §8 starvation)."""
     if ws_root is None:
         return
     try:
@@ -1479,41 +1539,6 @@ def sync_query_outcomes(ws_root: Path | str | None) -> None:
             _append_v2_events(ws_root, docs)
     except Exception:
         pass
-
-
-def _check_q(ws_root: Path | str, sig: str) -> None:
-    """Score one sighted ``ctx q`` command (the hook path). Always folds
-    the ledger first; when the engine writes NO op lines (state file
-    only), the sighting itself is the rerun evidence: an identical q
-    re-issued while its signature's last result was 0 rows scores one
-    dry_query_rerun per dry episode (``scored`` dedups the hook/cli
-    double-sighting; a fresh dry result re-arms). Never changes a guard
-    decision; never touches the run-signature machinery (retrieval
-    purity: q reruns are not §8 starvation)."""
-    try:
-        led = Path(ws_root) / _LEDGER_DIR
-        ops_path = led / _Q_DRY_OPS_NAME
-        json_path = led / _Q_DRY_STATE_NAME
-        has_ops, has_json = ops_path.is_file(), json_path.is_file()
-        if not has_ops and not has_json:
-            return None  # no q-dry ledger: skip, never guess, never write
-        state = _normalized(read_state(ws_root))
-        docs, changed = _fold_q_ledger(
-            state, ops_path if has_ops else None, json_path if has_json else None
-        )
-        if not has_ops:
-            rec = state["q_dry"].get(sig)
-            if isinstance(rec, dict) and rec.get("dry") and not rec.get("scored"):
-                docs.append(_q_outcome_doc("dry_query_rerun", sig, 0))
-                rec["scored"] = True
-                changed = True
-        if changed:
-            _write_state(ws_root, state)
-        if docs:
-            _append_v2_events(ws_root, docs)
-        return None
-    except Exception:
-        return None
 
 
 # -------------------------------------------------------------- heuristics
