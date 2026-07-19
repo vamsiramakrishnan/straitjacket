@@ -97,6 +97,12 @@ class EvidenceOutcome:
     actions_observed: int
     censored: bool
     operator: str = "unknown"  # logical op or profile/command family (aggregation key)
+    # ADDITIVE optional cost (debt 741c6afb40): live plan integration knows
+    # the emitting node's real duration and visible-token estimate. None =
+    # unknown (transcript-derived events); payload() OMITS the keys when
+    # None, so cost-less events keep their content-derived ids byte-stable.
+    cost_ms: int | None = None
+    visible_tokens: int | None = None
 
     def __post_init__(self) -> None:
         for o in self.outcomes:
@@ -107,7 +113,7 @@ class EvidenceOutcome:
                 raise ValueError(f"reason outside the closed vocabulary: {r!r}")
 
     def payload(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "version": self.version,
             "event_id": self.event_id,
             "investigation_id": self.investigation_id,
@@ -125,6 +131,13 @@ class EvidenceOutcome:
             "censored": self.censored,
             "operator": self.operator,
         }
+        # Omitted (not null) when unknown: _event_id hashes this payload, so
+        # inserting null keys would silently re-id every historical event.
+        if self.cost_ms is not None:
+            out["cost_ms"] = self.cost_ms
+        if self.visible_tokens is not None:
+            out["visible_tokens"] = self.visible_tokens
+        return out
 
 
 def combine_confidence(reasons: tuple[str, ...]) -> float:

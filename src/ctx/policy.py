@@ -155,6 +155,13 @@ _PV_RATE_KEY = {
 }
 
 
+def _lower_median(values: list[int]) -> int:
+    """Deterministic lower median: element at index (n-1)//2 of the sorted
+    values. No interpolation — the result is always an observed value."""
+    ordered = sorted(values)
+    return ordered[(len(ordered) - 1) // 2]
+
+
 def confidence_class(observations: int) -> str:
     for floor, name in PLAN_VALUE_CONFIDENCE:
         if observations >= floor:
@@ -197,6 +204,7 @@ def compile_plan_value(ws: Workspace) -> dict[str, Any]:
     events = _outcome_events(ws.root / ".ctx-session-reads")
     seen: set[str] = set()
     per: dict[str, dict[str, int]] = {}
+    costs: dict[str, dict[str, list[int]]] = {}  # op -> field -> observed values
     for ev in events:
         eid = str(ev.get("event_id") or "")
         if eid and eid in seen:
@@ -213,6 +221,12 @@ def compile_plan_value(ws: Workspace) -> dict[str, Any]:
             for o in outcomes:
                 if o in _PV_RATE_KEY:
                     b[o] += 1
+            # Optional cost fields (debt 741c6afb40): only events that carry
+            # them contribute; absent keys never synthesize a zero sample.
+            for fld in ("cost_ms", "visible_tokens"):
+                v = ev.get(fld)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    costs.setdefault(op, {}).setdefault(fld, []).append(int(v))
 
     table: dict[str, dict[str, Any]] = {}
     for op in sorted(per):
@@ -227,6 +241,14 @@ def compile_plan_value(ws: Workspace) -> dict[str, Any]:
         for outcome, key in _PV_RATE_KEY.items():
             denom = obs if outcome in _PV_POSITIVE else non_censored
             row[key] = round(b[outcome] / denom, 2) if denom else 0.0
+        # Cost medians (lower median of observed values) — ADDITIVE: the
+        # keys are omitted entirely when no event carries the field, so
+        # cost-less ledgers compile to byte-identical tables as before.
+        cost_samples = costs.get(op) or {}
+        if cost_samples.get("cost_ms"):
+            row["median_cost_ms"] = _lower_median(cost_samples["cost_ms"])
+        if cost_samples.get("visible_tokens"):
+            row["median_visible_tokens"] = _lower_median(cost_samples["visible_tokens"])
         row["confidence"] = confidence_class(obs)
         table[op] = row
     return {
@@ -430,6 +452,9 @@ def render_policy(policy: dict[str, Any]) -> str:
                 "observations", "attributed", "censored",
             ):
                 lines.append(f"{key} = {int(row.get(key, 0))}")
+            for key in ("median_cost_ms", "median_visible_tokens"):
+                if key in row:  # additive cost medians: rendered only when compiled
+                    lines.append(f"{key} = {int(row[key])}")
             for key in sorted(k for k in row if k.endswith("_rate")):
                 lines.append(f"{key} = {float(row[key]):.2f}")
             lines.append(f"confidence = {json.dumps(str(row.get('confidence', 'insufficient')))}")
