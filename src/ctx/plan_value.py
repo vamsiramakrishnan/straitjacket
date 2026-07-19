@@ -378,6 +378,26 @@ def apply_expected_coverage(
     return out
 
 
+def realized_coverage(steps: Any, node_rows: Mapping[str, int]) -> dict[str, float]:
+    """Coverage REALIZED by executed plan nodes: an op's declared
+    ``provides`` counts only when its node produced at least one row —
+    a declared causality of 1.0 beside an empty join is a claim, not
+    evidence. A node absent from ``node_rows`` (skipped/errored) counts
+    as empty; each op is credited at most once."""
+    from ctx import plan_ops
+
+    coverage: dict[str, float] = {}
+    credited: set[str] = set()
+    for step in steps:
+        if step.op in credited or int(node_rows.get(step.id) or 0) < 1:
+            continue
+        spec = plan_ops.OPS.get(step.op)
+        if spec is not None and spec.provides:
+            coverage = apply_expected_coverage(spec.provides, coverage)
+            credited.add(step.op)
+    return coverage
+
+
 def _conflicts(a: CandidateAction, b: CandidateAction) -> bool:
     """Deterministic conflict rule: same op, or two expensive actions that
     provide overlapping dimensions (mutually substitutable — never
@@ -516,6 +536,7 @@ __all__ = [
     "rank_actions",
     "select_batch",
     "apply_expected_coverage",
+    "realized_coverage",
     "stopping_decision",
     "render_ranking",
 ]

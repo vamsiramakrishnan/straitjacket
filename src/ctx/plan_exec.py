@@ -237,12 +237,18 @@ def execute_plan(
     *,
     tier: str = "cli",
     clock=time.monotonic,
+    node_rows: dict[str, int] | None = None,
 ) -> tuple[str, int]:
     """Validate and execute one evidence plan; returns (digest, exit_code).
 
     Exit codes: 0 = executed (test failures are evidence, not errors);
     2 = validation rejections (the text IS the typed rejection list);
     3 = one or more nodes errored (digest still renders, errors declared).
+
+    ``node_rows``, when supplied, is filled in place with the realized row
+    count of every ok node (additive out-parameter — the text/exit
+    contract is unchanged). Skipped and errored nodes never appear:
+    absence means the node produced nothing.
     """
     from ctx import plan_ir, plan_ops
 
@@ -399,6 +405,11 @@ def execute_plan(
             _cache_put(store, cache_key, blob_id)
         results[step.id] = {**doc, "status": "ok"}
         entry.update(blob=blob_id)
+
+    if node_rows is not None:
+        # Realized rows per ok node: declared OpSpec.provides are estimates;
+        # advisory coverage must be conditioned on what actually landed.
+        node_rows.update({nid: len(res.get("rows") or []) for nid, res in results.items()})
 
     # ---------------------------------------------------------- investigation
     manifest = {

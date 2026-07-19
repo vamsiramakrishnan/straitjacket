@@ -1186,7 +1186,8 @@ def _cmd_investigate(ws, ns) -> int:
         pass
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    out, code = execute_plan(ws, store, text, tier="cli")
+    node_rows: dict[str, int] = {}
+    out, code = execute_plan(ws, store, text, tier="cli", node_rows=node_rows)
     if code == 2:
         print(out)
         return 2
@@ -1221,27 +1222,25 @@ def _cmd_investigate(ws, ns) -> int:
     _emit_investigation(ws, store, out)
     if getattr(ns, "inv_advise", False):
         print()
-        print(_investigate_advice(ws, plan))
+        print(_investigate_advice(ws, plan, node_rows))
     return code
 
 
-def _investigate_advice(ws, plan) -> str:
+def _investigate_advice(ws, plan, node_rows=None) -> str:
     """Advisory next-action section for `ctx investigate --advise`: estimate
-    coverage from the plan's own executed ops (declared `provides`), rank the
-    remaining APPLICABLE registered ops with compiled priors, and render the
-    stopping receipt. Purely advisory stdout — never enters the investigation
-    digest, never suppresses anything (fail-open to a one-line note)."""
+    coverage from the plan's REALIZED results (an op's declared `provides`
+    counts only when its node produced rows — an empty join is no evidence),
+    rank the remaining APPLICABLE registered ops with compiled priors, and
+    render the stopping receipt. Purely advisory stdout — never enters the
+    investigation digest, never suppresses anything (fail-open to a one-line
+    note)."""
     try:
         from ctx import plan_ops
         from ctx import plan_value as pv
 
         floors = pv.required_floors(plan.objective_kind, plan.requires)
-        coverage: dict[str, float] = {}
+        coverage = pv.realized_coverage(plan.steps, node_rows or {})
         ran_ops = {s.op for s in plan.steps}
-        for op in ran_ops:
-            spec = plan_ops.OPS.get(op)
-            if spec is not None and spec.provides:
-                coverage = pv.apply_expected_coverage(spec.provides, coverage)
         # Hard constraints FIRST: only registered, engine-available ops are
         # candidates; already-run ops are excluded (novelty lives in priors).
         candidates = [
