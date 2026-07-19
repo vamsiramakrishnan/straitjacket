@@ -48,6 +48,24 @@ class DigestContext:
     # Graduated engagement (mechanism C): how many "next:" suggestions this
     # digest may carry. 0 = passive session, 1 = lean-model profile, 3 = full.
     suggestion_cap: int = 3
+    # Reflex arc (docs/REFLEX.md layer 3): densify-on-starvation. When True,
+    # a profile should spend its budget on the full census — every failing
+    # test name, every diagnostic, inline evidence instead of hints.
+    # Profiles read it via ``getattr(ctx, "dense", False)``; rendering stays
+    # deterministic — dense selects WHICH deterministic rendering, and the
+    # choice is declared in the printed header by the caller, never baked
+    # into stored digest identity by this flag alone.
+    dense: bool = False
+    # EDC delivery plan (docs/EDC.md §5.4): duck-typed against
+    # ctx.resolver.DeliveryPlan — the resolver owns the type; profiles read
+    # it via ``getattr(ctx, "plan", None)`` and fall back to a local default
+    # when absent. Like ``dense``, the plan selects WHICH deterministic
+    # rendering; identity stays a pure function of the rendered bytes.
+    plan: Any = None
+    # Profiles that version their renderings per outcome (pytest/v2 failure
+    # renders vs the byte-identical pytest/v1 pass path) declare the final
+    # version here; None means the profile's static ``version``.
+    meta_profile_version: str | None = None
 
     def mint_span(self, stream: "StreamView", kind: str, **kw: Any) -> str | None:
         if self.store is None:

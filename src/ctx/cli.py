@@ -27,6 +27,14 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write('{"decision":"allow"}\n')
         return 0
 
+    # ------------------------------------------------- supervisor fast path
+    # Hidden: `ctx job _supervise <jobdir>` is spawned detached by
+    # `ctx run --bg`; it must not resolve a workspace or parse the full CLI.
+    if len(args) >= 3 and args[0] == "job" and args[1] == "_supervise":
+        from ctx.jobs import supervise_main
+
+        return supervise_main(args[2])
+
     if args and args[0] == "mcp":
         from ctx.mcp import serve
 
@@ -54,6 +62,14 @@ def _main_slow(args: list[str]) -> int:
     p_run.add_argument("--cwd", help="working directory relative to the workspace")
     p_run.add_argument("--shell", action="store_true", help="run one string through the shell")
     p_run.add_argument("--timeout", type=float, default=600.0)
+    p_run.add_argument(
+        "--bg", action="store_true",
+        help="background immediately: supervised run, transcript gets a job handle",
+    )
+    p_run.add_argument(
+        "--bg-after", type=float, dest="bg_after", metavar="T",
+        help="stay foreground up to T seconds; if still running, background",
+    )
     p_run.add_argument("command", nargs=argparse.REMAINDER, help="-- <command> [args...]")
 
     p_search = sub.add_parser("search", help="multi-pattern bounded search")
@@ -87,6 +103,29 @@ def _main_slow(args: list[str]) -> int:
         action="store_true",
         help="render the current session's wire scorecard (proxy required)",
     )
+
+    p_eval = sub.add_parser(
+        "eval", help="run a Python script under the birth gate; only its digest returns"
+    )
+    p_eval.add_argument(
+        "script", nargs="?", help="script text ('-' or omitted reads stdin/heredoc)"
+    )
+    p_eval.add_argument("--file", help="read the script from a workspace file")
+    p_eval.add_argument("--cwd", help="working directory relative to the workspace")
+    p_eval.add_argument("--timeout", type=float, default=600.0)
+    p_eval.add_argument("--focus", help="deterministic evidence-selection query")
+
+    p_job = sub.add_parser("job", help="inspect or control a backgrounded run")
+    p_job.add_argument("job_id", help="job id from `ctx run --bg` (prefix ok)")
+    p_job.add_argument("--tail", type=int, metavar="N", help="show last N spool lines")
+    p_job.add_argument("--wait", action="store_true", help="block until done, then digest")
+    p_job.add_argument("--timeout", type=float, help="give up --wait after T seconds")
+    p_job.add_argument(
+        "--kill", action="store_true",
+        help="SIGKILL the process group; finalize what spooled",
+    )
+
+    sub.add_parser("jobs", help="list this workspace's backgrounded runs")
 
     p_seq = sub.add_parser("seq", help="declared command tree: N steps, one round")
     p_seq.add_argument("steps", nargs="+", help="shell command strings, run in order")
@@ -127,6 +166,17 @@ def _main_slow(args: list[str]) -> int:
     p_impact = sub.add_parser("impact", help="transitive callers / blast radius")
     p_impact.add_argument("symbol", help="name or Class.method dotted name")
     p_impact.add_argument("--depth", type=int, default=6, help="max hops (≤6)")
+
+    p_q = sub.add_parser(
+        "q", help="total pipeline algebra: '<stage> | <stage> | …' over typed streams"
+    )
+    p_q.add_argument(
+        "query",
+        help="e.g. 'refs TokenBucket | group file | top 3 | get --context 5'",
+    )
+    p_q.add_argument(
+        "--trace", action="store_true", help="append per-stage row provenance"
+    )
 
     p_policy = sub.add_parser("policy", help="compiled steering policy")
     pol_sub = p_policy.add_subparsers(dest="policy_cmd", required=True)
@@ -255,6 +305,12 @@ def _main_slow(args: list[str]) -> int:
 
         if ns.cmd == "run":
             return _cmd_run(ws, ns)
+        if ns.cmd == "job":
+            return _cmd_job(ws, ns)
+        if ns.cmd == "jobs":
+            return _cmd_jobs(ws)
+        if ns.cmd == "eval":
+            return _cmd_eval(ws, ns)
         if ns.cmd == "search":
             return _cmd_retrieval(ws, ns, "search")
         if ns.cmd == "get":
@@ -276,7 +332,6 @@ def _main_slow(args: list[str]) -> int:
         if ns.cmd == "seq":
             from ctx.seq import run_seq
             from ctx.store import Store as _Store
-            from ctx.textutil import bounded as _bounded
 
             store = _Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
             text, code = run_seq(
@@ -284,10 +339,18 @@ def _main_slow(args: list[str]) -> int:
                 halt_on_fail=not ns.keep_going,
                 timeout=ns.timeout, focus=ns.focus,
             )
-            budget = ws.config.budgets.result_tokens
-            if code != 0:
-                budget = int(budget * ws.config.budgets.failure_budget_factor)
-            print(_bounded(text, budget))
+            # Delivery plan (EDC §13): seq always emits against the result
+            # budget; failure asymmetry + pressure compose in the resolver.
+            # Engagement parity with run/eval (docs/LADDERS.md edge 1): lean
+            # or passive sessions must not pay for suggestion lines here
+            # either — _emit_bounded_digest applies the same filter.
+            plan = _delivery_plan(
+                ws,
+                outcome="success" if code == 0 else "failure",
+                family="seq",
+                base_tokens=ws.config.budgets.result_tokens,
+            )
+            _emit_bounded_digest(ws, store, text, plan)
             return 0 if code == 0 else 3
         if ns.cmd == "gain":
             return _cmd_gain(ws)
@@ -322,6 +385,8 @@ def _main_slow(args: list[str]) -> int:
             else:
                 print(cmd_impact(store, ws, ns.symbol, depth=ns.depth))
             return 0
+        if ns.cmd == "q":
+            return _cmd_q(ws, ns)
         if ns.cmd == "policy":
             return _cmd_policy(ws, ns)
         if ns.cmd == "init":
@@ -438,6 +503,67 @@ def _cmd_gain(ws) -> int:
     return 0
 
 
+def _delivery_plan(ws, *, outcome: str, family: str, base_tokens: int, signature=None):
+    """One resolver for every emission budget (docs/EDC.md §13, LADDERS
+    edge 8): outcome + circuit + signal record + config in, DeliveryPlan
+    out. Fail-open inside the resolver by contract."""
+    from ctx import resolver
+
+    return resolver.resolve_delivery(
+        outcome,
+        family,
+        contract_rendering={"base_tokens": base_tokens},
+        session=resolver.session_state(ws.root, signature),
+        environment=resolver.environment_signals(ws.root),
+        config_budgets=ws.config.budgets,
+    )
+
+
+def _emit_bounded_digest(ws, store, text: str, plan) -> None:
+    """Shared emission boundary: engagement filtering (teaching prose obeys
+    both the plan and the graduated-engagement cap), the plan's token
+    budget as the bounded() backstop, and the plan receipt telemetry."""
+    from ctx import resolver
+    from ctx.engagement import filter_digest, suggestion_cap
+    from ctx.textutil import bounded
+
+    eng = ws.config.engagement
+    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
+    if not plan.include_teaching:
+        cap = 0  # include_teaching=False maps to suggestion cap 0
+    resolver.record_plan_receipt(store.audit_dir if store is not None else None, plan)
+    print(bounded(filter_digest(text, cap), plan.token_budget))
+
+
+def _emit_run_digest(ws, digest: str, manifest: dict, store=None, signature=None) -> int:
+    """Shared emission tail for foreground runs and finalized background
+    jobs: delivery-plan resolution (budget selection, failure asymmetry,
+    window pressure), engagement filtering, and the run's exit-code
+    semantics (124 timeout, 3 nonzero, 0 success)."""
+    # Zero-hop inline digests may exceed the summary budget by design; the
+    # result budget is the hard emission backstop either way.
+    base = (
+        ws.config.budgets.result_tokens
+        if "output (complete):" in digest
+        else ws.config.budgets.digest_tokens
+    )
+    # Failure asymmetry rides through the resolver: a failing run's output
+    # is evidence, not boilerplate. exitCode != 0 covers None too: timeouts
+    # and signal deaths are failures (docs/LADDERS.md edge 4 — parity with
+    # eval's treatment).
+    outcome = "success" if manifest["result"]["exitCode"] == 0 else "failure"
+    plan = _delivery_plan(
+        ws, outcome=outcome, family="run", base_tokens=base, signature=signature
+    )
+    # Graduated engagement (mechanism C): affordances are filtered at this
+    # emission boundary only — the stored digest identity stays canonical.
+    _emit_bounded_digest(ws, store, digest, plan)
+    result = manifest["result"]
+    if result["timedOut"]:
+        return 124
+    return 0 if result["exitCode"] == 0 else 3
+
+
 def _cmd_run(ws, ns) -> int:
     from ctx.digest import render_run_digest
     from ctx.execution import ExecutionError, run_capture
@@ -451,6 +577,10 @@ def _cmd_run(ws, ns) -> int:
         return 2
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+
+    if ns.bg or ns.bg_after is not None:
+        return _cmd_run_bg(ws, store, ns, command)
+
     try:
         capture = run_capture(
             ws,
@@ -464,34 +594,236 @@ def _cmd_run(ws, ns) -> int:
         print(f"ctx run: {e}", file=sys.stderr)
         return 1
 
-    digest, manifest = render_run_digest(store, ws, capture.manifest, focus=ns.focus)
-    from ctx.textutil import bounded
+    # Reflex arc (docs/REFLEX.md layer 3): a signature already intervened on
+    # this session re-arriving here IS the starvation loop — check_command
+    # scores it (deduped against the hook's sighting of the same re-run) and
+    # reports the densify latch. Latched → render the dense census and
+    # declare it in the printed header. Fail-open: broken reflex state means
+    # a plain digest, never a failed run.
+    sig = None
+    dense = False
+    try:
+        import shlex
 
-    # Zero-hop inline digests may exceed the summary budget by design; the
-    # result budget is the hard emission backstop either way.
-    budget = (
+        from ctx import reflex
+
+        cmd_str = command[0] if ns.shell else shlex.join(command)
+        sig = reflex.command_signature(cmd_str)
+        if sig:
+            dense = reflex.check_command(ws.root, cmd_str) == "densify" or (
+                reflex.densify_latched(ws.root, sig)
+            )
+    except Exception:
+        sig, dense = None, False
+
+    # EDC phase 4: resolve the delivery plan and hand it to the renderer
+    # when the digest layer accepts it (duck-typed `plan=` kwarg; absent →
+    # legacy rendering, byte-identical by construction). The render-time
+    # plan uses the digest base budget; the emission backstop re-resolves
+    # with the actual zero-hop marker in `_emit_run_digest`.
+    render_kwargs = {}
+    try:
+        import inspect
+
+        if "plan" in inspect.signature(render_run_digest).parameters:
+            outcome = (
+                "success" if capture.manifest["result"]["exitCode"] == 0 else "failure"
+            )
+            render_kwargs["plan"] = _delivery_plan(
+                ws,
+                outcome=outcome,
+                family="run",
+                base_tokens=ws.config.budgets.digest_tokens,
+                signature=sig,
+            )
+    except Exception:
+        render_kwargs = {}
+
+    digest, manifest = render_run_digest(
+        store, ws, capture.manifest, focus=ns.focus, dense=dense, **render_kwargs
+    )
+    # A digest that omitted content is an intervention (hypothesis: the model
+    # uses the digest, not a re-run). Record it so the reflex arc can score
+    # the next command against it.
+    try:
+        if sig:
+            from ctx import reflex
+
+            if reflex.has_omissions(digest):
+                short = str(manifest.get("id", "")).removeprefix("sha256:")[:12]
+                reflex.note_intervention(
+                    ws.root, sig, short, hints=reflex.count_hints(digest)
+                )
+    except Exception:
+        pass
+    if dense:
+        # Printed declaration only — the stored digest identity/meta hash is
+        # computed inside render_run_digest and never sees reflex state.
+        from ctx.reflex import DENSIFY_HEADER
+
+        digest = DENSIFY_HEADER + "\n" + digest
+    return _emit_run_digest(ws, digest, manifest, store=store, signature=sig)
+
+
+def _cmd_run_bg(ws, store, ns, command: list[str]) -> int:
+    """`ctx run --bg / --bg-after T`: supervised launch, then a bounded
+    patience window. Finished in time → the normal digest, byte-identical
+    to a foreground run. Still running → job handle, exit 0."""
+    from ctx.jobs import (
+        JobError,
+        backgrounded_status,
+        finalize_job,
+        start_job,
+        wait_for_done,
+    )
+    from ctx.workspace import WorkspaceError
+
+    patience = ns.bg_after if ns.bg_after is not None else 0.0  # --bg ⇒ 0
+    try:
+        job_id = start_job(
+            ws, store, command,
+            cwd=ns.cwd, shell=ns.shell, timeout=ns.timeout, focus=ns.focus,
+        )
+    except (JobError, WorkspaceError) as e:
+        print(f"ctx run: {e}", file=sys.stderr)
+        return 1
+    try:
+        if wait_for_done(store, job_id, timeout=max(0.0, patience)):
+            digest, manifest = finalize_job(ws, store, job_id)
+            return _emit_run_digest(ws, digest, manifest, store=store)
+        print(backgrounded_status(store, job_id))
+        return 0
+    except JobError as e:
+        print(f"ctx run: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_job(ws, ns) -> int:
+    from ctx.jobs import (
+        JobError,
+        finalize_job,
+        job_state,
+        job_status,
+        kill_job,
+        resolve_job_id,
+        wait_for_done,
+    )
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        job_id = resolve_job_id(store, ns.job_id)
+        if ns.kill:
+            digest, manifest = kill_job(ws, store, job_id)
+            short = manifest["id"].removeprefix("sha256:")[:12]
+            print(f"[ctx job:{job_id} killed · finalized → run:{short}]")
+            _emit_run_digest(ws, digest, manifest, store=store)
+            return 0
+        if ns.wait:
+            if not wait_for_done(store, job_id, timeout=ns.timeout):
+                print(job_status(store, job_id, tail=ns.tail))
+                return 124
+            digest, manifest = finalize_job(ws, store, job_id)
+            short = manifest["id"].removeprefix("sha256:")[:12]
+            print(f"[ctx job:{job_id} finalized → run:{short}]")
+            return _emit_run_digest(ws, digest, manifest, store=store)
+        state = job_state(store, job_id)
+        if state in ("done", "finalized"):
+            digest, manifest = finalize_job(ws, store, job_id)
+            short = manifest["id"].removeprefix("sha256:")[:12]
+            print(f"[ctx job:{job_id} finalized → run:{short}]")
+            _emit_run_digest(ws, digest, manifest, store=store)
+            return 0
+        status = job_status(store, job_id, tail=ns.tail)
+        print(status)
+        return 1 if state == "failed" else 0
+    except JobError as e:
+        print(f"ctx job: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_jobs(ws) -> int:
+    from ctx.jobs import list_jobs
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(list_jobs(store))
+    return 0
+
+
+def _cmd_eval(ws, ns) -> int:
+    from ctx.execution import ExecutionError
+    from ctx.pyeval import run_eval
+    from ctx.store import Store
+
+    if ns.file:
+        full = ws.confine(ns.file, must_exist=True)
+        rel = ws.relativize(full)
+        if ws.is_ignored(rel):
+            print(f"ctx eval: path is excluded from capture by policy: {rel}", file=sys.stderr)
+            return 1
+        script = full.read_text(encoding="utf-8")
+    elif ns.script in (None, "-"):
+        if sys.stdin.isatty():
+            print(
+                "ctx eval: no script given (pass text, --file <path>, or pipe stdin)",
+                file=sys.stderr,
+            )
+            return 2
+        script = sys.stdin.read()
+    else:
+        script = ns.script
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        text, code = run_eval(
+            ws, store, script, timeout=ns.timeout, cwd=ns.cwd, focus=ns.focus
+        )
+    except ExecutionError as e:
+        print(f"ctx eval: {e}", file=sys.stderr)
+        return 1
+
+    # Delivery plan (EDC §13): zero-hop inline uses the result budget;
+    # failure asymmetry (a failing script's traceback is evidence — timeout
+    # 124 included, docs/LADDERS.md edge 4) and window pressure compose in
+    # the resolver, floor-protected.
+    base = (
         ws.config.budgets.result_tokens
-        if "output (complete):" in digest
+        if "output (complete):" in text
         else ws.config.budgets.digest_tokens
     )
-    # Failure asymmetry: a failing run's output is evidence, not boilerplate.
-    if manifest["result"]["exitCode"] not in (0, None):
-        budget = int(budget * ws.config.budgets.failure_budget_factor)
-    # Graduated engagement (mechanism C): affordances are filtered at this
-    # emission boundary only — the stored digest identity stays canonical.
-    from ctx.engagement import filter_digest, suggestion_cap
-
-    eng = ws.config.engagement
-    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
-    print(bounded(filter_digest(digest, cap), budget))
-    result = manifest["result"]
-    if result["timedOut"]:
+    plan = _delivery_plan(
+        ws,
+        outcome="success" if code == 0 else "failure",
+        family="eval",
+        base_tokens=base,
+    )
+    _emit_bounded_digest(ws, store, text, plan)
+    if code == 124:
         return 124
-    return 0 if result["exitCode"] == 0 else 3
+    return 0 if code == 0 else 3
+
+
+def _emit_retrieval(ws, store, out: str) -> int:
+    """Shared emission tail for every retrieval-path verb (search/get/
+    stats/diff/map/code): the ONE budget choke point (LADDERS edge 8).
+    ``resolve_retrieval_budget`` returns exactly the configured
+    turn-retrieval budget today — the same value ``charge_turn_budget``
+    enforces — so behavior is unchanged; the window-pressure hook-in for
+    retrieval lands in the resolver, not in seven call sites."""
+    from ctx import resolver
+    from ctx.retrieval import charge_turn_budget
+
+    resolver.resolve_retrieval_budget(ws.config, resolver.environment_signals(ws.root))
+    warning = charge_turn_budget(store, ws, out)
+    if warning:
+        print(warning)
+    print(out)
+    return 0
 
 
 def _cmd_diff(ws, ns) -> int:
-    from ctx.retrieval import RetrievalError, charge_turn_budget
+    from ctx.retrieval import RetrievalError
     from ctx.rundiff import run_diff
     from ctx.store import Store
 
@@ -501,30 +833,27 @@ def _cmd_diff(ws, ns) -> int:
     except RetrievalError as e:
         print(f"ctx diff: {e}", file=sys.stderr)
         return 1
-    warning = charge_turn_budget(store, ws, out)
-    if warning:
-        print(warning)
-    print(out)
-    return 0
+    return _emit_retrieval(ws, store, out)
 
 
 def _cmd_map(ws, ns) -> int:
+    from ctx import resolver
     from ctx.repomap import repo_map
-    from ctx.retrieval import charge_turn_budget
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    out = repo_map(store, ws, budget=ns.budget, focus=ns.focus)
-    warning = charge_turn_budget(store, ws, out)
-    if warning:
-        print(warning)
-    print(out)
-    return 0
+    # The map's explicit --budget routes through the same resolver choke
+    # point (today: returned verbatim; pressure hook-in comes later).
+    budget = resolver.resolve_retrieval_budget(
+        ws.config, resolver.environment_signals(ws.root), requested=ns.budget
+    )
+    out = repo_map(store, ws, budget=budget, focus=ns.focus)
+    return _emit_retrieval(ws, store, out)
 
 
 def _cmd_code(ws, ns) -> int:
     from ctx.codeverbs import cmd_def, cmd_diag, cmd_refs
-    from ctx.retrieval import RetrievalError, charge_turn_budget
+    from ctx.retrieval import RetrievalError
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
@@ -538,10 +867,28 @@ def _cmd_code(ws, ns) -> int:
     except RetrievalError as e:
         print(f"ctx {ns.cmd}: {e}", file=sys.stderr)
         return 1
-    warning = charge_turn_budget(store, ws, out)
-    if warning:
-        print(warning)
-    print(out)
+    return _emit_retrieval(ws, store, out)
+
+
+def _cmd_q(ws, ns) -> int:
+    """`ctx q '<stage> | …'` — the M-H composition algebra (docs/ALGEBRA.md).
+    Total by construction (no loops, ≤8 stages), so its cost is statically
+    boundable — the property that makes it MCP-tier-safe later (no MCP
+    wiring this wave). Emission rides the same engagement filter + bounded
+    backstop as the other verbs."""
+    from ctx.query import run_query
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    text, code = run_query(ws, store, ns.query, trace=ns.trace)
+    if code != 0:
+        print(text, file=sys.stderr)
+        return code
+    plan = _delivery_plan(
+        ws, outcome="success", family="q",
+        base_tokens=ws.config.budgets.result_tokens,
+    )
+    _emit_bounded_digest(ws, store, text, plan)
     return 0
 
 
@@ -569,7 +916,7 @@ def _cmd_policy(ws, ns) -> int:
 
 
 def _cmd_retrieval(ws, ns, verb: str) -> int:
-    from ctx.retrieval import RetrievalError, Selector, _span, charge_turn_budget, get, search, stats
+    from ctx.retrieval import RetrievalError, Selector, _span, get, search, stats
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
@@ -603,11 +950,7 @@ def _cmd_retrieval(ws, ns, verb: str) -> int:
         print(f"ctx {verb}: {e}", file=sys.stderr)
         return 1
 
-    warning = charge_turn_budget(store, ws, out)
-    if warning:
-        print(warning)
-    print(out)
-    return 0
+    return _emit_retrieval(ws, store, out)
 
 
 if __name__ == "__main__":  # pragma: no cover

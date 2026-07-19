@@ -12,6 +12,15 @@ The compiled file is meant to be reviewed and committed like code — the
 epoch id is a content hash of the policy body, so two compiles of the same
 telemetry produce byte-identical output and a stable id. Nothing here runs
 on the hook hot path; the hook only re-reads the rendered TOML fail-open.
+
+REFLEX slow loop (layer 4): the compiler also aggregates the reflex-arc
+outcome ledger (``.ctx-session-reads/reflex-outcomes.jsonl``) into a
+``[digest_density]`` table — per command signature, the starting digest
+density the next epoch should use. Signatures that repeatedly starved
+(re-runs after their digest) start ``"dense"`` so the in-session reflex has
+nothing left to correct. The section is additive: the hook's policy loader
+reads only schema/promoted/demoted and ignores it, and nothing consumes it
+at render time yet — epoch consumption is deliberately deferred.
 """
 
 from __future__ import annotations
@@ -37,6 +46,16 @@ _SCAN_LIMIT = 500
 # A single observation above DEMOTE_MULTIPLE × cap marks the signature as a
 # flooder regardless of how well-behaved its p95 is.
 _DEMOTE_MULTIPLE = 4
+
+# Digest-density promotion threshold (REFLEX slow loop). A signature enters
+# [digest_density] only when the outcome ledger shows at least this many
+# starvation events for it — the same "two independent observations before
+# the policy moves" conservatism as min_runs/_DEMOTE_MULTIPLE above. And it
+# NEVER enters when landings >= starvations: a model that follows the
+# digest's addresses at least as often as it re-runs is being served by the
+# lean form, and lean digests stay the default (the asymmetric-loss prior
+# only pays for density where starvation dominates).
+_DENSIFY_MIN_STARVATION = 2
 
 # A "subcommand" is a bare lowercase word (``git status``, ``cargo build``).
 # Script paths, code snippets, and option values never qualify, so
@@ -70,6 +89,40 @@ def _p95(values: list[int]) -> int:
     return ordered[idx]
 
 
+def _reflex_tallies(ledger_dir: Path) -> dict[str, dict[str, int]]:
+    """Per-signature starvation/landing tallies from the reflex outcome
+    ledger (``<ledger_dir>/reflex-outcomes.jsonl``; one JSON object per
+    line: ``{"ts", "event", "signature", "run", "action"}``).
+
+    Fail-open like the manifest scan above: a missing or unreadable ledger,
+    and any individually corrupt line, contribute nothing."""
+    tallies: dict[str, dict[str, int]] = {}
+    try:
+        lines = (
+            (Path(ledger_dir) / "reflex-outcomes.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    except OSError:
+        return tallies
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        event = rec.get("event")
+        sig = rec.get("signature")
+        if event not in ("starvation", "landing"):
+            continue  # friction scores guard outcomes, not digest density
+        if not isinstance(sig, str) or not sig.strip():
+            continue
+        t = tallies.setdefault(sig.strip(), {"starvation": 0, "landing": 0})
+        t[event] += 1
+    return tallies
+
+
 def _run_total_bytes(manifest: dict[str, Any]) -> int:
     total = 0
     for stream in (manifest.get("streams") or {}).values():
@@ -97,9 +150,17 @@ def compile_policy(
     observation above ``_DEMOTE_MULTIPLE`` × cap demotes the signature —
     excluded from promotion even when its p95 passes.
 
-    Returns ``{"schema", "epoch", "promoted", "demoted"}`` where ``epoch``
-    is the first 12 hex chars of the sha256 of the canonical body (without
-    the epoch itself) — deterministic across compiles of the same store."""
+    Additionally aggregates the reflex outcome ledger under
+    ``<ws.root>/.ctx-session-reads/`` into ``digest_density`` (REFLEX slow
+    loop): a signature with >= ``_DENSIFY_MIN_STARVATION`` starvation events
+    and strictly more starvations than landings compiles to ``"dense"``.
+
+    Returns ``{"schema", "epoch", "promoted", "demoted"}`` plus
+    ``"digest_density"`` when non-empty, where ``epoch`` is the first 12 hex
+    chars of the sha256 of the canonical body (without the epoch itself) —
+    deterministic across compiles of the same inputs. The density table is
+    part of the hashed body only when non-empty, so pre-reflex epochs keep
+    their ids and recompiling unchanged telemetry stays a no-op diff."""
     cap = int(max_p95_bytes or ws.config.budgets.max_inline_bytes)
     rows = store.db.execute(
         "SELECT id FROM objects WHERE kind='run' "
@@ -139,14 +200,37 @@ def compile_policy(
                     {"signature": sig, "runs": len(totals), "p95_bytes": p95}
                 )
 
+    # Digest-density promotion (REFLEX slow loop). Rule, mirroring the
+    # promote/demote conservatism above:
+    #   - >= _DENSIFY_MIN_STARVATION starvation events for the signature in
+    #     the telemetry window (one event never moves policy), AND
+    #   - starvations strictly greater than landings — a signature whose
+    #     landings keep pace is following addresses and keeps lean digests.
+    digest_density: dict[str, str] = {}
+    tallies = _reflex_tallies(ws.root / ".ctx-session-reads")
+    for sig in sorted(tallies):
+        t = tallies[sig]
+        if (
+            t["starvation"] >= _DENSIFY_MIN_STARVATION
+            and t["landing"] < t["starvation"]
+        ):
+            digest_density[sig] = "dense"
+
     body = {"schema": POLICY_SCHEMA, "promoted": promoted, "demoted": demoted}
+    if digest_density:
+        # Additive: absent from the hash body when empty so pre-reflex
+        # epochs keep their ids.
+        body["digest_density"] = digest_density
     epoch = hashlib.sha256(canonical_json(body)).hexdigest()[:12]
-    return {
+    out: dict[str, Any] = {
         "schema": POLICY_SCHEMA,
         "epoch": epoch,
         "promoted": promoted,
         "demoted": demoted,
     }
+    if digest_density:
+        out["digest_density"] = digest_density
+    return out
 
 
 def render_policy(policy: dict[str, Any]) -> str:
@@ -185,6 +269,22 @@ def render_policy(policy: dict[str, Any]) -> str:
                 f'p95_bytes = {int(entry["p95_bytes"])}',
             ]
         )
+    density = policy.get("digest_density") or {}
+    if density:
+        lines.extend(
+            [
+                "",
+                "# Starting digest density per command signature (REFLEX slow",
+                "# loop): compiled from the reflex outcome ledger. A signature",
+                "# is listed only after repeated starvation (>= 2 events) with",
+                "# starvations exceeding landings. Not consumed by rendering",
+                "# yet — the in-session reflex handles densify; the guard's",
+                "# policy loader ignores this table (fail-open).",
+                "[digest_density]",
+            ]
+        )
+        for sig in sorted(density):
+            lines.append(f"{json.dumps(str(sig))} = {json.dumps(str(density[sig]))}")
     return "\n".join(lines) + "\n"
 
 

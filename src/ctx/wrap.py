@@ -99,7 +99,9 @@ def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
         "hooks": {
             "PreToolUse": [
                 {
-                    "matcher": "Bash|Read|Grep|Glob",
+                    # Edit/Write are observation-only (reflex v2 disarm):
+                    # the hook always allows them without rewrite.
+                    "matcher": "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
                     "hooks": [
                         {
                             "type": "command",

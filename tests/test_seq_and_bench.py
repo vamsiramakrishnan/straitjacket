@@ -90,6 +90,39 @@ def test_cli_seq_exit_codes(ws_store, capsys):
     assert main(["--workspace", str(ws.root), "seq", "sh -c 'exit 1'"]) == 3
 
 
+def test_seq_signal_death_is_failure(ws_store):
+    """exitCode None from signal death is a failure, not a green step (S6)."""
+    from ctx.seq import run_seq
+
+    ws, store = ws_store
+    text, code = run_seq(ws, store, ["sh -c 'kill -9 $$'", "echo after"])
+    assert code != 0
+    assert "step 1 ✗" in text
+    assert "after" not in text  # tree halted at the failure
+
+
+def test_cli_seq_passive_engagement_strips_hints(tmp_path, monkeypatch, capsys):
+    """Engagement parity (docs/LADDERS.md edge 1): passive sessions don't
+    pay for `next:` suggestion lines on seq digests either."""
+    import subprocess
+
+    monkeypatch.setenv("CTX_STATE_HOME", str(tmp_path / "state"))
+    d = tmp_path / "proj"
+    d.mkdir()
+    (d / "ctx.toml").write_text(
+        'version = 1\n[engagement]\nmode = "passive"\n', encoding="utf-8"
+    )
+    subprocess.run(["git", "init", "-q", "."], cwd=d, check=True)
+    from ctx.cli import main
+
+    assert main(
+        ["--workspace", str(d), "seq", "sh -c 'yes x | head -5000'"]
+    ) == 0
+    out = capsys.readouterr().out
+    assert "run:" in out  # evidence handle still rides
+    assert "next:" not in out  # suggestion lines filtered under passive
+
+
 # --------------------------------------------- scorecard rounds + recovery
 def test_scorecard_rounds_and_rescue_recovery(tmp_path):
     from ctx.scorecard import compute_scorecard, summary_line

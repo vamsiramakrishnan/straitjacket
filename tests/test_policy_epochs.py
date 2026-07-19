@@ -146,6 +146,27 @@ def test_epoch_id_deterministic_across_compiles(state_home, workspace_dir):
     int(p1["epoch"], 16)  # hex content hash
 
 
+def test_epoch_id_pinned_regression(state_home, workspace_dir):
+    """Golden receipt: this exact scenario must always compile to epoch
+    ``b5023dd959c5`` (captured before any modernization pass on policy.py).
+    Epoch hashing is content identity, not just internally consistent — any
+    idiom change that alters ``compile_policy``'s output ordering, field
+    presence, or canonicalization for *identical inputs* is a regression,
+    even if p1 == p2 still holds within the changed code."""
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    for i in range(6):
+        _seed_run(store, ws, ["sleeper", "x", str(i)], 40, salt=i)
+    _seed_run(store, ws, ["flooder", "run"], HUGE, salt=777)
+
+    from ctx.policy import compile_policy
+
+    policy = compile_policy(store, ws)
+    assert policy["epoch"] == "b5023dd959c5"
+    assert policy["promoted"] == [{"signature": "sleeper x", "runs": 6, "p95_bytes": 40}]
+    assert policy["demoted"] == ["flooder run"]
+
+
 def test_command_signature_shapes():
     from ctx.policy import command_signature
 

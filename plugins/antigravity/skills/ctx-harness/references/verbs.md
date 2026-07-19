@@ -27,6 +27,35 @@ index entry is not enough; each verb's output is bounded and deterministic.
   step's digest rides in full, a green tree stays terse. Use for
   mechanical chains you can declare upfront (test → build → lint):
   measured, 65–70% of repair/creation rounds were such chains.
+- `ctx eval '<python script>' | --file <path> | -` (stdin/heredoc) —
+  programmable capture: when the chain needs computed control flow
+  (branch on a result, loop over files, aggregate before emitting), write
+  a short Python script instead of N rounds of tool calls. It runs under
+  the birth gate (`python -I`, script fed on stdin) and only its bounded
+  digest returns — print exactly what the transcript needs; intermediates
+  stay local. That terseness scopes to the script's output only: the final
+  user-facing answer must still satisfy the task's required output format
+  in full. The script itself is stored and cited as `blob:<id>` in the
+  digest header (reproduce: `ctx get blob:<id> | python3 -I -`); both
+  streams stay span-addressable. Sub-steps that deserve their own handles
+  call `ctx run` from inside the script. Isolated mode means repo imports
+  need an explicit `sys.path.insert(0, ".")`. Same trust envelope as
+  `ctx run`; failing scripts get the failure digest budget (traceback is
+  evidence, and frames say `File "<stdin>"` — never a host path).
+
+## Long runners
+
+- `ctx run --bg | --bg-after T -- <cmd>` — supervised backgrounding: the
+  run starts under a detached supervisor either way. Finishes within `T`
+  → the normal digest returns as if foreground (byte-identical, same
+  `run:` id). Still running at `T` → the transcript gets `job:<id>`
+  immediately and the output exists only as a spooled artifact. Inspect
+  with `ctx job <id>` (bounded live tail, never a flood), `--wait`
+  (block, then digest), `--kill` (SIGKILL the group; what spooled is
+  finalized and addressable); `ctx jobs` lists. Finalized jobs are
+  ordinary `run:` artifacts — `search`/`get` address them identically.
+  Never idle a session on a long process: background it, keep working,
+  collect the digest when you need it.
 
 ## Repository comprehension
 

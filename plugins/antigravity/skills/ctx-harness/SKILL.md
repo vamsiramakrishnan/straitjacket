@@ -31,8 +31,10 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     by re-quoting it: quoted evidence duplicates context and burns output
     tokens, while the citation resolves exactly for any reader.
 12. Keep intermediate narration to one terse line per step; reserve full
-    prose for the final user-facing report. Sub-agent reports use the
-    checkpoint shape (goal, findings, evidence handles, negatives).
+    prose for the final user-facing report. Terseness governs scripts and
+    intermediate narration only — never the final deliverable, which must
+    satisfy the task's required output format in full. Sub-agent reports
+    use the checkpoint shape (goal, findings, evidence handles, negatives).
 13. Apply the solution ladder before writing any code — prefer in order:
     not needed at all, reuse what exists, standard library, a one-liner,
     minimal new code. Be lazy about the solution, never about reading.
@@ -41,17 +43,27 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 14. Plan backward: state the final acceptance check first, then the step
     before it, back to your first action — then execute forward without
     re-planning. Mechanical chains you can declare upfront run as one
-    round via `ctx seq`.
+    round via `ctx seq`; chains that need computed control flow (branch
+    on a result, loop over files, aggregate before emitting) run as one
+    round via `ctx eval` — print only what the transcript needs.
+15. Never idle on a long-running command: `ctx run --bg-after 30 -- <cmd>`
+    backgrounds it if it outlives the wait, returning `job:<id>` while the
+    output spools to an artifact. Keep working; `ctx job <id>` shows a
+    bounded live tail, `--wait` collects the digest when you need it.
 
 ## Verb index
 
 `run` (capture) · `seq` (declared command tree — N mechanical steps, one
-round, per-step provenance) · `search` (batched patterns) · `get` (exact
+round, per-step provenance) · `eval` (programmable capture — a Python
+script chains N ops with computed control flow; only its digest returns,
+the script itself is an addressable blob) · `search` (batched patterns) · `get` (exact
 slices incl. `--span`) · `stats` (shape; on one code file: priced symbol
 outline) · `map` (ranked codebase map) · `def`/`refs`/`diag` (symbol
 verbs) · `callers`/`callees`/`impact` (call graph — direct/transitive, one
 query replaces a recursive grep trace) · `diff run:A run:B` (regression
-delta) · `stats --session` /
+delta) · `run --bg`/`job`/`jobs` (long-runner backgrounding — live tail,
+wait, kill; finalized jobs are ordinary `run:` artifacts) ·
+`stats --session` /
 `gain` (economics) · `checkpoint` (cache epoch) · `debt` (deferral ledger).
 Full flags and when-to-use detail: read `references/verbs.md`.
 

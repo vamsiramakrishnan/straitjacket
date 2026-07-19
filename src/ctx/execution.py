@@ -60,9 +60,18 @@ def run_capture(
     shell: bool = False,
     timeout: float | None = 600.0,
     store: Store | None = None,
+    stdin_bytes: bytes | None = None,
+    record_argv: list[str] | None = None,
 ) -> CaptureResult:
     """Execute a command, streaming stdout/stderr into distinct immutable
-    blobs, and publish a ``ctx.invocation/v1`` manifest."""
+    blobs, and publish a ``ctx.invocation/v1`` manifest.
+
+    ``stdin_bytes`` is spooled to disk and fed as the child's stdin (never a
+    pipe, so no deadlock and no size limit). ``record_argv`` substitutes the
+    manifest's model-visible argv when the executed argv carries a
+    host-specific absolute path (e.g. ``sys.executable``) that must never
+    appear in manifests or digests.
+    """
     if not argv:
         raise ExecutionError("empty command")
     store = store or Store(ws.workspace_id)
@@ -80,8 +89,13 @@ def run_capture(
     tmpdir = Path(tempfile.mkdtemp(prefix="ctx-cap-"))
     out_path = tmpdir / "stdout"
     err_path = tmpdir / "stderr"
+    in_path: Path | None = None
+    if stdin_bytes is not None:
+        in_path = tmpdir / "stdin"
+        in_path.write_bytes(stdin_bytes)
     timed_out = False
     try:
+        in_fh = in_path.open("rb") if in_path is not None else None
         with out_path.open("wb") as out_fh, err_path.open("wb") as err_fh:
             try:
                 proc = subprocess.Popen(
@@ -90,11 +104,14 @@ def run_capture(
                     shell=shell,
                     stdout=out_fh,
                     stderr=err_fh,
-                    stdin=subprocess.DEVNULL,
+                    stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
                     start_new_session=True,
                 )
             except FileNotFoundError as e:
                 raise ExecutionError(f"command not found: {argv[0]}") from e
+            finally:
+                if in_fh is not None:
+                    in_fh.close()
             try:
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -127,7 +144,7 @@ def run_capture(
                 "encoding": encoding if size else "utf-8",
             }
     finally:
-        for p in (out_path, err_path):
+        for p in (out_path, err_path) + ((in_path,) if in_path is not None else ()):
             try:
                 p.unlink()
             except OSError:
@@ -141,7 +158,7 @@ def run_capture(
         "schema": "ctx.invocation/v1",
         "workspaceId": ws.workspace_id,
         "cwd": rel_cwd,
-        "argv": list(argv),
+        "argv": list(record_argv if record_argv is not None else argv),
         "shell": shell,
         "result": {
             "exitCode": exit_code,
@@ -182,6 +199,91 @@ def _worktree_hash(ws: Workspace) -> str | None:
             return None
         return "sha256:" + hashlib.sha256(out.stdout).hexdigest()
     except (OSError, subprocess.SubprocessError):
+        return None
+
+
+# Bookkeeping directory excluded from the generation walk: the reflex/session
+# ledgers mutate on every scored command, so including them would bump the
+# generation on our own writes and confirm nothing, ever.
+_GENERATION_EXCLUDE_DIR = ".ctx-session-reads"
+# Bound on the untracked-file walk. Ignored trees (node_modules, venvs) never
+# appear in porcelain, so real workspaces sit far below this; the cap only
+# guards pathological unignored trees. Deterministic: the walk is sorted, and
+# hitting the cap folds the total count into the hash instead of the tail.
+_GENERATION_MAX_UNTRACKED = 4096
+
+
+def generation_hash(ws_root: Any) -> str | None:
+    """Source-state generation (docs/EDC.md §8): the operational identity of
+    the worktree at a scoring moment.
+
+    ``sha256`` over the raw ``git status --porcelain`` bytes PLUS, for every
+    untracked file (each ``?? `` entry, recursed through untracked
+    directories), its ``(relative path, size, mtime_ns)`` triple in sorted
+    path order. The untracked triples are the §8.2 fix for the
+    untracked-content trap: porcelain lists ``?? file`` regardless of
+    content, so edits to just-created unstaged files (the dominant
+    spec-driven-creation pattern — exactly the spec3 workload) never change
+    :func:`_worktree_hash` and would confirm false starvations. Size+mtime_ns
+    is legal here because generations are OPERATIONAL identity (did the
+    source plausibly change between two runs?), never content identity —
+    manifest identity stays :func:`_worktree_hash`, unchanged.
+
+    Hot-path discipline: callers (the reflex arc) invoke this LAZILY, only at
+    scoring moments (an intervention being recorded, an equivalent/narrower
+    rerun being classified) — never per command. Fail-open by contract:
+    non-git roots, git errors, and IO problems all return None (unknown
+    generation), never raise.
+    """
+    if ws_root is None:
+        return None
+    try:
+        root = Path(ws_root)
+        out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(root),
+            capture_output=True,
+            timeout=15,
+        )
+        if out.returncode != 0:
+            return None
+        h = hashlib.sha256(out.stdout)
+        untracked: list[Path] = []
+        for line in out.stdout.decode("utf-8", "replace").splitlines():
+            if not line.startswith("?? "):
+                continue
+            rel = line[3:]
+            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
+                rel = rel[1:-1]  # git quotes unusual paths
+            if rel.rstrip("/").split("/")[0] == _GENERATION_EXCLUDE_DIR:
+                continue
+            p = root / rel
+            if rel.endswith("/") or p.is_dir():
+                # Porcelain lists an untracked directory as ONE entry; walk
+                # it, or edits inside would be invisible to the generation.
+                for sub in sorted(p.rglob("*")):
+                    if sub.is_file():
+                        untracked.append(sub)
+            elif p.is_file():
+                untracked.append(p)
+        for p in sorted(untracked)[:_GENERATION_MAX_UNTRACKED]:
+            try:
+                rel_str = str(p.relative_to(root))
+            except ValueError:
+                rel_str = str(p)
+            try:
+                st = p.stat()
+                h.update(
+                    f"\x00{rel_str}\x00{st.st_size}\x00{st.st_mtime_ns}".encode(
+                        "utf-8", "replace"
+                    )
+                )
+            except OSError:
+                h.update(f"\x00{rel_str}\x00gone".encode("utf-8", "replace"))
+        if len(untracked) > _GENERATION_MAX_UNTRACKED:
+            h.update(f"\x00capped:{len(untracked)}".encode("utf-8"))
+        return "sha256:" + h.hexdigest()
+    except Exception:
         return None
 
 

@@ -4,6 +4,181 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.22.0] - 2026-07-19
+
+The Evidence Delivery Controller wave (docs/EDC.md, all 24 sections
+specified and adversarially reviewed before build — seven defects died on
+paper). Built by seven parallel engineers in two increments; 612 tests.
+
+- **Evidence core**: typed EvidenceGraph/Item/Ref with volatile quarantine
+  and coverage attestation (ctx.evidence); TOML Evidence Contracts with
+  loss severities and floor<=ceiling load validation (ctx.contracts);
+  selection-seam validation — coverage computed over typed facts, never
+  re-parsed text.
+- **pytest/v2 extract/render split** (the layering law made real):
+  extraction emits attested graphs (failure class + one-line summary per
+  census row now DEFAULT — hierarchy levels 3-4); rendering through
+  contracts: FAIL_CENSUS, DENSE (grouped under extracted keys only),
+  FLOOD (histograms + first-N census + complete census minted as a
+  derived blob: artifact); degradation cascade never truncates identities
+  outside declared FLOOD; pass path byte-identical pytest/v1.
+- **Delivery Policy Resolver** (ctx.resolver): the single choke point
+  replacing seven hand-rolled budget sites; DeliveryPlan with plan_id and
+  closed reason vocabulary; floor applied after multipliers; reader
+  capability with latching and confidence floor; plan receipts to
+  telemetry. Safety invariant test: guard decisions byte-identical under
+  every adaptive state.
+- **Controller state, shadow-first** (EDC 5-7+6b): source generations
+  with untracked-content hashing (ledger-dir excluded, capped,
+  deterministic); per-family signature tables closing the scope-flag
+  defect; narrowing relation + positives; v2 intervention/outcome ledger
+  with deterministic ids, hypothesis windows, censored expiry; shadow
+  circuit machine (episode semantics + hysteresis); graduated-steering
+  shadow ledger. Replay gates vs archived transcripts ALL PASS: the r1
+  8x slicer loop collapses to one episode/one transition; edit cadence
+  scores as verification; 7 narrowing positives.
+- **Seeded referee + scorecard v2**: spec3 --repeats/--gates with median
+  aggregation and frozen-constants checksum; per-family behavioral
+  blocks, coverage tables, episode narratives, formula-labeled
+  counterfactuals; censored events excluded from denominators.
+- **Perf with receipts** (rejected optimizations documented): resolve_id
+  ~500x (index-seekable range scan), line-index repeat access ~3600x
+  (in-process cache; the mmap "win" was this confound), gc 3.7x
+  (batched); retrieval.py modularized into ctx/_retrieval behind a
+  byte-compatible facade; MCP schema drift fixed (call-graph ops
+  declared, diff wired) + bounded workspace cache.
+
+## [0.21.0] - 2026-07-18
+
+The reflex wave: closed-loop conditionality (docs/REFLEX.md), built
+against the spec3 receipt where every conditional fired to spec on the
+flood axis while the failure lived on the uninstrumented information
+axis. Every intervention is now a hypothesis about the model's next
+action; the system scores the hypothesis per event and adapts on the axis
+the evidence names.
+
+- **`pytest/v1` failing-test census** (debt 74db82e027): one line per
+  failing test — node id, output coordinates, traceback span — rendered
+  above and outliving the inline first-failure detail under budget
+  pressure; overflow declared with a continuation span. Dense mode adds
+  one evidence line per test. Bare `-q` summaries, `--tb=line/no`, and
+  pipe-truncated output all parse (the spec3 "summary line not found"
+  breakage fixed); all-pass runs byte-identical to before.
+- **Reflex arc v1** (`ctx.reflex`, hook + cli wiring): slicer-normalized
+  command signatures (`pytest -v`, `… | head -100`, `… --tb=short | tail`
+  → one signature); starvation detector — a signature re-issued after its
+  digest-with-omissions appends an outcome event and latches densify for
+  the session; landing detector on `ctx get`/`search` of known handles.
+  Reflexes act through rendering only (`densified: re-run detected` header
+  on the printed digest; dense flag never in digest meta — content
+  identity stays a pure function of bytes). All state fail-open,
+  replay-deterministic from the command sequence. Outcome ledger:
+  `.ctx-session-reads/reflex-outcomes.jsonl` (frozen schema).
+- **Behavioral-anomalies scorecard**: `ctx stats --session` renders
+  starvation/landing/densify counts per signature when present — the
+  single-session instrument that would have caught spec3 without a
+  benchmark. Summary line flags `⚠ N starvation/M landings`.
+- **Slow-loop epoch schema**: `ctx policy compile` aggregates reflex
+  outcomes into `[digest_density]` — signatures with ≥2 starvations and
+  landings < starvations start dense in future epochs; address-following
+  readers keep lean digests. Additive to ctx.policy/v1 (hook parser
+  verified tolerant); consumption deliberately deferred.
+
+## [0.20.0] - 2026-07-18
+
+The measurement-driven wave: three mechanisms built in parallel by
+independent engineers against the receipts of the eval-collapse
+measurements (evals/eval-collapse-2026-07-18.md) and the conditionality
+audit (docs/LADDERS.md), then assembled with the audit's consistency fixes.
+
+- **Head/tail evidence windows** (`digest/text.py`): large text/v1 digests
+  now show the first `digest_head_lines` AND last `digest_tail_lines`
+  lines (both configurable via `[budgets]` in ctx.toml, default 5/5), each
+  with real coordinates; the omitted middle carries a deterministic region
+  span plus a `ctx get --lines` continuation. Motivated by a measured
+  failure: CLIs put conclusions at the END of output, and the S-C flood
+  scenario's own SUMMARY line was being omitted. Budget fitting shrinks
+  tail first, then head; small-output and error-signal paths byte-identical
+  to before.
+- **Long-runner backgrounding** (`jobs.py`, `run --bg`/`--bg-after T`,
+  `job`, `jobs`): every `--bg*` run starts under a detached supervisor
+  spooling to the store; finish within T → the normal digest, byte-for-byte
+  identical to a foreground run including the same `run:` id. Outlive T →
+  the transcript gets `job:<id>` immediately; `ctx job <id>` shows a
+  bounded live tail (never a flood), `--wait` blocks then digests,
+  `--kill` finalizes what spooled. Finalized jobs are ordinary `run:`
+  artifacts — search/get address them identically; job ids, pids, and
+  timestamps never enter content identity. Six launch/kill/finalize races
+  identified and closed (single-writer meta, idempotent finalization,
+  orphan adoption).
+- **Adoption steering** (hook + skill, shipped mid-wave as its own commit):
+  eval-opportunity detection (python heredoc/-c) appends the collapse
+  teaching to remediations at every friction point and ledgers each
+  opportunity fail-open (`.ctx-session-reads/eval-adoption.jsonl`) — the
+  adoption ratio's denominator. Doctrine scoping fix: terseness governs
+  scripts and narration, never the final deliverable.
+- **Conditionality audit applied** (docs/LADDERS.md): seq emissions now
+  respect the engagement filter like run/eval (edge 1); timeouts and
+  signal deaths get the failure budget in `run` (edge 4, parity with
+  eval); seq marks signal-death steps as failures (S6 finding). Remaining
+  audit items (pressure-aware budgets via a single resolve_budget choke
+  point, hint follow-through telemetry, MCP schema drift) are the next
+  wave's candidates, ranked in the doc.
+- Skill: verb index + rule 15 (never idle on a long runner) + long-runners
+  reference section. Prefix manifest regenerated; PREFIX_VERSION unchanged
+  (invocation-tier assets only — no cache impact).
+
+## [0.19.0] - 2026-07-18
+
+Programmable capture: the Maki absorption. Maki (maki.sh) demonstrated the
+strongest form of tool-chain collapse — the model writes one script that
+chains N operations, and intermediates never enter the transcript (their
+demo: 1300× context reduction). `ctx seq` already performed this collapse
+for *declared* trees; this wave generalizes it to *computed* control flow
+(branch on a result, loop over files, aggregate before emitting) while
+keeping what a raw interpreter sandbox drops: provenance. Maki's script and
+its intermediates vanish into the chat log with no address; here every
+piece keeps one.
+
+- **`ctx eval`** (`ctx.pyeval`): a Python script runs under birth-gate
+  capture and only its bounded digest returns. The script is stored first
+  as a content-addressed blob, cited in the digest header
+  (`script blob:<id>`) and in the final manifest (`eval.script`) —
+  reproduce with `ctx get blob:<id> | python3 -I -`. Streams are the usual
+  span-addressable blobs; the existing profile registry digests the output
+  (flood → bounded digest with continuation coordinates; small result →
+  complete inline). Failure asymmetry applies: a failing script's
+  traceback rides on the failure budget, and frames are deterministic and
+  path-free (`File "<stdin>"` — the script feeds stdin, never a temp
+  file). `python -I` isolated mode blocks cwd/PYTHONPATH injection.
+  Sub-steps that deserve their own handles call `ctx run` from inside the
+  script. Trust envelope identical to `ctx run` (bounded capture, not OS
+  isolation — that remains the broker's job, Phase 3). Deterministic:
+  identical script + identical worktree → byte-identical digest.
+- **Capture runner**: `run_capture` gains `stdin_bytes` (spooled to disk
+  and fed as the child's stdin — never a pipe, so no deadlock and no size
+  limit) and `record_argv` (normalized model-visible argv, so the
+  host-specific interpreter path never appears in manifests or digests).
+- **Telemetry attribution**: `render_run_digest` takes an `op` name so
+  `ctx gain` reports eval under its own by-verb row; `op` never
+  participates in digest bytes or content identity.
+- Skill body rule 14 + verb index teach the seq/eval split (declared →
+  `seq`, computed → `eval`); prefix manifest regenerated — the skill body
+  is invocation-tier, so PREFIX_VERSION stays 3 and there is **no cache
+  impact**.
+- **Eval set + first measurements** (`evals/evalset_collapse.py`,
+  `evals/ab_eval_live.py`, results in `evals/eval-collapse-2026-07-18.md`,
+  smoke-guarded by `tests/test_evalset_collapse.py`): mechanical arms on
+  real fixtures (fan-out aggregate 146 tok vs 96k naive with the
+  best-play baseline provably unable to finish; bash-pipeline control
+  showing `run --shell` already covers stream-shaped chains; flood/needle
+  provenance net; 299-tok wrong-script recovery vs 192k re-pay) plus a
+  live mechanism-isolated A/B (haiku, n=2) and a wrapped condition. Live
+  findings recorded honestly: the one-script discipline wins (−15–63%
+  cost, fewer turns, −79% cache churn at best) but the verb itself went
+  unadopted (0/3 sessions) and the terse doctrine leaked into final
+  deliverables — both filed in the debt ledger with coordinates.
+
 ## [0.18.0] - 2026-07-18
 
 The universal emission gate: one output-side gate for every faucet. Prior

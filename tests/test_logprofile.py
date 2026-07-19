@@ -157,7 +157,8 @@ def test_does_not_fire_on_pytest_output(state_home, workspace_dir):
     cap = _run_text(ws, store, _PYTEST_FAKE)
     assert _detect(store, ws, cap) is None
     _, m = render_run_digest(store, ws, cap.manifest)
-    assert m["digest"]["profile"] == "pytest/v1"
+    # Failing pytest shape → pytest/v2 evidence render (never logtemplate).
+    assert m["digest"]["profile"] == "pytest/v2"
 
 
 def test_does_not_fire_on_small_output(state_home, workspace_dir):

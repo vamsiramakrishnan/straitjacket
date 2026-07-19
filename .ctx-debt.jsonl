@@ -8,3 +8,33 @@
 {"id": "7884ed9a7d", "note": "S5 library ADOPT #1: dedup _glob_match (retrieval.py) against pathspec-backed matcher in workspace.py \u2014 two glob dialects", "op": "add", "ref": "src/ctx/retrieval.py:28"}
 {"id": "daadf60dae", "note": "S5 library ADOPT #3: triplicated REMAINDER flag-scraping in cli.py wrap dispatch -> second argparse.parse_known_args pass", "op": "add", "ref": "src/ctx/cli.py:209"}
 {"id": "ebb61ce277", "note": "S5 library ADOPT #4: unidiff as optional git-diff engine (regex path becomes deterministic fallback, engine-disclosure plumbing)", "op": "add", "ref": "src/ctx/digest/moreprofs.py:170"}
+{"id": "02fe21864a", "note": "eval verb has no teaching surface on the claude-code host: skill ships Antigravity-only, MCP is bounded-only by policy, hook remediation never mentions eval \u2014 live A/B measured 0/5 adoption while the one-script discipline won on cost/turns", "op": "add", "ref": "evals/eval-collapse-2026-07-18.md"}
+{"id": "c23a8ccdf5", "note": "terse-output doctrine leaks into final deliverables (2/2 strict-format failures in eval arms) \u2014 scope 'print only what the transcript needs' to scripts, not answers", "op": "add", "ref": "plugins/antigravity/skills/ctx-harness/SKILL.md:44"}
+{"id": "02fe21864a", "op": "resolve"}
+{"id": "c23a8ccdf5", "op": "resolve"}
+{"id": "74db82e027", "note": "pytest/v1 shows first-failure only where the task needs the failing-test census (the lint/v1 rtk lesson never applied to pytest) \u2014 measured: haiku re-ran the suite 8x with slicers, sj hit the 32-turn cap on both spec3 tasks", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
+{"id": "51604cfe7b", "note": "bare-wrap tier teaches no retrieval vocabulary to lean models (LADDERS edge 7 with a measured failure): emission-gate digests' spans went unresolved, converted to re-execution", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
+{"id": "3f483592c4", "note": "reflex v2: starvation must require no intervening Edit/Write between digest and re-run (v1 counts healthy edit-verify cycles as starvation \u2014 6 false-ish events on the r2 referee; also pollutes [digest_density] training data). Hook already sees Edit/Write; one re-arm flag per signature.", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
+{"id": "74db82e027", "op": "resolve"}
+{"id": "51604cfe7b", "op": "resolve"}
+{"id": "3f483592c4", "op": "resolve"}
+{"id": "34e21fe2dc", "note": "spec3 gate needs n>=3 paired seeds per cell: baseline variance (naive 26->13->19 turns on identical code) exceeds the <=1.5x effect being resolved \u2014 single-seed referee rounds cannot adjudicate mechanism iterations", "op": "add", "ref": "evals/spec3-haiku-2026-07-18.md"}
+{"id": "c273b8d3d0", "note": "graduated steering: apply the engagement ladder to steering strength \u2014 small-scale sessions keep native test runs until measured scale proves containment pays (three referee rounds of motivation; the 'parity is the ceiling' regime made actionable)", "op": "add", "ref": "docs/LADDERS.md"}
+{"id": "748f470aa1", "note": "reflex signature normalization strips scope-affecting flags (-k/-m/--lf) as presentation noise \u2014 'pytest -k auth' equals bare 'pytest', so a legitimate scope change can score as starvation; fix via per-family signature tables (scope flags kept, presentation flags dropped), part of pytest/v2", "op": "add", "ref": "src/ctx/reflex.py"}
+{"id": "eb6fa057df", "note": "store has retention-GC but no size ceiling \u2014 EDC \u00a711 safety-plane inventory lists maximum artifact storage as a non-adaptive bound; unenforced today", "op": "add", "ref": "src/ctx/store.py"}
+{"id": "9132676de6", "note": "mutation/v1 success-ack profile: git push/pull/commit/add and peers emit one-line acks (rtk's ok-main pattern) \u2014 success is boilerplate applied to the mutation family; ~8x/session, inline-complete currently emits full ceremony", "op": "add", "ref": "src/ctx/digest/"}
+{"id": "9821f0bc0c", "note": "machine-format-first capture: steering injects structured-output flags at rewrite (go test -json, ruff --format json, cargo --message-format json) so the stored artifact is structure and extractors stop parsing prose \u2014 generalizes the JUnit-XML phase-8 principle to capture time", "op": "add", "ref": "docs/EDC.md"}
+{"id": "4a533988f2", "note": "tabular/v1 shape profile: column-aware compaction (header + row census) for ps/get/describe-style tables \u2014 covers docker/kubectl/aws by shape, not per-command filters", "op": "add", "ref": "src/ctx/digest/"}
+{"id": "6db9f7011b", "note": "M-F tree-sitter skeleton tier: [code] extra, content-keyed skeleton blobs, file-read Evidence Contract (census-before-detail applied to source), multi-language stats/map", "op": "add", "ref": "docs/ALGEBRA.md"}
+{"id": "6611d8c899", "note": "M-H ctx q composition algebra: total pipeline combinators over typed record streams, ~20-40 tok vs eval's ~200, per-stage provenance, MCP-tier safe by totality; referee = eval-collapse scenarios with a q arm", "op": "add", "ref": "docs/ALGEBRA.md"}
+{"id": "19520be4f7", "note": "M-G/M-I fact store + Angle-lite: typed facts from skeletons + evidence graphs + generations, SCIP ingestion opportunistic, bounded conjunctive joins \u2014 the static x dynamic x temporal root-cause query", "op": "add", "ref": "docs/ALGEBRA.md"}
+{"id": "bf48ba3c4e", "op": "resolve"}
+{"id": "748f470aa1", "op": "resolve"}
+{"id": "34e21fe2dc", "op": "resolve"}
+{"id": "135d7df383", "op": "resolve"}
+{"id": "f5d318bf5b", "note": "hook classifier: reordered '2>&1 >file' redirection misclassified (the one unfixed item from the resolved S6 bundle 135d7df383; seq signal-exit, timeout budgets, binary-abort, and _WS_CACHE all shipped in v0.20-0.22)", "op": "add", "ref": "src/ctx/hook.py"}
+{"id": "6db9f7011b", "op": "resolve"}
+{"id": "6611d8c899", "op": "resolve"}
+{"id": "19520be4f7", "op": "resolve"}
+{"id": "fac2339eff", "note": "q fails-stage precondition opacity (live A/B receipt: 3 identical dry joins + 1 malformed before abandonment): 'fails last' with no derivable run must auto-capture the family's test command under the birth gate OR emit a teaching empty-result digest naming the precondition; then n>=3 taught-vs-untaught referee", "op": "add", "ref": "src/ctx/facts.py"}
+{"id": "fac2339eff", "op": "resolve"}

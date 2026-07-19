@@ -1,0 +1,22 @@
+# Evidence contract: generic fallback (docs/EDC.md §21) — the ONLY
+# contract legal for legacy-adapter graphs. Aggregate-outcome only: it
+# never requires a census, so a degenerate graph (empty items, declared
+# parser warning) neither satisfies a census vacuously nor starves one
+# silently. Legacy profiles ride this until they gain typed extraction.
+schema = "ctx.evidence-contract/v1"
+family = "generic"
+profile = "*"
+decision_unit = "run"
+
+[outcomes.default]
+required = ["aggregate_counts"]
+preferred = []
+retrievable = ["stdout", "stderr"]
+
+[loss_severities]
+aggregate_counts = "catastrophic"
+
+[rendering]
+stable_order = "occurrence"
+evidence_floor_tokens = 64
+hard_ceiling_tokens = 4000

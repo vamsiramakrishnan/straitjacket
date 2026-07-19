@@ -1,0 +1,45 @@
+# Evidence contract: lint/compiler diagnostics (mirrors lint/v1's shipped
+# exact censuses — rtk-corpus lesson: "diagnostics needed structure, not
+# compression"; the digest of 526 violations that names none of them is
+# the failure class this table forbids).
+schema = "ctx.evidence-contract/v1"
+family = "lint"
+profile = "lint/v1"
+decision_unit = "diagnostic"
+
+[outcomes.fail]
+required = ["aggregate_counts", "complete_identity_census", "location"]
+preferred = ["failure_class", "one_line_summary"]
+retrievable = ["stdout", "stderr"]
+
+[outcomes.error]
+required = ["aggregate_counts", "complete_identity_census", "location"]
+preferred = ["failure_class", "one_line_summary"]
+retrievable = ["stdout", "stderr"]
+
+[outcomes.warning]
+required = ["aggregate_counts", "complete_identity_census", "location"]
+preferred = ["failure_class", "one_line_summary"]
+retrievable = ["stdout", "stderr"]
+
+[outcomes.pass]
+required = ["aggregate_counts"]
+preferred = []
+retrievable = ["stdout"]
+
+[outcomes.default]
+required = ["aggregate_counts"]
+preferred = []
+retrievable = ["stdout", "stderr"]
+
+[loss_severities]
+aggregate_counts = "catastrophic"
+complete_identity_census = "catastrophic"
+location = "major"
+failure_class = "minor"
+one_line_summary = "minor"
+
+[rendering]
+stable_order = "occurrence"
+evidence_floor_tokens = 256
+hard_ceiling_tokens = 4000

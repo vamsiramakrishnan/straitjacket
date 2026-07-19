@@ -346,6 +346,80 @@ def _steering_allows(policy: dict[str, Any]) -> bool:
     return str(policy.get("steering", "auto")) in ("auto", "rewrite")
 
 
+# ------------------------------------------------- eval teaching surface
+# Measured gap (evals/eval-collapse-2026-07-18.md, finding 2): agents write
+# raw `python3 << 'EOF'` heredocs / `python -c` chains instead of `ctx eval`
+# — 0/3 live adoption, because the verb has no teaching surface on this
+# host. When such a command hits the guard, the remediation additionally
+# teaches the collapse move. Teaching-only this wave: heredocs are NEVER
+# auto-rewritten into `ctx eval` (quoting hazards).
+_EVAL_TEACH = (
+    "Or collapse the chain: ctx eval '<python script>' — the script becomes "
+    "an addressable blob and only a bounded digest returns."
+)
+
+_PY_PROG_RE = re.compile(r"^python(3(\.\d+)?)?$")
+
+
+def _eval_opportunity(command: str) -> bool:
+    """True when ``command`` is a raw python invocation carrying inline code
+    — a heredoc/herestring (``<<``) or a ``-c`` flag — i.e. the chain shape
+    ``ctx eval`` collapses. Conservative by construction: the program must
+    be python/python3/python3.N after unwrapping, and ``-c`` counts only
+    among python's own leading options (before ``-m``, ``--``, or a script
+    path), so ``python3 -m pytest`` and ``python3 script.py`` never match."""
+    if "python" not in command:
+        return False
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        argv = command.split()
+    argv = _unwrap(argv)
+    if not argv or not _PY_PROG_RE.match(os.path.basename(argv[0])):
+        return False
+    if "<<" in command:
+        return True
+    for tok in argv[1:]:
+        if tok.startswith("-c"):  # "-c" / "-c<code>"; long opts start "--", not "-c"
+            return True
+        if tok == "-m" or tok == "--":
+            return False  # module mode: -c beyond here is not python's
+        if not tok.startswith("-"):
+            # Script path. An EPHEMERAL script (written to a temp/scratch
+            # dir moments earlier, run once, never addressed) is the
+            # measured real-world evasion of this detector: agents do
+            # `cat > /tmp/.../x.py` then `python3 /tmp/.../x.py`
+            # (eval-collapse doc, layer 2b — 0 ledger entries because both
+            # halves individually looked innocent). Workspace-resident
+            # scripts stay non-opportunities: they are addressable code.
+            return tok.startswith("/tmp/") or "/scratchpad/" in tok
+    return False
+
+
+def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
+    """Adoption telemetry for the eval teaching surface: append one JSON
+    line to ``<workspace>/.ctx-session-reads/eval-adoption.jsonl``. This is
+    the denominator of the measurement loop (actual ``ctx eval`` use is
+    counted in store telemetry as op="eval"). Fail-open by contract: any IO
+    error counts nothing and never blocks a decision."""
+    if not workspace_root:
+        return
+    try:
+        import time
+
+        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        os.makedirs(ledger_dir, exist_ok=True)
+        path = os.path.join(ledger_dir, "eval-adoption.jsonl")
+        line = json.dumps(
+            {"op": "eval_opportunity", "taught": taught, "ts": time.time()},
+            sort_keys=True,
+        )
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
+
+
 def _deny_cmd(
     argv: list[str],
     policy: dict[str, Any],
@@ -856,6 +930,20 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
         pass
 
     lowered = tool_name.lower()
+
+    # Reflex v2 (spec3 round-2 finding): an Edit/Write disarms starvation
+    # detection — run → census → edit → re-run is healthy verification, and
+    # v1 counted it as starvation (6 spurious events on the referee). Pure
+    # observation: always allow, never rewrite, fail-open.
+    if "edit" in lowered or "write" in lowered or lowered in ("create_file", "replace_file_content"):
+        try:
+            from ctx import reflex
+
+            reflex.note_edit(workspace_root)
+        except Exception:
+            pass
+        return dict(DECISION_ALLOW)
+
     if "command" in lowered or lowered in ("bash", "shell", "exec"):
         command = ""
         command_key = None
@@ -871,6 +959,53 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 cwd = v
                 break
         decision = classify_command(command, policy, cwd=cwd or workspace_root)
+        # Eval teaching surface: a raw python heredoc / -c chain that hits
+        # the guard gets the collapse move appended to its remediation (and
+        # to the rewrite reason, so wrapped sessions see it too). Every
+        # detected opportunity is ledgered — taught or not — as the
+        # adoption denominator. Teaching-only: never auto-rewritten.
+        if _eval_opportunity(command):
+            taught = decision.get("decision") in ("deny", "force_ask")
+            if taught:
+                decision["reason"] = decision.get("reason", "") + "\n" + _EVAL_TEACH
+                if "_rewrite" in decision:
+                    decision["_rewrite"]["reason"] += "\n" + _EVAL_TEACH
+            _note_eval_opportunity(workspace_root, taught)
+        # Reflex arc (docs/REFLEX.md layers 1-3): score this command against
+        # the session's recorded interventions. A `ctx get`/`ctx search` on a
+        # known run handle is a landing (the positive class); anything else
+        # is checked for the starvation pattern (same signature re-issued
+        # after its digest — the spec3 re-run loop). The result NEVER changes
+        # the decision — reflexes act through rendering (`ctx run` reads the
+        # densify latch), not through blocking. Fail-open by contract.
+        try:
+            from ctx import reflex
+
+            handle = reflex.landing_ref(command)
+            if handle:
+                reflex.note_landing(workspace_root, handle)
+            else:
+                reflex.check_command(workspace_root, command)
+        except Exception:
+            pass
+        # Graduated steering — the null plan (EDC phase 6b) — SHADOW ONLY
+        # this wave: when steering is about to rewrite this command (a
+        # command-substitution `_rewrite`, i.e. an unbounded/compound
+        # command being routed through ctx), record whether the graduated
+        # regime WOULD have bypassed the rewrite (engagement still passive
+        # AND no prior flood for the signature). NO behavior change: the
+        # rewrite below is applied exactly as before. The PostToolUse
+        # emission gate (`_emission_gate`) is the safety net that will make
+        # the eventual relaxation safe — even a bypassed unbounded command
+        # is bounded at emission time, so the null plan risks one bounded
+        # digest, never a transcript flood. Fail-open by contract.
+        if isinstance(decision.get("_rewrite"), dict) and "command" in decision["_rewrite"]:
+            try:
+                from ctx import reflex
+
+                reflex.note_steer_shadow(workspace_root, command)
+            except Exception:
+                pass
         return _apply_rewrite(decision, tool_input, command_key)
 
     if "read" in lowered or lowered in ("open_file", "view_file"):
@@ -1160,8 +1295,9 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         # Never digest our own digests or ctx's own tool results (recursion /
         # double-wrap guard). "[ctx " covers every ctx header — run: (digest),
         # get / search / stats (retrieval) — so a large `ctx get` slice run via
-        # Bash is not itself re-digested.
-        if stdout.lstrip().startswith("[ctx ") or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
+        # Bash is not itself re-digested. "densified:" is the reflex arc's
+        # declared-densification header prepended above the "[ctx run:" line.
+        if stdout.lstrip().startswith(("[ctx ", "densified:")) or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
             return None
 
         ws_root = _resolve_workspace_root(payload)
