@@ -16,8 +16,15 @@ from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
 from ctx.digest.searchprof import SearchProfile
 from ctx.digest.logprof import LogTemplateProfile
-from ctx.digest.moreprofs import BuildProfile, GitDiffProfile, GoTestProfile, JestProfile
+from ctx.digest.moreprofs import (
+    BuildProfile,
+    CargoTestProfile,
+    GitDiffProfile,
+    GoTestProfile,
+    JestProfile,
+)
 from ctx.digest.pytestprof import PytestProfile
+from ctx.digest.tableprof import TableProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
@@ -28,6 +35,8 @@ from ctx.workspace import Workspace
 _PROFILES: tuple[Profile, ...] = (
     PytestProfile(),
     GoTestProfile(),
+    CargoTestProfile(),  # shape-anchored on 'test result:' — compile-error
+    #                      runs decline here and fall to Lint/Build below
     JestProfile(),
     GitDiffProfile(),
     LintProfile(),  # before Build/LogTemplate: both would misclaim lint shapes
@@ -36,6 +45,8 @@ _PROFILES: tuple[Profile, ...] = (
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),
+    TableProfile(),  # caps-header aligned tables (docker/kubectl family);
+    #                  strict header rule keeps logs and prose out
     LogTemplateProfile(),
     TextProfile(),
 )

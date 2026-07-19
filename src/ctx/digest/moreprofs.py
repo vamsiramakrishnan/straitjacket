@@ -52,6 +52,105 @@ class GoTestProfile(Profile):
         )
 
 
+_CARGO_RESULT_RE = re.compile(
+    r"^test result: (?P<status>ok|FAILED)\. (?P<passed>\d+) passed; (?P<failed>\d+) failed; "
+    r"(?P<ignored>\d+) ignored; (?P<measured>\d+) measured; (?P<filtered>\d+) filtered out",
+    re.MULTILINE,
+)
+_CARGO_FAILED_RE = re.compile(r"^test (\S+) \.\.\. FAILED$")
+_CARGO_PANIC_RE = re.compile(r"panicked at (?P<loc>\S+?:\d+:\d+)")
+
+
+class CargoTestProfile(Profile):
+    """Rust test harness (``cargo test`` / bare libtest binaries).
+
+    Measured motivation (evals/coverage-corpus-2026-07-19.md): 150 tests with
+    6 failures under text/v1 compressed 26× but named exactly one failing
+    test — the spec3 lesson (a test digest without a failing census starves
+    the fix loop) replayed on a second runner. Detection is anchored on the
+    ``test result:`` shape, never argv alone, so ``cargo test`` runs that die
+    in the compiler correctly fall through to lint/build profiles.
+    """
+
+    version = "cargotest/v1"
+
+    def detect(self, ctx: DigestContext) -> str | None:
+        combined = ctx.stdout.text + "\n" + ctx.stderr.text
+        if not _CARGO_RESULT_RE.search(combined):
+            return None
+        if not re.search(r"^running \d+ tests?$", combined, re.MULTILINE):
+            return None
+        argv = ctx.manifest["argv"]
+        if argv and argv[0].rsplit("/", 1)[-1] == "cargo":
+            return "argv is cargo with libtest result lines"
+        return "libtest 'running N tests' + 'test result:' shape"
+
+    def render(self, ctx: DigestContext) -> str:
+        combined = ctx.stdout.text + "\n" + ctx.stderr.text
+        passed = failed = ignored = 0
+        suites_ok = suites_failed = 0
+        for m in _CARGO_RESULT_RE.finditer(combined):
+            passed += int(m.group("passed"))
+            failed += int(m.group("failed"))
+            ignored += int(m.group("ignored"))
+            if m.group("status") == "ok":
+                suites_ok += 1
+            else:
+                suites_failed += 1
+        summary = [
+            "summary:",
+            f"  tests (exact): passed {fmt_int(passed)} · failed {fmt_int(failed)}"
+            f" · ignored {fmt_int(ignored)} · suites ok {suites_ok} · failed {suites_failed}",
+        ]
+        shown = 1
+
+        # Failing-test census: one line per failure with real coordinates —
+        # the census is the work queue (rtk-corpus lesson: structure at equal
+        # budget, and per-item addresses for the repair loop).
+        cap = failed if getattr(ctx, "dense", False) else 10
+        listed = 0
+        for view in (ctx.stdout, ctx.stderr):
+            for i, ln in enumerate(view.text_lines, start=1):
+                fm = _CARGO_FAILED_RE.match(ln)
+                if fm:
+                    if listed < cap:
+                        summary.append(f"  failing: {fm.group(1)} · {view.name}:L{i}")
+                        shown += 1
+                    listed += 1
+        if listed > cap:
+            summary.append(f"  … {fmt_int(listed - cap)} more failing tests (complete list in 'failures:' section)")
+
+        # First panic region inline: location + message line, anticipatory.
+        for view in (ctx.stdout, ctx.stderr):
+            done = False
+            for i, ln in enumerate(view.text_lines, start=1):
+                pm = _CARGO_PANIC_RE.search(ln)
+                if pm:
+                    msg = ""
+                    rest = ln.split(pm.group(0), 1)[1].lstrip(": ").strip()
+                    nxt = view.text_lines[i] if i < len(view.text_lines) else ""
+                    msg = rest or nxt.strip()
+                    summary.append(
+                        f"  first panic {view.name}:L{i}: {pm.group('loc')}: {msg[:140]}"
+                    )
+                    shown += 1
+                    done = True
+                    break
+            if done:
+                break
+
+        rid = "run:PENDING"
+        suggestions = [f"ctx search {rid} 'FAILED' --context 0"]
+        if failed:
+            suggestions.insert(0, f"ctx search {rid} 'panicked at' --context 4")
+        return "\n".join(
+            ctx.header_lines()
+            + summary
+            + self.coverage_lines(ctx, shown)
+            + self.next_lines(ctx, suggestions)
+        )
+
+
 _JEST_SUMMARY_RE = re.compile(
     r"^(Tests|Test Suites):\s+(?P<body>.+)$", re.MULTILINE
 )

@@ -4,6 +4,35 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.24.0] - 2026-07-19
+
+The coverage-corpus wave: rtk's breadth question answered the house way —
+real corpora measured before any profile was built, hypotheses killed on
+the record (evals/coverage-corpus-2026-07-19.md).
+
+- **`evals/coverage_corpus.py`** — the rtk-corpus method made re-runnable:
+  every corpus (live toolchain capture or labeled fixture replay) goes
+  through a stub binary carrying the real tool's name, so `ctx run`
+  exercises true argv-anchored detection, shape dispatch, slim inline, and
+  budgets; emits the raw/digest/ratio/profile table per corpus.
+- **`cargotest/v1`** (SPEC §9 Cargo row): exact suite-aggregated census,
+  one line per failing test with coordinates, first panic location+message
+  inlined; detection anchored on the libtest `test result:` shape so
+  compile-error runs fall through to lint/build. Measured: 150-test crate
+  with 6 failures went from "names one failure" (text/v1, 117 tok) to the
+  full failing census (203 tok).
+- **`table/v1`** (SPEC §9 tabular row): shape-detected caps-header aligned
+  tables (docker/podman ps, kubectl/oc get, MCP-delivered tables); exact
+  row×column count, low-cardinality column value censuses, minority rows
+  cited verbatim with coordinates. Measured: 180-pod `kubectl get pods`
+  under text/v1 hid 13 of 14 broken pods in the omitted middle; table/v1
+  names the exact state distribution at equal budget — tabular needle-drop
+  100% → 0%.
+- **Killed by measurement** (reasons in the eval): mvn/gradle profile
+  (logtemplate/v1 already surfaces every failure via rarity), AWS parsers
+  (json/v1 shape census, 150.9×), pip/gh listing profiles (slim inline
+  correct at ~1.0×), ps aux (no census worth its tokens).
+
 ## [0.22.0] - 2026-07-19
 
 The Evidence Delivery Controller wave (docs/EDC.md, all 24 sections
