@@ -59,6 +59,11 @@ class for a stdlib-first harness. Adopt the idea:
 
 ## M-H · `ctx q`: the composition algebra (token-efficient, TOTAL)
 
+> **Closure.** Why this algebra is token-efficient is made precise in
+> [DIGEST-CLOSURE.md](DIGEST-CLOSURE.md): every stage but `get`/`outline` is a
+> homomorphism over the bounded representation (runs at digest-rate), and the
+> type system guarantees bytes are materialized at most once, terminally.
+
 `ctx eval` is Turing-complete Python: ~150–300 tokens of model output,
 quoting hazards, and a trust envelope that keeps it off the MCP tier.
 Most real compositions don't need Turing-completeness — they need
