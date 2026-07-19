@@ -419,6 +419,48 @@ Command ──► Execute ──► Raw artifacts (CAS) ──► Semantic extra
              reflex/breaker   compiler + review
 ```
 
+## Implementation plan (§17), reconciled against shipped code
+
+Adopted with a shipped-status audit — roughly half of phases 0–7 exists
+as of v0.21.x:
+
+| phase | status | remaining delta |
+|---|---|---|
+| 0 · freeze referee | ⚠️ partial | ✅ runner/holdout frozen; ✅ transcripts NOW archived (evals/archive/, all 3 rounds) + versions pinned (py 3.11.15, headroom 0.32.0, claude 2.1.211, haiku-4-5); ❌ n≥3 seed support (debt 34e21fe2dc) |
+| 1 · pytest/v2 semantics | ~80% shipped | failure class per row; one-line summaries default; typed coverage receipt |
+| 2 · contract infra | ❌ | as specced (TOML; pytest/lint/text first); + guard-class safety property test slots here |
+| 3 · extract/render split | ❌ | compatibility adapters; contract version into manifests |
+| 4 · one resolver | ❌ | subsumes LADDERS edge 8 (seven independent budget sites); route `run` first, others behind adapters with byte-identical goldens |
+| 5 · shadow instrumentation | ~70% shipped LIVE | intervention IDs, intent/execution split, confirmed generations; **new detectors (narrowing, workaround, generation-confirm) ship shadow-first and validate against the archived transcripts** |
+| 6 · NORMAL→DENSE | shipped, needs episode semantics | single-transition-per-episode; generation scoping |
+| 7 · DENSE→BYPASS | ❌ | breaker + hysteresis as specced |
+| 8 · generalize families | ❌ | per §16 list; gated on family signature tables (debt 748f470aa1) |
+| 9 · epochs | schema shipped | consumption, comparison, rollback |
+
+**Ordering lesson, acknowledged**: the plan's shadow-before-enable
+discipline (phase 5 before 6–7) is better than what we did — v0.21
+shipped detectors and densify together, and the edit-cadence false
+positives reached the round-2 ledger before v2 corrected them.
+Shadow-first + archived-transcript precision validation is the adopted
+discipline for every remaining detector.
+
+**One omission, corrected**: no phase schedules **graduated steering —
+the null plan** — which is the highest-expected-value item for the
+spec3 verdict (parity on the losing regime by construction, debt
+c273b8d3d0). Added as **Phase 6b**: BYPASS-from-above keyed on measured
+session scale, shadow-validated like any detector, judged by the same
+referee.
+
+**Referee gates**: quick pytest/v2 spot-check after phase 1; the full
+n≥3 gate after phase 7 (+6b); per-family spot checks during phase 8.
+Flood evals and cache doctrine are non-regression gates at every step.
+
+**§18 test plan adopted**: extraction-conformance suites assert exact
+identity lists against real fixtures (the missing test class that let
+pytest/v1 ship starved); contract tests assert coverage receipts —
+census named 8/8 with required_fraction 1.0 at default budgets —
+so contract violations fail CI, not benchmarks.
+
 ## Build path
 
 1. **pytest/v2 = the first EDC instance** (no new framework): explicit
