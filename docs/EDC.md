@@ -493,6 +493,33 @@ metrics ("avoided reexecutions/turns/runtime") are labeled estimates
 carrying their conservative derivation formulas**, per the existing
 est_cost discipline. Fixes ctx gain's documented token-only framing.
 
+## Migration, non-goals, risks, decision rules (§21–24) — spec closed
+
+**§21 adopted**: legacy profiles ride a compatibility adapter (degenerate
+EvidenceGraph, empty items, declared parser warning) — paired
+exclusively with the generic fallback contract: a legacy graph is never
+validated against a census-requiring contract, and never satisfies one
+vacuously.
+
+**§22 adopted wholesale** as permanent scope boundaries — six of its ten
+non-goals are this spec's amendments restated as governance (no
+per-command starvation, no hint-as-failure, no hidden adaptation, no
+learn-and-deploy in one loop, no tier-as-verdict, pytest before
+generality).
+
+**§23 adopted**: every mitigation resolves to an adopted mechanism
+(generations, shadow mode, bounded escalation, flood ladder,
+conservative priors + offline epochs, the single resolver, guard
+classes, extraction attestation — "never claim complete coverage the
+parser cannot prove").
+
+**§24 adopted**: the fifteen decision rules as the executable summary,
+plus **Rule 9b** (the missing credit rule): a run that materially
+narrows to census-delivered identities is census consumption — recorded
+as a positive narrowing outcome, never starvation. Rule 14 ("same
+evidence + contract + plan → identical bytes") is the renderer purity
+property test, verbatim.
+
 ## Build path
 
 1. **pytest/v2 = the first EDC instance** (no new framework): explicit
