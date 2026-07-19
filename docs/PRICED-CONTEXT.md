@@ -1,4 +1,7 @@
-<img src="../assets/readme/docs/priced-context.svg" width="100%" alt="Priced Context — metadata as economic signposting. Mechanism thesis, shipped."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs/priced-context.svg">
+  <img src="../assets/readme/docs/priced-context-light.svg" width="100%" alt="Priced Context — metadata as economic signposting. Mechanism thesis, shipped.">
+</picture>
 
 <sub><a href="README.md">« straitjacket / docs</a></sub>
 

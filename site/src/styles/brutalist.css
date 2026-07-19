@@ -128,3 +128,8 @@ nav.sidebar .top-level a,
   border-left: 4px solid var(--sl-color-accent);
   font-weight: 700;
 }
+
+/* theme-aware diagram swap (tracks the Starlight toggle) */
+.sj-light { display: none !important; }
+:root[data-theme='light'] .sj-light { display: block !important; }
+:root[data-theme='light'] .sj-dark { display: none !important; }

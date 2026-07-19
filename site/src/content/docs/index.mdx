@@ -28,7 +28,8 @@ Raw bytes stop at the gate. The transcript carries the digest and its
 addresses, and any address resolves back to the exact original bytes later.
 
 <div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow);">
-  <img src="/straitjacket/diagrams/flow.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time." style="display:block" />
+  <img className="sj-dark" src="/straitjacket/diagrams/flow.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time." style="display:block" />
+  <img className="sj-light" src="/straitjacket/diagrams/flow-light.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time." style="display:block" />
 </div>
 
 ## The four gates
@@ -59,7 +60,8 @@ gates, and every shipped mechanism attaches to exactly one of them.
 ## The measured results
 
 <div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow); margin-bottom: 1rem;">
-  <img src="/straitjacket/diagrams/econ.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
+  <img className="sj-dark" src="/straitjacket/diagrams/econ.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
+  <img className="sj-light" src="/straitjacket/diagrams/econ-light.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
 </div>
 
 Every steering change ships only after a measured A/B or head-to-head, all

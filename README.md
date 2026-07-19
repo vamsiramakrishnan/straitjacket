@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="assets/readme/hero.svg" width="100%" alt="straitjacket — context containment harness for coding agents. A 304,113-token log becomes a ~210-token digest, and the one anomalous line keeps an exact retrieval address."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero.svg">
+  <img src="assets/readme/hero-light.svg" width="100%" alt="straitjacket — context containment harness for coding agents. A 304,113-token log becomes a ~210-token digest, and the one anomalous line keeps an exact retrieval address.">
+</picture>
 
 [Quickstart](#-quickstart) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
@@ -26,7 +29,10 @@ retrievable after compaction would have dropped it.
 
 <div align="center">
 
-<img src="assets/readme/diagrams/flow.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/flow.svg">
+  <img src="assets/readme/diagrams/flow-light.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time.">
+</picture>
 
 </div>
 
@@ -108,7 +114,10 @@ as gates, and every shipped mechanism attaches to exactly one of them.
 
 <div align="center">
 
-<img src="assets/readme/diagrams/gates.svg" width="100%" alt="The four gates. Birth: can it flood at the source. Entry: what crosses the wire. Residence: what may stay and for how long. Emission: what goes back out. One artifact store serves all four."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/gates.svg">
+  <img src="assets/readme/diagrams/gates-light.svg" width="100%" alt="The four gates. Birth: can it flood at the source. Entry: what crosses the wire. Residence: what may stay and for how long. Emission: what goes back out. One artifact store serves all four.">
+</picture>
 
 </div>
 
@@ -135,7 +144,10 @@ The most common question — which verb do I use — as a flowchart:
 
 <div align="center">
 
-<img src="assets/readme/diagrams/ladder.svg" width="100%" alt="The capture ladder: native read for small bounded output; ctx run for one noisy command; ctx run --shell for pipe chains; ctx seq for N declared steps; ctx eval for computed control flow. Long work backgrounds into a job handle."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ladder.svg">
+  <img src="assets/readme/diagrams/ladder-light.svg" width="100%" alt="The capture ladder: native read for small bounded output; ctx run for one noisy command; ctx run --shell for pipe chains; ctx seq for N declared steps; ctx eval for computed control flow. Long work backgrounds into a job handle.">
+</picture>
 
 </div>
 
@@ -155,7 +167,10 @@ re-execution: 299 tok to fix and rerun vs 192k to re-pay the raw chain.
 
 <div align="center">
 
-<img src="assets/readme/diagrams/longrun.svg" width="100%" alt="ctx run --bg-after 30: finish within 30 seconds and the digest is byte-identical to a foreground run; outlive it and the transcript gets job:<id> while output spools to the store. ctx job gives a bounded tail; finalized jobs become ordinary run: artifacts."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/longrun.svg">
+  <img src="assets/readme/diagrams/longrun-light.svg" width="100%" alt="ctx run --bg-after 30: finish within 30 seconds and the digest is byte-identical to a foreground run; outlive it and the transcript gets job:<id> while output spools to the store. ctx job gives a bounded tail; finalized jobs become ordinary run: artifacts.">
+</picture>
 
 </div>
 
@@ -170,7 +185,10 @@ timestamps never enter content identity.
 
 <div align="center">
 
-<img src="assets/readme/containment.gif" width="100%" alt="Animated terminal: ctx run captures a 20,001-line flood streaming past; it collapses through the gate into a six-line logtemplate/v1 digest — 304,113 tokens become ~210 model-visible, and the needle line keeps an exact retrieval address."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/containment.gif">
+  <img src="assets/readme/containment-light.gif" width="100%" alt="Animated terminal: ctx run captures a 20,001-line flood streaming past; it collapses through the gate into a six-line logtemplate/v1 digest — 304,113 tokens become ~210 model-visible, and the needle line keeps an exact retrieval address.">
+</picture>
 
 <sub>The loop in six seconds: flood → gate → digest. (Editable static source: [`containment.svg`](assets/readme/containment.svg))</sub>
 
@@ -180,7 +198,10 @@ This is what one turn looks like with and without the harness:
 
 <div align="center">
 
-<img src="assets/readme/diagrams/econ.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn until compaction deletes lines without trace. With: the transcript holds a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/econ.svg">
+  <img src="assets/readme/diagrams/econ-light.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn until compaction deletes lines without trace. With: the transcript holds a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free.">
+</picture>
 
 </div>
 
@@ -249,7 +270,10 @@ what it saved.
 
 <div align="center">
 
-<img src="assets/readme/diagrams/loop.svg" width="100%" alt="The measurement loop: a wire observer measures every session; scorecards compile into committed policy epochs; the next session runs under tighter steering. ctx gain reports cumulative savings by verb."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/loop.svg">
+  <img src="assets/readme/diagrams/loop-light.svg" width="100%" alt="The measurement loop: a wire observer measures every session; scorecards compile into committed policy epochs; the next session runs under tighter steering. ctx gain reports cumulative savings by verb.">
+</picture>
 
 </div>
 
@@ -308,7 +332,10 @@ The needle case, drawn out — the same anomalous line under each approach:
 
 <div align="center">
 
-<img src="assets/readme/diagrams/fates.svg" width="100%" alt="A 20,001-line log with one anomalous line. Compaction deletes it without trace. A rewriting proxy dropped it in every measured run (347,595 tokens in, 68 out). straitjacket's logtemplate profile kept it verbatim with an exact retrieval address."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/fates.svg">
+  <img src="assets/readme/diagrams/fates-light.svg" width="100%" alt="A 20,001-line log with one anomalous line. Compaction deletes it without trace. A rewriting proxy dropped it in every measured run (347,595 tokens in, 68 out). straitjacket's logtemplate profile kept it verbatim with an exact retrieval address.">
+</picture>
 
 </div>
 
@@ -386,7 +413,10 @@ happens to a command you type:
 
 <div align="center">
 
-<img src="assets/readme/diagrams/lanes.svg" width="100%" alt="A PreToolUse classifier sorts every command into three lanes: bounded commands run untouched; flooding commands are rewritten through ctx run with the token price shown; secret paths, outside-workspace access and interactive programs always ask first."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/lanes.svg">
+  <img src="assets/readme/diagrams/lanes-light.svg" width="100%" alt="A PreToolUse classifier sorts every command into three lanes: bounded commands run untouched; flooding commands are rewritten through ctx run with the token price shown; secret paths, outside-workspace access and interactive programs always ask first.">
+</picture>
 
 </div>
 
@@ -476,7 +506,10 @@ bytes on any later day:
 
 <div align="center">
 
-<img src="assets/readme/diagrams/address.svg" width="100%" alt="ctx get run:51c70b74fa1f#stdout --lines 8412:8422 — the retrieval verb, an immutable content-addressed artifact id, the stream, and exact line coordinates. The same address returns the same bytes forever."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/address.svg">
+  <img src="assets/readme/diagrams/address-light.svg" width="100%" alt="ctx get run:51c70b74fa1f#stdout --lines 8412:8422 — the retrieval verb, an immutable content-addressed artifact id, the stream, and exact line coordinates. The same address returns the same bytes forever.">
+</picture>
 
 </div>
 

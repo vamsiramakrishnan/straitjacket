@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="../assets/readme/docs-header.svg" width="100%" alt="straitjacket docs — design notes and mechanism specs. Every claim backed by a receipt in evals; bytes become addresses. Current focus: LADDERS, REFLEX, EDC, ALGEBRA."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs-header.svg">
+  <img src="../assets/readme/docs-header-light.svg" width="100%" alt="straitjacket docs — design notes and mechanism specs. Every claim backed by a receipt in evals; bytes become addresses. Current focus: LADDERS, REFLEX, EDC, ALGEBRA.">
+</picture>
 
 </div>
 
@@ -13,7 +16,10 @@ reversed on the evidence.
 
 <div align="center">
 
-<img src="../assets/readme/docs-path.svg" width="100%" alt="Reading path: two shipped mechanism theses (PRICED-CONTEXT — price at decision time; LOSSLESS-RESCUE — elide bytes, keep addresses), then the current architecture work in reading order: LADDERS, REFLEX, EDC, ALGEBRA."/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs-path.svg">
+  <img src="../assets/readme/docs-path-light.svg" width="100%" alt="Reading path: two shipped mechanism theses (PRICED-CONTEXT — price at decision time; LOSSLESS-RESCUE — elide bytes, keep addresses), then the current architecture work in reading order: LADDERS, REFLEX, EDC, ALGEBRA.">
+</picture>
 
 </div>
 
