@@ -23,3 +23,7 @@ evals/_runs/
 # track a root ctx.toml — the test suite provisions isolated workspaces.
 /ctx.toml
 /.ctxignore
+
+# Claude Code harness-local state (agent worktrees, session-scoped agent
+# definitions written by `ctx wrap claude`) — never source.
+.claude/
