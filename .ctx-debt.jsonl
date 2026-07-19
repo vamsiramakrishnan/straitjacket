@@ -28,3 +28,8 @@
 {"id": "6db9f7011b", "note": "M-F tree-sitter skeleton tier: [code] extra, content-keyed skeleton blobs, file-read Evidence Contract (census-before-detail applied to source), multi-language stats/map", "op": "add", "ref": "docs/ALGEBRA.md"}
 {"id": "6611d8c899", "note": "M-H ctx q composition algebra: total pipeline combinators over typed record streams, ~20-40 tok vs eval's ~200, per-stage provenance, MCP-tier safe by totality; referee = eval-collapse scenarios with a q arm", "op": "add", "ref": "docs/ALGEBRA.md"}
 {"id": "19520be4f7", "note": "M-G/M-I fact store + Angle-lite: typed facts from skeletons + evidence graphs + generations, SCIP ingestion opportunistic, bounded conjunctive joins \u2014 the static x dynamic x temporal root-cause query", "op": "add", "ref": "docs/ALGEBRA.md"}
+{"id": "bf48ba3c4e", "op": "resolve"}
+{"id": "748f470aa1", "op": "resolve"}
+{"id": "34e21fe2dc", "op": "resolve"}
+{"id": "135d7df383", "op": "resolve"}
+{"id": "f5d318bf5b", "note": "hook classifier: reordered '2>&1 >file' redirection misclassified (the one unfixed item from the resolved S6 bundle 135d7df383; seq signal-exit, timeout budgets, binary-abort, and _WS_CACHE all shipped in v0.20-0.22)", "op": "add", "ref": "src/ctx/hook.py"}
