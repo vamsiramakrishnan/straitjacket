@@ -121,3 +121,27 @@ preservation under compression. Axis (c) exists publicly only as our
 needle-drop eval and Headroom's CCR Needle. That triad is the bench this
 project's matrix + scorecard already approximates internally — and the gap
 in the field our receipts are pointed at.
+
+## Re-verified (same day, post plan-value wave)
+
+Fresh live run of the identical corpus after the v0.25 profile work. The
+two cargo defects recorded above are FIXED — cargo output is now claimed by
+`cargotest/v1` with an exact census (`passed 144 · failed 6`, all six
+identities inline), not text/v1's lucky tail window:
+
+| corpus | raw tok | digest tok | ratio | profile |
+|---|--:|--:|--:|---|
+| cargo test (6/150 failing) | 3,092 | 191 | 16.2× | cargotest/v1 (exact census) |
+| cargo test (150 passing) | 1,185 | 92 | 12.9× | cargotest/v1 |
+| ps aux | 5,676 | 129 | 44.0× | text/v1 |
+| find src tests | 2,872 | 202 | 14.2× | text/v1 |
+| docker ps -a (40) | 1,522 | 191 | 8.0× | table/v1 (40×7 exact) |
+| kubectl get pods (180) | 3,200 | 259 | 12.4× | table/v1 (180×5 exact) |
+| mvn test (3,360 tests) | 4,781 | 584 | 8.2× | logtemplate/v1 |
+| aws ec2 describe-instances (120) | 16,748 | 111 | 150.9× | json/v1 (exact shape) |
+| pip list · gh pr list · rspec | ~477–574 | ~1× | pass-through | text/v1 |
+
+Reading: floods collapse 8×–151× with exact censuses where a profile owns
+the family; small outputs pass through ~1:1 (containment that would add no
+value is not applied). rspec remains the weakest family (0.9× — a profile
+gap already on the coverage queue).

@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-architecture-blue)](docs/README.md)
 
-[Quickstart](#-quickstart) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
+[Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
 **Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 798 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
@@ -45,59 +45,94 @@ addresses. Any address resolves back to the exact original bytes later.
 
 ## ⚡ Quickstart
 
+Three commands, from zero to a harnessed agent:
+
 ```bash
-pip install -e .            # runtime (stdlib-only core; extras optional)
-ctx wrap setup              # ONE command: harness Antigravity + Claude Code + Codex
-ctx stats --session         # wire scorecard: rounds, cache classes, effort mix
-ctx gain                    # cumulative containment savings, by verb
+pip install -e .    # from a clone (PyPI release pending); Python 3.11+
+cd your-repo
+ctx wrap setup      # done — Antigravity, Claude Code, and Codex are harnessed
 ```
 
-**One command sets everything up.** `ctx wrap setup` (alias `ctx wrap all`)
-writes `ctx.toml`, then installs the harness for every host it supports —
-Antigravity, Claude Code, and Codex — in the current workspace. It is
-idempotent and non-destructive (existing config is merged, never clobbered).
-The harness is **built for Antigravity** and works identically on the other
-two: same capture, same deterministic digests, same retrieval addresses.
+`ctx wrap setup` is idempotent and non-destructive: it merges into existing
+config, never clobbers it, and re-running is a no-op. From the next agent
+session on, flooding tool output is captured into a local store and your
+agent sees a small digest with exact retrieval addresses instead.
 
-Per-host, if you prefer to set up just one — or how each is wired:
+**See it work** (no agent needed):
 
-| Host | Command | How it's wired |
+```bash
+ctx run -- pytest -q        # run anything noisy through the harness
+```
+
+```
+[ctx run:8d8335db6848 profile=pytest/v2]
+stdout: 4,102 lines · 402.1 KiB · est 98,000 tokens   ← what your agent DIDN'T pay for
+failing tests (census):
+  1. tests/test_auth.py::test_token_expiry   tests/test_auth.py:42
+next:
+  ctx get run:8d8335db6848#stdout --lines 1284:1300   ← any omitted byte, on demand
+```
+
+Setting up one host only, or checking what setup writes first:
+
+| | |
+|---|---|
+| `ctx wrap antigravity` / `claude` / `codex` | set up a single host |
+| `ctx wrap <host> --print-config` | preview the exact config without writing it |
+| `ctx wrap claude -- -p "fix the tests"` | one ephemeral Claude session, zero residue |
+| `ctx doctor --antigravity` | verify the install (15 health checks) |
+
+Everything else — the wire-observer proxy, mid-session rescue, pip extras,
+the optional Rust hook accelerator — is opt-in and documented in
+[Getting started](docs/GETTING-STARTED.md). New to the project? Read
+**[How it works](docs/HOW-IT-WORKS.md)** first — it walks one command
+through the whole system in plain language.
+
+## 🆕 New in v0.25
+
+Plain-language highlights; full detail in [`CHANGELOG.md`](CHANGELOG.md).
+
+- **One-command, three-host setup.** `ctx wrap setup` harnesses Antigravity,
+  Claude Code, *and Codex* (new — with real enforcement, not just advice)
+  in a single idempotent command.
+- **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
+  run a bounded multi-step evidence program in **one round instead of N**
+  — measured 6 rounds → 1 ([receipt](evals/plan-collapse-2026-07-19.md)).
+- **The harness now measures itself.** `ctx replay --regret` scores each
+  digest profile's distance from the evidence frontier; `ctx replay
+  --outcomes` reports whether agents actually *use* each digest's evidence
+  — both computed from your own recorded sessions, offline, deterministic
+  ([how to read them](docs/THEORY.md)).
+- **Proven on a real SWE-bench task.** django__django-13569 solved
+  end-to-end — gold-equivalent fix from addressed evidence at ~900 visible
+  tokens, ≥20× less than reading the involved files
+  ([receipt](evals/swe-django-13569-2026-07-19.md)).
+- **First non-Claude numbers.** Antigravity-SDK A/B on `gemini-3.5-flash`:
+  −30% billed tokens, 152× less tool output at equal correctness on an
+  unavoidable flood — and the regime where naive wins is published too
+  ([receipt](evals/antigravity-gemini-2026-07-19.md)).
+
+## 📊 What's measured (and what isn't yet)
+
+Every performance claim in this README links to a reproducible receipt.
+The quick map:
+
+| Question | Instrument | Latest receipt |
 |---|---|---|
-| **Antigravity** | `ctx wrap antigravity` | workspace plugin (`.agents/plugins/`): MCP `ctx` tool + Pre/PostToolUse hooks |
-| **Claude Code** | `ctx wrap claude` (persist) · `ctx wrap claude -- -p "…"` (ephemeral run) | `.claude/settings.json` hooks + explorer agent; the `--` form injects hooks for one run and leaves zero residue |
-| **Codex** | `ctx wrap codex` | `.codex/config.toml` (MCP + `hooks=true`) + `.codex/hooks.json` (Pre/PostToolUse) + `AGENTS.md` steering |
+| Does containment survive hostile outputs? | coverage corpus: 11 real output families (cargo, ps, docker, kubectl, mvn, aws, …) | floods collapse 8×–151×; small outputs pass through ~1× — [`evals/coverage-corpus-2026-07-19.md`](evals/coverage-corpus-2026-07-19.md) |
+| Does it help a real agent on a real task? | live A/B, same agent both arms | −30% / 152× (Antigravity SDK); parity-to-loss when the flood is cheaply greppable — published |
+| Does it ever drop the decisive line? | needle-drop + evidence conformance tests | 0% dropped (vs 100% for a rewriting proxy) |
+| Is each digest near-optimal? | `ctx replay --regret` per profile | pytest/v1 frontier 0.17, 199/199 facts preserved |
+| Hook latency on the hot path? | hot-path profile | ~29 ms Python / ~3 ms native Rust per intercepted call |
 
-Preview any host's exact config without writing it: `ctx wrap <host> --print-config`.
-
-Opt-in extras: `--proxy` (Tier-0 wire observer on `ctx wrap claude`),
-`--rescue-pct 70` (lossless mid-session rescue), `[map]`/`[code]`/`[fast]` pip
-extras, `rg`/`ctags` binaries, and a Rust post-hook accelerator
-(`native/ctx-hook-native`, ~3 ms vs Python's ~29 ms startup floor —
-parity-tested byte-for-byte, never required).
-
-## 🆕 New in v0.19–0.20
-
-- **Head/tail evidence windows.** CLIs print their conclusion at the END of
-  the output. Large `text/v1` digests now show the first 5 and last 5 lines
-  (configurable) with real line numbers; the omitted middle keeps a
-  deterministic span and a `ctx get --lines` continuation. This came from a
-  measured miss: a flood scenario's own SUMMARY line was being dropped.
-- **Long-runner backgrounding.** `ctx run --bg-after 30 -- <cmd>`: finish
-  within 30s and you get the normal digest, byte-identical to a foreground
-  run. Outlive it and the transcript gets `job:<id>` immediately while output
-  spools to the store. `ctx job <id>` is a bounded live tail, never a flood;
-  finalized jobs are ordinary `run:` artifacts.
-- **Programmable capture: `ctx eval`.** One Python script chains N operations
-  with computed control flow; only its bounded digest returns, and the script
-  itself is stored as an addressable `blob:` cited in the digest header.
-  Measured: 146 tokens vs 96k naive on a 30-file aggregate
-  ([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)).
-- **Adoption-measured steering.** The hook detects eval opportunities (python
-  heredocs, `-c`, ephemeral scripts), suggests the collapse at that point,
-  and records every opportunity — so adoption is a measured ratio per
-  session, not a guess.
-
-Full history: [`CHANGELOG.md`](CHANGELOG.md).
+**Honestly not yet measured:** a full Terminal-Bench (or similar)
+agent-driving run. The static half exists — the coverage corpus above
+referees digest shape against exactly the output families Terminal-Bench
+exercises — but the dynamic half (an agent driving those outputs under a
+task) is a declared TO-BUILD in the
+[benchmark charter](evals/BENCHMARK.md), which also explains why no single
+leaderboard can referee a system that changes the agent's information
+channel.
 
 ## 🔒 The core invariant
 

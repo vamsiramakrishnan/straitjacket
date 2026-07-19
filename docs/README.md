@@ -7,7 +7,7 @@
 
 **Use it. Understand it. Verify it. Extend it.**
 
-[Getting started](GETTING-STARTED.md) · [Core concepts](CONCEPTS.md) · [Architecture path](#architecture-reading-path) · [Evaluation receipts](../evals/) · [Normative specs](../spec/)
+[How it works](HOW-IT-WORKS.md) · [Getting started](GETTING-STARTED.md) · [Core concepts](CONCEPTS.md) · [Architecture path](#architecture-reading-path) · [Evaluation receipts](../evals/) · [Normative specs](../spec/)
 
 </div>
 
@@ -28,12 +28,12 @@ A design document is not automatically current product behaviour. It may describ
 
 ### Use straitjacket
 
-Start with **[Getting started](GETTING-STARTED.md)**.
+Start with **[How it works](HOW-IT-WORKS.md)** (a ten-minute plain-language walkthrough), then **[Getting started](GETTING-STARTED.md)**.
 
 You will learn how to:
 
-- run one harnessed Claude Code session;
-- install the Antigravity integration;
+- set up all three hosts (Antigravity, Claude Code, Codex) in one command;
+- run one harnessed or ephemeral agent session;
 - capture, inspect, search, and retrieve evidence;
 - choose between `run`, `seq`, `eval`, `q`, and background jobs;
 - interpret the session scorecard;
@@ -144,6 +144,7 @@ Every mechanism inherits the same invariants:
 
 | Need | Read |
 |---|---|
+| the ten-minute overview | [HOW-IT-WORKS.md](HOW-IT-WORKS.md) |
 | first successful session | [GETTING-STARTED.md](GETTING-STARTED.md) |
 | vocabulary and invariants | [CONCEPTS.md](CONCEPTS.md) |
 | retrieval economics | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |

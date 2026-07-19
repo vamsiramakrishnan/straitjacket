@@ -10,33 +10,51 @@ straitjacket currently requires:
 
 - Python 3.11 or newer;
 - a local repository workspace;
-- Claude Code or Antigravity for automatic host integration;
+- Antigravity, Claude Code, or Codex for automatic host integration
+  (or none — every capture/retrieval verb also works standalone);
 - optional binaries such as `rg` and `ctags` for richer repository analysis.
 
 The Python core remains deliberately small. Optional analysis backends improve precision or speed, but their absence should degrade capability rather than break capture.
 
-## Install from the repository
+## Install and set up (one command)
 
 ```bash
 python -m pip install -e .
-ctx init
+cd your-repo
+ctx wrap setup
 ```
 
-`ctx init` writes the workspace configuration and ignore file. The artifact store remains local to the workspace unless configured otherwise.
-
-Confirm the CLI is available:
+`ctx wrap setup` writes the workspace configuration (`ctx.toml`,
+`.ctxignore`) and installs the harness for every host it supports —
+Antigravity, Claude Code, and Codex — in one idempotent command. Existing
+host config is merged, never clobbered; re-running is a no-op. Verify:
 
 ```bash
-ctx --help
+ctx doctor --antigravity    # 15 health checks
+ctx wrap codex --print-config   # preview any host's config without writing
 ```
 
-## Run one harnessed Claude Code session
+Per host, what setup writes:
+
+| Host | Files | Enforcement |
+|---|---|---|
+| Antigravity | `.agents/plugins/ctx-harness/` (MCP tool + hooks) | enforced |
+| Claude Code | `.claude/settings.json` hooks + explorer agent | enforced |
+| Codex | `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` block | enforced |
+
+Prefer a single host? `ctx wrap antigravity`, `ctx wrap claude`, or
+`ctx wrap codex` do exactly one.
+
+## Or: one ephemeral session, zero residue
 
 ```bash
 ctx wrap claude --proxy -- -p "fix the failing tests"
 ```
 
-`ctx wrap` injects the required host settings for this process only. It does not leave persistent Claude Code configuration behind when the session exits.
+The `--` form injects host settings for this process only and removes them
+when the session exits — nothing persistent is left behind. (`--proxy`
+additionally routes API traffic through a localhost observer that measures
+the session's true wire cost; optional.)
 
 During the session, operations that could produce unbounded output are captured and replaced with bounded evidence digests. Small outputs may still pass through whole when containment would add no value.
 
@@ -48,14 +66,6 @@ ctx gain
 ```
 
 `ctx stats --session` explains what crossed the wire and how the session behaved. `ctx gain` shows cumulative containment savings by operation family.
-
-## Install the Antigravity integration
-
-```bash
-ctx antigravity install
-```
-
-The Antigravity integration is persistent. Once installed, sessions use the same capture, artifact, digest, and retrieval contracts as the ephemeral Claude Code wrapper.
 
 ## Learn the core loop manually
 
