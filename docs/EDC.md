@@ -234,6 +234,38 @@ the outcome-tracker event vocabulary. Five amendments:
    Ledger vocabulary extension is a schema-v2 bump with tolerant readers
    (unknown events → "other"), scorecard updated in lockstep.
 
+## Reader capability (§6) and signature algebra (§7)
+
+**§6 adopted**: ReaderState from existing ledger events; deterministic
+prior-weight shrinkage (a Beta-posterior mean without ceremony);
+tier = prior, session behavior = evidence, delivery = posterior decision.
+Amendments: (1) ModelPrior tables are epoch-compiled from session
+ledgers — reviewed, never live-mutated cross-session; (2) preference
+transitions follow the latching discipline — dropping to `inline`
+latches, recovery is earned (>0.7 followthrough AND a minimum landing
+count); `confidence` below a floor defers to epoch defaults; (3)
+`inline` governs evidence delivery, never citation — addresses always
+ride (provenance); (4) rerun_susceptibility v1 is plan-unconditional
+(acceptable); plan_id-tagged outcomes make the conditional split
+computable later — version the derivation.
+
+**§7 adopted as a relation algebra**, not just equality:
+- *equivalent* — normalization (shipped: slicers, presentation flags,
+  wrappers, `python -m`, `ctx run` unwrapping);
+- *narrower* — family-specific containment (`pytest a.py::t` ⊂
+  `pytest a.py`, node-id prefix): fires the "narrowing" positive —
+  census consumed without retrieval;
+- *disjoint* — different decision scope;
+- × **content equality** (worktree-hash, rule 5 v3) as the orthogonal
+  dimension: the full rerun-classification matrix.
+
+**Defect found by §7 (pytest/v2 item):** v1 signature normalization
+strips ALL flags as presentation noise — including scope-affecting ones.
+`pytest -k auth` / `-m slow` / `--lf` currently equal bare `pytest`,
+so a legitimate scope change can score as starvation. Fix: per-family
+signature tables declaring scope flags (kept) vs presentation flags
+(dropped) — breadth as data, per the house rule.
+
 ## The canonical picture
 
 ```
