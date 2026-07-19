@@ -44,15 +44,45 @@ API = "https://datasets-server.huggingface.co/filter"
 DATASET = "SWE-bench/SWE-bench_Verified"
 
 
+def _django_spec(test: str) -> str:
+    """'test_x (migrations.test_ops.OpTests)' -> 'migrations.test_ops.OpTests.test_x'."""
+    m = re.match(r"^(\S+) \(([\w.]+)\)$", test.strip())
+    return f"{m.group(2)}.{m.group(1)}" if m else test
+
+
+# Run families: how each repo executes its FAIL_TO_PASS tests. The default
+# family is pytest; breadth is data — adding a repo is a table row.
+RUN_FAMILIES = {
+    "django/django": lambda vpy, tests: [
+        str(vpy), "tests/runtests.py", "--verbosity", "1",
+        *(_django_spec(t) for t in tests),
+    ],
+    # sympy names bare test functions run through its own harness.
+    "sympy/sympy": lambda vpy, tests: [str(vpy), "bin/test", *tests],
+}
+
+
+def _run_argv(repo: str, vpy: Path, tests: list[str]) -> list[str]:
+    fam = RUN_FAMILIES.get(repo)
+    if fam:
+        return fam(vpy, tests)
+    return [str(vpy), "-m", "pytest", "-v", *tests]
+
+
 def fetch_instances(repo: str, limit: int) -> list[dict]:
+    """Newest-first: this container has one interpreter (3.11), and only
+    the recent era of each repo imports on it. Pre-2022 instances need the
+    official per-instance Docker images — deferred to a docker-capable
+    environment, recorded honestly rather than scored as noise."""
     where = urllib.parse.quote(f'"repo"=\'{repo}\'')
     url = (
         f"{API}?dataset={urllib.parse.quote(DATASET)}&config=default&split=test"
-        f"&where={where}&offset=0&length={limit}"
+        f"&where={where}&offset=0&length=100"
     )
     with urllib.request.urlopen(url, timeout=60) as r:
-        rows = json.load(r)["rows"]
-    return [row["row"] for row in rows]
+        rows = [row["row"] for row in json.load(r)["rows"]]
+    rows.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
+    return rows[:limit]
 
 
 def gold_regions(patch: str) -> dict[str, list[tuple[int, int]]]:
@@ -109,14 +139,31 @@ def reproduce_failure(inst: dict, work: Path) -> tuple[str, int] | None:
             [str(vpy), "-m", "pip", "install", "-q", "-e", "."],
             cwd=repo_dir, capture_output=True, timeout=600, env=env,
         )
+        if inst["repo"] not in RUN_FAMILIES:  # pytest-family repos need the runner
+            subprocess.run(
+                [str(vpy), "-m", "pip", "install", "-q", "pytest"],
+                capture_output=True, timeout=300,
+            )
     tests = json.loads(inst["FAIL_TO_PASS"]) if isinstance(
         inst["FAIL_TO_PASS"], str
     ) else inst["FAIL_TO_PASS"]
     r = subprocess.run(
-        [str(vpy), "-m", "pytest", "-v", *tests],
+        _run_argv(inst["repo"], vpy, tests),
         cwd=repo_dir, capture_output=True, text=True, timeout=600,
     )
-    return r.stdout + r.stderr, r.returncode
+    combined = r.stdout + r.stderr
+    # A run that never reached the tests is not a reproduction — scoring it
+    # would count tooling noise as evidence. pytest reserves exit 1 for
+    # real test failures; 2-5 are interruption/internal/usage/collection.
+    not_repro = (
+        "No module named" in combined[:400]
+        or (inst["repo"] not in RUN_FAMILIES and r.returncode not in (0, 1))
+    )
+    if not_repro:
+        tail = combined.strip().splitlines()[-1][:100] if combined.strip() else "?"
+        print(f"  not a reproduction (exit {r.returncode}): {tail}")
+        return None
+    return combined, r.returncode
 
 
 def score_digest(digest: str, raw: str, gold: dict[str, list[tuple[int, int]]]) -> dict:
@@ -140,9 +187,13 @@ def score_digest(digest: str, raw: str, gold: dict[str, list[tuple[int, int]]]) 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--repo", default="pytest-dev/pytest")
-    ap.add_argument("--limit", type=int, default=1)
+    ap.add_argument("--repo", default="pytest-dev/pytest", help="comma-separated repo list")
+    ap.add_argument("--limit", type=int, default=1, help="instances per repo")
     ap.add_argument("--workdir", required=True)
+    ap.add_argument(
+        "--keep", action="store_true",
+        help="keep clones+venvs (default: delete after scoring — disk hygiene)",
+    )
     args = ap.parse_args()
     work = Path(args.workdir)
     work.mkdir(parents=True, exist_ok=True)
@@ -158,35 +209,65 @@ def main() -> None:
     ws = resolve_workspace(str(ws_dir))
     store = Store(ws_dir / "store")
 
-    for inst in fetch_instances(args.repo, args.limit):
-        print(f"== {inst['instance_id']} ==")
-        gold = gold_regions(inst["patch"])
-        print(f"  gold files: {list(gold)}")
-        out = reproduce_failure(inst, work)
-        if out is None:
-            continue
-        raw, code = out
-        digest, _ = digest_output(store, ws, "bash", raw, is_error=code != 0)
-        r_tok, d_tok = estimate_tokens(len(raw.encode())), estimate_tokens(
-            len(digest.encode())
-        )
-        score = score_digest(digest, raw, gold)
-        print(f"  failure output: {r_tok:,} tok -> digest {d_tok:,} tok (exit {code})")
-        prof = digest.split("profile=", 1)[1].split("]", 1)[0] if "profile=" in digest else "?"
-        print(f"  profile: {prof}")
-        # The trichotomy is the lesson: inline = containment delivered the
-        # fix location; one-hop = present in raw but dropped by the digest
-        # (THE actionable defect class — the profile-improvement queue);
-        # absent = not in the output at all, so no output-side channel could
-        # deliver it — that task's evidence belongs to the search lane
-        # (code verbs / repo map), not to digesting.
-        print(
-            f"  gold-anchored evidence: {score['inline']} digest-inline · "
-            f"{score['one_hop']} digest-dropped (DEFECT) · "
-            f"{score['absent']} not-in-output (search-lane)"
-        )
-        for f, verdict in score["files"].items():
-            print(f"    {verdict:>7}: {f}")
+    import shutil
+
+    totals = {"inline": 0, "one_hop": 0, "absent": 0, "instances": 0, "skipped": 0}
+    defects: list[tuple[str, str]] = []
+    for repo in [r.strip() for r in args.repo.split(",") if r.strip()]:
+        for inst in fetch_instances(repo, args.limit):
+            print(f"== {inst['instance_id']} ==", flush=True)
+            gold = gold_regions(inst["patch"])
+            try:
+                out = reproduce_failure(inst, work)
+            except Exception as e:  # noqa: BLE001 — a family that won't build is data
+                print(f"  skipped: {type(e).__name__}: {str(e)[:120]}")
+                totals["skipped"] += 1
+                continue
+            finally:
+                if not args.keep:
+                    shutil.rmtree(work / inst["instance_id"], ignore_errors=True)
+            if out is None:
+                totals["skipped"] += 1
+                continue
+            raw, code = out
+            digest, _ = digest_output(store, ws, "bash", raw, is_error=code != 0)
+            r_tok, d_tok = estimate_tokens(len(raw.encode())), estimate_tokens(
+                len(digest.encode())
+            )
+            score = score_digest(digest, raw, gold)
+            prof = digest.split("profile=", 1)[1].split("]", 1)[0] if "profile=" in digest else "?"
+            print(f"  {r_tok:,} tok -> {d_tok:,} tok · exit {code} · {prof}")
+            # The trichotomy is the lesson: inline = containment delivered
+            # the fix location; one-hop = present in raw but dropped by the
+            # digest (THE actionable defect class — the profile-improvement
+            # queue); absent = not in the output at all — that evidence
+            # belongs to the search lane (code verbs / repo map).
+            print(
+                f"  gold: {score['inline']} digest-inline · "
+                f"{score['one_hop']} digest-dropped (DEFECT) · "
+                f"{score['absent']} not-in-output (search-lane)"
+            )
+            for f, verdict in score["files"].items():
+                if verdict != "inline":
+                    print(f"    {verdict:>7}: {f}")
+                if verdict == "one-hop":
+                    defects.append((inst["instance_id"], f))
+            totals["inline"] += score["inline"]
+            totals["one_hop"] += score["one_hop"]
+            totals["absent"] += score["absent"]
+            totals["instances"] += 1
+
+    print("\n== aggregate ==")
+    n = totals["inline"] + totals["one_hop"] + totals["absent"]
+    print(
+        f"  {totals['instances']} instances scored ({totals['skipped']} skipped) · "
+        f"{n} gold files: {totals['inline']} inline · "
+        f"{totals['one_hop']} digest-dropped · {totals['absent']} search-lane"
+    )
+    if defects:
+        print("  DEFECT QUEUE (raw held it, digest dropped it):")
+        for iid, f in defects:
+            print(f"    {iid}: {f}")
 
 
 if __name__ == "__main__":

@@ -151,6 +151,104 @@ class CargoTestProfile(Profile):
         )
 
 
+_UNITTEST_RAN_RE = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
+_UNITTEST_VERDICT_RE = re.compile(
+    r"^(?:OK|FAILED \((?P<detail>[^)]+)\))\s*$", re.MULTILINE
+)
+_UNITTEST_FAIL_RE = re.compile(r"^(FAIL|ERROR): (\S+) \(([\w.]+)\)")
+
+
+class UnittestProfile(Profile):
+    """Python unittest runner shape — vanilla unittest and Django's
+    ``runtests.py``. Measured motivation (SWE-bench mine, 2026-07-19):
+    Django failure floods fell to text/v1 with no failing census; SPEC §9
+    lists unittest as a required row. Same lesson, third runner: the
+    census is the work queue."""
+
+    version = "unittest/v1"
+
+    def detect(self, ctx: DigestContext) -> str | None:
+        combined = ctx.stdout.text + "\n" + ctx.stderr.text
+        if not _UNITTEST_RAN_RE.search(combined):
+            return None
+        if not _UNITTEST_VERDICT_RE.search(combined):
+            return None
+        return "unittest 'Ran N tests' + OK/FAILED verdict shape"
+
+    def render(self, ctx: DigestContext) -> str:
+        combined = ctx.stdout.text + "\n" + ctx.stderr.text
+        ran = sum(int(m.group(1)) for m in _UNITTEST_RAN_RE.finditer(combined))
+        failures = errors = 0
+        for m in _UNITTEST_VERDICT_RE.finditer(combined):
+            for part in (m.group("detail") or "").split(","):
+                k, _, v = part.strip().partition("=")
+                if k == "failures":
+                    failures += int(v or 0)
+                elif k == "errors":
+                    errors += int(v or 0)
+        summary = [
+            "summary:",
+            f"  tests (exact): ran {fmt_int(ran)} · failures {fmt_int(failures)}"
+            f" · errors {fmt_int(errors)}",
+        ]
+        shown = 1
+        cap = (failures + errors) if getattr(ctx, "dense", False) else 10
+        listed = 0
+        for view in (ctx.stdout, ctx.stderr):
+            for i, ln in enumerate(view.text_lines, start=1):
+                fm = _UNITTEST_FAIL_RE.match(ln)
+                if fm:
+                    if listed < cap:
+                        summary.append(
+                            f"  {fm.group(1).lower()}: {fm.group(3)}.{fm.group(2)}"
+                            f" · {view.name}:L{i}"
+                        )
+                        shown += 1
+                    listed += 1
+        if listed > cap:
+            summary.append(f"  … {fmt_int(listed - cap)} more failing tests")
+        # First failure region: the exception line AND the innermost
+        # traceback frame. The frame names the file the fix lands in —
+        # measured directly (SWE-bench django-13568: census-only rendering
+        # dropped the gold file the traceback carried; gold-anchored replay
+        # flagged it as the first digest-dropped defect).
+        for view in (ctx.stdout, ctx.stderr):
+            lines = view.text_lines
+            for i, ln in enumerate(lines, start=1):
+                if _UNITTEST_FAIL_RE.match(ln):
+                    frame_j = exc_j = None
+                    for j in range(i, min(i + 60, len(lines))):
+                        if re.match(r'^\s+File "', lines[j]):
+                            frame_j = j  # keep the LAST = innermost frame
+                        if re.match(r"^\w+(\.\w+)*(Error|Exception)\b", lines[j]):
+                            exc_j = j
+                            break
+                    if frame_j is not None:
+                        summary.append(
+                            f"  innermost frame {view.name}:L{frame_j + 1}: {lines[frame_j].strip()[:160]}"
+                        )
+                        shown += 1
+                    if exc_j is not None:
+                        summary.append(
+                            f"  first failure {view.name}:L{exc_j + 1}: {lines[exc_j].strip()[:160]}"
+                        )
+                        shown += 1
+                    break
+            else:
+                continue
+            break
+        rid = "run:PENDING"
+        suggestions = [f"ctx search {rid} 'FAIL' 'ERROR' --context 0"]
+        if failures or errors:
+            suggestions.insert(0, f"ctx search {rid} 'Traceback' --context 6")
+        return "\n".join(
+            ctx.header_lines()
+            + summary
+            + self.coverage_lines(ctx, shown)
+            + self.next_lines(ctx, suggestions)
+        )
+
+
 _JEST_SUMMARY_RE = re.compile(
     r"^(Tests|Test Suites):\s+(?P<body>.+)$", re.MULTILINE
 )

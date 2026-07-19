@@ -22,6 +22,7 @@ from ctx.digest.moreprofs import (
     GitDiffProfile,
     GoTestProfile,
     JestProfile,
+    UnittestProfile,
 )
 from ctx.digest.pytestprof import PytestProfile
 from ctx.digest.tableprof import TableProfile
@@ -37,6 +38,8 @@ _PROFILES: tuple[Profile, ...] = (
     GoTestProfile(),
     CargoTestProfile(),  # shape-anchored on 'test result:' — compile-error
     #                      runs decline here and fall to Lint/Build below
+    UnittestProfile(),  # 'Ran N tests' + OK/FAILED — vanilla unittest and
+    #                     Django runtests.py (SWE-bench mine, 2026-07-19)
     JestProfile(),
     GitDiffProfile(),
     LintProfile(),  # before Build/LogTemplate: both would misclaim lint shapes

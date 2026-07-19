@@ -152,3 +152,51 @@ def test_registry_order_lint_still_wins_diagnostics(tmp_path):
     )
     profile, _ = detect_profile(_ctx_for(tmp_path, tsc, argv=("tsc",), exit_code=1))
     assert profile.version != "table/v1"
+
+
+UNITTEST_FAIL = textwrap.dedent("""\
+    FF..
+    ======================================================================
+    FAIL: test_scrypt (auth_tests.test_hashers.TestUtilsHashPwd)
+    ----------------------------------------------------------------------
+    Traceback (most recent call last):
+      File "/x/tests/auth_tests/test_hashers.py", line 508, in test_scrypt
+        self.check(encoded)
+      File "/x/django/contrib/auth/checks.py", line 92, in check
+        raise self.failureException(msg)
+    AssertionError: False is not true
+    ======================================================================
+    FAIL: test_rounds (auth_tests.test_hashers.TestUtilsHashPwd)
+    ----------------------------------------------------------------------
+    Traceback (most recent call last):
+      File "/x/tests/auth_tests/test_hashers.py", line 511, in test_rounds
+        self.assertEqual(rounds, 12)
+    AssertionError: 10 != 12
+    ----------------------------------------------------------------------
+    Ran 4 tests in 0.412s
+
+    FAILED (failures=2)
+    """)
+
+
+def test_unittest_profile_census_and_innermost_frame(tmp_path):
+    """SWE-bench mine receipt (django-13568): census alone dropped the
+    gold file carried by the traceback; the innermost frame is decisive
+    evidence and must ride the digest."""
+    from ctx.digest.moreprofs import UnittestProfile
+
+    p = UnittestProfile()
+    ctx = _ctx_for(tmp_path, UNITTEST_FAIL, argv=("python", "tests/runtests.py"), exit_code=1)
+    assert p.detect(ctx)
+    body = p.render(ctx)
+    assert "tests (exact): ran 4 · failures 2 · errors 0" in body
+    assert "fail: auth_tests.test_hashers.TestUtilsHashPwd.test_scrypt · stdout:L3" in body
+    assert "fail: auth_tests.test_hashers.TestUtilsHashPwd.test_rounds · stdout:L12" in body
+    assert 'innermost frame stdout:L8: File "/x/django/contrib/auth/checks.py"' in body
+    assert "first failure stdout:L10: AssertionError: False is not true" in body
+
+
+def test_unittest_profile_declines_pass_free_prose(tmp_path):
+    from ctx.digest.moreprofs import UnittestProfile
+
+    assert UnittestProfile().detect(_ctx_for(tmp_path, "Ran a marathon in 4 hours\n")) is None
