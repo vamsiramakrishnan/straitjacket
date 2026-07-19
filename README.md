@@ -105,6 +105,7 @@ flowchart LR
     G2 --- M2["Tier-0 observer proxy<br/>universal PostToolUse gate<br/>wire.jsonl · window.json"]
     G3 --- M3["session read ledger<br/>window-pressure loop<br/>epoch-latched rescue"]
     G4 --- M4["emission governor tiers<br/>cite-don't-quote<br/>solution ladder"]
+    M1 ~~~ M2 ~~~ M3 ~~~ M4
 ```
 
 *The taxonomy that organizes everything: prevention at birth, observation
