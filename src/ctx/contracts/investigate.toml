@@ -1,0 +1,46 @@
+# Evidence contract for the investigation family (docs/EVIDENCE-PLANS.md).
+# The decision unit is a conclusion candidate: a changed symbol that
+# explains failing tests, supported by named planes (static/dynamic/
+# temporal/semantic). Counterevidence is REQUIRED in every outcome — the
+# section renders even when empty ("none found in N probes"), because its
+# absence is exactly the anchoring failure the plan exists to prevent.
+schema = "ctx.evidence-contract/v1"
+family = "investigate"
+profile = "investigate/v1"
+decision_unit = "conclusion_candidate"
+
+[outcomes.fail]
+required = [
+    "aggregate_counts",
+    "complete_identity_census",
+    "location",
+    "one_line_summary",
+    "counterevidence",
+    "coverage_attestation",
+]
+preferred = ["root_detail"]
+retrievable = ["node_results"]
+
+[outcomes.pass]
+# No candidates is a legitimate result; the census class is defined only
+# over a non-empty item set, so pass requires the honest frame instead.
+required = ["aggregate_counts", "counterevidence", "coverage_attestation"]
+preferred = []
+retrievable = ["node_results"]
+
+[outcomes.default]
+required = ["aggregate_counts", "counterevidence", "coverage_attestation"]
+preferred = []
+retrievable = ["node_results"]
+
+[loss_severities]
+complete_identity_census = "catastrophic"
+counterevidence = "major"
+coverage_attestation = "major"
+location = "major"
+one_line_summary = "minor"
+
+[rendering]
+stable_order = "rank"
+evidence_floor_tokens = 160
+hard_ceiling_tokens = 4000

@@ -20,6 +20,14 @@ A release is not conformant until every MUST below is automated.
 - MUST reject or continue an oversized `get` request rather than returning it whole.
 - MUST enforce per-turn cumulative retrieval budget when a conversation ID is available.
 
+## Evidence plans
+
+- MUST reject invalid plans statically with closed-vocabulary reasons (cycles via forward references, node/fan-out ceilings, guard grammar, capability class per tier) before any execution.
+- MUST persist every executed node result as an addressable content-addressed blob and declare every skipped or failed node with a typed reason in the digest.
+- MUST produce byte-identical investigation digests for an observe-only plan re-run against an unchanged worktree.
+- MUST reject execute-class ops on the MCP tier and refuse `ast.rewrite.apply` when the generation changed since preview.
+- MUST render the counterevidence section in every outcome, including its empty form.
+
 ## Repository behavior
 
 - MUST pass Git repo, plain folder, monorepo scope, nested repo, submodule, symlink escape, deleted file, renamed file, and changed-after-search fixtures.

@@ -213,6 +213,17 @@ A request larger than the configured result budget MUST return a bounded preview
 
 Profiles MAY emit exact or approximate schema statistics. Every field MUST be labeled `exact` or `approximate`. High-cardinality operations use deterministic bounded sketches and samples.
 
+### 6.6 `ctx plan` / `ctx investigate`
+
+Compiled evidence plans (`ctx.plan/v1`, docs/EVIDENCE-PLANS.md): a model-authored, total, bounded DAG of logical evidence operations, validated statically and executed locally; one investigation digest (`investigate/v1`) returns.
+
+- Validation MUST be static and total: cycle-free by construction (edges reference earlier steps only), node count and fan-out capped, `when` guards restricted to the count/outcome micro-grammar, rejection reasons drawn from a closed vocabulary.
+- `ctx plan price` MUST render the cost card before execution (priced-context rule); nothing executes during `validate` or `price`.
+- Every node result MUST persist as a content-addressed `ctx.plan-node/v1` blob; every non-executed node MUST be declared in the digest coverage section with its typed reason. The digest always renders.
+- Physical engine selection is the harness's choice, deterministic given availability, and disclosed per node; the plan IR carries no engine field.
+- Execute-class ops (`test.run`, `ast.rewrite.*`) run only on the CLI tier under the standard guard; the MCP `investigate` op MUST reject them at validation (bounded-only surface, §10.4). `ast.rewrite.apply` MUST be transactional and MUST refuse when the source-state generation changed since preview.
+- The digest renders against `contracts/investigate.toml` through the shared resolver; the counterevidence section is REQUIRED in every outcome, including the empty form.
+
 ## 7. Invocation and artifact data model
 
 A command produces an invocation manifest referencing independently addressed streams:

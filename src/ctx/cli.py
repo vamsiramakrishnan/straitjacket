@@ -191,6 +191,35 @@ def _main_slow(args: list[str]) -> int:
         "--trace", action="store_true", help="append per-stage row provenance"
     )
 
+    p_plan = sub.add_parser(
+        "plan", help="compiled evidence plans: validate | price | run | ops"
+    )
+    plan_sub = p_plan.add_subparsers(dest="plan_cmd", required=True)
+    for _pc, _help in (
+        ("validate", "static totality/capability check; typed rejections"),
+        ("price", "pre-execution cost card (nodes, units, wall budget)"),
+        ("run", "execute the plan DAG; one investigation digest returns"),
+    ):
+        _pp = plan_sub.add_parser(_pc, help=_help)
+        _pp.add_argument(
+            "plan_file", nargs="?", default="-",
+            help="plan JSON path ('-' or omitted reads stdin)",
+        )
+    plan_sub.add_parser("ops", help="registered logical operators (the plan author's inventory)")
+
+    p_inv = sub.add_parser(
+        "investigate",
+        help="one hypothesis epoch: execute a compiled evidence plan, get one digest",
+    )
+    p_inv.add_argument(
+        "plan_file", nargs="?", default="-",
+        help="plan JSON path ('-' or omitted reads stdin)",
+    )
+    p_inv.add_argument(
+        "--replans", type=int, default=None,
+        help="epoch allowance for this objective (default from ctx.toml [plan])",
+    )
+
     p_policy = sub.add_parser("policy", help="compiled steering policy")
     pol_sub = p_policy.add_subparsers(dest="policy_cmd", required=True)
     p_pc = pol_sub.add_parser("compile", help="compile policy from telemetry")
@@ -420,6 +449,10 @@ def _main_slow(args: list[str]) -> int:
             return 0
         if ns.cmd == "q":
             return _cmd_q(ws, ns)
+        if ns.cmd == "plan":
+            return _cmd_plan(ws, ns)
+        if ns.cmd == "investigate":
+            return _cmd_investigate(ws, ns)
         if ns.cmd == "policy":
             return _cmd_policy(ws, ns)
         if ns.cmd == "init":
@@ -923,6 +956,161 @@ def _cmd_q(ws, ns) -> int:
     )
     _emit_bounded_digest(ws, store, text, plan)
     return 0
+
+
+def _read_plan_text(ws, plan_file: str) -> str | None:
+    """Plan JSON from a workspace file or stdin ('-'). None ⇒ usage error
+    (message already printed)."""
+    if plan_file in (None, "-"):
+        if sys.stdin.isatty():
+            print(
+                "ctx plan: no plan given (pass a JSON path or pipe stdin)",
+                file=sys.stderr,
+            )
+            return None
+        return sys.stdin.read()
+    full = ws.confine(plan_file, must_exist=True)
+    return full.read_text(encoding="utf-8")
+
+
+def _cmd_plan(ws, ns) -> int:
+    """`ctx plan validate|price|run|ops` — compiled evidence plans
+    (docs/EVIDENCE-PLANS.md). Validation and pricing are static: nothing
+    executes; `run` executes the DAG and emits one investigation digest."""
+    from ctx import plan_ir, plan_ops
+    from ctx.store import Store
+
+    if ns.plan_cmd == "ops":
+        print(plan_ops.ops_census())
+        return 0
+
+    text = _read_plan_text(ws, ns.plan_file)
+    if text is None:
+        return 2
+
+    if ns.plan_cmd in ("validate", "price"):
+        try:
+            plan = plan_ir.parse_plan(text)
+        except plan_ir.PlanError as e:
+            print(f"ctx plan: {e}", file=sys.stderr)
+            return 2
+        rejections = plan_ir.validate_plan(plan, tier="cli", plan_policy=ws.config.plan)
+        if rejections:
+            print(f"[ctx plan · REJECTED · {len(rejections)} problem(s)]")
+            for r in rejections:
+                print("  " + r.render())
+            return 2
+        if ns.plan_cmd == "validate":
+            print(
+                f"[ctx plan · OK · {len(plan.steps)} nodes · "
+                f"plan:{plan.plan_id()[:12]}]"
+            )
+            return 0
+        print(plan_ir.price_plan(plan))
+        return 0
+
+    # run
+    from ctx.plan_exec import execute_plan
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    out, code = execute_plan(ws, store, text, tier="cli")
+    if code == 2:
+        print(out)
+        return 2
+    _emit_investigation(ws, store, out)
+    return code
+
+
+def _emit_investigation(ws, store, text: str) -> None:
+    """Emission tail for plan/investigate digests: the shared resolver
+    (family 'investigate'; a digest naming failed nodes rides the failure
+    budget) + engagement filter + bounded backstop."""
+    outcome = "failure" if ("ERROR:" in text or "candidates (census): 0" not in text) else "success"
+    plan = _delivery_plan(
+        ws,
+        outcome=outcome,
+        family="investigate",
+        base_tokens=ws.config.budgets.result_tokens,
+    )
+    _emit_bounded_digest(ws, store, text, plan)
+
+
+def _cmd_investigate(ws, ns) -> int:
+    """`ctx investigate <plan.json>` — one hypothesis epoch. Same execution
+    as `ctx plan run`, plus the epochal-control ledger: replans beyond the
+    budget are declared with a banner and recorded for the reflex plane
+    (the asymmetric-loss doctrine: warn and record, never block local
+    evidence-gathering)."""
+    import hashlib as _hashlib
+    import json as _json
+
+    from ctx import plan_ir
+    from ctx.plan_exec import execute_plan
+    from ctx.store import Store
+
+    text = _read_plan_text(ws, ns.plan_file)
+    if text is None:
+        return 2
+    try:
+        plan = plan_ir.parse_plan(text)
+    except plan_ir.PlanError as e:
+        print(f"ctx investigate: {e}", file=sys.stderr)
+        return 2
+
+    replans = ns.replans if ns.replans is not None else ws.config.plan.replans
+    objective_key = _hashlib.sha256(
+        " ".join(plan.question.lower().split()).encode("utf-8")
+    ).hexdigest()[:12]
+    ledger_dir = ws.root / ".ctx-session-reads"
+    ledger = ledger_dir / "investigations.jsonl"
+    prior = 0
+    try:
+        if ledger.is_file():
+            for line in ledger.read_text(encoding="utf-8").splitlines():
+                try:
+                    ev = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if ev.get("objective") == objective_key:
+                    prior += 1
+    except OSError:
+        pass
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    out, code = execute_plan(ws, store, text, tier="cli")
+    if code == 2:
+        print(out)
+        return 2
+
+    try:
+        import time as _time
+
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        with ledger.open("a", encoding="utf-8") as fh:
+            fh.write(
+                _json.dumps(
+                    {
+                        "op": "investigate",
+                        "objective": objective_key,
+                        "epoch": prior + 1,
+                        "plan": plan.plan_id()[:12],
+                        "ts": _time.time(),  # operational only
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+    except OSError:
+        pass
+
+    if prior > replans:
+        out += (
+            f"\nreplan budget: epoch {prior + 1} for this objective exceeds the "
+            f"allowance ({replans} replan(s)) — unlimited replanning degenerates "
+            "to the interactive loop; patch/verify or change the hypothesis"
+        )
+    _emit_investigation(ws, store, out)
+    return code
 
 
 def _cmd_policy(ws, ns) -> int:

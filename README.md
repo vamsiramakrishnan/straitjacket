@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.24.0 (pre-1.0, minor bump per mechanism) · 733 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 788 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
 </div>
 
@@ -367,6 +367,8 @@ cache economics) ·
 (real-corpus reversals + live lint-fix rounds) ·
 [`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)
 (programmable capture) ·
+[`evals/plan-collapse-2026-07-19.md`](evals/plan-collapse-2026-07-19.md)
+(compiled evidence plans: rounds 6→1, resend cost 9.0×↓, byte-stable digest) ·
 [`docs/LOSSLESS-RESCUE.md`](docs/LOSSLESS-RESCUE.md) ·
 [`docs/PRICED-CONTEXT.md`](docs/PRICED-CONTEXT.md) ·
 [`docs/LADDERS.md`](docs/LADDERS.md) (the conditionality audit behind v0.20).
@@ -474,6 +476,7 @@ Full flags and when-to-use detail:
 | `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/--records/--json-pointer/--bytes`) · shape stats, or a priced symbol outline on a single code file |
 | `map` / `def` / `refs` / `diag` | ranked priced codebase map · symbol definition/reference/diagnostic verbs |
 | `callers` / `callees` / `impact` | call graph: direct callers, callees, transitive blast radius (`--depth ≤6`) — one query replaces a recursive grep trace |
+| `plan` / `investigate` | compiled evidence plans ([`docs/EVIDENCE-PLANS.md`](docs/EVIDENCE-PLANS.md)): `validate`/`price` a `ctx.plan/v1` DAG statically, `run` it locally (joins, tests, structural/semantic scans), get ONE ranked investigation digest — O(hypothesis epochs) model rounds instead of O(operations) |
 | `diff run:A run:B` | regression delta between captured runs, span-backed |
 | `stats --session` / `gain` | wire scorecard (rounds, cache classes, effort mix) · cumulative savings |
 | `checkpoint` / `pin` / `gc` | cache epochs · retention leases · mark-and-sweep |
@@ -600,7 +603,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 733 tests: determinism, budgets, hook contract, escapes
+pytest        # 788 tests: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

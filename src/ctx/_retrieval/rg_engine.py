@@ -60,6 +60,10 @@ def _rg_repo_search(
     # Deny globs come after the include glob: rg gives the last matching
     # glob precedence, and capture exclusions must always win.
     argv += ["--glob", "!.git/**"]
+    # The session ledger is bookkeeping, never evidence (hook.py rule; the
+    # q search stage excludes it for the same reason) — and since it grows
+    # as the harness runs, scanning it makes search observe its own state.
+    argv += ["--glob", "!.ctx-session-reads/**"]
     for deny in ws.ignore_globs:
         argv += ["--glob", f"!{deny}"]
     for p in patterns:

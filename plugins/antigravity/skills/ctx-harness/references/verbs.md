@@ -80,6 +80,23 @@ index entry is not enough; each verb's output is bounded and deterministic.
   deferred improvement instead of silently skipping it.
 - `ctx debt list` / `ctx debt resolve <id>` — review and close.
 
+## Compiled evidence plans (one model round per hypothesis epoch)
+
+- `ctx plan ops` — the registered logical operators (kinds, capability
+  class, cost class, engine availability). Read this before authoring.
+- `ctx plan validate <plan.json|->` / `ctx plan price …` — static totality
+  check with typed rejections · the pre-execution cost card. Nothing runs.
+- `ctx plan run <plan.json|->` — execute a `ctx.plan/v1` DAG (repo.changed,
+  test.run, evidence.join, ast.search, semantic.taint, …) locally; ONE
+  ranked investigation digest returns: conclusion candidates with plane
+  attribution, counterevidence, coverage, per-node `blob:` addresses.
+- `ctx investigate <plan.json|->` — the epochal loop: same execution plus
+  the replan allowance (default 1; exceeding it is declared, recorded, and
+  argues for patch/verify instead of another sweep).
+- Use a plan when you would otherwise run 3+ exploration commands whose
+  sequence you can already name; use interactive verbs when each result
+  changes what you would do next.
+
 ## Call graph (Python, ast — zero-dep, always-current)
 
 - `ctx callers <Symbol>` — direct callers of a function/method, each with `file:line`.

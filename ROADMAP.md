@@ -134,6 +134,33 @@ test run).
 zero writes outside the throwaway store; redaction applied to every
 printed fragment.
 
+## M-J · Compiled evidence plans (`ctx plan` / `ctx investigate`)
+
+**Shipped v0.25.0** (P0–P3 + P5 surface; P4 cost-table epoch = debt e319eef641; live four-arm referee open).
+
+*Collapse every deterministic fan-out within a hypothesis epoch into one
+locally executed, typed, bounded DAG — one model round in, one
+decision-organized digest out.*
+
+The model compiles its exploration intent into a total evidence plan
+(`ctx.plan/v1`): typed ops (`ast.search`, `code.refs`, `test.run`,
+`evidence.join`, `semantic.taint`), static validation and pricing, cost-based
+physical engine selection (ast-grep / Semgrep / SCIP / facts / rg behind
+logical ops), parallel execution with per-node CAS artifacts, and one
+`investigate/v1` digest through the shipped EDC resolver. Interactive rounds
+go from O(operations) to O(hypothesis epochs); replans are budgeted (default
+1) and cache-resumed. Full design, phases P0–P5, and the frozen four-arm
+referee: [`docs/EVIDENCE-PLANS.md`](docs/EVIDENCE-PLANS.md).
+
+**Acceptance**: validator totality (typed rejections, cycle/budget/capability
+checks); byte-identical investigation artifacts across replays; every claim
+in the digest resolves via `ctx get`; observe-only plans on the MCP tier;
+referee gates C ≥ B on turns at no correctness loss.
+
+**Effort**: ~2 weeks across six gated phases. **Depends on**: EDC resolver +
+contracts (shipped), `ctx q` stage registry (shipped), facts store joins
+(shipped); ast-grep/Semgrep are opportunistic tiers, never required.
+
 ## Sequencing
 
 ```
@@ -143,6 +170,7 @@ now ──► M-A quarantine template ─┐
 next ─► M-B code verbs v1 (jedi) ──► MCP op growth, skill update
 then ─► M-E broker ──► M-B multi-language LSP · M-C cached indexes
         + learned policy epochs (telemetry → committed policy, existing plan)
+now ──► M-J compiled evidence plans (shipped v0.25.0; P4 + referee open)
 ```
 
 Deliberately **not** planned: wire-side semantic compression (LLMLingua-class

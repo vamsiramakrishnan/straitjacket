@@ -103,6 +103,10 @@ The Evidence Delivery Controller replaces profile-specific truncation logic with
 
 The EDC governs how evidence is delivered; ALGEBRA governs how it is produced and joined. Tree-sitter skeletons, opportunistic SCIP ingestion, a typed fact store, bounded query stages, and static × dynamic × temporal joins make repository investigation compositional without making it Turing-complete.
 
+### 5. [EVIDENCE-PLANS — compile the investigation](EVIDENCE-PLANS.md)
+
+The model compiles its exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx investigate`); the harness validates, prices, and executes it locally, and one causally organized digest returns. ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). Shipped v0.25.0; measured in [`evals/plan-collapse-2026-07-19.md`](../evals/plan-collapse-2026-07-19.md).
+
 ---
 
 ## Status language
@@ -140,6 +144,7 @@ Every mechanism inherits the same invariants:
 | closed-loop adaptation | [REFLEX.md](REFLEX.md) |
 | evidence contracts and plans | [EDC.md](EDC.md) |
 | facts, indexing, and queries | [ALGEBRA.md](ALGEBRA.md) |
+| compiled evidence plans | [EVIDENCE-PLANS.md](EVIDENCE-PLANS.md) |
 | schemas and compatibility | [`spec/`](../spec/) |
 | benchmark receipts | [`evals/`](../evals/) |
 | shipped history | [`CHANGELOG.md`](../CHANGELOG.md) |

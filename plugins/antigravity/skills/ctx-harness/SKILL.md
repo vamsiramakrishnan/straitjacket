@@ -65,7 +65,9 @@ delta) · `run --bg`/`job`/`jobs` (long-runner backgrounding — live tail,
 wait, kill; finalized jobs are ordinary `run:` artifacts) ·
 `stats --session` /
 `gain` (economics) · `checkpoint` (cache epoch) · `debt` (deferral ledger).
-Full flags and when-to-use detail: read `references/verbs.md`.
+Full flags and when-to-use detail: read `references/verbs.md`. For
+compiled evidence plans (`ctx plan`/`ctx investigate`), read
+`references/evidence-plans.md`.
 
 ## Repository references
 
