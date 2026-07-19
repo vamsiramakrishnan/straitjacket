@@ -1,18 +1,17 @@
-[![PyPI](https://img.shields.io/pypi/v/ctx-harness?label=PyPI)](...)
-[![Python](https://img.shields.io/pypi/pyversions/ctx-harness)](...)
-[![Tests](https://github.com/vamsiramakrishnan/straitjacket/actions/workflows/test.yml/badge.svg)](...)
-[![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](...)
-[![Docs](https://img.shields.io/badge/docs-architecture-blue)](...)
-
 <div align="center">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero.svg">
   <img src="assets/readme/hero-light.svg" width="100%" alt="straitjacket — context containment harness for coding agents. A 304,113-token log becomes a ~210-token digest, and the one anomalous line keeps an exact retrieval address.">
 </picture>
 
+[![Tests](https://github.com/vamsiramakrishnan/straitjacket/actions/workflows/ci.yml/badge.svg)](https://github.com/vamsiramakrishnan/straitjacket/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-architecture-blue)](docs/README.md)
+
 [Quickstart](#-quickstart) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.24.0 (pre-1.0, minor bump per mechanism) · 714 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.24.0 (pre-1.0, minor bump per mechanism) · 733 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
 </div>
 
@@ -457,7 +456,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 361 acceptance-oriented determinism & security tests
+└── tests/             # 733 acceptance-oriented determinism & security tests
 ```
 
 ## 📖 Reference
@@ -601,7 +600,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 361 tests: determinism, budgets, hook contract, escapes
+pytest        # 733 tests: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper
