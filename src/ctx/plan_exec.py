@@ -261,6 +261,20 @@ def execute_plan(
     plan_blob = store.put_blob(plan.canonical_bytes())
     from ctx import facts
 
+    # The emissions ledger FILE must exist BEFORE the generation is read:
+    # the generation hashes raw porcelain bytes, and porcelain gains a
+    # ``?? .ctx-session-reads/`` line only once a file exists inside the
+    # (excluded-from-triples, but not from raw bytes) dir. Creating it
+    # mid-run would de-sync the recorded generation from any post-run read
+    # and break replan byte-determinism. Fail-open: an unwritable root just
+    # skips emissions; in ignored/committed setups this is a no-op.
+    try:
+        ledger_dir = ws.root / ".ctx-session-reads"
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        (ledger_dir / "plan-emissions.jsonl").touch(exist_ok=True)
+    except OSError:
+        pass
+
     generation = facts.current_generation(ws)
     ws_fingerprint = _workspace_fingerprint(ws)
     pc = plan_ops.PlanContext(ws=ws, store=store, generation=generation)
@@ -420,6 +434,17 @@ def execute_plan(
     }
     inv_id = store.put_manifest(manifest, kind="investigation")
 
+    # Live plan emissions (ctx.plan-emission/v1): one JSONL line per executed
+    # ok node into the house ledger dir, feeding evidence-outcome attribution
+    # with REAL generations and per-node cost (debts 936231223f / 741c6afb40).
+    # Fail-open like the telemetry block below: any error here must never
+    # affect the digest bytes or the exit code. "ts" is operational-only,
+    # exactly like the investigations ledger.
+    try:
+        _append_plan_emissions(ws, inv_id, generation, results, node_meta)
+    except Exception:
+        pass
+
     text = _render_investigation(
         ws, store, plan, plan_blob, inv_id, generation, results, node_meta
     )
@@ -436,6 +461,80 @@ def execute_plan(
 
     errored = any(m.get("status") == "error" for m in node_meta.values())
     return text, (3 if errored else 0)
+
+
+_EMISSION_SCHEMA = "ctx.plan-emission/v1"
+_EMISSION_LIST_CAP = 16
+
+
+def _emission_identities(rows: Any, key: str) -> list[str]:
+    """Sorted unique non-empty values of one optional row field, defensively
+    extracted (rows are dicts with optional keys), capped at the emission
+    list cap. Truncation is undeclared at this layer by design — the
+    attribution join treats identity sets as samples, never censuses."""
+    out: set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        v = row.get(key)
+        if v:
+            out.add(str(v))
+    return sorted(out)[:_EMISSION_LIST_CAP]
+
+
+def _append_plan_emissions(
+    ws: Workspace,
+    inv_id: str,
+    generation: str | None,
+    results: dict[str, dict[str, Any]],
+    node_meta: dict[str, dict[str, Any]],
+) -> None:
+    """Append one ``ctx.plan-emission/v1`` line per executed ok node to the
+    house ledger (``.ctx-session-reads/plan-emissions.jsonl``). Carries the
+    REAL source-state generation and per-node cost (duration, visible-token
+    estimate) so evidence-outcome attribution stops approximating either.
+    Callers wrap this fail-open; it never raises into the digest path."""
+    import json as _json
+
+    from ctx.textutil import estimate_tokens
+
+    ledger_dir = ws.root / ".ctx-session-reads"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    for nid, res in results.items():
+        meta = node_meta.get(nid) or {}
+        if meta.get("status") != "ok":
+            continue
+        rows = res.get("rows") or []
+        artifacts = res.get("artifacts") or {}
+        handles = sorted(
+            str(v)
+            for v in (artifacts.values() if isinstance(artifacts, dict) else ())
+            if isinstance(v, str) and v.startswith(("run:", "blob:"))
+        )[:_EMISSION_LIST_CAP]
+        try:
+            duration_ms = int(float(meta.get("duration_s") or 0.0) * 1000)
+        except (TypeError, ValueError):
+            duration_ms = 0
+        rec = {
+            "schema": _EMISSION_SCHEMA,
+            "investigation_id": inv_id,
+            "plan_node_id": nid,
+            "op": str(res.get("op") or meta.get("op") or ""),
+            "generation": generation,
+            "files": _emission_identities(rows, "file"),
+            "symbols": _emission_identities(rows, "symbol"),
+            "tests": _emission_identities(rows, "test"),
+            "handles": handles,
+            "rows": len(rows),
+            "duration_ms": duration_ms,
+            "visible_tokens": estimate_tokens(len(canonical_json(res))),
+            "ts": time.time(),  # operational-only, like the investigations ledger
+        }
+        lines.append(_json.dumps(rec, sort_keys=True))
+    if lines:
+        with (ledger_dir / "plan-emissions.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
 
 
 # --------------------------------------------------------------- rendering
