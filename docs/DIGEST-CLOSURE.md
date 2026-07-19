@@ -3,8 +3,9 @@
 # Digest closure: which operators compute on the compressed form
 
 **Date:** 2026-07-19 · design law for the composition algebra. Companion to
-[ALGEBRA.md](ALGEBRA.md) (which *builds* the `ctx q` algebra) and
-[EVIDENCE-PLANS.md](EVIDENCE-PLANS.md) (which *compiles* pipelines). This doc
+[ALGEBRA.md](ALGEBRA.md) (which *builds* the `ctx q` algebra),
+[EVIDENCE-PLANS.md](EVIDENCE-PLANS.md) (which *compiles* pipelines), and
+[THEORY.md](THEORY.md) (which states the objective this law serves). This doc
 answers one question: **when can an operator run without rehydrating raw
 bytes?** — and shows the answer is already enforced by the type system.
 

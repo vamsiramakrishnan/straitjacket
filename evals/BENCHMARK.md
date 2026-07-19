@@ -84,7 +84,13 @@ Adopted verbatim (definitions per the external review):
 - **Evidence density** = gold-region lines surfaced / model-visible
   evidence tokens.
 - **Retrieval regret** R = T_actual − T_oracle (tokens before sufficient
-  evidence vs oracle-span minimum).
+  evidence vs oracle-span minimum). **BUILT** (offline form): `ctx replay
+  --regret` (`src/ctx/replay.py`) computes per-profile R over recorded
+  transcripts with the facts-used oracle — a lower-bound oracle, so measured
+  R is an upper bound on the true gap; formal statement in
+  `docs/THEORY.md`. First numbers (spec3 archives): pytest/v1 frontier
+  0.17 with 199/199 facts inline. Gold-region oracles upgrade this from
+  "facts used" to "facts needed" when explore/ lands.
 - **Containment ratio** = 1 − visible/raw tool-output tokens (already
   computed live by `ctx gain`; the benchmark reports it per-arm).
 - **Evidence preservation** = solved-under-SJ / solved-native. The

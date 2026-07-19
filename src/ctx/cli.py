@@ -147,6 +147,11 @@ def _main_slow(args: list[str]) -> int:
         help="replay every session under ~/.claude/projects",
     )
     p_replay.add_argument("--gaps", action="store_true", help="aggregate coverage-gap table")
+    p_replay.add_argument(
+        "--regret", dest="replay_regret", action="store_true",
+        help="evidence-regret scoreboard: R = actual − oracle per profile "
+        "(the measured rate–distortion frontier gap, docs/THEORY.md)",
+    )
     p_replay.add_argument("--json", dest="replay_json", action="store_true")
 
     p_debt = sub.add_parser("debt", help="declared-omission ledger for deferred decisions")
@@ -295,7 +300,12 @@ def _main_slow(args: list[str]) -> int:
             # machine that has ~/.claude/projects, harnessed or not.
             import json as _json
 
-            from ctx.replay import default_history_paths, render_report, simulate_session
+            from ctx.replay import (
+                default_history_paths,
+                render_regret,
+                render_report,
+                simulate_session,
+            )
 
             paths = list(ns.transcripts)
             if ns.all_projects:
@@ -306,6 +316,8 @@ def _main_slow(args: list[str]) -> int:
             reports = [simulate_session(p) for p in paths]
             if ns.replay_json:
                 print(_json.dumps(reports, indent=2))
+            elif ns.replay_regret:
+                print(render_regret(reports))
             else:
                 print(render_report(reports, gaps=ns.gaps))
             return 0

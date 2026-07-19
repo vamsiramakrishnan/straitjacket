@@ -107,6 +107,10 @@ The EDC governs how evidence is delivered; ALGEBRA governs how it is produced an
 
 The closure audit of the algebra: which operators run at digest-rate (homomorphic over the representation) versus which rehydrate raw bytes. Closure turns out to be a total function of the `ctx q` type signature, and the single-refinement-boundary theorem — bytes materialize at most once, and only terminally — is a structural invariant of the kind graph, pinned in [`tests/test_digest_closure.py`](../tests/test_digest_closure.py).
 
+### 4c. [THEORY — the objective, the theorems, the measured gap](THEORY.md)
+
+The formalization in one page: the information-bottleneck objective with the lazy-lossless constraint, the two enforced theorems (determinism, single refinement boundary), the evidence-regret metric (`ctx replay --regret`) that scores every digest profile's distance from the rate–distortion frontier on real trajectories, and the honest ledger of which mechanisms are derived from the objective versus empirically adopted under it.
+
 ### 5. [EVIDENCE-PLANS — compile the investigation](EVIDENCE-PLANS.md)
 
 The model compiles its exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx investigate`); the harness validates, prices, and executes it locally, and one causally organized digest returns. ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). Shipped v0.25.0; measured in [`evals/plan-collapse-2026-07-19.md`](../evals/plan-collapse-2026-07-19.md).
@@ -148,6 +152,7 @@ Every mechanism inherits the same invariants:
 | closed-loop adaptation | [REFLEX.md](REFLEX.md) |
 | evidence contracts and plans | [EDC.md](EDC.md) |
 | compute on the compressed form | [DIGEST-CLOSURE.md](DIGEST-CLOSURE.md) |
+| the objective, theorems, and the measured gap | [THEORY.md](THEORY.md) |
 | facts, indexing, and queries | [ALGEBRA.md](ALGEBRA.md) |
 | compiled evidence plans | [EVIDENCE-PLANS.md](EVIDENCE-PLANS.md) |
 | schemas and compatibility | [`spec/`](../spec/) |
