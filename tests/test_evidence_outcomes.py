@@ -3,6 +3,7 @@ attribution (docs/EVIDENCE-PLANS.md §plan-value). Every required scenario
 from the attribution contract, plus determinism and censoring."""
 
 from ctx.evidence_outcomes import (
+    LANGUAGE_FAMILY_OF_EXTENSION,
     OUTCOME_VOCABULARY,
     REASON_CONFIDENCE,
     Action,
@@ -10,6 +11,8 @@ from ctx.evidence_outcomes import (
     ObservationWindow,
     attribute,
     combine_confidence,
+    emissions_from_calls,
+    language_family,
     make_event,
 )
 
@@ -190,6 +193,71 @@ def test_event_identity_is_content_derived_and_deterministic():
     e1, e2 = make_event(**kw), make_event(**kw)
     assert e1.event_id == e2.event_id
     assert e1.evidence_ids == ("a", "b")  # sorted deterministically
+
+
+def test_language_family_majority_tiebreak_and_none():
+    # Majority family wins deterministically.
+    assert language_family(["src/a.py", "src/b.py", "web/c.ts"]) == "python"
+    # Extension aliases collapse into one family before counting.
+    assert language_family(["a.ts", "b.jsx", "c.py"]) == "js"
+    # Ties break alphabetically on the family name (js < python < rust).
+    assert language_family(["a.py", "b.ts"]) == "js"
+    assert language_family(["a.rs", "b.py"]) == "python"
+    # No recognizable extension → None (never a guessed family).
+    assert language_family([]) is None
+    assert language_family(["Makefile", "README", "notes.txt"]) is None
+    # Case-insensitive extensions; unknown ones are ignored, not counted.
+    assert language_family(["A.PY", "b.xyz"]) == "python"
+    # Frozen table sanity: aliases stay mapped to their family.
+    assert LANGUAGE_FAMILY_OF_EXTENSION["tsx"] == "js"
+    assert LANGUAGE_FAMILY_OF_EXTENSION["h"] == "c"
+
+
+_EVENT_KW = dict(
+    investigation_id=None, plan_node_id=None,
+    evidence_ids=("src/cart.py",), candidate_ids=(),
+    downstream_action_kind="bash", downstream_action_ref=None,
+    outcomes=("landed",), attribution_reasons=("exact_file",),
+    generation_before="g0", generation_after="g1",
+    actions_observed=2, censored=False, operator="op:x",
+)
+
+
+def test_language_less_event_ids_stay_byte_identical():
+    # The additive field must not perturb ids of language-less events:
+    # payload() (which feeds _event_id) omits the key when None.
+    legacy = make_event(**_EVENT_KW)
+    explicit_none = make_event(**_EVENT_KW, language=None)
+    assert "language" not in legacy.payload()
+    assert legacy.event_id == explicit_none.event_id
+    assert legacy.payload() == explicit_none.payload()
+    # A set language IS part of the content-derived identity.
+    tagged = make_event(**_EVENT_KW, language="python")
+    assert tagged.payload()["language"] == "python"
+    assert tagged.event_id != legacy.event_id
+
+
+def test_emission_language_threads_onto_events():
+    em = _em(files=frozenset({"src/cart.py"}), language="python",
+             raw_text="src/cart.py:12")
+    acts = [_bash(1, "ctx cat src/cart.py")]
+    (ev,) = attribute([em], acts, session_complete=True)
+    assert ev.language == "python"
+    # Language-less emissions stay language-less end to end.
+    em2 = _em(test_ids=frozenset({"tests/t.py::x"}))
+    (ev2,) = attribute([em2], [], session_complete=True)
+    assert ev2.language is None and "language" not in ev2.payload()
+
+
+def test_emissions_from_calls_set_language_from_identity_files():
+    calls = [{
+        "tool": "Bash",
+        "input": {"command": "grep -rn total src/"},
+        "result": "src/cart.py:12: total\nsrc/tax.py:3: total\nweb/app.ts:9: total",
+    }]
+    (em,) = emissions_from_calls(calls)
+    assert em.files == frozenset({"src/cart.py", "src/tax.py", "web/app.ts"})
+    assert em.language == "python"  # majority over identity files
 
 
 def test_confidence_is_max_of_reasons():
