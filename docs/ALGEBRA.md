@@ -118,3 +118,85 @@ pure; results carry the fact-store epoch they ran against.
    broker era (M-E); no language-specific indexer fleets (SCIP ingestion
    over bespoke indexers); tree-sitter never parses tool output
    (evidence extractors own that plane).
+
+## The atlas: every plane, one picture
+
+Legend: ✅ shipped (v0.22.0, gates passed) · ⊙ shipped in shadow ·
+○ designed (this doc / EDC), referee named, not built.
+
+```
+╔══════════════════ SAFETY PLANE — never adaptive, spans both ends ══════════════════╗
+║ entry: authz · path confinement · secret-path deny · hard caps · timeouts · killpg ║
+║ exit:  redaction · ANSI/control strip at emission                                  ║
+║ guard classes: safety ⇒ adaptive:false — property-tested byte-identical under      ║
+║ every reflex/circuit/epoch state ✅                                                 ║
+╚═══════════════════════════════════╦════════════════════════════════════════════════╝
+                                    ║ (everything below runs inside it)
+ DERIVATION PLANE — what code IS    ║          EXECUTION PLANE — what code DOES ✅
+ ┌────────────┐ ○ tree-sitter .scm  ║  model ──► hook PreToolUse ✅ ──────────────┐
+ │ repo files │──(error-tolerant,──►║    │   steer│teach│allow · adoption ledger  │
+ └─────┬──────┘   15+ langs)        ║    │   steer-shadow(6b) ⊙ · Edit/Write──►gen│
+       │      ┌──────────────────┐  ║    ▼                                        │
+       │      │ skeleton blobs   │  ║  birth gate: run│seq│eval│job(--bg) ✅       │
+       │      │ (derived CAS,    │  ║    │ raw bytes, ALL of them                 │
+       │      │ keyed by file    │  ║    ▼                                        │
+       │      │ blob hash — no   │  ║  ┌─────────────────────────────┐           │
+       │      │ invalidation)    │  ║  │ ARTIFACT STORE ✅ CAS:      │           │
+       │      └───────┬──────────┘  ║  │ blobs·manifests·spans·leases │           │
+       │ ⊙ scip-*     ▼             ║  │ + derived blobs (census ✅,  │           │
+       │ index.scip ┌───────────┐   ║  │   skeletons ○, facts ○)     │           │
+       └──ingest───►│ facts.db ○│   ║  └──────────┬──────────────────┘           │
+                    │ decl·ref· │   ║             ▼                               │
+   ○ Angle-lite ───►│ import·   │   ║  EVIDENCE PLANE — what the model NEEDS ✅   │
+   bounded joins:   │ fail·     │◄──╬── extractors: pytest/v2 ✅ lint go jest     │
+   fail⋈decl⋈       │ changed(g)│   ║   build json log text (contract tables)     │
+   changed(gen) =   │ + spans   │   ║             │ EvidenceGraph: items·coverage·│
+   root-cause query └───────────┘   ║             │ attested·volatile-quarantined │
+                                    ║             ▼                               │
+   ○ ctx q 'refs X | group file     ║   Evidence Contract (TOML) ✅               │
+     | top 3 | get --context 5'     ║   REQUIRED/ELASTIC/RETRIEVABLE · loss table │
+   total algebra: no loops ⇒        ║   floor≤ceiling · validate_selection at the │
+   terminates ⇒ MCP-tier safe;      ║   SEAM (typed facts, never re-parsed text)  │
+   per-stage provenance; 20-40 tok  ║             ▼                               │
+   of intent vs eval's ~200         ║   Delivery Policy Resolver ✅ (ONE choke    │
+                                    ║   point; 7 hand-rolled sites retired)       │
+        inputs ─────────────────────╬──► contract · SessionState(reflex) ·        │
+                                    ║   Signals(window%·tier) · ReaderCapability  │
+                                    ║   (latched posterior) · Policy Epoch        │
+                                    ║             ▼                               │
+                                    ║   DeliveryPlan ✅ plan_id·closed reasons    │
+                                    ║   PASS_SUMMARY│FAIL_CENSUS│DENSE│FLOOD│     │
+                                    ║   BYPASS(two entries: 6b null ○ · breaker ⊙)│
+                                    ║             ▼                               │
+                                    ║   pure Renderer ✅ → RenderedEvidence       │
+                                    ║   (text · CoverageReceipt · plan)           │
+                                    ║   Rule 14: same graph+contract+plan ⇒       │
+                                    ║   identical bytes (property-tested)         │
+                                    ║      │                    │                 │
+                                    ║      ▼                    ▼                 │
+                                    ║  transcript ✅        store (census blob:,  │
+                                    ║  bounded · addressed  spans) ✅             │
+                                    ║  declared omission                          │
+                                    ║      │                                      │
+ BEHAVIOR LOOP — what the model DID ║      ▼                                      │
+  model's next action ◄─────────────╬──────┘                                      │
+      │                             ║                                             │
+      ▼                             ║   generations §8 ✅⊙: sig-relation ×        │
+  outcome tracker ⊙ landing·        ║   gen-equality (porcelain + untracked       │
+  narrowed·validated-after-edit·    ║   (path,size,mtime), ledger-dir excluded)   │
+  equiv-rerun·slicer·workaround·    ║   confirmed-by-content ⊙ beats event guess  │
+  expired(CENSORED — never trains   ║◄────────────────────────────────────────────┘
+  pessimism)                        ║
+      │ intervention events ⊙ (deterministic iid · coverage · hypotheses w/ windows)
+      ├── fast loop: reflex ✅ / circuit ⊙ NORMAL→DENSE→BYPASS
+      │   episode = signature × generation · one transition per level per episode
+      │   hysteresis: earned recovery (2/3 positives) · replay gates vs archived
+      │   transcripts: ALL PASS ✅
+      └── slow loop: scorecard v2 ✅ (anomalies · coverage tables · episode
+          narratives · counterfactuals formula-labeled) ──► epoch compiler ✅
+          [digest_density] reviewed·committed ──► Resolver defaults, next session ↺
+
+ REFEREE ✅ (outside everything, judges all of it): spec3 --repeats N --gates ·
+ frozen-constants checksum · medians · §19.2 thresholds frozen pre-build ·
+ v0.22.0 verdict: ALL GATES PASS (tokenbucket 1.2× naive at cost parity)
+```
