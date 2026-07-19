@@ -132,6 +132,28 @@ per-request adaptivity invisible to the reader — every reflex adaptation
 is declared inline and recorded in telemetry with the signal that caused
 it (the LADDERS receipts rule, applied to the reflex layer itself).
 
+## The design rules (adopted 2026-07-19, statuses against the codebase)
+
+| # | rule | status |
+|---|---|---|
+| 1 | Census before detail | ✅ shipped: lint/v1, pytest/v1 (budget priority enforced) |
+| 2 | Semantic coverage before token savings | ✅ doctrine (quiet-needle; logtemplate) |
+| 3 | Profiles extract facts; policy chooses presentation | 🔨 the generalization refactor: `extract() → Facts` + one presentation layer; densify/census/tier become inherited properties, not per-profile code |
+| 4 | Model tier is a prior, not a verdict | ✅ doctrine; the measured-follow-through update is wired for hints, not yet for tier |
+| 5 | Rerun equivalence must account for source changes | ⚠️ v2 shipped the event form (Edit disarms); v3 is the content form — compare `source.worktreeHash` (already minted per run): equal hash = starvation regardless of Edit events |
+| 6 | Compression gets a circuit breaker | 🔨 densify exists; the concession state doesn't: after N post-densify starvations, capped raw passthrough (bounded by failure budget — Gate 4 holds) |
+| 7 | Safety never adapts away | ✅ structural; harden with an invariant test: secret/escape guard decisions byte-identical under any reflex/policy state |
+| 8 | Optimize total downstream cost, not output tokens | ✅ doctrine (spec3's 2k-tokens-vs-20-turns); scorecard prices rounds |
+| 9 | Measure interventions by progress, not hint clicks | 🔨 the census enables it free: failure-count trajectory per signature (8→5 = intervention worked) — the correct [digest_density] training signal |
+| 10 | Fix pytest/v2 before the general controller | ✅ sequencing adopted: pytest/v2 (rules 5v3+6+9) under the n≥3 referee, then the rule-3 split carries go test/jest/cargo/build in one move |
+
+Why pytest first, generalized second: mechanisms follow receipts — pytest
+is where the benchmark bled. The reflex machinery is already tool-agnostic;
+only *dense renderings* are profile-specific, and rule 3 is the one-refactor
+path that gives every profile census/densify/breaker at once. Doing the
+split with exactly one proven Facts shape would be a guess; doing it after
+pytest/v2 preserves three validated behaviors.
+
 ## v0.21 deliverables and acceptance
 
 1. `pytest/v1` failing-test census (debt 74db82e027) — the dense form
