@@ -34,7 +34,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from ctx.store import canonical_json
 
@@ -97,6 +97,11 @@ class EvidenceOutcome:
     actions_observed: int
     censored: bool
     operator: str = "unknown"  # logical op or profile/command family (aggregation key)
+    #: Additive instrumentation (appended field, default None): the majority
+    #: language family of the emission's identity files. Captured so future
+    #: replays can test for a language interaction effect; NOT aggregated
+    #: into compiled priors today, and never consulted by scheduler logic.
+    language: str | None = None
 
     def __post_init__(self) -> None:
         for o in self.outcomes:
@@ -107,7 +112,7 @@ class EvidenceOutcome:
                 raise ValueError(f"reason outside the closed vocabulary: {r!r}")
 
     def payload(self) -> dict[str, Any]:
-        return {
+        body: dict[str, Any] = {
             "version": self.version,
             "event_id": self.event_id,
             "investigation_id": self.investigation_id,
@@ -125,6 +130,11 @@ class EvidenceOutcome:
             "censored": self.censored,
             "operator": self.operator,
         }
+        # Included ONLY when set: this dict feeds _event_id, so language-less
+        # events keep byte-identical payloads (and ids) across the upgrade.
+        if self.language is not None:
+            body["language"] = self.language
+        return body
 
 
 def combine_confidence(reasons: tuple[str, ...]) -> float:
@@ -163,6 +173,52 @@ class ObservationWindow:
     max_generations: int = 2
 
 
+# ------------------------------------------------------ language families
+
+#: File-extension → language-family table (frozen; additions are reviewed
+#: like any vocabulary change). Language is a PARTITION KEY for compiled
+#: priors only — the scheduler stays language-neutral and no logic may
+#: branch on a family name.
+LANGUAGE_FAMILY_OF_EXTENSION: dict[str, str] = {
+    "py": "python",
+    "pyi": "python",
+    "js": "js",
+    "jsx": "js",
+    "ts": "js",
+    "tsx": "js",
+    "go": "go",
+    "rs": "rust",
+    "java": "jvm",
+    "kt": "jvm",
+    "rb": "ruby",
+    "c": "c",
+    "h": "c",
+    "cc": "c",
+    "cpp": "c",
+    "hpp": "c",
+    "cs": "dotnet",
+    "php": "php",
+    "swift": "swift",
+}
+
+
+def language_family(paths: Iterable[str]) -> str | None:
+    """Majority language family over the identity files, deterministic:
+    ties break alphabetically on the family name; ``None`` when no path
+    carries a recognizable extension."""
+    counts: dict[str, int] = {}
+    for p in paths:
+        name = str(p).replace("\\", "/").rsplit("/", 1)[-1]
+        if "." not in name:
+            continue
+        fam = LANGUAGE_FAMILY_OF_EXTENSION.get(name.rsplit(".", 1)[-1].lower())
+        if fam:
+            counts[fam] = counts.get(fam, 0) + 1
+    if not counts:
+        return None
+    return min(counts, key=lambda f: (-counts[f], f))
+
+
 # ---------------------------------------------------- emissions & actions
 
 
@@ -184,6 +240,7 @@ class EvidenceEmission:
     raw_text: str = ""  # emission text (digest or raw) for span-overlap checks
     investigation_id: str | None = None
     plan_node_id: str | None = None
+    language: str | None = None  # language_family(files); partition key, never logic
 
     def identity_set(self) -> frozenset[str]:
         return frozenset(self.handles | self.test_ids | self.files | self.symbols)
@@ -264,6 +321,7 @@ def emissions_from_calls(calls: list[dict[str, Any]]) -> list[EvidenceEmission]:
                 files=files,
                 failing_ids=failing & test_ids,
                 raw_text=res,
+                language=language_family(files),
             )
         )
     return out
@@ -402,6 +460,7 @@ def attribute(
                 actions_observed=w.actions_seen,
                 censored=censored,
                 operator=w.em.operator,
+                language=w.em.language,
             )
         )
 
@@ -572,6 +631,8 @@ __all__ = [
     "OUTCOME_VOCABULARY",
     "REASON_VOCABULARY",
     "REASON_CONFIDENCE",
+    "LANGUAGE_FAMILY_OF_EXTENSION",
+    "language_family",
     "EvidenceOutcome",
     "EvidenceEmission",
     "Action",
