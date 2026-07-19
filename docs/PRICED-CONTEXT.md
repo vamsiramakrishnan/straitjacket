@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs/priced-context.svg">
-  <img src="../assets/readme/docs/priced-context-light.svg" width="100%" alt="Priced Context — metadata as economic signposting. Mechanism thesis, shipped.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs/priced-context.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs/priced-context-light.svg" width="100%" alt="Priced Context — metadata as economic signposting. Mechanism thesis, shipped.">
 </picture>
 
 <sub><a href="README.md">« straitjacket / docs</a></sub>

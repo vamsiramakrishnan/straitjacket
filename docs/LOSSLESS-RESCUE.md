@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs/lossless-rescue.svg">
-  <img src="../assets/readme/docs/lossless-rescue-light.svg" width="100%" alt="Lossless mid-session rescue — the rewriting proxy's last edge, without its costs. Mechanism thesis, shipped.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs/lossless-rescue.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs/lossless-rescue-light.svg" width="100%" alt="Lossless mid-session rescue — the rewriting proxy's last edge, without its costs. Mechanism thesis, shipped.">
 </picture>
 
 <sub><a href="README.md">« straitjacket / docs</a></sub>

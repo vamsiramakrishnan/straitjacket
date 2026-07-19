@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs-header.svg">
-  <img src="../assets/readme/docs-header-light.svg" width="100%" alt="straitjacket documentation — use the harness, understand the architecture, verify the claims, and extend the evidence system.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs-header.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs-header-light.svg" width="100%" alt="straitjacket documentation — use the harness, understand the architecture, verify the claims, and extend the evidence system.">
 </picture>
 
 **Use it. Understand it. Verify it. Extend it.**
@@ -149,6 +149,18 @@ Every mechanism inherits the same invariants:
 | benchmark receipts | [`evals/`](../evals/) |
 | shipped history | [`CHANGELOG.md`](../CHANGELOG.md) |
 | unshipped mechanisms | [`ROADMAP.md`](../ROADMAP.md) |
+
+
+<!-- docs-phase2:start -->
+## Practical guides
+
+| Guide | Use it when |
+|---|---|
+| [Use cases](USE-CASES.md) | You know the task or failure mode and want the shortest path through the harness. |
+| [CLI guide](CLI.md) | You need to choose a verb, retrieve evidence, or interpret a scorecard. |
+| [Writing an evidence profile](WRITING-A-PROFILE.md) | You are extending extraction, contracts, or rendering. |
+| [Why Straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
+<!-- docs-phase2:end -->
 
 ---
 

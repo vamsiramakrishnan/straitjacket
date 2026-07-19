@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs/edc.svg">
-  <img src="../assets/readme/docs/edc-light.svg" width="100%" alt="The Evidence Delivery Controller. Architecture work, doc 3 of 4.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs/edc.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs/edc-light.svg" width="100%" alt="The Evidence Delivery Controller. Architecture work, doc 3 of 4.">
 </picture>
 
 <sub><a href="README.md">« straitjacket / docs</a></sub>

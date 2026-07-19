@@ -5,7 +5,7 @@ description: Artifact-backed context containment for coding agents.
 ---
 
 <p align="center">
-  <img src="../assets/readme/docs-header-light.svg" width="100%" alt="straitjacket documentation">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs-header-light.svg" width="100%" alt="straitjacket documentation">
 </p>
 
 # Keep the evidence. Lose the transcript bloat.
@@ -149,6 +149,18 @@ The design documents preserve the reasoning that produced the implementation. Th
 - **Rejected** — investigated and deliberately not adopted.
 
 For current product behaviour, prefer `spec/` and the changelog. For why that behaviour exists, read the design sequence and its linked receipts.
+
+
+<!-- docs-phase2:start -->
+## Practical guides
+
+| Guide | Use it when |
+|---|---|
+| [Use cases](USE-CASES.md) | You know the task or failure mode and want the shortest path through the harness. |
+| [CLI guide](CLI.md) | You need to choose a verb, retrieve evidence, or interpret a scorecard. |
+| [Writing an evidence profile](WRITING-A-PROFILE.md) | You are extending extraction, contracts, or rendering. |
+| [Why Straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
+<!-- docs-phase2:end -->
 
 ---
 
