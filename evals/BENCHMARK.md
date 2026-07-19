@@ -114,15 +114,18 @@ Our additions, from mechanisms this repo already has:
 - **Unresolved-omission rate** — every omission must carry an address
   that resolves; the store can verify this mechanically per digest.
   Target is 100% resolvable, and it is testable without a model.
-- **Evidence-outcome attribution** — **BUILT**: `ctx replay --outcomes`
-  (`src/ctx/evidence_outcomes.py`) converts recorded sessions into
-  deterministic `evidence_outcome/v1` events (landed/narrowed/validated/…,
-  censoring-honest), and `ctx policy compile --plan-value` aggregates them
-  into committed per-operator priors that rank the next logical
-  investigation action (`src/ctx/plan_value.py`; seeded acceptance:
-  `evals/plan_value_selection.py`). This is the action-selection sibling of
-  retrieval regret: regret scores what crossed the boundary; plan value
-  scores which evidence-producing action to run next.
+- **Operator follow-up (association)** — **BUILT, reshaped 2026-07-19**:
+  `ctx replay --outcomes` (`src/ctx/evidence_outcomes.py`) converts recorded
+  sessions into deterministic `evidence_followup/v1` events — exact-match
+  classes (no confidence floats), four states (used_exactly /
+  validation_associated / equivalent_requery / censored), censoring never
+  negative — and `ctx policy compile --plan-value` aggregates them into
+  committed per-operator COUNTS. `plan_value.rank_followup` derives Wilson
+  lower bounds at read time for a SHADOW ranking (report only; seeded
+  acceptance: `evals/plan_value_selection.py`). Promotion to a conservative
+  online tie-break is gated on the paired referee (pending): does the
+  shadow ordering beat declared orderings on paired tasks at equal success,
+  controlling for task phase and operator preconditions?
 
 ## Arms and controls: adapted
 

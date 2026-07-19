@@ -1,3 +1,11 @@
+> **RESHAPED 2026-07-19 (same day, design review):** this receipt records
+> the v1 run of a schema since renamed and cut — `evidence_outcome/v1` with
+> causal outcome labels and confidence floats became `evidence_followup/v1`
+> with match classes and four states; the weighted scorer became a Wilson
+> lexicographic SHADOW ranking (report only); the stopping verdict became a
+> low-yield advisory sentence. See docs/EVIDENCE-PLANS.md §plan-value for
+> the current design and the promotion law. Kept as a historical receipt.
+
 # Plan value — seeded selection eval + end-to-end loop receipt
 
 **Date:** 2026-07-19 · **Harness:** [`evals/plan_value_selection.py`](plan_value_selection.py)

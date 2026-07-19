@@ -27,17 +27,15 @@ def _make_kwargs(op="code.refs", salt=0, **extra):
     return dict(
         investigation_id=None,
         plan_node_id=None,
+        operator=op,
         evidence_ids=(f"run:{salt:04d}",),
-        candidate_ids=(),
-        downstream_action_kind="bash",
-        downstream_action_ref=None,
-        outcomes=("landed",),
-        attribution_reasons=("exact_handle",),
+        match_classes=("exact_handle",),
+        validation_associated=False,
+        equivalent_requery=False,
+        censored=False,
         generation_before="g0",
         generation_after="g1",
         actions_observed=2,
-        censored=False,
-        operator=op,
         **extra,
     )
 
@@ -45,7 +43,7 @@ def _make_kwargs(op="code.refs", salt=0, **extra):
 def _write_ledger(ws_root, events):
     ldir = ws_root / ".ctx-session-reads"
     ldir.mkdir(parents=True, exist_ok=True)
-    with (ldir / "evidence-outcomes.jsonl").open("a", encoding="utf-8") as fh:
+    with (ldir / "evidence-followups.jsonl").open("a", encoding="utf-8") as fh:
         for e in events:
             fh.write(json.dumps(e.payload(), sort_keys=True) + "\n")
 

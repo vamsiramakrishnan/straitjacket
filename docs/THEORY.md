@@ -85,27 +85,29 @@ is a lower bound, and censuses the model *reads* without *reusing verbatim*
 are invisible to it — but any future profile change that pushes frontier
 down or hops up is a measurable regression.
 
-## 3b. Two optimizations, one loop: regret vs plan value
+## 3b. Two optimizations, one loop: regret vs follow-up
 
-The system now scores both halves of the economy, and they must not be
-conflated:
+The system scores both halves of the economy, and they must not be
+conflated — nor may either claim more than it measures:
 
-| | **evidence regret** | **plan value** |
+| | **evidence regret** | **operator follow-up** |
 |---|---|---|
-| optimizes | *representation*: what should cross the context boundary? | *investigation*: which evidence-producing action should run next? |
-| measured from | facts the model provably used downstream | outcomes attributed to emissions (landed/narrowed/validated/…) |
-| offline artifact | per-profile frontier gap (`ctx replay --regret`) | per-operator priors (`ctx policy compile --plan-value`) |
-| online consumer | digest profiles (via the regression gate) | `ctx investigate --advise` / `ctx plan price --value` ranking |
-| failure direction | one-sided: R is an upper bound, never flatters | censored events never count negative; low samples shrink to defaults |
+| optimizes | *representation*: what should cross the context boundary? | *investigation*: which evidence route to prefer, eventually |
+| measures | facts the model provably used downstream | follow-up ASSOCIATION (exact-match joins), never causation |
+| offline artifact | per-profile frontier gap (`ctx replay --regret`) | per-operator COUNTS (`ctx policy compile --plan-value`) |
+| online consumer | digest profiles (via the regression gate) | shadow report only (`--advise` / `price --value`); promotion to a conservative tie-break waits on the paired referee |
+| failure direction | one-sided: R is an upper bound, never flatters | censored never counts negative; Wilson lower bounds at read time; match classes, no confidence floats |
 
-The closed loop (docs/EVIDENCE-PLANS.md §plan-value): predict gain from
-reviewed historical priors → execute the highest-value compatible action →
-observe landing/narrowing/discrimination/validation → write deterministic
-outcome events → compile updated priors offline → review and commit the
-policy epoch. Explicitly: no online reinforcement learning, no runtime
-policy mutation, no trusted model self-report, conservative attribution,
-and the priors are advisory — subordinate to safety, capability tier,
-evidence floors, precision, freshness, and explicit budgets, always.
+The known confound is stated wherever the numbers appear: follow-up rates
+are entangled with when operators run in a trajectory (verifiers cluster
+at the end of successes; reconnaissance at the start), so the counts feed
+a report and a shadow ledger, not behavior. The promotion law: measure
+associations first, demonstrate counterfactual value in shadow (paired
+tasks, equal success), and only then use the ranking — as a tie-break
+between actions already equivalent under hard semantics. Explicitly: no
+online reinforcement learning, no runtime policy mutation, no trusted
+model self-report, no automatic stopping, and hard constraints dominate
+always.
 
 ## 4. Mechanism ledger: derived vs empirical
 

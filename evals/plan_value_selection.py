@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Seeded plan-value selection eval — mechanistic acceptance (Part 13).
+"""Seeded shadow-ranking eval — mechanistic acceptance (the ponytail cut).
 
-Proves the compiled priors change investigation decisions usefully on three
-seeded fixtures, model-free and deterministic. This is NOT a cost-savings
-claim: it is an acceptance check that the selection layer (a) prefers the
-cheap high-prior join when it fills the missing dimensions, (b) defers the
-expensive semantic scan until cheaper actions have run, and (c) re-ranks
-after a hypothesis-contradicting replan changes the missing dimensions.
+Proves the lexicographic follow-up ranking behaves as specified on seeded
+fixtures, model-free and deterministic. Scope matches the reshaped design:
+this validates the SHADOW ranking (report only). Counterfactual value —
+whether following the shadow ordering would cut turns/cost at equal task
+success — is the paired referee's question, and no online behavior changes
+before that referee passes.
 
 Run:  python evals/plan_value_selection.py
 Exit non-zero on any fixture failure (CI-friendly).
@@ -21,121 +21,84 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from ctx.plan_value import (  # noqa: E402
     CandidateAction,
-    rank_actions,
-    render_ranking,
-    select_batch,
-    stopping_decision,
+    rank_followup,
+    render_shadow,
+    wilson_lower_bound,
 )
 
-# Priors as `ctx policy compile --plan-value` emits them (counts + rates +
-# confidence). Seeded here so the eval is hermetic; the shape is identical
-# to the committed [plan_value] table.
+# Counts table exactly as `ctx policy compile --plan-value` emits it.
 PRIORS = {
-    "version": 1,
-    "minimum_observations": 5,
-    "*": {
-        "observations": 160, "confidence": "high",
-        "landing_rate": 0.40, "narrowing_rate": 0.30, "discrimination_rate": 0.20,
-        "validation_rate": 0.20, "retrieval_rate": 0.15,
-        "equivalent_requery_rate": 0.08, "redundancy_rate": 0.10, "reversal_rate": 0.03,
-    },
     "evidence.join": {
-        "observations": 84, "confidence": "high",
-        "landing_rate": 0.79, "narrowing_rate": 0.71, "discrimination_rate": 0.63,
-        "validation_rate": 0.54, "retrieval_rate": 0.22,
-        "equivalent_requery_rate": 0.03, "redundancy_rate": 0.05, "reversal_rate": 0.02,
+        "observations": 84, "used_exactly": 68, "validation_associated": 40,
+        "equivalent_requery": 3, "censored": 5,
+        "median_cost_ms": 12, "median_visible_tokens": 48,
+    },
+    "code.refs": {
+        "observations": 51, "used_exactly": 27, "validation_associated": 14,
+        "equivalent_requery": 7, "censored": 4,
+        "median_cost_ms": 95, "median_visible_tokens": 73,
     },
     "semantic.taint": {
-        "observations": 22, "confidence": "medium",
-        "landing_rate": 0.18, "narrowing_rate": 0.14, "discrimination_rate": 0.10,
-        "validation_rate": 0.09, "retrieval_rate": 0.05,
-        "equivalent_requery_rate": 0.10, "redundancy_rate": 0.32, "reversal_rate": 0.05,
+        "observations": 22, "used_exactly": 4, "validation_associated": 2,
+        "equivalent_requery": 6, "censored": 3,
+        "median_cost_ms": 1800, "median_visible_tokens": 121,
+    },
+    "code.tiny_sample": {
+        "observations": 2, "used_exactly": 2, "validation_associated": 2,
+        "equivalent_requery": 0, "censored": 0,
+        "median_cost_ms": 1, "median_visible_tokens": 5,
     },
 }
 
-JOIN = CandidateAction(op="evidence.join",
-                       provides={"causality": 1.0, "changedness": 0.8,
-                                 "dynamic_failure": 0.4}, cost_class="index")
-REFS = CandidateAction(op="code.refs",
-                       provides={"topology": 0.8, "semantic_support": 0.3},
-                       cost_class="scan")
-TAINT = CandidateAction(op="semantic.taint",
-                        provides={"semantic_support": 1.0, "counterevidence": 0.5},
-                        cost_class="process")
-TEST_RUN = CandidateAction(op="test.run",
-                           provides={"dynamic_failure": 1.0, "freshness": 0.8,
-                                     "coverage": 0.3},
-                           cost_class="test", klass="execute")
-TRACEBACK = CandidateAction(op="code.search",
-                            provides={"topology": 0.4, "coverage": 0.3},
-                            cost_class="scan")
+JOIN = CandidateAction(op="evidence.join", cost_class="index")
+REFS = CandidateAction(op="code.refs", cost_class="scan")
+TAINT = CandidateAction(op="semantic.taint", cost_class="process")
+TINY = CandidateAction(op="code.tiny_sample", cost_class="scan")
 
 
 def fixture_a() -> list[str]:
-    """Changed files + failures known; causality missing → cheap join wins."""
-    coverage = {"changedness": 1.0, "dynamic_failure": 1.0}
-    floors = {"causality": 0.8, "changedness": 1.0, "dynamic_failure": 1.0,
-              "counterevidence": 0.5}
-    ranked = rank_actions([JOIN, REFS, TAINT, TRACEBACK], coverage, floors, PRIORS)
-    lines = ["== Fixture A · cheap join should win ==", render_ranking(ranked), ""]
-    assert ranked[0].op == "evidence.join", f"A: expected evidence.join, got {ranked[0].op}"
-    return lines
+    """Strong-evidence join preferred: 68/84 exact-use at index cost beats
+    every alternative on the lexicographic key."""
+    ranked = rank_followup([JOIN, REFS, TAINT], PRIORS)
+    assert ranked[0].op == "evidence.join", f"A: got {ranked[0].op}"
+    return [
+        "== Fixture A · strong follow-up record preferred ==",
+        render_shadow("code.refs", ranked),
+        "",
+    ]
 
 
 def fixture_b() -> list[str]:
-    """No dynamic evidence yet → semantic scan deferred; after the cheaper
-    actions run and the source-to-sink question remains, taint ranks first."""
-    floors = {"dynamic_failure": 1.0, "changedness": 1.0, "semantic_support": 0.5}
-    first = rank_actions([TAINT, TEST_RUN, JOIN, REFS], {}, floors, PRIORS)
-    assert first[0].op != "semantic.taint", f"B1: taint must be deferred, got {first[0].op}"
-    after = {"dynamic_failure": 1.0, "changedness": 1.0, "causality": 1.0,
-             "semantic_support": 0.3}
-    second = rank_actions([TAINT, TEST_RUN], after, floors, PRIORS)
-    assert second[0].op == "semantic.taint", f"B2: expected taint, got {second[0].op}"
+    """Sample-size honesty: 2/2 ('100%') must not outrank 68/84 — the
+    Wilson lower bound is the entire confidence treatment."""
+    ranked = rank_followup([JOIN, TINY], PRIORS)
+    assert ranked[0].op == "evidence.join", f"B: got {ranked[0].op}"
+    lb_tiny = wilson_lower_bound(2, 2)
+    lb_join = wilson_lower_bound(68, 84)
+    assert lb_join > lb_tiny
     return [
-        "== Fixture B · expensive semantic scan deferred, then chosen ==",
-        f"initial best: {first[0].op} (score {first[0].score:.2f}) · "
-        f"taint deferred at {[s.score for s in first if s.op == 'semantic.taint'][0]:.2f}",
-        f"after cheap actions: {second[0].op} (score {second[0].score:.2f})",
+        "== Fixture B · 2/2 cannot outrank 68/84 ==",
+        f"wilson(2/2)  = {lb_tiny:.2f}",
+        f"wilson(68/84) = {lb_join:.2f}",
+        f"preferred: {ranked[0].op}",
         "",
     ]
 
 
 def fixture_c() -> list[str]:
-    """Hypothesis-sensitive replan: dynamic contradiction resets causality
-    and raises the counterevidence floor — the ranking must follow the new
-    missing dimensions (one replan epoch; node caching is plan_exec's own
-    tested behavior, out of scope for this selection-layer eval)."""
-    floors_before = {"causality": 0.8, "dynamic_failure": 1.0}
-    cov_before = {"causality": 0.9, "dynamic_failure": 1.0}
-    ranked_before = rank_actions([JOIN, TAINT, TEST_RUN], cov_before, floors_before, PRIORS)
-    stop_before, _ = stopping_decision(ranked_before, cov_before, floors_before,
-                                       priors=PRIORS)
-    # Contradiction: candidate's causal story falsified → causality resets,
-    # counterevidence becomes required.
-    floors_after = {"causality": 0.8, "dynamic_failure": 1.0, "counterevidence": 0.5}
-    cov_after = {"causality": 0.0, "dynamic_failure": 1.0}
-    ranked_after = rank_actions([JOIN, TAINT, TEST_RUN], cov_after, floors_after, PRIORS)
-    stop_after, receipt = stopping_decision(ranked_after, cov_after, floors_after,
-                                            priors=PRIORS)
-    assert stop_before, "C: should stop before contradiction (floors met, low value)"
-    assert not stop_after, "C: must NOT stop after contradiction (floors unmet)"
-    assert ranked_after[0].op == "evidence.join", (
-        f"C: causality gap should re-select the join, got {ranked_after[0].op}"
-    )
-    batch = select_batch([JOIN, TAINT, TEST_RUN], cov_after, floors_after, PRIORS)
-    return [
-        "== Fixture C · hypothesis-sensitive replan ==",
-        f"before contradiction: stop={stop_before} (floors met, best value below threshold)",
-        f"after contradiction:  stop={stop_after} · re-selected {ranked_after[0].op} · "
-        f"batch {[s.op for s in batch]}",
-        receipt,
-        "",
-    ]
+    """Shadow disagreement is a REPORT, not a reorder: a plan that declared
+    semantic.taint first gets an agreement=no line with the lexicographic
+    reason — nothing is suppressed or reordered."""
+    ranked = rank_followup([TAINT, JOIN], PRIORS)
+    out = render_shadow("semantic.taint", ranked)
+    assert "agreement: no" in out, "C: expected disagreement report"
+    assert "report only; never reorders" in out
+    assert "value score" not in out  # no scalar exists to hide behind
+    return ["== Fixture C · disagreement reported, never enforced ==", out, ""]
 
 
 def main() -> int:
-    out: list[str] = ["plan-value seeded selection eval (mechanistic acceptance)", ""]
+    out: list[str] = ["plan-value shadow-ranking eval (mechanistic acceptance)", ""]
     for fx in (fixture_a, fixture_b, fixture_c):
         out.extend(fx())
     out.append("ALL FIXTURES PASS")

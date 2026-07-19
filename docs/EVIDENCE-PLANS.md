@@ -385,64 +385,77 @@ narrowing, replan, abandonment) join the existing ledger vocabulary
 (schema-v2 bump, tolerant readers) and train the `[plan]` epoch tables the
 same way digest density is trained today.
 
-## Plan value: outcome-trained action ranking (shipped)
+## Plan value: follow-up statistics and shadow ranking (shipped, reshaped)
 
-The closed loop that connects observable downstream behavior back into
-online investigation decisions — **not** reinforcement learning, and not
-model self-report:
+Reshaped 2026-07-19 after a design review whose verdict we accepted: the
+first version dressed follow-up **association** in causal language
+(attribution, confidence, validation) and jumped from observational
+telemetry to a weighted decision theory. The governing law now:
+
+> Measure associations first. Demonstrate counterfactual value in shadow.
+> Promote only proven choices into conservative tie-breaks.
 
 ```
 plan node / command emits evidence
-        ↓ identities recorded (handles, test ids, files, symbols, spans)
+        ↓ identities recorded (handles, spans, symbols, test ids, files)
 subsequent commands / retrievals / edits / tests observed
-        ↓ ordered deterministic attribution (evidence_outcomes.py)
-evidence_outcome/v1 events   — closed vocab, content-derived ids
+        ↓ exact-match joins (evidence_outcomes.followup_join)
+evidence_followup/v1 events — match classes, four states, no floats
         ↓ offline aggregation (ctx policy compile --plan-value)
-reviewable [plan_value] priors, committed like code
-        ↓ read-only at runtime (plan_value.py)
-ctx investigate --advise / ctx plan price --value rank applicable ops
+[plan_value] COUNTS table, committed like code
+        ↓ read-only at runtime
+per-operator report (ctx replay --outcomes) · shadow ranking
+(ctx investigate --advise / ctx plan price --value) · shadow ledger
+        ↓ paired referee (pending)
+ONLY THEN: a conservative tie-break between semantically equivalent actions
 ```
 
-**The outcome vocabulary** (frozen): `landed · narrowed · discriminated ·
-validated_after_edit · retrieved · equivalent_requery · redundant ·
-reversed · abandoned`. Attribution reasons are ordered by confidence
-(`exact_handle` 1.0 → `edit_span_overlap`/`exact_test_id` 0.98 →
-`exact_symbol` 0.95 → `mapped_failures_resolved` 0.90 → `exact_file` 0.85
-→ `ranked_candidate_action` 0.80 → `scope_narrowing` 0.75); the combined
-confidence is the **maximum** reason confidence, never a pseudo-probability
-product. Session end, compaction, or a missing future action is
-`censored=true` — never negative evidence; positive rates use all
-observations as denominator (censoring can only under-count positives),
-negative rates exclude censored observations. Reused single sources of
-truth: reflex command signatures + scope-flag tables, `is_narrower`,
-`landing_ref`, replay's fact extraction — no parallel tracking system.
+**The event** (`evidence_followup/v1`): match classes instead of a
+confidence float — `exact_handle · exact_span_overlap · exact_test_id ·
+exact_symbol · exact_file` — because ``exact_handle`` is easier to review
+than ``confidence = 0.98`` and the float suggests calibration that does not
+exist. Four states: `used_exactly` (an exact emitted identity was acted
+on), `validation_associated` (an associated edit was followed by a passing
+verifier — association, NOT causation; verifiers naturally follow edits),
+`equivalent_requery` (same normalized signature, no intervening generation
+change — reusing the reflex signature + scope-flag tables), `censored`
+(the window never closed; session end is never negative evidence). Finer
+distinctions return only when a measurement proves they carry signal.
 
-**Evidence dimensions** (closed): `topology · changedness ·
-dynamic_failure · causality · semantic_support · counterevidence ·
-coverage · freshness`. Each op declares `provides` (e.g. `evidence.join`
-→ causality 1.0, changedness 0.8, dynamic_failure 0.4); a plan objective
-may declare `requires` floors additively (old plans validate unchanged and
-get conservative defaults by objective kind).
+**The table**: counts, never rates — ``observations / used_exactly /
+validation_associated / equivalent_requery / censored`` plus cost
+lower-medians where events carry them — so 2/2 can never masquerade as
+100% in a committed artifact. Wilson lower bounds are derived at read
+time.
 
-**Selection** (`plan_value.py`): hard constraints first — safety,
-capability tier, plan validity, precision, freshness, evidence floors,
-budgets are applied *before* scoring and can never be overridden by a
-prior. Then `score = effective_gain / max(effective_cost, ε)` with every
-constant module-visible; priors below the observation floor back off
-(`op|language|precision → op|precision → op → global → builtin`, level
-disclosed) and shrink toward the fallback; a textual fallback is never
-scored like exact semantic evidence. Batch selection is the greedy
-diminishing-returns loop (marginal-coverage threshold, no mutually
-substitutable expensive actions, cost-unit budget). The advisory stopping
-rule fires when all floors are met AND no remaining action beats the value
-threshold — it never suppresses mandatory verifiers or explicit requests.
+**The ranking** (shadow only, lexicographic, no weighted scalar):
+hard constraints (caller-side, always) → precision class (exact/semantic
+before structural before textual) → freshness → Wilson lower bound of
+exact-use → Wilson bound of validation-association → requery ascending →
+median tokens → median ms → name. The explanation IS the key.
+
+**What is deliberately absent** (deferred until the paired referee — which
+compares declared vs shadow orderings on paired tasks at equal success —
+answers for them): weighted utility scalars, fractional evidence-coverage
+arithmetic, automatic stopping (the report emits a low-yield *sentence*,
+suppresses nothing), batch scheduling, language-partitioned cells (the
+language field is captured on events for a future interaction-effect
+test; priors stay global), and any autonomous choice of the next logical
+action. The evidence-dimension vocabulary survives as *descriptive* plan
+metadata: `requires` floors validate and display (UNMET lines over
+REALIZED coverage — an op's declared `provides` counts only when its node
+produced rows), and never gate.
+
+Known confound, stated in the artifact: per-operator follow-up rates are
+entangled with WHEN operators run (verifiers sit near the end of
+successful trajectories; reconnaissance sits at the start). That is why
+the counts feed a report and a shadow ledger — not behavior.
 
 Seeded mechanistic acceptance: [`evals/plan_value_selection.py`](../evals/plan_value_selection.py)
-(cheap join wins; expensive semantic scan deferred then chosen;
-hypothesis-contradiction replan re-ranks). Runtime never writes the
-committed policy — the ledger is appended only by explicit
-`ctx replay --outcomes --append-ledger` or plan integration, and the TOML
-is recompiled offline and reviewed like code.
+(strong-record preference, 2/2-vs-68/84 sample honesty, disagreement
+reported-never-enforced). Runtime never writes the committed policy; the
+ledger is appended only by explicit `ctx replay --outcomes
+--append-ledger` or plan integration.
 
 ## Phases
 

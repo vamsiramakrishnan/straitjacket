@@ -1,32 +1,38 @@
-"""``ctx.evidence-outcome/v1`` — deterministic evidence-to-action attribution.
+"""``ctx.evidence-followup/v1`` — deterministic evidence→follow-up association.
 
-The bridge between offline evidence-regret measurement (what should cross
-the context boundary — ``ctx replay --regret``) and online investigation
-decisions (which evidence-producing action should run next —
-``ctx.plan_value``). This module converts *observable* downstream behavior
-into typed outcome events:
+Observable follow-up, named as such. The joins below can prove that a
+digest surfaced symbol X, a later edit touched X, and a later verifier
+passed. They cannot prove the digest *caused* the model's choice — so
+nothing here is called attribution, outcome, confidence, or validation of
+evidence. The event records **associations** with the match class that
+established each one:
 
     plan node / command emits evidence
-            ↓ identities recorded (handles, test ids, files, symbols, spans)
+            ↓ identities recorded (handles, spans, symbols, test ids, files)
     subsequent commands / retrievals / edits / tests observed
-            ↓ ordered deterministic attribution rules
-    evidence_outcome/v1 events (closed vocabularies, content-derived ids)
+            ↓ exact-match joins (deterministic, ordered by strength)
+    evidence_followup/v1 events
             ↓ offline aggregation (ctx policy compile --plan-value)
-    reviewable [plan_value] priors consumed by investigation ranking
+    per-operator follow-up REPORT · shadow ranking · (later, if the paired
+    referee proves counterfactual value) a conservative tie-break
 
-This is NOT reinforcement learning and NOT model self-report. Attribution
-is conservative, rule-ordered, and confidence is a deterministic function
-of the reason set (max over per-reason confidences — never
-pseudo-probabilistic multiplication). Sessions that end before a window
-closes are ``censored=True`` and never count as negative evidence.
+Design laws:
+
+- **Match classes, not floats.** ``exact_handle`` is easier to review than
+  ``confidence = 0.98``, and a float suggests statistical calibration that
+  does not exist. The class itself encodes strength.
+- **Four states.** ``used_exactly`` (an exact identity emitted here was
+  acted on), ``validation_associated`` (an associated edit was followed by
+  a passing verifier — association, not causation), ``equivalent_requery``
+  (the same normalized signature re-issued with no intervening generation
+  change), and ``censored`` (the window never closed: session end is never
+  negative evidence). Finer distinctions return only when a measurement
+  proves they carry signal.
+- **Counts survive to the report** so 2/2 can never masquerade as 100%.
 
 Reused single sources of truth (no parallel implementations):
-
-- normalized command signatures + scope-flag tables: ``reflex.command_signature``;
-- the narrowing relation: ``reflex.is_narrower``;
-- handle-landing detection: ``reflex.landing_ref``;
-- test-id / coordinate extraction: ``replay._NODEID_RE`` / ``replay._COORD_RE``;
-- canonical serialization: ``store.canonical_json``.
+``reflex.command_signature`` (+ scope-flag tables), ``reflex.landing_ref``,
+``replay._NODEID_RE``/``_COORD_RE``, ``store.canonical_json``.
 """
 
 from __future__ import annotations
@@ -38,84 +44,87 @@ from typing import Any, Iterable, Literal
 
 from ctx.store import canonical_json
 
-SCHEMA = "ctx.evidence-outcome/v1"
+SCHEMA = "ctx.evidence-followup/v1"
 
-#: Closed outcome vocabulary (frozen; additions are a schema bump).
-OUTCOME_VOCABULARY = (
-    "landed",
-    "narrowed",
-    "discriminated",
-    "validated_after_edit",
-    "retrieved",
-    "equivalent_requery",
-    "redundant",
-    "reversed",
-    "abandoned",
+#: Closed match-class vocabulary, strongest first. The class IS the strength
+#: signal — there is deliberately no numeric confidence.
+MATCH_CLASSES = (
+    "exact_handle",        # later call resolves an emitted run:/blob: handle
+    "exact_span_overlap",  # later edit's old_string line appears in the emission
+    "exact_test_id",       # later command invokes an emitted test node id
+    "exact_symbol",        # later edit/command targets an emitted symbol
+    "exact_file",          # later action targets a surfaced file
 )
 
-#: Closed attribution-reason vocabulary, each with its deterministic
-#: confidence. Combination rule: ``attribution_confidence = max(confidence
-#: of reasons present)`` — documented, monotone, and never multiplies
-#: pseudo-probabilities.
-REASON_CONFIDENCE: dict[str, float] = {
-    "exact_handle": 1.00,
-    "edit_span_overlap": 0.98,
-    "exact_test_id": 0.98,
-    "exact_symbol": 0.95,
-    "mapped_failures_resolved": 0.90,
-    "edit_reverted": 0.90,
-    "equivalent_signature": 0.90,
-    "exact_file": 0.85,
-    "ranked_candidate_action": 0.80,
-    "scope_narrowing": 0.75,
-    "identity_subset": 0.70,
-    "shared_identity": 0.60,  # identity claimed by >1 open window: degraded, never arbitrary
-    "window_expired": 0.50,
+# ---------------------------------------------------------------- language
+#
+# Captured for future replay interaction-effect analysis ONLY. Never
+# consulted by scheduler logic; not aggregated into compiled priors today
+# (start global; partition only when replay demonstrates an interaction).
+LANGUAGE_FAMILY_OF_EXTENSION: dict[str, str] = {
+    "py": "python", "pyi": "python",
+    "js": "js", "jsx": "js", "ts": "js", "tsx": "js",
+    "go": "go",
+    "rs": "rust",
+    "java": "jvm", "kt": "jvm",
+    "rb": "ruby",
+    "c": "c", "h": "c", "cc": "c", "cpp": "c", "hpp": "c",
+    "cs": "dotnet",
+    "php": "php",
+    "swift": "swift",
 }
-REASON_VOCABULARY = tuple(sorted(REASON_CONFIDENCE))
+
+
+def language_family(paths: Iterable[str]) -> str | None:
+    """Majority file-extension family over ``paths``; ties break
+    alphabetically on family name; None when nothing is recognizable."""
+    counts: dict[str, int] = {}
+    for p in paths:
+        ext = str(p).rsplit(".", 1)[-1].lower() if "." in str(p) else ""
+        fam = LANGUAGE_FAMILY_OF_EXTENSION.get(ext)
+        if fam:
+            counts[fam] = counts.get(fam, 0) + 1
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+
+# ------------------------------------------------------------------ events
 
 
 @dataclass(frozen=True)
-class EvidenceOutcome:
-    """One attributed evidence→action event. Frozen, closed-vocabulary,
+class FollowupEvent:
+    """One evidence→follow-up association. Frozen, closed-vocabulary,
     content-addressed (``event_id`` derives from the canonical fields, so
-    identical observable behavior yields identical events on every replay)."""
+    identical observable behavior yields identical events on every replay).
+    """
 
-    version: Literal["ctx.evidence-outcome/v1"]
+    version: Literal["ctx.evidence-followup/v1"]
     event_id: str
     investigation_id: str | None
     plan_node_id: str | None
+    operator: str
     evidence_ids: tuple[str, ...]
-    candidate_ids: tuple[str, ...]
-    downstream_action_kind: str
-    downstream_action_ref: str | None
-    outcomes: tuple[str, ...]
-    attribution_reasons: tuple[str, ...]
-    attribution_confidence: float
+    match_classes: tuple[str, ...]  # sorted subset of MATCH_CLASSES; () = no exact use
+    used_exactly: bool
+    validation_associated: bool
+    equivalent_requery: bool
+    censored: bool
     generation_before: str | None
     generation_after: str | None
     actions_observed: int
-    censored: bool
-    operator: str = "unknown"  # logical op or profile/command family (aggregation key)
-    # ADDITIVE optional cost (debt 741c6afb40): live plan integration knows
-    # the emitting node's real duration and visible-token estimate. None =
-    # unknown (transcript-derived events); payload() OMITS the keys when
-    # None, so cost-less events keep their content-derived ids byte-stable.
+    # Additive optional instrumentation; omitted from payload() when None so
+    # ids of events without them are byte-stable.
     cost_ms: int | None = None
     visible_tokens: int | None = None
-    #: Additive instrumentation (appended field, default None): the majority
-    #: language family of the emission's identity files. Captured so future
-    #: replays can test for a language interaction effect; NOT aggregated
-    #: into compiled priors today, and never consulted by scheduler logic.
     language: str | None = None
 
     def __post_init__(self) -> None:
-        for o in self.outcomes:
-            if o not in OUTCOME_VOCABULARY:
-                raise ValueError(f"outcome outside the closed vocabulary: {o!r}")
-        for r in self.attribution_reasons:
-            if r not in REASON_CONFIDENCE:
-                raise ValueError(f"reason outside the closed vocabulary: {r!r}")
+        for m in self.match_classes:
+            if m not in MATCH_CLASSES:
+                raise ValueError(f"match class outside the closed vocabulary: {m!r}")
+        if self.used_exactly and not self.match_classes:
+            raise ValueError("used_exactly requires at least one match class")
 
     def payload(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -123,18 +132,16 @@ class EvidenceOutcome:
             "event_id": self.event_id,
             "investigation_id": self.investigation_id,
             "plan_node_id": self.plan_node_id,
+            "operator": self.operator,
             "evidence_ids": list(self.evidence_ids),
-            "candidate_ids": list(self.candidate_ids),
-            "downstream_action_kind": self.downstream_action_kind,
-            "downstream_action_ref": self.downstream_action_ref,
-            "outcomes": list(self.outcomes),
-            "attribution_reasons": list(self.attribution_reasons),
-            "attribution_confidence": self.attribution_confidence,
+            "match_classes": list(self.match_classes),
+            "used_exactly": self.used_exactly,
+            "validation_associated": self.validation_associated,
+            "equivalent_requery": self.equivalent_requery,
+            "censored": self.censored,
             "generation_before": self.generation_before,
             "generation_after": self.generation_after,
             "actions_observed": self.actions_observed,
-            "censored": self.censored,
-            "operator": self.operator,
         }
         # Omitted (not null) when unknown: _event_id hashes this payload, so
         # inserting null keys would silently re-id every historical event.
@@ -147,27 +154,20 @@ class EvidenceOutcome:
         return out
 
 
-def combine_confidence(reasons: tuple[str, ...]) -> float:
-    """The documented combination rule: maximum reason confidence."""
-    return max((REASON_CONFIDENCE[r] for r in reasons), default=0.0)
-
-
 def _event_id(fields: dict[str, Any]) -> str:
     body = {k: v for k, v in fields.items() if k != "event_id"}
     return hashlib.sha256(canonical_json(body)).hexdigest()[:16]
 
 
-def make_event(**kw: Any) -> EvidenceOutcome:
+def make_event(**kw: Any) -> FollowupEvent:
     """Construct an event with sorted collections and a content-derived id."""
     kw.setdefault("version", SCHEMA)
     kw["evidence_ids"] = tuple(sorted(set(map(str, kw.get("evidence_ids") or ()))))
-    kw["candidate_ids"] = tuple(sorted(set(map(str, kw.get("candidate_ids") or ()))))
-    kw["outcomes"] = tuple(sorted(set(map(str, kw.get("outcomes") or ()))))
-    reasons = tuple(sorted(set(map(str, kw.get("attribution_reasons") or ()))))
-    kw["attribution_reasons"] = reasons
-    kw["attribution_confidence"] = round(combine_confidence(reasons), 2)
-    probe = EvidenceOutcome(event_id="", **kw)
-    return EvidenceOutcome(**{**kw, "event_id": _event_id(probe.payload())})
+    matches = tuple(sorted(set(map(str, kw.get("match_classes") or ()))))
+    kw["match_classes"] = matches
+    kw.setdefault("used_exactly", bool(matches))
+    probe = FollowupEvent(event_id="", **kw)
+    return FollowupEvent(**{**kw, "event_id": _event_id(probe.payload())})
 
 
 # ---------------------------------------------------------------- windows
@@ -175,58 +175,12 @@ def make_event(**kw: Any) -> EvidenceOutcome:
 
 @dataclass(frozen=True)
 class ObservationWindow:
-    """Bounded per-emission observation window (Part 3). Defaults mirror the
-    reflex hypothesis-window idiom; callers configure via this object, never
-    via scattered constants."""
+    """Bounded per-emission observation window. Defaults mirror the reflex
+    hypothesis-window idiom; callers configure via this object, never via
+    scattered constants."""
 
     max_actions: int = 6
     max_generations: int = 2
-
-
-# ------------------------------------------------------ language families
-
-#: File-extension → language-family table (frozen; additions are reviewed
-#: like any vocabulary change). Language is a PARTITION KEY for compiled
-#: priors only — the scheduler stays language-neutral and no logic may
-#: branch on a family name.
-LANGUAGE_FAMILY_OF_EXTENSION: dict[str, str] = {
-    "py": "python",
-    "pyi": "python",
-    "js": "js",
-    "jsx": "js",
-    "ts": "js",
-    "tsx": "js",
-    "go": "go",
-    "rs": "rust",
-    "java": "jvm",
-    "kt": "jvm",
-    "rb": "ruby",
-    "c": "c",
-    "h": "c",
-    "cc": "c",
-    "cpp": "c",
-    "hpp": "c",
-    "cs": "dotnet",
-    "php": "php",
-    "swift": "swift",
-}
-
-
-def language_family(paths: Iterable[str]) -> str | None:
-    """Majority language family over the identity files, deterministic:
-    ties break alphabetically on the family name; ``None`` when no path
-    carries a recognizable extension."""
-    counts: dict[str, int] = {}
-    for p in paths:
-        name = str(p).replace("\\", "/").rsplit("/", 1)[-1]
-        if "." not in name:
-            continue
-        fam = LANGUAGE_FAMILY_OF_EXTENSION.get(name.rsplit(".", 1)[-1].lower())
-        if fam:
-            counts[fam] = counts.get(fam, 0) + 1
-    if not counts:
-        return None
-    return min(counts, key=lambda f: (-counts[f], f))
 
 
 # ---------------------------------------------------- emissions & actions
@@ -236,7 +190,7 @@ def language_family(paths: Iterable[str]) -> str | None:
 class EvidenceEmission:
     """One evidence-producing event with its extractable identity sets.
     Built by :func:`emissions_from_calls` for transcripts, or directly by
-    plan integration (which can supply candidates and symbols)."""
+    plan integration (which can supply symbols and real generations)."""
 
     index: int  # position in the action stream
     operator: str  # logical op name, or "profile:<x>" / "command:<family>"
@@ -245,12 +199,11 @@ class EvidenceEmission:
     test_ids: frozenset[str] = frozenset()
     files: frozenset[str] = frozenset()
     symbols: frozenset[str] = frozenset()
-    candidates: tuple[tuple[str, int], ...] = ()  # (candidate_id, rank)
     failing_ids: frozenset[str] = frozenset()  # failing test identities, if known
     raw_text: str = ""  # emission text (digest or raw) for span-overlap checks
     investigation_id: str | None = None
     plan_node_id: str | None = None
-    language: str | None = None  # language_family(files); partition key, never logic
+    language: str | None = None  # via language_family(files); instrumentation only
 
     def identity_set(self) -> frozenset[str]:
         return frozenset(self.handles | self.test_ids | self.files | self.symbols)
@@ -273,7 +226,6 @@ class Action:
 # -------------------------------------------------- transcript extraction
 
 _HANDLE_RE = re.compile(r"\brun:[0-9a-f]{4,64}\b")
-_FILE_RE = re.compile(r"\b[\w./-]+/[\w.-]+\.\w{1,8}\b")
 _FAILING_ID_RE = re.compile(r"^\s*(?:\d+\.\s+)?([\w./-]+::[\w:\[\]-]+)", re.MULTILINE)
 
 
@@ -371,7 +323,7 @@ def actions_from_calls(calls: list[dict[str, Any]]) -> list[Action]:
     return out
 
 
-# ------------------------------------------------------------ attribution
+# --------------------------------------------------------------- the join
 
 
 def _looks_pass(text: str) -> bool:
@@ -382,137 +334,88 @@ def _looks_pass(text: str) -> bool:
     return "passed" in t and "failed" not in t and "error" not in t
 
 
-def _edit_matches(em: EvidenceEmission, act: Action) -> tuple[str, ...]:
-    """Reasons for an edit action landing on an emission's evidence."""
-    reasons: list[str] = []
+def _edit_matches(em: EvidenceEmission, act: Action) -> set[str]:
+    """Match classes for an edit action against an emission's identities."""
+    matches: set[str] = set()
     if act.file and act.file in em.files:
-        reasons.append("exact_file")
+        matches.add("exact_file")
     for line in act.old_string.splitlines():
         line = line.strip()
         if len(line) >= 12 and line in em.raw_text:
-            reasons.append("edit_span_overlap")
+            matches.add("exact_span_overlap")
             break
     for sym in em.symbols:
-        if sym and (sym in act.old_string or (act.file and sym in (act.file or ""))):
-            reasons.append("exact_symbol")
+        if sym and (sym in act.old_string or (act.file and sym in act.file)):
+            matches.add("exact_symbol")
             break
-    if em.candidates:
-        for cid, _rank in em.candidates:
-            if cid and (cid in act.old_string or (act.file and cid in act.file)):
-                reasons.append("ranked_candidate_action")
-                break
-    return tuple(reasons)
+    return matches
 
 
 @dataclass
 class _OpenWindow:
     em: EvidenceEmission
-    outcomes: set[str] = field(default_factory=set)
-    reasons: set[str] = field(default_factory=set)
+    matches: set[str] = field(default_factory=set)
+    validation_associated: bool = False
+    equivalent_requery: bool = False
     actions_seen: int = 0
     generations: int = 0
-    action_ref: str | None = None
-    action_kind: str | None = None
-    attributed_edits: list[Action] = field(default_factory=list)
+    associated_edit: bool = False
     closed: bool = False
-    censored: bool = False
 
 
-def attribute(
+def followup_join(
     emissions: list[EvidenceEmission],
     actions: list[Action],
     *,
     window: ObservationWindow = ObservationWindow(),
     session_complete: bool = True,
-) -> list[EvidenceOutcome]:
-    """The deterministic attribution join (Part 2). Ordered rules, bounded
+) -> list[FollowupEvent]:
+    """The deterministic follow-up join. Exact-match rules only, bounded
     windows, conservative censoring. Same inputs ⇒ identical events.
 
-    ``session_complete=False`` (or a window still open when actions run out)
-    marks the event censored: session end is never negative evidence.
-    """
-    # Identity ambiguity map: identity string -> emission indices claiming it.
-    claims: dict[str, list[int]] = {}
-    for em in emissions:
-        for ident in em.identity_set():
-            claims.setdefault(ident, []).append(em.index)
-
+    ``session_complete=False`` (or a window still open when actions run
+    out) marks the event censored: session end is never negative evidence.
+    An identity surfaced by more than one open window associates with every
+    window that surfaced it — deterministic, no arbitrary winner, no
+    pseudo-confidence discount (the shared evidence id is recoverable from
+    the events themselves)."""
     open_windows: list[_OpenWindow] = []
-    events: list[EvidenceOutcome] = []
-    seen_identities: dict[str, int] = {}  # identity -> first emitting index
+    events: list[FollowupEvent] = []
 
     def _close(w: _OpenWindow, *, censored: bool) -> None:
         if w.closed:
             return
         w.closed = True
-        w.censored = censored
-        if (
-            not censored
-            and not w.outcomes & {"landed", "narrowed", "discriminated",
-                                  "validated_after_edit", "retrieved"}
-            and not w.outcomes & {"reversed", "equivalent_requery"}
-            and w.actions_seen >= window.max_actions
-        ):
-            w.outcomes.add("abandoned")
-            w.reasons.add("window_expired")
         events.append(
             make_event(
                 investigation_id=w.em.investigation_id,
                 plan_node_id=w.em.plan_node_id,
+                operator=w.em.operator,
                 evidence_ids=tuple(sorted(w.em.identity_set()))[:16],
-                candidate_ids=tuple(cid for cid, _ in w.em.candidates),
-                downstream_action_kind=w.action_kind or "none",
-                downstream_action_ref=w.action_ref,
-                outcomes=tuple(w.outcomes),
-                attribution_reasons=tuple(w.reasons),
+                match_classes=tuple(w.matches),
+                validation_associated=w.validation_associated,
+                equivalent_requery=w.equivalent_requery,
+                censored=censored,
                 generation_before="g0",
                 generation_after=f"g{w.generations}",
                 actions_observed=w.actions_seen,
-                censored=censored,
-                operator=w.em.operator,
                 language=w.em.language,
             )
         )
 
-    def _ambiguous(ident: str, em_index: int) -> bool:
-        holders = [
-            i for i in claims.get(ident, [])
-            if i != em_index
-            and any(not w.closed and w.em.index == i for w in open_windows)
-        ]
-        return bool(holders)
-
-    def _add(w: _OpenWindow, outcome: str, reason: str, idents: tuple[str, ...] = ()) -> None:
-        # Shared-identity degradation: a match on an identity claimed by
-        # another still-open window replaces the exact reason with the
-        # deterministic lower-confidence ``shared_identity`` reason.
-        if idents and all(_ambiguous(i, w.em.index) for i in idents):
-            reason = "shared_identity"
-        w.outcomes.add(outcome)
-        w.reasons.add(reason)
-
     # Every call is an action against earlier open windows FIRST, and only
     # then (if it emits evidence) opens its own window — so a narrower
-    # re-run both lands the prior emission and starts a fresh window.
+    # re-run both associates with the prior emission and starts fresh.
     stream: list[tuple[int, int, str, Any]] = []
     for act in actions:
         stream.append((act.index, 0, "action", act))
     for em in emissions:
         stream.append((em.index, 1, "emission", em))
     stream.sort(key=lambda t: (t[0], t[1]))
-    stream_items = [(kind, obj) for _i, _o, kind, obj in stream]
 
-    for kind, obj in stream_items:
+    for _i, _o, kind, obj in stream:
         if kind == "emission":
-            em: EvidenceEmission = obj
-            w = _OpenWindow(em=em)
-            idents = em.identity_set()
-            if idents and idents <= set(seen_identities):
-                w.outcomes.add("redundant")
-                w.reasons.add("identity_subset")
-            for ident in idents:
-                seen_identities.setdefault(ident, em.index)
-            open_windows.append(w)
+            open_windows.append(_OpenWindow(em=obj))
             continue
 
         act: Action = obj
@@ -527,87 +430,41 @@ def attribute(
 
             if act.kind in ("bash", "retrieval"):
                 cmd = act.command
-                matched_handle = next((h for h in em.handles if h in cmd), None)
-                if matched_handle:
-                    _add(w, "retrieved", "exact_handle", (matched_handle,))
-                    _add(w, "landed", "exact_handle", (matched_handle,))
-                    w.action_kind, w.action_ref = act.kind, matched_handle
-                    if "--lines" in cmd or "--span" in cmd:
-                        _add(w, "narrowed", "exact_handle", (matched_handle,))
-                matched_tid = next((t for t in em.test_ids if t in cmd), None)
-                if matched_tid:
-                    _add(w, "landed", "exact_test_id", (matched_tid,))
-                    w.action_kind, w.action_ref = "bash", matched_tid
-                    from ctx import reflex
-
-                    if em.signature and reflex.is_narrower(act.signature, em.signature):
-                        _add(w, "narrowed", "exact_test_id", (matched_tid,))
-                else:
-                    from ctx import reflex
-
-                    if (
-                        em.signature
-                        and act.signature
-                        and reflex.is_narrower(act.signature, em.signature)
-                    ):
-                        _add(w, "narrowed", "scope_narrowing")
-                matched_file = next(
-                    (
-                        f for f in em.files
-                        if f in cmd and len(claims.get(f, [])) == 1
-                    ),
-                    None,
-                )
-                if matched_file and not matched_handle and not matched_tid:
-                    _add(w, "landed", "exact_file", (matched_file,))
-                    w.action_kind = w.action_kind or "bash"
-                    w.action_ref = w.action_ref or matched_file
-                # Equivalent requery: same signature, no intervening
-                # generation change, not a narrowing.
+                if any(h in cmd for h in em.handles):
+                    w.matches.add("exact_handle")
+                if any(t in cmd for t in em.test_ids):
+                    w.matches.add("exact_test_id")
+                if any(s and s in cmd for s in em.symbols):
+                    w.matches.add("exact_symbol")
+                matched_file = next((f for f in em.files if f in cmd), None)
+                if matched_file and not (w.matches & {"exact_handle", "exact_test_id"}):
+                    w.matches.add("exact_file")
+                # Equivalent requery: same normalized signature with no
+                # intervening generation change. An edit in between makes a
+                # re-run legitimate re-verification, never a requery.
                 if (
                     em.signature
                     and act.signature == em.signature
                     and w.generations == 0
                 ):
-                    _add(w, "equivalent_requery", "equivalent_signature")
-                # Validation: an attributed edit happened, then a passing
-                # verifier resolves the mapped failures.
-                if w.attributed_edits and act.result_text:
+                    w.equivalent_requery = True
+                # Validation ASSOCIATION (not causation): an associated edit
+                # happened, then a passing verifier whose output no longer
+                # names the emission's failing ids.
+                if w.associated_edit and act.result_text:
                     resolved = _looks_pass(act.result_text) and not any(
                         fid in act.result_text for fid in em.failing_ids
                     )
-                    if resolved and (em.failing_ids or _looks_pass(act.result_text)):
-                        _add(w, "validated_after_edit", "mapped_failures_resolved")
+                    if resolved:
+                        w.validation_associated = True
                         _close(w, censored=False)
                         continue
 
             elif act.kind in ("edit", "write"):
-                reasons = _edit_matches(em, act)
-                if reasons:
-                    for r in reasons:
-                        idents: tuple[str, ...] = ()
-                        if r == "exact_file" and act.file:
-                            idents = (act.file,)
-                        _add(w, "landed", r, idents)
-                    if "ranked_candidate_action" in reasons:
-                        _add(w, "discriminated", "ranked_candidate_action")
-                    w.action_kind = "edit"
-                    w.action_ref = act.file
-                    w.attributed_edits.append(act)
-                # Reversal: this edit exactly undoes an attributed edit.
-                for prev in w.attributed_edits[:-1] if reasons else w.attributed_edits:
-                    if (
-                        prev.new_string
-                        and act.old_string == prev.new_string
-                        and act.new_string == prev.old_string
-                    ):
-                        w.outcomes.add("reversed")
-                        w.reasons.add("edit_reverted")
-                        w.outcomes.discard("validated_after_edit")
-                        _close(w, censored=False)
-                        break
-                if w.closed:
-                    continue
+                matches = _edit_matches(em, act)
+                if matches:
+                    w.matches |= matches
+                    w.associated_edit = True
 
             if w.actions_seen >= window.max_actions or w.generations > window.max_generations:
                 _close(w, censored=False)
@@ -619,38 +476,35 @@ def attribute(
     return sorted(events, key=lambda e: (e.operator, e.event_id))
 
 
-def attribute_session(
+def followups_from_session(
     calls: list[dict[str, Any]],
     *,
     window: ObservationWindow = ObservationWindow(),
     session_complete: bool = False,
-) -> list[EvidenceOutcome]:
-    """Transcript-level attribution: emissions + actions from a parsed
-    replay call list. ``session_complete`` defaults to False because a
-    recorded transcript's end is a session end — open windows are censored,
-    never negative."""
-    emissions = emissions_from_calls(calls)
-    actions = actions_from_calls(calls)
-    return attribute(
-        emissions, actions, window=window, session_complete=session_complete
+) -> list[FollowupEvent]:
+    """Transcript-level join: emissions + actions from a parsed replay call
+    list. ``session_complete`` defaults to False because a recorded
+    transcript's end is a session end — open windows are censored."""
+    return followup_join(
+        emissions_from_calls(calls),
+        actions_from_calls(calls),
+        window=window,
+        session_complete=session_complete,
     )
 
 
 __all__ = [
     "SCHEMA",
-    "OUTCOME_VOCABULARY",
-    "REASON_VOCABULARY",
-    "REASON_CONFIDENCE",
+    "MATCH_CLASSES",
     "LANGUAGE_FAMILY_OF_EXTENSION",
     "language_family",
-    "EvidenceOutcome",
+    "FollowupEvent",
     "EvidenceEmission",
     "Action",
     "ObservationWindow",
-    "combine_confidence",
     "make_event",
-    "attribute",
-    "attribute_session",
+    "followup_join",
+    "followups_from_session",
     "emissions_from_calls",
     "actions_from_calls",
 ]

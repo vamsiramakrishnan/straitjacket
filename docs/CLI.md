@@ -205,20 +205,21 @@ ctx antigravity install
 The plugin is persistent. Both hosts use the same artifact store, digest contracts, and
 retrieval vocabulary.
 
-## Score the loop: regret, outcomes, plan value
+## Score the loop: regret, follow-up, shadow
 
 ```bash
 ctx replay --regret <t.jsonl>            # per-profile frontier gap (docs/THEORY.md)
-ctx replay --outcomes <t.jsonl>          # evidence_outcome/v1 attribution scoreboard
-ctx replay --outcomes --append-ledger …  # explicit: feed the workspace outcome ledger
-ctx policy compile --plan-value          # aggregate ledger → committed [plan_value] priors
-ctx plan price --value <plan.json>       # price card + prior-ranked op explanation
-ctx investigate --advise <plan.json>     # digest + advisory next-action ranking + stopping receipt
+ctx replay --outcomes <t.jsonl>          # per-operator follow-up counts (association, not causation)
+ctx replay --outcomes --append-ledger …  # explicit: feed the workspace follow-up ledger
+ctx policy compile --plan-value          # aggregate ledger → committed [plan_value] COUNTS
+ctx plan price --value <plan.json>       # price card + shadow follow-up ranking (report only)
+ctx investigate --advise <plan.json>     # digest + shadow report + shadow ledger line
 ```
 
-The priors are advisory ranking input only: safety, capability tier, plan
-validity, precision, freshness, evidence floors, and budgets always
-dominate, and runtime never writes the committed policy file.
+Counts, not rates, in the committed table; Wilson lower bounds derive at
+read time. The shadow ranking never reorders or suppresses anything —
+promotion to a conservative tie-break waits on the paired referee, and
+hard constraints always dominate. Runtime never writes the policy file.
 
 ## Failure semantics
 

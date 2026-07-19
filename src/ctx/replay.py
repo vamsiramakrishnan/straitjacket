@@ -428,61 +428,58 @@ def render_report(reports: list[dict[str, Any]], *, gaps: bool = False) -> str:
 
 
 def session_outcomes(path: str | Path) -> list[Any]:
-    """``ctx replay --outcomes``: deterministic evidence_outcome/v1 events
-    from one recorded transcript (docs/EVIDENCE-PLANS.md §plan-value).
+    """``ctx replay --outcomes``: deterministic evidence_followup/v1 events
+    from one recorded transcript. Read-only; windows still open at
+    transcript end are censored (never negative); investigation ids are
+    never invented for sessions that predate compiled plans."""
+    from ctx.evidence_outcomes import followups_from_session
 
-    Read-only; windows still open at transcript end are censored, never
-    negative; investigation ids are never invented for sessions that
-    predate compiled plans (command/profile-level attribution only)."""
-    from ctx.evidence_outcomes import attribute_session
-
-    return attribute_session(parse_transcript(path), session_complete=False)
+    return followups_from_session(parse_transcript(path), session_complete=False)
 
 
 def render_outcomes(events: list[Any]) -> str:
-    """The evidence-outcomes scoreboard, aggregated per operator. Positive
-    rates use all observations (censored windows can only under-count
-    positives — conservative); negative denominators exclude censored."""
+    """The per-operator FOLLOW-UP scoreboard (association, not causation).
+    Counts shown beside every rate; positive rates use all observations as
+    denominator (censoring only under-counts positives); the requery rate
+    excludes censored windows from its denominator."""
     per: dict[str, dict[str, int]] = {}
     for e in events:
         b = per.setdefault(
             e.operator,
-            {"obs": 0, "censored": 0, "landed": 0, "narrowed": 0,
-             "validated_after_edit": 0, "redundant": 0},
+            {"obs": 0, "censored": 0, "used_exactly": 0,
+             "validation_associated": 0, "equivalent_requery": 0},
         )
         b["obs"] += 1
         if e.censored:
             b["censored"] += 1
-        for o in ("landed", "narrowed", "validated_after_edit", "redundant"):
-            if o in e.outcomes:
-                b[o] += 1
-    out = ["Evidence outcomes"]
-    out.append("─" * 74)
+        for f in ("used_exactly", "validation_associated", "equivalent_requery"):
+            if getattr(e, f):
+                b[f] += 1
+    out = ["Operator follow-up (association, not causation)"]
+    out.append("─" * 78)
     out.append(
-        f"{'operator':<30} {'obs':>4} {'land':>5} {'narrow':>6} "
-        f"{'validate':>8} {'redundant':>9} {'censored':>8}"
+        f"{'operator':<30} {'n':>4} {'exact-use':>10} {'valid-assoc':>11} "
+        f"{'requery':>8} {'censored':>9}"
     )
     if not per:
-        out.append("  (no attributable evidence emissions found)")
+        out.append("  (no evidence emissions with extractable identities found)")
         return "\n".join(out)
 
-    def pct(n: int, d: int) -> str:
-        return f"{(100 * n / d):.0f}%" if d else "—"
+    def cell(n: int, d: int) -> str:
+        return f"{n}/{d}" if d else "—"
 
     for op in sorted(per):
         b = per[op]
         non_censored = b["obs"] - b["censored"]
         out.append(
-            f"{op:<30} {b['obs']:>4} {pct(b['landed'], b['obs']):>5} "
-            f"{pct(b['narrowed'], b['obs']):>6} "
-            f"{pct(b['validated_after_edit'], b['obs']):>8} "
-            f"{pct(b['redundant'], non_censored):>9} "
-            f"{pct(b['censored'], b['obs']):>8}"
+            f"{op:<30} {b['obs']:>4} {cell(b['used_exactly'], b['obs']):>10} "
+            f"{cell(b['validation_associated'], b['obs']):>11} "
+            f"{cell(b['equivalent_requery'], non_censored):>8} "
+            f"{b['censored']:>9}"
         )
-    attributable = sum(1 for e in events if e.attribution_reasons)
     out.append(
-        f"attributable: {attributable}/{len(events)} events · reasons+confidence "
-        "per event in --json (payloads carry counts, never just rates)"
+        "counts, not rates: Wilson lower bounds are derived at ranking time; "
+        "full events in --json"
     )
     return "\n".join(out)
 

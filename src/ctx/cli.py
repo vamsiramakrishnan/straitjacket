@@ -154,14 +154,14 @@ def _main_slow(args: list[str]) -> int:
     )
     p_replay.add_argument(
         "--outcomes", dest="replay_outcomes", action="store_true",
-        help="evidence_outcome/v1 attribution scoreboard: which emissions the "
-        "model observably landed on / narrowed with / validated after "
-        "(deterministic, read-only; open windows censored)",
+        help="evidence_followup/v1 scoreboard: which emissions were observably "
+        "followed up (association, not causation; deterministic, read-only; "
+        "open windows censored)",
     )
     p_replay.add_argument(
         "--append-ledger", dest="replay_append_ledger", action="store_true",
         help="with --outcomes: append the events to the workspace "
-        ".ctx-session-reads/evidence-outcomes.jsonl ledger (the input to "
+        ".ctx-session-reads/evidence-followups.jsonl ledger (the input to "
         "`ctx policy compile --plan-value`) — an explicit user action, "
         "never a runtime side effect",
     )
@@ -226,8 +226,8 @@ def _main_slow(args: list[str]) -> int:
         if _pc == "price":
             _pp.add_argument(
                 "--value", dest="plan_value_explain", action="store_true",
-                help="also rank the plan's logical ops with compiled "
-                "[plan_value] priors and disclose the full score explanation",
+                help="also show the shadow follow-up ranking of the plan's ops "
+                "(Wilson lower bounds over compiled counts; report only)",
             )
     plan_sub.add_parser("ops", help="registered logical operators (the plan author's inventory)")
 
@@ -245,9 +245,9 @@ def _main_slow(args: list[str]) -> int:
     )
     p_inv.add_argument(
         "--advise", dest="inv_advise", action="store_true",
-        help="after execution: advisory next-action ranking from compiled "
-        "[plan_value] priors + evidence-floor stopping receipt (never "
-        "blocks; hard constraints and explicit requests always dominate)",
+        help="after execution: shadow follow-up report — declared vs "
+        "empirically-preferred operator ordering with the lexicographic "
+        "reason (report only: nothing is reordered or suppressed)",
     )
 
     p_policy = sub.add_parser("policy", help="compiled steering policy")
@@ -354,7 +354,7 @@ def _main_slow(args: list[str]) -> int:
                     _ws = _rw(ns.workspace)
                     ldir = _ws.root / ".ctx-session-reads"
                     ldir.mkdir(parents=True, exist_ok=True)
-                    with (ldir / "evidence-outcomes.jsonl").open(
+                    with (ldir / "evidence-followups.jsonl").open(
                         "a", encoding="utf-8"
                     ) as fh:
                         for e in events:
@@ -1109,13 +1109,19 @@ def _cmd_plan(ws, ns) -> int:
 
             floors = pv.required_floors(plan.objective_kind, plan.requires)
             candidates = [
-                pv.candidate_from_spec(s.op, plan_ops.OPS[s.op])
-                for s in plan.steps
-                if s.op in plan_ops.OPS
+                pv.CandidateAction(
+                    op=st.op,
+                    cost_class=plan_ops.OPS[st.op].cost,
+                    klass=plan_ops.OPS[st.op].klass,
+                )
+                for st in plan.steps
+                if st.op in plan_ops.OPS
             ]
-            ranked = pv.rank_actions(candidates, {}, floors, pv.load_priors(ws))
+            priors = pv.load_priors(ws)
+            ranked = pv.rank_followup(candidates, priors.get("operators", priors))
+            declared = plan.steps[0].op if plan.steps else None
             print()
-            print(pv.render_ranking(ranked))
+            print(pv.render_shadow(declared, ranked, floors=floors))
         return 0
 
     # run
@@ -1227,47 +1233,74 @@ def _cmd_investigate(ws, ns) -> int:
 
 
 def _investigate_advice(ws, plan, node_rows=None) -> str:
-    """Advisory next-action section for `ctx investigate --advise`: estimate
-    coverage from the plan's REALIZED results (an op's declared `provides`
-    counts only when its node produced rows — an empty join is no evidence),
-    rank the remaining APPLICABLE registered ops with compiled priors, and
-    render the stopping receipt. Purely advisory stdout — never enters the
-    investigation digest, never suppresses anything (fail-open to a one-line
-    note)."""
+    """Shadow follow-up report for `ctx investigate --advise` (report only —
+    never reorders, inserts, or suppresses anything). Shows the declared
+    plan's first op against what the empirical follow-up ordering would have
+    preferred among the same already-applicable candidates, with the full
+    lexicographic reason; appends one ctx.shadow-rank/v1 line to the shadow
+    ledger so the paired referee can score agreement offline. Floors are
+    displayed descriptively from REALIZED coverage (an op's declared
+    `provides` counts only when its node produced rows). Fail-open."""
     try:
+        import json as _json
+        import time as _time
+
         from ctx import plan_ops
         from ctx import plan_value as pv
 
         floors = pv.required_floors(plan.objective_kind, plan.requires)
         coverage = pv.realized_coverage(plan.steps, node_rows or {})
-        ran_ops = {s.op for s in plan.steps}
-        # Hard constraints FIRST: only registered, engine-available ops are
-        # candidates; already-run ops are excluded (novelty lives in priors).
-        candidates = [
-            pv.candidate_from_spec(name, spec)
-            for name, spec in sorted(plan_ops.OPS.items())
+        declared_first = plan.steps[0].op if plan.steps else None
+        # Hard constraints FIRST: candidates are the plan's own declared ops
+        # plus registered engine-available observe-class ops — the ranking
+        # never introduces an action the tier could not run.
+        ran_ops = [s.op for s in plan.steps]
+        names = list(dict.fromkeys(ran_ops)) + sorted(
+            name
+            for name, spec in plan_ops.OPS.items()
             if name not in ran_ops
             and (spec.probe_available is None or spec.probe_available())
+        )
+        candidates = [
+            pv.CandidateAction(
+                op=n,
+                cost_class=plan_ops.OPS[n].cost,
+                klass=plan_ops.OPS[n].klass,
+            )
+            for n in names
+            if n in plan_ops.OPS
         ]
         priors = pv.load_priors(ws)
-        ranked = pv.rank_actions(candidates, coverage, floors, priors)
-        batch = pv.select_batch(candidates, coverage, floors, priors)
-        stop, receipt = pv.stopping_decision(ranked, coverage, floors, priors=priors)
-        lines = ["── plan-value advisory (compiled priors; advisory only) ──"]
-        lines.append(receipt)
-        if not stop and batch:
-            lines.append("")
-            lines.append("suggested next action(s):")
-            for s in batch[:3]:
-                lines.append(
-                    f"  {s.op:<26} score {s.score:.2f} · prior {s.prior_confidence}"
-                    f" ({s.prior_observations} obs, {s.backoff_level})"
+        ranked = pv.rank_followup(candidates, priors.get("operators", priors))
+        report = pv.render_shadow(
+            declared_first, ranked, floors=floors, coverage=coverage
+        )
+        # Shadow ledger: the paired referee's input. Operational ts only.
+        try:
+            ldir = ws.root / ".ctx-session-reads"
+            ldir.mkdir(parents=True, exist_ok=True)
+            with (ldir / "shadow-rank.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(
+                    _json.dumps(
+                        {
+                            "schema": "ctx.shadow-rank/v1",
+                            "plan": plan.plan_id()[:12],
+                            "declared_first": declared_first,
+                            "shadow_first": ranked[0].op if ranked else None,
+                            "agreement": bool(
+                                ranked and declared_first == ranked[0].op
+                            ),
+                            "ts": _time.time(),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
                 )
-            lines.append("")
-            lines.append(pv.render_ranking(ranked, selected=batch[0]))
-        return "\n".join(lines)
-    except Exception as e:  # advisory: never fail the investigation
-        return f"(plan-value advisory unavailable: {type(e).__name__})"
+        except OSError:
+            pass
+        return report
+    except Exception as e:  # report only: never fail the investigation
+        return f"(follow-up shadow report unavailable: {type(e).__name__})"
 
 
 def _cmd_policy(ws, ns) -> int:

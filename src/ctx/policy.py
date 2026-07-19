@@ -133,26 +133,11 @@ def _reflex_tallies(ledger_dir: Path) -> dict[str, dict[str, int]]:
 
 PLAN_VALUE_MIN_OBSERVATIONS = 5
 
-#: Deterministic sample-size confidence classes (Part 5).
-PLAN_VALUE_CONFIDENCE = (
-    (50, "high"),
-    (20, "medium"),
-    (5, "low"),
-    (0, "insufficient"),
-)
-
-_PV_POSITIVE = ("landed", "narrowed", "discriminated", "validated_after_edit", "retrieved")
-_PV_NEGATIVE = ("equivalent_requery", "redundant", "reversed")
-_PV_RATE_KEY = {
-    "landed": "landing_rate",
-    "narrowed": "narrowing_rate",
-    "discriminated": "discrimination_rate",
-    "validated_after_edit": "validation_rate",
-    "retrieved": "retrieval_rate",
-    "equivalent_requery": "equivalent_requery_rate",
-    "redundant": "redundancy_rate",
-    "reversed": "reversal_rate",
-}
+#: Counted follow-up fields (evidence_followup/v1 booleans). Counts, not
+#: rates: the table stores what was observed; Wilson lower bounds are
+#: derived at read time (plan_value.rank_followup), so 2/2 can never
+#: masquerade as calibrated knowledge in the committed artifact.
+_PV_COUNT_FIELDS = ("used_exactly", "validation_associated", "equivalent_requery")
 
 
 def _lower_median(values: list[int]) -> int:
@@ -162,20 +147,13 @@ def _lower_median(values: list[int]) -> int:
     return ordered[(len(ordered) - 1) // 2]
 
 
-def confidence_class(observations: int) -> str:
-    for floor, name in PLAN_VALUE_CONFIDENCE:
-        if observations >= floor:
-            return name
-    return "insufficient"
-
-
-def _outcome_events(ledger_dir: Path) -> list[dict[str, Any]]:
-    """Read evidence-outcome events, fail-open per line (house ledger
+def _followup_events(ledger_dir: Path) -> list[dict[str, Any]]:
+    """Read evidence-followup events, fail-open per line (house ledger
     pattern). Order-independent aggregation downstream."""
     events: list[dict[str, Any]] = []
     try:
         lines = (
-            (Path(ledger_dir) / "evidence-outcomes.jsonl")
+            (Path(ledger_dir) / "evidence-followups.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
         )
@@ -186,22 +164,24 @@ def _outcome_events(ledger_dir: Path) -> list[dict[str, Any]]:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(rec, dict) and rec.get("version") == "ctx.evidence-outcome/v1":
+        if isinstance(rec, dict) and rec.get("version") == "ctx.evidence-followup/v1":
             events.append(rec)
     return events
 
 
 def compile_plan_value(ws: Workspace) -> dict[str, Any]:
-    """Compile per-operator plan-value priors from the outcome ledger.
+    """Compile the per-operator follow-up table from the ledger.
 
-    Rate semantics (Part 5): positive rates use ALL observations as the
-    denominator (a censored window can only under-count positives —
-    conservative); negative rates exclude censored observations from the
-    denominator (censoring is never negative evidence). Counts always ride
-    alongside rates; a ``*`` row is the global fallback prior. Events are
-    deduplicated by content-derived event_id, so re-appending the same
-    replay is idempotent."""
-    events = _outcome_events(ws.root / ".ctx-session-reads")
+    Counts, not rates (design-review verdict 2026-07-19): the committed
+    artifact stores exactly what was observed — ``observations``,
+    ``used_exactly``, ``validation_associated``, ``equivalent_requery``,
+    ``censored``, and cost lower-medians where events carry them. Wilson
+    lower bounds are computed at read time by the shadow ranker. Censored
+    windows never count as negative evidence. Events dedupe by
+    content-derived event_id, so re-appending the same replay is
+    idempotent. A ``*`` row aggregates everything (the global fallback).
+    """
+    events = _followup_events(ws.root / ".ctx-session-reads")
     seen: set[str] = set()
     per: dict[str, dict[str, int]] = {}
     costs: dict[str, dict[str, list[int]]] = {}  # op -> field -> observed values
@@ -210,19 +190,17 @@ def compile_plan_value(ws: Workspace) -> dict[str, Any]:
         if eid and eid in seen:
             continue
         seen.add(eid)
-        outcomes = [str(o) for o in ev.get("outcomes") or []]
-        censored = bool(ev.get("censored"))
         for op in (str(ev.get("operator") or "unknown"), "*"):
             b = per.setdefault(op, {"observations": 0, "censored": 0,
-                                    **{o: 0 for o in _PV_RATE_KEY}})
+                                    **{f: 0 for f in _PV_COUNT_FIELDS}})
             b["observations"] += 1
-            if censored:
+            if bool(ev.get("censored")):
                 b["censored"] += 1
-            for o in outcomes:
-                if o in _PV_RATE_KEY:
-                    b[o] += 1
-            # Optional cost fields (debt 741c6afb40): only events that carry
-            # them contribute; absent keys never synthesize a zero sample.
+            for f in _PV_COUNT_FIELDS:
+                if bool(ev.get(f)):
+                    b[f] += 1
+            # Optional cost fields: only events that carry them contribute;
+            # absent keys never synthesize a zero sample.
             for fld in ("cost_ms", "visible_tokens"):
                 v = ev.get(fld)
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -231,25 +209,18 @@ def compile_plan_value(ws: Workspace) -> dict[str, Any]:
     table: dict[str, dict[str, Any]] = {}
     for op in sorted(per):
         b = per[op]
-        obs = b["observations"]
-        non_censored = obs - b["censored"]
         row: dict[str, Any] = {
-            "observations": obs,
-            "attributed": non_censored,
+            "observations": b["observations"],
+            "used_exactly": b["used_exactly"],
+            "validation_associated": b["validation_associated"],
+            "equivalent_requery": b["equivalent_requery"],
             "censored": b["censored"],
         }
-        for outcome, key in _PV_RATE_KEY.items():
-            denom = obs if outcome in _PV_POSITIVE else non_censored
-            row[key] = round(b[outcome] / denom, 2) if denom else 0.0
-        # Cost medians (lower median of observed values) — ADDITIVE: the
-        # keys are omitted entirely when no event carries the field, so
-        # cost-less ledgers compile to byte-identical tables as before.
         cost_samples = costs.get(op) or {}
         if cost_samples.get("cost_ms"):
             row["median_cost_ms"] = _lower_median(cost_samples["cost_ms"])
         if cost_samples.get("visible_tokens"):
             row["median_visible_tokens"] = _lower_median(cost_samples["visible_tokens"])
-        row["confidence"] = confidence_class(obs)
         table[op] = row
     return {
         "version": 1,
@@ -433,13 +404,12 @@ def render_policy(policy: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "# Plan-value priors: per-operator downstream-outcome rates",
-                "# compiled from the evidence-outcome ledger (deterministic",
-                "# attribution, docs/EVIDENCE-PLANS.md). ADVISORY ranking input",
-                "# only — hard constraints (safety, capability tier, plan",
-                "# validity, precision, freshness, evidence floors, budgets)",
-                "# always dominate. Counts ride with rates; censored events",
-                "# never count as negative evidence. Runtime never writes here.",
+                "# Per-operator evidence FOLLOW-UP counts (association, not",
+                "# causation) compiled from the evidence-followup ledger",
+                "# (docs/EVIDENCE-PLANS.md). Report/shadow input only — hard",
+                "# constraints always dominate, censored windows never count",
+                "# as negative evidence, and Wilson lower bounds are derived",
+                "# at read time from these counts. Runtime never writes here.",
                 "[plan_value]",
                 f"version = {int(pv.get('version', 1))}",
                 f"minimum_observations = {int(pv.get('minimum_observations', PLAN_VALUE_MIN_OBSERVATIONS))}",
@@ -449,15 +419,13 @@ def render_policy(policy: dict[str, Any]) -> str:
             row = pv["operators"][op]
             lines.extend(["", f"[plan_value.{json.dumps(str(op))}]"])
             for key in (
-                "observations", "attributed", "censored",
+                "observations", "used_exactly", "validation_associated",
+                "equivalent_requery", "censored",
             ):
                 lines.append(f"{key} = {int(row.get(key, 0))}")
             for key in ("median_cost_ms", "median_visible_tokens"):
                 if key in row:  # additive cost medians: rendered only when compiled
                     lines.append(f"{key} = {int(row[key])}")
-            for key in sorted(k for k in row if k.endswith("_rate")):
-                lines.append(f"{key} = {float(row[key]):.2f}")
-            lines.append(f"confidence = {json.dumps(str(row.get('confidence', 'insufficient')))}")
     return "\n".join(lines) + "\n"
 
 

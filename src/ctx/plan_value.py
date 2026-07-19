@@ -1,40 +1,55 @@
-"""Plan value — deterministic online action ranking from compiled priors.
+"""Plan value — per-operator follow-up statistics and shadow ranking.
 
-The online half of the evidence-outcome loop (docs/EVIDENCE-PLANS.md
-§plan-value; the offline half is ``evidence_outcomes`` + ``ctx policy
-compile --plan-value``):
+The online half of the evidence-followup loop (the offline half is
+``evidence_outcomes.followup_join`` + ``ctx policy compile --plan-value``).
+Scope, deliberately narrow:
 
-    predict gain from reviewed historical priors
-    execute the highest-value compatible action (or independent batch)
-    observe landing / narrowing / discrimination / validation
-    write deterministic outcome events
-    compile updated priors offline · review · commit
+1. **Report** — per-operator follow-up statistics (counts first, rates
+   derived, Wilson lower bounds for ranking).
+2. **Shadow ranking** — given already-applicable candidates, what the
+   empirical ordering would have preferred, with the lexicographic key
+   disclosed. Report-only: nothing is reordered, inserted, or suppressed.
+3. **Promotion path** — only after a paired referee shows the shadow
+   ordering beating declared orderings at equal task success may the
+   ranking be used online, and then only as a conservative tie-break
+   between actions already equivalent under hard semantics.
 
-Design laws (all enforced here, tested in tests/test_plan_value.py):
+What this module deliberately does NOT do (design-review verdict,
+2026-07-19): no weighted utility scalar, no fractional evidence-coverage
+arithmetic, no confidence floats, no automatic stopping, no batch
+scheduling, no language-partitioned cells. The evidence-dimension
+vocabulary survives only as *descriptive* plan metadata (``requires``
+floors are displayed, never enforced) — converting a qualitative model
+into a quantitative type system waits until the quantities predict
+something.
 
-- **Advisory only.** Hard constraints — safety, capability tier, plan
-  validity, precision requirements, freshness, evidence-contract floors,
-  explicit budgets — are applied BEFORE scoring; a historical prior can
-  never resurrect a rejected action.
-- **Deterministic + explainable.** Every constant is module-visible;
-  every score carries a full explanation record; sorting is total
-  (score desc, confidence desc, op name asc). No hidden adaptation:
-  runtime never mutates the committed policy.
-- **Honest priors.** Low-sample priors shrink toward the global prior and
-  then toward the built-in conservative default; the backoff level is
-  disclosed. Precision classes discount expected gain — a textual
-  fallback is never scored like exact semantic evidence.
+Ranking is lexicographic, not weighted soup:
+
+    1. hard constraints (caller-side: safety, tier, validity, contract)
+    2. precision class (exact/semantic before structural before textual)
+    3. freshness class (fresh before stale)
+    4. Wilson lower bound of exact-use rate, descending
+    5. Wilson lower bound of validation-association rate, descending
+    6. equivalent-requery rate, ascending
+    7. median visible tokens, ascending
+    8. median cost ms, ascending
+    9. operator name, ascending
+
+The Wilson lower bound is the entire sample-size treatment: 2/2 cannot
+outrank 68/84, and no confidence-class or shrinkage table exists.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 # ------------------------------------------------- evidence dimensions
-
-#: Closed evidence-dimension vocabulary (Part 7). Operators declare what
-#: they provide; objectives declare required floors.
+#
+# DESCRIPTIVE vocabulary only: plan_ir validates `requires` against it and
+# the shadow report displays UNMET floors as information. Nothing scores,
+# gates, or stops on these values.
 EVIDENCE_DIMENSIONS = (
     "topology",
     "changedness",
@@ -46,8 +61,6 @@ EVIDENCE_DIMENSIONS = (
     "freshness",
 )
 
-#: Conservative required-floor defaults by objective kind, used when a plan
-#: predates the optional ``requires`` field (old plans keep validating).
 DEFAULT_FLOORS: dict[str, dict[str, float]] = {
     "diagnose": {
         "dynamic_failure": 1.0,
@@ -62,7 +75,8 @@ DEFAULT_FLOORS: dict[str, dict[str, float]] = {
 
 def required_floors(objective_kind: str, requires: Any = None) -> dict[str, float]:
     """Floors from an explicit ``requires`` list (validated additively by
-    plan_ir) or the conservative default for the objective kind."""
+    plan_ir) or the conservative default for the objective kind. Display
+    semantics only."""
     if requires:
         floors: dict[str, float] = {}
         for row in requires:
@@ -74,53 +88,31 @@ def required_floors(objective_kind: str, requires: Any = None) -> dict[str, floa
     return dict(DEFAULT_FLOORS.get(objective_kind, DEFAULT_FLOORS["default"]))
 
 
-# ------------------------------------------------------------- constants
-#
-# Every constant that shapes a score lives HERE, visible and reviewable.
-# The committed [plan_value] policy table may override the two thresholds.
+def realized_coverage(steps: Any, node_rows: Mapping[str, int] | None) -> dict[str, float]:
+    """Coverage credited only for ops whose node produced >= 1 row — a
+    declared ``provides`` beside an empty join is a claim, not evidence.
+    Used exclusively for the UNMET-floors display line."""
+    from ctx import plan_ops
 
-WEIGHTS: dict[str, float] = {
-    "coverage": 1.0,
-    "landing": 0.6,
-    "discrimination": 0.5,
-    "validation": 0.8,
-    "narrowing": 0.4,
-    "redundancy": 0.5,   # subtracted
-    "reversal": 0.7,     # subtracted
-}
-CONFIDENCE_FACTOR = {"high": 1.0, "medium": 0.85, "low": 0.6, "insufficient": 0.4}
-#: Linear shrinkage toward the fallback prior by confidence class.
-SHRINKAGE = {"high": 1.0, "medium": 0.7, "low": 0.35, "insufficient": 0.0}
-PRECISION_WEIGHT = {"exact": 1.0, "semantic": 1.0, "structural": 0.85, "textual": 0.6}
-FRESHNESS_WEIGHT = {"fresh": 1.0, "stale": 0.6}
-#: Deterministic per-cost-class estimates (plan_ir.COST_UNITS lineage).
-COST_MS = {"index": 5, "scan": 40, "process": 200, "test": 1200}
-COST_VISIBLE_TOK = {"index": 30, "scan": 60, "process": 120, "test": 200}
-LOCAL_MS_WEIGHT = 0.05
-VISIBLE_TOKEN_WEIGHT = 1.0
-PROCESS_SPAWN_PENALTY = 20.0  # applied to process/test cost classes
-REFINEMENT_PENALTY = 10.0     # applied to execute-class ops
-EPSILON = 0.1
-MIN_ACTION_VALUE = 0.25       # stopping threshold (policy-overridable)
-MARGINAL_GAIN_THRESHOLD = 0.05  # batch admission floor
+    covered: dict[str, float] = {}
+    rows = dict(node_rows or {})
+    credited: set[str] = set()
+    for step in steps:
+        if rows.get(step.id, 0) < 1 or step.op in credited:
+            continue
+        spec = plan_ops.OPS.get(step.op)
+        if spec is None or not spec.provides:
+            continue
+        credited.add(step.op)
+        for dim, v in spec.provides.items():
+            covered[dim] = min(1.0, covered.get(dim, 0.0) + float(v))
+    return covered
 
-#: The built-in conservative prior — the bottom of every backoff chain.
-BUILTIN_PRIOR: dict[str, Any] = {
-    "landing_rate": 0.30,
-    "narrowing_rate": 0.20,
-    "discrimination_rate": 0.15,
-    "validation_rate": 0.10,
-    "retrieval_rate": 0.10,
-    "equivalent_requery_rate": 0.10,
-    "redundancy_rate": 0.15,
-    "reversal_rate": 0.05,
-    "observations": 0,
-    "confidence": "insufficient",
-}
 
-#: Precision class per logical-op prefix (longest prefix wins). Physical
-#: engine fallbacks may degrade further at runtime; this is the op's
-#: declared ceiling. Language-specific logic never lives here.
+# --------------------------------------------------------- precision class
+
+#: Precision class per logical-op prefix (longest prefix wins). The op's
+#: declared ceiling; physical fallbacks may degrade further at runtime.
 PRECISION_OF_OP: tuple[tuple[str, str], ...] = (
     ("semantic.", "semantic"),
     ("ast.", "structural"),
@@ -135,6 +127,7 @@ PRECISION_OF_OP: tuple[tuple[str, str], ...] = (
     ("test.", "exact"),
     ("q.", "exact"),
 )
+_PRECISION_RANK = {"exact": 0, "semantic": 0, "structural": 1, "textual": 2}
 
 
 def precision_of(op: str) -> str:
@@ -146,13 +139,24 @@ def precision_of(op: str) -> str:
     return best
 
 
-# ----------------------------------------------------------- prior access
+# ----------------------------------------------------------- follow-up stats
+
+
+def wilson_lower_bound(successes: int, n: int, z: float = 1.96) -> float:
+    """Wilson score interval lower bound — the standard small-sample
+    correction. 0.0 when n == 0 (no observations claim nothing)."""
+    if n <= 0:
+        return 0.0
+    p = successes / n
+    denom = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)
+    return max(0.0, (centre - margin) / denom)
 
 
 def load_priors(ws: Any) -> dict[str, Any]:
-    """Read the committed ``[plan_value]`` table from ctx-policy.toml.
-    Fail-open to {} — absent priors mean built-in conservative defaults.
-    Runtime only ever READS this file."""
+    """Read the committed ``[plan_value]`` follow-up table from
+    ctx-policy.toml. Fail-open to {}. Runtime only ever READS this file."""
     try:
         import tomllib
 
@@ -166,377 +170,163 @@ def load_priors(ws: Any) -> dict[str, Any]:
         return {}
 
 
-def lookup_prior(
-    priors: Mapping[str, Any],
-    op: str,
-    *,
-    language: str | None = None,
-    precision: str | None = None,
-    min_observations: int | None = None,
-) -> tuple[dict[str, Any], str]:
-    """Backoff chain (Part 10), each level skipped when absent or below the
-    observation floor: ``op|language|precision`` → ``op|precision`` → ``op``
-    → global ``*`` → built-in. Returns (prior_row, disclosed_level)."""
-    min_obs = int(
-        min_observations
-        if min_observations is not None
-        else priors.get("minimum_observations", 5)
-    )
-    chain: list[tuple[str, str]] = []
-    if language and precision:
-        chain.append((f"{op}|{language}|{precision}", "op+language+precision"))
-    if precision:
-        chain.append((f"{op}|{precision}", "op+precision"))
-    chain.append((op, "op"))
-    chain.append(("*", "global"))
-    for key, level in chain:
-        row = priors.get(key) if isinstance(priors, Mapping) else None
-        if isinstance(row, Mapping) and int(row.get("observations", 0)) >= min_obs:
-            return dict(row), level
-    return dict(BUILTIN_PRIOR), "builtin"
-
-
-def shrink_prior(row: Mapping[str, Any], fallback: Mapping[str, Any]) -> dict[str, float]:
-    """Deterministic linear shrinkage: low-confidence rates move toward the
-    fallback prior (Part 6: 'low-confidence priors strongly shrunk')."""
-    lam = SHRINKAGE.get(str(row.get("confidence", "insufficient")), 0.0)
-    out: dict[str, float] = {}
-    for key in BUILTIN_PRIOR:
-        if not key.endswith("_rate"):
-            continue
-        base = float(fallback.get(key, BUILTIN_PRIOR[key]))
-        obs = float(row.get(key, base))
-        out[key] = round(base + lam * (obs - base), 4)
-    return out
-
-
-# ------------------------------------------------------------ candidates
-
-
 @dataclass(frozen=True)
 class CandidateAction:
-    """One applicable logical action. Hard-constraint filtering happens
-    BEFORE construction — a candidate in this list is already safe, tier-
-    valid, fresh enough, and within budget to consider."""
+    """One already-applicable action. Hard-constraint filtering happens
+    BEFORE construction — a candidate here is safe, tier-valid, and within
+    budget to consider. The ranking never resurrects a rejected action."""
 
     op: str
-    provides: Mapping[str, float] = field(default_factory=dict)
     cost_class: str = "scan"
     klass: str = "observe"
-    language: str | None = None
     fresh: bool = True
 
 
 @dataclass(frozen=True)
-class ScoredAction:
+class FollowupRank:
+    """One ranked candidate with the full lexicographic key disclosed —
+    the explanation IS the key, no scalar score exists to hide behind."""
+
     op: str
-    score: float
-    coverage_gain: float
-    expected: dict[str, float]
-    prior_confidence: str
-    prior_observations: int
-    backoff_level: str
     precision: str
-    estimated_ms: int
-    estimated_visible_tokens: int
-    effective_cost: float
-    missing_dimensions: tuple[str, ...]
+    fresh: bool
+    n: int
+    used_exactly: int
+    validation_associated: int
+    equivalent_requery: int
+    censored: int
+    wilson_used: float
+    wilson_validation: float
+    requery_rate: float
+    median_visible_tokens: int
+    median_cost_ms: int
 
-
-def candidate_from_spec(op_name: str, spec: Any, **kw: Any) -> CandidateAction:
-    """Build a candidate from a registered OpSpec (single source of truth
-    for provides/cost/class)."""
-    return CandidateAction(
-        op=op_name,
-        provides=dict(getattr(spec, "provides", None) or {}),
-        cost_class=str(getattr(spec, "cost", "scan")),
-        klass=str(getattr(spec, "klass", "observe")),
-        **kw,
-    )
-
-
-def coverage_gain(
-    provides: Mapping[str, float],
-    coverage: Mapping[str, float],
-    floors: Mapping[str, float],
-) -> float:
-    """Marginal expected coverage toward the still-missing floors."""
-    gain = 0.0
-    for dim, floor in floors.items():
-        cur = float(coverage.get(dim, 0.0))
-        if cur >= floor:
-            continue
-        gain += max(0.0, min(floor, cur + float(provides.get(dim, 0.0))) - cur)
-    return round(gain, 4)
-
-
-def score_action(
-    action: CandidateAction,
-    coverage: Mapping[str, float],
-    floors: Mapping[str, float],
-    priors: Mapping[str, Any],
-) -> ScoredAction:
-    """The deterministic action-value function (Part 6)."""
-    precision = precision_of(action.op)
-    global_row, _ = lookup_prior(priors, "*", min_observations=1)
-    raw_prior, level = lookup_prior(
-        priors, action.op, language=action.language, precision=precision
-    )
-    fallback = global_row if level != "builtin" else BUILTIN_PRIOR
-    rates = shrink_prior(raw_prior, fallback)
-
-    cov = coverage_gain(action.provides, coverage, floors)
-    novelty = 1.0 - rates["redundancy_rate"]
-    # Relevance gate: the prior-rate terms measure how useful this op's
-    # evidence historically was GIVEN the investigation needed it. An action
-    # contributing nothing toward the still-missing floors earns no rate
-    # credit — otherwise a high-landing op would keep scoring above the
-    # stopping threshold forever after the floors are met (priors are a
-    # ranking input, never a reason to keep acquiring satisfied evidence).
-    relevance = 1.0 if cov > 0 else 0.0
-    expected_gain = (
-        cov * WEIGHTS["coverage"]
-        + relevance
-        * (
-            rates["landing_rate"] * WEIGHTS["landing"]
-            + rates["discrimination_rate"] * WEIGHTS["discrimination"]
-            + rates["validation_rate"] * WEIGHTS["validation"]
-            + rates["narrowing_rate"] * WEIGHTS["narrowing"]
-            - rates["redundancy_rate"] * WEIGHTS["redundancy"]
-            - rates["reversal_rate"] * WEIGHTS["reversal"]
+    def sort_key(self) -> tuple:
+        return (
+            _PRECISION_RANK.get(self.precision, 3),
+            0 if self.fresh else 1,
+            -round(self.wilson_used, 4),
+            -round(self.wilson_validation, 4),
+            round(self.requery_rate, 4),
+            self.median_visible_tokens,
+            self.median_cost_ms,
+            self.op,
         )
-    )
-    conf = str(raw_prior.get("confidence", "insufficient"))
-    effective_gain = (
-        expected_gain
-        * PRECISION_WEIGHT[precision]
-        * FRESHNESS_WEIGHT["fresh" if action.fresh else "stale"]
-        * novelty
-        * CONFIDENCE_FACTOR.get(conf, CONFIDENCE_FACTOR["insufficient"])
-    )
-    est_ms = COST_MS.get(action.cost_class, COST_MS["scan"])
-    est_tok = COST_VISIBLE_TOK.get(action.cost_class, COST_VISIBLE_TOK["scan"])
-    effective_cost = (
-        LOCAL_MS_WEIGHT * est_ms
-        + VISIBLE_TOKEN_WEIGHT * est_tok
-        + (PROCESS_SPAWN_PENALTY if action.cost_class in ("process", "test") else 0.0)
-        + (REFINEMENT_PENALTY if action.klass == "execute" else 0.0)
-    )
-    score = effective_gain / max(effective_cost, EPSILON) * 100.0
-    missing = tuple(
-        sorted(d for d, f in floors.items() if float(coverage.get(d, 0.0)) < f)
-    )
-    return ScoredAction(
-        op=action.op,
-        score=round(score, 2),
-        coverage_gain=cov,
-        expected={
-            "landing": round(rates["landing_rate"], 2),
-            "discrimination": round(rates["discrimination_rate"], 2),
-            "validation": round(rates["validation_rate"], 2),
-            "narrowing": round(rates["narrowing_rate"], 2),
-            "redundancy": round(rates["redundancy_rate"], 2),
-        },
-        prior_confidence=conf,
-        prior_observations=int(raw_prior.get("observations", 0)),
-        backoff_level=level,
-        precision=precision,
-        estimated_ms=est_ms,
-        estimated_visible_tokens=est_tok,
-        effective_cost=round(effective_cost, 2),
-        missing_dimensions=missing,
-    )
 
 
-_CONF_RANK = {"high": 3, "medium": 2, "low": 1, "insufficient": 0}
+#: Deterministic fallback cost estimates by cost class, used when the
+#: compiled table carries no observed medians for an operator.
+FALLBACK_MS = {"index": 5, "scan": 40, "process": 200, "test": 1200}
+FALLBACK_TOK = {"index": 30, "scan": 60, "process": 120, "test": 200}
 
 
-def rank_actions(
+def _stat_row(priors: Mapping[str, Any], op: str) -> Mapping[str, Any]:
+    row = priors.get(op)
+    return row if isinstance(row, Mapping) else {}
+
+
+def rank_followup(
     candidates: list[CandidateAction],
-    coverage: Mapping[str, float],
-    floors: Mapping[str, float],
     priors: Mapping[str, Any],
-) -> list[ScoredAction]:
-    """Deterministic total order (Part 8): score desc, confidence desc,
-    op name asc."""
-    scored = [score_action(a, coverage, floors, priors) for a in candidates]
-    return sorted(
-        scored,
-        key=lambda s: (-s.score, -_CONF_RANK.get(s.prior_confidence, 0), s.op),
-    )
+) -> list[FollowupRank]:
+    """Shadow ranking of already-applicable candidates by the lexicographic
+    rule. Deterministic and total; ties end at the operator name."""
+    ranked: list[FollowupRank] = []
+    for c in candidates:
+        row = _stat_row(priors, c.op)
+        n = int(row.get("observations", 0))
+        used = int(row.get("used_exactly", 0))
+        val = int(row.get("validation_associated", 0))
+        req = int(row.get("equivalent_requery", 0))
+        cen = int(row.get("censored", 0))
+        non_censored = max(0, n - cen)
+        ranked.append(
+            FollowupRank(
+                op=c.op,
+                precision=precision_of(c.op),
+                fresh=c.fresh,
+                n=n,
+                used_exactly=used,
+                validation_associated=val,
+                equivalent_requery=req,
+                censored=cen,
+                # Positive numerators over ALL observations (censoring can
+                # only under-count positives — conservative); the negative
+                # requery rate excludes censored from its denominator.
+                wilson_used=round(wilson_lower_bound(used, n), 4),
+                wilson_validation=round(wilson_lower_bound(val, n), 4),
+                requery_rate=round(req / non_censored, 4) if non_censored else 0.0,
+                median_visible_tokens=int(
+                    row.get("median_visible_tokens", FALLBACK_TOK.get(c.cost_class, 60))
+                ),
+                median_cost_ms=int(
+                    row.get("median_cost_ms", FALLBACK_MS.get(c.cost_class, 40))
+                ),
+            )
+        )
+    return sorted(ranked, key=lambda r: r.sort_key())
 
 
-# ---------------------------------------------------------- batch + stop
-
-
-def apply_expected_coverage(
-    provides: Mapping[str, float], coverage: dict[str, float]
-) -> dict[str, float]:
-    out = dict(coverage)
-    for dim, v in provides.items():
-        out[dim] = min(1.0, out.get(dim, 0.0) + float(v))
-    return out
-
-
-def realized_coverage(steps: Any, node_rows: Mapping[str, int]) -> dict[str, float]:
-    """Coverage REALIZED by executed plan nodes: an op's declared
-    ``provides`` counts only when its node produced at least one row —
-    a declared causality of 1.0 beside an empty join is a claim, not
-    evidence. A node absent from ``node_rows`` (skipped/errored) counts
-    as empty; each op is credited at most once."""
-    from ctx import plan_ops
-
-    coverage: dict[str, float] = {}
-    credited: set[str] = set()
-    for step in steps:
-        if step.op in credited or int(node_rows.get(step.id) or 0) < 1:
-            continue
-        spec = plan_ops.OPS.get(step.op)
-        if spec is not None and spec.provides:
-            coverage = apply_expected_coverage(spec.provides, coverage)
-            credited.add(step.op)
-    return coverage
-
-
-def _conflicts(a: CandidateAction, b: CandidateAction) -> bool:
-    """Deterministic conflict rule: same op, or two expensive actions that
-    provide overlapping dimensions (mutually substitutable — never
-    parallelized merely because both score positive)."""
-    if a.op == b.op:
-        return True
-    if a.cost_class in ("process", "test") and b.cost_class in ("process", "test"):
-        return bool(set(a.provides) & set(b.provides))
-    return False
-
-
-def select_batch(
-    candidates: list[CandidateAction],
-    coverage: Mapping[str, float],
-    floors: Mapping[str, float],
-    priors: Mapping[str, Any],
+def render_shadow(
+    declared_first: str | None,
+    ranked: list[FollowupRank],
     *,
-    budget_units: int = 200,
-    marginal_threshold: float = MARGINAL_GAIN_THRESHOLD,
-) -> list[ScoredAction]:
-    """Greedy deterministic batch (Part 8 pseudo-code, verbatim semantics):
-    admit by rank while marginal coverage stays above threshold, no
-    conflicts, and the plan_ir cost-unit budget holds."""
-    from ctx.plan_ir import COST_UNITS
-
-    by_op = {c.op: c for c in candidates}
-    ranked = rank_actions(candidates, coverage, floors, priors)
-    selected: list[ScoredAction] = []
-    selected_actions: list[CandidateAction] = []
-    covered = dict(coverage)
-    spent = 0
-    for s in ranked:
-        cand = by_op[s.op]
-        marginal = coverage_gain(cand.provides, covered, floors)
-        if selected and marginal < marginal_threshold:
-            continue
-        if any(_conflicts(cand, prev) for prev in selected_actions):
-            continue
-        units = COST_UNITS.get(cand.cost_class, COST_UNITS["scan"])
-        if spent + units > budget_units:
-            continue
-        selected.append(s)
-        selected_actions.append(cand)
-        covered = apply_expected_coverage(cand.provides, covered)
-        spent += units
-    return selected
-
-
-def stopping_decision(
-    ranked: list[ScoredAction],
-    coverage: Mapping[str, float],
-    floors: Mapping[str, float],
-    *,
-    threshold: float | None = None,
-    priors: Mapping[str, Any] | None = None,
-) -> tuple[bool, str]:
-    """Advisory stopping rule (Part 9): stop when every floor is met AND no
-    remaining action beats the value threshold. Never suppresses mandatory
-    verifier steps or explicit user requests — the caller owns that."""
-    thr = float(
-        threshold
-        if threshold is not None
-        else (priors or {}).get("min_action_value", MIN_ACTION_VALUE)
-    )
-    lines = ["evidence acquisition receipt", "required floors:"]
-    floors_met = True
-    for dim in sorted(floors):
-        cur = float(coverage.get(dim, 0.0))
-        met = cur >= floors[dim]
-        floors_met &= met
-        lines.append(f"  {dim:<18} {cur:.2f} / {floors[dim]:.2f}" + ("" if met else "  UNMET"))
-    best = ranked[0] if ranked else None
-    if best is not None:
-        lines += [
-            "best remaining action:",
-            f"  {best.op}",
-            f"  value score: {best.score:.2f}",
-        ]
-    lines += ["policy threshold:", f"  {thr:.2f}"]
-    stop = floors_met and (best is None or best.score < thr)
-    lines.insert(0, "evidence acquisition stopped" if stop else "evidence acquisition continues")
-    return stop, "\n".join(lines)
-
-
-# ---------------------------------------------------------- explanation
-
-
-def render_ranking(
-    ranked: list[ScoredAction], *, selected: "ScoredAction | None" = None
+    floors: Mapping[str, float] | None = None,
+    coverage: Mapping[str, float] | None = None,
 ) -> str:
-    """The inspectable score explanation (Part 6). Two decimals — never
-    more precision than the priors support."""
+    """The shadow report (report only — never reorders): declared vs
+    shadow-preferred with the lexicographic reason, per-candidate counts,
+    and the descriptive floors display. Low-yield is an advisory sentence,
+    never a suppression."""
+    lines = ["── operator follow-up shadow (report only; never reorders) ──"]
+    if floors:
+        lines.append("declared evidence floors (descriptive):")
+        cov = coverage or {}
+        for dim in sorted(floors):
+            cur = float(cov.get(dim, 0.0))
+            met = "" if cur >= floors[dim] else "  UNMET"
+            lines.append(f"  {dim:<18} {cur:.2f} / {floors[dim]:.2f}{met}")
     if not ranked:
-        return "no applicable candidate actions"
-    sel = selected or ranked[0]
-    out = [
-        f"candidate action: {sel.op}",
-        "applicable: yes",
-        "missing dimensions: " + (", ".join(sel.missing_dimensions) or "(none)"),
-        f"prior confidence: {sel.prior_confidence} "
-        f"({sel.prior_observations} observations · backoff: {sel.backoff_level})",
-        "expected:",
-        f"  landing        {sel.expected['landing']:.2f}",
-        f"  discrimination {sel.expected['discrimination']:.2f}",
-        f"  validation     {sel.expected['validation']:.2f}",
-        f"  redundancy     {sel.expected['redundancy']:.2f}",
-        "estimated cost:",
-        f"  local          {sel.estimated_ms} ms",
-        f"  visible        {sel.estimated_visible_tokens} tokens",
-        "value score:",
-        f"  {sel.score:.2f}",
-    ]
-    others = [s for s in ranked if s.op != sel.op]
-    if others:
-        out.append("selected over:")
-        for s in others[:6]:
-            out.append(f"  {s.op:<24} {s.score:.2f}")
-    return "\n".join(out)
+        lines.append("no applicable candidates to rank")
+        return "\n".join(lines)
+    shadow = ranked[0]
+    lines.append(f"declared first: {declared_first or '(none declared)'}")
+    lines.append(f"shadow preferred: {shadow.op}")
+    agree = declared_first == shadow.op
+    lines.append(f"agreement: {'yes' if agree else 'no'}")
+    lines.append(
+        "reason (lexicographic): "
+        f"precision={shadow.precision} · "
+        f"wilson(used {shadow.used_exactly}/{shadow.n})={shadow.wilson_used:.2f} · "
+        f"wilson(valid {shadow.validation_associated}/{shadow.n})={shadow.wilson_validation:.2f} · "
+        f"requery={shadow.requery_rate:.2f} · "
+        f"~{shadow.median_visible_tokens} tok · ~{shadow.median_cost_ms} ms"
+    )
+    lines.append(f"{'operator':<28} {'n':>4} {'used':>5} {'valid':>5} {'requery':>7} {'tok':>5} {'ms':>6}")
+    for r in ranked[:8]:
+        lines.append(
+            f"{r.op:<28} {r.n:>4} {r.used_exactly:>5} {r.validation_associated:>5}"
+            f" {r.equivalent_requery:>7} {r.median_visible_tokens:>5} {r.median_cost_ms:>6}"
+        )
+    if all(r.wilson_used == 0.0 for r in ranked):
+        lines.append(
+            "advisory: no operator has demonstrated follow-up yet — "
+            "additional evidence appears low-yield (nothing is suppressed)"
+        )
+    return "\n".join(lines)
 
 
 __all__ = [
     "EVIDENCE_DIMENSIONS",
     "DEFAULT_FLOORS",
     "required_floors",
-    "WEIGHTS",
-    "BUILTIN_PRIOR",
-    "CandidateAction",
-    "ScoredAction",
-    "candidate_from_spec",
-    "precision_of",
-    "load_priors",
-    "lookup_prior",
-    "shrink_prior",
-    "coverage_gain",
-    "score_action",
-    "rank_actions",
-    "select_batch",
-    "apply_expected_coverage",
     "realized_coverage",
-    "stopping_decision",
-    "render_ranking",
+    "PRECISION_OF_OP",
+    "precision_of",
+    "wilson_lower_bound",
+    "load_priors",
+    "CandidateAction",
+    "FollowupRank",
+    "rank_followup",
+    "render_shadow",
 ]

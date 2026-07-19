@@ -56,12 +56,11 @@ def test_empty_join_keeps_floor_unmet_and_advisory_continues(
 
     plan = plan_ir.parse_plan(PLAN)
     floors = pv.required_floors(plan.objective_kind, plan.requires)
-    # The bug being fixed: declared provides alone satisfy the floor.
-    declared = pv.apply_expected_coverage(plan_ops.OPS["evidence.join"].provides, {})
-    assert declared["causality"] >= floors["causality"]
-    # Realized coverage does not — the advisory must keep going.
+    # The bug being fixed: declared provides alone would satisfy the floor.
+    assert plan_ops.OPS["evidence.join"].provides["causality"] >= floors["causality"]
+    # Realized coverage does not — the shadow report shows the floor UNMET
+    # (display only: the ponytail cut removed the stopping verdict).
     coverage = pv.realized_coverage(plan.steps, node_rows)
-    stop, receipt = pv.stopping_decision([], coverage, floors)
-    assert not stop
-    assert "evidence acquisition continues" in receipt
-    assert "UNMET" in receipt
+    report = pv.render_shadow("evidence.join", [], floors=floors, coverage=coverage)
+    assert "UNMET" in report
+    assert "report only" in report
