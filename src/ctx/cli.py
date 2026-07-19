@@ -167,6 +167,17 @@ def _main_slow(args: list[str]) -> int:
     p_impact.add_argument("symbol", help="name or Class.method dotted name")
     p_impact.add_argument("--depth", type=int, default=6, help="max hops (≤6)")
 
+    p_q = sub.add_parser(
+        "q", help="total pipeline algebra: '<stage> | <stage> | …' over typed streams"
+    )
+    p_q.add_argument(
+        "query",
+        help="e.g. 'refs TokenBucket | group file | top 3 | get --context 5'",
+    )
+    p_q.add_argument(
+        "--trace", action="store_true", help="append per-stage row provenance"
+    )
+
     p_policy = sub.add_parser("policy", help="compiled steering policy")
     pol_sub = p_policy.add_subparsers(dest="policy_cmd", required=True)
     p_pc = pol_sub.add_parser("compile", help="compile policy from telemetry")
@@ -374,6 +385,8 @@ def _main_slow(args: list[str]) -> int:
             else:
                 print(cmd_impact(store, ws, ns.symbol, depth=ns.depth))
             return 0
+        if ns.cmd == "q":
+            return _cmd_q(ws, ns)
         if ns.cmd == "policy":
             return _cmd_policy(ws, ns)
         if ns.cmd == "init":
@@ -855,6 +868,28 @@ def _cmd_code(ws, ns) -> int:
         print(f"ctx {ns.cmd}: {e}", file=sys.stderr)
         return 1
     return _emit_retrieval(ws, store, out)
+
+
+def _cmd_q(ws, ns) -> int:
+    """`ctx q '<stage> | …'` — the M-H composition algebra (docs/ALGEBRA.md).
+    Total by construction (no loops, ≤8 stages), so its cost is statically
+    boundable — the property that makes it MCP-tier-safe later (no MCP
+    wiring this wave). Emission rides the same engagement filter + bounded
+    backstop as the other verbs."""
+    from ctx.query import run_query
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    text, code = run_query(ws, store, ns.query, trace=ns.trace)
+    if code != 0:
+        print(text, file=sys.stderr)
+        return code
+    plan = _delivery_plan(
+        ws, outcome="success", family="q",
+        base_tokens=ws.config.budgets.result_tokens,
+    )
+    _emit_bounded_digest(ws, store, text, plan)
+    return 0
 
 
 def _cmd_policy(ws, ns) -> int:
