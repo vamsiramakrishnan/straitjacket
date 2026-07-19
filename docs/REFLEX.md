@@ -1,3 +1,10 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs/reflex.svg">
+  <img src="../assets/readme/docs/reflex-light.svg" width="100%" alt="Reflex — closed-loop conditionality. Architecture work, doc 2 of 4.">
+</picture>
+
+<sub><a href="README.md">« straitjacket / docs</a></sub>
+
 # Reflex: closed-loop conditionality
 
 **Date:** 2026-07-18 · design doc for the intelligence layer, written

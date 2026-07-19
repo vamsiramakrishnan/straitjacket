@@ -1,0 +1,135 @@
+/* straitjacket docs — neo-brutalist theme.
+   Space Grotesk display + JetBrains Mono, square corners, hard offset
+   shadows, amber/green on near-black. */
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/700.css';
+
+:root {
+  --sl-font: 'Space Grotesk Variable', 'Space Grotesk', sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* palette (dark) */
+  --sl-color-accent-low: #3a2c05;
+  --sl-color-accent: #f0b429;
+  --sl-color-accent-high: #f8d47a;
+  --sl-color-white: #e6edf3;
+  --sl-color-gray-1: #c9d1d9;
+  --sl-color-gray-2: #7d8590;
+  --sl-color-gray-3: #58606a;
+  --sl-color-gray-4: #30363d;
+  --sl-color-gray-5: #232b36;
+  --sl-color-gray-6: #0f141b;
+  --sl-color-black: #0a0c10;
+
+  --sj-shadow: 6px 6px 0 var(--sl-color-accent);
+  --sj-shadow-sm: 4px 4px 0 var(--sl-color-gray-4);
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #fdeec3;
+  --sl-color-accent: #b07d0a;
+  --sl-color-accent-high: #6b4c05;
+  --sl-color-white: #0a0c10;
+  --sl-color-gray-1: #1c232d;
+  --sl-color-gray-2: #30363d;
+  --sl-color-gray-3: #58606a;
+  --sl-color-gray-4: #c9d1d9;
+  --sl-color-gray-5: #e2e7ed;
+  --sl-color-gray-6: #f4f6f8;
+  --sl-color-black: #ffffff;
+  --sj-shadow: 6px 6px 0 #f0b429;
+  --sj-shadow-sm: 4px 4px 0 var(--sl-color-gray-4);
+}
+
+/* display type: tight, confident */
+h1, h2, h3, .site-title {
+  font-family: var(--sl-font);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.hero h1 {
+  font-size: clamp(3rem, 8vw, 5.5rem);
+  line-height: 0.95;
+}
+
+.hero .tagline {
+  font-family: var(--sl-font-mono);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+/* brutalist edges: square everything, hard shadows */
+.card,
+.sl-markdown-content aside,
+.starlight-aside,
+article.card {
+  border-radius: 0 !important;
+  border: 2px solid var(--sl-color-white);
+  box-shadow: var(--sj-shadow);
+}
+
+.card .title {
+  font-family: var(--sl-font);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.sl-markdown-content code:not(pre code) {
+  border-radius: 0;
+  border: 1px solid var(--sl-color-gray-4);
+  padding: 0.1em 0.35em;
+}
+
+.sl-markdown-content pre,
+.expressive-code .frame pre {
+  border-radius: 0 !important;
+  border: 2px solid var(--sl-color-gray-4) !important;
+  box-shadow: var(--sj-shadow-sm);
+}
+
+.sl-markdown-content table {
+  border: 2px solid var(--sl-color-gray-4);
+}
+
+.sl-markdown-content blockquote {
+  border-left: 6px solid var(--sl-color-accent);
+  border-radius: 0;
+  font-family: var(--sl-font-mono);
+  font-size: 0.95em;
+}
+
+/* buttons: chunky */
+.sl-link-button,
+a.action {
+  border-radius: 0 !important;
+  font-family: var(--sl-font-mono);
+  font-weight: 700;
+}
+
+.sl-link-button.primary,
+a.action.primary {
+  border: 2px solid var(--sl-color-white);
+  box-shadow: 4px 4px 0 var(--sl-color-white);
+}
+
+/* sidebar: mono labels, amber current marker */
+nav.sidebar .top-level a,
+#starlight__sidebar a {
+  font-family: var(--sl-font-mono);
+  font-size: 0.85rem;
+  border-radius: 0;
+}
+
+#starlight__sidebar a[aria-current='page'] {
+  background: transparent;
+  color: var(--sl-color-accent);
+  border-left: 4px solid var(--sl-color-accent);
+  font-weight: 700;
+}
+
+/* theme-aware diagram swap (tracks the Starlight toggle) */
+.sj-light { display: none !important; }
+:root[data-theme='light'] .sj-light { display: block !important; }
+:root[data-theme='light'] .sj-dark { display: none !important; }

@@ -1,3 +1,10 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs/algebra.svg">
+  <img src="../assets/readme/docs/algebra-light.svg" width="100%" alt="Facts and the composition algebra. Architecture work, doc 4 of 4.">
+</picture>
+
+<sub><a href="README.md">« straitjacket / docs</a></sub>
+
 # Facts and the composition algebra
 
 **Date:** 2026-07-19 · design for the post-EDC wave. Four questions

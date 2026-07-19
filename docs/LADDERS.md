@@ -1,3 +1,10 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/readme/docs/ladders.svg">
+  <img src="../assets/readme/docs/ladders-light.svg" width="100%" alt="Ladders — the conditionality audit. Architecture work, doc 1 of 4.">
+</picture>
+
+<sub><a href="README.md">« straitjacket / docs</a></sub>
+
 # Ladders: the conditionality audit
 
 **Date:** 2026-07-18 · analysis pass over every tiered/conditional construct
