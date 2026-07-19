@@ -60,11 +60,19 @@ def test_probe_rejects_shadow_utils_sg(tmp_path, monkeypatch):
     sg.chmod(sg.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", str(bindir))
     astgrep.binary.cache_clear()
+    astgrep.lib_available.cache_clear()
     try:
         assert astgrep.binary() is None
-        assert astgrep.engine_id() == "regex-fallback"
+        # Binary absent: identity is the library rung if present, else regex.
+        expected = (
+            f"ast-grep-py {astgrep._lib_version()}"
+            if astgrep.lib_available()
+            else "regex-fallback"
+        )
+        assert astgrep.engine_id() == expected
     finally:
         astgrep.binary.cache_clear()
+        astgrep.lib_available.cache_clear()
 
 
 def test_fallback_regex_derivation():
@@ -82,10 +90,15 @@ def test_ast_search_fallback_is_labeled_and_sorted(git_ws):
     from ctx import astgrep
 
     astgrep.binary.cache_clear()
+    astgrep.lib_available.cache_clear()
     ws = make_ws(git_ws)
     store = make_store(ws)
+    # This is the bottom-rung shape: it only holds when neither the binary
+    # nor the ast-grep-py library is present to intercept first.
     if astgrep.available():  # environment has a real binary: not this test's shape
         pytest.skip("real ast-grep present")
+    if astgrep.lib_available():  # library rung would intercept before regex
+        pytest.skip("ast-grep-py library present (library rung, not regex)")
     rows, meta = astgrep.ast_search(ws, store, "old_client.fetch($X)")
     assert meta["engine"] == "regex-fallback"
     assert "textual" in meta["precision"]
@@ -196,6 +209,65 @@ def test_rewrite_without_engine_declines(git_ws, monkeypatch):
             astgrep.rewrite_preview(ws, store, "a($X)", "b($X)")
     finally:
         astgrep.binary.cache_clear()
+
+
+def test_ast_search_lib_rung_is_structural_and_sorted(git_ws, monkeypatch):
+    """Middle rung: with the binary off PATH but the ast-grep-py library
+    present, ast.search yields structural rows via the in-process engine —
+    disclosed as ast-grep-py, precision structural, sorted (file, line, col)."""
+    pytest.importorskip("ast_grep_py")
+    from ctx import astgrep
+
+    # A second file proves the caller path-sorts the library's output.
+    (git_ws / "z.py").write_text(
+        "def h(y):\n    return old_client.fetch(y)\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("PATH", "/nonexistent")
+    astgrep.binary.cache_clear()
+    astgrep.lib_available.cache_clear()
+    try:
+        ws = make_ws(git_ws)
+        store = make_store(ws)
+        assert astgrep.binary() is None  # binary rung is out
+        assert astgrep.lib_available() is True
+        rows, meta = astgrep.ast_search(ws, store, "old_client.fetch($X)")
+        assert meta["engine"].startswith("ast-grep-py")
+        assert meta["precision"] == "structural"
+        # m.py match is at line 3 (fixture), z.py at line 2; path-sorted.
+        assert [(r["file"], r["line"]) for r in rows] == [("m.py", 3), ("z.py", 2)]
+        assert rows == sorted(rows, key=lambda r: (r["file"], r["line"], r["col"]))
+    finally:
+        astgrep.binary.cache_clear()
+        astgrep.lib_available.cache_clear()
+
+
+def test_engine_id_precedence_binary_then_lib_then_regex(git_ws, tmp_path, monkeypatch):
+    """engine_id() participates in plan_exec cache keys — its precedence is
+    binary id > library id > regex-fallback. Exercise all three rungs."""
+    from ctx import astgrep
+
+    # Binary rung wins when a (fake) ast-grep is on PATH.
+    _fake_astgrep(tmp_path, monkeypatch, _FAKE_SEARCH)
+    astgrep.lib_available.cache_clear()
+    try:
+        assert astgrep.engine_id() == "ast-grep 9.9.9-test"
+    finally:
+        astgrep.binary.cache_clear()
+        astgrep.lib_available.cache_clear()
+
+    # Binary absent: library id when importable, else regex-fallback.
+    monkeypatch.setenv("PATH", "/nonexistent")
+    astgrep.binary.cache_clear()
+    astgrep.lib_available.cache_clear()
+    try:
+        eid = astgrep.engine_id()
+        if astgrep.lib_available():
+            assert eid.startswith("ast-grep-py ")
+        else:
+            assert eid == "regex-fallback"
+    finally:
+        astgrep.binary.cache_clear()
+        astgrep.lib_available.cache_clear()
 
 
 def test_plan_op_ast_search_discloses_engine(git_ws, tmp_path, monkeypatch):

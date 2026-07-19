@@ -2,10 +2,13 @@
 
 ast-grep is an opportunistic binary (the ripgrep pattern): on PATH it gives
 structural, metavariable-pattern search and mechanical rewrites over
-tree-sitter ASTs; absent, ``ast.search`` degrades to a metavariable-anchored
-regex scan with its precision honestly labeled, and ``ast.rewrite.*``
-declines (a textual approximation of a codemod is the failure mode, not a
-feature — no lossy fallback).
+tree-sitter ASTs. ``ast.search`` degrades through three rungs, each honestly
+disclosed: the ast-grep BINARY (structural) → the ``ast-grep-py`` LIBRARY
+(structural, same tree-sitter engine, no subprocess) → a metavariable-anchored
+regex scan with its precision labeled ``textual``. ``ast.rewrite.*`` stays
+binary-only and declines otherwise (a textual approximation of a codemod is
+the failure mode, not a feature — no lossy fallback, and the library rung is
+deliberately search-only).
 
 Determinism: matches are sorted ``(path, line, column)``, paths are
 repo-relative POSIX, the engine name + version are disclosed in node meta
@@ -72,10 +75,73 @@ def available() -> bool:
     return binary() is not None
 
 
+@lru_cache(maxsize=1)
+def lib_available() -> bool:
+    """True when the ``ast-grep-py`` library is importable — the middle rung
+    of ast.search (structural, in-process, no subprocess). Cached; call
+    ``lib_available.cache_clear()`` in tests that manipulate imports."""
+    try:
+        import ast_grep_py  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _lib_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("ast_grep_py")
+    except Exception:
+        return "?"
+
+
 def engine_id() -> str:
-    """Engine identity for disclosure and cache keys."""
+    """Engine identity for disclosure and cache keys. Precedence mirrors the
+    ast.search dispatch: binary id > library id > regex fallback."""
     b = binary()
-    return f"ast-grep {b[1]}" if b else "regex-fallback"
+    if b is not None:
+        return f"ast-grep {b[1]}"
+    if lib_available():
+        return f"ast-grep-py {_lib_version()}"
+    return "regex-fallback"
+
+
+# ast_grep_py language strings, keyed by the skeleton language name that
+# ``ctx.skeleton.language_for`` derives from a repo-relative path. Names that
+# differ from the skeleton spelling (c++/c#/shell) are remapped; a path whose
+# language cannot be determined maps to None and is skipped per-file.
+_AST_GREP_LANG = {
+    "python": "python",
+    "javascript": "javascript",
+    "typescript": "typescript",
+    "go": "go",
+    "rust": "rust",
+    "java": "java",
+    "kotlin": "kotlin",
+    "ruby": "ruby",
+    "php": "php",
+    "c": "c",
+    "c++": "cpp",
+    "c#": "csharp",
+    "swift": "swift",
+    "scala": "scala",
+    "lua": "lua",
+    "shell": "bash",
+}
+
+
+def _lib_lang(rel: str) -> str | None:
+    """ast_grep_py language string for a repo-relative path, or None."""
+    try:
+        from ctx.skeleton import language_for
+
+        sk = language_for(rel)
+    except Exception:
+        return None
+    if not sk:
+        return None
+    return _AST_GREP_LANG.get(sk.lower())
 
 
 # ------------------------------------------------------------------ search
@@ -188,6 +254,9 @@ def ast_search(
         meta = {"engine": engine_id(), "precision": "structural"}
         return rows[: max(1, cap)], {**meta, "matched": len(rows)}
 
+    if lib_available():
+        return _lib_search(ws, store, pattern, language, glob, cap)
+
     # Degraded tier: metavariable-anchored regex over repo targets, honestly
     # labeled. Reuses the retrieval target walk (path-sorted, confined).
     import re as _re
@@ -213,6 +282,54 @@ def ast_search(
         "precision": "textual (metavariable-anchored regex; ast-grep absent)",
         "matched": len(rows),
     }
+    return rows[: max(1, cap)], meta
+
+
+def _lib_search(
+    ws: Workspace,
+    store: Store,
+    pattern: str,
+    language: str | None,
+    glob: str | None,
+    cap: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Middle rung: structural search via the ``ast-grep-py`` library over the
+    same repo-target walk the regex fallback uses. Parses each file in-process
+    with the tree-sitter engine; per-file parse/find is wrapped so a file whose
+    language cannot be mapped (or that the lib rejects) is skipped silently.
+    Rows share the binary path's shape and are sorted ``(file, line, col)``."""
+    from ast_grep_py import SgRoot
+
+    from ctx.refs import parse_ref
+    from ctx.retrieval import _resolve_repo_targets
+
+    targets, _, _ = _resolve_repo_targets(
+        store, ws, parse_ref("repo:"), glob=glob, scope=None
+    )
+    rows: list[dict[str, Any]] = []
+    for t in targets:
+        rel = str(t.label)
+        if _ledger_path(rel) or ws.is_ignored(rel):
+            continue
+        lang = _lib_lang(rel)
+        if lang is None:
+            continue
+        if language and lang.lower() != language.lower():
+            continue
+        try:
+            root = SgRoot(t.text, lang).root()
+            matches = root.find_all(pattern=pattern)
+        except Exception:
+            continue  # unparseable / lib-rejected file: skip, do not error
+        for node in matches:
+            start = node.range().start
+            line = int(start.line) + 1  # ast_grep_py ranges are 0-based lines
+            col = int(start.column)
+            text = node.text().splitlines()
+            first = text[0].strip()[:_LINE_CAP] if text else ""
+            rows.append({"file": rel, "line": line, "col": col, "text": first})
+    rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
+    meta = {"engine": engine_id(), "precision": "structural", "matched": len(rows)}
     return rows[: max(1, cap)], meta
 
 
@@ -364,6 +481,7 @@ __all__ = [
     "RewriteError",
     "available",
     "binary",
+    "lib_available",
     "engine_id",
     "ast_search",
     "rewrite_preview",

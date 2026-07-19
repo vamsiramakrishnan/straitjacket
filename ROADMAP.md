@@ -136,6 +136,8 @@ printed fragment.
 
 ## M-J · Compiled evidence plans (`ctx plan` / `ctx investigate`)
 
+**Shipped v0.25.0** (P0–P3 + P5 surface; P4 cost-table epoch = debt e319eef641; live four-arm referee open).
+
 *Collapse every deterministic fan-out within a hypothesis epoch into one
 locally executed, typed, bounded DAG — one model round in, one
 decision-organized digest out.*
@@ -168,9 +170,7 @@ now ──► M-A quarantine template ─┐
 next ─► M-B code verbs v1 (jedi) ──► MCP op growth, skill update
 then ─► M-E broker ──► M-B multi-language LSP · M-C cached indexes
         + learned policy epochs (telemetry → committed policy, existing plan)
-next ─► M-J compiled evidence plans (docs/EVIDENCE-PLANS.md): plan IR +
-        executor over shipped ops (P0–P1), ast-grep/Semgrep operator tiers
-        (P2–P3), cost-based planner + MCP investigate + referee (P4–P5)
+now ──► M-J compiled evidence plans (shipped v0.25.0; P4 + referee open)
 ```
 
 Deliberately **not** planned: wire-side semantic compression (LLMLingua-class

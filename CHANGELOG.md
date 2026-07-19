@@ -63,6 +63,32 @@ executes it locally; one causally organized digest returns.
   contracts, generation-guarded apply); full suite 757 passed on both the
   full and minimal (no-binaries) matrices.
 
+Second batch, same wave:
+
+- **ast-grep-py library rung**: `ast.search` now degrades through three
+  disclosed tiers — ast-grep binary (structural) → `ast-grep-py` library
+  (structural, in-process, added to the `[code]` extra) → labeled
+  metavariable-anchored regex. `engine_id()` precedence feeds node cache
+  keys; rewrites stay binary-only by design.
+- **Measured evidence** (`evals/plan-collapse-2026-07-19.md`, runnable
+  `evals/plan_collapse.py`, CI-guarded): on a seeded auth-regression
+  diagnosis, boundary crossings collapse 6 (naive) → 4 (harnessed) → 1
+  (plan); append-only resend cost 1,704 → 1,336 → **189 tok** (9.0× under
+  naive, 7.1× under harnessed-interactive); the plan digest body is
+  byte-identical across re-runs (cache-aligned) where naive pytest output
+  carries a volatile wall-clock token. Headroom comparison cited from
+  prior measurements and explicitly labeled derived, not head-to-head.
+- **Skill progressive disclosure**: plan authoring ships as
+  `references/evidence-plans.md` (loaded on demand only); the SKILL.md
+  body gains a one-line pointer; frontmatter untouched, prefix manifest
+  regenerated without a PREFIX_VERSION bump — zero always-in-prompt
+  footprint growth.
+- **Fix**: repo search no longer scans the `.ctx-session-reads/` ledger
+  (both rg and python engines) — the ledger is bookkeeping, never
+  evidence, and it grows as the harness runs, so scanning it made
+  identical searches non-byte-identical (found by the plan-collapse
+  cache-stability probe).
+
 ## [0.24.0] - 2026-07-19
 
 The coverage-corpus wave: rtk's breadth question answered the house way —

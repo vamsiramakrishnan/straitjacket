@@ -125,6 +125,11 @@ def _resolve_repo_targets(
     for root in roots:
         rels.extend(ws.list_files(root))
     rels = sorted(dict.fromkeys(rels))
+    # The session ledger is bookkeeping, never evidence (hook.py rule; the
+    # q search stage and generation hashing exclude it likewise). It also
+    # grows as the harness runs, so including it makes repo search observe
+    # its own state — the byte-stability failure mode, engine-independent.
+    rels = [r for r in rels if r.replace("\\", "/").split("/")[0] != ".ctx-session-reads"]
     if glob:
         rels = [r for r in rels if _glob_match(r, glob)]
     rels = rels[:max_files]

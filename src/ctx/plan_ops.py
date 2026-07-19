@@ -503,8 +503,8 @@ register_op("code.impact", _mk_callgraph_op("impact"), input_kinds=(),
             check_args=_check_symbol)
 register_op("ast.search", _op_ast_search, input_kinds=(), output_kind="sites",
             cost="scan", cacheable=True,
-            doc="structural metavariable search (ast-grep → labeled regex fallback; "
-                "args: pattern, language, glob)",
+            doc="structural metavariable search (ast-grep → ast-grep-py → labeled "
+                "regex fallback; args: pattern, language, glob)",
             engine_hint="ast-grep (binary on PATH)", check_args=_check_pattern)
 register_op("evidence.join", _op_evidence_join, input_kinds=(), output_kind="records",
             cost="index",

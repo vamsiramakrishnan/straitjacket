@@ -7,7 +7,7 @@
 
 [Quickstart](#-quickstart) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 783 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 788 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
 </div>
 
@@ -363,6 +363,8 @@ cache economics) ·
 (real-corpus reversals + live lint-fix rounds) ·
 [`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)
 (programmable capture) ·
+[`evals/plan-collapse-2026-07-19.md`](evals/plan-collapse-2026-07-19.md)
+(compiled evidence plans: rounds 6→1, resend cost 9.0×↓, byte-stable digest) ·
 [`docs/LOSSLESS-RESCUE.md`](docs/LOSSLESS-RESCUE.md) ·
 [`docs/PRICED-CONTEXT.md`](docs/PRICED-CONTEXT.md) ·
 [`docs/LADDERS.md`](docs/LADDERS.md) (the conditionality audit behind v0.20).
