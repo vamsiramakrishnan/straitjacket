@@ -303,11 +303,21 @@ Concretely:
 
 ## 🧾 Comparisons
 
-### The field, in one table
-
 Other tools in this space each do one thing well. We benchmarked or
 stress-tested each, took the good idea without its cost, and recorded what
-each still does better (all data in [`evals/`](evals/)).
+each still does better (all data in [`evals/`](evals/)). The amber strip on
+each tile below is the idea the harness kept — losslessly.
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/field-treemap.svg">
+  <img src="assets/readme/diagrams/field-treemap-light.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail and Maki. Each tile names the tool's one good idea, its limitation, and — on an amber strip — the lossless form straitjacket adopted.">
+</picture>
+
+</div>
+
+### The field, in one table
 
 | Approach | What it does well | Limitation (measured where marked) | How we took it |
 |---|---|---|---|
@@ -319,26 +329,72 @@ each still does better (all data in [`evals/`](evals/)).
 | **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
 | **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx eval`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
 
-Headroom is the only one we ran head-to-head behind our own observer. On the
-quiet structural needle it dropped the evidence 100% of the time (347,595 →
-68 tokens, no trace) where `logtemplate/v1` dropped 0%. On the long task our
-mechanisms beat it outright: 42 turns / 243s vs 53 / 279s at comparable cost.
-The `ctx eval` live A/B ran four pairs: the one-script discipline won every
-pair (−15–63% cost, fewer turns), but the verb itself went unadopted in bare
-sessions, so we filed it as debt. The v0.20 teaching surface now detects,
-suggests, and records every opportunity, and conversion is the next metric to
-move. What each still does better than us, by design: Headroom's
-zero-integration generality, rtk's 15-host reach and <10ms single binary,
-Ponytail's 20-host rule files, Maki's OS-level sandbox (ours arrives with the
-broker, Phase 3).
+What each still does better than us, by design: Headroom's zero-integration
+generality, rtk's 15-host reach and <10ms single binary, Ponytail's 20-host
+rule files, Maki's OS-level sandbox (ours arrives with the broker, Phase 3).
 
-The needle case, drawn out — the same anomalous line under each approach:
+### How each neighbour is built — and where the harness diverges
+
+The neighbours split into two architectural families. **Headroom** sits on the
+wire and rewrites transcript history on every request — compression happens
+_after_ the bytes are already resident, and the original is gone. **rtk** and
+**Caveman** cut earlier, at the shell hook or in the prompt, but throw the cut
+bytes away. The harness's move is orthogonal to all three: capture at the
+source into an immutable, addressable store, and put only a bounded digest —
+plus a resolvable address for every omitted byte — on the wire.
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/headroom-arch.svg">
+  <img src="assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two lanes. Top: an agent loop feeds a Headroom proxy that compresses messages and rewrites history on each call; the model sees a rewritten log and the quiet needle is silently dropped with no address. Bottom: straitjacket captures tool output at the birth gate into an immutable artifact store where every line is addressed, sends the model a bounded digest, and ctx get resolves any omitted line by address.">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/filters-arch.svg">
+  <img src="assets/readme/diagrams/filters-arch-light.svg" width="100%" alt="rtk filters a flooding shell command at a fast bash hook and emits truncated output with no addresses; Caveman prompts the agent to narrate tersely, squeezing evidence into prose that cannot be resolved. Both feed into the harness's answer: keep the bytes in the store and carry a cited, resolvable handle, under a failure-asymmetric budget.">
+</picture>
+
+</div>
+
+### The one we ran head-to-head — Headroom
+
+Headroom is the only neighbour that is a drop-in library, so it is the only one
+we can run behind our own observer. The needle-drop comparison is **model-free
+and reproducible** — it exercises the compression/digest layer only, no LLM, so
+it re-runs in a review sandbox in seconds
+([`evals/headroom_needle_v2.py`](evals/headroom_needle_v2.py)):
+
+```bash
+pip install -e '.[dev]' headroom-ai tiktoken
+python evals/headroom_needle_v2.py
+```
+
+Rerun **2026-07-19 against the current `headroom-ai==0.32.1`** on a 20,001-line
+log (302,628 tok) hiding one structurally rare "quiet needle" with no error
+keyword ([receipt](evals/headroom-needle-2026-07-19.md)):
+
+| | Headroom 0.32.1 | `ctx run` logtemplate/v1 |
+|---|---|---|
+| Output | **357 tok** (847×) | **~520 tok** (584×) |
+| Loud ERROR line | ✅ kept (keyword window) | ✅ kept, at `L17650` |
+| **Quiet structural needle** | ❌ **silently dropped** | ✅ **verbatim at `L14238`** |
+| Omission keeps an address | ❌ none | ✅ `ctx get run:<id>#stdout --lines 14238:14241` |
+
+Headroom compresses harder and keeps the ERROR **because it announces itself**;
+the quiet needle, structurally identical to an INFO line, vanishes with no
+trace. `ctx` spends ~160 more tokens to buy the evidence that _doesn't_ announce
+itself, plus an address for every omitted line — **needle-drop rate 100% vs 0%**
+on this workload. (On the long task our mechanisms also beat Headroom outright:
+42 turns / 243s vs 53 / 279s at comparable cost, per the
+[2026-07-17 run](evals/headroom-needle-drop-2026-07-17.md).) The same anomalous
+line, drawn out under each approach:
 
 <div align="center">
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/fates.svg">
-  <img src="assets/readme/diagrams/fates-light.svg" width="100%" alt="A 20,001-line log with one anomalous line. Compaction deletes it without trace. A rewriting proxy dropped it in every measured run (347,595 tokens in, 68 out). straitjacket's logtemplate profile kept it verbatim with an exact retrieval address.">
+  <img src="assets/readme/diagrams/fates-light.svg" width="100%" alt="A 20,001-line log with one anomalous line. Compaction deletes it without trace. A rewriting proxy dropped it in every measured run. straitjacket's logtemplate profile kept it verbatim with an exact retrieval address.">
 </picture>
 
 </div>
@@ -357,8 +413,10 @@ The needle case, drawn out — the same anomalous line under each approach:
 Depth, per topic:
 [`evals/matrix-2026-07-18.md`](evals/matrix-2026-07-18.md) (scenario matrix +
 cache economics) ·
+[`evals/headroom-needle-2026-07-19.md`](evals/headroom-needle-2026-07-19.md)
+(needle-drop rerun vs headroom 0.32.1, model-free + reproducible) ·
 [`evals/headroom-needle-drop-2026-07-17.md`](evals/headroom-needle-drop-2026-07-17.md)
-(needle-drop head-to-head) ·
+(original needle-drop head-to-head) ·
 [`evals/ab-claude-code-2026-07-17.md`](evals/ab-claude-code-2026-07-17.md)
 (N=5 A/B: cost parity, 5/5 correct both arms, zero denials) ·
 [`evals/overhaul-3arm-2026-07-17.md`](evals/overhaul-3arm-2026-07-17.md)

@@ -186,6 +186,25 @@ An omission without an address becomes an irreversible quality bet. An omission 
 span is a paging decision. The transcript can stay small without pretending the omitted
 evidence never existed.
 
+This is the architectural fault line between Straitjacket and the neighbouring tools.
+A rewriting proxy compresses *after* the bytes are already resident and discards the
+original; source-side filters and terse-prompting styles cut earlier but still throw the
+cut bytes away. Straitjacket captures at the source into an addressable store and puts
+only a bounded digest — plus a resolvable address for every omitted byte — on the wire.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two lanes. Top: an agent loop feeds a rewriting proxy that compresses messages and rewrites history on each call; the model sees a rewritten log and the quiet needle is silently dropped with no address. Bottom: Straitjacket captures tool output at the birth gate into an immutable addressable store, sends the model a bounded digest, and ctx get resolves any omitted line by address.">
+</picture>
+
+The same divergence, seen across the whole field — each tile names a neighbour's one
+good idea and the lossless form Straitjacket adopted (the amber strip):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap-light.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail and Maki. Each tile names the tool's one good idea, its limitation, and the lossless form Straitjacket adopted.">
+</picture>
+
 ## What Straitjacket is not
 
 ### Not agent memory
