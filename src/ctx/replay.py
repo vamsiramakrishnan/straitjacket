@@ -427,6 +427,66 @@ def render_report(reports: list[dict[str, Any]], *, gaps: bool = False) -> str:
     return "\n".join(out).rstrip()
 
 
+def session_outcomes(path: str | Path) -> list[Any]:
+    """``ctx replay --outcomes``: deterministic evidence_outcome/v1 events
+    from one recorded transcript (docs/EVIDENCE-PLANS.md §plan-value).
+
+    Read-only; windows still open at transcript end are censored, never
+    negative; investigation ids are never invented for sessions that
+    predate compiled plans (command/profile-level attribution only)."""
+    from ctx.evidence_outcomes import attribute_session
+
+    return attribute_session(parse_transcript(path), session_complete=False)
+
+
+def render_outcomes(events: list[Any]) -> str:
+    """The evidence-outcomes scoreboard, aggregated per operator. Positive
+    rates use all observations (censored windows can only under-count
+    positives — conservative); negative denominators exclude censored."""
+    per: dict[str, dict[str, int]] = {}
+    for e in events:
+        b = per.setdefault(
+            e.operator,
+            {"obs": 0, "censored": 0, "landed": 0, "narrowed": 0,
+             "validated_after_edit": 0, "redundant": 0},
+        )
+        b["obs"] += 1
+        if e.censored:
+            b["censored"] += 1
+        for o in ("landed", "narrowed", "validated_after_edit", "redundant"):
+            if o in e.outcomes:
+                b[o] += 1
+    out = ["Evidence outcomes"]
+    out.append("─" * 74)
+    out.append(
+        f"{'operator':<30} {'obs':>4} {'land':>5} {'narrow':>6} "
+        f"{'validate':>8} {'redundant':>9} {'censored':>8}"
+    )
+    if not per:
+        out.append("  (no attributable evidence emissions found)")
+        return "\n".join(out)
+
+    def pct(n: int, d: int) -> str:
+        return f"{(100 * n / d):.0f}%" if d else "—"
+
+    for op in sorted(per):
+        b = per[op]
+        non_censored = b["obs"] - b["censored"]
+        out.append(
+            f"{op:<30} {b['obs']:>4} {pct(b['landed'], b['obs']):>5} "
+            f"{pct(b['narrowed'], b['obs']):>6} "
+            f"{pct(b['validated_after_edit'], b['obs']):>8} "
+            f"{pct(b['redundant'], non_censored):>9} "
+            f"{pct(b['censored'], b['obs']):>8}"
+        )
+    attributable = sum(1 for e in events if e.attribution_reasons)
+    out.append(
+        f"attributable: {attributable}/{len(events)} events · reasons+confidence "
+        "per event in --json (payloads carry counts, never just rates)"
+    )
+    return "\n".join(out)
+
+
 def render_regret(reports: list[dict[str, Any]]) -> str:
     """The evidence-regret scoreboard: per-profile frontier gap, aggregated
     across sessions (docs/THEORY.md). ``frontier`` = oracle/actual ∈ (0, 1];

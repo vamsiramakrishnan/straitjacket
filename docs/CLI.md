@@ -205,6 +205,21 @@ ctx antigravity install
 The plugin is persistent. Both hosts use the same artifact store, digest contracts, and
 retrieval vocabulary.
 
+## Score the loop: regret, outcomes, plan value
+
+```bash
+ctx replay --regret <t.jsonl>            # per-profile frontier gap (docs/THEORY.md)
+ctx replay --outcomes <t.jsonl>          # evidence_outcome/v1 attribution scoreboard
+ctx replay --outcomes --append-ledger …  # explicit: feed the workspace outcome ledger
+ctx policy compile --plan-value          # aggregate ledger → committed [plan_value] priors
+ctx plan price --value <plan.json>       # price card + prior-ranked op explanation
+ctx investigate --advise <plan.json>     # digest + advisory next-action ranking + stopping receipt
+```
+
+The priors are advisory ranking input only: safety, capability tier, plan
+validity, precision, freshness, evidence floors, and budgets always
+dominate, and runtime never writes the committed policy file.
+
 ## Failure semantics
 
 Straitjacket distinguishes safety from optional intelligence:

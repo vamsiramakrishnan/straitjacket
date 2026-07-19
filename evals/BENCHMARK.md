@@ -114,6 +114,15 @@ Our additions, from mechanisms this repo already has:
 - **Unresolved-omission rate** — every omission must carry an address
   that resolves; the store can verify this mechanically per digest.
   Target is 100% resolvable, and it is testable without a model.
+- **Evidence-outcome attribution** — **BUILT**: `ctx replay --outcomes`
+  (`src/ctx/evidence_outcomes.py`) converts recorded sessions into
+  deterministic `evidence_outcome/v1` events (landed/narrowed/validated/…,
+  censoring-honest), and `ctx policy compile --plan-value` aggregates them
+  into committed per-operator priors that rank the next logical
+  investigation action (`src/ctx/plan_value.py`; seeded acceptance:
+  `evals/plan_value_selection.py`). This is the action-selection sibling of
+  retrieval regret: regret scores what crossed the boundary; plan value
+  scores which evidence-producing action to run next.
 
 ## Arms and controls: adapted
 

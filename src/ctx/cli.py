@@ -152,6 +152,19 @@ def _main_slow(args: list[str]) -> int:
         help="evidence-regret scoreboard: R = actual − oracle per profile "
         "(the measured rate–distortion frontier gap, docs/THEORY.md)",
     )
+    p_replay.add_argument(
+        "--outcomes", dest="replay_outcomes", action="store_true",
+        help="evidence_outcome/v1 attribution scoreboard: which emissions the "
+        "model observably landed on / narrowed with / validated after "
+        "(deterministic, read-only; open windows censored)",
+    )
+    p_replay.add_argument(
+        "--append-ledger", dest="replay_append_ledger", action="store_true",
+        help="with --outcomes: append the events to the workspace "
+        ".ctx-session-reads/evidence-outcomes.jsonl ledger (the input to "
+        "`ctx policy compile --plan-value`) — an explicit user action, "
+        "never a runtime side effect",
+    )
     p_replay.add_argument("--json", dest="replay_json", action="store_true")
 
     p_debt = sub.add_parser("debt", help="declared-omission ledger for deferred decisions")
@@ -210,6 +223,12 @@ def _main_slow(args: list[str]) -> int:
             "plan_file", nargs="?", default="-",
             help="plan JSON path ('-' or omitted reads stdin)",
         )
+        if _pc == "price":
+            _pp.add_argument(
+                "--value", dest="plan_value_explain", action="store_true",
+                help="also rank the plan's logical ops with compiled "
+                "[plan_value] priors and disclose the full score explanation",
+            )
     plan_sub.add_parser("ops", help="registered logical operators (the plan author's inventory)")
 
     p_inv = sub.add_parser(
@@ -224,11 +243,23 @@ def _main_slow(args: list[str]) -> int:
         "--replans", type=int, default=None,
         help="epoch allowance for this objective (default from ctx.toml [plan])",
     )
+    p_inv.add_argument(
+        "--advise", dest="inv_advise", action="store_true",
+        help="after execution: advisory next-action ranking from compiled "
+        "[plan_value] priors + evidence-floor stopping receipt (never "
+        "blocks; hard constraints and explicit requests always dominate)",
+    )
 
     p_policy = sub.add_parser("policy", help="compiled steering policy")
     pol_sub = p_policy.add_subparsers(dest="policy_cmd", required=True)
     p_pc = pol_sub.add_parser("compile", help="compile policy from telemetry")
     p_pc.add_argument("--min-runs", type=int, dest="min_runs")
+    p_pc.add_argument(
+        "--plan-value", dest="plan_value", action="store_true",
+        help="also compile [plan_value] priors from the evidence-outcome "
+        "ledger (advisory investigation-ranking input; deterministic, "
+        "reviewable, never written by runtime)",
+    )
     pol_sub.add_parser("show", help="print the compiled policy")
 
     sub.add_parser("init", help="write ctx.toml and .ctxignore templates")
@@ -313,6 +344,27 @@ def _main_slow(args: list[str]) -> int:
             if not paths:
                 print("no transcripts given (pass paths or --all-projects)")
                 return 1
+            if ns.replay_outcomes:
+                from ctx.replay import render_outcomes, session_outcomes
+
+                events = [e for p in paths for e in session_outcomes(p)]
+                if ns.replay_append_ledger:
+                    from ctx.workspace import resolve_workspace as _rw
+
+                    _ws = _rw(ns.workspace)
+                    ldir = _ws.root / ".ctx-session-reads"
+                    ldir.mkdir(parents=True, exist_ok=True)
+                    with (ldir / "evidence-outcomes.jsonl").open(
+                        "a", encoding="utf-8"
+                    ) as fh:
+                        for e in events:
+                            fh.write(_json.dumps(e.payload(), sort_keys=True) + "\n")
+                    print(f"appended {len(events)} events to {ldir / 'evidence-outcomes.jsonl'}")
+                if ns.replay_json:
+                    print(_json.dumps([e.payload() for e in events], indent=2))
+                else:
+                    print(render_outcomes(events))
+                return 0
             reports = [simulate_session(p) for p in paths]
             if ns.replay_json:
                 print(_json.dumps(reports, indent=2))
@@ -1052,6 +1104,18 @@ def _cmd_plan(ws, ns) -> int:
             )
             return 0
         print(plan_ir.price_plan(plan))
+        if getattr(ns, "plan_value_explain", False):
+            from ctx import plan_value as pv
+
+            floors = pv.required_floors(plan.objective_kind, plan.requires)
+            candidates = [
+                pv.candidate_from_spec(s.op, plan_ops.OPS[s.op])
+                for s in plan.steps
+                if s.op in plan_ops.OPS
+            ]
+            ranked = pv.rank_actions(candidates, {}, floors, pv.load_priors(ws))
+            print()
+            print(pv.render_ranking(ranked))
         return 0
 
     # run
@@ -1155,7 +1219,56 @@ def _cmd_investigate(ws, ns) -> int:
             "to the interactive loop; patch/verify or change the hypothesis"
         )
     _emit_investigation(ws, store, out)
+    if getattr(ns, "inv_advise", False):
+        print()
+        print(_investigate_advice(ws, plan))
     return code
+
+
+def _investigate_advice(ws, plan) -> str:
+    """Advisory next-action section for `ctx investigate --advise`: estimate
+    coverage from the plan's own executed ops (declared `provides`), rank the
+    remaining APPLICABLE registered ops with compiled priors, and render the
+    stopping receipt. Purely advisory stdout — never enters the investigation
+    digest, never suppresses anything (fail-open to a one-line note)."""
+    try:
+        from ctx import plan_ops
+        from ctx import plan_value as pv
+
+        floors = pv.required_floors(plan.objective_kind, plan.requires)
+        coverage: dict[str, float] = {}
+        ran_ops = {s.op for s in plan.steps}
+        for op in ran_ops:
+            spec = plan_ops.OPS.get(op)
+            if spec is not None and spec.provides:
+                coverage = pv.apply_expected_coverage(spec.provides, coverage)
+        # Hard constraints FIRST: only registered, engine-available ops are
+        # candidates; already-run ops are excluded (novelty lives in priors).
+        candidates = [
+            pv.candidate_from_spec(name, spec)
+            for name, spec in sorted(plan_ops.OPS.items())
+            if name not in ran_ops
+            and (spec.probe_available is None or spec.probe_available())
+        ]
+        priors = pv.load_priors(ws)
+        ranked = pv.rank_actions(candidates, coverage, floors, priors)
+        batch = pv.select_batch(candidates, coverage, floors, priors)
+        stop, receipt = pv.stopping_decision(ranked, coverage, floors, priors=priors)
+        lines = ["── plan-value advisory (compiled priors; advisory only) ──"]
+        lines.append(receipt)
+        if not stop and batch:
+            lines.append("")
+            lines.append("suggested next action(s):")
+            for s in batch[:3]:
+                lines.append(
+                    f"  {s.op:<26} score {s.score:.2f} · prior {s.prior_confidence}"
+                    f" ({s.prior_observations} obs, {s.backoff_level})"
+                )
+            lines.append("")
+            lines.append(pv.render_ranking(ranked, selected=batch[0]))
+        return "\n".join(lines)
+    except Exception as e:  # advisory: never fail the investigation
+        return f"(plan-value advisory unavailable: {type(e).__name__})"
 
 
 def _cmd_policy(ws, ns) -> int:
@@ -1175,6 +1288,10 @@ def _cmd_policy(ws, ns) -> int:
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     kwargs = {"min_runs": ns.min_runs} if ns.min_runs is not None else {}
+    if getattr(ns, "plan_value", False):
+        from ctx.policy import compile_plan_value
+
+        kwargs["plan_value"] = compile_plan_value(ws)
     policy = compile_policy(store, ws, **kwargs)
     print(render_policy(policy))
     print(f"written: {write_policy(ws, policy)}")

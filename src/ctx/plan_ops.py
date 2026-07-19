@@ -27,7 +27,7 @@ flow is visible.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from ctx.store import Store
 from ctx.workspace import Workspace
@@ -63,6 +63,10 @@ class OpSpec:
     # and double-caching is where staleness bugs live.
     cacheable: bool = False
     input_optional: bool = False  # may run without an input (narrows with one)
+    # Evidence-dimension contributions (plan_value.EVIDENCE_DIMENSIONS →
+    # expected baseline coverage in [0,1]). Additive: {} means the op makes
+    # no declared dimension claim and ranks on priors + cost alone.
+    provides: Mapping[str, float] = field(default_factory=dict)
 
 
 OPS: dict[str, OpSpec] = {}
@@ -84,6 +88,7 @@ def register_op(
     check_args: Callable[[dict], str | None] | None = None,
     cacheable: bool = False,
     input_optional: bool = False,
+    provides: Mapping[str, float] | None = None,
 ) -> None:
     OPS[name] = OpSpec(
         name,
@@ -100,6 +105,7 @@ def register_op(
         check_args,
         cacheable,
         input_optional,
+        dict(provides or {}),
     )
 
 
@@ -482,31 +488,40 @@ def _check_rewrite(args: dict) -> str | None:
 
 
 register_op("repo.changed", _op_repo_changed, input_kinds=(), output_kind="files",
+            provides={"changedness": 1.0, "freshness": 0.6},
             cost="index", doc="changed files this generation (git porcelain → facts)")
 register_op("repo.inventory", _op_repo_inventory, input_kinds=(), output_kind="text",
+            provides={"topology": 0.3, "coverage": 0.2},
             cost="scan", doc="ranked budget-fitted codebase map")
 register_op("code.search", _op_code_search, input_kinds=(), output_kind="sites",
+            provides={"topology": 0.4, "coverage": 0.3},
             cost="scan", doc="regex over repo files (args: pattern, glob)",
             check_args=_check_pattern)
 register_op("code.refs", _op_code_refs, input_kinds=(), output_kind="sites",
+            provides={"topology": 0.8, "semantic_support": 0.3},
             cost="scan", doc="reference sites (jedi → ast fallback)",
             check_args=_check_symbol)
 register_op("code.callers", _mk_callgraph_op("callers"), input_kinds=(),
+            provides={"topology": 0.9, "causality": 0.3},
             output_kind="sites", cost="index", doc="direct callers (ast call graph)",
             check_args=_check_symbol)
 register_op("code.callees", _mk_callgraph_op("callees"), input_kinds=(),
+            provides={"topology": 0.9, "causality": 0.3},
             output_kind="sites", cost="index", doc="in-repo callees (ast call graph)",
             check_args=_check_symbol)
 register_op("code.impact", _mk_callgraph_op("impact"), input_kinds=(),
+            provides={"topology": 0.9, "causality": 0.4},
             output_kind="sites", cost="index",
             doc="transitive callers, depth ≤ 6 (args: symbol, depth)",
             check_args=_check_symbol)
 register_op("ast.search", _op_ast_search, input_kinds=(), output_kind="sites",
+            provides={"topology": 0.6, "semantic_support": 0.4},
             cost="scan", cacheable=True,
             doc="structural metavariable search (ast-grep → ast-grep-py → labeled "
                 "regex fallback; args: pattern, language, glob)",
             engine_hint="ast-grep (binary on PATH)", check_args=_check_pattern)
 register_op("evidence.join", _op_evidence_join, input_kinds=(), output_kind="records",
+            provides={"causality": 1.0, "changedness": 0.8, "dynamic_failure": 0.4},
             cost="index",
             doc="Angle-lite fact joins (args.on: failing_in_changed | "
                 "untouched_failures | shared_cause_groups | symbol_neighbors)",
@@ -518,6 +533,7 @@ register_op("ast.outline", _op_ast_outline,
             input_kinds=("files", "sites"), output_kind="text", cost="index",
             doc=f"skeleton outline per input file (cap {OUTLINE_FILE_CAP}; derived-blob cached)")
 register_op("code.related_tests", _op_related_tests,
+            provides={"coverage": 0.6, "dynamic_failure": 0.3},
             input_kinds=("files", "sites", "records"), output_kind="files", cost="scan",
             doc="test files plausibly covering input files (labeled heuristic)")
 register_op("evidence.where", _mk_combinator_op("where", ("cond",)),
@@ -537,6 +553,7 @@ register_op("evidence.count", _mk_combinator_op("count", ()),
             input_kinds=("sites", "files", "records", "text", "symbols"),
             output_kind="records", cost="index", doc="row count or per-group counts")
 register_op("test.run", _op_test_run, input_kinds=(), output_kind="records",
+            provides={"dynamic_failure": 1.0, "freshness": 0.8, "coverage": 0.3},
             klass="execute", cost="test", cacheable=False,
             doc="birth-gate test capture; failing census rows; run: handle attached "
                 "(args: command, timeout)",
@@ -571,6 +588,7 @@ register_op("ast.rewrite.apply", _op_rewrite_apply,
                 "(input: the preview node, or args: patch_blob, generation)")
 for _mode in ("search", "taint", "policy_scan"):
     register_op(f"semantic.{_mode}", _op_semantic(_mode),
+                provides={"semantic_support": 1.0, "counterevidence": 0.5},
                 input_kinds=("sites", "files", "records"), input_optional=True,
                 output_kind="records", cost="process", cacheable=True,
                 on_missing_default="skip", probe_available=_semgrep_available,

@@ -85,6 +85,28 @@ is a lower bound, and censuses the model *reads* without *reusing verbatim*
 are invisible to it — but any future profile change that pushes frontier
 down or hops up is a measurable regression.
 
+## 3b. Two optimizations, one loop: regret vs plan value
+
+The system now scores both halves of the economy, and they must not be
+conflated:
+
+| | **evidence regret** | **plan value** |
+|---|---|---|
+| optimizes | *representation*: what should cross the context boundary? | *investigation*: which evidence-producing action should run next? |
+| measured from | facts the model provably used downstream | outcomes attributed to emissions (landed/narrowed/validated/…) |
+| offline artifact | per-profile frontier gap (`ctx replay --regret`) | per-operator priors (`ctx policy compile --plan-value`) |
+| online consumer | digest profiles (via the regression gate) | `ctx investigate --advise` / `ctx plan price --value` ranking |
+| failure direction | one-sided: R is an upper bound, never flatters | censored events never count negative; low samples shrink to defaults |
+
+The closed loop (docs/EVIDENCE-PLANS.md §plan-value): predict gain from
+reviewed historical priors → execute the highest-value compatible action →
+observe landing/narrowing/discrimination/validation → write deterministic
+outcome events → compile updated priors offline → review and commit the
+policy epoch. Explicitly: no online reinforcement learning, no runtime
+policy mutation, no trusted model self-report, conservative attribution,
+and the priors are advisory — subordinate to safety, capability tier,
+evidence floors, precision, freshness, and explicit budgets, always.
+
 ## 4. Mechanism ledger: derived vs empirical
 
 Honesty about provenance. *Derived* = the mechanism's shape follows from the

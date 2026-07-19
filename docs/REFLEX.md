@@ -182,3 +182,19 @@ must show the re-run loop gone (starvation detector may fire once — the
 reflex correcting is the mechanism working; firing eight times is the
 bug we had). Flood-containment evals must not regress (needle-drop,
 eval-collapse S-C).
+
+## Evidence-outcome events (the slow-loop join, shipped)
+
+The reflex ledgers now have a downstream consumer beyond digest density:
+`evidence_outcomes.py` joins the same primitives this doc defines —
+normalized command signatures with the per-family scope tables,
+`is_narrower`, `landing_ref`, and the generation idiom — into
+`evidence_outcome/v1` events (landed / narrowed / discriminated /
+validated_after_edit / retrieved / equivalent_requery / redundant /
+reversed / abandoned) with deterministic attribution reasons and
+confidences. `ctx policy compile --plan-value` aggregates them into the
+committed `[plan_value]` priors that `ctx investigate --advise` reads —
+the same telemetry-→-epoch pattern as `[digest_density]`, applied to
+action selection instead of digest shape (docs/EVIDENCE-PLANS.md
+§plan-value). One vocabulary rule carried over unchanged: censored
+windows (session end, compaction) are never negative evidence.

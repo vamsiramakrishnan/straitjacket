@@ -123,6 +123,119 @@ def _reflex_tallies(ledger_dir: Path) -> dict[str, dict[str, int]]:
     return tallies
 
 
+# ------------------------------------------------ plan-value priors (M-J)
+#
+# Aggregates the evidence-outcome ledger (evidence_outcomes.py; events
+# written by an EXPLICIT `ctx replay --outcomes --append-ledger` or by plan
+# integration) into per-operator priors for online action ranking
+# (plan_value.py). Deterministic: same ledger ⇒ byte-identical TOML.
+# Runtime never writes back into the compiled file.
+
+PLAN_VALUE_MIN_OBSERVATIONS = 5
+
+#: Deterministic sample-size confidence classes (Part 5).
+PLAN_VALUE_CONFIDENCE = (
+    (50, "high"),
+    (20, "medium"),
+    (5, "low"),
+    (0, "insufficient"),
+)
+
+_PV_POSITIVE = ("landed", "narrowed", "discriminated", "validated_after_edit", "retrieved")
+_PV_NEGATIVE = ("equivalent_requery", "redundant", "reversed")
+_PV_RATE_KEY = {
+    "landed": "landing_rate",
+    "narrowed": "narrowing_rate",
+    "discriminated": "discrimination_rate",
+    "validated_after_edit": "validation_rate",
+    "retrieved": "retrieval_rate",
+    "equivalent_requery": "equivalent_requery_rate",
+    "redundant": "redundancy_rate",
+    "reversed": "reversal_rate",
+}
+
+
+def confidence_class(observations: int) -> str:
+    for floor, name in PLAN_VALUE_CONFIDENCE:
+        if observations >= floor:
+            return name
+    return "insufficient"
+
+
+def _outcome_events(ledger_dir: Path) -> list[dict[str, Any]]:
+    """Read evidence-outcome events, fail-open per line (house ledger
+    pattern). Order-independent aggregation downstream."""
+    events: list[dict[str, Any]] = []
+    try:
+        lines = (
+            (Path(ledger_dir) / "evidence-outcomes.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    except OSError:
+        return events
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("version") == "ctx.evidence-outcome/v1":
+            events.append(rec)
+    return events
+
+
+def compile_plan_value(ws: Workspace) -> dict[str, Any]:
+    """Compile per-operator plan-value priors from the outcome ledger.
+
+    Rate semantics (Part 5): positive rates use ALL observations as the
+    denominator (a censored window can only under-count positives —
+    conservative); negative rates exclude censored observations from the
+    denominator (censoring is never negative evidence). Counts always ride
+    alongside rates; a ``*`` row is the global fallback prior. Events are
+    deduplicated by content-derived event_id, so re-appending the same
+    replay is idempotent."""
+    events = _outcome_events(ws.root / ".ctx-session-reads")
+    seen: set[str] = set()
+    per: dict[str, dict[str, int]] = {}
+    for ev in events:
+        eid = str(ev.get("event_id") or "")
+        if eid and eid in seen:
+            continue
+        seen.add(eid)
+        outcomes = [str(o) for o in ev.get("outcomes") or []]
+        censored = bool(ev.get("censored"))
+        for op in (str(ev.get("operator") or "unknown"), "*"):
+            b = per.setdefault(op, {"observations": 0, "censored": 0,
+                                    **{o: 0 for o in _PV_RATE_KEY}})
+            b["observations"] += 1
+            if censored:
+                b["censored"] += 1
+            for o in outcomes:
+                if o in _PV_RATE_KEY:
+                    b[o] += 1
+
+    table: dict[str, dict[str, Any]] = {}
+    for op in sorted(per):
+        b = per[op]
+        obs = b["observations"]
+        non_censored = obs - b["censored"]
+        row: dict[str, Any] = {
+            "observations": obs,
+            "attributed": non_censored,
+            "censored": b["censored"],
+        }
+        for outcome, key in _PV_RATE_KEY.items():
+            denom = obs if outcome in _PV_POSITIVE else non_censored
+            row[key] = round(b[outcome] / denom, 2) if denom else 0.0
+        row["confidence"] = confidence_class(obs)
+        table[op] = row
+    return {
+        "version": 1,
+        "minimum_observations": PLAN_VALUE_MIN_OBSERVATIONS,
+        "operators": table,
+    }
+
+
 def _run_total_bytes(manifest: dict[str, Any]) -> int:
     total = 0
     for stream in (manifest.get("streams") or {}).values():
@@ -139,6 +252,7 @@ def compile_policy(
     ws: Workspace,
     min_runs: int = 5,
     max_p95_bytes: int | None = None,
+    plan_value: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile a policy epoch from the store's run telemetry.
 
@@ -221,6 +335,11 @@ def compile_policy(
         # Additive: absent from the hash body when empty so pre-reflex
         # epochs keep their ids.
         body["digest_density"] = digest_density
+    if plan_value and plan_value.get("operators"):
+        # Additive exactly like digest_density: only a non-empty compiled
+        # prior table enters the hash body, so epochs without plan-value
+        # data keep their ids and old policy files stay byte-compatible.
+        body["plan_value"] = plan_value
     epoch = hashlib.sha256(canonical_json(body)).hexdigest()[:12]
     out: dict[str, Any] = {
         "schema": POLICY_SCHEMA,
@@ -230,6 +349,8 @@ def compile_policy(
     }
     if digest_density:
         out["digest_density"] = digest_density
+    if plan_value and plan_value.get("operators"):
+        out["plan_value"] = plan_value
     return out
 
 
@@ -285,6 +406,33 @@ def render_policy(policy: dict[str, Any]) -> str:
         )
         for sig in sorted(density):
             lines.append(f"{json.dumps(str(sig))} = {json.dumps(str(density[sig]))}")
+    pv = policy.get("plan_value") or {}
+    if pv.get("operators"):
+        lines.extend(
+            [
+                "",
+                "# Plan-value priors: per-operator downstream-outcome rates",
+                "# compiled from the evidence-outcome ledger (deterministic",
+                "# attribution, docs/EVIDENCE-PLANS.md). ADVISORY ranking input",
+                "# only — hard constraints (safety, capability tier, plan",
+                "# validity, precision, freshness, evidence floors, budgets)",
+                "# always dominate. Counts ride with rates; censored events",
+                "# never count as negative evidence. Runtime never writes here.",
+                "[plan_value]",
+                f"version = {int(pv.get('version', 1))}",
+                f"minimum_observations = {int(pv.get('minimum_observations', PLAN_VALUE_MIN_OBSERVATIONS))}",
+            ]
+        )
+        for op in sorted(pv["operators"]):
+            row = pv["operators"][op]
+            lines.extend(["", f"[plan_value.{json.dumps(str(op))}]"])
+            for key in (
+                "observations", "attributed", "censored",
+            ):
+                lines.append(f"{key} = {int(row.get(key, 0))}")
+            for key in sorted(k for k in row if k.endswith("_rate")):
+                lines.append(f"{key} = {float(row[key]):.2f}")
+            lines.append(f"confidence = {json.dumps(str(row.get('confidence', 'insufficient')))}")
     return "\n".join(lines) + "\n"
 
 
