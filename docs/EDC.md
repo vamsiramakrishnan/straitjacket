@@ -47,6 +47,35 @@ The genuinely new object is the **Evidence Contract**: it makes rules 1–2
 machine-checkable. A plan that cannot fit REQUIRED facts escalates
 (bigger budget → dense → breaker) — it never silently truncates them.
 
+## The layering law
+
+> **Policy cannot buy what extraction didn't build.** Budget, tier,
+> reflex, and epoch policy select among representations extraction made
+> available; no amount of downstream conditionality can recover a fact
+> class the semantic model never represented. (Receipt: spec3 round 1 —
+> failure asymmetry doubled the budget and the renderer spent it on the
+> only structure it had, one traceback; seven failure identities were
+> unreachable at any budget.)
+
+The five layers are separated because each fails differently and is
+fixed differently:
+
+| layer | failure signature | fix path | in-session recoverable? |
+|---|---|---|---|
+| 1 · semantic extraction | fact class absent; budget increases change nothing | code (extractor) | ❌ — invisible to policy |
+| 2 · evidence requirements (contract) | digest looks complete, decisions still starve — the *silent* failure | contract table review | ❌ — looks like model error |
+| 3 · delivery policy | wrong plan for this reader/moment | reflex (fast), epoch (slow) | ✅ — the adaptive layer |
+| 4 · rendering | facts present but illegible/mis-ordered | golden tests | ✅ trivially |
+| 5 · outcome measurement | loop blind or mis-trained | ledger/schema audit | ❌ — corrupts the slow loop |
+
+Conflating layers is what made an extraction defect masquerade as a
+budget defect. Only layer 3 may adapt at runtime; layers 1–2 change by
+code and committed tables; layer 5 is the instrument and must stay
+boring. Test classes follow the layers: **contract-conformance tests**
+(Facts completeness vs raw output — does extraction represent every
+REQUIRED class?) are a distinct suite from rendering goldens, and the
+absence of that suite is how pytest/v1 shipped structurally starved.
+
 ## Design refinements (binding)
 
 1. **The null plan is first-class.** The plan space includes raw
