@@ -176,6 +176,14 @@ timestamps never enter content identity.
 
 </div>
 
+This is what one turn looks like with and without the harness:
+
+<div align="center">
+
+<img src="assets/readme/diagrams/econ.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn until compaction deletes lines without trace. With: the transcript holds a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free."/>
+
+</div>
+
 Real output. First, the v0.20 head/tail window on a 4,809-line run with no
 error keywords — the tail carries the conclusions, and the omitted middle
 keeps an address:
@@ -296,6 +304,14 @@ zero-integration generality, rtk's 15-host reach and <10ms single binary,
 Ponytail's 20-host rule files, Maki's OS-level sandbox (ours arrives with the
 broker, Phase 3).
 
+The needle case, drawn out — the same anomalous line under each approach:
+
+<div align="center">
+
+<img src="assets/readme/diagrams/fates.svg" width="100%" alt="A 20,001-line log with one anomalous line. Compaction deletes it without trace. A rewriting proxy dropped it in every measured run (347,595 tokens in, 68 out). straitjacket's logtemplate profile kept it verbatim with an exact retrieval address."/>
+
+</div>
+
 ### Regime scoreboard (worst case and best case, all measured)
 
 | Regime | straitjacket vs naive | vs the field |
@@ -365,8 +381,16 @@ skill (protocol)        plugin (MCP + hooks)
 
 ### Steering policy (the hooks)
 
-The PreToolUse classifier is conservative and config-driven. Under default
-`steering = "auto"` it **rewrites instead of denying**:
+The PreToolUse classifier is conservative and config-driven. Here is what
+happens to a command you type:
+
+<div align="center">
+
+<img src="assets/readme/diagrams/lanes.svg" width="100%" alt="A PreToolUse classifier sorts every command into three lanes: bounded commands run untouched; flooding commands are rewritten through ctx run with the token price shown; secret paths, outside-workspace access and interactive programs always ask first."/>
+
+</div>
+
+Under default `steering = "auto"` it **rewrites instead of denying**:
 
 - **Untouched**: ctx-routed calls, bounded commands and all-bounded chains,
   small reads, redirections to real files.
@@ -446,6 +470,15 @@ ctx diff run:7bd91f2a4c3d run:9ae02c17b5ff
 ```
 
 ### Selector grammar
+
+Every address has the same shape, and the same address returns the same
+bytes on any later day:
+
+<div align="center">
+
+<img src="assets/readme/diagrams/address.svg" width="100%" alt="ctx get run:51c70b74fa1f#stdout --lines 8412:8422 — the retrieval verb, an immutable content-addressed artifact id, the stream, and exact line coordinates. The same address returns the same bytes forever."/>
+
+</div>
 
 Absolute host paths never appear in model-visible output. Two address spaces:
 

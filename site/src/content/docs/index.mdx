@@ -58,6 +58,10 @@ gates, and every shipped mechanism attaches to exactly one of them.
 
 ## The measured results
 
+<div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow); margin-bottom: 1rem;">
+  <img src="/straitjacket/diagrams/econ.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
+</div>
+
 Every steering change ships only after a measured A/B or head-to-head, all
 recorded in
 [`evals/`](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals).
