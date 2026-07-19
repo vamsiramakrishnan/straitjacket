@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ctx-harness"
-version = "0.24.0"
+version = "0.25.0"
 description = "straitjacket: artifact-backed, repository-aware context containment harness for Antigravity. Unbounded tool output becomes an immutable artifact plus a bounded deterministic digest."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,6 +37,10 @@ dev = ["pytest>=8", "jsonschema>=4"]
 map = ["grimp>=3", "networkx>=3"]
 fast = ["orjson>=3"]
 code = ["jedi>=0.19", "tree-sitter>=0.21", "tree-sitter-language-pack>=0.1"]
+# Semantic/taint plan operators (docs/EVIDENCE-PLANS.md P3). Invoked
+# hermetically (local rules, --metrics=off, no registry fetch); absence is
+# a declared skip, never an error.
+sem = ["semgrep>=1.60"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ctx"]

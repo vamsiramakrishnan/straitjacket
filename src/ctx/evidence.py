@@ -54,6 +54,19 @@ _SEVERITIES = ("info", "warning", "error", "critical")
 # (EDC §5 amendment 4: the proposed ``failure:<name>`` resolves nowhere).
 _SELECTOR_RE = re.compile(r"^(span:[0-9a-f]{6,64}|lines:\d+:\d+|blob:[0-9a-f]{6,64})$")
 
+# Closed relation vocabulary (docs/EVIDENCE-PLANS.md, graph v2). Relations
+# are additive: a graph with none serializes byte-identically to v1, so
+# every existing graph_id and pinned golden is unchanged. Relations arrive
+# now because a consumer finally exists — the investigation join/rank
+# renderer ("fact lists before fact graphs", honored).
+RELATION_VOCABULARY = (
+    "span_contains",
+    "symbol_identity",
+    "frame_of",
+    "changed_in",
+    "taints",
+)
+
 
 @dataclass(frozen=True)
 class EvidenceRef:
@@ -130,6 +143,11 @@ class EvidenceGraph:
     parser_warnings: tuple[str, ...] = ()
     coverage: Mapping[str, Any] = field(default_factory=_default_coverage)
     volatile: Mapping[str, Any] = field(default_factory=dict)
+    # v2 (additive): typed relations between item ids / extracted keys, as
+    # (from_id, relation, to_id) triples with ``relation`` drawn from the
+    # closed RELATION_VOCABULARY. Empty ⇒ the graph serializes as v1,
+    # byte-identical to before this field existed.
+    relations: tuple[tuple[str, str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.outcome not in _OUTCOMES:
@@ -138,6 +156,16 @@ class EvidenceGraph:
         # whether the extractor built lists or tuples.
         object.__setattr__(self, "items", tuple(self.items))
         object.__setattr__(self, "parser_warnings", tuple(str(w) for w in self.parser_warnings))
+        rels = []
+        for rel in self.relations:
+            frm, kind, to = rel
+            if kind not in RELATION_VOCABULARY:
+                raise ValueError(
+                    f"relation outside the closed vocabulary: {kind!r}; "
+                    f"expected one of {RELATION_VOCABULARY}"
+                )
+            rels.append((str(frm), str(kind), str(to)))
+        object.__setattr__(self, "relations", tuple(rels))
         cov = dict(_default_coverage(), **dict(self.coverage))
         missing = {"parsed", "total_estimate", "complete"} - set(cov)
         if missing:  # pragma: no cover - defaults make this unreachable
@@ -171,7 +199,12 @@ def _item_payload(item: EvidenceItem) -> dict[str, Any]:
 def to_canonical_bytes(graph: EvidenceGraph) -> bytes:
     """Canonical serialization of a graph: store.canonical_json semantics
     (sorted keys, compact separators, utf-8), with ``volatile`` stripped —
-    presentation never enters content identity, and neither does timing."""
+    presentation never enters content identity, and neither does timing.
+
+    Version negotiation is by content, not by flag: a graph without
+    relations serializes as ``ctx.evidence-graph/v1`` byte-identically to
+    before the field existed (every pinned golden holds); a graph carrying
+    relations serializes as v2 with a ``relations`` key."""
     payload = {
         "schema": "ctx.evidence-graph/v1",
         "family": graph.family,
@@ -183,6 +216,9 @@ def to_canonical_bytes(graph: EvidenceGraph) -> bytes:
         "parser_warnings": list(graph.parser_warnings),
         "coverage": dict(graph.coverage),
     }
+    if graph.relations:
+        payload["schema"] = "ctx.evidence-graph/v2"
+        payload["relations"] = [list(r) for r in graph.relations]
     return canonical_json(payload)
 
 
@@ -259,6 +295,7 @@ class RenderedEvidence:
 __all__ = [
     "Outcome",
     "Severity",
+    "RELATION_VOCABULARY",
     "EvidenceRef",
     "EvidenceItem",
     "EvidenceGraph",

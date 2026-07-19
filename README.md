@@ -7,7 +7,7 @@
 
 [Quickstart](#-quickstart) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.24.0 (pre-1.0, minor bump per mechanism) · 714 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 783 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
 </div>
 
@@ -470,6 +470,7 @@ Full flags and when-to-use detail:
 | `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/--records/--json-pointer/--bytes`) · shape stats, or a priced symbol outline on a single code file |
 | `map` / `def` / `refs` / `diag` | ranked priced codebase map · symbol definition/reference/diagnostic verbs |
 | `callers` / `callees` / `impact` | call graph: direct callers, callees, transitive blast radius (`--depth ≤6`) — one query replaces a recursive grep trace |
+| `plan` / `investigate` | compiled evidence plans ([`docs/EVIDENCE-PLANS.md`](docs/EVIDENCE-PLANS.md)): `validate`/`price` a `ctx.plan/v1` DAG statically, `run` it locally (joins, tests, structural/semantic scans), get ONE ranked investigation digest — O(hypothesis epochs) model rounds instead of O(operations) |
 | `diff run:A run:B` | regression delta between captured runs, span-backed |
 | `stats --session` / `gain` | wire scorecard (rounds, cache classes, effort mix) · cumulative savings |
 | `checkpoint` / `pin` / `gc` | cache epochs · retention leases · mark-and-sweep |

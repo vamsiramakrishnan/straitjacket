@@ -2,9 +2,11 @@
 
 Exposes exactly one stable tool schema with an ``op`` discriminator:
 ``search | get | stats | map | def | refs | diag | callers | callees | impact |
-diff | repo | doctor``. Arbitrary command execution stays
+diff | repo | doctor | investigate``. Arbitrary command execution stays
 on ``ctx run`` through the native command tool so the user's permission flow
-remains visible; this server is bounded-only by construction.
+remains visible; this server is bounded-only by construction —
+``investigate`` accepts observe-class evidence plans only (execute-class
+ops are typed rejections at tier='mcp').
 
 Transport: MCP stdio — newline-delimited JSON-RPC 2.0.
 """
@@ -39,12 +41,15 @@ TOOL_SCHEMA: dict[str, Any] = {
                 "enum": [
                     "search", "get", "stats", "map",
                     "def", "refs", "diag", "callers", "callees", "impact",
-                    "diff", "repo", "doctor",
+                    "diff", "repo", "doctor", "investigate",
                 ],
                 "description": (
                     "callers/callees: direct call-graph edges for options.symbol; "
                     "impact: transitive callers (blast radius, options.depth<=6); "
-                    "diff: regression delta between two run: refs (options.refA/refB)."
+                    "diff: regression delta between two run: refs (options.refA/refB); "
+                    "investigate: execute an observe-class ctx.plan/v1 evidence plan "
+                    "(options.plan, a JSON object) — total DAG, bounded, one digest; "
+                    "execute-class ops (test.run, ast.rewrite.*) are CLI-only."
                 ),
             },
             "workspace": {"type": "string", "description": "workspace path or alias"},
@@ -223,6 +228,18 @@ def _dispatch(args: dict[str, Any]) -> str:
         if not ref_a or not ref_b:
             raise RetrievalError("diff requires options.refA and options.refB (run: refs)")
         result = run_diff(store, ws, ref_a, ref_b)
+    elif op == "investigate":
+        from ctx.plan_exec import execute_plan
+
+        opts = args.get("options") or {}
+        plan_doc = opts.get("plan")
+        if not isinstance(plan_doc, dict):
+            raise RetrievalError(
+                "investigate requires options.plan (a ctx.plan/v1 JSON object)"
+            )
+        # Bounded-only by construction (SPEC §10.4): the MCP tier validates
+        # at tier='mcp', so execute-class ops are typed rejections here.
+        result, _code = execute_plan(ws, store, plan_doc, tier="mcp")
     elif op == "repo":
         result = stats(store, ws, "repo:")
     elif op == "doctor":

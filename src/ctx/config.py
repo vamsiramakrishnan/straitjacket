@@ -84,6 +84,18 @@ class StorePolicy:
 
 
 @dataclass(frozen=True)
+class PlanPolicy:
+    """Compiled evidence plans (docs/EVIDENCE-PLANS.md): totality bounds and
+    the epochal-control default. ``max_nodes``/``max_fanout`` are ceilings —
+    a plan's own budget may only tighten them, never exceed them."""
+
+    max_nodes: int = 24
+    max_fanout: int = 64
+    wall_seconds: float = 120.0
+    replans: int = 1
+
+
+@dataclass(frozen=True)
 class WorkspacePolicy:
     allow_outside_root: bool = False
     follow_symlinks: bool = False
@@ -113,6 +125,7 @@ class Config:
     guard: Guard = field(default_factory=Guard)
     engagement: Engagement = field(default_factory=Engagement)
     store: StorePolicy = field(default_factory=StorePolicy)
+    plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # ws:<alias> routing targets: alias -> workspace path (absolute, or
@@ -150,6 +163,7 @@ def load_config(workspace_root: Path | None) -> Config:
     budgets = _pick(raw.get("budgets") or {}, Budgets)
     guard = _pick(raw.get("guard") or {}, Guard)
     store = _pick(raw.get("store") or {}, StorePolicy)
+    plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
 
     eng_raw = raw.get("engagement") or {}
@@ -187,6 +201,7 @@ def load_config(workspace_root: Path | None) -> Config:
         guard=guard,
         engagement=engagement,
         store=store,
+        plan=plan,
         redaction=redaction,
         scopes=scopes,
         aliases=aliases,

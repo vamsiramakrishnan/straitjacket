@@ -4,6 +4,65 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.25.0] - 2026-07-19
+
+The compiled-evidence-plans wave (ROADMAP M-J, docs/EVIDENCE-PLANS.md):
+repository exploration moves from an LLM-mediated control loop toward one
+model round per hypothesis epoch — the model compiles a typed, total,
+bounded DAG of evidence operations; the harness validates, prices, and
+executes it locally; one causally organized digest returns.
+
+- **`ctx.plan/v1` IR** (`plan_ir.py`): model-authored JSON DAG, statically
+  validated (cycle-free by construction — edges reference earlier steps
+  only; ≤24 nodes; mandatory foreach caps ≤64; `when` guard micro-grammar;
+  closed rejection vocabulary) and priced before execution
+  (`ctx plan validate|price`, the PRICED-CONTEXT idiom).
+- **22 logical operators** (`plan_ops.py`) over shipped machinery: the q
+  stage registry (`code.search/refs/callers/callees/impact`, combinators,
+  `q.pipe`), facts Angle-lite joins (`evidence.join` — the root-cause join
+  `failing_in_changed`, counterevidence via `untouched_failures`),
+  skeleton outlines, `repo.changed` (now deriving decl facts for changed
+  files, upgrading the join to symbol precision), `test.run` (birth-gate
+  capture + failing census + `run:` handle). Ops declare capability class
+  (observe|execute), cost class, and engine requirements.
+- **Executor + `investigate/v1` digest** (`plan_exec.py`): plan-order
+  execution (deterministic bytes by construction), per-node
+  `ctx.plan-node/v1` blobs, typed skip declarations (guards, engine
+  absences, error cascades, wall-budget exhaustion — the digest always
+  renders), `ctx.investigation/v1` manifests, ranked conclusion candidates
+  with plane attribution (dynamic/temporal/static/semantic), REQUIRED
+  counterevidence (empty form declared), coverage attestation with
+  per-node engine disclosure, contract-checked at the selection seam
+  (`contracts/investigate.toml`). Expensive external-engine scans are
+  node-cached on a content-sensitive workspace fingerprint.
+- **ast-grep tier** (`astgrep.py`, opportunistic binary): structural
+  `ast.search` with span-shaped sorted matches; degraded tier is a
+  metavariable-anchored regex honestly labeled `textual`. Probe rejects
+  shadow-utils `sg`. `ast.rewrite.preview` mints the full patch as an
+  addressable blob; `apply` is transactional (`git apply`) and refuses on
+  generation drift. No lossy fallback for rewrites, by design.
+- **Semgrep tier** (`semgrep_engine.py`, `[sem]` extra): hermetic by
+  construction (local rules confined to the workspace, `--metrics=off`,
+  no version check, no registry fetch); findings normalized/sorted into
+  typed rows with dataflow-trace frames; absence is a declared skip.
+- **EvidenceGraph v2 relations** (additive): typed `(from, relation, to)`
+  triples from a closed vocabulary; a graph without relations serializes
+  byte-identically to v1, so every pinned golden and cache key holds.
+- **CLI + MCP**: `ctx plan validate|price|run|ops`, `ctx investigate`
+  (epochal control: replans beyond the `[plan]` allowance get a declared
+  banner + reflex-plane ledger event, never a block). MCP op
+  `investigate` accepts observe-class plans only; execute-class ops are
+  typed rejections at tier=mcp (SPEC §10.4 preserved; tool description
+  bytes unchanged — no prefix-version bump).
+- Declared debt e319eef641: physical operator selection is
+  availability-based (the shipped `_select_engine` idiom); the
+  telemetry-compiled `[plan_engines]` cost-table epoch (EVIDENCE-PLANS
+  P4) lands once plan-node telemetry accumulates.
+- 43 new acceptance tests (IR totality, end-to-end diagnosis, byte
+  determinism, addressability, tier enforcement, fake-binary engine
+  contracts, generation-guarded apply); full suite 757 passed on both the
+  full and minimal (no-binaries) matrices.
+
 ## [0.24.0] - 2026-07-19
 
 The coverage-corpus wave: rtk's breadth question answered the house way —

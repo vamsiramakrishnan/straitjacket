@@ -3,9 +3,14 @@
 # Compiled evidence plans (`ctx plan` / `ctx investigate`)
 
 **Date:** 2026-07-19 · design for the post-ALGEBRA wave (doc 5 of 5).
-**Status:** implementation plan — phases, contracts, and referee gates named
-before any code. Builds directly on EDC (delivery) and ALGEBRA (derivation);
-nothing here invents a new policy layer.
+**Status:** shipped v0.25.0 — P0–P3 + the P5 surface (`plan_ir` /
+`plan_ops` / `plan_exec` / `astgrep` / `semgrep_engine`, `investigate/v1`
+digest + contract, CLI `plan`/`investigate`, MCP observe-tier op; 43
+acceptance tests). Outstanding, declared: the P4 telemetry-compiled
+`[plan_engines]` cost-table epoch (debt e319eef641 — selection today is
+availability-based with disclosure) and the four-arm referee, which needs
+live model sessions. Builds directly on EDC (delivery) and ALGEBRA
+(derivation); nothing here invents a new policy layer.
 
 ## The thesis
 

@@ -38,3 +38,4 @@
 {"id": "19520be4f7", "op": "resolve"}
 {"id": "fac2339eff", "note": "q fails-stage precondition opacity (live A/B receipt: 3 identical dry joins + 1 malformed before abandonment): 'fails last' with no derivable run must auto-capture the family's test command under the birth gate OR emit a teaching empty-result digest naming the precondition; then n>=3 taught-vs-untaught referee", "op": "add", "ref": "src/ctx/facts.py"}
 {"id": "fac2339eff", "op": "resolve"}
+{"id": "e319eef641", "note": "plan physical-operator selection is availability-based (shipped _select_engine idiom); the telemetry-compiled [plan_engines] cost-table epoch (EVIDENCE-PLANS P4) is deferred until plan-node telemetry accumulates", "op": "add", "ref": "docs/EVIDENCE-PLANS.md"}
