@@ -330,6 +330,44 @@ often the command repeats. The evidence plane hosts the fast loop
 within hard bounds; the economic plane sets reviewed defaults and may
 never override the planes above it.
 
+## Guard classes, concrete plans, resolver, coverage receipts (§11.4–14)
+
+**§11.4 adopted**: every guard declares `class` (safety | usability) and
+`adaptive` — the three-plane doctrine becomes a testable property:
+safety-class ⇒ adaptive:false, enforced by enumeration plus a property
+test that safety decisions are byte-identical under any reflex/circuit/
+epoch state. This IS the rule-7 invariant test.
+
+**§12 adopted** (PASS_SUMMARY / FAIL_CENSUS / DENSE / BYPASS / FLOOD
+formats) with three corrections:
+1. **Addresses are contract-driven, not plan-driven** — §13's
+   pass_summary sets include_addresses=False while §12.1's warnings
+   variant correctly emits one. Resolution: any nonempty retrievable-
+   tier class emits its address in every mode; include_addresses
+   governs teaching prose only. Provenance is never a plan knob.
+2. **Shared-cause group labels are extracted keys** (file, failure
+   class, shared top frame) — never invented topic prose. The spec's
+   own determinism guardrail, made mechanical; the example's
+   "authentication path" label is the violation class.
+3. **Derived artifacts are minted `blob:` handles** — FLOOD's
+   machine-readable full census is a content-addressed canonical-JSON
+   blob referenced from the digest (put_blob exists; leases/GC
+   inherited). No synthetic streams; derived structured artifacts
+   become a first-class, generalizable pattern.
+
+**§13 adopted**: circuit state → mode; failure and pressure multipliers;
+floor applied after multipliers (pressure never squeezes below the
+evidence floor), ceiling last — with `floor ≤ ceiling` asserted at
+contract load. The resolver never silently violates coverage: an
+unfittable census selects FLOOD with declared partial inline coverage.
+
+**§14 adopted**: the renderer returns (text, CoverageReceipt, plan) —
+coverage filled by selection accounting, never by re-parsing output.
+Addition: the receipt carries extraction's `attested_complete` so
+required_fraction over a partial parse cannot masquerade as full
+coverage. Receipt fields feed the emission event (§9) and the existing
+raw/emitted telemetry.
+
 ## The canonical picture
 
 ```
