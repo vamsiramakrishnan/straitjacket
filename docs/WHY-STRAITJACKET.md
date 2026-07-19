@@ -16,21 +16,21 @@ boundary crossings between deterministic computation and probabilistic reasoning
 
 Let:
 
-- \(R\) be the number of model reasoning rounds;
-- \(P_0\) be the fixed prompt prefix;
-- \(O_i\) be tool output introduced after round \(i\).
+- $R$ be the number of model reasoning rounds;
+- $P_0$ be the fixed prompt prefix;
+- $O_i$ be tool output introduced after round $i$.
 
 Without perfect cache reuse, total model-visible input is approximately:
 
-\[
+$$
 C_{input} \approx R P_0 + \sum_{i=1}^{R}(R-i)O_i
-\]
+$$
 
-If outputs have average size \(\bar O\), the growing-history term approaches:
+If outputs have average size $\bar O$, the growing-history term approaches:
 
-\[
+$$
 O(R^2 \bar O)
-\]
+$$
 
 The expensive mistake is not only printing 100,000 tokens once. It is introducing those
 tokens early enough that later rounds repeatedly inherit them.
@@ -41,11 +41,11 @@ by deleting evidence without a durable route back to the exact source.
 ## Bounded digests reduce the inner term
 
 Straitjacket captures every raw byte and replaces each unbounded output with a digest
-whose visible size is bounded by \(B\):
+whose visible size is bounded by $B$:
 
-\[
+$$
 C_{bounded} = O(RP_0 + R^2B), \quad B \ll \bar O
-\]
+$$
 
 This is a large improvement, but interactive exploration can still require many model
 rounds. Bounded output removes payload growth; it does not automatically remove control
@@ -63,15 +63,15 @@ The model should specify the epistemic objective. A local evidence program can s
 parallelize, cache, deduplicate, and join the operations beside the repository, then
 return one bounded result.
 
-Let \(H\) be the number of genuine hypothesis transitions. A well-planned workflow aims
-for model rounds proportional to \(H\), not the number of shell commands \(M\):
+Let $H$ be the number of genuine hypothesis transitions. A well-planned workflow aims
+for model rounds proportional to $H$, not the number of shell commands $M$:
 
-\[
+$$
 C_{planned} = O(H(P + D))
-\]
+$$
 
-where \(D\) is the decision-oriented digest for one hypothesis epoch and usually
-\(H \ll M\).
+where $D$ is the decision-oriented digest for one hypothesis epoch and usually
+$H \ll M$.
 
 The right rule is not “plan everything once.” It is:
 
@@ -83,9 +83,9 @@ The right rule is not “plan everything once.” It is:
 Repository parsing, AST search, database joins, and artifact indexing still consume
 compute. The system objective is not minimum compute; it is minimum weighted cost:
 
-\[
+$$
 \min(\alpha C_{model} + \beta C_{latency} + \gamma C_{quality\ loss} + \delta C_{local})
-\]
+$$
 
 For current coding-agent economics, repeated inference, extra turns, and wrong decisions
 usually dominate incremental local CPU. Content-keyed indexes make the local term cheaper
@@ -113,15 +113,15 @@ This is why determinism is both a correctness property and an economic property.
 A 100 ms local search can cost seconds when it requires another model turn to select,
 parse, and react to it. Interactive execution approaches:
 
-\[
+$$
 T_{serial} = \sum_i T_{tool_i} + M T_{model}
-\]
+$$
 
 A local DAG approaches:
 
-\[
+$$
 T_{planned} = T_{plan} + T_{critical\ path} + T_{reason}
-\]
+$$
 
 Independent operators can run in parallel. More importantly, repeated model queueing,
 prompt ingestion, inference, and tool selection disappear from the critical path.
@@ -140,15 +140,15 @@ Large context can lower quality through:
 
 The useful quantity is evidence density:
 
-\[
+$$
 \rho = \frac{decision\text{-}relevant\ evidence}{model\text{-}visible\ evidence}
-\]
+$$
 
 But density alone can be gamed by dropping decisive evidence. The delivery objective is:
 
-\[
+$$
 quality \propto recall_{decisive} \times precision_{presented} \times coverage\ confidence
-\]
+$$
 
 That is why a Straitjacket digest includes a census, exact addresses, declared omission,
 and a coverage receipt—not merely a compressed summary.
@@ -215,15 +215,15 @@ what occupies the window.
 
 A containment claim is meaningful only at matched or better task success:
 
-\[
+$$
 S_{SJ} \geq S_{native} - \epsilon
-\]
+$$
 
 while reducing:
 
-\[
+$$
 tokens + \lambda_1 turns + \lambda_2 latency + \lambda_3 unresolved\ omissions
-\]
+$$
 
 The most honest public result is a Pareto frontier: success, tokens, turns, wall time,
 re-execution, evidence recall, and false interventions—not one proprietary score.
