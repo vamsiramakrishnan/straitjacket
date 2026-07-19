@@ -171,6 +171,57 @@ escalates descent depth per starvation; the circuit breaker is the
 ladder's floor (capped raw); graduated steering is its ceiling (level 0,
 the null plan).
 
+## The canonical picture
+
+```
+SAFETY PLANE (never adaptive, spans BOTH ends)
+  entry: authorization · confinement · hard caps · timeout
+  exit:  redaction · control-stripping at emission
+                               │
+                               ▼
+Command ──► Execute ──► Raw artifacts (CAS) ──► Semantic extractor
+                                                     │
+                                                     ▼
+                                          Evidence Graph (facts + spans)
+                                                     │
+              ┌──────────────────┬───────────────────┼──────────────────┐
+              │                  │                   │                  │
+              ▼                  ▼                   ▼                  ▼
+      Evidence Contract   Session Outcomes     Signal Record      Policy Epoch
+      required census     reruns/landings      window % · tier    reviewed defaults
+              │                  │                   │                  │
+              └──────────────────┴─────────┬─────────┴──────────────────┘
+                                           ▼
+                              Delivery Policy Resolver
+                                           │
+                                           ▼
+              PASS_SUMMARY / FAIL_CENSUS / DENSE / BYPASS
+              (BYPASS is two states: steering's null plan, entered from
+               above at level 0 · the breaker's concession, entered from
+               below at the ladder floor, capped raw — the ledger must
+               distinguish them or the compiler learns nonsense)
+                                           │
+                                           ▼
+                              Deterministic Renderer
+                                           │
+                          ┌────────────────┴────────────────┐
+                          ▼                                 ▼
+                 bounded transcript                  artifact store
+                          │                         (spans, manifests)
+                          ▼
+                 model's next action
+                          │
+                          ▼
+          typed intervention outcome event
+          (records the ACTIVE PLAN — the compiler
+           needs plan-conditional P_rerun(p))
+                          │
+                   ┌──────┴──────┐
+                   ▼             ▼
+             fast session     offline epoch
+             reflex/breaker   compiler + review
+```
+
 ## Build path
 
 1. **pytest/v2 = the first EDC instance** (no new framework): explicit
