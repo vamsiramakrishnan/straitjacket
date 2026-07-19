@@ -237,7 +237,7 @@ def _line_set(text: str, label: str) -> set[str] | None:
         return None
     names: set[str] = set()
     for raw in _NAME_SPLIT_RE.split(matches[-1]):
-        name = raw.strip().strip("`'\"").rstrip(".")
+        name = raw.strip().strip("`'\".,;:")
         if "::" in name:
             name = name.split("::")[-1]
         if name and name.lower() not in ("none", "-"):
