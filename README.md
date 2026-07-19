@@ -1,6 +1,6 @@
 # straitjacket 🧥
 
-**Status:** v0.23.0 (pre-1.0, minor bump per mechanism wave) · 669 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.24.0 (pre-1.0, minor bump per mechanism wave) · 714 tests · hosts: Claude Code + Antigravity · Apache-2.0
 
 One `pytest -q` can dump 300k tokens into your agent's transcript. Every
 turn after that re-sends them — a routine `mcp__github__list_commits` alone
@@ -105,6 +105,7 @@ flowchart LR
     G2 --- M2["Tier-0 observer proxy<br/>universal PostToolUse gate<br/>wire.jsonl · window.json"]
     G3 --- M3["session read ledger<br/>window-pressure loop<br/>epoch-latched rescue"]
     G4 --- M4["emission governor tiers<br/>cite-don't-quote<br/>solution ladder"]
+    M1 ~~~ M2 ~~~ M3 ~~~ M4
 ```
 
 *The taxonomy that organizes everything: prevention at birth, observation

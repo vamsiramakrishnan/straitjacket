@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ctx-harness"
-version = "0.23.0"
+version = "0.24.0"
 description = "straitjacket: artifact-backed, repository-aware context containment harness for Antigravity. Unbounded tool output becomes an immutable artifact plus a bounded deterministic digest."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -50,3 +50,6 @@ include = ["src/ctx", "plugins", "README.md", "LICENSE"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "sj_canary: Tier-0 evidence-channel conformance tests (evals/BENCHMARK.md); run with -m sj_canary as the PR gate",
+]

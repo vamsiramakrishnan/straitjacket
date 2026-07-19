@@ -103,6 +103,37 @@ tenants it hosts for free: warm LSP servers for M-B's multi-language tier,
 and cached map/graph indexes for M-C. Latency wins are incidental, not the
 justification (see the language analysis in evals/).
 
+## M-F · Session-history learning loop (shipped v0.24, extending)
+
+*The goldmine already on disk: every Claude Code host journals full
+transcripts under `~/.claude/projects`. Replay them through the real
+harness code, open-loop, and let real sessions rank the next mechanism.*
+
+**Shipped**: `ctx replay [paths|--all-projects] [--gaps]` (`ctx.replay`) —
+workspace-free, read-only, deterministic. Per session: interception
+verdicts over recorded commands, recorded-vs-simulated wire residency,
+and evidence sufficiency (facts the model provably used downstream,
+scored inline-in-digest vs one-hop). `--gaps` aggregates the empirical
+coverage priority list: raw tokens by claiming profile, slicer-heavy
+programs, `ctx eval` opportunities. Read results are counted under the
+read path, never shape-digested (a file containing test markers is not a
+test run).
+
+**Next increments**
+- Regression gate in CI: replay archived harnessed transcripts after any
+  profile change; evidence-sufficiency on digests a model actually worked
+  from must not drop (measured 11/11 and 42/42 on spec3 archives).
+- Divergence probes (small-model tier): at flagged starvation points,
+  ask a canary model for its next action given the simulated digest;
+  agreement is a canary metric, never proof — open-loop replay stops
+  being ground truth at the first changed observation.
+- Corpus intake: `ctx replay --gaps` output as a committed artifact per
+  epoch, feeding the policy learner the same way wire telemetry does.
+
+**Acceptance**: byte-deterministic reports given identical transcripts;
+zero writes outside the throwaway store; redaction applied to every
+printed fragment.
+
 ## Sequencing
 
 ```

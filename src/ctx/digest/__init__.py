@@ -16,8 +16,16 @@ from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
 from ctx.digest.searchprof import SearchProfile
 from ctx.digest.logprof import LogTemplateProfile
-from ctx.digest.moreprofs import BuildProfile, GitDiffProfile, GoTestProfile, JestProfile
+from ctx.digest.moreprofs import (
+    BuildProfile,
+    CargoTestProfile,
+    GitDiffProfile,
+    GoTestProfile,
+    JestProfile,
+    UnittestProfile,
+)
 from ctx.digest.pytestprof import PytestProfile
+from ctx.digest.tableprof import TableProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
@@ -28,6 +36,10 @@ from ctx.workspace import Workspace
 _PROFILES: tuple[Profile, ...] = (
     PytestProfile(),
     GoTestProfile(),
+    CargoTestProfile(),  # shape-anchored on 'test result:' — compile-error
+    #                      runs decline here and fall to Lint/Build below
+    UnittestProfile(),  # 'Ran N tests' + OK/FAILED — vanilla unittest and
+    #                     Django runtests.py (SWE-bench mine, 2026-07-19)
     JestProfile(),
     GitDiffProfile(),
     LintProfile(),  # before Build/LogTemplate: both would misclaim lint shapes
@@ -36,6 +48,8 @@ _PROFILES: tuple[Profile, ...] = (
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),
+    TableProfile(),  # caps-header aligned tables (docker/kubectl family);
+    #                  strict header rule keeps logs and prose out
     LogTemplateProfile(),
     TextProfile(),
 )
@@ -128,6 +142,7 @@ def digest_output(
     stderr: str = "",
     *,
     is_error: bool = False,
+    argv: list[str] | None = None,
 ) -> tuple[str, str]:
     """Digest an already-produced tool result (not a shell capture).
 
@@ -137,10 +152,14 @@ def digest_output(
     :func:`render_run_digest` to produce a bounded digest carrying a working
     ``ctx get run:<short>#stdout`` retrieval ref.
 
-    ``argv`` is ``[tool_name]`` only — never the tool's arguments — so the
-    command-anchored profiles (git-diff, pytest, search, build) decline and the
-    result is classified purely on its *shape*. That is the if-ladder cure: a
-    new tool needs no new code because dispatch is by output shape.
+    By default the manifest ``argv`` is ``[tool_name]`` only — never the
+    tool's arguments — so the command-anchored profiles (git-diff, pytest,
+    search, build) decline and the result is classified purely on its
+    *shape*. That is the if-ladder cure: a new tool needs no new code
+    because dispatch is by output shape. A caller that *knows* the true
+    command (session replay reconstructing a steered `ctx run`) may pass
+    ``argv`` explicitly to restore command-anchored detection; identity is
+    then a pure function of (bytes, argv).
 
     Returns ``(bounded_digest_text, short_run_id)``.
     """
@@ -165,7 +184,7 @@ def digest_output(
         "schema": "ctx.invocation/v1",
         "workspaceId": ws.workspace_id,
         "cwd": ".",
-        "argv": [tool_name],
+        "argv": list(argv) if argv else [tool_name],
         "shell": False,
         "result": {"exitCode": 0, "signal": None, "timedOut": False},
         "streams": {
