@@ -1,0 +1,37 @@
+{
+  "corpus": {
+    "lines": 20001,
+    "bytes": 1002594,
+    "raw_tokens_o200k": 302628,
+    "quiet_needle_line": 14238
+  },
+  "arms": [
+    {
+      "tool": "headroom-ai 0.32.1",
+      "out_tokens": 357,
+      "self_reported_before": 286649,
+      "self_reported_after": 434,
+      "transforms": [
+        "router:protected:user_message",
+        "router:tool_result:log",
+        "router:protected:user_message",
+        "router:protected:user_message",
+        "router:protected:user_message",
+        "router:protected:user_message",
+        "router:protected:user_message"
+      ],
+      "quiet_needle_survived": false,
+      "loud_needle_survived": true,
+      "retrieval_address": null,
+      "output_excerpt": "Investigate the integration log; find anything anomalous.\n\n\n\nINFO worker-13 request req-04997 accepted in 77ms\nINFO worker-10 request req-04998 accepted in 10ms\nINFO worker-4 request req-04999 forwarded in 33ms\nERROR db-pool connection refused on shard 7 (attempt 3)\nINFO worker-27 request req-05001 completed in 17ms\nINFO worker-5 request req-05002 processed in 15ms\nINFO worker-9 request req-05003 dispatched in 40ms\nINFO worker-15 request req-17647 dispatched in 12ms\nINFO worker-32 request req-17648 dispatched in 14ms\nINFO worker-6 request req-17649 validated in 70ms\nERROR cache eviction storm:"
+    },
+    {
+      "tool": "ctx run (logtemplate/v1)",
+      "out_tokens": 524,
+      "quiet_needle_survived": true,
+      "loud_needle_survived": true,
+      "retrieval_address": true,
+      "output_excerpt": "[ctx run:552d8ee0a472 profile=logtemplate/v1]\ncwd: .\ncommand: cat corpus.log\nexit: 0\nstdout: 20,001 lines \u00b7 979.1 KiB \u00b7 est 250,648 tokens\nstderr: 0 lines \u00b7 0 B\ntemplates: 11 cover 20,000/20,001 lines\n  2,608\u00d7 L6: INFO worker-<*> request req-<*> enqueued in <*> \u00b7 span 0f44195122\n  2,545\u00d7 L11: INFO worker-<*> request req-<*> validated in <*> \u00b7 span 432ba740c9\n  2,508\u00d7 L2: INFO worker-<*> request req-<*> accepted in <*> \u00b7 span 02398680c8\n  2,493\u00d7 L5: INFO worker-<*> request req-<*> dispatched in <*> \u00b7 span 0ee5d290df\n  2,485\u00d7 L1: INFO worker-<*> request req-<*> processed in <*> \u00b7 span 293a8c7444"
+    }
+  ]
+}

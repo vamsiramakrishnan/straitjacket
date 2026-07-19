@@ -1,11 +1,19 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 
 // Deployed under GitHub Pages at /straitjacket/ — adjust `site`/`base` if
 // you host elsewhere.
 export default defineConfig({
   site: 'https://vamsiramakrishnan.github.io',
   base: '/straitjacket',
+  // Render the \( … \) and \[ … \] math in the design docs (currently only
+  // WHY-STRAITJACKET) instead of leaking raw TeX onto the page.
+  markdown: {
+    remarkPlugins: [remarkMath],
+    rehypePlugins: [rehypeKatex],
+  },
   integrations: [
     starlight({
       title: 'straitjacket',
@@ -19,6 +27,15 @@ export default defineConfig({
         },
       ],
       sidebar: [
+        {
+          label: 'Practical guides',
+          items: [
+            { label: 'Use cases', slug: 'guides/use-cases' },
+            { label: 'CLI guide', slug: 'guides/cli' },
+            { label: 'Writing a profile', slug: 'guides/writing-a-profile' },
+            { label: 'Why straitjacket', slug: 'guides/why-straitjacket' },
+          ],
+        },
         {
           label: 'Shipped theses',
           items: [
@@ -36,7 +53,7 @@ export default defineConfig({
           ],
         },
       ],
-      customCss: ['./src/styles/brutalist.css'],
+      customCss: ['katex/dist/katex.min.css', './src/styles/brutalist.css'],
     }),
   ],
 });
