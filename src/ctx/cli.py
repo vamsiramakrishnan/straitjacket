@@ -136,6 +136,19 @@ def _main_slow(args: list[str]) -> int:
 
     sub.add_parser("gain", help="cumulative token/cost savings from telemetry")
 
+    p_replay = sub.add_parser(
+        "replay",
+        help="deterministic open-loop replay of recorded Claude Code transcripts",
+    )
+    p_replay.add_argument("transcripts", nargs="*", help="transcript .jsonl paths")
+    p_replay.add_argument(
+        "--all-projects",
+        action="store_true",
+        help="replay every session under ~/.claude/projects",
+    )
+    p_replay.add_argument("--gaps", action="store_true", help="aggregate coverage-gap table")
+    p_replay.add_argument("--json", dest="replay_json", action="store_true")
+
     p_debt = sub.add_parser("debt", help="declared-omission ledger for deferred decisions")
     debt_sub = p_debt.add_subparsers(dest="debt_cmd", required=True)
     p_da = debt_sub.add_parser("add", help="declare a deferred decision")
@@ -240,6 +253,26 @@ def _main_slow(args: list[str]) -> int:
     from ctx.workspace import WorkspaceError, resolve_workspace
 
     try:
+        if ns.cmd == "replay":
+            # Workspace-free by design: history replay must run on any
+            # machine that has ~/.claude/projects, harnessed or not.
+            import json as _json
+
+            from ctx.replay import default_history_paths, render_report, simulate_session
+
+            paths = list(ns.transcripts)
+            if ns.all_projects:
+                paths += default_history_paths()
+            if not paths:
+                print("no transcripts given (pass paths or --all-projects)")
+                return 1
+            reports = [simulate_session(p) for p in paths]
+            if ns.replay_json:
+                print(_json.dumps(reports, indent=2))
+            else:
+                print(render_report(reports, gaps=ns.gaps))
+            return 0
+
         if ns.cmd == "antigravity" and ns.agy_cmd == "install":
             ws = resolve_workspace(ns.workspace or ns.agy_workspace)
             from ctx.installer import install_antigravity

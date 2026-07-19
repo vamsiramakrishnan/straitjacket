@@ -1,0 +1,261 @@
+"""Session-history replay: the deterministic learning loop over recorded
+Claude Code transcripts (ROADMAP M-F).
+
+Every Claude Code host journals sessions as JSONL under
+``~/.claude/projects/<encoded-project>/<session>.jsonl`` — inputs, tool
+calls, and full tool results. That store is a goldmine of ground truth this
+harness can learn from without running a single command or model: replay
+each recorded call through the *real* steering and digest code, open-loop,
+and score what the harness would have done.
+
+Three questions, answered exactly:
+
+- **Interception**: `classify_command` verdict per recorded Bash input.
+- **Residency**: recorded result bytes vs the digest the emission layer
+  would have produced from the same bytes.
+- **Evidence sufficiency**: the transcript proves which bytes the model
+  used downstream (fragments later passed to Edit ``old_string``,
+  file:line coordinates and test node-ids reused in later commands); each
+  such fact is scored inline-in-digest or one-``ctx get``-hop away. On
+  already-harnessed transcripts this doubles as a regression gate: digests
+  a model actually worked from must keep their sufficiency after profile
+  changes.
+
+- **Gaps** (``--gaps``): where the raw bytes fell — which profiles claimed
+  them, how much fell to ``text/v1``, hand-rolled slicer frequency, and
+  ``ctx eval`` opportunities — the empirical priority list for the next
+  coverage wave, mined from real sessions instead of intuition.
+
+Open-loop limits, stated plainly: no turn-count or behavioral deltas — the
+recorded trajectory stops being ground truth at the first observation that
+would have changed the model's next action. Those questions belong to the
+live A/B evals. Replay is read-only: simulation uses a throwaway workspace
+and store; nothing touches the caller's artifact store, and printed fact
+samples pass through the workspace redaction patterns.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import re
+import tempfile
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+_SLICER_RE = re.compile(r"\|\s*(head|tail|grep|sed|awk|cut|wc)\b")
+_EVAL_OPP_RE = re.compile(r"<<|python3? -c |python3? - ")
+_COORD_RE = re.compile(r"[\w./-]+\.\w+:\d+")
+_NODEID_RE = re.compile(r"[\w./-]+::[\w:]+")
+
+
+def default_history_paths() -> list[str]:
+    return sorted(
+        glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
+    )
+
+
+def parse_transcript(path: str | Path) -> list[dict[str, Any]]:
+    """Recorded pathway: ordered tool calls with inputs and result text."""
+    entries = []
+    with open(path, encoding="utf-8") as fh:
+        for ln in fh:
+            try:
+                entries.append(json.loads(ln))
+            except json.JSONDecodeError:
+                continue  # partial trailing line in a live session file
+    results: dict[str, str] = {}
+    for d in entries:
+        if d.get("type") != "user":
+            continue
+        content = d.get("message", {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                t = b.get("content")
+                if isinstance(t, list):
+                    t = "\n".join(x.get("text", "") for x in t if isinstance(x, dict))
+                results[b.get("tool_use_id")] = t or ""
+    calls: list[dict[str, Any]] = []
+    for d in entries:
+        if d.get("type") != "assistant":
+            continue
+        for b in d.get("message", {}).get("content", []):
+            if isinstance(b, dict) and b.get("type") == "tool_use":
+                calls.append(
+                    {
+                        "tool": b["name"],
+                        "input": b.get("input", {}),
+                        "result": results.get(b.get("id"), ""),
+                    }
+                )
+    return calls
+
+
+def downstream_facts(calls: list[dict[str, Any]], idx: int) -> list[str]:
+    """Facts from call idx's result that later calls provably used."""
+    res = calls[idx]["result"]
+    if not res:
+        return []
+    facts: set[str] = set()
+    later = calls[idx + 1 :]
+    for c in later:
+        if c["tool"] in ("Edit", "Write"):
+            frag = str(c["input"].get("old_string") or "")
+            for line in frag.splitlines():
+                line = line.strip()
+                if len(line) >= 12 and line in res:
+                    facts.add(line[:120])
+    coords = set(_COORD_RE.findall(res)) | set(_NODEID_RE.findall(res))
+    for c in later:
+        if c["tool"] == "Bash":
+            cmd = str(c["input"].get("command") or "")
+            for coord in coords:
+                if coord in cmd:
+                    facts.add(coord)
+    return sorted(facts)[:20]
+
+
+def simulate_session(path: str | Path) -> dict[str, Any]:
+    """Open-loop replay of one transcript through steering + digest code.
+
+    Uses a throwaway workspace/store so replay never writes into the
+    caller's artifact store.
+    """
+    from ctx.digest import digest_output
+    from ctx.hook import classify_command
+    from ctx.store import Store
+    from ctx.textutil import estimate_tokens
+    from ctx.workspace import resolve_workspace
+
+    calls = parse_transcript(path)
+    td = Path(tempfile.mkdtemp(prefix="ctx-replay-"))
+    (td / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    ws = resolve_workspace(str(td))
+    store = Store(td / "store")
+
+    verdicts: Counter[str] = Counter()
+    programs: Counter[str] = Counter()
+    profile_tok: Counter[str] = Counter()
+    raw_tok = sim_tok = 0
+    already_harnessed = slicers = eval_opps = 0
+    facts_inline = facts_hop = 0
+    misses: list[str] = []
+
+    for i, c in enumerate(calls):
+        res = c["result"]
+        if c["tool"] == "Bash":
+            cmd = str(c["input"].get("command") or "")
+            verdicts[classify_command(cmd, {}).get("decision", "?")] += 1
+            m = re.match(r"(?:\w+=\S+\s+)*(?:cd \S+ && )?(\S+)", cmd)
+            if m:
+                programs[m.group(1).rsplit("/", 1)[-1]] += 1
+            if _SLICER_RE.search(cmd):
+                slicers += 1
+            if _EVAL_OPP_RE.search(cmd):
+                eval_opps += 1
+        if not res:
+            continue
+        r_tok = estimate_tokens(len(res.encode("utf-8")))
+        raw_tok += r_tok
+        if "[ctx run:" in res or res.startswith("[ctx "):
+            already_harnessed += 1
+            sim_tok += r_tok
+            continue
+        if c["tool"] not in ("Bash",) and not c["tool"].startswith("mcp__"):
+            # Read/Grep/Glob run under the read path (budgets, native caps),
+            # not the emission gate — shape-digesting source-file Reads here
+            # would misclaim (a file that *contains* test markers is not a
+            # test run). Count them raw under their own bucket.
+            sim_tok += r_tok
+            profile_tok["read-path"] += r_tok
+            continue
+        digest, _short = digest_output(store, ws, c["tool"].lower(), res)
+        d_tok = estimate_tokens(len(digest.encode("utf-8")))
+        inline = "output (complete):" in digest
+        sim_tok += min(d_tok, r_tok) if inline else d_tok
+        prof = digest.split("profile=", 1)[1].split("]", 1)[0] if "profile=" in digest else "?"
+        profile_tok[("inline" if inline else prof)] += r_tok
+        for fact in downstream_facts(calls, i):
+            if fact in digest:
+                facts_inline += 1
+            else:
+                facts_hop += 1
+                misses.append(fact[:80])
+
+    from ctx.textutil import sanitize_for_model
+
+    safe_misses = [sanitize_for_model(m, ws.config.redaction.patterns)[0] for m in misses[:5]]
+    return {
+        "path": str(path),
+        "calls": len(calls),
+        "bash": sum(1 for c in calls if c["tool"] == "Bash"),
+        "verdicts": dict(sorted(verdicts.items())),
+        "programs": dict(programs.most_common(10)),
+        "slicer_commands": slicers,
+        "eval_opportunities": eval_opps,
+        "already_harnessed_results": already_harnessed,
+        "recorded_residency_tok": raw_tok,
+        "simulated_residency_tok": sim_tok,
+        "raw_tok_by_profile": dict(sorted(profile_tok.items(), key=lambda kv: -kv[1])),
+        "facts_used_downstream": facts_inline + facts_hop,
+        "facts_inline_in_digest": facts_inline,
+        "facts_one_hop": facts_hop,
+        "sample_one_hop": safe_misses,
+    }
+
+
+def render_report(reports: list[dict[str, Any]], *, gaps: bool = False) -> str:
+    out: list[str] = []
+    for r in reports:
+        out.append(f"== {Path(r['path']).name} ==")
+        out.append(
+            f"  calls: {r['calls']} ({r['bash']} bash) · verdicts: {r['verdicts']}"
+        )
+        if r["already_harnessed_results"]:
+            out.append(
+                f"  already-harnessed results passed through: {r['already_harnessed_results']}"
+            )
+        rec, sim = r["recorded_residency_tok"], r["simulated_residency_tok"]
+        pct = (1 - sim / rec) * 100 if rec else 0.0
+        out.append(
+            f"  residency: recorded {rec:,} tok -> simulated {sim:,} tok ({pct:.0f}% saved)"
+        )
+        used = r["facts_used_downstream"]
+        if used:
+            out.append(
+                f"  downstream-used evidence: {used} facts · "
+                f"{r['facts_inline_in_digest']} inline · {r['facts_one_hop']} one-hop"
+            )
+            for m in r["sample_one_hop"]:
+                out.append(f"    one-hop: '{m}'")
+        out.append("")
+    if gaps and reports:
+        prog: Counter[str] = Counter()
+        prof: Counter[str] = Counter()
+        slicers = opps = bash = 0
+        for r in reports:
+            prog.update(r["programs"])
+            prof.update(r["raw_tok_by_profile"])
+            slicers += r["slicer_commands"]
+            opps += r["eval_opportunities"]
+            bash += r["bash"]
+        out.append("== gaps (aggregate) ==")
+        out.append("  bash programs: " + " · ".join(f"{k} {v}" for k, v in prog.most_common(12)))
+        out.append(
+            "  raw tokens by claiming profile: "
+            + " · ".join(f"{k} {v:,}" for k, v in prof.most_common(8))
+        )
+        out.append(
+            f"  hand-rolled slicers: {slicers}/{bash} bash commands · "
+            f"ctx-eval opportunities: {opps}"
+        )
+        out.append(
+            "  reading: raw tokens under text/v1 with downstream one-hop facts "
+            "mark the next profile to build; slicer-heavy programs mark digests "
+            "the model routes around."
+        )
+    return "\n".join(out).rstrip()

@@ -32,6 +32,19 @@ the record (evals/coverage-corpus-2026-07-19.md).
   (logtemplate/v1 already surfaces every failure via rarity), AWS parsers
   (json/v1 shape census, 150.9×), pip/gh listing profiles (slim inline
   correct at ~1.0×), ps aux (no census worth its tokens).
+- **`ctx replay`** (ROADMAP M-F, session-history learning loop): replay
+  recorded Claude Code transcripts through the real steering + digest
+  code, open-loop and workspace-free — interception verdicts, wire
+  residency recorded-vs-simulated, evidence sufficiency (downstream-used
+  facts scored inline vs one-hop), and `--gaps` (the empirical coverage
+  priority list mined from real sessions). Read-only by construction;
+  read results counted under the read path, never shape-digested.
+  Measured: the naive dev session replays at 46% residency saved; spec3
+  harnessed archives replay at zero delta with 11/11 and 42/42
+  downstream-used facts inline. Pathway mining receipts:
+  evals/pathways-spec3-2026-07-19.md (70% of commands are pytest; 15
+  starvations, zero retrieval-verb adoption — command-channel
+  continuations filed as the fix).
 
 ## [0.22.0] - 2026-07-19
 
