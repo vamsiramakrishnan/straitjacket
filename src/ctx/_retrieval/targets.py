@@ -108,7 +108,6 @@ def _resolve_repo_targets(
     glob: str | None,
     scope: str | None,
     max_files: int = 5000,
-    snapshot: bool = True,
 ) -> tuple[list[SearchTarget], int, int]:
     """Returns (targets, files_considered, files_skipped_binary)."""
     roots: list[str | None]
@@ -132,12 +131,16 @@ def _resolve_repo_targets(
 
     targets: list[SearchTarget] = []
     skipped_binary = 0
-    root = ws.root
+    # Named distinctly from the ``root`` loop variable above (str | None,
+    # one per configured scope root) — reusing the name there confused
+    # mypy's type-flow into a spurious str|None/Path union (part of debt
+    # bf48ba3c4e's mypy residual, closed out by this split).
+    ws_root = ws.root
     for rel in rels:
         # rels come from ws.list_files (already confined + ignore-filtered);
         # skip per-file re-confinement syscalls on the hot loop.
         try:
-            data = (root / rel).read_bytes()
+            data = (ws_root / rel).read_bytes()
         except OSError:
             continue
         if b"\x00" in data[:8192]:

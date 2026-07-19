@@ -19,7 +19,20 @@ from .telemetry import record_telemetry
 
 
 @dataclass(frozen=True, slots=True)
-class Match:
+class SearchHit:
+    """One matched line within a search target.
+
+    Named ``SearchHit`` rather than ``Match`` (its pre-split name) because a
+    same-named local of the *stdlib*'s ``re.Match`` lives in the same
+    function's scope (``for m in rx.finditer(text)``) — the identical name
+    confused mypy's flow analysis into unifying the two unrelated types,
+    the exact ``Match``/``Selector`` union-flow residual debt bf48ba3c4e
+    named as blocked on "a refactor [that] splits retrieval.py". The facade
+    still re-exports the old name (``ctx.retrieval.Match``) as an alias —
+    nothing outside this module ever imported it, but the alias costs
+    nothing and keeps the byte-compatible-facade guarantee absolute.
+    """
+
     target: str
     line_start: int  # char offset; line number/text computed only if shown
     pattern_index: int
@@ -97,7 +110,7 @@ def search(
     else:
         raise RetrievalError(f"cannot search reference kind {ref.kind!r}")
 
-    matches: list[Match] = []
+    matches: list[SearchHit] = []
     scanned_lines = 0
     for target in targets:
         scanned_lines += target.n_lines
@@ -110,12 +123,12 @@ def search(
         text = target.text
         for pi, rx in enumerate(rxs):
             for m in rx.finditer(text):
-                ls = text.rfind("\n", 0, m.start()) + 1
-                prev = per_line.get(ls)
+                line_start = text.rfind("\n", 0, m.start()) + 1
+                prev = per_line.get(line_start)
                 if prev is None or pi < prev:
-                    per_line[ls] = pi
-        for ls, pi in per_line.items():
-            matches.append(Match(target.label, ls, pi))
+                    per_line[line_start] = pi
+        for line_start, pi in per_line.items():
+            matches.append(SearchHit(target.label, line_start, pi))
 
     matches.sort(key=lambda m: (m.target, m.line_start, m.pattern_index))
     shown = matches[:cap]
@@ -135,15 +148,15 @@ def search(
     out.append("patterns: " + " ".join(repr(p) for p in patterns) + (" (all)" if mode_all else " (any)"))
     last_target = None
     by_label = {t.label: t for t in targets}
-    for m in shown:
-        if m.target != last_target:
-            out.append(f"{m.target}:")
-            last_target = m.target
-        t = by_label[m.target]
-        line_no = t.line_no_of(m.line_start)
+    for hit in shown:
+        if hit.target != last_target:
+            out.append(f"{hit.target}:")
+            last_target = hit.target
+        t = by_label[hit.target]
+        line_no = t.line_no_of(hit.line_start)
         if context:
             back: list[int] = []
-            ls: int | None = m.line_start
+            ls: int | None = hit.line_start
             for _ in range(context):
                 ls = t.prev_line_start(ls)  # type: ignore[arg-type]
                 if ls is None:
@@ -151,7 +164,7 @@ def search(
                 back.append(ls)
             back.reverse()
             fwd: list[int] = []
-            ls = m.line_start
+            ls = hit.line_start
             for _ in range(context):
                 ls = t.next_line_start(ls)  # type: ignore[arg-type]
                 if ls is None:
@@ -159,11 +172,11 @@ def search(
                 fwd.append(ls)
             for i, ls_k in enumerate(back):
                 out.append(f"  L{line_no - len(back) + i}: {t.line_text_at(ls_k)[:200]}")
-            out.append(f" >L{line_no}: {t.line_text_at(m.line_start)[:200]}")
+            out.append(f" >L{line_no}: {t.line_text_at(hit.line_start)[:200]}")
             for i, ls_k in enumerate(fwd, start=1):
                 out.append(f"  L{line_no + i}: {t.line_text_at(ls_k)[:200]}")
         else:
-            out.append(f"  L{line_no}: {t.line_text_at(m.line_start)[:200]}")
+            out.append(f"  L{line_no}: {t.line_text_at(hit.line_start)[:200]}")
 
     out.append("coverage:")
     out.append(

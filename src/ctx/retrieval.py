@@ -27,7 +27,7 @@ from ctx._retrieval.common import (
 )
 from ctx._retrieval.get import Selector, _python_symbol_span, get
 from ctx._retrieval.rg_engine import RgMatch, _rg_available, _rg_repo_search
-from ctx._retrieval.search import Match, _render_rg_search, search
+from ctx._retrieval.search import SearchHit, _render_rg_search, search
 from ctx._retrieval.spans import _resolve_span, _zoom_region
 from ctx._retrieval.stats import _LANG_BY_EXT, _OUTLINE_MAX_ENTRIES, _stats_outline, stats
 from ctx._retrieval.targets import (
@@ -39,10 +39,19 @@ from ctx._retrieval.targets import (
 )
 from ctx._retrieval.telemetry import charge_turn_budget, record_telemetry, telemetry_summary
 
+# ``Match`` was the pre-split name of ``SearchHit`` (renamed internally to
+# stop colliding, in mypy's eyes, with the stdlib's ``re.Match`` living in
+# the same function scope — debt bf48ba3c4e). Nothing outside this module
+# ever imported the old name, but the alias keeps this facade's guarantee
+# ("every name, including underscore-prefixed ones, keeps working")
+# absolute rather than merely "true of everything we found by grep".
+Match = SearchHit
+
 __all__ = [
     "RetrievalError",
     "Selector",
     "SearchTarget",
+    "SearchHit",
     "Match",
     "RgMatch",
     "search",

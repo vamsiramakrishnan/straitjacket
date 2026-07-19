@@ -10,7 +10,7 @@ from typing import Any
 
 from ctx.execution import snapshot_file
 from ctx.store import Store
-from ctx.textutil import estimate_tokens, fmt_int
+from ctx.textutil import fmt_int
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit, _parse, _peek_blob, _read_bytes_range, _route_workspace
