@@ -39,6 +39,15 @@ MAX_TURNS = 32
 SESSION_TIMEOUT = 1500
 REVIEW_TIMEOUT = 900
 
+# --------------------------------------------------------------------------
+# FROZEN REFEREE (debt 34e21fe2dc, docs/EDC.md phase 0): TASK_PROMPT, SPECS,
+# HOLDOUT, and arm construction (arm_argv, incl. MODELS/TOOLS/MAX_TURNS) are
+# the frozen n>=3 referee — cross-round comparisons die if one byte changes.
+# Guarded by tests/test_scorecard_v2.py::test_frozen_referee_constants
+# (sha256 over these constants asserted against a recorded value). Seed
+# support (--repeats/--gates) wraps AROUND these constants; it never edits
+# them.
+# --------------------------------------------------------------------------
 TASK_PROMPT = (
     "Read SPEC.md in this directory and implement it exactly. Write your "
     "own pytest tests, run them, and iterate until everything is green. "
@@ -342,6 +351,95 @@ def review_arm(task: str, arm: str, review_model: str, out: pathlib.Path) -> dic
     }
 
 
+def _median(values: list[float]) -> float | None:
+    vals = sorted(values)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    if len(vals) % 2:
+        return vals[mid]
+    return (vals[mid - 1] + vals[mid]) / 2
+
+
+AGG_METRICS = ("turns", "cost_usd", "wall_s", "cache_hit_pct")
+
+
+def aggregate_rows(rows: list[dict]) -> dict:
+    """Per (task, arm) medians block across repeats: median/min/max for
+    turns, cost, wall-clock, and cache hit. Non-numeric values (failed
+    sessions report turns=None) are skipped; a metric with no numeric
+    observations is omitted rather than invented. Pure — unit-testable
+    without live sessions."""
+    by: dict[tuple[str, str], list[dict]] = {}
+    for r in rows:
+        by.setdefault((r["task"], r["arm"]), []).append(r)
+    out: dict = {}
+    for (task, arm), rs in sorted(by.items()):
+        block: dict = {"n": len(rs)}
+        for metric in AGG_METRICS:
+            vals = [r[metric] for r in rs
+                    if isinstance(r.get(metric), (int, float))
+                    and not isinstance(r.get(metric), bool)]
+            if vals:
+                block[metric] = {
+                    "median": round(_median(vals), 4),
+                    "min": min(vals),
+                    "max": max(vals),
+                }
+        out[f"{task}/{arm}"] = block
+    return out
+
+
+def evaluate_gates(rows: list[dict], medians: dict) -> tuple[list[dict], bool]:
+    """EDC §19.2 economic gates, evaluated on MEDIANS across seeds (the
+    round-3 variance-wall lesson: single-seed cells cannot adjudicate).
+
+    - turns_ratio[task]: sj median turns <= 1.5 x same-round naive median
+    - cache_advantage[task]: sj cache-hit median >= naive cache-hit median
+    - holdout_all_pass: every row (all arms, all reps) at full holdout pass
+
+    Missing inputs FAIL closed (a gate that cannot see its numbers must
+    not pass). Pure — unit-testable with synthetic rows."""
+    gates: list[dict] = []
+    tasks = sorted({r["task"] for r in rows})
+
+    def _med(task: str, arm: str, metric: str):
+        return medians.get(f"{task}/{arm}", {}).get(metric, {}).get("median")
+
+    for task in tasks:
+        sj_t, nv_t = _med(task, "sj", "turns"), _med(task, "naive", "turns")
+        if sj_t is None or nv_t is None:
+            gates.append({"gate": f"turns_ratio[{task}]", "ok": False,
+                          "detail": "missing sj/naive turn medians (FAIL closed)"})
+        else:
+            limit = 1.5 * nv_t
+            gates.append({
+                "gate": f"turns_ratio[{task}]", "ok": sj_t <= limit,
+                "detail": (f"sj median {sj_t} vs limit {limit:g} "
+                           f"(1.5 x naive median {nv_t})"),
+            })
+        sj_c = _med(task, "sj", "cache_hit_pct")
+        nv_c = _med(task, "naive", "cache_hit_pct")
+        if sj_c is None or nv_c is None:
+            gates.append({"gate": f"cache_advantage[{task}]", "ok": False,
+                          "detail": "missing sj/naive cache medians (FAIL closed)"})
+        else:
+            gates.append({
+                "gate": f"cache_advantage[{task}]", "ok": sj_c >= nv_c,
+                "detail": f"sj cache median {sj_c}% vs naive {nv_c}%",
+            })
+    failing = [r for r in rows if r.get("holdout_frac") != 1.0]
+    detail = f"{len(rows) - len(failing)}/{len(rows)} rows at full holdout pass"
+    if failing:
+        worst = ", ".join(
+            f"{r['task']}/{r['arm']} rep{r.get('rep', 1)} {r.get('holdout')}"
+            for r in failing[:4])
+        detail += f" (failing: {worst})"
+    gates.append({"gate": "holdout_all_pass", "ok": not failing,
+                  "detail": detail})
+    return gates, all(g["ok"] for g in gates)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, type=pathlib.Path)
@@ -350,45 +448,87 @@ def main() -> int:
     ap.add_argument("--arms", nargs="+", default=["naive", "sj", "headroom"])
     ap.add_argument("--review-model", default="claude-opus-4-8")
     ap.add_argument("--skip-review", action="store_true")
+    ap.add_argument("--repeats", type=int, default=1,
+                    help="paired seeds per cell (EDC §19: n>=3 to adjudicate)")
+    ap.add_argument("--gates", action="store_true",
+                    help="evaluate EDC §19.2 economic gates on medians; "
+                         "exit 1 on any FAIL")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    import concurrent.futures
 
     rows: list[dict] = []
-    for task in args.tasks:
-        # Arms run in parallel per task (isolated fixtures + config dirs).
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            futs = {pool.submit(run_arm, task, arm, args.model, args.out): arm
-                    for arm in args.arms}
+    # Reps run sequentially (cost control); pairs concurrently within a rep
+    # (isolated fixtures + config dirs). Each rep gets an isolated out-dir.
+    for rep in range(1, args.repeats + 1):
+        if args.repeats == 1:
+            rep_out = args.out
+        else:
+            rep_out = args.out.parent / f"{args.out.name}-rep{rep}"
+            rep_out.mkdir(parents=True, exist_ok=True)
+        pairs = [(t, a) for t in args.tasks for a in args.arms]
+        rep_rows: list[dict] = []
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max(1, len(pairs))) as pool:
+            futs = {pool.submit(run_arm, t, a, args.model, rep_out): (t, a)
+                    for t, a in pairs}
             for fut in concurrent.futures.as_completed(futs):
                 r = fut.result()
-                rows.append(r)
-                print(f"session done: {r['task']}/{r['arm']} · turns={r['turns']} "
-                      f"cost=${r['cost_usd']} holdout={r['holdout']}", flush=True)
-    if not args.skip_review:
-        import concurrent.futures
+                r["rep"] = rep
+                rep_rows.append(r)
+                print(f"session done: rep{rep} {r['task']}/{r['arm']} · "
+                      f"turns={r['turns']} cost=${r['cost_usd']} "
+                      f"holdout={r['holdout']}", flush=True)
+        if not args.skip_review:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+                futs = {pool.submit(review_arm, r["task"], r["arm"],
+                                    args.review_model, rep_out): r
+                        for r in rep_rows}
+                for fut in concurrent.futures.as_completed(futs):
+                    r = futs[fut]
+                    r.update(fut.result())
+                    print(f"review done: rep{rep} {r['task']}/{r['arm']} · "
+                          f"score={r.get('score')}", flush=True)
+        rows.extend(rep_rows)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            futs = {pool.submit(review_arm, r["task"], r["arm"],
-                                args.review_model, args.out): r for r in rows}
-            for fut in concurrent.futures.as_completed(futs):
-                r = futs[fut]
-                r.update(fut.result())
-                print(f"review done: {r['task']}/{r['arm']} · score={r.get('score')}",
-                      flush=True)
-
-    rows.sort(key=lambda r: (r["task"], args.arms.index(r["arm"])))
-    (args.out / "summary.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    rows.sort(key=lambda r: (r["task"], args.arms.index(r["arm"]), r["rep"]))
+    medians = aggregate_rows(rows)
+    summary = {"schema": "spec3.summary/v2", "repeats": args.repeats,
+               "rows": rows, "medians": medians}
+    (args.out / "summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8")
 
     cols = ["task", "arm", "turns", "cost_usd", "cache_hit_pct", "wall_s",
             "holdout", "score"]
+    if args.repeats > 1:
+        cols = ["rep"] + cols
     print("\n| " + " | ".join(cols) + " |")
     print("|" + "---|" * len(cols))
     for r in rows:
         print("| " + " | ".join(str(r.get(c, "")) for c in cols) + " |")
+    if args.repeats > 1 or args.gates:
+        print("\nmedians per task/arm (median [min-max] across reps):")
+        for key, b in medians.items():
+            frag = []
+            for metric, fmt in (("turns", "turns {med:g} [{lo:g}-{hi:g}]"),
+                                ("cost_usd", "cost ${med:g} [{lo:g}-{hi:g}]"),
+                                ("wall_s", "wall {med:g}s [{lo:g}-{hi:g}]"),
+                                ("cache_hit_pct",
+                                 "cache {med:g}% [{lo:g}-{hi:g}]")):
+                m = b.get(metric)
+                if m:
+                    frag.append(fmt.format(med=m["median"], lo=m["min"],
+                                           hi=m["max"]))
+            print(f"  {key}: n={b['n']} · " + " · ".join(frag))
+    gates_ok = True
+    if args.gates:
+        gates, gates_ok = evaluate_gates(rows, medians)
+        print("\nEDC §19.2 economic gates (medians across seeds):")
+        for g in gates:
+            print(f"  {g['gate']}: {'PASS' if g['ok'] else 'FAIL'} — {g['detail']}")
+        print(f"GATES: {'PASS' if gates_ok else 'FAIL'}")
     print("\nSPEC3_DONE", flush=True)
-    return 0
+    return 0 if gates_ok else 1
 
 
 if __name__ == "__main__":

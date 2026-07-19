@@ -321,7 +321,6 @@ def _main_slow(args: list[str]) -> int:
         if ns.cmd == "seq":
             from ctx.seq import run_seq
             from ctx.store import Store as _Store
-            from ctx.textutil import bounded as _bounded
 
             store = _Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
             text, code = run_seq(
@@ -329,16 +328,18 @@ def _main_slow(args: list[str]) -> int:
                 halt_on_fail=not ns.keep_going,
                 timeout=ns.timeout, focus=ns.focus,
             )
-            budget = ws.config.budgets.result_tokens
-            if code != 0:
-                budget = int(budget * ws.config.budgets.failure_budget_factor)
+            # Delivery plan (EDC §13): seq always emits against the result
+            # budget; failure asymmetry + pressure compose in the resolver.
             # Engagement parity with run/eval (docs/LADDERS.md edge 1): lean
-            # or passive sessions must not pay for suggestion lines here either.
-            from ctx.engagement import filter_digest, suggestion_cap
-
-            eng = ws.config.engagement
-            cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
-            print(_bounded(filter_digest(text, cap), budget))
+            # or passive sessions must not pay for suggestion lines here
+            # either — _emit_bounded_digest applies the same filter.
+            plan = _delivery_plan(
+                ws,
+                outcome="success" if code == 0 else "failure",
+                family="seq",
+                base_tokens=ws.config.budgets.result_tokens,
+            )
+            _emit_bounded_digest(ws, store, text, plan)
             return 0 if code == 0 else 3
         if ns.cmd == "gain":
             return _cmd_gain(ws)
@@ -489,31 +490,61 @@ def _cmd_gain(ws) -> int:
     return 0
 
 
-def _emit_run_digest(ws, digest: str, manifest: dict) -> int:
-    """Shared emission tail for foreground runs and finalized background
-    jobs: budget selection, failure asymmetry, engagement filtering, and
-    the run's exit-code semantics (124 timeout, 3 nonzero, 0 success)."""
+def _delivery_plan(ws, *, outcome: str, family: str, base_tokens: int, signature=None):
+    """One resolver for every emission budget (docs/EDC.md §13, LADDERS
+    edge 8): outcome + circuit + signal record + config in, DeliveryPlan
+    out. Fail-open inside the resolver by contract."""
+    from ctx import resolver
+
+    return resolver.resolve_delivery(
+        outcome,
+        family,
+        contract_rendering={"base_tokens": base_tokens},
+        session=resolver.session_state(ws.root, signature),
+        environment=resolver.environment_signals(ws.root),
+        config_budgets=ws.config.budgets,
+    )
+
+
+def _emit_bounded_digest(ws, store, text: str, plan) -> None:
+    """Shared emission boundary: engagement filtering (teaching prose obeys
+    both the plan and the graduated-engagement cap), the plan's token
+    budget as the bounded() backstop, and the plan receipt telemetry."""
+    from ctx import resolver
+    from ctx.engagement import filter_digest, suggestion_cap
     from ctx.textutil import bounded
 
+    eng = ws.config.engagement
+    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
+    if not plan.include_teaching:
+        cap = 0  # include_teaching=False maps to suggestion cap 0
+    resolver.record_plan_receipt(store.audit_dir if store is not None else None, plan)
+    print(bounded(filter_digest(text, cap), plan.token_budget))
+
+
+def _emit_run_digest(ws, digest: str, manifest: dict, store=None, signature=None) -> int:
+    """Shared emission tail for foreground runs and finalized background
+    jobs: delivery-plan resolution (budget selection, failure asymmetry,
+    window pressure), engagement filtering, and the run's exit-code
+    semantics (124 timeout, 3 nonzero, 0 success)."""
     # Zero-hop inline digests may exceed the summary budget by design; the
     # result budget is the hard emission backstop either way.
-    budget = (
+    base = (
         ws.config.budgets.result_tokens
         if "output (complete):" in digest
         else ws.config.budgets.digest_tokens
     )
-    # Failure asymmetry: a failing run's output is evidence, not boilerplate.
-    # exitCode != 0 covers None too: timeouts and signal deaths are failures
-    # (docs/LADDERS.md edge 4 — parity with eval's treatment).
-    if manifest["result"]["exitCode"] != 0:
-        budget = int(budget * ws.config.budgets.failure_budget_factor)
+    # Failure asymmetry rides through the resolver: a failing run's output
+    # is evidence, not boilerplate. exitCode != 0 covers None too: timeouts
+    # and signal deaths are failures (docs/LADDERS.md edge 4 — parity with
+    # eval's treatment).
+    outcome = "success" if manifest["result"]["exitCode"] == 0 else "failure"
+    plan = _delivery_plan(
+        ws, outcome=outcome, family="run", base_tokens=base, signature=signature
+    )
     # Graduated engagement (mechanism C): affordances are filtered at this
     # emission boundary only — the stored digest identity stays canonical.
-    from ctx.engagement import filter_digest, suggestion_cap
-
-    eng = ws.config.engagement
-    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
-    print(bounded(filter_digest(digest, cap), budget))
+    _emit_bounded_digest(ws, store, digest, plan)
     result = manifest["result"]
     if result["timedOut"]:
         return 124
@@ -572,8 +603,31 @@ def _cmd_run(ws, ns) -> int:
     except Exception:
         sig, dense = None, False
 
+    # EDC phase 4: resolve the delivery plan and hand it to the renderer
+    # when the digest layer accepts it (duck-typed `plan=` kwarg; absent →
+    # legacy rendering, byte-identical by construction). The render-time
+    # plan uses the digest base budget; the emission backstop re-resolves
+    # with the actual zero-hop marker in `_emit_run_digest`.
+    render_kwargs = {}
+    try:
+        import inspect
+
+        if "plan" in inspect.signature(render_run_digest).parameters:
+            outcome = (
+                "success" if capture.manifest["result"]["exitCode"] == 0 else "failure"
+            )
+            render_kwargs["plan"] = _delivery_plan(
+                ws,
+                outcome=outcome,
+                family="run",
+                base_tokens=ws.config.budgets.digest_tokens,
+                signature=sig,
+            )
+    except Exception:
+        render_kwargs = {}
+
     digest, manifest = render_run_digest(
-        store, ws, capture.manifest, focus=ns.focus, dense=dense
+        store, ws, capture.manifest, focus=ns.focus, dense=dense, **render_kwargs
     )
     # A digest that omitted content is an intervention (hypothesis: the model
     # uses the digest, not a re-run). Record it so the reflex arc can score
@@ -595,7 +649,7 @@ def _cmd_run(ws, ns) -> int:
         from ctx.reflex import DENSIFY_HEADER
 
         digest = DENSIFY_HEADER + "\n" + digest
-    return _emit_run_digest(ws, digest, manifest)
+    return _emit_run_digest(ws, digest, manifest, store=store, signature=sig)
 
 
 def _cmd_run_bg(ws, store, ns, command: list[str]) -> int:
@@ -623,7 +677,7 @@ def _cmd_run_bg(ws, store, ns, command: list[str]) -> int:
     try:
         if wait_for_done(store, job_id, timeout=max(0.0, patience)):
             digest, manifest = finalize_job(ws, store, job_id)
-            return _emit_run_digest(ws, digest, manifest)
+            return _emit_run_digest(ws, digest, manifest, store=store)
         print(backgrounded_status(store, job_id))
         return 0
     except JobError as e:
@@ -650,7 +704,7 @@ def _cmd_job(ws, ns) -> int:
             digest, manifest = kill_job(ws, store, job_id)
             short = manifest["id"].removeprefix("sha256:")[:12]
             print(f"[ctx job:{job_id} killed · finalized → run:{short}]")
-            _emit_run_digest(ws, digest, manifest)
+            _emit_run_digest(ws, digest, manifest, store=store)
             return 0
         if ns.wait:
             if not wait_for_done(store, job_id, timeout=ns.timeout):
@@ -659,13 +713,13 @@ def _cmd_job(ws, ns) -> int:
             digest, manifest = finalize_job(ws, store, job_id)
             short = manifest["id"].removeprefix("sha256:")[:12]
             print(f"[ctx job:{job_id} finalized → run:{short}]")
-            return _emit_run_digest(ws, digest, manifest)
+            return _emit_run_digest(ws, digest, manifest, store=store)
         state = job_state(store, job_id)
         if state in ("done", "finalized"):
             digest, manifest = finalize_job(ws, store, job_id)
             short = manifest["id"].removeprefix("sha256:")[:12]
             print(f"[ctx job:{job_id} finalized → run:{short}]")
-            _emit_run_digest(ws, digest, manifest)
+            _emit_run_digest(ws, digest, manifest, store=store)
             return 0
         status = job_status(store, job_id, tail=ns.tail)
         print(status)
@@ -716,27 +770,47 @@ def _cmd_eval(ws, ns) -> int:
         print(f"ctx eval: {e}", file=sys.stderr)
         return 1
 
-    from ctx.engagement import filter_digest, suggestion_cap
-    from ctx.textutil import bounded
-
-    budget = (
+    # Delivery plan (EDC §13): zero-hop inline uses the result budget;
+    # failure asymmetry (a failing script's traceback is evidence — timeout
+    # 124 included, docs/LADDERS.md edge 4) and window pressure compose in
+    # the resolver, floor-protected.
+    base = (
         ws.config.budgets.result_tokens
         if "output (complete):" in text
         else ws.config.budgets.digest_tokens
     )
-    # Failure asymmetry: a failing script's traceback is evidence.
-    if code != 0:
-        budget = int(budget * ws.config.budgets.failure_budget_factor)
-    eng = ws.config.engagement
-    cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
-    print(bounded(filter_digest(text, cap), budget))
+    plan = _delivery_plan(
+        ws,
+        outcome="success" if code == 0 else "failure",
+        family="eval",
+        base_tokens=base,
+    )
+    _emit_bounded_digest(ws, store, text, plan)
     if code == 124:
         return 124
     return 0 if code == 0 else 3
 
 
+def _emit_retrieval(ws, store, out: str) -> int:
+    """Shared emission tail for every retrieval-path verb (search/get/
+    stats/diff/map/code): the ONE budget choke point (LADDERS edge 8).
+    ``resolve_retrieval_budget`` returns exactly the configured
+    turn-retrieval budget today — the same value ``charge_turn_budget``
+    enforces — so behavior is unchanged; the window-pressure hook-in for
+    retrieval lands in the resolver, not in seven call sites."""
+    from ctx import resolver
+    from ctx.retrieval import charge_turn_budget
+
+    resolver.resolve_retrieval_budget(ws.config, resolver.environment_signals(ws.root))
+    warning = charge_turn_budget(store, ws, out)
+    if warning:
+        print(warning)
+    print(out)
+    return 0
+
+
 def _cmd_diff(ws, ns) -> int:
-    from ctx.retrieval import RetrievalError, charge_turn_budget
+    from ctx.retrieval import RetrievalError
     from ctx.rundiff import run_diff
     from ctx.store import Store
 
@@ -746,30 +820,27 @@ def _cmd_diff(ws, ns) -> int:
     except RetrievalError as e:
         print(f"ctx diff: {e}", file=sys.stderr)
         return 1
-    warning = charge_turn_budget(store, ws, out)
-    if warning:
-        print(warning)
-    print(out)
-    return 0
+    return _emit_retrieval(ws, store, out)
 
 
 def _cmd_map(ws, ns) -> int:
+    from ctx import resolver
     from ctx.repomap import repo_map
-    from ctx.retrieval import charge_turn_budget
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    out = repo_map(store, ws, budget=ns.budget, focus=ns.focus)
-    warning = charge_turn_budget(store, ws, out)
-    if warning:
-        print(warning)
-    print(out)
-    return 0
+    # The map's explicit --budget routes through the same resolver choke
+    # point (today: returned verbatim; pressure hook-in comes later).
+    budget = resolver.resolve_retrieval_budget(
+        ws.config, resolver.environment_signals(ws.root), requested=ns.budget
+    )
+    out = repo_map(store, ws, budget=budget, focus=ns.focus)
+    return _emit_retrieval(ws, store, out)
 
 
 def _cmd_code(ws, ns) -> int:
     from ctx.codeverbs import cmd_def, cmd_diag, cmd_refs
-    from ctx.retrieval import RetrievalError, charge_turn_budget
+    from ctx.retrieval import RetrievalError
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
@@ -783,11 +854,7 @@ def _cmd_code(ws, ns) -> int:
     except RetrievalError as e:
         print(f"ctx {ns.cmd}: {e}", file=sys.stderr)
         return 1
-    warning = charge_turn_budget(store, ws, out)
-    if warning:
-        print(warning)
-    print(out)
-    return 0
+    return _emit_retrieval(ws, store, out)
 
 
 def _cmd_policy(ws, ns) -> int:
@@ -814,7 +881,7 @@ def _cmd_policy(ws, ns) -> int:
 
 
 def _cmd_retrieval(ws, ns, verb: str) -> int:
-    from ctx.retrieval import RetrievalError, Selector, _span, charge_turn_budget, get, search, stats
+    from ctx.retrieval import RetrievalError, Selector, _span, get, search, stats
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
@@ -848,11 +915,7 @@ def _cmd_retrieval(ws, ns, verb: str) -> int:
         print(f"ctx {verb}: {e}", file=sys.stderr)
         return 1
 
-    warning = charge_turn_budget(store, ws, out)
-    if warning:
-        print(warning)
-    print(out)
-    return 0
+    return _emit_retrieval(ws, store, out)
 
 
 if __name__ == "__main__":  # pragma: no cover

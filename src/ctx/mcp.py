@@ -1,7 +1,8 @@
 """Bounded MCP retrieval server (SPEC §10.4).
 
 Exposes exactly one stable tool schema with an ``op`` discriminator:
-``search | get | stats | map | repo | doctor``. Arbitrary command execution stays
+``search | get | stats | map | def | refs | diag | callers | callees | impact |
+diff | repo | doctor``. Arbitrary command execution stays
 on ``ctx run`` through the native command tool so the user's permission flow
 remains visible; this server is bounded-only by construction.
 
@@ -10,6 +11,7 @@ Transport: MCP stdio — newline-delimited JSON-RPC 2.0.
 
 from __future__ import annotations
 
+import collections
 import json
 import sys
 from typing import Any
@@ -36,8 +38,14 @@ TOOL_SCHEMA: dict[str, Any] = {
             "op": {
                 "enum": [
                     "search", "get", "stats", "map",
-                    "def", "refs", "diag", "repo", "doctor",
-                ]
+                    "def", "refs", "diag", "callers", "callees", "impact",
+                    "diff", "repo", "doctor",
+                ],
+                "description": (
+                    "callers/callees: direct call-graph edges for options.symbol; "
+                    "impact: transitive callers (blast radius, options.depth<=6); "
+                    "diff: regression delta between two run: refs (options.refA/refB)."
+                ),
             },
             "workspace": {"type": "string", "description": "workspace path or alias"},
             "ref": {
@@ -56,7 +64,7 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "options": {
                 "type": "object",
-                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path}",
+                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path} · callers/callees/impact options: {symbol,depth} · diff options: {refA,refB}",
             },
             "maxTokens": {"type": "integer", "minimum": 64, "maximum": 4000},
         },
@@ -67,8 +75,33 @@ TOOL_SCHEMA: dict[str, Any] = {
 
 # Long-lived server: cache workspace resolution + store connections so each
 # tool call avoids re-spawning git subprocesses and reopening SQLite.
-_WS_CACHE: dict[str | None, tuple[float, Any, Any]] = {}
+#
+# Bounded LRU-with-TTL (S6 finding): an unbounded cache here holds one open
+# sqlite connection per distinct workspace/alias ever seen by a long-lived
+# server process — in a multi-workspace session (`ws:<alias>` roots) that
+# grows without limit and never releases file descriptors. Eviction, either
+# by TTL or by capacity, always closes the evicted Store before dropping it.
+_WS_CACHE: "collections.OrderedDict[str | None, tuple[float, Any, Any]]" = (
+    collections.OrderedDict()
+)
 _WS_CACHE_TTL = 10.0
+_WS_CACHE_MAXSIZE = 8
+
+
+def _evict_ws_cache_entry(key: str | None) -> None:
+    entry = _WS_CACHE.pop(key, None)
+    if entry is not None:
+        _, _, store = entry
+        try:
+            store.close()
+        except Exception:
+            pass
+
+
+def _evict_expired_ws_cache(now: float) -> None:
+    expired = [k for k, (ts, _, _) in _WS_CACHE.items() if now - ts >= _WS_CACHE_TTL]
+    for k in expired:
+        _evict_ws_cache_entry(k)
 
 
 def _resolve_cached(workspace_arg: str | None) -> tuple[Any, Any]:
@@ -78,12 +111,17 @@ def _resolve_cached(workspace_arg: str | None) -> tuple[Any, Any]:
     from ctx.workspace import resolve_workspace
 
     now = time.monotonic()
+    _evict_expired_ws_cache(now)
     hit = _WS_CACHE.get(workspace_arg)
-    if hit and now - hit[0] < _WS_CACHE_TTL:
+    if hit is not None:
+        _WS_CACHE.move_to_end(workspace_arg)
         return hit[1], hit[2]
     ws = resolve_workspace(workspace_arg)
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     _WS_CACHE[workspace_arg] = (now, ws, store)
+    _WS_CACHE.move_to_end(workspace_arg)
+    while len(_WS_CACHE) > _WS_CACHE_MAXSIZE:
+        _evict_ws_cache_entry(next(iter(_WS_CACHE)))
     return ws, store
 
 
@@ -176,6 +214,15 @@ def _dispatch(args: dict[str, Any]) -> str:
             result = cmd_callees(store, ws, symbol)
         else:
             result = cmd_impact(store, ws, symbol, depth=int(opts.get("depth", 6)))
+    elif op == "diff":
+        from ctx.rundiff import run_diff
+
+        opts = args.get("options") or {}
+        ref_a = opts.get("refA")
+        ref_b = opts.get("refB")
+        if not ref_a or not ref_b:
+            raise RetrievalError("diff requires options.refA and options.refB (run: refs)")
+        result = run_diff(store, ws, ref_a, ref_b)
     elif op == "repo":
         result = stats(store, ws, "repo:")
     elif op == "doctor":

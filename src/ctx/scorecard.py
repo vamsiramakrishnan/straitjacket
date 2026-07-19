@@ -41,6 +41,29 @@ PRICES = {
 
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "write_to_file", "replace_file_content"}
 
+# ----------------------------------------------------------- scorecard v2
+# Intervention-ledger vocabulary (docs/EDC.md §9/§20). The v2 ledger
+# (``.ctx-session-reads/interventions.jsonl``) carries emission lines
+# (ctx.intervention/v1) and outcome lines (ctx.intervention-outcome/v1);
+# unknown events and outcomes are future schema, never errors.
+_V2_OUTCOME_KEYS = {
+    "retrieval_landing": "landings",
+    "progressed_without_retrieval": "progressed",
+    "equivalent_rerun": "equivalent_reruns",
+    "slicer_rerun": "slicer_reruns",
+    "narrowed_execution": "narrowed",
+    "validation_after_edit": "validated_after_edit",
+    "verbatim_retry": "verbatim_retries",
+    "workaround": "workarounds",
+    "expired_unresolved": "expired",
+}
+# A confirmed starvation resolved WITHOUT a re-execution after adaptation.
+_RESOLVED_WITHOUT_RERUN = {
+    "retrieval_landing", "progressed_without_retrieval", "narrowed_execution",
+}
+# Plan modes that are adaptations (the controller responded to starvation).
+_ADAPTED_PLAN_MODES = {"dense", "bypass"}
+
 
 def _price_key(model_id: str) -> str:
     for key in PRICES:
@@ -123,6 +146,250 @@ def _behavioral_anomalies(session_reads_dir: Path) -> dict | None:
         "eval_opportunities": opportunities,
         "eval_taught": taught,
     }
+
+
+def _median(values: list[float]) -> float | None:
+    vals = sorted(values)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    if len(vals) % 2:
+        return vals[mid]
+    return (vals[mid - 1] + vals[mid]) / 2
+
+
+def _xy(value) -> tuple[int, int] | None:
+    """Tolerant x/y reader for coverage fields: accepts ``[x, y]``,
+    ``"x/y"``, or a dict with common covered/total key spellings.
+    None when underivable — the metric is then omitted, never invented."""
+    try:
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            return int(value[0]), int(value[1])
+        if isinstance(value, str) and "/" in value:
+            a, b = value.split("/", 1)
+            return int(a), int(b)
+        if isinstance(value, dict):
+            for xk in ("covered", "have", "count", "x"):
+                for yk in ("total", "required", "of", "y"):
+                    if xk in value and yk in value:
+                        return int(value[xk]), int(value[yk])
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _runtime_s(rec: dict) -> float | None:
+    """Observed runtime carried by an event, in seconds. Only ever read
+    from the event itself (or its evidence map) — never invented."""
+    sources = [rec]
+    ev = rec.get("evidence")
+    if isinstance(ev, dict):
+        sources.append(ev)
+    for src in sources:
+        for key in ("runtime_ms", "runtimeMs", "duration_ms", "durationMs"):
+            v = src.get(key)
+            if isinstance(v, (int, float)) and v >= 0:
+                return v / 1000.0
+        for key in ("runtime_s", "runtimeS"):
+            v = src.get(key)
+            if isinstance(v, (int, float)) and v >= 0:
+                return float(v)
+    return None
+
+
+def _resolution(outcomes: list[str]) -> str | None:
+    """The episode's resolution: the LAST non-censored outcome.
+    ``expired_unresolved`` is a censored observation (EDC §9) — it never
+    resolves anything and is excluded from every rate denominator."""
+    resolved = [o for o in outcomes if o != "expired_unresolved"]
+    return resolved[-1] if resolved else None
+
+
+def _interventions_v2(session_reads_dir: Path) -> dict | None:
+    """Fold ``interventions.jsonl`` (v2 ledger, EDC §9/§20) into the
+    scorecard's behavioral-outcomes section, or None when the ledger is
+    absent or yields no interventions — the v1 rendering then stays
+    byte-identical. Corrupt lines are skipped individually; never raises."""
+    try:
+        lines = (
+            (session_reads_dir / "interventions.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    except OSError:
+        return None
+    ivs: dict[str, dict] = {}
+    order: list[str] = []
+    pending_outcomes: list[tuple[str, str, dict]] = []
+    transitions: dict[str, dict[str, int]] = {}
+    runtimes: dict[str, list[float]] = {}
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        event = str(rec.get("event") or "")
+        if event == "intervention_emitted":
+            iid = str(rec.get("interventionId") or "")
+            if not iid:
+                continue
+            cov = rec.get("coverage")
+            info = {
+                "family": str(rec.get("family") or "?"),
+                "signature": str(rec.get("signature") or "?"),
+                "seq": rec.get("sessionSeq"),
+                "generation": rec.get("generation"),
+                "plan_mode": str(rec.get("planMode") or "").lower(),
+                "coverage": cov if isinstance(cov, dict) else {},
+                "hints": int(rec.get("hints") or 0),
+                "outcomes": [],
+            }
+            if iid not in ivs:
+                order.append(iid)
+            ivs[iid] = info
+            rs = _runtime_s(rec)
+            if rs is not None:
+                runtimes.setdefault(info["signature"], []).append(rs)
+        elif event == "intervention_outcome":
+            iid = str(rec.get("interventionId") or "")
+            outcome = str(rec.get("outcome") or "")
+            if iid and outcome:
+                pending_outcomes.append((iid, outcome, rec))
+        elif event.endswith("transition"):
+            fam = str(rec.get("family") or "?")
+            to = str(rec.get("to") or rec.get("planMode") or "?").lower()
+            fam_t = transitions.setdefault(fam, {})
+            fam_t[to] = fam_t.get(to, 0) + 1
+        # any other event kind: future schema, skipped
+    if not ivs:
+        return None
+    for iid, outcome, rec in pending_outcomes:
+        info = ivs.get(iid)
+        if info is None:
+            continue  # unattributable outcome — skipped, fail-open
+        info["outcomes"].append(outcome)
+        rs = _runtime_s(rec)
+        if rs is not None:
+            runtimes.setdefault(info["signature"], []).append(rs)
+
+    families: dict[str, dict] = {}
+    for iid in order:
+        info = ivs[iid]
+        f = families.setdefault(info["family"], {
+            "events": 0, "census_complete": 0, "hinted": 0,
+            "hinted_resolved": 0, "hinted_landed": 0,
+            "landings": 0, "progressed": 0, "equivalent_reruns": 0,
+            "slicer_reruns": 0, "narrowed": 0, "validated_after_edit": 0,
+            "verbatim_retries": 0, "workarounds": 0, "expired": 0,
+            "other_outcomes": 0,
+            "_required_fractions": [], "_named": [0, 0], "_named_n": 0,
+            "_addressable": [0, 0], "_addressable_n": 0,
+        })
+        f["events"] += 1
+        cov = info["coverage"]
+        rf = cov.get("requiredFraction")
+        if isinstance(rf, (int, float)):
+            f["_required_fractions"].append(float(rf))
+            if float(rf) == 1.0:
+                f["census_complete"] += 1
+        named = _xy(cov.get("named"))
+        if named is not None:
+            f["_named"][0] += named[0]
+            f["_named"][1] += named[1]
+            f["_named_n"] += 1
+        addressable = _xy(cov.get("addressable"))
+        if addressable is not None:
+            f["_addressable"][0] += addressable[0]
+            f["_addressable"][1] += addressable[1]
+            f["_addressable_n"] += 1
+        for outcome in info["outcomes"]:
+            key = _V2_OUTCOME_KEYS.get(outcome)
+            if key:
+                f[key] += 1
+            else:
+                f["other_outcomes"] += 1  # tolerant reader: unknown → other
+        resolution = _resolution(info["outcomes"])
+        if info["hints"] > 0:
+            f["hinted"] += 1
+            if resolution is not None:
+                f["hinted_resolved"] += 1
+                if resolution == "retrieval_landing":
+                    f["hinted_landed"] += 1
+    for fam, f in families.items():
+        fracs = f.pop("_required_fractions")
+        f["required_pct"] = (
+            round(100 * sum(fracs) / len(fracs), 1) if fracs else None
+        )
+        named, named_n = f.pop("_named"), f.pop("_named_n")
+        f["named"] = f"{named[0]}/{named[1]}" if named_n else None
+        addr, addr_n = f.pop("_addressable"), f.pop("_addressable_n")
+        f["addressable"] = f"{addr[0]}/{addr[1]}" if addr_n else None
+        if fam in transitions:
+            f["transitions"] = dict(sorted(transitions[fam].items()))
+
+    # Estimated downstream cost (EDC §20 amendment): every counterfactual
+    # is a labeled estimate carrying a conservative derivation; a metric
+    # whose inputs are absent is omitted, never invented.
+    adapted = [ivs[iid] for iid in order
+               if ivs[iid]["plan_mode"] in _ADAPTED_PLAN_MODES]
+    estimates = None
+    if adapted:
+        avoided = [i for i in adapted
+                   if _resolution(i["outcomes"]) in _RESOLVED_WITHOUT_RERUN]
+        estimates = {
+            "avoided_reexecutions": len(avoided),
+            "avoided_turns": len(avoided),
+        }
+        meds: list[float] | None = []
+        for info in avoided:
+            obs = runtimes.get(info["signature"])
+            med = _median(obs) if obs else None
+            if med is None:
+                meds = None  # any unobserved signature → omit, don't invent
+                break
+            meds.append(med)
+        if avoided and meds is not None:
+            estimates["avoided_runtime_s"] = round(sum(meds), 1)
+
+    by_sig: dict[str, list[dict]] = {}
+    for iid in order:
+        info = ivs[iid]
+        by_sig.setdefault(info["signature"], []).append(info)
+    episodes = []
+    for sig, infos in sorted(by_sig.items()):
+        infos = sorted(
+            infos,
+            key=lambda i: i["seq"] if isinstance(i["seq"], int) else 1 << 30,
+        )
+        first = infos[0]
+        responses: list[str] = []
+        outcome_seq: list[str] = []
+        for info in infos:
+            mode = info["plan_mode"] or "normal"
+            if not responses or responses[-1] != mode:
+                responses.append(mode)
+            if info["outcomes"]:
+                outcome_seq.extend(info["outcomes"])
+            else:
+                outcome_seq.append("unresolved")
+        episodes.append({
+            "signature": sig,
+            "family": first["family"],
+            "first_seq": first["seq"],
+            "generation": first["generation"],
+            "responses": responses,
+            "outcomes": outcome_seq,
+        })
+
+    result: dict = {
+        "families": {k: dict(v) for k, v in sorted(families.items())},
+        "episodes": episodes,
+    }
+    if estimates is not None:
+        result["estimates"] = estimates
+    return result
 
 
 def compute_scorecard(proxy_state_dir: Path) -> dict | None:
@@ -238,6 +505,12 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
             sc["anomalies"] = anomalies
     except Exception:
         pass  # fail-open: the anomalies section is absent, never an error
+    try:
+        interventions = _interventions_v2(Path(proxy_state_dir).parent)
+        if interventions:
+            sc["interventions"] = interventions
+    except Exception:
+        pass  # fail-open: v2 section absent, v1 rendering byte-identical
     if first_rescued_round is not None:
         # Post-rescue recovery cost (Tura's best metric, adopted): how much
         # of the session ran after rescue began — the price of regaining
@@ -288,7 +561,100 @@ def render_scorecard(sc: dict) -> str:
                 f"  eval adoption: {an['eval_opportunities']} opportunities "
                 f"· {an['eval_taught']} taught"
             )
+    iv = sc.get("interventions")
+    if iv:
+        lines.extend(_render_interventions(iv))
     return "\n".join(lines)
+
+
+def _render_interventions(iv: dict) -> list[str]:
+    """Scorecard v2 behavioral blocks (EDC §20): per-family outcomes,
+    labeled downstream-cost estimates, evidence-coverage table, and
+    per-signature episode narratives. Rendered only when the v2 ledger
+    yielded interventions — absent ledger keeps v1 output byte-identical."""
+    lines: list[str] = ["  interventions (v2 ledger):"]
+    for fam, f in iv["families"].items():
+        lines.append(
+            f"    {fam}: {f['events']} interventions · census complete "
+            f"{f['census_complete']}/{f['events']} · hinted {f['hinted']}"
+        )
+        parts = [
+            f"landings {f['landings']}",
+            f"progressed w/o retrieval {f['progressed']}",
+            f"equivalent reruns {f['equivalent_reruns']}",
+            f"slicer reruns {f['slicer_reruns']}",
+        ]
+        for label, key in (
+            ("narrowed", "narrowed"),
+            ("validated-after-edit", "validated_after_edit"),
+            ("verbatim retries", "verbatim_retries"),
+            ("workarounds", "workarounds"),
+        ):
+            if f.get(key):
+                parts.append(f"{label} {f[key]}")
+        lines.append("      outcomes: " + " · ".join(parts))
+        if f.get("expired"):
+            lines.append(
+                f"      censored: {f['expired']} expired_unresolved "
+                "(excluded from all rate denominators)"
+            )
+        if f.get("hinted"):
+            lines.append(
+                f"      retrieval landing rate: {f['hinted_landed']}/"
+                f"{f['hinted_resolved']} resolved opportunities"
+            )
+        if f.get("transitions"):
+            lines.append(
+                "      transitions: "
+                + " · ".join(f"{k}×{v}" for k, v in f["transitions"].items())
+            )
+    est = iv.get("estimates")
+    if est:
+        lines.append("  estimated downstream cost (labeled estimates):")
+        lines.append(
+            f"    avoided reexecutions (estimate): {est['avoided_reexecutions']}"
+        )
+        lines.append(f"    avoided turns (estimate): {est['avoided_turns']}")
+        if "avoided_runtime_s" in est:
+            lines.append(
+                f"    avoided runtime (estimate): {est['avoided_runtime_s']}s"
+            )
+        lines.append(
+            "    note: avoided reexecutions = adapted-plan (dense/bypass) "
+            "interventions resolved without an equivalent/slicer rerun; "
+            "avoided turns = same count (one turn per avoided rerun); "
+            "avoided runtime = sum of median observed same-signature "
+            "runtimes over those interventions (omitted when unobserved); "
+            "expired_unresolved is censored — excluded from every "
+            "denominator"
+        )
+    lines.append("  evidence coverage:")
+    lines.append("    family        events  required%    named  addressable")
+    for fam, f in iv["families"].items():
+        req = f"{f['required_pct']:.1f}" if f.get("required_pct") is not None else "—"
+        named = f.get("named") or "—"
+        addressable = f.get("addressable") or "—"
+        lines.append(
+            f"    {fam:<12}  {f['events']:>6}  {req:>9}  {named:>7}  "
+            f"{addressable:>11}"
+        )
+    episodes = iv.get("episodes") or []
+    if episodes:
+        lines.append("  episodes:")
+        for ep in episodes[:8]:
+            seq = ep["first_seq"] if ep.get("first_seq") is not None else "?"
+            gen = (
+                f" (gen {ep['generation']})"
+                if ep.get("generation") is not None else ""
+            )
+            lines.append(
+                f"    '{ep['signature']}': first at seq {seq}{gen} · "
+                f"response {'→'.join(ep['responses'])} · "
+                f"outcomes {' → '.join(ep['outcomes'])}"
+            )
+        if len(episodes) > 8:
+            lines.append(f"    … and {len(episodes) - 8} more signatures")
+    return lines
 
 
 def summary_line(sc: dict) -> str:

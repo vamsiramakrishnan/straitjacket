@@ -1,0 +1,42 @@
+# Evidence contract: pytest (docs/EDC.md §5.3, the first EDC instance).
+# The spec3 receipt: a failing suite's decision unit is the failing test;
+# omitting one identity converts directly into a suite re-run (a turn, an
+# execution, a cache append, a state-loss opportunity — each individually
+# more expensive than the census row).
+schema = "ctx.evidence-contract/v1"
+family = "pytest"
+profile = "pytest/v2"
+decision_unit = "failing_test"
+
+[outcomes.fail]
+required = ["aggregate_counts", "complete_identity_census", "location", "failure_class"]
+preferred = ["one_line_summary", "root_detail"]
+retrievable = ["full_traceback", "stdout", "stderr"]
+
+[outcomes.error]
+required = ["aggregate_counts", "complete_identity_census", "location", "failure_class"]
+preferred = ["one_line_summary", "root_detail"]
+retrievable = ["full_traceback", "stdout", "stderr"]
+
+[outcomes.pass]
+required = ["aggregate_counts"]
+preferred = []
+retrievable = ["stdout"]
+
+[outcomes.default]
+required = ["aggregate_counts"]
+preferred = []
+retrievable = ["stdout", "stderr"]
+
+[loss_severities]
+aggregate_counts = "catastrophic"
+complete_identity_census = "catastrophic"
+location = "major"
+failure_class = "major"
+one_line_summary = "minor"
+root_detail = "minor"
+
+[rendering]
+stable_order = "occurrence"
+evidence_floor_tokens = 256
+hard_ceiling_tokens = 4000
