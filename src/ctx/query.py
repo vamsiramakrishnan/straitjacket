@@ -223,8 +223,12 @@ def _stage_examples(name: str) -> tuple[str, ...]:
             out.append(ex)
     if not out and name in STAGES:
         st = STAGES[name]
-        out.append(name if not st.input_kinds else f"search <pattern> | {name}"
-                   if "sites" in st.input_kinds else f"<{_kinds_label(st)}> | {name}")
+        if not st.input_kinds:
+            out.append(name)
+        elif "sites" in st.input_kinds:
+            out.append(f"search <pattern> | {name}")
+        else:
+            out.append(f"<{_kinds_label(st)} stage> | {name}")
     return tuple(out)
 
 

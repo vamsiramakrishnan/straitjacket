@@ -20,7 +20,17 @@ Contracts under test:
 * Controller State wave (shadow): the v2 intervention ledger dual-writes
   through the real CLI with zero cli changes (defaulted plan fields) —
   full shadow-detector coverage lives in tests/test_generations.py and
-  tests/test_intervention_events.py.
+  tests/test_intervention_events.py;
+* ctx q visibility (the ALGEBRA live-A/B gap) — `ctx q '<pipeline>'`
+  signatures normalize (quote/whitespace/--trace variance collapses; stage
+  names+args are kept, they ARE the semantics); the q-dry ledger the query
+  engine writes folds fail-open into additive ctx.q/v1 events
+  (dry_query_rerun on an identical re-issue after a 0-row result;
+  recovered on rows-after-dry — the landing extension); absent ledger →
+  nothing scored, nothing written;
+* the ab_algebra_live referee (frozen constants checksum, mechanical
+  grading, spec3-reused aggregation, taught-vs-untaught doctrine gates) —
+  unit-tested on synthetic rows, never a live session.
 """
 
 import json
@@ -30,6 +40,7 @@ import sys
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parent.parent / "src"
+EVALS = Path(__file__).resolve().parent.parent / "evals"
 
 LEDGER = ".ctx-session-reads"
 OUTCOMES = "reflex-outcomes.jsonl"
@@ -537,3 +548,432 @@ def test_hook_edit_tool_disarms_and_allows(tmp_path):
     decision = _json.loads(out)
     assert decision  # exactly one valid JSON decision
     assert reflex.check_command(ws, "pytest tests/x.py") is None  # disarmed
+
+
+# ---------------------------------------------- ctx q signatures (algebra)
+
+
+def test_q_signature_normalizes_quote_whitespace_trace_variants():
+    """The live-A/B loop (3 identical dry `ctx q` reruns) collapses to ONE
+    signature regardless of quoting, whitespace, --trace, or trailing
+    slicer pipes; a different pipeline stays a different signature."""
+    from ctx.reflex import command_signature
+
+    base = command_signature("ctx q 'fails last | in-changed'")
+    assert base == "q fails last | in-changed"
+    same = [
+        'ctx q "fails last | in-changed"',
+        "ctx q   'fails   last |  in-changed '",
+        "ctx q --trace 'fails last | in-changed'",
+        "ctx q 'fails last | in-changed' --trace",
+        "ctx q 'fails last | in-changed' | head -5",
+        "bash -c \"ctx q 'fails last | in-changed'\"",
+    ]
+    for cmd in same:
+        assert command_signature(cmd) == base, cmd
+    # Stage names AND args are the semantics — different pipelines differ.
+    assert command_signature("ctx q 'fails last | shared-cause'") != base
+    assert (
+        command_signature("ctx q 'refs TokenBucket | group file | top 3'")
+        == "q refs TokenBucket | group file | top 3"
+    )
+    # Inner-arg quoting variance is one signature too.
+    assert command_signature(
+        "ctx q 'decls --kind function | where file=src/alpha.py'"
+    ) == command_signature(
+        'ctx q "decls --kind function | where file=src/alpha.py"'
+    )
+    # Empty pipelines have no signature; other retrieval verbs unchanged.
+    assert command_signature("ctx q") is None
+    assert command_signature("ctx q --trace") is None
+    assert command_signature("ctx q ''") is None
+    assert command_signature("ctx get run:abc123 --lines 1:5") is None
+    assert command_signature("ctx search run:abc123 FAIL") is None
+    assert command_signature("ctx run -- pytest tests/x.py -v") == "pytest tests/x.py"
+
+
+def test_query_signature_matches_command_signature():
+    """The ledger-writer helper and the hook-side signature agree
+    byte-for-byte (ledger keys must match sighted commands)."""
+    from ctx.reflex import command_signature, query_signature
+
+    assert (
+        query_signature("fails  last |   in-changed")
+        == command_signature("ctx q 'fails last | in-changed'")
+    )
+    assert query_signature("") is None
+    assert query_signature(None) is None
+
+
+# ------------------------------------------- q-dry ledger → ctx.q/v1 events
+
+Q_SIG = "q fails last | in-changed"
+
+
+def _q_events(root: Path) -> list[dict]:
+    path = Path(root) / LEDGER / "interventions.jsonl"
+    if not path.is_file():
+        return []
+    return [
+        json.loads(ln)
+        for ln in path.read_text(encoding="utf-8").splitlines()
+        if ln.strip()
+    ]
+
+
+def _write_q_ops(root: Path, lines: list[dict], append: bool = False) -> None:
+    led = Path(root) / LEDGER
+    led.mkdir(exist_ok=True)
+    mode = "a" if append else "w"
+    with (led / "q-dry.jsonl").open(mode, encoding="utf-8") as fh:
+        for rec in lines:
+            fh.write(json.dumps(rec, sort_keys=True) + "\n")
+
+
+def test_dry_query_rerun_events_from_op_lines(tmp_path):
+    """The ledger-driven path: the query engine's q_dry_rerun op lines
+    fold into ctx.q/v1 dry_query_rerun events — once each (cursor), no
+    matter how often the fold runs. The v1 outcome ledger (FROZEN schema)
+    is never touched by q events."""
+    from ctx import reflex
+
+    _write_q_ops(tmp_path, [
+        {"op": "q", "signature": Q_SIG, "rows": 0, "ts": 1.0},
+        {"op": "q_dry_rerun", "signature": Q_SIG, "rows": 0, "ts": 2.0},
+        {"op": "q_dry_rerun", "signature": Q_SIG, "rows": 0, "ts": 3.0},
+    ])
+    assert reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'") is None
+    evs = _q_events(tmp_path)
+    assert [e["event"] for e in evs] == ["dry_query_rerun", "dry_query_rerun"]
+    assert all(e["schema"] == "ctx.q/v1" for e in evs)
+    assert all(e["signature"] == Q_SIG for e in evs)
+    assert all(e["rows"] == 0 for e in evs)
+    # Cursor: a second sighting re-folds nothing.
+    reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'")
+    assert len(_q_events(tmp_path)) == 2
+    # Retrieval purity: q reruns are NOT §8 starvation — v1 ledger silent.
+    assert _events(tmp_path) == []
+
+
+def test_recovered_event_after_dry(tmp_path):
+    """The landing extension: rows>0 following a dry identical pipeline is
+    a 'recovered' positive (the teaching worked)."""
+    from ctx import reflex
+
+    _write_q_ops(tmp_path, [
+        {"op": "q", "signature": Q_SIG, "rows": 0, "ts": 1.0},
+        {"op": "q", "signature": Q_SIG, "rows": 4, "ts": 2.0},
+    ])
+    reflex.sync_query_outcomes(tmp_path)
+    evs = _q_events(tmp_path)
+    assert [(e["event"], e["rows"]) for e in evs] == [("recovered", 4)]
+    # A dry result alone (no rerun, no recovery) is not an event.
+    _write_q_ops(tmp_path, [
+        {"op": "q", "signature": "q decls", "rows": 0, "ts": 3.0},
+    ], append=True)
+    reflex.sync_query_outcomes(tmp_path)
+    assert len(_q_events(tmp_path)) == 1
+
+
+def test_q_json_state_fallback_scores_sighted_rerun_once(tmp_path):
+    """No op lines, only q-dry.json: the hook sighting of an identical q
+    while the ledger marks it dry IS the rerun — scored once per dry
+    episode (hook/cli double-sighting dedup), recovered on rows>0."""
+    from ctx import reflex
+
+    led = tmp_path / LEDGER
+    led.mkdir()
+    (led / "q-dry.json").write_text(
+        json.dumps({"pipelines": {Q_SIG: {"rows": 0}}}), encoding="utf-8"
+    )
+    reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'")
+    reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'")  # dedup
+    assert [e["event"] for e in _q_events(tmp_path)] == ["dry_query_rerun"]
+    # The pipeline recovers: any later q sighting folds the transition.
+    (led / "q-dry.json").write_text(
+        json.dumps({"pipelines": {Q_SIG: {"rows": 5}}}), encoding="utf-8"
+    )
+    reflex.check_command(tmp_path, "ctx q 'decls'")
+    evs = _q_events(tmp_path)
+    assert [e["event"] for e in evs] == ["dry_query_rerun", "recovered"]
+    assert evs[1]["rows"] == 5
+
+
+def test_q_ledger_absent_scores_nothing_and_writes_nothing(tmp_path):
+    """No q-dry ledger → skip entirely (never guess): no events, and the
+    ledger dir is NOT created (worktreeHash golden discipline)."""
+    from ctx import reflex
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    assert reflex.check_command(ws, "ctx q 'fails last | in-changed'") is None
+    reflex.sync_query_outcomes(ws)
+    assert not (ws / LEDGER).exists()
+
+
+def test_q_ledger_fail_open_on_garbage(tmp_path):
+    """Corrupt ledger shapes change nothing and never raise."""
+    from ctx import reflex
+
+    led = tmp_path / LEDGER
+    led.mkdir()
+    (led / "q-dry.json").write_text("{not json", encoding="utf-8")
+    (led / "q-dry.jsonl").mkdir()  # a directory, not a file
+    assert reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'") is None
+    assert _q_events(tmp_path) == []
+    # Corrupt op LINES are skipped individually; the cursor still advances.
+    import shutil
+
+    shutil.rmtree(led / "q-dry.jsonl")
+    (led / "q-dry.json").unlink()
+    (led / "q-dry.jsonl").write_text(
+        "not json at all\n"
+        + json.dumps({"op": "q_dry_rerun", "signature": Q_SIG, "rows": 0}) + "\n",
+        encoding="utf-8",
+    )
+    reflex.sync_query_outcomes(tmp_path)
+    reflex.sync_query_outcomes(tmp_path)  # idempotent past corrupt lines
+    assert [e["event"] for e in _q_events(tmp_path)] == ["dry_query_rerun"]
+
+
+def test_q_events_do_not_touch_run_signature_machinery(tmp_path):
+    """Retrieval purity, both directions: a q sighting neither trips the
+    starvation detector for run signatures nor consumes their hypothesis
+    windows; run interventions keep scoring exactly as before."""
+    from ctx import reflex
+
+    reflex.note_intervention(tmp_path, "pytest tests/x.py", "abc123def456")
+    _write_q_ops(tmp_path, [
+        {"op": "q_dry_rerun", "signature": Q_SIG, "rows": 0, "ts": 1.0},
+    ])
+    assert reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'") is None
+    assert not reflex.densify_latched(tmp_path, "pytest tests/x.py")
+    assert _events(tmp_path) == []  # no v1 starvation from the q sighting
+    # The run detector still fires exactly as before.
+    assert reflex.check_command(tmp_path, "pytest tests/x.py -x") == "densify"
+    assert [e["event"] for e in _events(tmp_path)] == ["starvation"]
+
+
+def test_q_state_and_events_deterministic(tmp_path):
+    """Same ledger content + same sighting sequence → byte-identical state
+    and identical events minus ts (the determinism contract extends)."""
+    from ctx import reflex
+
+    def drive(root: Path) -> None:
+        root.mkdir(exist_ok=True)
+        _write_q_ops(root, [
+            {"op": "q", "signature": Q_SIG, "rows": 0, "ts": 1.0},
+            {"op": "q_dry_rerun", "signature": Q_SIG, "rows": 0, "ts": 2.0},
+            {"op": "q", "signature": Q_SIG, "rows": 3, "ts": 3.0},
+        ])
+        reflex.check_command(root, "ctx q 'fails last | in-changed'")
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    drive(a)
+    drive(b)
+    state_a = (a / LEDGER / "reflex.json").read_text(encoding="utf-8")
+    state_b = (b / LEDGER / "reflex.json").read_text(encoding="utf-8")
+    assert state_a == state_b
+    strip = lambda evs: [{k: v for k, v in e.items() if k != "ts"} for e in evs]
+    assert strip(_q_events(a)) == strip(_q_events(b))
+    assert strip(_q_events(a)) == [
+        {"schema": "ctx.q/v1", "event": "dry_query_rerun",
+         "signature": Q_SIG, "rows": 0},
+        {"schema": "ctx.q/v1", "event": "recovered",
+         "signature": Q_SIG, "rows": 3},
+    ]
+
+
+# ------------------------------- ab_algebra_live referee (no live sessions)
+
+
+def _ab():
+    sys.path.insert(0, str(EVALS))
+    import ab_algebra_live
+
+    return ab_algebra_live
+
+
+AB_ALGEBRA_FROZEN_SHA256 = (
+    "143252d3afd4f42bbb9b51f78c49ec6fdd958c716631e2639790493f98c8b012"
+)
+
+
+def test_ab_algebra_frozen_referee_constants():
+    """The frozen-referee contract, algebra edition (mirrors
+    test_scorecard_v2.py::test_frozen_referee_constants): TASK_PROMPT,
+    TEACH, fixture files, ground truth, and arm construction are the
+    n>=3 taught-vs-untaught referee — any drift invalidates cross-round
+    comparison against the live-A/B receipt, so it fails loudly here and
+    the fix is to revert the drift, not to update the hash."""
+    import hashlib
+
+    ab = _ab()
+    h = hashlib.sha256()
+    h.update(ab.TASK_PROMPT.encode())
+    h.update(ab.TEACH.encode())
+    h.update(json.dumps(ab.BASE_FILES, sort_keys=True).encode())
+    h.update(json.dumps(ab.INTRODUCED_EDITS, sort_keys=True).encode())
+    h.update(json.dumps(
+        [list(ab.INTRODUCED_TESTS), list(ab.PREEXISTING_TESTS)]).encode())
+    for arm in ("taught", "untaught"):
+        h.update(json.dumps(ab.arm_argv(arm, "haiku")).encode())
+    assert h.hexdigest() == AB_ALGEBRA_FROZEN_SHA256, (
+        "ab_algebra frozen-referee constants drifted — TASK_PROMPT/TEACH/"
+        "fixture/ground-truth/arm_argv must not change (cross-round "
+        "comparisons die)."
+    )
+    # The receipt's structural requirements, asserted not just hashed:
+    # both arms are ctx wrap; the ONLY delta is the appended teach.
+    taught = ab.arm_argv("taught", "haiku")
+    untaught = ab.arm_argv("untaught", "haiku")
+    assert taught[:3] == ["ctx", "wrap", "claude"]
+    assert untaught == [t for t in taught if t not in ("--append-system-prompt", ab.TEACH)]
+    assert "--append-system-prompt" in taught and ab.TEACH in taught
+    assert str(ab.MAX_TURNS) == "25" or ab.MAX_TURNS == 25
+
+
+def test_ab_algebra_grade_format():
+    ab = _ab()
+    good = "some prose\nINTRODUCED: test_add, test_scale\nPREEXISTING: test_median\n"
+    g = ab.grade_format(good)
+    assert g["format_present"] and g["format_correct"]
+    # Node-id spellings and reordering are tolerated.
+    g2 = ab.grade_format(
+        "INTRODUCED: tests/test_suite.py::test_scale, tests/test_suite.py::test_add\n"
+        "PREEXISTING: `test_median`."
+    )
+    assert g2["format_present"] and g2["format_correct"]
+    # Wrong classification: present but not correct.
+    g3 = ab.grade_format(
+        "INTRODUCED: test_add, test_median\nPREEXISTING: test_scale\n"
+    )
+    assert g3["format_present"] and not g3["format_correct"]
+    # Missing a line: not present, not correct.
+    g4 = ab.grade_format("INTRODUCED: test_add, test_scale\n")
+    assert not g4["format_present"] and not g4["format_correct"]
+    # Empty / dead session output.
+    g5 = ab.grade_format("")
+    assert not g5["format_present"] and not g5["format_correct"]
+    # The LAST occurrence wins (models often restate at the end).
+    g6 = ab.grade_format(
+        "INTRODUCED: test_median\nPREEXISTING: test_add\n...fixing...\n"
+        "INTRODUCED: test_add, test_scale\nPREEXISTING: test_median\n"
+    )
+    assert g6["format_correct"]
+
+
+def test_ab_algebra_fix_grading():
+    ab = _ab()
+    out = (
+        "FAILED tests/test_suite.py::test_median - assert 3 == 2.5\n"
+        "1 failed, 4 passed in 0.12s\n"
+    )
+    assert ab.failing_tests(out) == {"test_median"}
+    assert ab.fixes_correct({"test_median"}) is True
+    assert ab.fixes_correct({"test_median", "test_add"}) is False
+    assert ab.fixes_correct(set()) is False  # "fixed" the pre-existing bug too
+    # Collection errors count as failing.
+    assert ab.failing_tests("ERROR tests/test_suite.py::test_scale - boom\n") == {
+        "test_scale"
+    }
+
+
+def _ab_row(arm, rep, turns, fmt, fixes=True, cost=0.1, wall=60.0, cache=97.0):
+    return {"task": "algebra_classify", "arm": arm, "rep": rep, "turns": turns,
+            "cost_usd": cost, "wall_s": wall, "cache_hit_pct": cache,
+            "format_present": bool(fmt), "format_correct": bool(fmt),
+            "fixes_correct": bool(fixes), "correct": bool(fmt and fixes),
+            "session_error": False}
+
+
+def test_ab_algebra_gates_pass_on_synthetic_rows():
+    """Aggregation is REUSED from the frozen spec3 runner; the doctrine
+    gates read its medians block."""
+    ab = _ab()
+    rows = [
+        _ab_row("taught", 1, 10, True), _ab_row("taught", 2, 12, True),
+        _ab_row("taught", 3, 14, True),
+        _ab_row("untaught", 1, 14, True), _ab_row("untaught", 2, 15, True),
+        _ab_row("untaught", 3, 16, True),
+    ]
+    medians = ab.aggregate_rows(rows)  # the spec3 import, unchanged
+    assert medians["algebra_classify/taught"]["turns"]["median"] == 12
+    assert medians["algebra_classify/untaught"]["turns"]["median"] == 15
+    gates, ok = ab.evaluate_ab_gates(rows, medians)
+    assert ok and all(g["ok"] for g in gates)
+    assert [g["gate"] for g in gates] == [
+        "taught_turns<=untaught_turns", "taught_format>=untaught_format",
+    ]
+
+
+def test_ab_algebra_gates_fail_on_regression():
+    ab = _ab()
+    # The n=1 receipt shape: taught costs turns AND drops the format.
+    rows = [
+        _ab_row("taught", 1, 26, False), _ab_row("taught", 2, 24, True),
+        _ab_row("taught", 3, 25, False),
+        _ab_row("untaught", 1, 20, True), _ab_row("untaught", 2, 18, True),
+        _ab_row("untaught", 3, 21, True),
+    ]
+    gates, ok = ab.evaluate_ab_gates(rows, ab.aggregate_rows(rows))
+    assert not ok
+    assert [g["ok"] for g in gates] == [False, False]
+    # Equality passes both gates (<=, >=): parity is not a loss.
+    rows_eq = [
+        _ab_row("taught", 1, 20, True),
+        _ab_row("untaught", 1, 20, True),
+    ]
+    gates_eq, ok_eq = ab.evaluate_ab_gates(rows_eq, ab.aggregate_rows(rows_eq))
+    assert ok_eq
+
+
+def test_ab_algebra_gates_fail_closed_on_missing_inputs():
+    ab = _ab()
+    rows = [_ab_row("taught", 1, 10, True)]  # no untaught arm at all
+    gates, ok = ab.evaluate_ab_gates(rows, ab.aggregate_rows(rows))
+    assert not ok and all(not g["ok"] for g in gates)
+    # Failed sessions (turns None) drop out of medians → turns gate FAILS
+    # closed rather than comparing invented numbers.
+    rows2 = [
+        _ab_row("taught", 1, None, False),
+        _ab_row("untaught", 1, 20, True),
+    ]
+    gates2, ok2 = ab.evaluate_ab_gates(rows2, ab.aggregate_rows(rows2))
+    assert not ok2
+    assert gates2[0]["ok"] is False  # turns: fail closed
+    assert gates2[1]["ok"] is False  # format: 0/1 < 1/1
+
+
+def test_ab_algebra_fixture_ground_truth(tmp_path):
+    """The frozen fixture's ground truth, verified with REAL pytest (no
+    live session): base commit fails exactly the pre-existing gamma test;
+    the working tree adds exactly the two introduced src-frame failures."""
+    ab = _ab()
+    base = tmp_path / "base"
+    ab.make_fixture(base, introduced=False)
+    p = subprocess.run(
+        ["python3", "-m", "pytest", "tests", "-q", "-rf", "--no-header",
+         "-p", "no:cacheprovider"],
+        cwd=base, capture_output=True, text=True, timeout=180,
+    )
+    assert ab.failing_tests(p.stdout + p.stderr) == set(ab.PREEXISTING_TESTS)
+
+    work = tmp_path / "work"
+    ab.make_fixture(work)
+    p2 = subprocess.run(
+        ["python3", "-m", "pytest", "tests", "-q", "-rf", "--no-header",
+         "-p", "no:cacheprovider"],
+        cwd=work, capture_output=True, text=True, timeout=180,
+    )
+    assert ab.failing_tests(p2.stdout + p2.stderr) == set(
+        ab.INTRODUCED_TESTS
+    ) | set(ab.PREEXISTING_TESTS)
+    # The receipt's frame requirement: introduced failures raise IN src/.
+    assert "src/alpha.py" in p2.stdout and "src/beta.py" in p2.stdout
+    # The introduced edits are uncommitted (the classification axis).
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=work,
+        capture_output=True, text=True,
+    ).stdout
+    assert " M src/alpha.py" in porcelain and " M src/beta.py" in porcelain

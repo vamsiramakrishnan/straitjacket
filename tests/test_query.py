@@ -370,3 +370,242 @@ def test_cli_q_error_is_exit_2(ws_store, capsys):
     err = capsys.readouterr().err
     assert rc == 2
     assert "needs files, got sites" in err
+
+
+# ---------------------- self-healing empty results (debt fac2339eff)
+# Live A/B receipt (evals/spec3-haiku-2026-07-18.md): an empty result that
+# teaches nothing converts to re-execution — 3 identical dry joins + 1
+# malformed variant, then abandonment. Empty results diagnose themselves;
+# identical dry re-issues banner the missing precondition, never block.
+def test_empty_diagnosis_at_source_stage(ws_store):
+    """0 rows is never a bare census: the diagnosis names the stage that
+    went empty and gives a why-shaped hint (generic, absent a note)."""
+    out, code = run_q(ws_store, "search zzz_absent_needle")
+    assert code == 0
+    assert "rows (census): 0" in out
+    assert "0 rows after stage 1 (search):" in out
+    assert "may not exist yet" in out  # generic source-stage hint
+    assert_bounded(ws_store, out)
+
+
+def test_empty_diagnosis_at_filter_stage(ws_store):
+    """The diagnosis walks the per-stage trace unconditionally (no --trace
+    flag here) and points at the stage where the stream went empty."""
+    out, code = run_q(ws_store, "search fold | where file~zzz_nowhere")
+    assert code == 0
+    assert "0 rows after stage 2 (where):" in out
+    assert "upstream rows were filtered out here" in out
+    assert "trace:" not in out  # diagnosis rides without the printed trace
+
+
+def test_empty_diagnosis_with_stream_note(ws_store):
+    """A Stream-carried note (the facts note channel) wins over the static
+    empty_hint."""
+    from ctx.query import STAGES, Stream, register_stage
+
+    def dry(qc, stream, args):
+        return Stream(
+            "records", [], note="no captured run — run: ctx run -- pytest -q"
+        )
+
+    register_stage(
+        "dry_fake", dry, input_kinds=(), output_kind="records",
+        doc="test-only", empty_hint="static hint that must lose to the note",
+    )
+    try:
+        out, code = run_q(ws_store, "dry_fake")
+        assert code == 0
+        assert (
+            "0 rows after stage 1 (dry_fake): "
+            "no captured run — run: ctx run -- pytest -q" in out
+        )
+        assert "static hint" not in out
+    finally:
+        del STAGES["dry_fake"]
+
+
+def test_empty_diagnosis_with_static_empty_hint(ws_store):
+    """Without a runtime note, the registered empty_hint teaches."""
+    from ctx.query import STAGES, Stream, register_stage
+
+    def dry(qc, stream, args):
+        return Stream("records", [])
+
+    register_stage(
+        "dry_hint_fake", dry, input_kinds=(), output_kind="records",
+        doc="test-only", empty_hint="derive facts first: ctx facts derive",
+    )
+    try:
+        out, code = run_q(ws_store, "dry_hint_fake")
+        assert code == 0
+        assert (
+            "0 rows after stage 1 (dry_hint_fake): "
+            "derive facts first: ctx facts derive" in out
+        )
+    finally:
+        del STAGES["dry_hint_fake"]
+
+
+def test_nonempty_rendering_carries_no_diagnosis(ws_store):
+    """Non-empty pipelines gain no diagnosis/banner lines (byte identity
+    with the pre-fix rendering is pinned by the untouched census,
+    determinism, and trace tests above)."""
+    out, code = run_q(ws_store, S_B_QUERY)
+    assert code == 0
+    assert "0 rows after" not in out and "moments ago" not in out
+
+
+# --------------------------------------------------------- did-you-mean
+def test_did_you_mean_exact_live_failure(ws_store):
+    """The exact live failure string from the A/B transcript: the model
+    inverted stage and argument ('last | fails')."""
+    out, code = run_q(ws_store, "last | fails")
+    assert code == 2
+    assert "unknown stage 'last'" in out
+    assert "did you mean: fails last | in-changed" in out
+    assert "known:" in out  # the registry list still teaches
+
+
+def test_kind_mismatch_names_working_example(ws_store):
+    out, code = run_q(ws_store, "search x | outline")
+    assert code == 2
+    assert "needs files, got sites" in out
+    assert "example: search TODO --glob 'src/*.py' | files | outline" in out
+
+
+# ------------------------------------------------------ dry-run guard rail
+def test_dry_rerun_banner_ledger_and_still_executes(ws_store):
+    import json
+
+    ws, _ = ws_store
+    q = "search zzz_dry_probe"
+    out1, code1 = run_q(ws_store, q)
+    assert code1 == 0 and "moments ago" not in out1  # first issue: no banner
+    out2, code2 = run_q(ws_store, q)
+    assert code2 == 0  # never blocks
+    assert (
+        "this exact query returned 0 rows moments ago — "
+        "the missing precondition is:" in out2
+    )
+    assert "re-running unchanged will not differ" in out2
+    # STILL executes: header, census, and diagnosis all present.
+    assert out2.splitlines()[0].startswith("[ctx q ·")
+    assert "rows (census): 0" in out2
+    assert "0 rows after stage 1 (search):" in out2
+    # One ledger line per dry re-issue, for the reflex plane.
+    lines = (
+        (ws.root / ".ctx-session-reads" / "q-dry.jsonl")
+        .read_text(encoding="utf-8").splitlines()
+    )
+    recs = [json.loads(ln) for ln in lines]
+    assert [r["op"] for r in recs] == ["q_dry_rerun"]
+    assert recs[0]["pipeline"] == q
+    # A different pipeline is not banner-ed.
+    out3, _ = run_q(ws_store, "search zzz_other_probe")
+    assert "moments ago" not in out3
+
+
+def test_dry_guard_fail_open(ws_store):
+    """Garbage guard state must never break a query (house ledger rule)."""
+    ws, _ = ws_store
+    state = ws.root / ".ctx-session-reads" / "q-dry.json"
+    state.parent.mkdir(exist_ok=True)
+    state.write_text("{not json", encoding="utf-8")
+    out, code = run_q(ws_store, "search zzz_failopen_probe")
+    assert code == 0
+    assert "0 rows after stage 1 (search):" in out
+
+
+def test_dry_memory_clears_when_rows_return(ws_store):
+    """A pipeline that produces rows again drops out of the dry set — the
+    banner is deterministic given the session's query sequence."""
+    from ctx.query import STAGES, Stream, register_stage
+
+    results = [[], [{"n": 1}], []]
+
+    def flaky(qc, stream, args):
+        return Stream("records", list(results.pop(0)))
+
+    register_stage(
+        "flaky_fake", flaky, input_kinds=(), output_kind="records", doc="test-only"
+    )
+    try:
+        out1, _ = run_q(ws_store, "flaky_fake")  # empty → remembered
+        assert "moments ago" not in out1
+        out2, _ = run_q(ws_store, "flaky_fake")  # rows → memory cleared
+        assert "moments ago" not in out2
+        out3, _ = run_q(ws_store, "flaky_fake")  # empty again, but first-dry
+        assert "moments ago" not in out3
+    finally:
+        del STAGES["flaky_fake"]
+
+
+def test_search_never_reads_the_session_ledger(ws_store):
+    """The ledger dir is bookkeeping, never evidence (hook.py rule) — and
+    the guard state echoes pipeline texts, so a ledger-scanning search
+    would match its own guard rail."""
+    ws, _ = ws_store
+    d = ws.root / ".ctx-session-reads"
+    d.mkdir(exist_ok=True)
+    (d / "q-dry.json").write_text(
+        '{"dry": ["search zzz_ledger_probe"]}', encoding="utf-8"
+    )
+    out, code = run_q(ws_store, "search zzz_ledger_probe")
+    assert code == 0
+    assert "rows (census): 0" in out  # the ledger file itself never matches
+
+
+# --------------------------------------- emission: teaching is evidence
+def test_empty_teaching_survives_engagement_filter(ws_store):
+    """Teaching-on-emptiness is evidence, not a suggestion: the engagement
+    filter (cap 0 strips 'next:' affordance blocks) must pass it whole."""
+    from ctx.engagement import filter_digest
+
+    q = "search zzz_filter_probe"
+    run_q(ws_store, q)
+    out, code = run_q(ws_store, q)  # diagnosis + banner present
+    assert code == 0 and "moments ago" in out
+    assert filter_digest(out, 0) == out
+
+
+def test_cli_q_empty_teaching_reaches_stdout(ws_store, capsys):
+    """End-to-end through _cmd_q's emission boundary (plan + filter +
+    bounded): the diagnosis and the dry-rerun banner reach the model."""
+    from ctx.cli import main
+
+    ws, _ = ws_store
+    q = "search zzz_cli_probe"
+    assert main(["--workspace", str(ws.root), "q", q]) == 0
+    capsys.readouterr()
+    assert main(["--workspace", str(ws.root), "q", q]) == 0
+    out = capsys.readouterr().out
+    assert "0 rows after stage 1 (search):" in out
+    assert "re-running unchanged will not differ" in out
+
+
+# ------------------------------------------------- additive-field contracts
+def test_stream_note_additive_backcompat():
+    """Stream gains ``note`` additively: existing positional/keyword call
+    shapes are untouched and default to None."""
+    from ctx.query import Stream
+
+    s = Stream("sites", [{"a": 1}])
+    assert s.note is None and s.omitted == 0 and s.groups is None
+    s2 = Stream("sites", [], 3, [("k", 3)])  # pre-existing positional shape
+    assert s2.note is None and s2.omitted == 3 and s2.groups == [("k", 3)]
+    s3 = Stream("records", [], note="hint")
+    assert s3.note == "hint"
+
+
+def test_register_stage_empty_hint_additive():
+    """The frozen registration contract is extended additively: empty_hint
+    is optional, defaults None, and existing stages carry no hint."""
+    import inspect
+
+    from ctx.query import STAGES, register_stage
+
+    params = inspect.signature(register_stage).parameters
+    assert "empty_hint" in params and params["empty_hint"].default is None
+    for name in ("name", "fn", "input_kinds", "output_kind", "doc"):
+        assert name in params  # original surface intact
+    assert STAGES["search"].empty_hint is None
