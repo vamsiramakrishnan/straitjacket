@@ -266,6 +266,34 @@ so a legitimate scope change can score as starvation. Fix: per-family
 signature tables declaring scope flags (kept) vs presentation flags
 (dropped) — breadth as data, per the house rule.
 
+## Source-state generations (§8)
+
+Adopted as the unifying abstraction over reflex v2's edit-disarm and
+rule 5 v3's content equivalence: **rerun classification = signature
+relation × generation equality**. Interventions record their generation;
+an equivalent rerun in the same generation is evidence recovery, in a
+later one it is verification. Progress (rule 9) is measured only across
+generations.
+
+1. **Two tiers**: hook events bump generations *provisionally* (cheap,
+   steers teaching/latching pre-execution; blind to `sed -i`/`git
+   apply`/`echo >>` mutations and fooled by irrelevant edits); capture
+   time *confirms* against the worktree hash already minted into every
+   run manifest (zero added cost). Equal hash → starvation confirmed
+   even if an event fired; different → verification even if none was
+   seen. Only confirmed events train [digest_density].
+2. **The untracked-content trap**: `_worktree_hash` hashes `git status
+   --porcelain`, which lists `?? file` regardless of content — edits to
+   just-created unstaged files (the dominant spec-driven-creation
+   pattern) don't change it, confirming false starvations on exactly the
+   spec3 workload. The generation hash extends with a digest over
+   untracked files' (path, size, mtime) — legal because generations are
+   operational identity, never content identity.
+3. **Freebie — flakiness detection**: within one generation, same
+   signature, a nonzero failing-set delta is mechanical evidence of
+   flaky tests (deterministic source ⇒ deterministic failures). A
+   `flaky` event joins the schema-v2 vocabulary at zero collection cost.
+
 ## The canonical picture
 
 ```
