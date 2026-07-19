@@ -171,6 +171,42 @@ escalates descent depth per starvation; the circuit breaker is the
 ladder's floor (capped raw); graduated steering is its ceiling (level 0,
 the null plan).
 
+## Component interfaces (§5, adopted with eight amendments)
+
+Extractor protocol (`family`, `version`, `matches`, `extract`), the
+EvidenceGraph (outcome, aggregate, items with id/kind/severity/summary/
+failure_class/location/detail_ref, artifacts, parser_warnings), and the
+Evidence Contract (decision_unit, outcome-conditional required/preferred/
+retrievable tiers, typed loss severities, stable_order, floor/ceiling)
+are adopted as proposed, with:
+
+1. **Volatile quarantine** (defect): timing and other volatile values
+   live in a designated `volatile` map excluded from graph identity and
+   default rendering — `duration_ms` inside `aggregate` would silently
+   break byte-identical digests and the cache doctrine with them.
+2. **Contracts are TOML, not YAML** (defect): stdlib `tomllib`, the
+   existing policy idiom; YAML would be the core's first hard dependency.
+3. `matches() -> str | None` (reason, not bool) — detection stays
+   deterministic *and explainable*, as the shipped registry already is.
+4. `detail_ref` carries a **minted span token over a real stream** — the
+   proposed `failure:<name>` selector resolves nowhere, and synthetic
+   streams (`#failures`) don't exist. Spans resolve today.
+5. **Completeness attestation**: graph gains
+   `coverage: {parsed, total_estimate, complete}` — the contract's
+   `complete_identity_census` is only checkable if extraction attests
+   completeness; otherwise the renderer must declare a partial census
+   (the typed form of the pipe-truncation degradation).
+6. `causal_rank` v1 = deterministic occurrence order; causal inference
+   is a versioned extractor upgrade, never a silent behavior change.
+7. **Severity gates dropping; the ladder governs compaction** —
+   orthogonal axes. Catastrophic facts are never dropped but may be
+   hierarchically compacted (census-of-census) with every rung
+   address-bearing. States the resolver's semantics per severity.
+8. **Graphs serialize via canonical_json and are content-addressed** —
+   yields extraction caching keyed by blob hash, conformance goldens
+   pinned to graph bytes (not rendering bytes), and an independently
+   testable seam between layers 1 and 3.
+
 ## The canonical picture
 
 ```
