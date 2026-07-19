@@ -70,17 +70,20 @@ _CTXIGNORE_TEMPLATE = """\
 """
 
 
-def _template_dir() -> Path:
-    """Locate the packaged plugin template: repo checkout first, then a
-    data dir next to the installed package."""
+def _template_dir(name: str = "antigravity", *, sentinel: str = "plugin.json") -> Path:
+    """Locate a packaged host template: repo checkout first, then a data dir
+    next to the installed package. ``name`` selects the host (antigravity,
+    codex); ``sentinel`` is a file that must exist for the dir to be valid."""
     here = Path(__file__).resolve()
     for candidate in (
-        here.parent.parent.parent / "plugins" / "antigravity",  # src checkout
-        here.parent / "data" / "antigravity",  # wheel data (future)
+        here.parent.parent.parent / "plugins" / name,  # src checkout
+        here.parent / "data" / name,  # wheel data (future)
     ):
-        if (candidate / "plugin.json").is_file():
+        if (candidate / sentinel).is_file():
             return candidate
-    raise FileNotFoundError("plugin template not found; reinstall ctx-harness")
+    raise FileNotFoundError(
+        f"{name} template not found; reinstall ctx-harness"
+    )
 
 
 def _ctx_executable() -> str:
@@ -150,6 +153,209 @@ def init_workspace(root: Path, *, quiet: bool = False) -> list[str]:
     elif not quiet:
         lines.append(f"{ign.name} already exists; left unchanged")
     return lines
+
+
+def claude_hook_settings(ctx_exe: str) -> dict:
+    """Claude Code / Codex-compatible hook settings dict (PreToolUse guard +
+    PostToolUse emission gate). Single source of truth; `ctx.wrap` reuses it
+    for ephemeral runs and `install_claude` for the persistent install."""
+    return {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{ctx_exe} hook claude-code pre-tool-use",
+                            "timeout": 10,
+                        }
+                    ],
+                }
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{ctx_exe} hook claude-code post-tool-use",
+                            "timeout": 10,
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+
+def _hook_command_present(settings: dict, ctx_exe: str) -> bool:
+    """True if a ctx-harness hook command is already registered."""
+    for stage in settings.get("hooks", {}).values():
+        for group in stage:
+            for hook in group.get("hooks", []):
+                cmd = str(hook.get("command", ""))
+                if " hook claude-code " in cmd or cmd.endswith("hook claude-code"):
+                    return True
+    return False
+
+
+def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
+    """Persistent Claude Code install: merge harness hooks into project
+    ``.claude/settings.json`` and drop the explorer agent. Idempotent and
+    non-destructive — existing hooks and settings are preserved."""
+    root = ws.root
+    exe = _ctx_executable()
+    lines: list[str] = []
+
+    settings_path = root / ".claude" / "settings.json"
+    existing: dict = {}
+    if settings_path.is_file():
+        try:
+            existing = json.loads(settings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing = {}
+    if _hook_command_present(existing, exe):
+        lines.append(".claude/settings.json already harnessed; left unchanged")
+    else:
+        merged = dict(existing)
+        for stage, entries in claude_hook_settings(exe)["hooks"].items():
+            merged.setdefault("hooks", {}).setdefault(stage, []).extend(entries)
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        lines.append(f"wrote {settings_path.relative_to(root)} (hooks merged)")
+
+    agent_src = _template_dir() / "agents" / "ctx-explorer.md"
+    agent_dst = root / ".claude" / "agents" / "ctx-explorer.md"
+    if agent_dst.exists():
+        lines.append(".claude/agents/ctx-explorer.md exists; left unchanged")
+    elif agent_src.is_file():
+        agent_dst.parent.mkdir(parents=True, exist_ok=True)
+        agent_dst.write_bytes(agent_src.read_bytes())
+        lines.append(f"wrote {agent_dst.relative_to(root)}")
+
+    if init_policy:
+        lines.extend(init_workspace(root, quiet=True))
+    lines.append("uninstall: remove the ctx hook entries from .claude/settings.json")
+    return "\n".join(lines)
+
+
+_CODEX_MARK_START = "<!-- ctx-harness:start -->"
+_CODEX_MARK_END = "<!-- ctx-harness:end -->"
+
+
+def _render_codex_file(name: str, exe: str) -> str:
+    tmpl = _template_dir("codex", sentinel="config.toml")
+    return (tmpl / name).read_text(encoding="utf-8").replace("{{CTX_EXECUTABLE}}", exe)
+
+
+def _upsert_agents_block(path: Path, block: str) -> str:
+    """Insert or replace the ctx-harness block in AGENTS.md, preserving the
+    rest of the file. Returns a one-line status."""
+    block = block.strip() + "\n"
+    if not path.is_file():
+        path.write_text(block, encoding="utf-8")
+        return f"wrote {path.name}"
+    text = path.read_text(encoding="utf-8")
+    if _CODEX_MARK_START in text and _CODEX_MARK_END in text:
+        pre = text[: text.index(_CODEX_MARK_START)]
+        post = text[text.index(_CODEX_MARK_END) + len(_CODEX_MARK_END) :]
+        path.write_text(pre + block + post.lstrip("\n"), encoding="utf-8")
+        return f"refreshed ctx-harness block in {path.name}"
+    sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+    path.write_text(text + sep + block, encoding="utf-8")
+    return f"appended ctx-harness block to {path.name}"
+
+
+def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
+    """Persistent Codex CLI install: register the ctx MCP server + lifecycle
+    hooks under ``.codex/`` and add a harness section to AGENTS.md. Never
+    clobbers an existing ``.codex/config.toml`` — prints the snippet to add."""
+    root = ws.root
+    exe = _ctx_executable()
+    lines: list[str] = []
+    codex_dir = root / ".codex"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg = codex_dir / "config.toml"
+    cfg_snippet = _render_codex_file("config.toml", exe)
+    if not cfg.is_file():
+        cfg.write_text(cfg_snippet, encoding="utf-8")
+        lines.append("wrote .codex/config.toml")
+    elif "mcp_servers.ctx-harness" in cfg.read_text(encoding="utf-8"):
+        lines.append(".codex/config.toml already registers ctx-harness; unchanged")
+    else:
+        # Never rewrite a user's TOML in place (duplicate-table hazard).
+        lines.append(
+            ".codex/config.toml exists — add these lines to enable ctx-harness:\n"
+            + "\n".join("    " + ln for ln in cfg_snippet.strip().splitlines())
+        )
+
+    hooks_path = codex_dir / "hooks.json"
+    hooks_rendered = _render_codex_file("hooks.json", exe)
+    if not hooks_path.is_file():
+        hooks_path.write_text(hooks_rendered, encoding="utf-8")
+        lines.append("wrote .codex/hooks.json")
+    else:
+        try:
+            cur = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            cur = {}
+        if _hook_command_present_codex(cur, exe):
+            lines.append(".codex/hooks.json already harnessed; left unchanged")
+        else:
+            ours = json.loads(hooks_rendered)
+            cur.setdefault("hooks", {})
+            for stage, entries in ours["hooks"].items():
+                cur["hooks"].setdefault(stage, []).extend(entries)
+            hooks_path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+            lines.append("merged ctx-harness hooks into .codex/hooks.json")
+
+    lines.append(_upsert_agents_block(root / "AGENTS.md", _render_codex_file("AGENTS.md", exe)))
+
+    if init_policy:
+        lines.extend(init_workspace(root, quiet=True))
+    lines.append("uninstall: remove .codex/config.toml, .codex/hooks.json, and the AGENTS.md block")
+    return "\n".join(lines)
+
+
+def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
+    for stage in settings.get("hooks", {}).values():
+        for group in stage:
+            for hook in group.get("hooks", []):
+                if " hook codex " in str(hook.get("command", "")):
+                    return True
+    return False
+
+
+# The harness is built for Antigravity and works with Claude Code and Codex.
+_HOST_INSTALLERS = {
+    "antigravity": install_antigravity,
+    "claude": install_claude,
+    "codex": install_codex,
+}
+SETUP_HOSTS = ("antigravity", "claude", "codex")
+
+
+def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
+    """Single-command multi-host setup. Configures the harness for each named
+    host (default: all three) and returns a combined per-host report."""
+    selected = hosts or list(SETUP_HOSTS)
+    out: list[str] = [
+        "ctx harness setup — built for Antigravity, works with Claude Code and Codex",
+        "",
+    ]
+    for host in selected:
+        installer = _HOST_INSTALLERS.get(host)
+        out.append(f"── {host} ──")
+        if installer is None:
+            out.append(f"unknown host {host!r} (choose from {', '.join(SETUP_HOSTS)})")
+        else:
+            # Each host inits policy once; keep it quiet after the first.
+            out.append(installer(ws, init_policy=(host == selected[0])))
+        out.append("")
+    out.append("validate: ctx doctor --antigravity   (and inspect .claude/ / .codex/)")
+    return "\n".join(out).rstrip() + "\n"
 
 
 def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:

@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 788 tests · hosts: Claude Code + Antigravity · Apache-2.0
+**Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 798 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -47,24 +47,33 @@ addresses. Any address resolves back to the exact original bytes later.
 
 ```bash
 pip install -e .            # runtime (stdlib-only core; extras optional)
-ctx init                    # write ctx.toml + .ctxignore
-ctx wrap claude --proxy -- -p "fix the failing tests"   # one harnessed session
+ctx wrap setup              # ONE command: harness Antigravity + Claude Code + Codex
 ctx stats --session         # wire scorecard: rounds, cache classes, effort mix
 ctx gain                    # cumulative containment savings, by verb
 ```
 
-If you run **Claude Code**: `ctx wrap claude --proxy -- -p "..."` runs one
-harnessed session. Hooks are injected via `--settings` for that run only and
-removed when it ends, so nothing is left behind in your config.
+**One command sets everything up.** `ctx wrap setup` (alias `ctx wrap all`)
+writes `ctx.toml`, then installs the harness for every host it supports —
+Antigravity, Claude Code, and Codex — in the current workspace. It is
+idempotent and non-destructive (existing config is merged, never clobbered).
+The harness is **built for Antigravity** and works identically on the other
+two: same capture, same deterministic digests, same retrieval addresses.
 
-If you run **Antigravity**: `ctx antigravity install` installs the plugin
-once, and the harness stays on for every session.
+Per-host, if you prefer to set up just one — or how each is wired:
 
-Both get the same capture, the same digests, and the same retrieval
-addresses. Opt-in extras: `--rescue-pct 70` (lossless mid-session rescue),
-`[map]`/`[code]`/`[fast]` pip extras, `rg`/`ctags` binaries, and a Rust
-post-hook accelerator (`native/ctx-hook-native`, ~3 ms vs Python's ~29 ms
-startup floor — parity-tested byte-for-byte, never required).
+| Host | Command | How it's wired |
+|---|---|---|
+| **Antigravity** | `ctx wrap antigravity` | workspace plugin (`.agents/plugins/`): MCP `ctx` tool + Pre/PostToolUse hooks |
+| **Claude Code** | `ctx wrap claude` (persist) · `ctx wrap claude -- -p "…"` (ephemeral run) | `.claude/settings.json` hooks + explorer agent; the `--` form injects hooks for one run and leaves zero residue |
+| **Codex** | `ctx wrap codex` | `.codex/config.toml` (MCP + `hooks=true`) + `.codex/hooks.json` (Pre/PostToolUse) + `AGENTS.md` steering |
+
+Preview any host's exact config without writing it: `ctx wrap <host> --print-config`.
+
+Opt-in extras: `--proxy` (Tier-0 wire observer on `ctx wrap claude`),
+`--rescue-pct 70` (lossless mid-session rescue), `[map]`/`[code]`/`[fast]` pip
+extras, `rg`/`ctags` binaries, and a Rust post-hook accelerator
+(`native/ctx-hook-native`, ~3 ms vs Python's ~29 ms startup floor —
+parity-tested byte-for-byte, never required).
 
 ## 🆕 New in v0.19–0.20
 
@@ -468,10 +477,16 @@ skill (protocol)        plugin (MCP + hooks)
 
 | Mode | Integration | Guarantee | Status |
 |---|---|---|---|
-| Skill | SKILL.md only | **Advisory**: protocol-trained, bypassable | shipped |
+| Skill | SKILL.md / AGENTS.md only | **Advisory**: protocol-trained, bypassable | shipped |
 | Plugin | skill + MCP + hooks | **Enforced**: transparent substitution steering on recognized tool paths | shipped |
 | Native harness | SDK agent, raw built-ins stripped | **Structural**: raw output cannot physically enter context | planned (Phase 4) |
 | Hardened | native + isolated broker | **Isolation-backed**: sandboxed shell cannot read the CAS database | planned (Phase 3) |
+
+The **Plugin** (enforced) mode is delivered across all three hosts by the same
+canonical hook decision, translated to each host's dialect: Antigravity's plugin
+`hooks.json`, Claude Code's `.claude/settings.json`, and Codex's `.codex/hooks.json`
+(`hookSpecificOutput` PreToolUse + `decision:block` PostToolUse substitution).
+One classifier, three emitters — `ctx wrap setup` wires all three at once.
 
 ### Steering policy (the hooks)
 
@@ -515,6 +530,7 @@ straitjacket/
 │                      # rescue, proxy, wrap, scorecard, digest/ (profiles)
 ├── native/ctx-hook-native/  # optional Rust post-hook shim (~3 ms), parity-tested
 ├── plugins/antigravity/     # plugin template: hooks, MCP config, skill, ctx-explorer agent
+├── plugins/codex/           # Codex template: config.toml (MCP+hooks), hooks.json, AGENTS.md
 ├── spec/              # normative SPEC, acceptance suite, ADRs, wire schemas
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
@@ -648,9 +664,12 @@ engine disclosed in headers.
 
 ```bash
 pip install -e .                            # from a clone (not yet on PyPI)
-ctx antigravity install --scope workspace --workspace .   # persistent plugin
-ctx wrap claude -- -p "fix the failing test"              # or: ephemeral wrap
-ctx wrap --print-config claude              # equivalent config for CI/manual setup
+ctx wrap setup                              # harness Antigravity + Claude Code + Codex
+# ...or one host at a time:
+ctx wrap antigravity                        # persistent workspace plugin
+ctx wrap codex                              # .codex/ MCP + hooks + AGENTS.md
+ctx wrap claude -- -p "fix the failing test"              # ephemeral, zero-residue run
+ctx wrap codex --print-config               # preview a host's exact config for CI
 ctx doctor --antigravity                    # verify hooks, manifests, store, classifier
 ```
 
@@ -664,7 +683,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 788 tests: determinism, budgets, hook contract, escapes
+pytest        # 798 tests: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

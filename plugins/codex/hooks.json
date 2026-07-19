@@ -1,0 +1,29 @@
+{
+  "description": "straitjacket (ctx-harness) context containment hooks for Codex CLI",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{CTX_EXECUTABLE}} hook codex pre-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{CTX_EXECUTABLE}} hook codex post-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

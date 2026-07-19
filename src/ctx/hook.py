@@ -1280,10 +1280,11 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     Returns None to pass the result through untouched. Fail-open: any error →
     None (the raw output is never lost, only un-digested).
 
-    Claude Code only this wave — the Antigravity output-replacement field is
-    unverified upstream, so there we stay nudge-only.
+    Claude Code (``updatedToolOutput``) and Codex (``decision:block`` + reason,
+    https://learn.chatgpt.com/docs/hooks) both have a verified substitution
+    field; Antigravity's is unverified upstream, so there we stay nudge-only.
     """
-    if flavor != "claude-code":
+    if flavor not in ("claude-code", "codex"):
         return None
     try:
         tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
@@ -1355,6 +1356,19 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         if nudge is not None:
             hso["additionalContext"] = nudge
         emitted: dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
+    elif flavor == "codex":
+        # Codex PostToolUse substitutes the model-visible result via
+        # {"decision":"block","reason":<text>}; additionalContext carries a
+        # non-substituting nudge (https://learn.chatgpt.com/docs/hooks).
+        emitted = {}
+        if replacement is not None:
+            emitted["decision"] = "block"
+            emitted["reason"] = replacement
+        chso: dict[str, Any] = {"hookEventName": "PostToolUse"}
+        if nudge is not None:
+            chso["additionalContext"] = nudge
+        if len(chso) > 1:
+            emitted["hookSpecificOutput"] = chso
     elif nudge is not None:  # antigravity dialect: nudge-only (no replacement)
         emitted = {"decision": "allow", "reason": nudge}
     else:
@@ -1386,9 +1400,12 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             decision = _deny("CTX_CONTEXT_GUARD: internal guard error (fail-closed policy)")
         else:
             decision = dict(DECISION_ALLOW)
+    # Codex uses Claude Code's PreToolUse contract verbatim
+    # (hookSpecificOutput.permissionDecision + updatedInput), per
+    # https://learn.chatgpt.com/docs/hooks.
     emitted: dict[str, Any] = (
         _to_claude_code_schema(decision)
-        if flavor == "claude-code"
+        if flavor in ("claude-code", "codex")
         else _to_antigravity_schema(decision)
     )
     sys.stdout.write(json.dumps(emitted, sort_keys=True))

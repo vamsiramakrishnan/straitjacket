@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
 
     # ------------------------------------------------------ hook fast path
-    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code"):
+    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code", "codex"):
         if args[2] == "pre-tool-use":
             from ctx.hook import main_pre_tool_use
 
@@ -263,8 +263,16 @@ def _main_slow(args: list[str]) -> int:
         "large tool_results to file-backed stubs (0 = pure observer)",
     )
 
-    p_wrap = sub.add_parser("wrap", help="run one agent session under the harness")
-    p_wrap.add_argument("host", choices=["claude", "antigravity"])
+    p_wrap = sub.add_parser(
+        "wrap",
+        help="set up / run the harness for a host (built for Antigravity, "
+        "works with Claude Code and Codex)",
+    )
+    p_wrap.add_argument(
+        "host",
+        choices=["setup", "all", "claude", "antigravity", "codex"],
+        help="'setup' (or 'all') harnesses every host in one command",
+    )
     p_wrap.add_argument(
         "--print-config", action="store_true", dest="print_config",
         help="print the host configuration instead of launching",
@@ -324,7 +332,13 @@ def _main_slow(args: list[str]) -> int:
             return 0
 
         if ns.cmd == "wrap":
-            from ctx.wrap import print_config, wrap_antigravity, wrap_claude
+            from ctx.wrap import (
+                print_config,
+                wrap_antigravity,
+                wrap_claude,
+                wrap_codex,
+                wrap_setup,
+            )
 
             agent_args = list(ns.agent_args)
             # REMAINDER swallows options placed after the host positional;
@@ -352,15 +366,34 @@ def _main_slow(args: list[str]) -> int:
                     del agent_args[i : i + 2]
                     use_proxy = True  # rescue implies the proxy
             if ns.print_config:
-                print(print_config(ns.host))
+                host = "claude" if ns.host in ("setup", "all") else ns.host
+                print(print_config(host))
                 return 0
             ws = resolve_workspace(ns.workspace)
             if agent_args and agent_args[0] == "--":
                 agent_args = agent_args[1:]
+            # Single-command multi-host setup (built for Antigravity; also
+            # harnesses Claude Code and Codex).
+            if ns.host in ("setup", "all"):
+                return wrap_setup(ws.root)
+            if ns.host == "codex":
+                return wrap_codex(ws.root)
+            if ns.host == "antigravity":
+                return wrap_antigravity(ws.root)
+            # claude: launch ephemerally when given agent args, else persist.
             if ns.host == "claude":
-                return wrap_claude(
-                    ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct
-                )
+                if agent_args:
+                    return wrap_claude(
+                        ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct
+                    )
+                from ctx.installer import install_claude
+
+                print(install_claude(resolve_workspace(str(ws.root))))
+                print()
+                print("Claude Code sessions in this workspace are now harnessed. "
+                      "For an ephemeral, zero-residue run instead: "
+                      "ctx wrap claude -- -p \"...\"")
+                return 0
             return wrap_antigravity(ws.root)
 
         ws = resolve_workspace(ns.workspace)
