@@ -46,6 +46,7 @@ the previous one's diagnosis.
 | 2 | [REFLEX.md](REFLEX.md) | Closed-loop conditionality: why open-loop ladders fired on the wrong axis, and the ten reflex design rules for steering on observed session behavior instead. |
 | 3 | [EDC.md](EDC.md) | The Evidence Delivery Controller — target architecture for the digest layer: typed Facts per command family, Evidence Contracts, deterministic Delivery Plans; coverage becomes the objective, size the constraint. |
 | 4 | [ALGEBRA.md](ALGEBRA.md) | Facts and the composition algebra: the EDC governs how evidence is delivered; this layer governs how it is derived and composed (tree-sitter skeleton tier, derived artifacts, Angle-inspired queries). |
+| 5 | [EVIDENCE-PLANS.md](EVIDENCE-PLANS.md) | Compiled evidence plans: the model compiles exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx investigate`); ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). |
 
 ---
 
