@@ -4,6 +4,50 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.22.0] - 2026-07-19
+
+The Evidence Delivery Controller wave (docs/EDC.md, all 24 sections
+specified and adversarially reviewed before build — seven defects died on
+paper). Built by seven parallel engineers in two increments; 612 tests.
+
+- **Evidence core**: typed EvidenceGraph/Item/Ref with volatile quarantine
+  and coverage attestation (ctx.evidence); TOML Evidence Contracts with
+  loss severities and floor<=ceiling load validation (ctx.contracts);
+  selection-seam validation — coverage computed over typed facts, never
+  re-parsed text.
+- **pytest/v2 extract/render split** (the layering law made real):
+  extraction emits attested graphs (failure class + one-line summary per
+  census row now DEFAULT — hierarchy levels 3-4); rendering through
+  contracts: FAIL_CENSUS, DENSE (grouped under extracted keys only),
+  FLOOD (histograms + first-N census + complete census minted as a
+  derived blob: artifact); degradation cascade never truncates identities
+  outside declared FLOOD; pass path byte-identical pytest/v1.
+- **Delivery Policy Resolver** (ctx.resolver): the single choke point
+  replacing seven hand-rolled budget sites; DeliveryPlan with plan_id and
+  closed reason vocabulary; floor applied after multipliers; reader
+  capability with latching and confidence floor; plan receipts to
+  telemetry. Safety invariant test: guard decisions byte-identical under
+  every adaptive state.
+- **Controller state, shadow-first** (EDC 5-7+6b): source generations
+  with untracked-content hashing (ledger-dir excluded, capped,
+  deterministic); per-family signature tables closing the scope-flag
+  defect; narrowing relation + positives; v2 intervention/outcome ledger
+  with deterministic ids, hypothesis windows, censored expiry; shadow
+  circuit machine (episode semantics + hysteresis); graduated-steering
+  shadow ledger. Replay gates vs archived transcripts ALL PASS: the r1
+  8x slicer loop collapses to one episode/one transition; edit cadence
+  scores as verification; 7 narrowing positives.
+- **Seeded referee + scorecard v2**: spec3 --repeats/--gates with median
+  aggregation and frozen-constants checksum; per-family behavioral
+  blocks, coverage tables, episode narratives, formula-labeled
+  counterfactuals; censored events excluded from denominators.
+- **Perf with receipts** (rejected optimizations documented): resolve_id
+  ~500x (index-seekable range scan), line-index repeat access ~3600x
+  (in-process cache; the mmap "win" was this confound), gc 3.7x
+  (batched); retrieval.py modularized into ctx/_retrieval behind a
+  byte-compatible facade; MCP schema drift fixed (call-graph ops
+  declared, diff wired) + bounded workspace cache.
+
 ## [0.21.0] - 2026-07-18
 
 The reflex wave: closed-loop conditionality (docs/REFLEX.md), built
