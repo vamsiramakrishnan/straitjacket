@@ -15,10 +15,37 @@ teaching error listing the valid pipelines.
 
 Registry contract (FROZEN — fact stages register against it):
 ``STAGES: dict[str, Stage]`` and ``register_stage(name, fn, *,
-input_kinds, output_kind, doc)`` are module-level and importable.
+input_kinds, output_kind, doc, empty_hint=None)`` are module-level and
+importable (``empty_hint`` is an additive keyword — see below).
 Late-bound: ``ctx.facts`` (engineer C) registers its stages at import
 time; ``run_query`` imports it lazily and fail-open, so ``ctx q`` works
 when facts is absent.
+
+Self-healing empty results (ALGEBRA-wide principle; debt fac2339eff — the
+live A/B receipt: a pipeline whose empty result teaches nothing converts
+to re-execution, 3 identical dry joins + 1 malformed before abandonment):
+
+* A 0-row result is never rendered as a bare census. The renderer walks
+  the per-stage trace (built unconditionally, ``--trace`` only controls
+  printing it) and names WHERE the stream went empty and why-shaped
+  guidance: ``0 rows after stage N (<name>): <hint>``. The hint comes
+  from, in order: the ``Stream.note`` the stage attached at runtime (the
+  facts note channel), the stage's static ``empty_hint`` registration
+  keyword, else a generic per-position emptiness hint.
+* Unknown-stage and kind-mismatch errors carry a did-you-mean line with
+  concrete working pipelines (difflib close matches + stages present
+  elsewhere in the query — the live failure ``'last | fails'`` inverted
+  stage and argument).
+* Dry-run guard rail: the workspace remembers (``.ctx-session-reads/
+  q-dry.json``, fail-open, house ledger pattern) the last
+  ``Q_DRY_REMEMBER`` pipeline texts that returned 0 rows this session; an
+  IDENTICAL re-issue after a 0-row result gets a stronger banner naming
+  the missing precondition while STILL executing (never blocks), and
+  appends ``{"op": "q_dry_rerun", "pipeline": ...}`` to
+  ``.ctx-session-reads/q-dry.jsonl`` (``ts`` operational-only) for the
+  reflex plane. The banner is deterministic given the session's query
+  sequence; the ledger dir is generation-excluded, so this state never
+  perturbs generation hashing.
 
 Boundedness: every stage respects a per-stage row cap (default 200) with
 declared omission. Emission rides the EDC spirit — bounded digest, a
@@ -33,9 +60,15 @@ orderings everywhere; content-addressed provenance only).
 
 from __future__ import annotations
 
+import difflib
+import json
+import os
 import re
 import shlex
+import tempfile
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from ctx.store import Store, canonical_json
@@ -52,6 +85,7 @@ GET_SITE_CAP = 24  # ``get`` fans out one bounded slice per site
 OUTLINE_FILE_CAP = 12  # ``outline`` fans out one outline per file
 RENDER_CAP = 100  # rows rendered inline; remainder declared + addressable
 _LINE_CAP = 160
+_LEDGER_DIR = ".ctx-session-reads"  # house ledger dir: bookkeeping, never evidence
 
 
 class QueryError(Exception):
@@ -60,12 +94,20 @@ class QueryError(Exception):
 
 @dataclass
 class Stream:
-    """Typed record stream between stages."""
+    """Typed record stream between stages.
+
+    ``note`` (additive, default ``None`` — no existing-call breakage) is
+    the runtime hint channel: a stage that KNOWS why it produced nothing
+    (e.g. facts' ``fails`` with no captured run) attaches the missing
+    precondition here; the empty-result diagnosis prefers it over the
+    stage's static ``empty_hint``.
+    """
 
     kind: str
     rows: list[dict]
     omitted: int = 0  # rows dropped by declared caps anywhere upstream
     groups: list[tuple[str, int]] | None = None  # set by ``group``
+    note: str | None = None  # runtime empty-result hint (facts note channel)
 
 
 @dataclass(frozen=True)
@@ -82,6 +124,7 @@ class Stage:
     output_kind: str
     doc: str
     row_cap: int = DEFAULT_ROW_CAP
+    empty_hint: str | None = None  # static why-shaped hint for 0-row results
 
 
 #: FROZEN registry (engineer C's facts.py registers fact stages here).
@@ -96,19 +139,31 @@ def register_stage(
     output_kind: str,
     doc: str,
     row_cap: int = DEFAULT_ROW_CAP,
+    empty_hint: str | None = None,
 ) -> None:
     """Register a pipeline stage. Module-level, importable, late-bound.
 
+    FROZEN contract surface, extended additively: the required keywords
+    (``input_kinds``, ``output_kind``, ``doc``) are unchanged; existing
+    registrations keep working verbatim.
+
     ``input_kinds``: tuple of stream kinds accepted (``()`` = source stage,
     must be first). ``output_kind``: one of KINDS, or ``SAME`` for
-    kind-preserving combinators.
+    kind-preserving combinators. ``empty_hint`` (optional, additive): a
+    why-shaped teaching line used when a pipeline goes to 0 rows at this
+    stage — name the likely missing precondition and the command that
+    creates it. A ``Stream.note`` attached at runtime by the stage takes
+    precedence over this static hint; with neither, the diagnosis falls
+    back to a generic per-stage emptiness hint.
     """
     if output_kind != SAME and output_kind not in KINDS:
         raise ValueError(f"unknown output kind {output_kind!r}; kinds: {KINDS}")
     for k in input_kinds:
         if k not in KINDS:
             raise ValueError(f"unknown input kind {k!r}; kinds: {KINDS}")
-    STAGES[name] = Stage(name, fn, tuple(input_kinds), output_kind, doc, row_cap)
+    STAGES[name] = Stage(
+        name, fn, tuple(input_kinds), output_kind, doc, row_cap, empty_hint
+    )
 
 
 @dataclass
@@ -132,6 +187,66 @@ def _pipelines_help() -> str:
         f"{n}({_kinds_label(st)}→{st.output_kind})" for n, st in sorted(STAGES.items())
     ]
     return "valid: " + " · ".join(parts)
+
+
+#: Concrete working pipelines per stage, used by did-you-mean lines. Entries
+#: for late-bound stages (facts) are inert until those stages register —
+#: ``_stage_examples`` only emits examples whose every stage exists.
+_EXAMPLES: dict[str, tuple[str, ...]] = {
+    "refs": ("refs TokenBucket | group file | top 3 | get --context 5",),
+    "callers": ("callers TokenBucket | files",),
+    "callees": ("callees TokenBucket | files",),
+    "impact": ("impact TokenBucket --depth 3",),
+    "search": ("search TODO --glob 'src/*.py' | files",),
+    "files": ("search TODO --glob 'src/*.py' | files",),
+    "outline": ("search TODO --glob 'src/*.py' | files | outline",),
+    "get": ("refs TokenBucket | get --context 5",),
+    "group": ("search TODO --glob 'src/*.py' | group file | count",),
+    "top": ("refs TokenBucket | group file | top 3",),
+    "where": ("search TODO --glob 'src/*.py' | where file~src/",),
+    "count": ("search TODO --glob 'src/*.py' | count",),
+    # facts stages (engineer C) — live only once registered:
+    "fails": ("fails last | in-changed", "fails last | shared-cause"),
+    "in-changed": ("fails last | in-changed",),
+    "decls": ("decls --kind class | count",),
+    "shared-cause": ("fails last | shared-cause",),
+}
+
+
+def _stage_examples(name: str) -> tuple[str, ...]:
+    """Working pipelines that use ``name``; only pipelines whose every
+    stage is currently registered (registries are late-bound)."""
+    out: list[str] = []
+    for ex in _EXAMPLES.get(name, ()):
+        heads = [seg.strip().split()[0] for seg in ex.split("|") if seg.strip()]
+        if heads and all(h in STAGES for h in heads):
+            out.append(ex)
+    if not out and name in STAGES:
+        st = STAGES[name]
+        out.append(name if not st.input_kinds else f"search <pattern> | {name}"
+                   if "sites" in st.input_kinds else f"<{_kinds_label(st)}> | {name}")
+    return tuple(out)
+
+
+def _did_you_mean(name: str, all_stage_heads: list[str]) -> str:
+    """The two most plausible correct pipelines for an unknown stage name:
+    stages named elsewhere in the query first (the live failure
+    ``'last | fails'`` inverted stage and argument), then difflib close
+    matches over the registry. Empty string when nothing plausible."""
+    candidates: list[str] = [h for h in all_stage_heads if h != name and h in STAGES]
+    for m in difflib.get_close_matches(name, sorted(STAGES), n=2, cutoff=0.4):
+        if m not in candidates:
+            candidates.append(m)
+    examples: list[str] = []
+    for c in candidates:
+        for ex in _stage_examples(c):
+            if ex not in examples:
+                examples.append(ex)
+        if len(examples) >= 2:
+            break
+    if not examples:
+        return ""
+    return "did you mean: " + " · ".join(examples[:2])
 
 
 # ---------------------------------------------------------------- grammar
@@ -166,27 +281,32 @@ def parse_query(text: str) -> list[tuple[str, list[str]]]:
         name, args = toks[0], toks[1:]
         st = STAGES.get(name)
         if st is None:
+            dym = _did_you_mean(name, [t[0] for t in stages])
             raise QueryError(
                 f"ctx q: unknown stage {name!r} (stage {i}); "
-                f"known: {', '.join(sorted(STAGES))}"
+                + (f"{dym}; " if dym else "")
+                + f"known: {', '.join(sorted(STAGES))}"
             )
+        example = _stage_examples(name)
+        ex_tail = f"; example: {example[0]}" if example else ""
         if not st.input_kinds:  # source stage
             if kind is not None:
                 raise QueryError(
                     f"ctx q: {name!r} is a source stage and must open the "
-                    f"pipeline (stage {i}); {_pipelines_help()}"
+                    f"pipeline (stage {i}); {_pipelines_help()}{ex_tail}"
                 )
             kind = st.output_kind
         else:
             if kind is None:
                 raise QueryError(
                     f"ctx q: {name!r} needs an upstream {_kinds_label(st)} "
-                    f"stream but opens the pipeline (stage {i}); {_pipelines_help()}"
+                    f"stream but opens the pipeline (stage {i}); "
+                    f"{_pipelines_help()}{ex_tail}"
                 )
             if kind not in st.input_kinds:
                 raise QueryError(
                     f"ctx q: stage {name!r} (stage {i}) needs "
-                    f"{_kinds_label(st)}, got {kind}; {_pipelines_help()}"
+                    f"{_kinds_label(st)}, got {kind}; {_pipelines_help()}{ex_tail}"
                 )
             kind = kind if st.output_kind == SAME else st.output_kind
         parsed.append((name, args))
@@ -316,6 +436,12 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     )
     rows = []
     for t in targets:  # targets arrive path-sorted
+        # The session ledger is bookkeeping, never evidence (hook.py rule;
+        # execution.py excludes it from generation hashing likewise) — and
+        # since the q dry-run guard rail records pipeline texts there, a
+        # ledger-scanning search would match its own guard state.
+        if _LEDGER_DIR in str(t.label).replace("\\", "/").split("/"):
+            continue
         for i, ln in enumerate(t.text.splitlines(), start=1):
             if rx.search(ln):
                 rows.append({"file": t.label, "line": i, "text": ln.strip()[:_LINE_CAP]})
@@ -500,6 +626,120 @@ def _load_registered_extensions() -> None:
         pass
 
 
+# ------------------------------------------- self-healing empty results
+# Debt fac2339eff: an affordance whose empty result teaches nothing
+# converts to re-execution (live A/B: 3 identical dry joins + 1 malformed
+# variant, then abandonment). Empty results diagnose themselves; identical
+# dry re-issues get a stronger banner but ALWAYS still execute.
+Q_DRY_REMEMBER = 8  # last N 0-row pipeline texts remembered per session
+_QDRY_STATE = "q-dry.json"
+_QDRY_LEDGER = "q-dry.jsonl"
+
+
+def _empty_diagnosis(
+    stage_stats: list[tuple[str, int, int, str | None]],
+) -> tuple[str, str] | None:
+    """Walk the per-stage trace (always recorded; ``--trace`` only prints
+    it) to the first stage whose output hit 0 rows. Returns
+    ``(diagnosis_line, hint)`` or None when no stage went empty."""
+    for i, (name, n_in, n_out, note) in enumerate(stage_stats, start=1):
+        if n_out != 0:
+            continue
+        st = STAGES.get(name)
+        hint = note or (st.empty_hint if st is not None else None)
+        if not hint:
+            doc = st.doc if st is not None else name
+            if st is not None and not st.input_kinds:
+                hint = (
+                    "the source produced no rows — the evidence it reads may "
+                    f"not exist yet; create it first ({doc})"
+                )
+            elif n_in:
+                hint = (
+                    f"all {fmt_int(n_in)} upstream rows were filtered out here "
+                    f"— loosen this stage's arguments ({doc})"
+                )
+            else:
+                hint = f"no rows reached this stage ({doc})"
+        return f"0 rows after stage {i} ({name}): {hint}", hint
+    return None
+
+
+def _qdry_read(root) -> list[str]:
+    """Last-N 0-row pipeline texts, oldest first. Fail-open: [] on any
+    problem (the guard rail degrades to silence, never to an error)."""
+    try:
+        doc = json.loads(
+            (Path(root) / _LEDGER_DIR / _QDRY_STATE).read_text(encoding="utf-8")
+        )
+        dry = doc.get("dry") if isinstance(doc, dict) else None
+        if isinstance(dry, list):
+            return [str(p) for p in dry][-Q_DRY_REMEMBER:]
+    except Exception:
+        pass
+    return []
+
+
+def _qdry_write(root, dry: list[str]) -> None:
+    """Atomic temp+rename write of the dry-pipeline state (house pattern:
+    reflex.json). Fail-open — never raises."""
+    try:
+        d = Path(root) / _LEDGER_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"dry": dry[-Q_DRY_REMEMBER:]}, sort_keys=True)
+        fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".q-dry-")
+        try:
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, str(d / _QDRY_STATE))
+    except Exception:
+        pass
+
+
+def _qdry_ledger_append(root, pipeline: str) -> None:
+    """One line per dry re-issue for the reflex plane. ``ts`` is
+    operational-only (house rule: the ledger minus ts is a pure function
+    of the session's query sequence). Fail-open — never raises."""
+    try:
+        d = Path(root) / _LEDGER_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(
+            {"op": "q_dry_rerun", "pipeline": pipeline, "ts": time.time()},
+            sort_keys=True,
+        )
+        with open(d / _QDRY_LEDGER, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
+
+
+def _qdry_note(root, pipeline: str, is_empty: bool, hint: str | None) -> str | None:
+    """Apply the dry-run guard rail for one executed pipeline. Returns the
+    stronger banner when this exact text just returned 0 rows and did so
+    again — while the caller STILL emits the executed result (never
+    blocks). Deterministic given the session's query sequence; every path
+    fail-open."""
+    try:
+        dry = _qdry_read(root)
+        if not is_empty:
+            if pipeline in dry:
+                _qdry_write(root, [p for p in dry if p != pipeline])
+            return None
+        banner = None
+        if pipeline in dry:
+            banner = (
+                "this exact query returned 0 rows moments ago — the missing "
+                f"precondition is: {hint or 'unknown (no stage hint)'}; "
+                "re-running unchanged will not differ"
+            )
+            _qdry_ledger_append(root, pipeline)
+        _qdry_write(root, [p for p in dry if p != pipeline] + [pipeline])
+        return banner
+    except Exception:
+        return None
+
+
 def _row_line(kind: str, r: dict) -> str:
     if kind == "sites":
         what = str(r.get("text") or r.get("symbol") or "")
@@ -516,7 +756,14 @@ def _row_line(kind: str, r: dict) -> str:
 
 
 def _render(
-    ws: Workspace, store: Store, query: str, n_stages: int, out: Stream, trace: list[str] | None
+    ws: Workspace,
+    store: Store,
+    query: str,
+    n_stages: int,
+    out: Stream,
+    trace: list[str] | None,
+    empty_diag: str | None = None,
+    dry_banner: str | None = None,
 ) -> str:
     # Derived, addressable result set (v1-lite: final stream only; per-stage
     # blobs deferred — the --trace ledger is stage provenance today).
@@ -543,6 +790,15 @@ def _render(
             "narrow with where/top)"
         )
     lines.append(census)
+    # Self-healing emptiness: a 0-row result is never a bare census — the
+    # per-stage diagnosis (and, on an identical dry re-issue, the stronger
+    # banner) is evidence, not a suggestion; it must survive the
+    # engagement filter, so it is emitted as plain lines, never under a
+    # "next:" affordance block.
+    if total == 0 and empty_diag:
+        lines.append(empty_diag)
+    if dry_banner:
+        lines.append(dry_banner)
     if out.groups is not None:
         head = out.groups[:10]
         gline = "groups (census): " + " · ".join(f"{k or '∅'}:{n}" for k, n in head)
@@ -580,6 +836,9 @@ def run_query(
 
     qc = _Ctx(ws, store)
     stream = Stream("start", [])
+    # Per-stage trace, ALWAYS recorded (the --trace flag only prints it):
+    # the empty-result diagnosis walks this unconditionally.
+    stage_stats: list[tuple[str, int, int, str | None]] = []
     try:
         for i, (name, args) in enumerate(parsed, start=1):
             st = STAGES[name]
@@ -588,6 +847,7 @@ def run_query(
             if len(stream.rows) > st.row_cap:
                 stream.omitted += len(stream.rows) - st.row_cap
                 stream.rows = stream.rows[: st.row_cap]
+            stage_stats.append((name, n_in, len(stream.rows), stream.note))
             qc.trace.append(
                 f"{i} {' '.join([name, *args])} · in {n_in} → out {len(stream.rows)}"
                 + (f" · omitted {stream.omitted}" if stream.omitted else "")
@@ -595,8 +855,23 @@ def run_query(
     except QueryError as e:
         return str(e), 2
 
+    # Self-healing empty results (debt fac2339eff): diagnose WHERE the
+    # stream went empty, and arm the dry-run guard rail — an identical
+    # re-issue after a 0-row result banners the missing precondition but
+    # STILL executes (never blocks).
+    diag = _empty_diagnosis(stage_stats) if not stream.rows else None
+    dry_banner = _qdry_note(
+        ws.root, text.strip(), not stream.rows, diag[1] if diag else None
+    )
     rendered = _render(
-        ws, store, text, len(parsed), stream, qc.trace if trace else None
+        ws,
+        store,
+        text,
+        len(parsed),
+        stream,
+        qc.trace if trace else None,
+        empty_diag=diag[0] if diag else None,
+        dry_banner=dry_banner,
     )
     # EDC-spirit emission backstop: the caller may re-bound under a plan;
     # library callers get a bounded digest either way.

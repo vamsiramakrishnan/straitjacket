@@ -646,6 +646,172 @@ def test_q_pipeline_end_to_end(derived):
     assert "boom" in out3 and "shared_trip" not in out3  # hidden def stays hidden
 
 
+# ------------------------------------------- self-healing fails stage (spec3)
+# The measured defect (evals/spec3-haiku-2026-07-18.md, ALGEBRA live A/B):
+# `fails last` before ANY captured run returned an empty stream that taught
+# nothing; the model abandoned the verb. The stage must auto-capture the
+# pytest family's command under the birth gate when no derivable run exists,
+# or carry a teaching note when auto-capture is impossible — and stay
+# byte-identical whenever a run already exists.
+def _qc(ws, store):
+    return type("QC", (), {"ws": ws, "store": store})()
+
+
+def _run_count(store) -> int:
+    return store.db.execute(
+        "SELECT COUNT(*) FROM objects WHERE kind='run'"
+    ).fetchone()[0]
+
+
+@pytest.fixture()
+def pytest_shaped_ws(tmp_path, state_home):
+    """Pytest-shaped workspace (tests/ dir), zero captured runs: one
+    passing + one failing test so the auto-capture yields real fail rows."""
+    d = tmp_path / "proj"
+    (d / "tests").mkdir(parents=True)
+    (d / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    (d / "tests" / "test_seed.py").write_text(
+        "def test_pass():\n    assert True\n\n\n"
+        "def test_boom():\n    assert 1 == 2\n",
+        encoding="utf-8",
+    )
+    ws = make_ws(d)
+    return ws, make_store(ws)
+
+
+def test_fails_last_auto_captures_on_pytest_shaped_empty_store(pytest_shaped_ws):
+    """(a) Empty store + pytest layout: the stage runs the suite itself,
+    a run manifest exists afterwards, rows come back, and the auto-capture
+    is DECLARED on both duck-typed note channels."""
+    query = pytest.importorskip("ctx.query")
+    import ctx.facts as facts
+
+    ws, store = pytest_shaped_ws
+    assert _run_count(store) == 0
+    out = facts._stage_fails(_qc(ws, store), query.Stream("start", []), ["last"])
+    # A run manifest now exists — the capture is addressable like any run.
+    assert _run_count(store) == 1
+    assert out.kind == "sites" and len(out.rows) == 1, out.rows
+    assert out.rows[0]["file"] == "tests/test_seed.py"
+    assert out.rows[0]["test"].endswith("::test_boom")
+    # Declaration present: module-level channel + Stream instance attr.
+    note = getattr(facts, "last_stage_note", None)
+    assert note and note.startswith("auto-captured"), note
+    assert "python -m pytest tests -q" in note and "run:" in note
+    assert "birth gate" in note
+    assert getattr(out, "note", None) == note
+    # The manifest's model-visible argv never carries sys.executable.
+    rid = store.db.execute("SELECT id FROM objects WHERE kind='run'").fetchone()[0]
+    assert store.get_manifest(rid)["argv"] == ["python", "-m", "pytest", "tests", "-q"]
+    # Second invocation: a run exists now → derived path, NO second capture.
+    out2 = facts._stage_fails(_qc(ws, store), query.Stream("start", []), ["last"])
+    assert _run_count(store) == 1
+    assert len(out2.rows) == 1
+    assert facts.last_stage_note is None and getattr(out2, "note", None) is None
+
+
+def test_fails_last_non_test_workspace_teaches_never_captures(
+    workspace_dir, state_home, monkeypatch
+):
+    """(b) No test layout at all: teaching note with the exact next
+    command, zero capture attempts, empty-but-never-silent stream."""
+    query = pytest.importorskip("ctx.query")
+    import ctx.facts as facts
+    import ctx.execution as execution
+
+    def _forbidden(*a, **k):  # pragma: no cover — must never run
+        raise AssertionError("run_capture must not be attempted without a layout")
+
+    monkeypatch.setattr(execution, "run_capture", _forbidden)
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    out = facts._stage_fails(_qc(ws, store), query.Stream("start", []), ["last"])
+    assert out.rows == [] and _run_count(store) == 0
+    assert facts.last_stage_note == (
+        "no captured test run — run: ctx run -- python -m pytest <path> -q, "
+        "then re-run this query"
+    )
+    assert facts.last_stage_note == facts.teach_no_run()
+    assert getattr(out, "note", None) == facts.last_stage_note
+
+
+def test_fails_existing_run_path_byte_identical_no_autocapture(derived, monkeypatch):
+    """(c) With a derivable run the stage is deterministic and untouched:
+    identical bytes across invocations, run-object count stable, no note,
+    and run_capture provably never called."""
+    query = pytest.importorskip("ctx.query")
+    import ctx.facts as facts
+    import ctx.execution as execution
+
+    def _forbidden(*a, **k):  # pragma: no cover — must never run
+        raise AssertionError("auto-capture must not trigger when a run exists")
+
+    monkeypatch.setattr(execution, "run_capture", _forbidden)
+    ws, store = derived["ws"], derived["store"]
+    before = _run_count(store)
+    out1, code1 = query.run_query(ws, store, "fails last | in-changed")
+    out2, code2 = query.run_query(ws, store, "fails last | in-changed")
+    assert code1 == 0 and code2 == 0
+    assert out1 == out2  # byte-identical (determinism unchanged)
+    assert "test_alpha_boom" in out1 and "test_beta_crunch" in out1
+    assert _run_count(store) == before
+    assert facts.last_stage_note is None
+
+
+def test_fails_capture_failure_teaches_never_raises(pytest_shaped_ws, monkeypatch):
+    """(d) Layout detected but the capture blows up: fail-open to the
+    teaching note (with the concrete detected path), no raise, no run."""
+    query = pytest.importorskip("ctx.query")
+    import ctx.facts as facts
+    import ctx.execution as execution
+
+    monkeypatch.setattr(
+        execution, "run_capture",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("capture exploded")),
+    )
+    ws, store = pytest_shaped_ws
+    out = facts._stage_fails(_qc(ws, store), query.Stream("start", []), ["last"])
+    assert out.rows == [] and _run_count(store) == 0
+    assert facts.last_stage_note == facts.teach_no_run("tests")
+    assert facts.last_stage_note == (
+        "no captured test run — run: ctx run -- python -m pytest tests -q, "
+        "then re-run this query"
+    )
+    assert getattr(out, "note", None) == facts.last_stage_note
+
+
+def test_fails_autocapture_single_attempt_never_recursive(pytest_shaped_ws, monkeypatch):
+    """(e) Exactly one capture attempt per invocation, and an adversarial
+    reentry DURING the capture gets the teaching note — never a second
+    subprocess, never recursion."""
+    query = pytest.importorskip("ctx.query")
+    import ctx.facts as facts
+    import ctx.execution as execution
+
+    ws, store = pytest_shaped_ws
+    attempts: list[int] = []
+
+    def _reentrant(*a, **k):
+        attempts.append(1)
+        # Reenter the stage mid-capture: the latch must teach, not recurse.
+        inner = facts._stage_fails(
+            _qc(ws, store), query.Stream("start", []), ["last"]
+        )
+        assert inner.rows == []
+        assert getattr(inner, "note", None) == facts.teach_no_run("tests")
+        raise RuntimeError("capture failed after reentry")
+
+    monkeypatch.setattr(execution, "run_capture", _reentrant)
+    for expected_attempts in (1, 2):  # one attempt per call, no more
+        out = facts._stage_fails(
+            _qc(ws, store), query.Stream("start", []), ["last"]
+        )
+        assert out.rows == []
+        assert len(attempts) == expected_attempts
+    assert facts.last_stage_note == facts.teach_no_run("tests")
+    assert _run_count(store) == 0
+
+
 # ----------------------------------------------------- real-skeleton contact
 def test_derive_file_with_real_skeleton_module(fixture_repo, state_home):
     """Tolerant integration: whatever backend engineer A's module picked

@@ -44,6 +44,16 @@ Query discipline (M-I, Angle-lite): every join helper is a bounded
 conjunctive query — deterministic ORDER BY, declared row cap, pure with
 respect to store state. Emission goes through :func:`render_census`
 (rows REQUIRED, omission declared) — one bounded digest per answer.
+
+ONE deliberate exception to query purity (measured defect, spec3 live
+A/B): the ``fails`` q stage self-heals. When ``fails last`` finds no
+derivable run at all in a pytest-shaped workspace it runs the family's
+test command itself under the full birth gate (a precondition-completing
+capture, addressable like any run) and derives it; when even that is
+impossible the empty stream carries a teaching note naming the
+precondition and the exact next command. Every path where a run exists
+is unchanged and byte-identical. See :func:`_auto_capture_fails` and
+``last_stage_note``.
 """
 
 from __future__ import annotations
@@ -54,6 +64,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -82,6 +93,34 @@ _SNAPSHOT_EXCLUDE_DIR = ".ctx-session-reads"
 
 #: Last swallowed error, for diagnostics only. Never raised to callers.
 LAST_ERROR: str | None = None
+
+#: Declared-metadata side channel for the ``fails`` q stage (measured
+#: defect, evals/spec3-haiku-2026-07-18.md ALGEBRA live A/B: an empty
+#: ``fails last`` stream taught nothing and the model abandoned the
+#: verb). Streams are typed rows and ``ctx.query.Stream`` — the FROZEN
+#: surface ``Stream(kind, rows, omitted=0, groups=None)`` — has no note
+#: field, so the stage declares its provenance (auto-capture) or its
+#: teaching line (irreducible emptiness) in TWO fail-open duck-typed
+#: channels: (1) this module-level attribute, readable by the query
+#: renderer via ``getattr(ctx.facts, "last_stage_note", None)`` — always
+#: read it through the module object, never ``from … import``; and
+#: (2) a ``note`` instance attribute set on the returned Stream (a plain
+#: non-slots dataclass, so instance attrs are legal), readable via
+#: ``getattr(stream, "note", None)``. A renderer that reads neither
+#: channel renders the typed rows exactly as before — byte-identical.
+#: Reset to None at the top of every ``fails`` stage invocation; non-None
+#: only when the stage auto-captured or hit irreducible emptiness.
+last_stage_note: str | None = None
+
+#: Auto-capture bounds (self-healing ``fails`` stage).
+_AUTOCAPTURE_TIMEOUT = 300.0
+#: Newest run manifests scanned for a pytest-family argv (bounded scan).
+_FAMILY_SCAN_CAP = 50
+
+#: Reentrancy latch: the auto-capture must NEVER recurse (a capture that
+#: somehow re-enters the stage gets the teaching note, not a second
+#: subprocess). One attempt per stage invocation, released in finally.
+_autocapture_active = False
 
 _LOCATION_RE = re.compile(r"^(?P<file>.+):(?P<line>\d+)$")
 
@@ -986,6 +1025,136 @@ def render_census(
     return "\n".join(lines)
 
 
+# ---------------------------------------------- self-healing fails (auto-capture)
+def teach_no_run(path: str = "<path>") -> str:
+    """The teaching line for irreducible emptiness: names the missing
+    precondition (no captured test run) and the exact next command. With a
+    detected pytest layout ``path`` is the concrete target (``tests`` or
+    ``.``); undetectable layouts keep the honest ``<path>`` placeholder."""
+    return (
+        f"no captured test run — run: ctx run -- python -m pytest {path} -q, "
+        "then re-run this query"
+    )
+
+
+def _pytest_layout(ws: Workspace) -> list[str] | None:
+    """Deterministic pytest-family detection. A workspace is pytest-shaped
+    iff ``pytest.ini`` exists, or ``pyproject.toml`` carries a
+    ``[tool.pytest…`` table, or a ``tests/`` directory exists. Returns the
+    family's test command — ``[sys.executable, "-m", "pytest", "tests" if
+    tests/ is a dir else ".", "-q"]`` — or None. Never raises."""
+    try:
+        root = Path(ws.root)
+        has_tests = (root / "tests").is_dir()
+        shaped = has_tests or (root / "pytest.ini").is_file()
+        if not shaped:
+            pp = root / "pyproject.toml"
+            if pp.is_file():
+                with contextlib.suppress(OSError, UnicodeError):
+                    shaped = "[tool.pytest" in pp.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+        if not shaped:
+            return None
+        return [sys.executable, "-m", "pytest", "tests" if has_tests else ".", "-q"]
+    except Exception as e:
+        _note_error("facts._pytest_layout", e)
+        return None
+
+
+def _pytest_family_run_exists(store: Store) -> bool:
+    """True when any captured run in this session matches the pytest
+    family (an argv token containing ``pytest``). Bounded scan over the
+    newest ``_FAMILY_SCAN_CAP`` run manifests; fail-open False."""
+    try:
+        rows = store.db.execute(
+            "SELECT id FROM objects WHERE kind='run' "
+            "ORDER BY created_at DESC, id LIMIT ?",
+            (_FAMILY_SCAN_CAP,),
+        ).fetchall()
+        for (rid,) in rows:
+            with contextlib.suppress(Exception):
+                argv = store.get_manifest(rid).get("argv") or []
+                if any("pytest" in str(a) for a in argv):
+                    return True
+        return False
+    except Exception as e:
+        _note_error("facts._pytest_family_run_exists", e)
+        return False
+
+
+def _auto_capture_fails(store: Store, ws: Workspace) -> tuple[list[dict[str, Any]], str]:
+    """Run the detected pytest family command under the FULL birth gate
+    (``ctx.execution.run_capture``: authz'd argv, ws-confined cwd, raw
+    stream blobs, a ``ctx.invocation/v1`` manifest — addressable like any
+    run) and derive fail facts from the fresh manifest.
+
+    THE DELIBERATE DETERMINISM EXCEPTION (docs/ALGEBRA.md queries are
+    otherwise pure): this path is side-effectful by design — a
+    precondition-COMPLETING capture, run only when ``fails last`` has no
+    derivable run at all, so the verb's first contact teaches instead of
+    returning an empty stream that teaches nothing (the measured spec3
+    live-A/B defect). Safety: single attempt per invocation, never
+    recursive (module latch), never when any pytest-family run exists,
+    fail-open to the teaching note on any error.
+
+    Returns (rows, note): rows + a provenance declaration on success, or
+    [] + the teaching note on any failure. Never raises."""
+    global _autocapture_active
+    cmd = _pytest_layout(ws)
+    if cmd is None:
+        return [], teach_no_run()
+    target = cmd[3]
+    if _autocapture_active:  # reentrancy: teach, never a second subprocess
+        return [], teach_no_run(target)
+    _autocapture_active = True
+    try:
+        from ctx.execution import run_capture
+
+        cap = run_capture(
+            ws,
+            cmd,
+            store=store,
+            timeout=_AUTOCAPTURE_TIMEOUT,
+            # sys.executable is host-specific and must never appear in
+            # manifests/digests (run_capture's own contract).
+            record_argv=["python", "-m", "pytest", target, "-q"],
+        )
+        derived = derive_run(store, ws, cap.manifest)
+        if not derived.get("ok"):
+            return [], teach_no_run(target)
+        run_id = str(derived.get("run") or "")
+        rows = _fails_for(store, run_id)
+        note = (
+            "auto-captured: no prior test run existed, so this stage ran "
+            f"python -m pytest {target} -q under the birth gate → run:{run_id} "
+            f"({derived.get('fail', 0)} failing sites; addressable like any run)"
+        )
+        return rows, note
+    except Exception as e:
+        _note_error("facts._auto_capture_fails", e)
+        return [], teach_no_run(target)
+    finally:
+        _autocapture_active = False
+
+
+def _self_heal_empty_fails(
+    store: Store, ws: Workspace
+) -> tuple[list[dict[str, Any]], str | None]:
+    """``fails last`` came back empty: decide truthful-empty vs missing
+    precondition. A pytest-family run already exists → the emptiness is
+    real evidence (no failing tests) — declare it, capture NOTHING. No
+    derivable pytest run anywhere → auto-capture once (or teach when the
+    workspace is not pytest-shaped / the capture fails). Never raises."""
+    try:
+        if _pytest_family_run_exists(store):
+            return [], "no failing tests in the latest captured pytest run"
+        return _auto_capture_fails(store, ws)
+    except Exception as e:
+        _note_error("facts._self_heal_empty_fails", e)
+        return [], teach_no_run()
+
+
 # ------------------------------------------------------------- q stages (M-H)
 # Stage functions follow the FROZEN ctx.query convention:
 # fn(qc, stream, args) -> Stream, with qc carrying .ws/.store. ctx.query is
@@ -993,14 +1162,32 @@ def render_census(
 # query engine itself invoked them, so the import cannot fail there; the
 # library API above never touches ctx.query.
 def _stage_fails(qc, stream, args: list[str]):
+    """Self-healing ``fails`` source stage (the spec3 live-A/B fix: an
+    empty stream must either complete its own precondition or teach it —
+    never silently teach nothing). Explicit ``run:<id>`` and every
+    rows-found path are byte-identical to before; only the empty
+    ``fails last`` case gains the auto-capture / teaching branch, with
+    the declaration carried on the ``last_stage_note`` +
+    ``Stream.note`` duck-typed channels (see ``last_stage_note``)."""
     from ctx.query import Stream
 
+    global last_stage_note
+    last_stage_note = None
     run: str | None = None
     for a in args:
         if a == "last" or a.startswith("--"):
             continue
         run = a
-    return Stream("sites", fails_sites(qc.ws, qc.store, run=run))
+    rows = fails_sites(qc.ws, qc.store, run=run)
+    if run is not None or rows:
+        return Stream("sites", rows)
+    rows, note = _self_heal_empty_fails(qc.store, qc.ws)
+    last_stage_note = note
+    out = Stream("sites", rows)
+    if note is not None:
+        with contextlib.suppress(Exception):  # duck-typed; frozen surface intact
+            out.note = note
+    return out
 
 
 def _stage_in_changed(qc, stream, args: list[str]):
@@ -1112,6 +1299,8 @@ __all__ = [
     "shared_cause_groups",
     "symbol_neighbors",
     "fails_sites",
+    "teach_no_run",
+    "last_stage_note",
     "sites_in_changed",
     "decls_rows",
     "render_census",

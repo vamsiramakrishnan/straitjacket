@@ -56,6 +56,46 @@ a pure function of the session's command sequence (determinism contract).
 (a later wave); nothing emits it yet.
 
 --------------------------------------------------------------------------
+``ctx q`` visibility (the ALGEBRA live-A/B gap, evals/spec3-haiku-
+2026-07-18.md addendum): the taught arm re-ran an identical dry
+``ctx q 'fails last | in-changed'`` three times and the reflex saw
+nothing — ctx verbs other than ``run`` had no signature. Now:
+
+* ``command_signature("ctx q '<pipeline>'")`` → ``"q <normalized
+  pipeline>"`` — shlex-flattened (quoting variance collapses), whitespace
+  collapsed, ``--trace`` stripped (presentation-only). Stage names AND
+  their args are KEPT: they are the semantics (no flag-stripping beyond
+  ``--trace``).
+* Retrieval purity: ``q`` is a READ verb, so a repeated q is NOT
+  starvation-after-intervention in the EDC §8 sense. It is its own event
+  class, fed by the q-dry ledger the query engine writes (fail-open —
+  ledger absent means nothing is scored, never guessed):
+
+      ``.ctx-session-reads/q-dry.json``   — state: {"pipelines":
+          {"<q signature>": {"rows": <int last result rows>}}}
+          (a bare top-level mapping and bare-int values are tolerated)
+      ``.ctx-session-reads/q-dry.jsonl``  — op lines: {"op":
+          "q_dry_rerun" | <other>, "signature": "<q signature>",
+          "rows": <int>, "ts": <float>}
+
+  Reflex folds that ledger (cursor ``q_ops``, dryness map ``q_dry`` in
+  reflex state) into ADDITIVE schema-v2 events on
+  ``interventions.jsonl`` (scorecard readers skip unknown events by
+  design):
+
+      {"schema": "ctx.q/v1", "event": "dry_query_rerun",
+       "signature": "<q signature>", "rows": 0, "ts": <float>}
+          — an identical q re-issued after a 0-row result this session
+            (the live-A/B "3 identical dry joins" loop, now counted);
+      {"schema": "ctx.q/v1", "event": "recovered",
+       "signature": "<q signature>", "rows": <int > 0>, "ts": <float>}
+          — a q pipeline that returns rows following a prior dry
+            identical pipeline: the landing extension (teaching worked).
+
+  Signatures in the ledger are reflex-normalized; the writer side uses
+  :func:`query_signature` on the raw pipeline text.
+
+--------------------------------------------------------------------------
 Controller State wave (EDC §7–§10 + phase 6b) — everything below ships in
 SHADOW MODE: the new detectors and the circuit state machine RECORD, they
 never change behavior. The v2 live loop above (event-armed starvation →
@@ -124,6 +164,8 @@ _STATE_NAME = "reflex.json"
 _OUTCOMES_NAME = "reflex-outcomes.jsonl"
 _INTERVENTIONS_NAME = "interventions.jsonl"  # v2 ledger (EDC §9, shadow wave)
 _STEER_SHADOW_NAME = "steering-shadow.jsonl"  # phase 6b shadow ledger
+_Q_DRY_STATE_NAME = "q-dry.json"  # q-dry ledger state (query engine writes)
+_Q_DRY_OPS_NAME = "q-dry.jsonl"  # q-dry ledger op lines (query engine writes)
 
 DENSIFY_HEADER = "densified: re-run detected · full evidence inline"
 
@@ -296,10 +338,14 @@ def command_signature(command: str, _depth: int = 0) -> str | None:
         # `bash -c '<inner>'` → classify the inner command.
         if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
             return command_signature(str(argv[2]), _depth + 1)
-        # ctx: only `ctx run` carries an underlying command; retrieval verbs
-        # (get/search/stats/...) never accrue re-run signatures.
+        # ctx: `ctx run` carries an underlying command, and `ctx q` carries
+        # a pipeline whose identity IS the signature (the ALGEBRA live-A/B
+        # gap: 3 identical dry q reruns were invisible). Other retrieval
+        # verbs (get/search/stats/...) never accrue re-run signatures.
         if prog == "ctx":
             sub = str(argv[1]) if len(argv) > 1 else ""
+            if sub == "q":
+                return _q_signature(argv[2:])
             if sub != "run":
                 return None
             rest = list(argv[2:])
