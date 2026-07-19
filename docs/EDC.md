@@ -461,6 +461,38 @@ pytest/v1 ship starved); contract tests assert coverage receipts —
 census named 8/8 with required_fraction 1.0 at default budgets —
 so contract violations fail CI, not benchmarks.
 
+## Acceptance gates and observability (§19–20)
+
+**§19 adopted as the frozen gate set** for the phase-7(+6b) referee:
+- Correctness: holdout 16/16; reviewer scores hold; **census-vs-raw
+  cross-validation at benchmark time**; **address integrity** (every
+  inline identity's span resolves to that item's evidence); no safety
+  guard weakened by any adaptive state.
+- Economics: **median across seeds** (the variance-wall lesson encoded):
+  sj ≤1.5× naive turns; wall-clock holds; cache advantage ≥ naive;
+  same-generation reruns collapse vs the r1 baseline of 8.
+- Controller: detection at the 2nd equivalent execution; silent on
+  relevant edits and material narrowing; one transition per level per
+  episode; bypass bounded; landings vs inline-progress distinguished;
+  optional unfollowed hints are censored data, never failures. Replay
+  tests run against evals/archive/ transcripts.
+- Evidence quality: the degradation order is a parametrized property
+  test — teaching drops before evidence, traceback before identity,
+  incomplete census only under declared FLOOD, FLOOD always mints the
+  structured census blob.
+- Regression: the existing containment suite (floods, needle, failure
+  asymmetry, head/tail, determinism, cache stability, timeout/signal,
+  addressability, retention, confinement) stays green at every phase.
+
+**§20 adopted as scorecard v2**: per-family behavioral outcomes
+(interventions, coverage, landings, progressed-without-retrieval,
+reruns, transitions), evidence-coverage table, per-signature episode
+narratives (the human-auditable false-positive surface), and downstream
+cost beyond tokens — with the binding amendment: **counterfactual
+metrics ("avoided reexecutions/turns/runtime") are labeled estimates
+carrying their conservative derivation formulas**, per the existing
+est_cost discipline. Fixes ctx gain's documented token-only framing.
+
 ## Build path
 
 1. **pytest/v2 = the first EDC instance** (no new framework): explicit
