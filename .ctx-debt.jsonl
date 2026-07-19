@@ -33,3 +33,6 @@
 {"id": "34e21fe2dc", "op": "resolve"}
 {"id": "135d7df383", "op": "resolve"}
 {"id": "f5d318bf5b", "note": "hook classifier: reordered '2>&1 >file' redirection misclassified (the one unfixed item from the resolved S6 bundle 135d7df383; seq signal-exit, timeout budgets, binary-abort, and _WS_CACHE all shipped in v0.20-0.22)", "op": "add", "ref": "src/ctx/hook.py"}
+{"id": "6db9f7011b", "op": "resolve"}
+{"id": "6611d8c899", "op": "resolve"}
+{"id": "19520be4f7", "op": "resolve"}
