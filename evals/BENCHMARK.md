@@ -1,5 +1,26 @@
 # straitjacket-bench: the paired-corpus charter
 
+## Standing principle: external corpora are teachers, never referees
+
+We do not compete on SWE-bench and we publish no resolve rates. External
+task suites are mined for the three things they contain that we cannot
+cheaply synthesize: **real hostile outputs** (each instance reproduces a
+genuine failing run in a real repository), **gold labels for evidence**
+(the gold patch names where the fix landed, so a digest can be scored
+against ground truth with no agent and no model), and **stratification
+frames** (repo/language/build-family diversity for the pathology oracle).
+Any resolve-rate arm we ever run is an internal sanity check on evidence
+preservation, not a public claim. First working extraction:
+`evals/swe_learn.py` — fetch instance → reproduce the real failure in an
+isolated venv → digest → gold-anchored trichotomy per gold file:
+*digest-inline* (containment delivered), *digest-dropped* (the actionable
+defect class; the profile-improvement queue), *not-in-output* (no
+output-side channel could deliver it — evidence belongs to the search
+lane: code verbs, repo map). First receipts (pytest-dev/pytest × 3):
+1 inline, 0 dropped, 2 not-in-output — zero digest defects, and a
+measured reminder that most gold evidence is search-lane, which is the
+M-B/M-C mechanisms' territory, not the digest layer's.
+
 Adopted 2026-07-19 from an external review whose core argument we accept:
 **one corpus cannot referee this system.** straitjacket changes the agent's
 information channel, so the benchmark must answer four different questions
