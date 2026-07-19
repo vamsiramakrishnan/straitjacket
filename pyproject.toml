@@ -50,3 +50,6 @@ include = ["src/ctx", "plugins", "README.md", "LICENSE"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "sj_canary: Tier-0 evidence-channel conformance tests (evals/BENCHMARK.md); run with -m sj_canary as the PR gate",
+]

@@ -32,6 +32,21 @@ the record (evals/coverage-corpus-2026-07-19.md).
   (logtemplate/v1 already surfaces every failure via rarity), AWS parsers
   (json/v1 shape census, 150.9×), pip/gh listing profiles (slim inline
   correct at ~1.0×), ps aux (no census worth its tokens).
+- **straitjacket-bench charter** (evals/BENCHMARK.md): the paired-corpus
+  benchmark design adopted from external review — retrieval quality
+  (SWE-Explore, pending dataset verification), downstream correctness
+  (SWE-bench Verified subset), hostile-output stress (Terminal-Bench
+  slice), and SJ-EvidenceBench invariant adversaries; metrics (evidence
+  density, retrieval regret, evidence preservation as the load-bearing
+  gate), pathology-stratified sampling, and four evaluation tiers mapped
+  to existing infrastructure. Inventory verified: 8 of 10 EvidenceBench
+  scenarios already existed as tests; the two gaps shipped
+  (tests/test_evidencebench.py, `sj_canary` marker): machine-format
+  negotiation baselines (JSON/JSONL/SARIF claimed structurally, JUnit XML
+  bounded+deterministic fallthrough) and stdout/stderr descriptor-graph
+  classification — whose first probe caught and fixed a real defect:
+  `cmd 2>&1 > file` was classified proven-small although POSIX sends
+  stderr to the console (hook `_REDIR_ALL_RE` now order-aware).
 - **`ctx replay`** (ROADMAP M-F, session-history learning loop): replay
   recorded Claude Code transcripts through the real steering + digest
   code, open-loop and workspace-free — interception verdicts, wire

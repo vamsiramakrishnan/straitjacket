@@ -290,8 +290,12 @@ def _apply_window_pressure(
 _WRAPPERS = {"env", "sudo", "doas", "nice", "nohup", "time", "stdbuf", "timeout", "command", "xvfb-run"}
 
 # Redirection-only tail: `cmd ... > file 2>&1` — console output proven small.
+# Only `> file 2>&1` (dup AFTER the stdout redirect) and `&> file` prove
+# both streams leave the console. `2>&1 > file` is NOT included: POSIX
+# processes redirections left to right, so the dup targets the console and
+# stderr still floods the transcript (SJ-EvidenceBench scenario F).
 _REDIR_ALL_RE = re.compile(
-    r"^(?P<cmd>[^|;&<>`$(){}]+?)\s*(?:>>?\s*(?P<t1>\S+)\s*2>&1|&>>?\s*(?P<t2>\S+)|2>&1\s*>>?\s*(?P<t3>\S+))\s*$"
+    r"^(?P<cmd>[^|;&<>`$(){}]+?)\s*(?:>>?\s*(?P<t1>\S+)\s*2>&1|&>>?\s*(?P<t2>\S+))\s*$"
 )
 
 
@@ -546,7 +550,7 @@ def classify_command(
     if has_meta:
         redir = _REDIR_ALL_RE.match(stripped)
         if redir:
-            target = redir.group("t1") or redir.group("t2") or redir.group("t3") or ""
+            target = redir.group("t1") or redir.group("t2") or ""
             if not target.startswith("/dev/") and not target.startswith("/proc/"):
                 return dict(DECISION_ALLOW)
         # Bounded chain: `a; b && c` with no other metacharacters. Each
