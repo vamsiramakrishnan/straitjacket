@@ -16,7 +16,11 @@ Contracts under test:
   emits exactly one valid decision JSON with reflexes active;
 * densify plumbing — a re-run through the real CLI prints the densified
   header and dense=True reaches the DigestContext (the pytest profile's
-  dense rendering itself is owned elsewhere and not asserted here).
+  dense rendering itself is owned elsewhere and not asserted here);
+* Controller State wave (shadow): the v2 intervention ledger dual-writes
+  through the real CLI with zero cli changes (defaulted plan fields) —
+  full shadow-detector coverage lives in tests/test_generations.py and
+  tests/test_intervention_events.py.
 """
 
 import json
@@ -467,6 +471,40 @@ def test_densify_latch_survives_disarm(tmp_path):
     reflex.note_edit(ws)
     assert reflex.check_command(ws, "pytest tests/x.py") is None  # no new event
     assert reflex.densify_latched(ws, sig) is True  # rendering stays dense
+
+
+def test_cli_run_dual_writes_v2_intervention_ledger(
+    state_home, workspace_dir, capsys
+):
+    """Controller State wave: the v2 intervention ledger (EDC §9) is
+    dual-written through the REAL cli path with zero cli changes —
+    ``note_intervention`` emits the ctx.intervention/v1 line with plan
+    fields defaulted from the densify latch (normal → dense across the
+    starvation), and the shadow rerun outcome lands as a provisional
+    (non-git workspace ⇒ unknown generation) equivalent_rerun. The v1
+    ledger and printed digests stay untouched (covered above)."""
+    from ctx.cli import main
+
+    script = "for i in range(3000): print('line', i)\nraise SystemExit(1)"
+    argv = ["--workspace", str(workspace_dir), "run", "--", sys.executable, "-c", script]
+    main(argv)
+    main(argv)
+    capsys.readouterr()
+
+    path = workspace_dir / LEDGER / "interventions.jsonl"
+    events = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    emissions = [e for e in events if e.get("event") == "intervention_emitted"]
+    outcomes = [e for e in events if e.get("event") == "intervention_outcome"]
+    assert len(emissions) == 2  # one per omission-bearing digest
+    assert [e["planMode"] for e in emissions] == ["normal", "dense"]
+    assert all(e["planId"] is None for e in emissions)  # richer plan data:
+    # cli passes the resolver's plan_id/mode + coverage receipt in a later
+    # integration wave; the defaulted dual-write keeps the pipeline live.
+    assert all(e["schema"] == "ctx.intervention/v1" for e in emissions)
+    assert emissions[0]["artifact"] and len(emissions[0]["artifact"]) == 12
+    assert [o["outcome"] for o in outcomes] == ["equivalent_rerun"]
+    assert outcomes[0]["evidence"]["generation"] == "unknown"  # non-git ws
+    assert outcomes[0]["evidence"]["confirmed"] is False  # provisional
 
 
 def test_hook_edit_tool_disarms_and_allows(tmp_path):

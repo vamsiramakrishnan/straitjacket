@@ -988,6 +988,24 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 reflex.check_command(workspace_root, command)
         except Exception:
             pass
+        # Graduated steering — the null plan (EDC phase 6b) — SHADOW ONLY
+        # this wave: when steering is about to rewrite this command (a
+        # command-substitution `_rewrite`, i.e. an unbounded/compound
+        # command being routed through ctx), record whether the graduated
+        # regime WOULD have bypassed the rewrite (engagement still passive
+        # AND no prior flood for the signature). NO behavior change: the
+        # rewrite below is applied exactly as before. The PostToolUse
+        # emission gate (`_emission_gate`) is the safety net that will make
+        # the eventual relaxation safe — even a bypassed unbounded command
+        # is bounded at emission time, so the null plan risks one bounded
+        # digest, never a transcript flood. Fail-open by contract.
+        if isinstance(decision.get("_rewrite"), dict) and "command" in decision["_rewrite"]:
+            try:
+                from ctx import reflex
+
+                reflex.note_steer_shadow(workspace_root, command)
+            except Exception:
+                pass
         return _apply_rewrite(decision, tool_input, command_key)
 
     if "read" in lowered or lowered in ("open_file", "view_file"):

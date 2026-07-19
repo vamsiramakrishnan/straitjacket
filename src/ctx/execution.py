@@ -202,6 +202,91 @@ def _worktree_hash(ws: Workspace) -> str | None:
         return None
 
 
+# Bookkeeping directory excluded from the generation walk: the reflex/session
+# ledgers mutate on every scored command, so including them would bump the
+# generation on our own writes and confirm nothing, ever.
+_GENERATION_EXCLUDE_DIR = ".ctx-session-reads"
+# Bound on the untracked-file walk. Ignored trees (node_modules, venvs) never
+# appear in porcelain, so real workspaces sit far below this; the cap only
+# guards pathological unignored trees. Deterministic: the walk is sorted, and
+# hitting the cap folds the total count into the hash instead of the tail.
+_GENERATION_MAX_UNTRACKED = 4096
+
+
+def generation_hash(ws_root: Any) -> str | None:
+    """Source-state generation (docs/EDC.md §8): the operational identity of
+    the worktree at a scoring moment.
+
+    ``sha256`` over the raw ``git status --porcelain`` bytes PLUS, for every
+    untracked file (each ``?? `` entry, recursed through untracked
+    directories), its ``(relative path, size, mtime_ns)`` triple in sorted
+    path order. The untracked triples are the §8.2 fix for the
+    untracked-content trap: porcelain lists ``?? file`` regardless of
+    content, so edits to just-created unstaged files (the dominant
+    spec-driven-creation pattern — exactly the spec3 workload) never change
+    :func:`_worktree_hash` and would confirm false starvations. Size+mtime_ns
+    is legal here because generations are OPERATIONAL identity (did the
+    source plausibly change between two runs?), never content identity —
+    manifest identity stays :func:`_worktree_hash`, unchanged.
+
+    Hot-path discipline: callers (the reflex arc) invoke this LAZILY, only at
+    scoring moments (an intervention being recorded, an equivalent/narrower
+    rerun being classified) — never per command. Fail-open by contract:
+    non-git roots, git errors, and IO problems all return None (unknown
+    generation), never raise.
+    """
+    if ws_root is None:
+        return None
+    try:
+        root = Path(ws_root)
+        out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(root),
+            capture_output=True,
+            timeout=15,
+        )
+        if out.returncode != 0:
+            return None
+        h = hashlib.sha256(out.stdout)
+        untracked: list[Path] = []
+        for line in out.stdout.decode("utf-8", "replace").splitlines():
+            if not line.startswith("?? "):
+                continue
+            rel = line[3:]
+            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
+                rel = rel[1:-1]  # git quotes unusual paths
+            if rel.rstrip("/").split("/")[0] == _GENERATION_EXCLUDE_DIR:
+                continue
+            p = root / rel
+            if rel.endswith("/") or p.is_dir():
+                # Porcelain lists an untracked directory as ONE entry; walk
+                # it, or edits inside would be invisible to the generation.
+                for sub in sorted(p.rglob("*")):
+                    if sub.is_file():
+                        untracked.append(sub)
+            elif p.is_file():
+                untracked.append(p)
+        for p in sorted(untracked)[:_GENERATION_MAX_UNTRACKED]:
+            try:
+                rel_str = str(p.relative_to(root))
+            except ValueError:
+                rel_str = str(p)
+            try:
+                st = p.stat()
+                h.update(
+                    f"\x00{rel_str}\x00{st.st_size}\x00{st.st_mtime_ns}".encode(
+                        "utf-8", "replace"
+                    )
+                )
+            except OSError:
+                h.update(f"\x00{rel_str}\x00gone".encode("utf-8", "replace"))
+        if len(untracked) > _GENERATION_MAX_UNTRACKED:
+            h.update(f"\x00capped:{len(untracked)}".encode("utf-8"))
+        return "sha256:" + h.hexdigest()
+    except Exception:
+        return None
+
+
 def update_manifest_digest(
     store: Store, manifest: dict[str, Any], digest_meta: dict[str, str]
 ) -> tuple[str, dict[str, Any]]:

@@ -57,6 +57,7 @@ def render_run_digest(
     focus: str | None = None,
     op: str = "run",
     dense: bool = False,
+    plan: Any = None,
 ) -> tuple[str, dict[str, Any]]:
     """Produce the bounded deterministic digest for a captured invocation and
     republish the manifest with its final digest identity.
@@ -70,10 +71,17 @@ def render_run_digest(
     remains a pure function of the rendered bytes, and the caller declares
     the densified rendering in the *printed* header only.
 
+    ``plan`` is the resolver's DeliveryPlan (docs/EDC.md §5.4), duck-typed —
+    the caller (cli) resolves it once and hands it through; profiles that
+    honor plans (pytest/v2) obey its mode/budget knobs, others ignore it.
+    Like ``dense``, the plan selects among deterministic renderings; digest
+    identity remains a pure function of the rendered bytes.
+
     Returns (digest_text, final_manifest).
     """
     ctx = DigestContext.load(store, ws, manifest, focus=focus)
     ctx.dense = bool(dense)
+    ctx.plan = plan
     profile, reason = detect_profile(ctx)
 
     body = profile.render(ctx)
@@ -81,8 +89,13 @@ def render_run_digest(
     if redactions:
         body += "\nredaction: applied [" + ", ".join(redactions) + "]"
 
+    # Per-outcome profile versioning (EDC phase 3): a profile may declare
+    # the version of the rendering it actually produced (pytest/v2 for
+    # failure evidence, pytest/v1 for the byte-identical pass path).
+    profile_version = ctx.meta_profile_version or profile.version
+
     digest_meta = {
-        "profile": profile.version,
+        "profile": profile_version,
         "policy": POLICY_VERSION,
         "focusHash": focus_hash(focus),
         "bytesHash": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
@@ -90,7 +103,7 @@ def render_run_digest(
     final_id, final_manifest = update_manifest_digest(store, manifest, digest_meta)
     short = final_id[:12]
 
-    header = f"[ctx run:{short} profile={profile.version}]"
+    header = f"[ctx run:{short} profile={profile_version}]"
     digest = header + "\n" + body.replace("run:PENDING", f"run:{short}")
 
     from ctx.retrieval import record_telemetry

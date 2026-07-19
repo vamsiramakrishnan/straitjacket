@@ -29,6 +29,32 @@ def test_search_run_multi_pattern_deterministic(state_home, workspace_dir):
     assert "scanned:" in out1
 
 
+def test_search_run_binary_stream_skipped_not_aborted(state_home, workspace_dir):
+    """Debt 135d7df383 (S6 bug-bash): a binary stream used to raise straight
+    out of ``_resolve_run_targets``, aborting the WHOLE multi-stream search —
+    so a binary stdout sitting next to a perfectly searchable text stderr
+    made the entire ``run:`` search fail instead of just noting the skip.
+    It must skip the binary stream with a declared, counted note and still
+    return matches from the other stream."""
+    from ctx.execution import run_capture
+    from ctx.retrieval import search
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write(b'needle-in-stdout\\x00binary-tail'); "
+        "sys.stderr.write('needle-in-stderr\\n')"
+    )
+    cap = run_capture(ws, [sys.executable, "-c", script], store=store)
+    short = cap.manifest_id[:12]
+
+    out = search(store, ws, f"run:{short}", ["needle"])  # both streams, no #stream
+    assert "needle-in-stderr" in out
+    assert "binary skipped" in out
+    assert "matches: 1" in out
+
+
 def test_search_repo_snapshot_on_read_survives_mutation(state_home, workspace_dir):
     from ctx.retrieval import Selector, get, search
 
@@ -59,6 +85,80 @@ def test_get_lines_bounded_with_continuation(state_home, workspace_dir):
     # max_inline_lines default is 240: oversized request must not flood.
     assert "--lines 241:" in out
     assert out.count("\nL") <= 245
+
+
+def test_get_run_default_view_matches_explicit_head_lines(state_home, workspace_dir):
+    """Perf pass: the default (no --lines) view of a run: stream now takes
+    the same line-index fast path as an explicit --lines request instead of
+    always fully decoding the stream. Output must be byte-identical either
+    way."""
+    from ctx.retrieval import Selector, get
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    cap = _capture_lines(ws, store, n=2000)
+    short = cap.manifest_id[:12]
+    default_view = get(store, ws, f"run:{short}#stdout", Selector())
+    explicit_head = get(
+        store, ws, f"run:{short}#stdout", Selector(lines=(1, ws.config.budgets.max_inline_lines))
+    )
+    assert default_view == explicit_head
+    assert "selector: --lines 1:240 of 2,000" in default_view
+
+
+def test_get_run_bytes_selector_fast_path(state_home, workspace_dir):
+    """--bytes on a run: stream now seeks the requested range instead of
+    loading the whole stream first."""
+    from ctx.retrieval import Selector, get
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    cap = _capture_lines(ws, store, n=500)
+    short = cap.manifest_id[:12]
+    out = get(store, ws, f"run:{short}#stdout", Selector(bytes=(1, 6)))
+    assert "line 0" in out
+    assert "selector: --bytes 1:6 of" in out
+
+
+def test_get_blob_lines_and_bytes_fast_paths(state_home, workspace_dir):
+    """blob: refs previously had no fast path at all for --lines or --bytes
+    (always a full get_blob + decode). Both must return exactly the same
+    content as a naive full-decode-and-slice would."""
+    from ctx.retrieval import Selector, get
+    from ctx.store import Store
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    text = "\n".join(f"blobline {i}" for i in range(300)) + "\n"
+    blob_hash = store.put_blob(text.encode())
+    short = blob_hash[:12]
+
+    out_lines = get(store, ws, f"blob:{short}", Selector(lines=(5, 9)))
+    expected = "\n".join(f"L{n}: blobline {n - 1}" for n in range(5, 10))
+    assert expected in out_lines
+
+    out_bytes = get(store, ws, f"blob:{short}", Selector(bytes=(1, 9)))
+    assert text.encode()[0:9].decode() in out_bytes  # "blobline "
+
+    # A fresh Store instance (no warm in-process line-index cache) must
+    # still return identical content on the very first call.
+    fresh = Store(ws.workspace_id)
+    out_lines_cold = get(fresh, ws, f"blob:{short}", Selector(lines=(5, 9)))
+    assert out_lines_cold == out_lines
+
+
+def test_get_blob_binary_still_rejected_with_lines_selector(state_home, workspace_dir):
+    """The blob-kind fast path must not bypass the binary-content rejection
+    — a peek-based check gates it exactly like the existing full-load path
+    did."""
+    from ctx.retrieval import RetrievalError, Selector, get
+    from ctx.store import Store
+
+    ws = make_ws(workspace_dir)
+    store = Store(ws.workspace_id)
+    blob_hash = store.put_blob(b"abc\x00def\nghi\n")
+    with pytest.raises(RetrievalError, match="binary content"):
+        get(store, ws, f"blob:{blob_hash[:12]}", Selector(lines=(1, 2)))
 
 
 def test_get_json_pointer(state_home, workspace_dir):

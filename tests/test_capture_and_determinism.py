@@ -122,7 +122,8 @@ def test_pytest_profile_detected_and_time_free(state_home, workspace_dir):
     script = "import sys; sys.stdout.write(open('fake-pytest.txt').read())"
     cap = _run(ws, store, [sys.executable, "-c", script])
     digest, m = render_run_digest(store, ws, cap.manifest)
-    assert m["digest"]["profile"] == "pytest/v1"
+    # Failing fixture → the pytest/v2 evidence render (pass paths stay v1).
+    assert m["digest"]["profile"] == "pytest/v2"
     assert "passed 2" in digest and "failed 1" in digest
     assert "0.07s" not in digest  # no timing noise in stable digests
     assert "TimeoutError" in digest
