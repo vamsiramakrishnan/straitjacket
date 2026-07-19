@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../assets/readme/docs-header.svg" width="100%" alt="straitjacket docs — design notes and mechanism specs. Every claim backed by a receipt in evals; bytes become addresses. Current wave: LADDERS, REFLEX, EDC, ALGEBRA."/>
+<img src="../assets/readme/docs-header.svg" width="100%" alt="straitjacket docs — design notes and mechanism specs. Every claim backed by a receipt in evals; bytes become addresses. Current focus: LADDERS, REFLEX, EDC, ALGEBRA."/>
 
 </div>
 
@@ -13,7 +13,7 @@ reversed on the evidence.
 
 <div align="center">
 
-<img src="../assets/readme/docs-path.svg" width="100%" alt="Reading path: two shipped mechanism theses (PRICED-CONTEXT — price at decision time; LOSSLESS-RESCUE — elide bytes, keep addresses), then the current architecture wave in order: LADDERS, REFLEX, EDC, ALGEBRA."/>
+<img src="../assets/readme/docs-path.svg" width="100%" alt="Reading path: two shipped mechanism theses (PRICED-CONTEXT — price at decision time; LOSSLESS-RESCUE — elide bytes, keep addresses), then the current architecture work in reading order: LADDERS, REFLEX, EDC, ALGEBRA."/>
 
 </div>
 
@@ -27,7 +27,7 @@ after a measured A/B or head-to-head.
 | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) | Why every retrieval choice carries a visible price — in tokens, at the moment you decide, against the remaining window, with a cheaper alternative attached. |
 | [LOSSLESS-RESCUE.md](LOSSLESS-RESCUE.md) | Rescuing an already-bloated transcript the way the rewriting proxy does, without its costs: epoch-latched elision, every elided byte file-backed and addressed. |
 
-## The current architecture wave
+## Current architecture work
 
 Written against the spec3 result
 ([`evals/spec3-haiku-2026-07-18.md`](../evals/spec3-haiku-2026-07-18.md)) —

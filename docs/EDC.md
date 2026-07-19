@@ -1,4 +1,4 @@
-<img src="../assets/readme/docs/edc.svg" width="100%" alt="The Evidence Delivery Controller. Architecture wave, doc 3 of 4."/>
+<img src="../assets/readme/docs/edc.svg" width="100%" alt="The Evidence Delivery Controller. Architecture work, doc 3 of 4."/>
 
 <sub><a href="README.md">« straitjacket / docs</a></sub>
 

@@ -582,8 +582,7 @@ enabled for the repo.
 
 ## 🗺️ Roadmap & license
 
-[`ROADMAP.md`](ROADMAP.md) — the house rule is **replace bytes with
-addresses**. Next up is the broker era (Phase 3: isolated OS identity, HMAC
+[`ROADMAP.md`](ROADMAP.md) tracks what is next; the standing rule is to replace bytes with addresses. Next up is the broker era (Phase 3: isolated OS identity, HMAC
 capability handles, warm LSP servers) and the conditionality audit's ranked
 candidates ([`docs/LADDERS.md`](docs/LADDERS.md)): pressure-aware budgets
 through a single resolver, hint follow-through telemetry, guard-mode outcome

@@ -1,4 +1,4 @@
-<img src="../assets/readme/docs/algebra.svg" width="100%" alt="Facts and the composition algebra. Architecture wave, doc 4 of 4."/>
+<img src="../assets/readme/docs/algebra.svg" width="100%" alt="Facts and the composition algebra. Architecture work, doc 4 of 4."/>
 
 <sub><a href="README.md">« straitjacket / docs</a></sub>
 

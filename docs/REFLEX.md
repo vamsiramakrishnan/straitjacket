@@ -1,4 +1,4 @@
-<img src="../assets/readme/docs/reflex.svg" width="100%" alt="Reflex — closed-loop conditionality. Architecture wave, doc 2 of 4."/>
+<img src="../assets/readme/docs/reflex.svg" width="100%" alt="Reflex — closed-loop conditionality. Architecture work, doc 2 of 4."/>
 
 <sub><a href="README.md">« straitjacket / docs</a></sub>
 
