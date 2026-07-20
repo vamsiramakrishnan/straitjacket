@@ -98,6 +98,14 @@ _UNBOUNDED_CMDS = {
 # git subcommands that flood; the rest of git is judged separately.
 _GIT_UNBOUNDED = {"log", "diff", "show", "blame", "reflog", "shortlog", "whatchanged"}
 
+# Text-transform tools (M-K5.3, docs/SUBSTRATE.md): read-only invocations
+# are unbounded-output commands (→ ctx run capture, like grep/find); an
+# IN-PLACE invocation is a structural-rewrite smell and force_asks with a
+# preview-first remediation — a textual approximation of a codemod is the
+# bug-generator failure mode, so it is never silently rerouted.
+_TEXT_TOOLS = {"sed", "awk", "gawk", "mawk", "nawk"}
+_SED_INPLACE_RE = re.compile(r"^-[a-zA-Z]*i")  # -i, -i.bak, clustered -ni
+
 # Bounded-by-construction commands: allow natively.
 _BOUNDED_CMDS = {
     "pwd", "whoami", "hostname", "true", "false", "echo", "printf",
@@ -493,6 +501,42 @@ def _deny_cmd(
     return decision
 
 
+def _inplace_text_edit_in(stripped: str) -> bool:
+    """Conservative token scan for an in-place sed/awk-family invocation
+    anywhere in a compound expression. False positives only force_ask."""
+    try:
+        toks = shlex.split(stripped)
+    except ValueError:
+        return False
+    for j, t in enumerate(toks):
+        prog = os.path.basename(t)
+        if prog in _TEXT_TOOLS and _text_tool_inplace(prog, toks[j:]):
+            return True
+    return False
+
+
+def _text_tool_inplace(prog: str, argv: list[str]) -> bool:
+    """Does this sed/awk-family invocation mutate files in place?
+
+    sed: ``-i``/``-i.bak`` (possibly clustered, e.g. ``-ni``) or
+    ``--in-place[=suffix]``. awk family: gawk's ``-i inplace`` /
+    ``--include=inplace``. False positives only force_ask — safe."""
+    rest = argv[1:]
+    if prog == "sed":
+        for a in rest:
+            if a == "--in-place" or a.startswith("--in-place="):
+                return True
+            if not a.startswith("--") and _SED_INPLACE_RE.match(a):
+                return True
+        return False
+    for j, a in enumerate(rest):
+        if a in ("-i", "--include") and j + 1 < len(rest) and rest[j + 1].startswith("inplace"):
+            return True
+        if a.startswith("--include=inplace") or a.startswith("-iinplace"):
+            return True
+    return False
+
+
 def _split_simple_chain(stripped: str) -> list[str] | None:
     """Split ``a; b && c`` into segments when the only metacharacters present
     are the separators ``;``, ``&&``, ``||``. Returns None when any other
@@ -664,6 +708,19 @@ def classify_command(
         # Canonical decision stays force_ask; under rewrite steering the
         # whole expression is steered into a bounded `ctx run --shell`
         # capture instead (secret/outside-workspace force_asks never are).
+        # Exception (M-K5.3): an IN-PLACE text edit inside the expression
+        # (sed -i, gawk -i inplace — awk programs always carry `{}`, so
+        # they land here, not in the plain-argv branch) is a mutation; a
+        # capture rewrite would still mutate files, so it keeps the plain
+        # force_ask with the preview-first remediation instead.
+        if _inplace_text_edit_in(stripped):
+            return _force_ask(
+                "CTX_CONTEXT_GUARD: in-place text edit over files. A textual "
+                "approximation of a structural rewrite is a bug generator — "
+                "prefer a previewed, generation-guarded rewrite (ctx plan: "
+                "ast.rewrite.preview → ast.rewrite.apply) or the editor's "
+                "edit tool."
+            )
         fa = _force_ask(
             "CTX_CONTEXT_GUARD: compound shell expression with unproven output bound. "
             f"Prefer: ctx run --shell -- {shlex.quote(stripped)}"
@@ -728,6 +785,18 @@ def classify_command(
                 ),
             }
             return decision
+
+    if prog in _TEXT_TOOLS:
+        if _text_tool_inplace(prog, argv):
+            return _force_ask(
+                "CTX_CONTEXT_GUARD: in-place text edit over files. A textual "
+                "approximation of a structural rewrite is a bug generator — "
+                "prefer a previewed, generation-guarded rewrite (ctx plan: "
+                "ast.rewrite.preview → ast.rewrite.apply) or the editor's "
+                "edit tool; for plain-text targets, capture it: "
+                f"ctx run -- {' '.join(shlex.quote(a) for a in argv)}"
+            )
+        return _deny_cmd(argv, policy)  # read-only: bounded capture via ctx run
 
     if prog in _UNBOUNDED_CMDS:
         return _deny_cmd(argv, policy)

@@ -163,6 +163,11 @@ contracts (shipped), `ctx q` stage registry (shipped), facts store joins
 
 ## M-K · The substrate operator classes (file sets · spans · records · rewrite breadth)
 
+**K1–K3 + K5.3 shipped v0.26.0** (same day; 948-test suite green, live-
+verified on this repository). Remaining: K4 SCIP, K5 comby behind its
+gate, K3's optional jq engine + opportunity ledger, K2's scoped-scan
+referee, K6 behind the broker.
+
 **Designed 2026-07-20**, from the external "evidence algebra" proposal —
 audited, corrected, and phased in [`docs/SUBSTRATE.md`](docs/SUBSTRATE.md).
 The audit's verdict: the proposal's principle (integrate operator classes,
@@ -200,8 +205,9 @@ next ─► M-B code verbs v1 (jedi) ──► MCP op growth, skill update
 then ─► M-E broker ──► M-B multi-language LSP · M-C cached indexes
         + learned policy epochs (telemetry → committed policy, existing plan)
 now ──► M-J compiled evidence plans (shipped v0.25.0; P4 + referee open)
-next ─► M-K substrate operators (K1 spans · K2 corpus · K3 records; K4 SCIP;
-        K5 comby behind its decline-corpus gate; K6 waits for M-E)
+now ──► M-K substrate operators: K1 spans ✅ K2 corpus ✅ K3 records ✅
+        K5.3 sed/awk steering ✅ (v0.26.0) · next: K4 SCIP; K5 comby
+        behind its decline-corpus gate; K6 waits for M-E
 ```
 
 Deliberately **not** planned: wire-side semantic compression (LLMLingua-class

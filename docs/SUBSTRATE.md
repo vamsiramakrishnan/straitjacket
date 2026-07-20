@@ -155,10 +155,10 @@ ladders (left = preferred, `→` = labeled degradation), and status:
 
 | Operator class | Logical surface | Engine ladder | Status |
 |---|---|---|---|
-| `file_select` | `corpus` (q source) · `repo.files` (plan op) | git ls-files → **fd** → os.walk; `--changed` from generation facts | **Designed** → M-K2 |
-| `site_search` | `search`/`refs` (q) · `code.search` (plan) · MCP `search` | rg --json → Python regex | **Shipped**; span capture → M-K1 |
+| `file_select` | `corpus` (q source) · `repo.files` (plan op) | git ls-files → **fd** → os.walk; `--changed` from generation facts | **Shipped** v0.26.0 (M-K2) |
+| `site_search` | `search`/`refs` (q) · `code.search` (plan) · MCP `search` | rg --json → Python regex | **Shipped** incl. span capture + result blobs, v0.26.0 (M-K1) |
 | `symbol_extract` | `decls`/`outline` (q) · `ast.outline` (plan) · `def/refs` | SCIP → jedi/ast-grep → tree-sitter → ctags --json → heuristic | **Shipped** except SCIP → M-K4 |
-| `record_transform` | `records` source + `where/group/top/count/distinct/histogram` (q) · `evidence.*` (plan) | native stages → **jq/jaq compile target** → `ctx eval` escape hatch | partial; → M-K3 |
+| `record_transform` | `records` source + `where/group/top/count/distinct/histogram` (q) · `evidence.*` (plan) | native stages → **jq/jaq compile target** → `ctx eval` escape hatch | **Shipped** native, v0.26.0 (M-K3); jq engine + opportunity ledger open |
 | `structural_rewrite` | `ast.rewrite.preview/apply` (plan, execute-class, CLI-only) | ast-grep → **comby** → **decline** (never textual) | **Shipped** (1 rung); → M-K5 |
 | `incremental_trigger` | none (generation checks at use time) | content-keyed laziness → broker-era watcher tenant | lazy form **Shipped**; watcher **Deferred** → M-K6 |
 
@@ -173,6 +173,9 @@ Ordered by leverage ÷ risk. Each inherits determinism, budgets, declared
 omission, and telemetry, or it doesn't merge.
 
 ### M-K1 · Span-precise sites with per-result provenance
+
+**Status: shipped v0.26.0** (all deliverables; engine parity extends to
+byte-identical `ctx.search/v1` result blobs).
 
 *Finish the shipped rg normalization: sites become `(path, line, col_a,
 col_b)`, and every search mints an addressable result.*
@@ -198,6 +201,10 @@ line-text re-match fallback (`rg_engine.py:44-45`).
 **Effort**: ~½ day. **Depends on**: nothing.
 
 ### M-K2 · `corpus`: the file-set algebra
+
+**Status: shipped v0.26.0** (`filesets.py`; the wall-clock/token referee
+over Semgrep/ast-grep scoped runs remains open — file it with the next
+eval refresh).
 
 *The missing operator class. A bounded, receipted answer to "which files
 may the next operation touch?"*
@@ -234,6 +241,12 @@ wiring is dropped.
 **Effort**: ~1 day. **Depends on**: nothing (M-K1 independent).
 
 ### M-K3 · `records`: the stream algebra over structured artifacts
+
+**Status: shipped v0.26.0** — the `records` source, `distinct`, and
+`histogram` (native engine, closure-pinned). Open, deliberately: the
+jq/jaq physical compile target (pure speed, adds no capability) and the
+`records_opportunity` adoption ledger (ship with the next telemetry
+wave); the eval-collapse records-arm referee runs then.
 
 *Absorb the jq class without importing the jq language.*
 
@@ -283,6 +296,12 @@ as specified in ALGEBRA §M-G and its root-cause-join eval. **Effort**:
 ~2 days.
 
 ### M-K5 · Rewrite breadth: the comby rung, behind a decline corpus
+
+**Status: deliverable 3 (sed/awk steering) shipped v0.26.0** — read-only
+steers to capture; in-place force_asks with the preview-first remediation,
+detected in plain argv *and* inside compound expressions (where every
+`{…}` awk program lands). The gate instrumentation and the comby rung
+itself remain designed.
 
 *ast-grep → comby → decline. The contract does not change; only the
 ladder grows a rung.*

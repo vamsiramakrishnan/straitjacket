@@ -149,9 +149,15 @@ to recover text the harness already captured.
 ctx q 'fails last | in-changed'
 ctx q 'refs TokenBucket | group file | top 5'
 ctx q 'fails last | shared-cause | top 10'
+ctx q 'corpus --ext py --changed | outline'
+ctx q 'records run:<id>#stdout --jsonl | group level | count'
+ctx q 'search TODO --glob "src/*.py" | histogram file'
 ```
 
 `ctx q` operates over typed record streams such as failures, symbols, files, and sites.
+`corpus` selects a bounded eligible file set with a coverage receipt (`--changed` binds
+to worktree generations, never mtime); `records` opens a stored JSON/JSONL artifact as a
+record stream; `distinct` and `histogram` summarize any field.
 The algebra is deliberately total: bounded stages, no loops, no recursion. This makes
 costs statically boundable and every stage’s result addressable.
 

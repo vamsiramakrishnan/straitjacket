@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from ctx.execution import snapshot_file
 from ctx.refs import Ref
-from ctx.store import Store
+from ctx.store import Store, canonical_json
 from ctx.textutil import fmt_int
 from ctx.workspace import Workspace
 
@@ -36,6 +36,30 @@ class SearchHit:
     target: str
     line_start: int  # char offset; line number/text computed only if shown
     pattern_index: int
+    # Span-precise columns (M-K1): 1-based, half-open [col_a, col_b)
+    # character columns of the leftmost match on the line. 0 = unknown.
+    col_a: int = 0
+    col_b: int = 0
+
+
+def _mint_search_blob(
+    store: Store,
+    ref_text: str,
+    patterns: list[str],
+    sites: list[dict],
+    total: int,
+) -> str:
+    """Per-result provenance (M-K1): the shown coordinates as one derived
+    canonical-JSON blob, so a search is citable as a single handle (parity
+    with ``ctx q``'s final-stream minting). Returns the short blob id."""
+    payload = {
+        "format": "ctx.search/v1",
+        "ref": ref_text,
+        "patterns": list(patterns),
+        "total": int(total),
+        "sites": sites,
+    }
+    return store.put_blob(canonical_json(payload))[:12]
 
 
 def search(
@@ -117,18 +141,28 @@ def search(
         if mode_all and not all(rx.search(target.text) for rx in rxs):
             continue
         # C-speed scan: finditer per pattern over the whole text; dedup to one
-        # record per line via the line-start offset (lowest pattern index
-        # wins). Line numbers are resolved later, only for shown matches.
-        per_line: dict[int, int] = {}
+        # record per line via the line-start offset. The LEFTMOST match on
+        # the line wins (rg submatch parity; ties break on pattern index),
+        # and its span rides the hit as 1-based [col_a, col_b) columns.
+        # Line numbers are resolved later, only for shown matches.
+        per_line: dict[int, tuple[int, int, int]] = {}  # start → (pi, a, b)
         text = target.text
         for pi, rx in enumerate(rxs):
             for m in rx.finditer(text):
                 line_start = text.rfind("\n", 0, m.start()) + 1
                 prev = per_line.get(line_start)
-                if prev is None or pi < prev:
-                    per_line[line_start] = pi
-        for line_start, pi in per_line.items():
-            matches.append(SearchHit(target.label, line_start, pi))
+                if prev is None or (m.start(), pi) < (prev[1], prev[0]):
+                    per_line[line_start] = (pi, m.start(), m.end())
+        for line_start, (pi, a, b) in per_line.items():
+            matches.append(
+                SearchHit(
+                    target.label,
+                    line_start,
+                    pi,
+                    col_a=a - line_start + 1,
+                    col_b=b - line_start + 1,
+                )
+            )
 
     matches.sort(key=lambda m: (m.target, m.line_start, m.pattern_index))
     shown = matches[:cap]
@@ -186,6 +220,19 @@ def search(
     out.append(
         f"  matches: {fmt_int(len(matches))} · shown: {fmt_int(len(shown))}"
         + (" · truncated" if len(matches) > len(shown) else "")
+    )
+    sites_rows = [
+        {
+            "target": h.target,
+            "line": by_label[h.target].line_no_of(h.line_start),
+            "col_a": h.col_a,
+            "col_b": h.col_b,
+        }
+        for h in shown
+    ]
+    out.append(
+        "result: blob:"
+        + _mint_search_blob(store, ref_text, patterns, sites_rows, len(matches))
     )
     if snapshot_note:
         out.append("snapshots:")
@@ -266,6 +313,14 @@ def _render_rg_search(
     out.append(
         f"  matches: {fmt_int(len(matches))} · shown: {fmt_int(len(shown))}"
         + (" · truncated" if len(matches) > len(shown) else "")
+    )
+    sites_rows = [
+        {"target": m.target, "line": m.line_no, "col_a": m.col_a, "col_b": m.col_b}
+        for m in shown
+    ]
+    out.append(
+        "result: blob:"
+        + _mint_search_blob(store, ref_text, patterns, sites_rows, len(matches))
     )
 
     snapshot_note: list[str] = []

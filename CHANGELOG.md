@@ -4,6 +4,54 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.26.0] - 2026-07-20
+
+The substrate wave (ROADMAP M-K, docs/SUBSTRATE.md): the operator classes
+beneath the semantic layers, from the audited external "evidence algebra"
+proposal. Phases K1–K3 + K5.3 shipped; K4 (SCIP) and K5 (comby, gated on a
+decline corpus) remain designed; K6 (watch warming) waits for the broker.
+
+- **M-K1 · span-precise sites** (`rg_engine.py`, `search.py`, `query.py`):
+  search results carry 1-based half-open `[col_a, col_b)` character
+  columns — captured from the rg `--json` submatches already on the wire,
+  and from `finditer` spans in the Python engine (leftmost match per line,
+  parity by construction; pattern-index recovery is span-anchored, the
+  whole-line re-match demoted to labeled fallback). Every `ctx search`
+  emission now mints a `ctx.search/v1` result blob (`result: blob:<id>`)
+  so a search is citable as one handle — engine parity extends to
+  byte-identical blobs.
+- **M-K2 · the file-set algebra** (`filesets.py`, new): the missing
+  `file_select` operator class. `ctx q 'corpus [--ext E]… [--glob G]…
+  [--exclude G]… [--changed] [--max N]'` and the `repo.files` plan op
+  emit a bounded eligible file set with a coverage receipt (`considered ·
+  selected · engine [· gen]`) that survives combinators and rides the
+  minted payload. Engine ladder git ls-files → **fd** (opportunistic, run
+  `--no-ignore` so `ws.is_ignored` stays the single ignore authority —
+  listings byte-identical across engines by construction;
+  `CTX_FILES_ENGINE` kill-switch) → os.walk. `--changed` binds to the
+  generation snapshot, never mtime (SUBSTRATE §2.4). Scoping
+  `semantic.*` to a `repo.files` result confines the engine to the
+  selected set — *select files before scanning*.
+- **M-K3 · the records algebra** (`query.py`): `records <run:|blob:>
+  [--jsonl] [--pointer /p]` opens stored JSON/JSONL artifacts (compiler
+  output, test JSON, SARIF, lockfiles) as the `records` kind, where the
+  shipped combinators plus new total stages `distinct <field>` and
+  `histogram <field> [--buckets N]` (numeric buckets or categorical
+  census, capped with declared omission) absorb the jq class without
+  importing the jq language. All four new stages carry derived closure
+  classes; the digest-closure pins extend to them.
+- **M-K5.3 · text-tool steering** (`hook.py`): `sed`/`awk`-family
+  commands leave the unknown-command limbo. Read-only invocations steer
+  into bounded `ctx run` capture like grep/find; **in-place** invocations
+  (`sed -i`, `gawk -i inplace` — detected in plain argv and inside
+  compound expressions, which is where every `{…}` awk program lands)
+  force_ask with a preview-first remediation and are never auto-rewritten
+  into a capture that would still mutate files.
+- Tests: `test_filesets.py` (engine parity incl. fd skip-if-absent,
+  generation-bound `--changed`, receipts), `test_substrate.py` (span
+  blobs, records/distinct/histogram, totality), closure pins, rg/python
+  column-parity extension, sed/awk steering cases.
+
 ## [0.25.0] - 2026-07-19
 
 The compiled-evidence-plans wave (ROADMAP M-J, docs/EVIDENCE-PLANS.md):

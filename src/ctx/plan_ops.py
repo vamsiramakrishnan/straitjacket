@@ -202,6 +202,40 @@ def _op_repo_changed(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     return payload("files", [{"file": f} for f in files], meta=meta)
 
 
+def _listify(v) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v] if v else []
+    return [str(x) for x in v if str(x)]
+
+
+def _op_repo_files(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
+    """M-K2 ``file_select``: the bounded eligible file set with a coverage
+    receipt — *select files before scanning*. Feed it to a scan-class op
+    via ``foreach`` (capped) or as a ``semantic.*`` input to scope the
+    engine to the selected set."""
+    from ctx import filesets
+
+    max_files = args.get("max")
+    rows, coverage, omitted = filesets.select(
+        pc.ws,
+        exts=_listify(args.get("ext") or args.get("exts")),
+        globs=_listify(args.get("glob") or args.get("globs")),
+        excludes=_listify(args.get("exclude") or args.get("excludes")),
+        changed=bool(args.get("changed")),
+        max_files=int(max_files) if max_files is not None else None,
+    )
+    meta: dict[str, Any] = {
+        "engine": coverage.get("engine"),
+        "considered": coverage.get("considered"),
+        "selected": coverage.get("selected"),
+    }
+    if coverage.get("generation"):
+        meta["generation"] = coverage["generation"]
+    return payload("files", rows, omitted=omitted, meta=meta)
+
+
 def _op_repo_inventory(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     from ctx.repomap import repo_map
 
@@ -490,6 +524,12 @@ def _check_rewrite(args: dict) -> str | None:
 register_op("repo.changed", _op_repo_changed, input_kinds=(), output_kind="files",
             provides={"changedness": 1.0, "freshness": 0.6},
             cost="index", doc="changed files this generation (git porcelain → facts)")
+register_op("repo.files", _op_repo_files, input_kinds=(), output_kind="files",
+            provides={"coverage": 0.5, "topology": 0.2},
+            cost="index",
+            doc="bounded eligible file set with coverage receipt (args: ext, "
+                "glob, exclude, changed, max) — select files before scanning; "
+                "changed binds to generation facts, never mtime")
 register_op("repo.inventory", _op_repo_inventory, input_kinds=(), output_kind="text",
             provides={"topology": 0.3, "coverage": 0.2},
             cost="scan", doc="ranked budget-fitted codebase map")
