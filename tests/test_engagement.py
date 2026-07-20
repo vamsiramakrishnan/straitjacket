@@ -78,6 +78,51 @@ def test_suggestion_cap_by_level_and_model(ws):
     assert suggestion_cap(None) == 3
 
 
+def test_lean_model_recognition_is_host_neutral():
+    """The lean-model default must recognize the small/fast tier of every
+    supported host by token, not by raw substring (regression: 'gemini'
+    contains 'mini')."""
+    from ctx.engagement import model_matches_lean
+
+    lean = [
+        "claude-haiku-4-5-20251001",  # Claude
+        "gemini-3.5-flash",  # Antigravity default
+        "gemini-3-flash-lite",
+        "gpt-5-mini",  # Codex / OpenAI
+        "gpt-5-nano",
+        "o4-mini",
+        "GEMINI-3.5-FLASH",  # case-insensitive
+    ]
+    capable = [
+        "claude-sonnet-5",
+        "claude-opus-4-8",
+        "gemini-3-pro",  # 'ge-mini' must NOT match 'mini'
+        "gpt-5",
+        "",
+    ]
+    for m in lean:
+        assert model_matches_lean(m), f"{m!r} should be lean"
+    for m in capable:
+        assert not model_matches_lean(m), f"{m!r} should be capable"
+
+
+def test_lean_models_config_default_matches_engagement():
+    """config.py must not re-hardcode the list — one source of truth."""
+    from ctx.config import Engagement
+    from ctx.engagement import DEFAULT_LEAN_MODELS
+
+    assert Engagement().lean_models == DEFAULT_LEAN_MODELS
+
+
+def test_lean_models_override_is_respected():
+    from ctx.engagement import model_matches_lean
+
+    # A repo can name its own model as lean, or clear the list entirely.
+    assert model_matches_lean("acme-tiny-1", ["tiny"])
+    assert not model_matches_lean("gemini-3.5-flash", ("pro",))
+    assert not model_matches_lean("gpt-5-mini", ())
+
+
 def test_passive_digest_carries_no_suggestions():
     from ctx.digest.base import DigestContext, Profile
 

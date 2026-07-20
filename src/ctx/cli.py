@@ -27,6 +27,15 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write('{"decision":"allow"}\n')
         return 0
 
+    # ------------------------------------------------- statusline fast path
+    # `ctx statusline <host>` is invoked by a host's status-line command on
+    # every render, so it stays off the full-CLI path: read one JSON payload
+    # on stdin, print one line, never raise (a status line must not break the
+    # host REPL). `ctx statusline codex --rollout <path>` summarises a Codex
+    # session rollout instead (Codex's bar is fixed built-in items).
+    if args and args[0] == "statusline":
+        return _statusline_main(args[1:])
+
     # ------------------------------------------------- supervisor fast path
     # Hidden: `ctx job _supervise <jobdir>` is spawned detached by
     # `ctx run --bg`; it must not resolve a workspace or parse the full CLI.
@@ -41,6 +50,68 @@ def main(argv: list[str] | None = None) -> int:
         return serve(bounded_only="--bounded-only" in args)
 
     return _main_slow(args)
+
+
+def _statusline_main(rest: list[str]) -> int:
+    """Fast path for `ctx statusline <host> [--rollout PATH] [--workspace W]`.
+    Fail-open: any error prints nothing and returns 0 so a broken status line
+    never surfaces an error into the host's prompt."""
+    import json
+    import os
+
+    from ctx import statusline
+
+    host = rest[0] if rest else "claude-code"
+    rollout = None
+    ws = None
+    i = 1
+    while i < len(rest):
+        if rest[i] == "--rollout" and i + 1 < len(rest):
+            rollout = rest[i + 1]
+            i += 2
+        elif rest[i] == "--workspace" and i + 1 < len(rest):
+            ws = rest[i + 1]
+            i += 2
+        else:
+            i += 1
+    try:
+        if rollout is not None:
+            line = statusline.codex_rollout_summary(rollout, workspace_root=ws)
+        else:
+            raw = sys.stdin.read()
+            payload = json.loads(raw) if raw.strip() else {}
+            if ws is None:
+                ws = (
+                    _json_dig(payload, "workspace.current_dir", "workspace.project_dir", "cwd")
+                    or os.getcwd()
+                )
+            # A Codex Stop-hook payload carries no tokens but names the session
+            # rollout — summarise that for a priced line.
+            tp = _json_dig(payload, "transcript_path")
+            if host == "codex" and tp:
+                line = statusline.codex_rollout_summary(tp, workspace_root=ws)
+            else:
+                line = statusline.render(host, payload, workspace_root=ws)
+    except Exception:
+        line = ""
+    if line:
+        sys.stdout.write(line + "\n")
+    return 0
+
+
+def _json_dig(obj, *paths):
+    for path in paths:
+        cur = obj
+        ok = True
+        for key in path.split("."):
+            if isinstance(cur, dict) and key in cur:
+                cur = cur[key]
+            else:
+                ok = False
+                break
+        if ok and isinstance(cur, str) and cur:
+            return cur
+    return None
 
 
 # --------------------------------------------------------------- full CLI
@@ -135,6 +206,22 @@ def _main_slow(args: list[str]) -> int:
     p_seq.add_argument("--focus", help="bias step digests toward this question")
 
     sub.add_parser("gain", help="cumulative token/cost savings from telemetry")
+
+    p_surface = sub.add_parser(
+        "surface",
+        help="audit the capability surface (input side of containment): "
+             "inventory · audit · explain · trim",
+    )
+    p_surface.add_argument(
+        "surface_cmd", choices=("inventory", "audit", "explain", "trim"),
+        help="inventory (list) · audit (summary) · explain <id> · trim (preview)",
+    )
+    p_surface.add_argument("target", nargs="?", help="capability id for `explain`")
+    p_surface.add_argument("--json", action="store_true", help="emit structured JSON")
+    p_surface.add_argument(
+        "--probe-mcp", action="store_true",
+        help="spawn each MCP server to measure its real per-tool schema tokens",
+    )
 
     p_replay = sub.add_parser(
         "replay",
@@ -513,6 +600,8 @@ def _main_slow(args: list[str]) -> int:
             return 0 if code == 0 else 3
         if ns.cmd == "gain":
             return _cmd_gain(ws)
+        if ns.cmd == "surface":
+            return _cmd_surface(ws, ns)
         if ns.cmd == "debt":
             from ctx import debt as _debt
 
@@ -618,6 +707,67 @@ def _main_slow(args: list[str]) -> int:
     return 2  # pragma: no cover
 
 
+def _cmd_surface(ws, ns) -> int:
+    """`ctx surface {inventory,audit,explain,trim}` — the input side of
+    containment: measure the discretionary capability surface, never mutate it
+    (Phase 1). All rendering is bounded and deterministic."""
+    import json as _json
+
+    from ctx import surface
+
+    if ns.surface_cmd == "explain":
+        if not ns.target:
+            print("usage: ctx surface explain <capability-id>")
+            return 2
+        records = surface.detect_overlaps(surface.collect_surface(ws.root))
+        counts = surface.observed_tool_counts(ws.root)
+        records = [surface._with(c, invocations=surface._match_invocations(c, counts))
+                   for c in records]
+        match = next((c for c in records if c.id == ns.target), None)
+        if match is None:
+            print(f"no capability {ns.target!r}; run `ctx surface inventory`")
+            return 1
+        print(surface.render_explain(match))
+        return 0
+
+    if ns.surface_cmd == "inventory":
+        base = surface.collect_surface(ws.root)
+        if getattr(ns, "probe_mcp", False):
+            probed = surface.probe_surface(ws.root)
+            provs = {p.provider for p in probed}
+            base = [c for c in base
+                    if not (c.kind == "mcp_server" and c.provider in provs)] + probed
+        records = surface.detect_overlaps(base)
+        counts = surface.observed_tool_counts(ws.root)
+        records = [surface._with(c, invocations=surface._match_invocations(c, counts))
+                   for c in records]
+        if ns.json:
+            print(_json.dumps([c.as_dict() for c in records], indent=2))
+        else:
+            print(surface.render_inventory(records))
+        return 0
+
+    # audit / trim both build the full audit; trim highlights the preview.
+    a = surface.audit(ws.root, probe_mcp=getattr(ns, "probe_mcp", False))
+    if ns.json:
+        print(_json.dumps(a, indent=2))
+        return 0
+    if ns.surface_cmd == "trim":
+        tp = a["trim_preview"]
+        print(f"[ctx surface trim --preview · advisory only, nothing hidden]")
+        if not tp["ids"]:
+            print("  nothing to defer: surface is already lean")
+            return 0
+        for cid in tp["ids"]:
+            rec = next(c for c in a["records"] if c["id"] == cid)
+            print(f"  defer  {rec['tokens']:>6,} tok  {cid:<28} "
+                  f"auth={rec['authority']} → {rec['recommended_level']}")
+        print(f"  ── est {tp['est_token_reduction']:,} tokens/turn recoverable")
+        return 0
+    print(surface.render_audit(a))
+    return 0
+
+
 def _cmd_gain(ws) -> int:
     """Cumulative containment savings, made legible (rtk's `gain` lesson:
     the metric users can watch is the metric that keeps the harness on)."""
@@ -652,10 +802,27 @@ def _cmd_gain(ws) -> int:
     )
     print(f"est tokens kept out of context: {saved_tok:,}")
     # Input-price framing only; the real savings compound through cache reads.
-    print(
-        f"est spend avoided (input-priced): ~${saved_tok * 3 / 1e6:.2f} sonnet · "
-        f"~${saved_tok * 1 / 1e6:.2f} haiku"
-    )
+    # Price against the session's own model when the proxy recorded one
+    # (host-neutral: works for Gemini/GPT/Claude alike); otherwise show a
+    # cheap->premium band from the shipped table rather than naming one vendor.
+    from ctx import pricing
+    from ctx.engagement import session_model
+
+    model = session_model(ws.root)
+    if model:
+        p = pricing.price_for(model, workspace_root=ws.root)
+        print(
+            f"est spend avoided (input-priced): ~${saved_tok * p.input / 1e6:.2f} "
+            f"({model} @ ${p.input:g}/Mtok in)"
+        )
+    else:
+        tbl = pricing.load_table(ws.root)
+        ins = sorted(float(r.get("in", 0)) for r in tbl["models"] if float(r.get("in", 0)) > 0)
+        lo, hi = (ins[0], ins[-1]) if ins else (1.0, 15.0)
+        print(
+            f"est spend avoided (input-priced): ~${saved_tok * lo / 1e6:.2f}–"
+            f"${saved_tok * hi / 1e6:.2f} (economy–premium input rates)"
+        )
     print("by verb:")
     for op, s in sorted(per_op.items(), key=lambda kv: -kv[1]["raw"]):
         ratio = s["raw"] / max(1, s["emitted"])

@@ -85,6 +85,9 @@ def test_install_claude_merges_settings(workspace_dir):
     )
     assert "PreToolUse" in settings["hooks"]
     assert (workspace_dir / ".claude" / "agents" / "ctx-explorer.md").is_file()
+    # Status line wired: a command that renders model/context/cost/git.
+    assert settings["statusLine"]["type"] == "command"
+    assert "statusline claude-code" in settings["statusLine"]["command"]
 
     report2 = install_claude(ws)
     assert "already harnessed" in report2
@@ -92,6 +95,31 @@ def test_install_claude_merges_settings(workspace_dir):
         (workspace_dir / ".claude" / "settings.json").read_text(encoding="utf-8")
     )
     assert len(s2["hooks"]["PreToolUse"]) == 1  # not duplicated
+
+
+def test_install_claude_preserves_user_statusline(workspace_dir):
+    from ctx.installer import install_claude
+
+    sp = workspace_dir / ".claude" / "settings.json"
+    sp.parent.mkdir(parents=True)
+    sp.write_text(json.dumps({"statusLine": {"type": "command", "command": "mine"}}),
+                  encoding="utf-8")
+    install_claude(make_ws(workspace_dir))
+    data = json.loads(sp.read_text(encoding="utf-8"))
+    assert data["statusLine"]["command"] == "mine"  # never clobbered
+    assert "PreToolUse" in data["hooks"]             # hooks still added
+
+
+def test_codex_config_selects_statusline_items(workspace_dir):
+    from ctx.installer import install_codex
+
+    install_codex(make_ws(workspace_dir))
+    cfg = (workspace_dir / ".codex" / "config.toml").read_text(encoding="utf-8")
+    import tomllib
+
+    doc = tomllib.loads(cfg)
+    assert "model" in doc["tui"]["status_line"]
+    assert "UsedTokens" in doc["tui"]["status_line"]
 
 
 def test_install_claude_preserves_user_hooks(workspace_dir):

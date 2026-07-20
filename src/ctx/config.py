@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# One source of truth for the host-neutral lean-model default (stdlib-only
+# module, no import cycle) so the config default never drifts from the
+# engagement mechanism's own default.
+from ctx.engagement import DEFAULT_LEAN_MODELS as _DEFAULT_LEAN_MODELS
+
 CONFIG_FILENAME = "ctx.toml"
 IGNORE_FILENAME = ".ctxignore"
 
@@ -73,7 +78,7 @@ class Engagement:
 
     mode: str = "auto"  # auto | active | passive
     activate_after_calls: int = 8
-    lean_models: tuple[str, ...] = ("haiku",)
+    lean_models: tuple[str, ...] = _DEFAULT_LEAN_MODELS
 
 
 @dataclass(frozen=True)

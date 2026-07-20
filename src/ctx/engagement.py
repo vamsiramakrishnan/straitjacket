@@ -19,8 +19,18 @@ Levels:
   Once active, a session never regresses to passive.
 
 Model profiles: a lean model (window.json model matching ``lean_models``)
-keeps a single suggestion even when active — measured: haiku over-executes
-affordances, sonnet exploits them.
+keeps a single suggestion even when active — measured on haiku, which
+over-executes affordances where sonnet exploits them. The default set maps
+the *small/fast tier of every supported host* by name — Claude ``haiku``,
+Gemini ``flash``/``flash-lite`` (the Antigravity default), OpenAI
+``mini``/``nano`` — so the harness behaves the same across Antigravity,
+Claude, and Codex without any host hardcoded as canonical. Matching is a
+case-insensitive substring test against ``window.json``'s ``model`` field
+and is fully overridable per repo via ``[engagement] lean_models`` in
+ctx.toml. The default is a conservative heuristic, not a per-model
+measurement: the costly error is treating a lean model as capable (measured
+2x turns), so mapping known fast tiers to fewer affordances fails safe;
+only haiku is measured — tune the list for your model.
 
 State: one flock-guarded JSON blob per workspace at
 ``.ctx-session-reads/engagement.json`` (also carries the emission governor's
@@ -31,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +50,16 @@ _LEDGER_DIR = ".ctx-session-reads"
 
 DEFAULT_MODE = "auto"  # auto | active | passive
 DEFAULT_ACTIVATE_AFTER_CALLS = 8
-DEFAULT_LEAN_MODELS = ("haiku",)
+# Small/fast tier of every supported host, matched case-insensitively as a
+# substring of window.json's model id. Host-neutral by construction (no
+# single host is canonical) and fully overridable via ctx.toml
+# [engagement] lean_models. Kept as the one source of truth — config.py
+# imports this so the dataclass default never drifts.
+#   Claude:  claude-haiku-*            -> "haiku"
+#   Gemini:  gemini-*-flash[-lite]     -> "flash" (also catches flash-lite)
+#   OpenAI:  gpt-*-mini / gpt-*-nano   -> "mini", "nano"
+#   generic: *-lite / *-small          -> "lite", "small"
+DEFAULT_LEAN_MODELS = ("haiku", "flash", "mini", "nano", "lite", "small")
 DEFAULT_SUGGESTIONS = 3
 LEAN_SUGGESTIONS = 1
 
@@ -106,9 +126,25 @@ def session_model(workspace_root: Path | str) -> str:
     return str(_proxy_doc(workspace_root).get("model") or "")
 
 
+def model_matches_lean(model: str, lean_models=DEFAULT_LEAN_MODELS) -> bool:
+    """True when a lean-model tag appears as a *tier token* in ``model``,
+    not merely as a substring. Letter boundaries only: a tag must not be
+    glued to another letter on either side, so ``mini`` matches
+    ``gpt-5-mini`` but NOT ``gemini-3-pro`` ("ge**mini**"); digits and
+    separators are allowed neighbours so ``flash2``/``haiku4`` still match.
+    Case-insensitive. Host-neutral by construction."""
+    if not model:
+        return False
+    low = model.lower()
+    for tag in lean_models:
+        t = str(tag).lower().strip()
+        if t and re.search(rf"(?<![a-z]){re.escape(t)}(?![a-z])", low):
+            return True
+    return False
+
+
 def is_lean_model(workspace_root: Path | str, lean_models=DEFAULT_LEAN_MODELS) -> bool:
-    model = session_model(workspace_root)
-    return any(tag in model for tag in lean_models) if model else False
+    return model_matches_lean(session_model(workspace_root), lean_models)
 
 
 def note_call(

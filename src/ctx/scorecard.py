@@ -32,12 +32,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# Published per-MTok prices for decomposition estimates only.
-PRICES = {
-    "opus": {"in": 15.0, "out": 75.0, "write": 18.75, "read": 1.50},
-    "sonnet": {"in": 3.0, "out": 15.0, "write": 3.75, "read": 0.30},
-    "haiku": {"in": 1.0, "out": 5.0, "write": 1.25, "read": 0.10},
-}
+from ctx import pricing
 
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "write_to_file", "replace_file_content"}
 
@@ -63,13 +58,6 @@ _RESOLVED_WITHOUT_RERUN = {
 }
 # Plan modes that are adaptations (the controller responded to starvation).
 _ADAPTED_PLAN_MODES = {"dense", "bypass"}
-
-
-def _price_key(model_id: str) -> str:
-    for key in PRICES:
-        if key in model_id:
-            return key
-    return "sonnet"
 
 
 def _behavioral_anomalies(session_reads_dir: Path) -> dict | None:
@@ -454,10 +442,10 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
         pm["read"] += u_read
         pm["cre"] += u_cre
         pm["out"] += u_out
-        p = PRICES[_price_key(model)]
-        est_cost += (
-            u_in * p["in"] + u_read * p["read"] + u_cre * p["write"] + u_out * p["out"]
-        ) / 1e6
+        est_cost += pricing.cost_usd(
+            {"input": u_in, "cache_read": u_read, "cache_write": u_cre, "output": u_out},
+            model,
+        )
         msgs = int(rec.get("messages", 0) or 0)
         if u_read == 0 and u_cre > 4096 and cold_prefix == 0:
             cold_prefix = u_cre

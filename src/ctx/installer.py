@@ -124,9 +124,50 @@ def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
     return dest
 
 
+def antigravity_settings_path() -> Path:
+    """Global Antigravity CLI settings (where the status line is configured).
+    Honours GEMINI_CLI_CONFIG_DIR / XDG-style overrides isn't documented, so
+    use the published default: ~/.gemini/antigravity-cli/settings.json."""
+    import os
+
+    home = os.environ.get("HOME") or str(Path.home())
+    return Path(home) / ".gemini" / "antigravity-cli" / "settings.json"
+
+
+def install_antigravity_statusline(exe: str, *, settings_path: Path | None = None) -> str:
+    """Add a ctx status line to the global Antigravity CLI settings, merging
+    non-destructively (never clobber a user's existing statusLine/title).
+    Antigravity has no dollar-cost field, so the line prices tokens through
+    ctx.pricing. Returns a one-line status. Fail-open."""
+    path = settings_path or antigravity_settings_path()
+    try:
+        existing: dict = {}
+        if path.is_file():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(existing, dict):
+                    existing = {}
+            except json.JSONDecodeError:
+                existing = {}
+        if existing.get("statusLine"):
+            return f"statusLine already set in {path}; left unchanged"
+        merged = dict(existing)
+        merged["statusLine"] = {
+            "command": f"{exe} statusline antigravity",
+            "enabled": True,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        return f"added statusLine to {path}"
+    except Exception as e:  # never let statusline setup break wrap
+        return f"statusLine not installed ({type(e).__name__}); set it manually"
+
+
 def install_antigravity(ws: Workspace, *, init_policy: bool = True) -> str:
     dest = render_plugin(ws.root)
     lines = [f"installed plugin: {dest}"]
+    exe = _ctx_executable()
+    lines.append(install_antigravity_statusline(exe))
     if init_policy:
         lines.extend(init_workspace(ws.root, quiet=True))
     lines.append("")
@@ -189,6 +230,18 @@ def claude_hook_settings(ctx_exe: str) -> dict:
     }
 
 
+def claude_statusline_setting(ctx_exe: str) -> dict:
+    """Claude Code ``statusLine`` block: a command that receives session JSON
+    on stdin and prints one line (model · context · cost · git). Cost comes
+    from the host's own ``cost.total_cost_usd`` when present, else ctx prices
+    the tokens. Single source of truth, reused by wrap and install."""
+    return {
+        "type": "command",
+        "command": f"{ctx_exe} statusline claude-code",
+        "padding": 0,
+    }
+
+
 def _hook_command_present(settings: dict, ctx_exe: str) -> bool:
     """True if a ctx-harness hook command is already registered."""
     for stage in settings.get("hooks", {}).values():
@@ -215,15 +268,28 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
             existing = json.loads(settings_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             existing = {}
+    merged = dict(existing)
+    changed = False
     if _hook_command_present(existing, exe):
-        lines.append(".claude/settings.json already harnessed; left unchanged")
+        lines.append(".claude/settings.json hooks already harnessed; left unchanged")
     else:
-        merged = dict(existing)
         for stage, entries in claude_hook_settings(exe)["hooks"].items():
             merged.setdefault("hooks", {}).setdefault(stage, []).extend(entries)
+        lines.append("merged PreToolUse/PostToolUse hooks")
+        changed = True
+    # Status line, independently idempotent: add only when the user has none,
+    # so pre-statusline installs gain it on re-run but a custom line is never
+    # clobbered.
+    if not existing.get("statusLine"):
+        merged["statusLine"] = claude_statusline_setting(exe)
+        lines.append("added statusLine (model · context · cost · git)")
+        changed = True
+    else:
+        lines.append("statusLine already set; left unchanged")
+    if changed:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
-        lines.append(f"wrote {settings_path.relative_to(root)} (hooks merged)")
+        lines.append(f"wrote {settings_path.relative_to(root)}")
 
     agent_src = _template_dir() / "agents" / "ctx-explorer.md"
     agent_dst = root / ".claude" / "agents" / "ctx-explorer.md"
