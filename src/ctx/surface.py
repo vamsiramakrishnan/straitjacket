@@ -28,6 +28,7 @@ nothing, never an error.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -35,6 +36,8 @@ from pathlib import Path
 from typing import Any
 
 from ctx.textutil import estimate_tokens
+
+_PROBE_CACHE = ".ctx-surface/probe-cache.json"
 
 SCHEMA = "ctx.surface/v1"
 
@@ -820,12 +823,41 @@ def probe_mcp_tools(argv: list[str], *, timeout: float = 8.0) -> list[dict[str, 
     return tools
 
 
-def probe_surface(ws_root: Path | str, *, timeout: float = 8.0) -> list[Capability]:
+def _probe_cache_key(argv: list[str]) -> str:
+    return hashlib.sha256(json.dumps(argv, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def probe_surface(ws_root: Path | str, *, timeout: float = 8.0,
+                  use_cache: bool = True) -> list[Capability]:
     """Expand each MCP server into per-tool records with measured schema
-    tokens (opt-in; spawns each server). Returns [] when nothing probes."""
+    tokens. Spawns each server, but caches the result under
+    ``.ctx-surface/probe-cache.json`` keyed by the server's argv, so only the
+    first session (or a changed command) pays the spawn cost — the pre-flight
+    gate can then price the real MCP surface cheaply every session. A failed
+    probe is not cached (retried next time). Returns [] when nothing probes."""
+    root = Path(ws_root)
+    cache: dict[str, Any] = {}
+    cpath = root / _PROBE_CACHE
+    if use_cache:
+        try:
+            cache = json.loads(cpath.read_text(encoding="utf-8"))
+            if not isinstance(cache, dict):
+                cache = {}
+        except Exception:
+            cache = {}
     out: list[Capability] = []
+    dirty = False
     for name, argv in sorted(_mcp_server_commands(ws_root).items()):
-        for tool in probe_mcp_tools(argv, timeout=timeout):
+        key = _probe_cache_key(argv)
+        entry = cache.get(name) if use_cache else None
+        if isinstance(entry, dict) and entry.get("key") == key:
+            tools = entry.get("tools") or []
+        else:
+            tools = probe_mcp_tools(argv, timeout=timeout)
+            if tools:  # cache only successful probes
+                cache[name] = {"key": key, "tools": tools}
+                dirty = True
+        for tool in tools:
             leak, terms = _leakage_tags(tool["name"] + " " + str(tool.get("description", "")),
                                         "mcp_tool", tool["authority"], -1)
             out.append(Capability(
@@ -834,7 +866,63 @@ def probe_surface(ws_root: Path | str, *, timeout: float = 8.0) -> list[Capabili
                 activation="always", invocations=-1, leakage=leak, sensitive_terms=terms,
                 detail=f"schema {tool['schema_tokens']} + desc {tool['description_tokens']} tok",
             ))
+    if use_cache and dirty:
+        try:
+            cpath.parent.mkdir(parents=True, exist_ok=True)
+            cpath.write_text(json.dumps(cache, sort_keys=True), encoding="utf-8")
+        except Exception:
+            pass
     return out
+
+
+# ------------------------------------------------------- SessionStart gate
+def preflight(ws_root: Path | str, *, max_static_tokens: int = 8000,
+              default_profile: str = "", gateway: bool = False,
+              probe: bool = True) -> str:
+    """Pre-flight surface audit run once at session start — 'bound before
+    bloat', the mirror of the output side's 'capture before flood'. Returns a
+    bounded advisory string (empty when the surface is within budget). Never
+    raises: a broken audit yields no advisory, never a blocked session.
+
+    Advisory, not blocking: true enforcement is structural (route MCP through
+    ``ctx surface gateway`` so unrevealed schemas never load). This gate makes
+    the harness *notice* bloat before the first turn and name the cheaper
+    path."""
+    try:
+        # Probe (cached) so the biggest cost — real MCP tool schemas — is
+        # counted; without it the gate is blind to server bloat.
+        a = audit(ws_root, probe_mcp=probe)
+    except Exception:
+        return ""
+    total = a["totals"]["static_tokens"]
+    if total <= max_static_tokens:
+        return ""
+    lines = [
+        f"CTX_SURFACE_GUARD: discretionary capability surface is {total:,} "
+        f"tokens/turn (budget {max_static_tokens:,}). This is re-sent every "
+        f"turn before any tool runs."
+    ]
+    by_kind = a["totals"]["by_kind"]
+    top = sorted(by_kind.items(), key=lambda kv: -kv[1]["tokens"])[:3]
+    lines.append("  heaviest: " + ", ".join(
+        f"{k} {v['tokens']:,}tok" for k, v in top))
+    if a.get("never_used"):
+        lines.append(f"  never used (observed): {len(a['never_used'])}")
+    if a.get("unused_high_authority"):
+        lines.append("  unused high-authority: "
+                     + ", ".join(a["unused_high_authority"][:4]))
+    broken = a.get("graph", {}).get("broken_dependencies") or {}
+    if broken:
+        lines.append("  broken deps: " + ", ".join(
+            f"{cid}→{','.join(refs)}" for cid, refs in list(broken.items())[:3]))
+    prof = default_profile or "local-dev"
+    if gateway:
+        lines.append("  → gateway active: reveal families on demand "
+                     "(surface_reveal); unrevealed tool schemas are not loaded")
+    else:
+        lines.append(f"  → bound it: ctx surface compile --profile {prof} --host <host> --apply")
+        lines.append("     or route MCP through `ctx surface gateway` for per-tool disclosure")
+    return "\n".join(lines)
 
 
 __all__ = [
@@ -842,5 +930,5 @@ __all__ = [
     "observed_tool_counts", "audit", "recommended_level", "probe_surface",
     "probe_mcp_tools", "render_inventory", "render_audit", "render_explain",
     "infer_authority", "enrich_graph", "build_graph", "render_graph",
-    "family_of", "provides_of", "FAMILY_RULES", "NATIVE_TOOLS",
+    "family_of", "provides_of", "FAMILY_RULES", "NATIVE_TOOLS", "preflight",
 ]

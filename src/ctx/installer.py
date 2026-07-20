@@ -226,6 +226,20 @@ def claude_hook_settings(ctx_exe: str) -> dict:
                     ],
                 }
             ],
+            # Input-side pre-flight: 'bound before bloat'. Audits the capability
+            # surface once at session start and injects a bounded advisory if it
+            # exceeds the [surface] budget in ctx.toml.
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{ctx_exe} hook claude-code session-start",
+                            "timeout": 15,
+                        }
+                    ],
+                }
+            ],
         }
     }
 

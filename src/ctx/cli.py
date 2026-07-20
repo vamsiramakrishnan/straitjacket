@@ -23,6 +23,10 @@ def main(argv: list[str] | None = None) -> int:
             from ctx.hook import main_post_tool_use
 
             return main_post_tool_use(flavor=args[1])
+        if args[2] == "session-start":
+            from ctx.hook import main_session_start
+
+            return main_session_start(flavor=args[1])
         # Unknown hook stage: still emit exactly one valid decision.
         sys.stdout.write('{"decision":"allow"}\n')
         return 0

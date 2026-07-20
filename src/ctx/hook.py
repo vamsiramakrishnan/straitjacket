@@ -1375,6 +1375,45 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         return None
 
 
+def main_session_start(flavor: str = "antigravity") -> int:
+    """Entry point for ``ctx hook <flavor> session-start``. Runs the capability
+    surface pre-flight ('bound before bloat') once, before the first turn, and
+    injects a bounded advisory when the discretionary surface exceeds budget.
+    Fires once per session (not the hot path), so the surface import is fine.
+    Fail-open: any error emits a no-op, never a blocked session."""
+    advisory = ""
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        ws = _resolve_workspace_root(payload)
+        if ws:
+            from ctx.config import load_config
+            from ctx.surface import preflight
+
+            sp = load_config(Path(ws)).surface
+            if sp.gate != "off":
+                advisory = preflight(
+                    ws, max_static_tokens=sp.max_static_tokens,
+                    default_profile=sp.default_profile, gateway=sp.gateway,
+                    probe=sp.probe)
+    except Exception:
+        advisory = ""
+    if flavor in ("claude-code", "codex"):
+        emitted: dict[str, Any] = (
+            {"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                    "additionalContext": advisory}}
+            if advisory else {"continue": True}
+        )
+    else:  # antigravity dialect
+        emitted = {"additionalContext": advisory} if advisory else {}
+    sys.stdout.write(json.dumps(emitted, sort_keys=True))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0
+
+
 def main_post_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> post-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON object on stdout: either a

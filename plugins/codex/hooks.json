@@ -24,6 +24,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{CTX_EXECUTABLE}} hook codex session-start",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   }
 }

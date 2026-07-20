@@ -121,6 +121,20 @@ class Redaction:
 
 
 @dataclass(frozen=True)
+class SurfacePolicy:
+    """Capability-surface containment (the input side). A SessionStart
+    pre-flight gate audits the discretionary surface before any work begins —
+    'bound before bloat', the mirror of the output side's 'capture before
+    flood'. See docs/CAPABILITY-SURFACE.md."""
+
+    max_static_tokens: int = 8000   # discretionary-surface budget per turn
+    gate: str = "warn"              # off | warn (advisory at SessionStart)
+    default_profile: str = ""       # profile to suggest when over budget
+    gateway: bool = False           # gateway is the MCP delivery (progressive disclosure)
+    probe: bool = True              # measure real MCP tool schemas (cached) in the gate
+
+
+@dataclass(frozen=True)
 class Config:
     version: int = 1
     repo_key: str | None = None
@@ -131,6 +145,7 @@ class Config:
     store: StorePolicy = field(default_factory=StorePolicy)
     plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
+    surface: SurfacePolicy = field(default_factory=SurfacePolicy)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # ws:<alias> routing targets: alias -> workspace path (absolute, or
     # relative to this workspace root). Committed in ctx.toml [aliases].
@@ -173,6 +188,7 @@ def load_config(workspace_root: Path | None) -> Config:
     store = _pick(raw.get("store") or {}, StorePolicy)
     plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
+    surface = _pick(raw.get("surface") or {}, SurfacePolicy)
 
     eng_raw = raw.get("engagement") or {}
     engagement = Engagement(
@@ -211,6 +227,7 @@ def load_config(workspace_root: Path | None) -> Config:
         store=store,
         plan=plan,
         redaction=redaction,
+        surface=surface,
         scopes=scopes,
         aliases=aliases,
     )
