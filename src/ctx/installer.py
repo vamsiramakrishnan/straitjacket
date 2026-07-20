@@ -377,9 +377,19 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
         agent_dst.write_bytes(agent_src.read_bytes())
         lines.append(f"wrote {agent_dst.relative_to(root)}")
 
+    # The teaching surface Claude Code otherwise lacks (measured in
+    # evals/ask-diagnose-3arm-2026-07-20.md: agents adopt ctx ask/q only
+    # when the vocabulary is in context). Marker-delimited and versioned,
+    # mirroring the Codex AGENTS.md block — refreshed on re-run, cleanly
+    # removable. Claude Code reads CLAUDE.md into the session automatically.
+    lines.append(_upsert_agents_block(root / "CLAUDE.md", _render_claude_md(exe)))
+
     if init_policy:
         lines.extend(init_workspace(root, quiet=True))
-    lines.append("uninstall: remove the ctx hook entries from .claude/settings.json")
+    lines.append(
+        "uninstall: remove the ctx hook entries from .claude/settings.json "
+        "and the ctx-harness block from CLAUDE.md"
+    )
     return "\n".join(lines)
 
 
@@ -390,6 +400,35 @@ _CODEX_MARK_END = "<!-- ctx-harness:end -->"
 def _render_codex_file(name: str, exe: str) -> str:
     tmpl = _template_dir("codex", sentinel="config.toml")
     return (tmpl / name).read_text(encoding="utf-8").replace("{{CTX_EXECUTABLE}}", exe)
+
+
+def _render_claude_md(exe: str) -> str:
+    """The compact ctx verb card for a Claude Code session's CLAUDE.md —
+    the vocabulary the wrap/settings path does not otherwise surface
+    (evals/ask-diagnose-3arm-2026-07-20.md). Marker-delimited so it is
+    idempotent and removable, exactly like the Codex AGENTS.md block."""
+    return f"""\
+{_CODEX_MARK_START}
+## Context harness (ctx / straitjacket)
+
+This workspace is harnessed by `{exe}`. Noisy command and file output is
+captured at the source and returned as a bounded, addressable digest — work
+*with* it rather than paging or pre-filtering around it.
+
+- Answer repository questions with `ctx ask "<q>" --intent
+  locate|impact|diagnose` — one bounded evidence view instead of a
+  search/read/search loop. `diagnose` reads the last captured run's failure
+  facts and names the culprit symbol; it never reruns tests. `locate` =
+  where is X defined/used; `impact` = what breaks if X changes.
+- Compose typed facts with `ctx q '<stage> | <stage>'` (bounded, total)
+  instead of piping through grep/awk/jq: `refs X | group file | top 3 | get`,
+  `fails last | in-changed` (failing tests in changed symbols),
+  `corpus --ext py --changed | outline`, `records run:<id>#stdout --jsonl |
+  group level | count`.
+- Capture noisy commands with `ctx run -- <cmd>`; pull exact bytes with
+  `ctx get <handle>`. Cite handles/coordinates instead of re-quoting output.
+{_CODEX_MARK_END}
+"""
 
 
 def _upsert_agents_block(path: Path, block: str) -> str:

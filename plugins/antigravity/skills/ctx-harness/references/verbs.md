@@ -3,6 +3,36 @@
 Full flag detail for verbs the skill body indexes. Read this when a one-line
 index entry is not enough; each verb's output is bounded and deterministic.
 
+## Answer a question / compose facts (start here)
+
+- `ctx ask "<question>" --intent locate|impact|diagnose [--symbol X]
+  [--run r] [--depth N] [--plan]` — compile a repository question into one
+  bounded evidence view (a typed `ctx.plan/v1` preset run through the plan
+  tier). Intents: `locate` (where is X defined and used), `impact` (what
+  could break if X changes — callers + bounded blast radius + related
+  tests), `diagnose` (what explains the captured failures — reads the last
+  captured run's facts and joins them against the change set; **never
+  reruns tests**). No natural-language guessing: `--intent` is required (a
+  missing one teaches and suggests), and the subject is `--symbol` or the
+  question's single identifier-shaped token (disclosed in the receipt).
+  `--plan` prints the compiled plan without executing.
+- `ctx q '<stage> | <stage> | …'` — total pipeline algebra over typed
+  record streams; bounded, no loops, every stage's result minted as an
+  addressable `blob:`. Sources open a stream: `refs <Sym>`, `search <pat>
+  [--glob G]`, `callers/callees/impact <Sym>`, `fails [run:|last]`,
+  `corpus [--ext E]… [--glob G]… [--exclude G]… [--changed] [--max N]`
+  (the eligible file set with a coverage receipt — `--changed` binds to
+  worktree generations, never mtime), `records <run:|blob:> [--jsonl]
+  [--pointer /p]` (a stored JSON/JSONL artifact as records — query
+  compiler/test/SARIF/lockfile output where it already lives, no
+  re-parsing). Combinators: `where <field><op><val>` (= != ~), `group
+  <field>`, `top <N>`, `count`, `distinct <field>`, `histogram <field>
+  [--buckets N]`. Materializers (terminal): `get [--context N]`, `outline`.
+  The root-cause one-liner: `ctx q 'fails last | in-changed'` — failing
+  tests inside symbols changed this generation. Prefer `ctx q` over piping
+  raw output through grep/awk/jq/sort/uniq; reach for `ctx eval` only when
+  the control flow is genuinely computational.
+
 ## Capture and retrieval
 
 - `ctx run -- <cmd> [args...]` — execute with birth-time capture; transcript

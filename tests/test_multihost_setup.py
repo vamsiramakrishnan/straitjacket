@@ -97,6 +97,29 @@ def test_install_claude_merges_settings(workspace_dir):
     assert len(s2["hooks"]["PreToolUse"]) == 1  # not duplicated
 
 
+def test_install_claude_delivers_verb_card(workspace_dir):
+    """The teaching surface Claude Code otherwise lacks (evals/ask-diagnose-
+    3arm): the shipped question vocabulary is upserted into CLAUDE.md,
+    marker-delimited and idempotent."""
+    from ctx.installer import install_claude
+
+    ws = make_ws(workspace_dir)
+    install_claude(ws)
+    cm = workspace_dir / "CLAUDE.md"
+    assert cm.is_file()
+    text = cm.read_text(encoding="utf-8")
+    assert "ctx ask" in text and "ctx q" in text and "--intent" in text
+    assert "ctx-harness:start" in text and "ctx-harness:end" in text
+
+    # A user's own CLAUDE.md content is preserved; re-install refreshes the
+    # block in place (never duplicates).
+    cm.write_text("# My project\n\nHouse rules.\n\n" + text, encoding="utf-8")
+    install_claude(ws)
+    t2 = cm.read_text(encoding="utf-8")
+    assert "# My project" in t2 and "House rules." in t2
+    assert t2.count("ctx-harness:start") == 1
+
+
 def test_install_claude_preserves_user_statusline(workspace_dir):
     from ctx.installer import install_claude
 

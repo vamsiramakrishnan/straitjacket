@@ -4,6 +4,34 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.28.0] - 2026-07-20
+
+The skill catches up to the engines, plus a measured three-arm receipt.
+
+- **Skill vocabulary refresh** (`plugins/antigravity/skills/ctx-harness/`,
+  Codex `AGENTS.md` block): `SKILL.md` and `references/verbs.md` stopped at
+  the pre-M-J `run/search/get/stats` vocabulary. They now teach `ctx ask`
+  (intents locate/impact/diagnose), `ctx q` (the composition algebra incl.
+  `corpus`/`records`/`distinct`/`histogram`), and `ctx investigate`/`plan`.
+  **PREFIX_VERSION 3 → 4**: the skill body/frontmatter are prefix-resident,
+  so this is a one-time full-prefix cache rewrite per user (the injected-
+  prefix stability contract; `prefixassets.py` manifest regenerated).
+- **Claude Code teaching surface** (`installer.py`): `install_claude` now
+  upserts a compact ctx verb card into the workspace `CLAUDE.md` (marker-
+  delimited, idempotent, mirroring the Codex `AGENTS.md` block). Measured
+  gap — the shipped verbs had no teaching surface on Claude Code, so agents
+  never invoked them (see the receipt below); with the card in context,
+  they do.
+- **Three-arm diagnosis receipt** (`evals/ask_diagnose_3arm.py`,
+  `evals/ask-diagnose-3arm-2026-07-20.md`): real coding agents (Haiku),
+  naive vs Headroom vs straitjacket vs straitjacket+card, on a seeded
+  single-bug diagnosis with a model-free grader. Findings: on a no-flood
+  task all arms solve it and containment is bounded overhead (the expected
+  low-complexity regime); and the vocabulary is adopted only when it
+  reaches the agent (0 `ctx ask`/`ctx q` bare; both invoked once the card
+  is in `CLAUDE.md`). Reusable 3/4-arm harness with a transcript-derived
+  adoption counter.
+
 ## [0.27.0] - 2026-07-20
 
 The `ctx ask` wave (ROADMAP M-L, docs/ASK.md): a repository question
