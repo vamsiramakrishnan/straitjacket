@@ -23,6 +23,33 @@ model with a clean 6-tool surface often beats a strong model drowning in 70
 tools and 20k tokens of irrelevant instructions. Capability containment
 attacks both.
 
+## Preventive by default: bound *before* bloat
+
+The point was never to measure bloat already in context — it was to stop it
+entering. Two mechanisms make the audit preventive, mirroring the output side's
+"capture before flood":
+
+- **SessionStart gate.** A hook on all three hosts (Claude `SessionStart`,
+  Codex `SessionStart`, Antigravity `on_session_start`) runs the audit *once,
+  before the first turn*, with a cached MCP probe so it sees the real tool-
+  schema cost. If the discretionary surface exceeds `[surface]
+  max_static_tokens` in `ctx.toml`, it injects a bounded advisory naming the
+  heaviest kinds, unused high-authority tools, broken dependencies, and the
+  cheaper path. The probe is cached in `.ctx-surface/probe-cache.json` — first
+  session ~6s, every session after ~0.08s.
+- **Gateway as the MCP delivery.** `ctx wrap <host> --gateway` (or `ctx
+  surface install-gateway --host <h> --apply`) points a host at **one** MCP
+  server — `ctx surface gateway` — instead of the individual servers. It
+  snapshots the backends to `.ctx-surface/backends.json` (the gateway reads
+  them from there; the host loads only the gateway via a separate config file,
+  never a rewrite of yours). At turn 1 the model sees only the compact index +
+  `reveal`/`hide`; the thousands of tokens of tool schemas are **never sent**
+  until a family is revealed. This is the only mechanism that makes it
+  structurally impossible for unrevealed capability schemas to reach context.
+
+`[surface]` in `ctx.toml`: `max_static_tokens` (8000), `gate` (off|warn),
+`default_profile`, `gateway` (bool), `probe` (bool).
+
 ## Commands
 
 ```
@@ -46,6 +73,11 @@ ctx surface gateway          # stdio MCP server: index + reveal/hide + proxied b
 ctx surface reconcile --intent "open a PR"   # recommend reveals/hides (logs shadow)
 ctx surface reconcile --enforce              # apply through gateway state
 ctx surface referee                          # score shadowed hides; promote/hold
+
+# preventive wiring — make it 'bound before bloat'
+ctx wrap setup --gateway                     # set up all 3 hosts + load ONLY the gateway
+ctx surface install-gateway --host claude --apply   # gateway-only config for one host
+# (the SessionStart gate is installed automatically by ctx wrap on every host)
 ```
 
 ## What it audits (and the honest blind spot)
