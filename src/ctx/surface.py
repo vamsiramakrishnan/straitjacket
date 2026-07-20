@@ -100,6 +100,12 @@ class Capability:
     leakage: tuple[str, ...] = ()
     overlaps: tuple[str, ...] = ()
     detail: str = ""
+    # ---- Phase 2 graph fields (populated by enrich_graph) ----
+    family: str = ""            # repository | testing | remote-source-control | ...
+    provides: tuple[str, ...] = ()   # capability tags this satisfies (search, read, ...)
+    requires: tuple[str, ...] = ()   # referenced capability/tool tokens it depends on
+    phase: str = ""             # explore | edit | verify | deliver (typical task phase)
+    unresolved: tuple[str, ...] = ()  # required references not found in the surface
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -108,6 +114,9 @@ class Capability:
             "activation": self.activation, "invocations": self.invocations,
             "sensitive_terms": list(self.sensitive_terms), "leakage": list(self.leakage),
             "overlaps": list(self.overlaps), "detail": self.detail,
+            "family": self.family, "provides": list(self.provides),
+            "requires": list(self.requires), "phase": self.phase,
+            "unresolved": list(self.unresolved),
         }
 
 
@@ -421,7 +430,147 @@ def _with(cap: Capability, **changes: Any) -> Capability:
         tokens=data["tokens"], authority=data["authority"], activation=data["activation"],
         invocations=data["invocations"], sensitive_terms=tuple(data["sensitive_terms"]),
         leakage=tuple(data["leakage"]), overlaps=tuple(data["overlaps"]), detail=data["detail"],
+        family=data.get("family", ""), provides=tuple(data.get("provides", ())),
+        requires=tuple(data.get("requires", ())), phase=data.get("phase", ""),
+        unresolved=tuple(data.get("unresolved", ())),
     )
+
+
+# ---------------------------------------------------------------- Phase 2 graph
+# Capability families (the compact directory a compact index would show) and
+# the task phase each typically serves. Ordered specific→general; first match
+# wins against provider + id + detail.
+FAMILY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("remote-source-control", ("github", "gitlab", "gitea", "bitbucket", "pull_request", "pull-request")),
+    ("deployment", ("deploy", "kubernetes", "kubectl", "terraform", "cloudformation", "helm", "vercel", "netlify")),
+    ("cloud", ("aws", "gcloud", "gcp", "azure", "ec2", "lambda", "cloudflare")),
+    ("database", ("postgres", "mysql", "mongo", "redis", "sqlite", "database", "sql")),
+    ("collaboration", ("slack", "email", "gmail", "jira", "notion", "confluence", "calendar", "linear")),
+    ("browser", ("browser", "playwright", "puppeteer", "chromium", "webfetch", "websearch")),
+    ("semantic-analysis", ("semgrep", "ast-grep", "astgrep", "scip", "sourcegraph", "tree-sitter", "codeql")),
+    ("testing", ("pytest", "jest", "cargo test", "junit", "rspec", "gotest", "test-run", "vitest")),
+    ("harness", ("ctx-harness", "ctx ", "ctx.", "mcp.ctx", "digest", "artifact")),
+    ("repository", ("repository", "file", "read", "search", "grep", "glob", "edit", "outline")),
+    ("docs", ("instruction", "readme", "guide", "steering")),
+)
+_PHASE_OF_FAMILY = {
+    "repository": "explore", "semantic-analysis": "explore", "browser": "explore",
+    "testing": "verify",
+    "remote-source-control": "deliver", "deployment": "deliver", "cloud": "deliver",
+    "collaboration": "deliver", "database": "deliver",
+    "harness": "explore", "docs": "explore",
+}
+# Host-native tools + shells: a reference to these is always resolved (never a
+# broken dependency), regardless of which host is active.
+NATIVE_TOOLS = frozenset({
+    "bash", "sh", "shell", "read", "edit", "write", "multiedit", "notebookedit",
+    "grep", "glob", "ls", "cat", "cd", "git", "pytest", "npm", "node", "python",
+    "python3", "cargo", "go", "make", "rg", "ripgrep", "sed", "awk", "find",
+    "echo", "curl", "apply_patch", "view_file", "str_replace", "webfetch", "websearch",
+})
+# References to MCP tools: mcp__<server>__<tool> (Claude/Codex) or mcp.<server>.
+# Capture ONLY the server segment (stops at the next `_`/`.` separator), so
+# mcp__github__search_code resolves to the server "github", not the tool.
+_MCP_REF_RE = re.compile(r"\bmcp(?:__|\.)([a-z0-9][a-z0-9-]*)")
+# `ctx <verb>` references and backtick code spans naming a tool.
+_CTX_REF_RE = re.compile(r"\bctx\s+([a-z][a-z-]+)")
+_BACKTICK_RE = re.compile(r"`([^`]{1,60})`")
+
+
+def family_of(cap: Capability) -> str:
+    if cap.kind == "repo_instructions":
+        return "docs"
+    if cap.kind == "policy":
+        return "harness"
+    blob = f"{cap.provider} {cap.id} {cap.detail}".lower()
+    for family, kws in FAMILY_RULES:
+        if any(kw in blob for kw in kws):
+            return family
+    return "other"
+
+
+def provides_of(cap: Capability) -> tuple[str, ...]:
+    blob = f"{cap.id} {cap.detail}".lower()
+    return tuple(k for k in _CAPABILITY_KEYS if k in blob)
+
+
+def _extract_requires(text: str) -> tuple[list[str], list[str]]:
+    """(mcp server refs, tool refs) named in prose. Precise on purpose: only
+    references shaped like a tool are collected, so broken-dependency signals
+    stay low-noise."""
+    servers = sorted({m.lower() for m in _MCP_REF_RE.findall(text)})
+    tools: set[str] = set()
+    for m in _CTX_REF_RE.findall(text):
+        tools.add(f"ctx {m.lower()}")
+    for span in _BACKTICK_RE.findall(text):
+        tok = span.strip().lower()
+        head = tok.split()[0] if tok else ""
+        if head in NATIVE_TOOLS or head == "ctx" or head.startswith("mcp"):
+            tools.add(tok)
+    return servers, sorted(tools)
+
+
+def enrich_graph(records: list[Capability], ws_root: Path | str) -> list[Capability]:
+    """Populate family / provides / requires / phase / unresolved. Broken
+    dependency = a prose capability names an MCP server that is not configured
+    in this workspace. Fail-open (re-reads sources; missing text ⇒ no refs)."""
+    root = Path(ws_root)
+    configured = {c.provider.lower() for c in records if c.kind in ("mcp_server", "mcp_tool")}
+    out: list[Capability] = []
+    for cap in records:
+        family = family_of(cap)
+        provides = provides_of(cap)
+        phase = _PHASE_OF_FAMILY.get(family, "")
+        requires: tuple[str, ...] = ()
+        unresolved: tuple[str, ...] = ()
+        if cap.kind in ("skill", "agent", "repo_instructions"):
+            text = _read_text(root / cap.source) or ""
+            servers, tools = _extract_requires(text)
+            requires = tuple(sorted(set(servers) | set(tools)))
+            unresolved = tuple(s for s in servers
+                               if s not in configured and s not in ("ctx", "ctx-harness"))
+        out.append(_with(cap, family=family, provides=provides, phase=phase,
+                         requires=requires, unresolved=unresolved))
+    return out
+
+
+def build_graph(records: list[Capability]) -> dict[str, Any]:
+    """Family rollup, redundancy clusters (shared provides), and broken
+    dependencies (unresolved references). Descriptive — no mutation."""
+    families: dict[str, dict[str, Any]] = {}
+    for c in records:
+        fam = families.setdefault(c.family or "other", {"count": 0, "tokens": 0, "ids": []})
+        fam["count"] += 1
+        fam["tokens"] += c.tokens
+        fam["ids"].append(c.id)
+    clusters: dict[str, list[str]] = {}
+    for c in records:
+        for tag in c.provides:
+            clusters.setdefault(tag, []).append(c.id)
+    redundancy = {tag: ids for tag, ids in sorted(clusters.items()) if len(ids) > 1}
+    broken = {c.id: list(c.unresolved) for c in records if c.unresolved}
+    return {
+        "families": {k: families[k] for k in sorted(families)},
+        "redundancy_clusters": redundancy,
+        "broken_dependencies": broken,
+    }
+
+
+def render_graph(records: list[Capability], graph: dict[str, Any]) -> str:
+    lines = ["CAPABILITY GRAPH", "─" * 56, "Families:"]
+    for fam, slot in sorted(graph["families"].items(), key=lambda kv: -kv[1]["tokens"]):
+        lines.append(f"  {fam:<22} {slot['count']:>3} · {slot['tokens']:>7,} tok")
+    if graph["redundancy_clusters"]:
+        lines.append("Redundancy clusters (shared capability, shadow):")
+        for tag, ids in graph["redundancy_clusters"].items():
+            lines.append(f"  {tag:<12} {', '.join(ids)}")
+    if graph["broken_dependencies"]:
+        lines.append("Broken dependencies (referenced but not configured):")
+        for cid, refs in graph["broken_dependencies"].items():
+            lines.append(f"  {cid} → {', '.join(refs)}")
+    else:
+        lines.append("Broken dependencies: none")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- audit
@@ -468,10 +617,11 @@ def audit(ws_root: Path | str, *, probe_mcp: bool = False, timeout: float = 8.0)
             base = [c for c in base
                     if not (c.kind == "mcp_server" and c.provider in probed_providers)]
             base = base + probed
-    records = detect_overlaps(base)
+    records = enrich_graph(detect_overlaps(base), ws_root)
     counts = observed_tool_counts(ws_root)
     records = [_with(c, invocations=_match_invocations(c, counts)) for c in records]
     levels = {c.id: recommended_level(c) for c in records}
+    graph = build_graph(records)
 
     by_kind: dict[str, dict[str, int]] = {}
     for c in records:
@@ -509,6 +659,7 @@ def audit(ws_root: Path | str, *, probe_mcp: bool = False, timeout: float = 8.0)
         "leakage": {c.id: list(c.leakage) for c in leaky},
         "overlap_clusters": sorted(clusters.keys()),
         "trim_preview": {"ids": [c.id for c in trim], "est_token_reduction": trim_savings},
+        "graph": graph,
         "blind_spot": ("host system prompt + native tool schemas are not "
                        "file-visible and are excluded from this audit"),
     }
@@ -690,5 +841,6 @@ __all__ = [
     "SCHEMA", "Capability", "collect_surface", "detect_overlaps",
     "observed_tool_counts", "audit", "recommended_level", "probe_surface",
     "probe_mcp_tools", "render_inventory", "render_audit", "render_explain",
-    "infer_authority",
+    "infer_authority", "enrich_graph", "build_graph", "render_graph",
+    "family_of", "provides_of", "FAMILY_RULES", "NATIVE_TOOLS",
 ]

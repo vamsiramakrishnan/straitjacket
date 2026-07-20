@@ -213,8 +213,8 @@ def _main_slow(args: list[str]) -> int:
              "inventory · audit · explain · trim",
     )
     p_surface.add_argument(
-        "surface_cmd", choices=("inventory", "audit", "explain", "trim"),
-        help="inventory (list) · audit (summary) · explain <id> · trim (preview)",
+        "surface_cmd", choices=("inventory", "audit", "explain", "trim", "graph"),
+        help="inventory · audit · explain <id> · trim (preview) · graph (families/deps)",
     )
     p_surface.add_argument("target", nargs="?", help="capability id for `explain`")
     p_surface.add_argument("--json", action="store_true", help="emit structured JSON")
@@ -747,10 +747,16 @@ def _cmd_surface(ws, ns) -> int:
             print(surface.render_inventory(records))
         return 0
 
-    # audit / trim both build the full audit; trim highlights the preview.
+    # audit / trim / graph build the full audit.
     a = surface.audit(ws.root, probe_mcp=getattr(ns, "probe_mcp", False))
     if ns.json:
         print(_json.dumps(a, indent=2))
+        return 0
+    if ns.surface_cmd == "graph":
+        recs = [surface.Capability(**{k: (tuple(v) if isinstance(v, list) else v)
+                                      for k, v in r.items() if k != "recommended_level"})
+                for r in a["records"]]
+        print(surface.render_graph(recs, a["graph"]))
         return 0
     if ns.surface_cmd == "trim":
         tp = a["trim_preview"]

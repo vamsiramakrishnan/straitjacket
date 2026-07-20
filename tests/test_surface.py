@@ -126,6 +126,59 @@ def test_overlap_clusters_are_descriptive(ws):
     assert with_overlap  # at least one cluster formed
 
 
+# ---------------------------------------------------------------- Phase 2 graph
+def test_family_and_phase_classification(ws):
+    recs = {r.id: r for r in surface.enrich_graph(surface.collect_surface(ws), ws)}
+    assert recs["mcp.github"].family == "remote-source-control"
+    assert recs["mcp.github"].phase == "deliver"
+    assert recs["repo.AGENTS.md"].family == "docs"
+    # deployer skill mentions deploy → deployment family, deliver phase
+    assert recs["skill.deployer"].family == "deployment"
+
+
+def test_broken_dependency_flags_unconfigured_mcp_ref(tmp_path):
+    root = tmp_path / "proj"
+    (root / ".claude" / "skills" / "jira-helper").mkdir(parents=True)
+    (root / ".claude" / "skills" / "jira-helper" / "SKILL.md").write_text(
+        "Use `mcp__jira__create_issue` to file tickets after a fix.\n",
+        encoding="utf-8")
+    (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
+    recs = surface.enrich_graph(surface.collect_surface(root), root)
+    graph = surface.build_graph(recs)
+    # jira MCP server is NOT configured → broken dependency
+    assert any("jira" in ref for refs in graph["broken_dependencies"].values() for ref in refs)
+
+
+def test_configured_mcp_ref_is_not_broken(tmp_path):
+    root = tmp_path / "proj"
+    (root / ".claude" / "skills" / "gh-helper").mkdir(parents=True)
+    (root / ".claude" / "skills" / "gh-helper" / "SKILL.md").write_text(
+        "Use `mcp__github__search_code` to find call sites.\n", encoding="utf-8")
+    (root / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"github": {"command": "gh-mcp"}}}), encoding="utf-8")
+    (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
+    recs = surface.enrich_graph(surface.collect_surface(root), root)
+    graph = surface.build_graph(recs)
+    assert graph["broken_dependencies"] == {}  # github IS configured
+
+
+def test_native_tool_refs_never_break(tmp_path):
+    root = tmp_path / "proj"
+    (root / ".claude" / "skills" / "runner").mkdir(parents=True)
+    (root / ".claude" / "skills" / "runner" / "SKILL.md").write_text(
+        "Run `pytest -q` then `git status`; use `ctx q` to explore.\n", encoding="utf-8")
+    (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
+    recs = surface.enrich_graph(surface.collect_surface(root), root)
+    assert surface.build_graph(recs)["broken_dependencies"] == {}
+
+
+def test_redundancy_cluster_groups_shared_capability(ws):
+    recs = surface.enrich_graph(surface.collect_surface(ws), ws)
+    graph = surface.build_graph(recs)
+    # reader skill + github both 'search' → a cluster with >1 member
+    assert any(len(ids) > 1 for ids in graph["redundancy_clusters"].values())
+
+
 # ---- MCP probe against a fake stdio server (dogfood of the JSON-RPC client)
 def _fake_mcp_server(tmp_path):
     script = tmp_path / "fake_mcp.py"
