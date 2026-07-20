@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -149,6 +148,10 @@ def load_config(workspace_root: Path | None) -> Config:
     path = workspace_root / CONFIG_FILENAME
     if not path.is_file():
         return Config()
+    # Lazy: tomllib costs ~4ms at import and the common hook-path case
+    # (no ctx.toml present) returns above without ever needing it.
+    import tomllib
+
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):

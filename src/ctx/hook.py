@@ -133,9 +133,31 @@ _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
 _NO_REWRITE_PROGS = {"less", "more", "vi", "vim", "nano", "emacs", "top", "htop", "watch", "ssh", "xargs"}
 
 
+_POLICY_CACHE_NAME = "guard-policy-cache.json"
+
+
+def _policy_cache_key(paths: list[Path]) -> list[list[Any]]:
+    """(path, mtime_ns, size) triples for every policy source file; a missing
+    file contributes a zero row so appearing/disappearing invalidates too."""
+    key: list[list[Any]] = []
+    for p in paths:
+        try:
+            st = p.stat()
+            key.append([str(p), st.st_mtime_ns, st.st_size])
+        except OSError:
+            key.append([str(p), 0, 0])
+    return key
+
+
 def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     """Minimal ctx.toml read for the guard section, plus the compiled
-    ctx-policy.toml learned-policy epoch. Never raises."""
+    ctx-policy.toml learned-policy epoch. Never raises.
+
+    The parsed result is cached as JSON in the session ledger keyed by the
+    (mtime_ns, size) of both source files: TOML parsing (and the tomllib
+    import itself, ~5ms) runs only when a source file actually changed.
+    The cache is a pure derivation of the TOMLs — deleting it is always safe.
+    """
     policy: dict[str, Any] = {
         "mode": "guarded",
         "unknown_command": "force_ask",
@@ -157,6 +179,20 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     if not workspace_root:
         return policy
     path = Path(workspace_root) / "ctx.toml"
+    ppath = Path(workspace_root) / _POLICY_FILENAME
+    if not path.is_file() and not ppath.is_file():
+        return policy
+    cache_path = Path(workspace_root) / _LEDGER_DIR_NAME / _POLICY_CACHE_NAME
+    key = _policy_cache_key([path, ppath])
+    try:
+        doc = json.loads(cache_path.read_text(encoding="utf-8"))
+        if doc.get("key") == key and isinstance(doc.get("policy"), dict):
+            # Fresh defaults first so keys added in a newer ctx win over a
+            # cache written by an older one.
+            policy.update(doc["policy"])
+            return policy
+    except Exception:
+        pass
     if path.is_file():
         try:
             import tomllib
@@ -200,7 +236,6 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     # signatures act like allow_commands prefixes; demoted never do. Read in
     # its own fail-open block so a corrupt epoch cannot poison ctx.toml
     # settings (and vice versa).
-    ppath = Path(workspace_root) / _POLICY_FILENAME
     if ppath.is_file():
         try:
             import tomllib
@@ -221,6 +256,15 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
                 policy["demoted_commands"] = demoted
         except Exception:
             pass
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_name(
+            f"{_POLICY_CACHE_NAME}.{os.getpid()}.{os.urandom(4).hex()}"
+        )
+        tmp.write_text(json.dumps({"key": key, "policy": policy}), encoding="utf-8")
+        os.replace(tmp, cache_path)
+    except Exception:
+        pass
     return policy
 
 
