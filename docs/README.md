@@ -156,6 +156,7 @@ Every mechanism inherits the same invariants:
 | the objective, theorems, and the measured gap | [THEORY.md](THEORY.md) |
 | facts, indexing, and queries | [ALGEBRA.md](ALGEBRA.md) |
 | compiled evidence plans | [EVIDENCE-PLANS.md](EVIDENCE-PLANS.md) |
+| the input side — capability surface containment | [CAPABILITY-SURFACE.md](CAPABILITY-SURFACE.md) |
 | schemas and compatibility | [`spec/`](../spec/) |
 | benchmark receipts | [`evals/`](../evals/) |
 | shipped history | [`CHANGELOG.md`](../CHANGELOG.md) |

@@ -23,20 +23,29 @@ model with a clean 6-tool surface often beats a strong model drowning in 70
 tools and 20k tokens of irrelevant instructions. Capability containment
 attacks both.
 
-## Status: Phase 1 — measurement, not mutation
-
-`ctx surface` **measures** the surface and **recommends**; it never hides or
-removes anything. Enforcement (progressive disclosure) is deferred and will
-ship only after the shadow signals here are validated. This is deliberate:
-receipts precede doctrine, and silently trimming a capability the task needed
-is the one failure mode worth being slow about.
+## Commands
 
 ```
+# measure (Phase 1–2) — never mutates anything
 ctx surface inventory        # every capability, priced, with usage + flags
 ctx surface audit            # the summary scorecard
 ctx surface explain <id>     # why one capability is visible, its cost + authority
-ctx surface trim             # preview-only defer recommendations (nothing hidden)
+ctx surface trim             # preview-only defer recommendations
+ctx surface graph            # families, redundancy clusters, broken dependencies
 ctx surface inventory --probe-mcp   # spawn MCP servers to measure real schema tokens
+
+# compile (Phase 3) — the enforced cross-host boundary
+ctx surface compile --profile local-dev --host claude [--apply]
+ctx surface compile --profile read-only --host codex --apply
+ctx surface compile --profile review    --host antigravity --apply
+
+# disclose at runtime (Phase 4) — MCP gateway
+ctx surface gateway          # stdio MCP server: index + reveal/hide + proxied backends
+
+# reconcile (Phase 5) — shadow by default
+ctx surface reconcile --intent "open a PR"   # recommend reveals/hides (logs shadow)
+ctx surface reconcile --enforce              # apply through gateway state
+ctx surface referee                          # score shadowed hides; promote/hold
 ```
 
 ## What it audits (and the honest blind spot)
@@ -115,24 +124,41 @@ Preview-trim candidates: 1 · ~638 tok/turn recoverable (advisory — nothing hi
 
 Receipt: [`evals/surface-audit-2026-07-20.md`](../evals/surface-audit-2026-07-20.md).
 
-## The deferred phases (not yet built)
+## The five phases (all shipped)
 
-| Phase | What | Gate |
+| Phase | What | Mutation? |
 |---|---|---|
-| 1 · **shipped** | inventory · accounting · utilization · overlap/leakage shadow · preview trim · MCP probe | this document |
-| 2 | dependency + overlap graph (`provides`/`requires`/`authority`/`phase`) | — |
-| 3 | compile-time profiles (`ctx surface compile --profile`) with authority/budget checks | — |
-| 4 | progressive disclosure: compact family index + explicit `reveal`/`hide`, host dynamic registration where supported | shadow-proven trims |
-| 5 | automatic reconciliation — hide unused high-cost family after a phase, reveal on intent trigger; **never** remove a capability an active task contract requires | paired referee |
+| 1 | inventory · accounting · utilization · overlap/leakage shadow · preview trim · MCP probe | none |
+| 2 | dependency + overlap graph — families, `provides`/`requires`, redundancy clusters, broken dependencies | none |
+| 3 | compile-time profiles (`ctx surface compile`) with dep-closure / provider / authority / budget checks → **minimal per-host config** | writes config on `--apply` |
+| 4 | progressive-disclosure **MCP gateway** — compact family index + `reveal`/`hide` + `tools/list_changed`, proxying live backends | gateway state only |
+| 5 | automatic reconciliation — hide unused high-cost family after a phase, reveal on intent; **never** remove a required or kernel family | shadow by default; `--enforce` opt-in |
 
-Progressive disclosure needs a real enforcement mechanism, not just a
-recommendation. The natural one is ctx acting as an **MCP gateway**: it already
-speaks the protocol (Phase 1 probes with it), so it can front other servers,
-present a compact family index, and reveal tools on demand via
-`tools/list_changed`. That mirrors exactly what ctx does for evidence — a
-boundary that reveals on demand — and it is the same machinery that would
-compile a minimal capability slice per delegated worker (coordinator /
-editor / explorer) instead of duplicating a 30k-token surface into each.
+Each phase's referee is its acceptance gate: Phase 1–2 are measurement (no
+gate needed); Phase 3's checks must be clean before a config is trusted;
+Phase 5 ships **shadow-first** with a paired referee (`ctx surface referee`)
+that promotes a hide rule only once it never mis-hid a family used afterwards.
+
+## Enforcement per host (the honest matrix)
+
+Research finding: the only surface bound *every* host respects is set at
+compile/launch time. Dynamic reveal is a best-effort affordance on top.
+
+| Host | Compile (Phase 3) — enforced | Gateway reveal (Phase 4) — in-session? |
+|---|---|---|
+| **Claude Code** | `--strict-mcp-config --mcp-config .ctx-surface/mcp.claude.json` + `permissions.deny mcp__<dropped>__*` | **Yes** on the normal tool path (honours `list_changed`, v2.1+); the ToolSearch/deferred index does not refresh — reconnect to pick those up |
+| **Codex** | `.ctx-surface/config.codex.toml` — only selected `[mcp_servers.*]` at startup | **No** — startup snapshot; a reveal applies after restart |
+| **Antigravity** | `.ctx-surface/mcp_config.antigravity.json` — minimal servers | **Manual** — a reveal applies after the MCP *Refresh* |
+
+Wire the gateway on any host by registering **one** MCP server pointing at
+`ctx surface gateway` instead of the individual servers — it fronts them all,
+starts with just the index, and reveals per family. The ctx bounded retrieval
+tool rides along automatically (the `harness` family is kernel, always
+revealed). Everywhere the gateway is a single bounded entry point; only where
+the client honours `list_changed` is the reveal *live* rather than
+apply-on-reconnect. That is the same machinery that compiles a minimal
+capability slice per delegated worker (coordinator / editor / explorer)
+instead of duplicating a 30k-token surface into each.
 
 ## Why this composes
 
