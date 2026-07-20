@@ -161,6 +161,35 @@ referee gates C ≥ B on turns at no correctness loss.
 contracts (shipped), `ctx q` stage registry (shipped), facts store joins
 (shipped); ast-grep/Semgrep are opportunistic tiers, never required.
 
+## M-K · The substrate operator classes (file sets · spans · records · rewrite breadth)
+
+**Designed 2026-07-20**, from the external "evidence algebra" proposal —
+audited, corrected, and phased in [`docs/SUBSTRATE.md`](docs/SUBSTRATE.md).
+The audit's verdict: the proposal's principle (integrate operator classes,
+not binaries) is already M-J's shipped doctrine, and three of its six
+additions already exist (`rg --json`, `ctags --json`, transactional
+generation-guarded rewrites). What survives, in leverage order:
+
+- **M-K1** span-precise sites: capture the rg submatch columns already on
+  the wire; per-result search provenance. (~½ day)
+- **M-K2** `corpus` / `repo.files`: the missing file-set operator class —
+  bounded, receipted eligible-file sets that scan-class ops (`ast.search`,
+  `semantic.*`) scope to via capped `foreach`; engines git ls-files → fd →
+  os.walk; `--changed` from generation facts, never mtime. (~1 day)
+- **M-K3** `records` source + `distinct`/`histogram` stages: the jq class
+  absorbed as physical engine and instrumented escape hatch, never as
+  bounded-tier vocabulary. (1–2 days)
+- **M-K4** SCIP ingestion (M-G increment, resequenced above rewrites).
+- **M-K5** comby as a second rewrite rung — if and only if a committed
+  decline-corpus gate shows the population; explicit sed/awk steering
+  ships independently.
+- **M-K6** watch-based warming: deferred to the broker era (M-E) on the
+  record; content-keyed laziness is the incremental algebra until then.
+
+**Acceptance**: per-phase gates and named referees in the design doc;
+engine parity byte-identical with kill-switches, coverage receipts on
+every new emission kind, totality preserved (`test_digest_closure`).
+
 ## Sequencing
 
 ```
@@ -171,6 +200,8 @@ next ─► M-B code verbs v1 (jedi) ──► MCP op growth, skill update
 then ─► M-E broker ──► M-B multi-language LSP · M-C cached indexes
         + learned policy epochs (telemetry → committed policy, existing plan)
 now ──► M-J compiled evidence plans (shipped v0.25.0; P4 + referee open)
+next ─► M-K substrate operators (K1 spans · K2 corpus · K3 records; K4 SCIP;
+        K5 comby behind its decline-corpus gate; K6 waits for M-E)
 ```
 
 Deliberately **not** planned: wire-side semantic compression (LLMLingua-class
