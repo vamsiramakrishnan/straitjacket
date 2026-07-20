@@ -27,3 +27,6 @@ evals/_runs/
 # Claude Code harness-local state (agent worktrees, session-scoped agent
 # definitions written by `ctx wrap claude`) — never source.
 .claude/
+
+# generated capability-surface state (gateway state, shadow ledger, compiled configs)
+.ctx-surface/

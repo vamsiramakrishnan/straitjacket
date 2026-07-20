@@ -228,8 +228,9 @@ def _main_slow(args: list[str]) -> int:
     )
     p_surface.add_argument(
         "surface_cmd",
-        choices=("inventory", "audit", "explain", "trim", "graph", "compile"),
-        help="inventory · audit · explain <id> · trim · graph · compile --profile",
+        choices=("inventory", "audit", "explain", "trim", "graph", "compile",
+                 "reconcile", "referee"),
+        help="inventory · audit · explain · trim · graph · compile · reconcile · referee",
     )
     p_surface.add_argument("target", nargs="?", help="capability id for `explain`")
     p_surface.add_argument("--json", action="store_true", help="emit structured JSON")
@@ -242,6 +243,11 @@ def _main_slow(args: list[str]) -> int:
                            help="target host for `compile` (default: claude)")
     p_surface.add_argument("--apply", action="store_true",
                            help="`compile`: write the minimal config under .ctx-surface/")
+    p_surface.add_argument("--intent", default="",
+                           help="`reconcile`: task-intent text used to trigger reveals")
+    p_surface.add_argument("--phase", help="`reconcile`: override inferred phase (explore|edit|verify|deliver)")
+    p_surface.add_argument("--enforce", action="store_true",
+                           help="`reconcile`: apply actions to gateway state (else shadow only)")
 
     p_replay = sub.add_parser(
         "replay",
@@ -734,6 +740,20 @@ def _cmd_surface(ws, ns) -> int:
     import json as _json
 
     from ctx import surface
+
+    if ns.surface_cmd in ("reconcile", "referee"):
+        from ctx import surface_reconcile as sr
+
+        if ns.surface_cmd == "referee":
+            rep = sr.referee(ws.root)
+            print(_json.dumps(rep, indent=2) if ns.json else
+                  f"[ctx surface referee] hides scored: {rep['hides_scored']} · "
+                  f"safe {rep['safe']} · unsafe {rep['unsafe']} · verdict {rep['verdict']}"
+                  + ("\n  promotable: " + ", ".join(rep["promotable"]) if rep["promotable"] else ""))
+            return 0
+        rep = sr.run_reconcile(ws.root, intent=ns.intent, phase=ns.phase, enforce=ns.enforce)
+        print(_json.dumps(rep, indent=2) if ns.json else sr.render_reconcile(rep))
+        return 0
 
     if ns.surface_cmd == "compile":
         from ctx import surface_profiles
