@@ -254,6 +254,14 @@ def _main_slow(args: list[str]) -> int:
     p_surface.add_argument("--enforce", action="store_true",
                            help="`reconcile`: apply actions to gateway state (else shadow only)")
 
+    p_image = sub.add_parser(
+        "image",
+        help="typed digests + perceptual diff for binary/image/pdf files",
+    )
+    p_image.add_argument("image_cmd", choices=("digest", "diff"),
+                         help="digest <file> · diff <a> <b> (perceptual distance)")
+    p_image.add_argument("files", nargs="+", help="file path(s)")
+
     p_replay = sub.add_parser(
         "replay",
         help="deterministic open-loop replay of recorded Claude Code transcripts",
@@ -659,6 +667,8 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_gain(ws)
         if ns.cmd == "surface":
             return _cmd_surface(ws, ns)
+        if ns.cmd == "image":
+            return _cmd_image(ns)
         if ns.cmd == "debt":
             from ctx import debt as _debt
 
@@ -762,6 +772,55 @@ def _main_slow(args: list[str]) -> int:
 
     parser.error(f"unhandled command {ns.cmd!r}")
     return 2  # pragma: no cover
+
+
+def _cmd_image(ns) -> int:
+    """`ctx image {digest,diff}` — typed binary digests and pixel-free
+    perceptual comparison (deterministic visual regression for design work)."""
+    from pathlib import Path
+
+    from ctx import binfmt
+
+    def _read(p: str) -> bytes | None:
+        try:
+            return Path(p).read_bytes()
+        except OSError as e:
+            print(f"cannot read {p}: {e}")
+            return None
+
+    if ns.image_cmd == "digest":
+        for f in ns.files:
+            data = _read(f)
+            if data is None:
+                return 1
+            print(f"[{f}]")
+            print(binfmt.render_digest(binfmt.inspect(data)))
+        return 0
+
+    # diff: two images by perceptual hash
+    if len(ns.files) != 2:
+        print("usage: ctx image diff <a> <b>")
+        return 2
+    da, db = _read(ns.files[0]), _read(ns.files[1])
+    if da is None or db is None:
+        return 1
+    ia, ib = binfmt.inspect(da), binfmt.inspect(db)
+    if not ia.perceptual_hash or not ib.perceptual_hash:
+        print("perceptual diff needs the `image` extra (pip install 'ctx-harness[image]') "
+              "and two decodable images")
+        return 1
+    dist = binfmt.phash_distance(ia.perceptual_hash, ib.perceptual_hash)
+    pct = 100.0 * dist / 64.0
+    verdict = ("identical render" if dist == 0 else
+               "near-identical (sub-perceptual)" if dist <= 5 else
+               "minor visual change" if dist <= 12 else
+               "substantial visual change")
+    print(f"a: {ia.width}×{ia.height} {ia.format}  phash {ia.perceptual_hash}")
+    print(f"b: {ib.width}×{ib.height} {ib.format}  phash {ib.perceptual_hash}")
+    print(f"perceptual distance: {dist}/64 (~{pct:.0f}%) — {verdict}")
+    if ia.sha256 == ib.sha256:
+        print("(byte-identical)")
+    return 0
 
 
 def _cmd_surface(ws, ns) -> int:

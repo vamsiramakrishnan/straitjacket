@@ -37,6 +37,10 @@ dev = ["pytest>=8", "jsonschema>=4"]
 map = ["grimp>=3", "networkx>=3"]
 fast = ["orjson>=3"]
 code = ["jedi>=0.19", "tree-sitter>=0.21", "tree-sitter-language-pack>=0.1", "ast-grep-py>=0.37"]
+# Perceptual hashing for the binary/image digest (dhash) and `ctx image diff`.
+# Absent, image digests still carry format + dimensions + exact hash (stdlib);
+# only the pixel-free perceptual comparison needs a decode.
+image = ["pillow>=10"]
 # Semantic/taint plan operators (docs/EVIDENCE-PLANS.md P3). Invoked
 # hermetically (local rules, --metrics=off, no registry fetch); absence is
 # a declared skip, never an error.

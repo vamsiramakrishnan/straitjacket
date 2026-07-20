@@ -12,6 +12,7 @@ from typing import Any
 
 from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile
+from ctx.digest.binprof import BinaryProfile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
 from ctx.digest.searchprof import SearchProfile
@@ -34,6 +35,7 @@ from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
 _PROFILES: tuple[Profile, ...] = (
+    BinaryProfile(),  # magic-byte binary (image/pdf/…) before any text profile
     PytestProfile(),
     GoTestProfile(),
     CargoTestProfile(),  # shape-anchored on 'test result:' — compile-error
