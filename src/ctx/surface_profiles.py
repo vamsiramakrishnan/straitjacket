@@ -189,9 +189,16 @@ def _excluded_servers(records, selected, ws_root) -> list[str]:
     return sorted(n for n in surface._mcp_server_commands(ws_root) if n not in kept)
 
 
-def emit_claude(servers: dict[str, list[str]], excluded: list[str]) -> dict[str, Any]:
+def emit_claude(servers: dict[str, list[str]], excluded: list[str],
+                deferred_tools: dict[str, list[str]]) -> dict[str, Any]:
     mcp = {name: {"command": argv[0], "args": argv[1:]} for name, argv in servers.items()}
+    # Whole-server drops reduce context (the server isn't loaded). Per-tool
+    # deny gates *callability* only — a denied tool is still listed to the
+    # model, so it still costs tokens; use `ctx surface gateway` for per-tool
+    # token reduction within a kept server.
     deny = [f"mcp__{name}__*" for name in excluded]
+    for srv, tools in sorted(deferred_tools.items()):
+        deny.extend(f"mcp__{srv}__{t}" for t in tools)
     return {
         "files": {
             f"{COMPILE_DIR}/mcp.claude.json": json.dumps({"mcpServers": mcp}, indent=2) + "\n",
@@ -202,27 +209,39 @@ def emit_claude(servers: dict[str, list[str]], excluded: list[str]) -> dict[str,
     }
 
 
-def emit_codex(servers: dict[str, list[str]], excluded: list[str]) -> dict[str, Any]:
+def emit_codex(servers: dict[str, list[str]], excluded: list[str],
+               deferred_tools: dict[str, list[str]]) -> dict[str, Any]:
     lines = ["# ctx surface compile — minimal Codex MCP surface for this profile",
-             "# (excluded servers are simply absent; Codex snapshots at startup)"]
+             "# (excluded servers are absent; per-tool defers use disabled_tools)"]
     for name, argv in sorted(servers.items()):
         lines.append(f"\n[mcp_servers.{name}]")
         lines.append(f'command = "{argv[0]}"')
         if argv[1:]:
             lines.append("args = [" + ", ".join(json.dumps(a) for a in argv[1:]) + "]")
+        gated = deferred_tools.get(name)
+        if gated:
+            lines.append("disabled_tools = [" + ", ".join(json.dumps(t) for t in gated) + "]")
     return {
         "files": {f"{COMPILE_DIR}/config.codex.toml": "\n".join(lines) + "\n"},
         "launch": f"codex --config {COMPILE_DIR}/config.codex.toml   # or merge into .codex/config.toml",
     }
 
 
-def emit_antigravity(servers: dict[str, list[str]], excluded: list[str]) -> dict[str, Any]:
+def emit_antigravity(servers: dict[str, list[str]], excluded: list[str],
+                     deferred_tools: dict[str, list[str]]) -> dict[str, Any]:
     mcp = {name: {"command": argv[0], "args": argv[1:], "disabled": False}
            for name, argv in servers.items()}
+    note = ""
+    if deferred_tools:
+        # Antigravity has no per-tool gating: tools deferred within a kept
+        # server can only be bounded by the gateway.
+        note = ("  NOTE: per-tool defers within kept servers are not enforceable "
+                "in Antigravity config — route through `ctx surface gateway`.")
     return {
         "files": {f"{COMPILE_DIR}/mcp_config.antigravity.json":
                   json.dumps({"mcpServers": mcp}, indent=2) + "\n"},
-        "launch": "point ~/.gemini/antigravity-cli config at this file, then Refresh MCP servers",
+        "launch": "point ~/.gemini/antigravity-cli config at this file, then Refresh MCP servers"
+                  + ("\n" + note if note else ""),
     }
 
 
@@ -247,10 +266,30 @@ def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
     issues = check(selected, profile)
     servers = _selected_servers(selected, ws_root)
     excl_servers = _excluded_servers(records, selected, ws_root)
-    emitted = _EMITTERS[host](servers, excl_servers)
+    kept_providers = set(servers)
+
+    # Tools deferred *within a kept server* (server stays, some tools excluded).
+    deferred_tools: dict[str, list[str]] = {}
+    for cap, _reason in excluded:
+        if cap.kind == "mcp_tool" and cap.provider in kept_providers:
+            tool = cap.id.split(".", 2)[-1]
+            deferred_tools.setdefault(cap.provider, []).append(tool)
+    for srv in deferred_tools:
+        deferred_tools[srv].sort()
+
+    emitted = _EMITTERS[host](servers, excl_servers, deferred_tools)
 
     before = sum(c.tokens for c in records)
-    after = sum(c.tokens for c in selected)
+    # Two honest numbers. after_gateway honours per-tool selection (achievable
+    # only by the gateway, which controls exactly what it lists). after_server
+    # is what dropping whole servers alone yields — kept servers keep ALL their
+    # tools' tokens, because a host deny/disable lists the tool anyway on
+    # Claude (tokens unchanged). The gap is what the gateway recovers.
+    after_gateway = sum(c.tokens for c in selected)
+    after_server = (sum(c.tokens for c in selected if c.kind != "mcp_tool")
+                    + sum(c.tokens for c in records
+                          if c.kind == "mcp_tool" and c.provider in kept_providers))
+
     written: list[str] = []
     if apply:
         root = Path(ws_root)
@@ -270,8 +309,11 @@ def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
         "excluded": [{"id": c.id, "reason": r} for c, r in excluded],
         "servers_kept": sorted(servers),
         "servers_dropped": excl_servers,
+        "deferred_tools": deferred_tools,
         "issues": issues,
-        "tokens": {"before": before, "after": after, "saved": before - after},
+        "tokens": {"before": before,
+                   "after_server": after_server, "saved_server": before - after_server,
+                   "after_gateway": after_gateway, "saved_gateway": before - after_gateway},
         "launch": emitted["launch"],
         "files": emitted["files"],
         "written": written,
@@ -284,16 +326,21 @@ def render_compile(rep: dict[str, Any]) -> str:
     t = rep["tokens"]
     lines = [
         f"[ctx surface compile · profile={rep['profile']} · host={rep['host']}]",
-        f"selected {len(rep['selected'])} capabilities · "
-        f"static {t['before']:,} → {t['after']:,} tok/turn (−{t['saved']:,})",
+        f"selected {len(rep['selected'])} capabilities of {t['before']:,} tok/turn",
+        f"  enforced by config (drop whole servers): {t['before']:,} → "
+        f"{t['after_server']:,} tok (−{t['saved_server']:,})",
     ]
+    if t["after_gateway"] < t["after_server"]:
+        lines.append(f"  with `ctx surface gateway` (per-tool): {t['before']:,} → "
+                     f"{t['after_gateway']:,} tok (−{t['saved_gateway']:,})")
     if rep["servers_kept"]:
         lines.append("  keep servers: " + ", ".join(rep["servers_kept"]))
     if rep["servers_dropped"]:
         lines.append("  drop servers: " + ", ".join(rep["servers_dropped"]))
-    if rep["excluded"]:
-        lines.append(f"  deferred: {len(rep['excluded'])} capabilities "
-                     "(family/authority/exclude)")
+    if rep["deferred_tools"]:
+        n = sum(len(v) for v in rep["deferred_tools"].values())
+        lines.append(f"  defer {n} tools within kept servers "
+                     "(gateway for token savings; config deny/disable = callability only)")
     if rep["issues"]:
         lines.append("  ISSUES:")
         for i in rep["issues"]:

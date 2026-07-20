@@ -150,6 +150,15 @@ compile/launch time. Dynamic reveal is a best-effort affordance on top.
 | **Codex** | `.ctx-surface/config.codex.toml` — only selected `[mcp_servers.*]` at startup | **No** — startup snapshot; a reveal applies after restart |
 | **Antigravity** | `.ctx-surface/mcp_config.antigravity.json` — minimal servers | **Manual** — a reveal applies after the MCP *Refresh* |
 
+**Config gates servers; only the gateway gates tokens per-tool.** Measured on
+two live reference MCP servers ([`evals/surface-real-2026-07-20.md`](../evals/surface-real-2026-07-20.md)):
+a `read-only` profile that keeps two servers (each has read tools it needs) but
+defers 17 of their tools saves only **−99 tok** by whole-server config, versus
+**−1,654 tok (~53%)** through the gateway — because a Claude `permissions.deny`d
+tool is still *listed* to the model, so it still costs context. `ctx surface
+compile` therefore reports **both** numbers and never claims the per-tool
+figure for a host config that can't deliver it.
+
 Wire the gateway on any host by registering **one** MCP server pointing at
 `ctx surface gateway` instead of the individual servers — it fronts them all,
 starts with just the index, and reveals per family. The ctx bounded retrieval

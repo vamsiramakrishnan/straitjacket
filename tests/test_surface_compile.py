@@ -45,7 +45,7 @@ def test_read_only_drops_remote_and_collab_servers(ws):
     assert "github" in rep["servers_dropped"]
     assert "jira" in rep["servers_dropped"]
     assert "ctx-harness" in rep["servers_kept"]      # kernel kept
-    assert rep["tokens"]["after"] <= rep["tokens"]["before"]
+    assert rep["tokens"]["after_gateway"] <= rep["tokens"]["after_server"] <= rep["tokens"]["before"]
 
 
 def test_full_profile_keeps_everything(ws):
@@ -94,6 +94,40 @@ def test_dependency_closure_check_fires():
         source="x", tokens=10, family="harness")
     issues = sp.check([skill, ctx_server], sp.BUILTIN_PROFILES["read-only"])
     assert any("github" in i for i in issues)
+
+
+_MIXED_SERVER = (
+    "import sys,json\n"
+    "for line in sys.stdin:\n"
+    " line=line.strip()\n"
+    " if not line: continue\n"
+    " m=json.loads(line); mid=m.get('id'); meth=m.get('method')\n"
+    " if meth=='initialize': print(json.dumps({'jsonrpc':'2.0','id':mid,'result':{'protocolVersion':'2024-11-05','capabilities':{},'serverInfo':{'name':'fs','version':'1'}}}),flush=True)\n"
+    " elif meth=='tools/list': print(json.dumps({'jsonrpc':'2.0','id':mid,'result':{'tools':[\n"
+    "   {'name':'read_file','description':'Read a file from disk and return its text contents for inspection','inputSchema':{'type':'object','properties':{'path':{'type':'string','description':'the file path to read'}}}},\n"
+    "   {'name':'delete_file','description':'Delete and permanently remove a file from the filesystem','inputSchema':{'type':'object','properties':{'path':{'type':'string','description':'the file path to delete'}}}}]}}),flush=True)\n"
+)
+
+
+def test_two_number_honesty_when_tools_deferred_within_kept_server(tmp_path):
+    # A kept server with a read tool (needed) + a destructive tool (deferred):
+    # dropping the whole server is impossible, so config saves little while the
+    # gateway's per-tool control recovers the destructive tool's tokens.
+    import sys
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    fake = root / "fs_mcp.py"
+    fake.write_text(_MIXED_SERVER, encoding="utf-8")
+    (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
+    (root / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "fs": {"command": sys.executable, "args": [str(fake)]}}}), encoding="utf-8")
+
+    rep = sp.compile_profile(root, "read-only", host="claude", probe_mcp=True)
+    assert "fs" in rep["servers_kept"]                     # kept for read_file
+    assert rep["deferred_tools"].get("fs") == ["delete_file"]
+    # gateway recovers what dropping the whole server cannot
+    assert rep["tokens"]["after_gateway"] < rep["tokens"]["after_server"]
 
 
 def test_unknown_profile_and_host_error(ws):
