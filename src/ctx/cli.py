@@ -213,8 +213,9 @@ def _main_slow(args: list[str]) -> int:
              "inventory · audit · explain · trim",
     )
     p_surface.add_argument(
-        "surface_cmd", choices=("inventory", "audit", "explain", "trim", "graph"),
-        help="inventory · audit · explain <id> · trim (preview) · graph (families/deps)",
+        "surface_cmd",
+        choices=("inventory", "audit", "explain", "trim", "graph", "compile"),
+        help="inventory · audit · explain <id> · trim · graph · compile --profile",
     )
     p_surface.add_argument("target", nargs="?", help="capability id for `explain`")
     p_surface.add_argument("--json", action="store_true", help="emit structured JSON")
@@ -222,6 +223,11 @@ def _main_slow(args: list[str]) -> int:
         "--probe-mcp", action="store_true",
         help="spawn each MCP server to measure its real per-tool schema tokens",
     )
+    p_surface.add_argument("--profile", help="profile name for `compile` (read-only|local-dev|review|full or ctx.toml)")
+    p_surface.add_argument("--host", default="claude", choices=("claude", "codex", "antigravity"),
+                           help="target host for `compile` (default: claude)")
+    p_surface.add_argument("--apply", action="store_true",
+                           help="`compile`: write the minimal config under .ctx-surface/")
 
     p_replay = sub.add_parser(
         "replay",
@@ -714,6 +720,22 @@ def _cmd_surface(ws, ns) -> int:
     import json as _json
 
     from ctx import surface
+
+    if ns.surface_cmd == "compile":
+        from ctx import surface_profiles
+
+        if not ns.profile:
+            print("usage: ctx surface compile --profile <name> [--host HOST] [--apply]")
+            print("built-in profiles: " + ", ".join(surface_profiles.BUILTIN_PROFILES))
+            return 2
+        rep = surface_profiles.compile_profile(
+            ws.root, ns.profile, host=ns.host, apply=ns.apply,
+            probe_mcp=getattr(ns, "probe_mcp", False))
+        if ns.json:
+            print(_json.dumps(rep, indent=2))
+            return 0
+        print(surface_profiles.render_compile(rep))
+        return 1 if rep.get("error") else 0
 
     if ns.surface_cmd == "explain":
         if not ns.target:
