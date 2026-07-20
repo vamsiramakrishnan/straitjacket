@@ -4,6 +4,51 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.27.0] - 2026-07-20
+
+The `ctx ask` wave (ROADMAP M-L, docs/ASK.md): a repository question
+compiles into a typed intent preset — a frozen `ctx.plan/v1` template
+with typed slots — executed on the shipped plan tier. Collapses the
+*decision cost* of exploration (which verbs, in what order) the way M-J
+collapsed its *turn cost*. The adopted core of an external retrieval
+proposal, audited: the natural-language parser, `reveal`/`audit` verbs,
+the whole-surface rebrand, and the entity/relation ontology were cut;
+what shipped is the elegant, testable spine.
+
+- **Phase 0 · thin observe ops** (`plan_ops.py`):
+  - `evidence.failures` — failure census from CAPTURED facts, never a
+    rerun. Freshness against the current generation is computed and
+    DECLARED: stale facts carry `fresh: false` + a note proposing (never
+    running) a refresh — the observe invariant made legible, using the
+    same `generation_hash` semantics as the rest of the system.
+  - `code.symbols` — structured symbol rows (identity · kind · range ·
+    span) from skeleton-derived facts; census before detail, no outline
+    text. An input warms facts for exactly those files (content-keyed).
+  - `code.context` — terminal bounded materialization (sites get
+    line±context, symbols their clamped range); emits `text`, the
+    refinement boundary at the plan tier.
+- **Phase 1 · intents + `ctx ask`** (`ask.py`, `cli.py`): `locate`,
+  `impact`, `diagnose` as deterministic slot→`ctx.plan/v1` presets
+  (`json.dumps(sort_keys=True)` ⇒ stable plan id ⇒ stable node-cache
+  keys). **No natural-language parser**: `--intent` is a flag; the
+  subject is `--symbol` or the question's sole identifier-shaped token
+  (dotted/snake/CamelCase — capitalized English is skipped), inferred
+  only when unambiguous and always disclosed. A missing/ambiguous slot
+  is a teaching error that SUGGESTS an intent and never guesses-and-runs.
+  The interpretation (`intent:`/`subject:`) rides above the digest, never
+  behind `--trace`. `ctx ask "q" --intent <i> [--symbol X] [--run r]
+  [--depth N] [--plan]`.
+- Every intent is observe-class end to end (diagnose reads captured
+  failures, never reruns); counterevidence is a structural join node
+  (rendered even when empty); the only text-emitting node is
+  `code.context` (bytes materialize once, terminally — the closure law).
+- Verified end to end: on a seeded regression (`raise` in a changed
+  function, its failing run captured), `ctx ask --intent diagnose` names
+  the culprit symbol with plane attribution in one digest, no rerun.
+- Tests: `test_ask.py` (compiler determinism, teaching-not-guessing,
+  no-rerun invariant at compile time and end to end, freshness
+  declaration, terminal materialization). Suite 968 passed / 0 failed.
+
 ## [0.26.0] - 2026-07-20
 
 The substrate wave (ROADMAP M-K, docs/SUBSTRATE.md): the operator classes

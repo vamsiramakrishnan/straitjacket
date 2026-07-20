@@ -23,6 +23,7 @@ different safety contracts. The mental model can stay small.
 | Exact evidence | `ctx get <handle>` | Address in, exact bytes or bounded zoom out |
 | Search stored evidence | `ctx search …` | Search artifacts without re-execution |
 | Compose typed facts | `ctx q '<pipeline>'` | Total, bounded repository/evidence query algebra |
+| Answer a question | `ctx ask "…" --intent <i>` | Typed intent preset (locate/impact/diagnose) → one evidence view |
 | Compare two runs | `ctx diff run:A run:B` | Behavioral delta instead of two complete outputs |
 | Session scorecard | `ctx stats --session` | Wire residency, rounds, behavior and interventions |
 | Cumulative savings | `ctx gain` | Containment savings by command family/verb |
@@ -142,6 +143,24 @@ ctx search 'authorization failed' --run run:<id>
 
 Searching an artifact is cheaper and more trustworthy than rerunning a command merely
 to recover text the harness already captured.
+
+## Answer a question: `ctx ask`
+
+```bash
+ctx ask "Where is AuthContext defined and used" --intent locate
+ctx ask "What could break if CacheKey.build changes" --intent impact --symbol CacheKey.build
+ctx ask "Why are the authentication tests failing" --intent diagnose
+ctx ask "Where is TokenBucket defined" --intent locate --plan   # show the compiled plan, don't run
+```
+
+`ctx ask` compiles a repository question into a typed intent preset — a frozen
+`ctx.plan/v1` — and runs it on the plan executor, answering with the investigate
+digest. Three intents ship: `locate` (where is X), `impact` (what breaks if X
+changes), `diagnose` (what explains the captured failures — reads captured facts,
+never reruns tests). There is no natural-language parser: `--intent` is required
+(a missing one is a teaching error that suggests, never guesses), and the subject
+is `--symbol` or the question's sole identifier-shaped token, always disclosed.
+See [docs/ASK.md](ASK.md).
 
 ## Compose evidence: `ctx q`
 

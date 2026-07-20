@@ -121,6 +121,16 @@ stored artifacts, span-precise sites, and a gated second rewrite rung. The
 governing rule: every binary is an engine behind a logical operator, every
 operator carries a contract, and no tool merges without a referee.
 
+### 4e. [ASK — intents as typed plan presets](ASK.md)
+
+The retrieval front door done without a natural-language parser. A repository
+question becomes a frozen `ctx.plan/v1` template with typed slots
+(`locate`/`impact`/`diagnose`), executed on the shipped plan tier and answered
+with the investigate digest — collapsing the *decision cost* of exploration the
+way evidence plans collapsed its *turn cost*. Includes the audit's cut list:
+what an elegant system declines (the NL parser as primary path, a speculative
+ontology, unscoped new verbs) matters as much as what it builds.
+
 ### 5. [EVIDENCE-PLANS — compile the investigation](EVIDENCE-PLANS.md)
 
 The model compiles its exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx investigate`); the harness validates, prices, and executes it locally, and one causally organized digest returns. ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). Shipped v0.25.0; measured in [`evals/plan-collapse-2026-07-19.md`](../evals/plan-collapse-2026-07-19.md).

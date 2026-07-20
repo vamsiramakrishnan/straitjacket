@@ -508,6 +508,150 @@ def _op_semantic(mode: str):
     return op
 
 
+# ------------------------------------------------- M-L0 thin ops (docs/ASK.md)
+def _op_evidence_failures(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
+    """Failure census from CAPTURED facts — never a rerun. ``run`` absent
+    → the latest derived run (deriving the newest captured manifest on
+    demand, content-keyed). Freshness against the current worktree
+    generation is computed and DECLARED; a stale census proposes a rerun
+    in prose and never executes one (observe-class by construction)."""
+    from ctx import facts
+
+    run = args.get("run")
+    limit = int(args.get("limit", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP)
+    rows = facts.fails_sites(pc.ws, pc.store, run=run, limit=limit)
+    run_id: str | None = None
+    gen: str | None = None
+    try:
+        conn = facts._connect(pc.store)
+        if conn is not None:
+            try:
+                run_id = (
+                    facts._short(str(run).removeprefix("run:"))
+                    if run
+                    else facts._meta_get(conn, "latest_run")
+                )
+                if run_id:
+                    got = conn.execute(
+                        "SELECT DISTINCT generation FROM fail WHERE run_id=? LIMIT 1",
+                        (run_id,),
+                    ).fetchone()
+                    gen = got[0] if got else None
+            finally:
+                conn.close()
+    except Exception:
+        pass
+    try:
+        now_gen = facts.current_generation(pc.ws)
+    except Exception:
+        now_gen = None
+    fresh = bool(gen) and gen == now_gen
+    meta: dict[str, Any] = {
+        "engine": "facts.sqlite",
+        "run": run_id,
+        "generation": gen,
+        "fresh": fresh,
+    }
+    if rows and not fresh:
+        meta["note"] = (
+            f"failure facts from gen:{gen or '?'} — worktree is now "
+            f"gen:{now_gen or '?'}; rerun tests to refresh (never automatic)"
+        )
+    if not rows:
+        meta["note"] = (
+            "no captured failures — run tests under the birth gate first "
+            "(ctx run -- pytest …), or the last run passed"
+        )
+    artifacts = {"run": f"run:{run_id}"} if run_id else {}
+    return payload("sites", rows, meta=meta, artifacts=artifacts)
+
+
+def _op_code_symbols(pc: PlanContext, args: dict, inp: dict | None) -> dict[str, Any]:
+    """Structured symbol rows (identity · kind · range · span) from the
+    skeleton-derived fact plane — census before detail, no outline text.
+    An input (files|sites) warms facts for exactly those files first;
+    derivation is content-keyed, so unchanged files cost nothing."""
+    from ctx import facts
+
+    files: list[str] = []
+    if inp is not None:
+        files = sorted({str(r.get("file") or "") for r in inp.get("rows") or []} - {""})
+    elif args.get("file"):
+        files = [str(args["file"])]
+    derived = 0
+    for rel in files[:_CHANGED_DERIVE_CAP]:
+        try:
+            if facts.derive_file(pc.store, pc.ws, rel).get("ok"):
+                derived += 1
+        except Exception:
+            pass
+    limit = int(args.get("limit", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP)
+    sym = str(args.get("symbol") or "")
+    pre_limit = 2000 if (files or sym) else limit
+    rows = facts.decls_rows(pc.ws, pc.store, kind=args.get("kind"), limit=pre_limit)
+    if files:
+        keep = set(files)
+        rows = [r for r in rows if r.get("file") in keep]
+    if sym:
+        rows = [
+            r for r in rows
+            if r.get("symbol") == sym
+            or str(r.get("symbol", "")).rsplit(".", 1)[-1] == sym
+            or str(r.get("symbol", "")).startswith(sym + ".")
+        ]
+    rows = rows[:limit]
+    meta: dict[str, Any] = {
+        "engine": "facts.sqlite (skeleton-derived)",
+        "derived_files": derived,
+    }
+    if not rows:
+        meta["note"] = (
+            "no matching decl facts — facts derive on demand per file: feed "
+            "an input (sites/files) or pass args.file to warm exactly the "
+            "relevant slice"
+        )
+    return payload("symbols", rows, meta=meta)
+
+
+_CONTEXT_SYMBOL_SPAN_CAP = 60  # bounded zoom: a symbol body, never a file flood
+
+
+def _op_code_context(pc: PlanContext, args: dict, inp: dict | None) -> dict[str, Any]:
+    """Terminal bounded materialization — the refinement boundary at the
+    plan tier. Sites materialize line ± context; symbols materialize
+    their declared range (clamped). Emits ``text``: by the closure law,
+    nothing downstream can lift bytes back into a representation."""
+    from ctx.retrieval import Selector, get
+
+    rows_in = list((inp or {}).get("rows") or [])
+    kind_in = str((inp or {}).get("kind") or "sites")
+    context = max(0, int(args.get("context", 3) or 3))
+    cap = max(1, min(int(args.get("cap", 8) or 8), OUTLINE_FILE_CAP))
+    take = rows_in[:cap]
+    omitted = max(0, len(rows_in) - len(take))
+    out_rows: list[dict[str, Any]] = []
+    for r in take:
+        rel = str(r.get("file") or "")
+        if not rel:
+            omitted += 1
+            continue
+        if kind_in == "symbols":
+            a = max(1, int(r.get("line") or 1))
+            b = max(a, int(r.get("line_b") or a))
+            b = min(b, a + _CONTEXT_SYMBOL_SPAN_CAP - 1)
+        else:
+            line = max(1, int(r.get("line") or 1))
+            a, b = max(1, line - context), line + context
+        try:
+            text = get(pc.store, pc.ws, f"repo:{rel}", Selector(lines=(a, b)))
+        except Exception:
+            omitted += 1
+            continue
+        out_rows.append({"file": rel, "line": int(r.get("line") or a), "text": text})
+    meta = {"engine": "store-materialize", "refinement": "terminal"}
+    return payload("text", out_rows, omitted=omitted, meta=meta)
+
+
 # ------------------------------------------------------------- registration
 def _check_pattern(args: dict) -> str | None:
     return _need(args, "pattern")
@@ -592,6 +736,23 @@ register_op("evidence.top", _mk_combinator_op("top", ("n",)),
 register_op("evidence.count", _mk_combinator_op("count", ()),
             input_kinds=("sites", "files", "records", "text", "symbols"),
             output_kind="records", cost="index", doc="row count or per-group counts")
+register_op("evidence.failures", _op_evidence_failures, input_kinds=(),
+            output_kind="sites",
+            provides={"dynamic_failure": 0.9, "freshness": 0.3},
+            cost="index",
+            doc="failure census from captured facts — never a rerun; freshness "
+                "vs the current generation declared (args: run, limit)")
+register_op("code.symbols", _op_code_symbols, input_kinds=("files", "sites"),
+            input_optional=True, output_kind="symbols",
+            provides={"topology": 0.5, "coverage": 0.2}, cost="index",
+            doc="structured symbol rows from skeleton-derived facts; an input "
+                "warms facts for exactly those files (args: symbol, kind, file, "
+                "limit)")
+register_op("code.context", _op_code_context, input_kinds=("sites", "symbols"),
+            output_kind="text", cost="index",
+            doc="terminal bounded materialization of input regions — sites get "
+                f"line±context, symbols their range (args: context, cap ≤ "
+                f"{OUTLINE_FILE_CAP})")
 register_op("test.run", _op_test_run, input_kinds=(), output_kind="records",
             provides={"dynamic_failure": 1.0, "freshness": 0.8, "coverage": 0.3},
             klass="execute", cost="test", cacheable=False,

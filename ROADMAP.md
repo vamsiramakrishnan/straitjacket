@@ -195,6 +195,36 @@ generation-guarded rewrites). What survives, in leverage order:
 engine parity byte-identical with kill-switches, coverage receipts on
 every new emission kind, totality preserved (`test_digest_closure`).
 
+## M-L · `ctx ask` — intents as typed plan presets (retrieval, decision-cost)
+
+**Phase 0 + core intents shipped v0.27.0** — the adopted core of an
+external `ctx ask` retrieval proposal, audited and resequenced in
+[`docs/ASK.md`](docs/ASK.md). Compile a repository question into a frozen
+`ctx.plan/v1` template with typed slots, execute on the shipped plan
+executor, answer with the investigate digest. Collapses the *decision
+cost* of exploration (which verbs, in what order) the way M-J collapsed
+its *turn cost*.
+
+- **Phase 0 · thin ops**: `evidence.failures` (failure census from
+  captured facts — never a rerun; freshness vs the current generation
+  declared), `code.symbols` (structured rows, census-before-detail),
+  `code.context` (terminal bounded materialization — the closure
+  boundary at the plan tier).
+- **Phase 1 · intents + `ctx ask`**: `locate`, `impact`, `diagnose` as
+  deterministic slot→plan presets. NO natural-language parser — intent is
+  a flag, subject is a flag or the one unambiguous identifier token
+  (disclosed); a missing/ambiguous slot is a teaching error that
+  *suggests* and never guesses-and-runs. Every intent observe-class;
+  counterevidence structural; bytes materialize once, terminally.
+
+**Cut from the proposal** (recorded in the doc): the NL parser as primary
+path, `reveal`/`audit` verbs, the whole-surface rebrand, the
+entity/relation/operation ontology, and speculative `view:` projections.
+**Deferred**: verify/review (execute-class), trace/compare, NL as sugar
+over presets, role projections, shadow prefetch — each behind the per-
+intent A/B/C referee (retrieval turns ≤ 50% of `ctx q`/`get` at no
+recall loss).
+
 ## Sequencing
 
 ```
@@ -208,6 +238,9 @@ now ──► M-J compiled evidence plans (shipped v0.25.0; P4 + referee open)
 now ──► M-K substrate operators: K1 spans ✅ K2 corpus ✅ K3 records ✅
         K5.3 sed/awk steering ✅ (v0.26.0) · next: K4 SCIP; K5 comby
         behind its decline-corpus gate; K6 waits for M-E
+now ──► M-L ctx ask: Phase 0 thin ops ✅ Phase 1 locate/impact/diagnose ✅
+        (v0.27.0) · next: A/B/C referee per intent; trace/compare;
+        verify/review (execute-class); NL sugar over presets
 ```
 
 Deliberately **not** planned: wire-side semantic compression (LLMLingua-class

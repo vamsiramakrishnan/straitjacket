@@ -368,6 +368,36 @@ def _main_slow(args: list[str]) -> int:
         "reason (report only: nothing is reordered or suppressed)",
     )
 
+    p_ask = sub.add_parser(
+        "ask",
+        help="answer a repository question via a typed intent preset "
+        "(locate | impact | diagnose) — compiles to one evidence plan",
+    )
+    p_ask.add_argument("question", help="the repository question (plain text)")
+    p_ask.add_argument(
+        "--intent", dest="ask_intent", default=None,
+        help="locate | impact | diagnose (required unless unambiguous; the "
+        "error suggests one — it never guesses and runs)",
+    )
+    p_ask.add_argument(
+        "--symbol", dest="ask_symbol", default=None,
+        help="the subject symbol (overrides inference from the question)",
+    )
+    p_ask.add_argument(
+        "--run", dest="ask_run", default=None,
+        help="run handle for diagnose (default: the latest captured run)",
+    )
+    p_ask.add_argument("--depth", dest="ask_depth", type=int, default=None,
+                       help="impact blast-radius depth (≤6)")
+    p_ask.add_argument(
+        "--plan", dest="ask_show_plan", action="store_true",
+        help="print the compiled ctx.plan/v1 and disclosure, do not execute",
+    )
+    p_ask.add_argument(
+        "--replans", type=int, default=None,
+        help="epoch allowance for this objective (default from ctx.toml [plan])",
+    )
+
     p_policy = sub.add_parser("policy", help="compiled steering policy")
     pol_sub = p_policy.add_subparsers(dest="policy_cmd", required=True)
     p_pc = pol_sub.add_parser("compile", help="compile policy from telemetry")
@@ -696,6 +726,8 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_plan(ws, ns)
         if ns.cmd == "investigate":
             return _cmd_investigate(ws, ns)
+        if ns.cmd == "ask":
+            return _cmd_ask(ws, ns)
         if ns.cmd == "policy":
             return _cmd_policy(ws, ns)
         if ns.cmd == "init":
@@ -853,7 +885,7 @@ def _cmd_surface(ws, ns) -> int:
         return 0
     if ns.surface_cmd == "trim":
         tp = a["trim_preview"]
-        print(f"[ctx surface trim --preview · advisory only, nothing hidden]")
+        print("[ctx surface trim --preview · advisory only, nothing hidden]")
         if not tp["ids"]:
             print("  nothing to defer: surface is already lean")
             return 0
@@ -1495,6 +1527,48 @@ def _cmd_investigate(ws, ns) -> int:
     if getattr(ns, "inv_advise", False):
         print()
         print(_investigate_advice(ws, plan, node_rows))
+    return code
+
+
+def _cmd_ask(ws, ns) -> int:
+    """`ctx ask "<question>" --intent <intent>` — compile a typed intent
+    preset into one ctx.plan/v1 and execute it through the SAME executor
+    and emission tail as investigate. No natural-language parser: the
+    subject is a flag or the question's sole identifier token (disclosed);
+    a missing/ambiguous slot is a teaching error that suggests, never
+    acts. The disclosure rides ABOVE the digest so the interpretation is
+    always visible (never hidden behind --trace)."""
+    from ctx import ask
+    from ctx.plan_exec import execute_plan
+    from ctx.store import Store
+
+    try:
+        plan_json, disclosure = ask.compile_ask(
+            ns.ask_intent,
+            ns.question,
+            symbol=ns.ask_symbol,
+            run=ns.ask_run,
+            depth=ns.ask_depth,
+        )
+    except ask.AskError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+
+    header = "\n".join(f"  {ln}" for ln in disclosure)
+    if getattr(ns, "ask_show_plan", False):
+        print(f"[ctx ask]\n{header}\n")
+        print(plan_json)
+        return 0
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    out, code = execute_plan(ws, store, plan_json, tier="cli")
+    if code == 2:  # a validation rejection: the text IS the typed reason
+        print(f"[ctx ask]\n{header}")
+        print(out)
+        return 2
+    # Disclosure first, then the shared investigation emission tail.
+    print(f"[ctx ask]\n{header}")
+    _emit_investigation(ws, store, out)
     return code
 
 
