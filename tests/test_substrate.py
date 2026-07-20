@@ -176,3 +176,30 @@ def test_totality_records_stages_are_closed(qws):
     assert STAGES["histogram"].closure == "closed"
     assert STAGES["corpus"].closure == "source"
     assert STAGES["records"].closure == "source"
+
+
+# ------------------------------------- pytest detection is word-anchored
+def test_pytest_detection_is_word_anchored():
+    """A command that merely MENTIONS pytest's name — an interpreter under
+    a pytest-named directory (uv tool shims), a /tmp/pytest-of-root
+    fixture path — is not a test run. The word must be a program basename
+    or module target."""
+    from ctx.digest.pytestprof import argv_invokes_pytest
+
+    invokes = [
+        ["pytest", "-q"],
+        ["/usr/bin/pytest", "tests"],
+        ["python3", "-m", "pytest", "-q"],
+        ["bash", "-c", "python -m pytest -q | tail -5"],
+        ["py.test", "tests/"],
+        ["/x/tools/pytest/bin/python", "-m", "pytest"],  # module target wins
+    ]
+    for argv in invokes:
+        assert argv_invokes_pytest(argv), argv
+    mentions_only = [
+        ["/root/.local/share/uv/tools/pytest/bin/python", "-c", "print(1)"],
+        ["cat", "/tmp/pytest-of-root/pytest-1/out.txt"],
+        ["python3", "-c", "print('v 1.2.3')"],
+    ]
+    for argv in mentions_only:
+        assert not argv_invokes_pytest(argv), argv

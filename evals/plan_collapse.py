@@ -32,6 +32,7 @@ import json
 import os
 import random
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -51,7 +52,10 @@ DIAGNOSIS_PLAN = {
     "steps": [
         {"id": "changes", "op": "repo.changed"},
         {"id": "tests", "op": "test.run",
-         "args": {"command": "python3 -m pytest -q"}},
+         # sys.executable, not a bare python3 — parity with the naive and
+         # harness arms below, and the only interpreter guaranteed to
+         # carry pytest in any environment running this eval.
+         "args": {"command": f"{shlex.quote(sys.executable)} -m pytest -q"}},
         {"id": "culprits", "op": "evidence.join",
          "args": {"on": "failing_in_changed"}, "after": ["tests", "changes"]},
         {"id": "counter", "op": "evidence.join",

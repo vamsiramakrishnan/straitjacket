@@ -51,6 +51,25 @@ decline corpus) remain designed; K6 (watch warming) waits for the broker.
   generation-bound `--changed`, receipts), `test_substrate.py` (span
   blobs, records/distinct/histogram, totality), closure pins, rg/python
   column-parity extension, sed/awk steering cases.
+- **Word-anchored pytest detection** (`pytestprof.py`, `facts.py`): the
+  profile claim and the facts-tier family detection matched `"pytest"`
+  as a raw substring of the joined argv, so a command whose INTERPRETER
+  lives under a pytest-named directory (uv tool shims:
+  `…/tools/pytest/bin/python -c …`) or whose args carry pytest-named
+  paths (`/tmp/pytest-of-root/…`) was misclaimed as a test run — the
+  replay doctrine's "a file containing test markers is not a test run",
+  violated at birth. Detection is now word-anchored (program basename or
+  `-m` module target; never an interior path component), shared via
+  `argv_invokes_pytest`, and regression-pinned.
+- **Environment-robust fixtures**: three fixtures invoked a bare
+  `python3 -m pytest` (the one interpreter NOT guaranteed to carry
+  pytest) — `test_plan_exec`'s diagnosis plan, `evals/plan_collapse.py`'s
+  plan arm (its other two arms already used `sys.executable`), and
+  `test_reflex`'s ground-truth run — all now `sys.executable`. The
+  scaffold-slim overhead budget in `test_lint_and_gain` is now relative
+  to the rendered command line (a venv-deep interpreter path must not
+  fail a fixed byte budget). Full suite green under both a clean venv
+  and a uv-tool pytest shim.
 
 ## [0.25.0] - 2026-07-19
 

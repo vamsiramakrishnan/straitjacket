@@ -144,8 +144,12 @@ def test_small_success_output_has_minimal_scaffold(ws_store):
     assert "cwd:" not in digest
     assert "coverage:" not in digest
     assert "\n  v 1.2.3" not in digest  # content is unindented
-    # Total overhead over raw content is small and bounded.
-    assert len(digest) < len("v 1.2.3") + 160
+    # Total overhead over raw content is small and bounded. The budget is
+    # relative to the rendered command line — the digest legitimately
+    # carries it, and interpreter paths vary by environment (a venv-deep
+    # sys.executable must not fail a fixed budget).
+    cmd_line = " ".join([sys.executable, "-c", "print('v 1.2.3')"])
+    assert len(digest) < len(cmd_line) + len("v 1.2.3") + 160
 
 
 def test_failure_budget_factor_applied(ws_store, tmp_path, monkeypatch, capsys):

@@ -4,7 +4,9 @@ skip cascades, foreach bounds, wall budget, addressability, MCP tier.
 
 import json
 import os
+import shlex
 import subprocess
+import sys
 
 import pytest
 
@@ -63,7 +65,9 @@ def _diagnosis_plan():
         "steps": [
             {"id": "changes", "op": "repo.changed"},
             {"id": "tests", "op": "test.run",
-             "args": {"command": "python3 -m pytest -q"}},
+             # sys.executable, not a bare python3: the interpreter running
+             # the suite is the one guaranteed to carry pytest.
+             "args": {"command": f"{shlex.quote(sys.executable)} -m pytest -q"}},
             {"id": "culprits", "op": "evidence.join",
              "args": {"on": "failing_in_changed"}, "after": ["tests", "changes"]},
             {"id": "counter", "op": "evidence.join",
