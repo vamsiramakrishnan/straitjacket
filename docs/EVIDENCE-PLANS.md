@@ -385,6 +385,78 @@ narrowing, replan, abandonment) join the existing ledger vocabulary
 (schema-v2 bump, tolerant readers) and train the `[plan]` epoch tables the
 same way digest density is trained today.
 
+## Plan value: follow-up statistics and shadow ranking (shipped, reshaped)
+
+Reshaped 2026-07-19 after a design review whose verdict we accepted: the
+first version dressed follow-up **association** in causal language
+(attribution, confidence, validation) and jumped from observational
+telemetry to a weighted decision theory. The governing law now:
+
+> Measure associations first. Demonstrate counterfactual value in shadow.
+> Promote only proven choices into conservative tie-breaks.
+
+```
+plan node / command emits evidence
+        ↓ identities recorded (handles, spans, symbols, test ids, files)
+subsequent commands / retrievals / edits / tests observed
+        ↓ exact-match joins (evidence_outcomes.followup_join)
+evidence_followup/v1 events — match classes, four states, no floats
+        ↓ offline aggregation (ctx policy compile --plan-value)
+[plan_value] COUNTS table, committed like code
+        ↓ read-only at runtime
+per-operator report (ctx replay --outcomes) · shadow ranking
+(ctx investigate --advise / ctx plan price --value) · shadow ledger
+        ↓ paired referee (pending)
+ONLY THEN: a conservative tie-break between semantically equivalent actions
+```
+
+**The event** (`evidence_followup/v1`): match classes instead of a
+confidence float — `exact_handle · exact_span_overlap · exact_test_id ·
+exact_symbol · exact_file` — because ``exact_handle`` is easier to review
+than ``confidence = 0.98`` and the float suggests calibration that does not
+exist. Four states: `used_exactly` (an exact emitted identity was acted
+on), `validation_associated` (an associated edit was followed by a passing
+verifier — association, NOT causation; verifiers naturally follow edits),
+`equivalent_requery` (same normalized signature, no intervening generation
+change — reusing the reflex signature + scope-flag tables), `censored`
+(the window never closed; session end is never negative evidence). Finer
+distinctions return only when a measurement proves they carry signal.
+
+**The table**: counts, never rates — ``observations / used_exactly /
+validation_associated / equivalent_requery / censored`` plus cost
+lower-medians where events carry them — so 2/2 can never masquerade as
+100% in a committed artifact. Wilson lower bounds are derived at read
+time.
+
+**The ranking** (shadow only, lexicographic, no weighted scalar):
+hard constraints (caller-side, always) → precision class (exact/semantic
+before structural before textual) → freshness → Wilson lower bound of
+exact-use → Wilson bound of validation-association → requery ascending →
+median tokens → median ms → name. The explanation IS the key.
+
+**What is deliberately absent** (deferred until the paired referee — which
+compares declared vs shadow orderings on paired tasks at equal success —
+answers for them): weighted utility scalars, fractional evidence-coverage
+arithmetic, automatic stopping (the report emits a low-yield *sentence*,
+suppresses nothing), batch scheduling, language-partitioned cells (the
+language field is captured on events for a future interaction-effect
+test; priors stay global), and any autonomous choice of the next logical
+action. The evidence-dimension vocabulary survives as *descriptive* plan
+metadata: `requires` floors validate and display (UNMET lines over
+REALIZED coverage — an op's declared `provides` counts only when its node
+produced rows), and never gate.
+
+Known confound, stated in the artifact: per-operator follow-up rates are
+entangled with WHEN operators run (verifiers sit near the end of
+successful trajectories; reconnaissance sits at the start). That is why
+the counts feed a report and a shadow ledger — not behavior.
+
+Seeded mechanistic acceptance: [`evals/plan_value_selection.py`](../evals/plan_value_selection.py)
+(strong-record preference, 2/2-vs-68/84 sample honesty, disagreement
+reported-never-enforced). Runtime never writes the committed policy; the
+ledger is appended only by explicit `ctx replay --outcomes
+--append-ledger` or plan integration.
+
 ## Phases
 
 Each phase lands with its acceptance tests in the same change

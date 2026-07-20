@@ -168,7 +168,6 @@ import json
 import os
 import re
 import shlex
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -570,7 +569,10 @@ def _write_state(ws_root: Path | str, state: dict[str, Any]) -> None:
     path = _state_path(ws_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(state, sort_keys=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=_STATE_NAME + ".")
+    # Hand-rolled unique temp name instead of tempfile.mkstemp: importing
+    # tempfile pulls shutil (~4ms) into every hook call for one mkstemp.
+    tmp = str(path.parent / f"{_STATE_NAME}.{os.getpid()}.{os.urandom(4).hex()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(payload)

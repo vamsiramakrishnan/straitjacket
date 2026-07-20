@@ -79,6 +79,13 @@ from ctx.workspace import Workspace
 KINDS = ("symbols", "sites", "files", "records", "text")
 SAME = "same"  # output_kind sentinel: combinator passes its input kind through
 
+# Closure lattice (docs/DIGEST-CLOSURE.md): the representation kinds are the
+# bounded, digest-rate stream types; ``text`` is the sole terminal kind that
+# carries raw byte payload. The single-refinement-boundary theorem holds
+# because no stage maps TERMINAL_KIND back to a REPRESENTATION_KIND.
+REPRESENTATION_KINDS = ("symbols", "sites", "files", "records")
+TERMINAL_KIND = "text"
+
 MAX_STAGES = 8  # hard totality cap — never raise without an MCP-tier review
 DEFAULT_ROW_CAP = 200
 GET_SITE_CAP = 24  # ``get`` fans out one bounded slice per site
@@ -126,6 +133,30 @@ class Stage:
     row_cap: int = DEFAULT_ROW_CAP
     empty_hint: str | None = None  # static why-shaped hint for 0-row results
 
+    @property
+    def closure(self) -> str:
+        """Digest-closure class, derived from the type signature alone
+        (docs/DIGEST-CLOSURE.md). A stage is:
+
+        * ``source``     — opens a pipeline (``input_kinds == ()``): lifts the
+          fact store / repo into the bounded ``sites`` representation.
+        * ``materialize`` — emits the terminal ``text`` kind: the single point
+          where raw artifact bytes enter the stream (the priced refinement
+          boundary). Design law: byte materialization MUST emit ``text``.
+        * ``closed``     — representation → representation, computable at
+          digest-rate without rehydrating raw bytes.
+
+        The single-refinement-boundary theorem: no stage maps ``text`` back to
+        a representation kind (``sites``/``files``/``symbols``), so a pipeline
+        materializes bytes at most once, and only terminally. Enforced by
+        ``tests/test_digest_closure.py``.
+        """
+        if not self.input_kinds:
+            return "source"
+        if self.output_kind == "text":
+            return "materialize"
+        return "closed"
+
 
 #: FROZEN registry (engineer C's facts.py registers fact stages here).
 STAGES: dict[str, Stage] = {}
@@ -164,6 +195,20 @@ def register_stage(
     STAGES[name] = Stage(
         name, fn, tuple(input_kinds), output_kind, doc, row_cap, empty_hint
     )
+
+
+def pipeline_closure(stage_names: "list[str] | tuple[str, ...]") -> str:
+    """Static closure verdict for a pipeline (docs/DIGEST-CLOSURE.md).
+
+    Returns ``"closed"`` when the whole pipeline runs at digest-rate (no byte
+    materialization), else ``"refinement@<n>:<name>"`` naming the 1-indexed
+    stage where bytes enter the stream. The prefix before that stage is always
+    digest-closed — that is the theorem, not a heuristic."""
+    for i, nm in enumerate(stage_names, start=1):
+        st = STAGES.get(nm)
+        if st is not None and st.closure == "materialize":
+            return f"refinement@{i}:{nm}"
+    return "closed"
 
 
 @dataclass

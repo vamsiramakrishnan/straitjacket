@@ -23,7 +23,6 @@ from pathlib import Path
 
 from ctx.installer import _ctx_executable
 
-_HOOK_STAGE = "hook claude-code pre-tool-use"
 _AGENT_FILENAME = "ctx-explorer.md"
 
 # The Caveman lesson: retrieval discipline without emission discipline just
@@ -92,44 +91,12 @@ def _remove_explorer_agent(created: Path | None) -> None:
 def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
     """Claude Code settings dict that routes tool calls through the harness.
 
-    PreToolUse is the guard; PostToolUse is the emission governor
-    (mechanism B) — it injects a terse one-line nudge when the proxy-measured
-    cumulative output crosses a pressure tier, and stays silent otherwise."""
-    return {
-        "hooks": {
-            "PreToolUse": [
-                {
-                    # Edit/Write are observation-only (reflex v2 disarm):
-                    # the hook always allows them without rewrite.
-                    "matcher": "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": f"{ctx_exe} {_HOOK_STAGE}",
-                            "timeout": 10,
-                        }
-                    ],
-                }
-            ],
-            "PostToolUse": [
-                {
-                    # Every faucet that emits into the window. Edit/Write/Todo are
-                    # excluded (tiny status results). The universal emission gate
-                    # needs the Store/digest layer, so it runs in Python — the
-                    # Rust shim (which only does the nudge fast-path) is not used
-                    # here.
-                    "matcher": "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": f"{ctx_exe} hook claude-code post-tool-use",
-                            "timeout": 10,
-                        }
-                    ],
-                }
-            ],
-        }
-    }
+    PreToolUse is the guard; PostToolUse is the emission governor + universal
+    emission gate. Delegates to ``installer.claude_hook_settings`` so the
+    ephemeral wrap and the persistent install share one source of truth."""
+    from ctx.installer import claude_hook_settings
+
+    return claude_hook_settings(ctx_exe)
 
 
 def _free_port() -> int:
@@ -324,6 +291,31 @@ def wrap_antigravity(workspace_root: Path, ctx_exe: str | None = None) -> int:
     return 0
 
 
+def wrap_codex(workspace_root: Path, ctx_exe: str | None = None) -> int:
+    """Persistent install: Codex discovers .codex/ config layers + AGENTS.md
+    from the workspace tree."""
+    from ctx.installer import install_codex
+    from ctx.workspace import resolve_workspace
+
+    ws = resolve_workspace(str(workspace_root))
+    print(install_codex(ws))
+    print()
+    print("Codex sessions in this workspace are now harnessed "
+          "(MCP retrieval tool + PreToolUse/PostToolUse containment hooks).")
+    return 0
+
+
+def wrap_setup(workspace_root: Path, hosts: list[str] | None = None) -> int:
+    """Single-command multi-host setup: `ctx wrap setup` harnesses Antigravity,
+    Claude Code, and Codex in this workspace in one shot."""
+    from ctx.installer import setup_hosts
+    from ctx.workspace import resolve_workspace
+
+    ws = resolve_workspace(str(workspace_root))
+    print(setup_hosts(ws, hosts))
+    return 0
+
+
 def print_config(host: str, ctx_exe: str | None = None) -> str:
     """Copy-pasteable configuration for a host, for CI and docs."""
     exe = ctx_exe or _ctx_executable()
@@ -338,4 +330,18 @@ def print_config(host: str, ctx_exe: str | None = None) -> str:
                 "ctx doctor --antigravity",
             ]
         )
-    raise ValueError(f"unsupported wrap host {host!r} (expected claude|antigravity)")
+    if host == "codex":
+        from ctx.installer import _render_codex_file
+
+        return "\n".join(
+            [
+                "# .codex/config.toml (MCP server + hooks feature):",
+                _render_codex_file("config.toml", exe).rstrip(),
+                "",
+                "# .codex/hooks.json (PreToolUse/PostToolUse containment):",
+                _render_codex_file("hooks.json", exe).rstrip(),
+            ]
+        )
+    raise ValueError(
+        f"unsupported wrap host {host!r} (expected claude|antigravity|codex)"
+    )

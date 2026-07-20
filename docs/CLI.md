@@ -205,6 +205,22 @@ ctx antigravity install
 The plugin is persistent. Both hosts use the same artifact store, digest contracts, and
 retrieval vocabulary.
 
+## Score the loop: regret, follow-up, shadow
+
+```bash
+ctx replay --regret <t.jsonl>            # per-profile frontier gap (docs/THEORY.md)
+ctx replay --outcomes <t.jsonl>          # per-operator follow-up counts (association, not causation)
+ctx replay --outcomes --append-ledger …  # explicit: feed the workspace follow-up ledger
+ctx policy compile --plan-value          # aggregate ledger → committed [plan_value] COUNTS
+ctx plan price --value <plan.json>       # price card + shadow follow-up ranking (report only)
+ctx investigate --advise <plan.json>     # digest + shadow report + shadow ledger line
+```
+
+Counts, not rates, in the committed table; Wilson lower bounds derive at
+read time. The shadow ranking never reorders or suppresses anything —
+promotion to a conservative tie-break waits on the paired referee, and
+hard constraints always dominate. Runtime never writes the policy file.
+
 ## Failure semantics
 
 Straitjacket distinguishes safety from optional intelligence:

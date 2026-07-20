@@ -84,7 +84,13 @@ Adopted verbatim (definitions per the external review):
 - **Evidence density** = gold-region lines surfaced / model-visible
   evidence tokens.
 - **Retrieval regret** R = T_actual − T_oracle (tokens before sufficient
-  evidence vs oracle-span minimum).
+  evidence vs oracle-span minimum). **BUILT** (offline form): `ctx replay
+  --regret` (`src/ctx/replay.py`) computes per-profile R over recorded
+  transcripts with the facts-used oracle — a lower-bound oracle, so measured
+  R is an upper bound on the true gap; formal statement in
+  `docs/THEORY.md`. First numbers (spec3 archives): pytest/v1 frontier
+  0.17 with 199/199 facts inline. Gold-region oracles upgrade this from
+  "facts used" to "facts needed" when explore/ lands.
 - **Containment ratio** = 1 − visible/raw tool-output tokens (already
   computed live by `ctx gain`; the benchmark reports it per-arm).
 - **Evidence preservation** = solved-under-SJ / solved-native. The
@@ -108,6 +114,18 @@ Our additions, from mechanisms this repo already has:
 - **Unresolved-omission rate** — every omission must carry an address
   that resolves; the store can verify this mechanically per digest.
   Target is 100% resolvable, and it is testable without a model.
+- **Operator follow-up (association)** — **BUILT, reshaped 2026-07-19**:
+  `ctx replay --outcomes` (`src/ctx/evidence_outcomes.py`) converts recorded
+  sessions into deterministic `evidence_followup/v1` events — exact-match
+  classes (no confidence floats), four states (used_exactly /
+  validation_associated / equivalent_requery / censored), censoring never
+  negative — and `ctx policy compile --plan-value` aggregates them into
+  committed per-operator COUNTS. `plan_value.rank_followup` derives Wilson
+  lower bounds at read time for a SHADOW ranking (report only; seeded
+  acceptance: `evals/plan_value_selection.py`). Promotion to a conservative
+  online tie-break is gated on the paired referee (pending): does the
+  shadow ordering beat declared orderings on paired tasks at equal success,
+  controlling for task phase and operator preconditions?
 
 ## Arms and controls: adapted
 

@@ -47,6 +47,8 @@ packages = ["src/ctx"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "plugins/antigravity" = "ctx/data/antigravity"
+"plugins/codex" = "ctx/data/codex"
+"src/ctx/data/model-prices.json" = "ctx/data/model-prices.json"
 
 [tool.hatch.build.targets.sdist]
 include = ["src/ctx", "plugins", "README.md", "LICENSE"]

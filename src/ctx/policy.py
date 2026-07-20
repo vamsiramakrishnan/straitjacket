@@ -123,6 +123,112 @@ def _reflex_tallies(ledger_dir: Path) -> dict[str, dict[str, int]]:
     return tallies
 
 
+# ------------------------------------------------ plan-value priors (M-J)
+#
+# Aggregates the evidence-outcome ledger (evidence_outcomes.py; events
+# written by an EXPLICIT `ctx replay --outcomes --append-ledger` or by plan
+# integration) into per-operator priors for online action ranking
+# (plan_value.py). Deterministic: same ledger ⇒ byte-identical TOML.
+# Runtime never writes back into the compiled file.
+
+PLAN_VALUE_MIN_OBSERVATIONS = 5
+
+#: Counted follow-up fields (evidence_followup/v1 booleans). Counts, not
+#: rates: the table stores what was observed; Wilson lower bounds are
+#: derived at read time (plan_value.rank_followup), so 2/2 can never
+#: masquerade as calibrated knowledge in the committed artifact.
+_PV_COUNT_FIELDS = ("used_exactly", "validation_associated", "equivalent_requery")
+
+
+def _lower_median(values: list[int]) -> int:
+    """Deterministic lower median: element at index (n-1)//2 of the sorted
+    values. No interpolation — the result is always an observed value."""
+    ordered = sorted(values)
+    return ordered[(len(ordered) - 1) // 2]
+
+
+def _followup_events(ledger_dir: Path) -> list[dict[str, Any]]:
+    """Read evidence-followup events, fail-open per line (house ledger
+    pattern). Order-independent aggregation downstream."""
+    events: list[dict[str, Any]] = []
+    try:
+        lines = (
+            (Path(ledger_dir) / "evidence-followups.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    except OSError:
+        return events
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("version") == "ctx.evidence-followup/v1":
+            events.append(rec)
+    return events
+
+
+def compile_plan_value(ws: Workspace) -> dict[str, Any]:
+    """Compile the per-operator follow-up table from the ledger.
+
+    Counts, not rates (design-review verdict 2026-07-19): the committed
+    artifact stores exactly what was observed — ``observations``,
+    ``used_exactly``, ``validation_associated``, ``equivalent_requery``,
+    ``censored``, and cost lower-medians where events carry them. Wilson
+    lower bounds are computed at read time by the shadow ranker. Censored
+    windows never count as negative evidence. Events dedupe by
+    content-derived event_id, so re-appending the same replay is
+    idempotent. A ``*`` row aggregates everything (the global fallback).
+    """
+    events = _followup_events(ws.root / ".ctx-session-reads")
+    seen: set[str] = set()
+    per: dict[str, dict[str, int]] = {}
+    costs: dict[str, dict[str, list[int]]] = {}  # op -> field -> observed values
+    for ev in events:
+        eid = str(ev.get("event_id") or "")
+        if eid and eid in seen:
+            continue
+        seen.add(eid)
+        for op in (str(ev.get("operator") or "unknown"), "*"):
+            b = per.setdefault(op, {"observations": 0, "censored": 0,
+                                    **{f: 0 for f in _PV_COUNT_FIELDS}})
+            b["observations"] += 1
+            if bool(ev.get("censored")):
+                b["censored"] += 1
+            for f in _PV_COUNT_FIELDS:
+                if bool(ev.get(f)):
+                    b[f] += 1
+            # Optional cost fields: only events that carry them contribute;
+            # absent keys never synthesize a zero sample.
+            for fld in ("cost_ms", "visible_tokens"):
+                v = ev.get(fld)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    costs.setdefault(op, {}).setdefault(fld, []).append(int(v))
+
+    table: dict[str, dict[str, Any]] = {}
+    for op in sorted(per):
+        b = per[op]
+        row: dict[str, Any] = {
+            "observations": b["observations"],
+            "used_exactly": b["used_exactly"],
+            "validation_associated": b["validation_associated"],
+            "equivalent_requery": b["equivalent_requery"],
+            "censored": b["censored"],
+        }
+        cost_samples = costs.get(op) or {}
+        if cost_samples.get("cost_ms"):
+            row["median_cost_ms"] = _lower_median(cost_samples["cost_ms"])
+        if cost_samples.get("visible_tokens"):
+            row["median_visible_tokens"] = _lower_median(cost_samples["visible_tokens"])
+        table[op] = row
+    return {
+        "version": 1,
+        "minimum_observations": PLAN_VALUE_MIN_OBSERVATIONS,
+        "operators": table,
+    }
+
+
 def _run_total_bytes(manifest: dict[str, Any]) -> int:
     total = 0
     for stream in (manifest.get("streams") or {}).values():
@@ -139,6 +245,7 @@ def compile_policy(
     ws: Workspace,
     min_runs: int = 5,
     max_p95_bytes: int | None = None,
+    plan_value: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile a policy epoch from the store's run telemetry.
 
@@ -221,6 +328,11 @@ def compile_policy(
         # Additive: absent from the hash body when empty so pre-reflex
         # epochs keep their ids.
         body["digest_density"] = digest_density
+    if plan_value and plan_value.get("operators"):
+        # Additive exactly like digest_density: only a non-empty compiled
+        # prior table enters the hash body, so epochs without plan-value
+        # data keep their ids and old policy files stay byte-compatible.
+        body["plan_value"] = plan_value
     epoch = hashlib.sha256(canonical_json(body)).hexdigest()[:12]
     out: dict[str, Any] = {
         "schema": POLICY_SCHEMA,
@@ -230,6 +342,8 @@ def compile_policy(
     }
     if digest_density:
         out["digest_density"] = digest_density
+    if plan_value and plan_value.get("operators"):
+        out["plan_value"] = plan_value
     return out
 
 
@@ -285,6 +399,33 @@ def render_policy(policy: dict[str, Any]) -> str:
         )
         for sig in sorted(density):
             lines.append(f"{json.dumps(str(sig))} = {json.dumps(str(density[sig]))}")
+    pv = policy.get("plan_value") or {}
+    if pv.get("operators"):
+        lines.extend(
+            [
+                "",
+                "# Per-operator evidence FOLLOW-UP counts (association, not",
+                "# causation) compiled from the evidence-followup ledger",
+                "# (docs/EVIDENCE-PLANS.md). Report/shadow input only — hard",
+                "# constraints always dominate, censored windows never count",
+                "# as negative evidence, and Wilson lower bounds are derived",
+                "# at read time from these counts. Runtime never writes here.",
+                "[plan_value]",
+                f"version = {int(pv.get('version', 1))}",
+                f"minimum_observations = {int(pv.get('minimum_observations', PLAN_VALUE_MIN_OBSERVATIONS))}",
+            ]
+        )
+        for op in sorted(pv["operators"]):
+            row = pv["operators"][op]
+            lines.extend(["", f"[plan_value.{json.dumps(str(op))}]"])
+            for key in (
+                "observations", "used_exactly", "validation_associated",
+                "equivalent_requery", "censored",
+            ):
+                lines.append(f"{key} = {int(row.get(key, 0))}")
+            for key in ("median_cost_ms", "median_visible_tokens"):
+                if key in row:  # additive cost medians: rendered only when compiled
+                    lines.append(f"{key} = {int(row[key])}")
     return "\n".join(lines) + "\n"
 
 

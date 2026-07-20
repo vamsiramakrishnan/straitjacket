@@ -184,7 +184,12 @@ def test_cmd_gain_reports_savings(ws_store, capsys):
     assert "[ctx gain" in out
     assert "est tokens kept out of context: 121,750" in out
     assert "run" in out and "search" in out
-    assert "sonnet" in out  # dollar framing present
+    # Host-neutral dollar framing: no session model recorded here, so a
+    # cheap->premium band is shown rather than any one vendor's model name.
+    assert "input-priced" in out
+    assert "economy–premium input rates" in out
+    for vendor_model in ("sonnet", "haiku"):
+        assert vendor_model not in out  # no Claude-specific hardcode leaks
 
 
 def test_cmd_gain_empty(tmp_path, monkeypatch, capsys):

@@ -69,6 +69,7 @@ REJECTION_VOCABULARY = (
     "bad_on_missing",
     "execute_on_observe_tier",
     "engine_unavailable",
+    "bad_requires",
 )
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -129,6 +130,11 @@ class EvidencePlan:
     rank_by: tuple[str, ...]
     sections: tuple[str, ...]
     raw: dict[str, Any]  # the parsed document, for canonical storage
+    # Optional required evidence floors (plan_value.EVIDENCE_DIMENSIONS):
+    # tuple of {"dimension": str, "floor": float}. Additive — old plans
+    # parse with () and validate exactly as before; conservative defaults
+    # then derive from objective_kind (plan_value.required_floors).
+    requires: tuple[dict[str, Any], ...] = ()
 
     def canonical_bytes(self) -> bytes:
         return canonical_json(self.raw)
@@ -211,6 +217,10 @@ def parse_plan(text_or_doc: str | dict[str, Any]) -> EvidencePlan:
         raise PlanError("plan.emit must be an object")
     rank_by = emit.get("rank_by") or list(DEFAULT_RANK_BY)
     sections = emit.get("sections") or list(DEFAULT_SECTIONS)
+    raw_requires = objective.get("requires") or []
+    requires: tuple[dict[str, Any], ...] = ()
+    if isinstance(raw_requires, list):
+        requires = tuple(r for r in raw_requires if isinstance(r, dict))
     return EvidencePlan(
         version=version,
         objective_kind=str(objective.get("kind") or "diagnose"),
@@ -220,6 +230,7 @@ def parse_plan(text_or_doc: str | dict[str, Any]) -> EvidencePlan:
         rank_by=tuple(str(k) for k in rank_by),
         sections=tuple(str(s) for s in sections),
         raw=doc,
+        requires=requires,
     )
 
 
@@ -258,6 +269,33 @@ def validate_plan(
         rejections.append(
             Rejection("bad_objective", None, "objective.question must be a non-empty string")
         )
+
+    # Optional required evidence floors (additive; a plan without them
+    # validates exactly as before this field existed).
+    if plan.requires:
+        from ctx.plan_value import EVIDENCE_DIMENSIONS
+
+        for row in plan.requires:
+            dim = str(row.get("dimension") or "")
+            if dim not in EVIDENCE_DIMENSIONS:
+                rejections.append(
+                    Rejection(
+                        "bad_requires", None,
+                        f"unknown evidence dimension {dim!r}; closed vocabulary: "
+                        + ", ".join(EVIDENCE_DIMENSIONS),
+                    )
+                )
+            try:
+                floor = float(row.get("floor", 0.0))
+            except (TypeError, ValueError):
+                floor = -1.0
+            if not (0.0 <= floor <= 1.0):
+                rejections.append(
+                    Rejection(
+                        "bad_requires", None,
+                        f"requires floor for {dim!r} must be a number in [0, 1]",
+                    )
+                )
 
     max_nodes = MAX_NODES_HARD
     max_fanout = MAX_FANOUT_HARD

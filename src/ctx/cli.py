@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
 
     # ------------------------------------------------------ hook fast path
-    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code"):
+    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code", "codex"):
         if args[2] == "pre-tool-use":
             from ctx.hook import main_pre_tool_use
 
@@ -23,9 +23,36 @@ def main(argv: list[str] | None = None) -> int:
             from ctx.hook import main_post_tool_use
 
             return main_post_tool_use(flavor=args[1])
+        if args[2] == "session-start":
+            from ctx.hook import main_session_start
+
+            return main_session_start(flavor=args[1])
         # Unknown hook stage: still emit exactly one valid decision.
         sys.stdout.write('{"decision":"allow"}\n')
         return 0
+
+    # ------------------------------------------------- statusline fast path
+    # `ctx statusline <host>` is invoked by a host's status-line command on
+    # every render, so it stays off the full-CLI path: read one JSON payload
+    # on stdin, print one line, never raise (a status line must not break the
+    # host REPL). `ctx statusline codex --rollout <path>` summarises a Codex
+    # session rollout instead (Codex's bar is fixed built-in items).
+    if args and args[0] == "statusline":
+        return _statusline_main(args[1:])
+
+    # ------------------------------------------------- surface gateway fast path
+    # `ctx surface gateway` runs the progressive-disclosure MCP server (stdio);
+    # it must not parse the full CLI, exactly like `ctx mcp`.
+    if len(args) >= 2 and args[0] == "surface" and args[1] == "gateway":
+        import os
+
+        from ctx.surface_gateway import serve_gateway
+
+        ws = None
+        if "--workspace" in args:
+            i = args.index("--workspace")
+            ws = args[i + 1] if i + 1 < len(args) else None
+        return serve_gateway(ws or os.getcwd())
 
     # ------------------------------------------------- supervisor fast path
     # Hidden: `ctx job _supervise <jobdir>` is spawned detached by
@@ -41,6 +68,68 @@ def main(argv: list[str] | None = None) -> int:
         return serve(bounded_only="--bounded-only" in args)
 
     return _main_slow(args)
+
+
+def _statusline_main(rest: list[str]) -> int:
+    """Fast path for `ctx statusline <host> [--rollout PATH] [--workspace W]`.
+    Fail-open: any error prints nothing and returns 0 so a broken status line
+    never surfaces an error into the host's prompt."""
+    import json
+    import os
+
+    from ctx import statusline
+
+    host = rest[0] if rest else "claude-code"
+    rollout = None
+    ws = None
+    i = 1
+    while i < len(rest):
+        if rest[i] == "--rollout" and i + 1 < len(rest):
+            rollout = rest[i + 1]
+            i += 2
+        elif rest[i] == "--workspace" and i + 1 < len(rest):
+            ws = rest[i + 1]
+            i += 2
+        else:
+            i += 1
+    try:
+        if rollout is not None:
+            line = statusline.codex_rollout_summary(rollout, workspace_root=ws)
+        else:
+            raw = sys.stdin.read()
+            payload = json.loads(raw) if raw.strip() else {}
+            if ws is None:
+                ws = (
+                    _json_dig(payload, "workspace.current_dir", "workspace.project_dir", "cwd")
+                    or os.getcwd()
+                )
+            # A Codex Stop-hook payload carries no tokens but names the session
+            # rollout — summarise that for a priced line.
+            tp = _json_dig(payload, "transcript_path")
+            if host == "codex" and tp:
+                line = statusline.codex_rollout_summary(tp, workspace_root=ws)
+            else:
+                line = statusline.render(host, payload, workspace_root=ws)
+    except Exception:
+        line = ""
+    if line:
+        sys.stdout.write(line + "\n")
+    return 0
+
+
+def _json_dig(obj, *paths):
+    for path in paths:
+        cur = obj
+        ok = True
+        for key in path.split("."):
+            if isinstance(cur, dict) and key in cur:
+                cur = cur[key]
+            else:
+                ok = False
+                break
+        if ok and isinstance(cur, str) and cur:
+            return cur
+    return None
 
 
 # --------------------------------------------------------------- full CLI
@@ -136,6 +225,35 @@ def _main_slow(args: list[str]) -> int:
 
     sub.add_parser("gain", help="cumulative token/cost savings from telemetry")
 
+    p_surface = sub.add_parser(
+        "surface",
+        help="audit the capability surface (input side of containment): "
+             "inventory · audit · explain · trim",
+    )
+    p_surface.add_argument(
+        "surface_cmd",
+        choices=("inventory", "audit", "explain", "trim", "graph", "compile",
+                 "reconcile", "referee", "install-gateway"),
+        help="inventory · audit · explain · trim · graph · compile · reconcile · "
+             "referee · install-gateway",
+    )
+    p_surface.add_argument("target", nargs="?", help="capability id for `explain`")
+    p_surface.add_argument("--json", action="store_true", help="emit structured JSON")
+    p_surface.add_argument(
+        "--probe-mcp", action="store_true",
+        help="spawn each MCP server to measure its real per-tool schema tokens",
+    )
+    p_surface.add_argument("--profile", help="profile name for `compile` (read-only|local-dev|review|full or ctx.toml)")
+    p_surface.add_argument("--host", default="claude", choices=("claude", "codex", "antigravity"),
+                           help="target host for `compile` (default: claude)")
+    p_surface.add_argument("--apply", action="store_true",
+                           help="`compile`: write the minimal config under .ctx-surface/")
+    p_surface.add_argument("--intent", default="",
+                           help="`reconcile`: task-intent text used to trigger reveals")
+    p_surface.add_argument("--phase", help="`reconcile`: override inferred phase (explore|edit|verify|deliver)")
+    p_surface.add_argument("--enforce", action="store_true",
+                           help="`reconcile`: apply actions to gateway state (else shadow only)")
+
     p_replay = sub.add_parser(
         "replay",
         help="deterministic open-loop replay of recorded Claude Code transcripts",
@@ -147,6 +265,24 @@ def _main_slow(args: list[str]) -> int:
         help="replay every session under ~/.claude/projects",
     )
     p_replay.add_argument("--gaps", action="store_true", help="aggregate coverage-gap table")
+    p_replay.add_argument(
+        "--regret", dest="replay_regret", action="store_true",
+        help="evidence-regret scoreboard: R = actual − oracle per profile "
+        "(the measured rate–distortion frontier gap, docs/THEORY.md)",
+    )
+    p_replay.add_argument(
+        "--outcomes", dest="replay_outcomes", action="store_true",
+        help="evidence_followup/v1 scoreboard: which emissions were observably "
+        "followed up (association, not causation; deterministic, read-only; "
+        "open windows censored)",
+    )
+    p_replay.add_argument(
+        "--append-ledger", dest="replay_append_ledger", action="store_true",
+        help="with --outcomes: append the events to the workspace "
+        ".ctx-session-reads/evidence-followups.jsonl ledger (the input to "
+        "`ctx policy compile --plan-value`) — an explicit user action, "
+        "never a runtime side effect",
+    )
     p_replay.add_argument("--json", dest="replay_json", action="store_true")
 
     p_debt = sub.add_parser("debt", help="declared-omission ledger for deferred decisions")
@@ -205,6 +341,12 @@ def _main_slow(args: list[str]) -> int:
             "plan_file", nargs="?", default="-",
             help="plan JSON path ('-' or omitted reads stdin)",
         )
+        if _pc == "price":
+            _pp.add_argument(
+                "--value", dest="plan_value_explain", action="store_true",
+                help="also show the shadow follow-up ranking of the plan's ops "
+                "(Wilson lower bounds over compiled counts; report only)",
+            )
     plan_sub.add_parser("ops", help="registered logical operators (the plan author's inventory)")
 
     p_inv = sub.add_parser(
@@ -219,11 +361,23 @@ def _main_slow(args: list[str]) -> int:
         "--replans", type=int, default=None,
         help="epoch allowance for this objective (default from ctx.toml [plan])",
     )
+    p_inv.add_argument(
+        "--advise", dest="inv_advise", action="store_true",
+        help="after execution: shadow follow-up report — declared vs "
+        "empirically-preferred operator ordering with the lexicographic "
+        "reason (report only: nothing is reordered or suppressed)",
+    )
 
     p_policy = sub.add_parser("policy", help="compiled steering policy")
     pol_sub = p_policy.add_subparsers(dest="policy_cmd", required=True)
     p_pc = pol_sub.add_parser("compile", help="compile policy from telemetry")
     p_pc.add_argument("--min-runs", type=int, dest="min_runs")
+    p_pc.add_argument(
+        "--plan-value", dest="plan_value", action="store_true",
+        help="also compile [plan_value] priors from the evidence-outcome "
+        "ledger (advisory investigation-ranking input; deterministic, "
+        "reviewable, never written by runtime)",
+    )
     pol_sub.add_parser("show", help="print the compiled policy")
 
     sub.add_parser("init", help="write ctx.toml and .ctxignore templates")
@@ -263,8 +417,16 @@ def _main_slow(args: list[str]) -> int:
         "large tool_results to file-backed stubs (0 = pure observer)",
     )
 
-    p_wrap = sub.add_parser("wrap", help="run one agent session under the harness")
-    p_wrap.add_argument("host", choices=["claude", "antigravity"])
+    p_wrap = sub.add_parser(
+        "wrap",
+        help="set up / run the harness for a host (built for Antigravity, "
+        "works with Claude Code and Codex)",
+    )
+    p_wrap.add_argument(
+        "host",
+        choices=["setup", "all", "claude", "antigravity", "codex"],
+        help="'setup' (or 'all') harnesses every host in one command",
+    )
     p_wrap.add_argument(
         "--print-config", action="store_true", dest="print_config",
         help="print the host configuration instead of launching",
@@ -287,7 +449,12 @@ def _main_slow(args: list[str]) -> int:
             # machine that has ~/.claude/projects, harnessed or not.
             import json as _json
 
-            from ctx.replay import default_history_paths, render_report, simulate_session
+            from ctx.replay import (
+                default_history_paths,
+                render_regret,
+                render_report,
+                simulate_session,
+            )
 
             paths = list(ns.transcripts)
             if ns.all_projects:
@@ -295,9 +462,32 @@ def _main_slow(args: list[str]) -> int:
             if not paths:
                 print("no transcripts given (pass paths or --all-projects)")
                 return 1
+            if ns.replay_outcomes:
+                from ctx.replay import render_outcomes, session_outcomes
+
+                events = [e for p in paths for e in session_outcomes(p)]
+                if ns.replay_append_ledger:
+                    from ctx.workspace import resolve_workspace as _rw
+
+                    _ws = _rw(ns.workspace)
+                    ldir = _ws.root / ".ctx-session-reads"
+                    ldir.mkdir(parents=True, exist_ok=True)
+                    with (ldir / "evidence-followups.jsonl").open(
+                        "a", encoding="utf-8"
+                    ) as fh:
+                        for e in events:
+                            fh.write(_json.dumps(e.payload(), sort_keys=True) + "\n")
+                    print(f"appended {len(events)} events to {ldir / 'evidence-outcomes.jsonl'}")
+                if ns.replay_json:
+                    print(_json.dumps([e.payload() for e in events], indent=2))
+                else:
+                    print(render_outcomes(events))
+                return 0
             reports = [simulate_session(p) for p in paths]
             if ns.replay_json:
                 print(_json.dumps(reports, indent=2))
+            elif ns.replay_regret:
+                print(render_regret(reports))
             else:
                 print(render_report(reports, gaps=ns.gaps))
             return 0
@@ -324,7 +514,13 @@ def _main_slow(args: list[str]) -> int:
             return 0
 
         if ns.cmd == "wrap":
-            from ctx.wrap import print_config, wrap_antigravity, wrap_claude
+            from ctx.wrap import (
+                print_config,
+                wrap_antigravity,
+                wrap_claude,
+                wrap_codex,
+                wrap_setup,
+            )
 
             agent_args = list(ns.agent_args)
             # REMAINDER swallows options placed after the host positional;
@@ -340,6 +536,12 @@ def _main_slow(args: list[str]) -> int:
                 if agent_args.index("--proxy") < tail:
                     use_proxy = True
                     agent_args.remove("--proxy")
+            use_gateway = False
+            if "--gateway" in agent_args:
+                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+                if agent_args.index("--gateway") < tail:
+                    use_gateway = True
+                    agent_args.remove("--gateway")
             rescue_pct = 0.0
             if "--rescue-pct" in agent_args:
                 tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
@@ -352,15 +554,54 @@ def _main_slow(args: list[str]) -> int:
                     del agent_args[i : i + 2]
                     use_proxy = True  # rescue implies the proxy
             if ns.print_config:
-                print(print_config(ns.host))
+                host = "claude" if ns.host in ("setup", "all") else ns.host
+                print(print_config(host))
                 return 0
             ws = resolve_workspace(ns.workspace)
             if agent_args and agent_args[0] == "--":
                 agent_args = agent_args[1:]
+            # --gateway: set up the host(s) AND wire the progressive-disclosure
+            # gateway, so unrevealed MCP tool schemas never enter context.
+            if use_gateway:
+                from ctx.installer import install_claude, install_gateway
+
+                hosts = (("claude", "codex", "antigravity")
+                         if ns.host in ("setup", "all") else (ns.host,))
+                if ns.host in ("setup", "all"):
+                    wrap_setup(ws.root)
+                elif ns.host == "codex":
+                    wrap_codex(ws.root)
+                elif ns.host == "antigravity":
+                    wrap_antigravity(ws.root)
+                elif ns.host == "claude":
+                    print(install_claude(resolve_workspace(str(ws.root))))
+                print()
+                for h in hosts:
+                    print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
+                    print()
+                return 0
+            # Single-command multi-host setup (built for Antigravity; also
+            # harnesses Claude Code and Codex).
+            if ns.host in ("setup", "all"):
+                return wrap_setup(ws.root)
+            if ns.host == "codex":
+                return wrap_codex(ws.root)
+            if ns.host == "antigravity":
+                return wrap_antigravity(ws.root)
+            # claude: launch ephemerally when given agent args, else persist.
             if ns.host == "claude":
-                return wrap_claude(
-                    ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct
-                )
+                if agent_args:
+                    return wrap_claude(
+                        ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct
+                    )
+                from ctx.installer import install_claude
+
+                print(install_claude(resolve_workspace(str(ws.root))))
+                print()
+                print("Claude Code sessions in this workspace are now harnessed. "
+                      "For an ephemeral, zero-residue run instead: "
+                      "ctx wrap claude -- -p \"...\"")
+                return 0
             return wrap_antigravity(ws.root)
 
         ws = resolve_workspace(ns.workspace)
@@ -416,6 +657,8 @@ def _main_slow(args: list[str]) -> int:
             return 0 if code == 0 else 3
         if ns.cmd == "gain":
             return _cmd_gain(ws)
+        if ns.cmd == "surface":
+            return _cmd_surface(ws, ns)
         if ns.cmd == "debt":
             from ctx import debt as _debt
 
@@ -521,6 +764,109 @@ def _main_slow(args: list[str]) -> int:
     return 2  # pragma: no cover
 
 
+def _cmd_surface(ws, ns) -> int:
+    """`ctx surface {inventory,audit,explain,trim}` — the input side of
+    containment: measure the discretionary capability surface, never mutate it
+    (Phase 1). All rendering is bounded and deterministic."""
+    import json as _json
+
+    from ctx import surface
+
+    if ns.surface_cmd == "install-gateway":
+        from ctx.installer import install_gateway
+
+        print(install_gateway(ws, ns.host, apply=ns.apply))
+        return 0
+
+    if ns.surface_cmd in ("reconcile", "referee"):
+        from ctx import surface_reconcile as sr
+
+        if ns.surface_cmd == "referee":
+            rep = sr.referee(ws.root)
+            print(_json.dumps(rep, indent=2) if ns.json else
+                  f"[ctx surface referee] hides scored: {rep['hides_scored']} · "
+                  f"safe {rep['safe']} · unsafe {rep['unsafe']} · verdict {rep['verdict']}"
+                  + ("\n  promotable: " + ", ".join(rep["promotable"]) if rep["promotable"] else ""))
+            return 0
+        rep = sr.run_reconcile(ws.root, intent=ns.intent, phase=ns.phase, enforce=ns.enforce)
+        print(_json.dumps(rep, indent=2) if ns.json else sr.render_reconcile(rep))
+        return 0
+
+    if ns.surface_cmd == "compile":
+        from ctx import surface_profiles
+
+        if not ns.profile:
+            print("usage: ctx surface compile --profile <name> [--host HOST] [--apply]")
+            print("built-in profiles: " + ", ".join(surface_profiles.BUILTIN_PROFILES))
+            return 2
+        rep = surface_profiles.compile_profile(
+            ws.root, ns.profile, host=ns.host, apply=ns.apply,
+            probe_mcp=getattr(ns, "probe_mcp", False))
+        if ns.json:
+            print(_json.dumps(rep, indent=2))
+            return 0
+        print(surface_profiles.render_compile(rep))
+        return 1 if rep.get("error") else 0
+
+    if ns.surface_cmd == "explain":
+        if not ns.target:
+            print("usage: ctx surface explain <capability-id>")
+            return 2
+        records = surface.detect_overlaps(surface.collect_surface(ws.root))
+        counts = surface.observed_tool_counts(ws.root)
+        records = [surface._with(c, invocations=surface._match_invocations(c, counts))
+                   for c in records]
+        match = next((c for c in records if c.id == ns.target), None)
+        if match is None:
+            print(f"no capability {ns.target!r}; run `ctx surface inventory`")
+            return 1
+        print(surface.render_explain(match))
+        return 0
+
+    if ns.surface_cmd == "inventory":
+        base = surface.collect_surface(ws.root)
+        if getattr(ns, "probe_mcp", False):
+            probed = surface.probe_surface(ws.root)
+            provs = {p.provider for p in probed}
+            base = [c for c in base
+                    if not (c.kind == "mcp_server" and c.provider in provs)] + probed
+        records = surface.detect_overlaps(base)
+        counts = surface.observed_tool_counts(ws.root)
+        records = [surface._with(c, invocations=surface._match_invocations(c, counts))
+                   for c in records]
+        if ns.json:
+            print(_json.dumps([c.as_dict() for c in records], indent=2))
+        else:
+            print(surface.render_inventory(records))
+        return 0
+
+    # audit / trim / graph build the full audit.
+    a = surface.audit(ws.root, probe_mcp=getattr(ns, "probe_mcp", False))
+    if ns.json:
+        print(_json.dumps(a, indent=2))
+        return 0
+    if ns.surface_cmd == "graph":
+        recs = [surface.Capability(**{k: (tuple(v) if isinstance(v, list) else v)
+                                      for k, v in r.items() if k != "recommended_level"})
+                for r in a["records"]]
+        print(surface.render_graph(recs, a["graph"]))
+        return 0
+    if ns.surface_cmd == "trim":
+        tp = a["trim_preview"]
+        print(f"[ctx surface trim --preview · advisory only, nothing hidden]")
+        if not tp["ids"]:
+            print("  nothing to defer: surface is already lean")
+            return 0
+        for cid in tp["ids"]:
+            rec = next(c for c in a["records"] if c["id"] == cid)
+            print(f"  defer  {rec['tokens']:>6,} tok  {cid:<28} "
+                  f"auth={rec['authority']} → {rec['recommended_level']}")
+        print(f"  ── est {tp['est_token_reduction']:,} tokens/turn recoverable")
+        return 0
+    print(surface.render_audit(a))
+    return 0
+
+
 def _cmd_gain(ws) -> int:
     """Cumulative containment savings, made legible (rtk's `gain` lesson:
     the metric users can watch is the metric that keeps the harness on)."""
@@ -555,10 +901,27 @@ def _cmd_gain(ws) -> int:
     )
     print(f"est tokens kept out of context: {saved_tok:,}")
     # Input-price framing only; the real savings compound through cache reads.
-    print(
-        f"est spend avoided (input-priced): ~${saved_tok * 3 / 1e6:.2f} sonnet · "
-        f"~${saved_tok * 1 / 1e6:.2f} haiku"
-    )
+    # Price against the session's own model when the proxy recorded one
+    # (host-neutral: works for Gemini/GPT/Claude alike); otherwise show a
+    # cheap->premium band from the shipped table rather than naming one vendor.
+    from ctx import pricing
+    from ctx.engagement import session_model
+
+    model = session_model(ws.root)
+    if model:
+        p = pricing.price_for(model, workspace_root=ws.root)
+        print(
+            f"est spend avoided (input-priced): ~${saved_tok * p.input / 1e6:.2f} "
+            f"({model} @ ${p.input:g}/Mtok in)"
+        )
+    else:
+        tbl = pricing.load_table(ws.root)
+        ins = sorted(float(r.get("in", 0)) for r in tbl["models"] if float(r.get("in", 0)) > 0)
+        lo, hi = (ins[0], ins[-1]) if ins else (1.0, 15.0)
+        print(
+            f"est spend avoided (input-priced): ~${saved_tok * lo / 1e6:.2f}–"
+            f"${saved_tok * hi / 1e6:.2f} (economy–premium input rates)"
+        )
     print("by verb:")
     for op, s in sorted(per_op.items(), key=lambda kv: -kv[1]["raw"]):
         ratio = s["raw"] / max(1, s["emitted"])
@@ -1007,6 +1370,24 @@ def _cmd_plan(ws, ns) -> int:
             )
             return 0
         print(plan_ir.price_plan(plan))
+        if getattr(ns, "plan_value_explain", False):
+            from ctx import plan_value as pv
+
+            floors = pv.required_floors(plan.objective_kind, plan.requires)
+            candidates = [
+                pv.CandidateAction(
+                    op=st.op,
+                    cost_class=plan_ops.OPS[st.op].cost,
+                    klass=plan_ops.OPS[st.op].klass,
+                )
+                for st in plan.steps
+                if st.op in plan_ops.OPS
+            ]
+            priors = pv.load_priors(ws)
+            ranked = pv.rank_followup(candidates, priors.get("operators", priors))
+            declared = plan.steps[0].op if plan.steps else None
+            print()
+            print(pv.render_shadow(declared, ranked, floors=floors))
         return 0
 
     # run
@@ -1077,7 +1458,8 @@ def _cmd_investigate(ws, ns) -> int:
         pass
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    out, code = execute_plan(ws, store, text, tier="cli")
+    node_rows: dict[str, int] = {}
+    out, code = execute_plan(ws, store, text, tier="cli", node_rows=node_rows)
     if code == 2:
         print(out)
         return 2
@@ -1110,7 +1492,81 @@ def _cmd_investigate(ws, ns) -> int:
             "to the interactive loop; patch/verify or change the hypothesis"
         )
     _emit_investigation(ws, store, out)
+    if getattr(ns, "inv_advise", False):
+        print()
+        print(_investigate_advice(ws, plan, node_rows))
     return code
+
+
+def _investigate_advice(ws, plan, node_rows=None) -> str:
+    """Shadow follow-up report for `ctx investigate --advise` (report only —
+    never reorders, inserts, or suppresses anything). Shows the declared
+    plan's first op against what the empirical follow-up ordering would have
+    preferred among the same already-applicable candidates, with the full
+    lexicographic reason; appends one ctx.shadow-rank/v1 line to the shadow
+    ledger so the paired referee can score agreement offline. Floors are
+    displayed descriptively from REALIZED coverage (an op's declared
+    `provides` counts only when its node produced rows). Fail-open."""
+    try:
+        import json as _json
+        import time as _time
+
+        from ctx import plan_ops
+        from ctx import plan_value as pv
+
+        floors = pv.required_floors(plan.objective_kind, plan.requires)
+        coverage = pv.realized_coverage(plan.steps, node_rows or {})
+        declared_first = plan.steps[0].op if plan.steps else None
+        # Hard constraints FIRST: candidates are the plan's own declared ops
+        # plus registered engine-available observe-class ops — the ranking
+        # never introduces an action the tier could not run.
+        ran_ops = [s.op for s in plan.steps]
+        names = list(dict.fromkeys(ran_ops)) + sorted(
+            name
+            for name, spec in plan_ops.OPS.items()
+            if name not in ran_ops
+            and (spec.probe_available is None or spec.probe_available())
+        )
+        candidates = [
+            pv.CandidateAction(
+                op=n,
+                cost_class=plan_ops.OPS[n].cost,
+                klass=plan_ops.OPS[n].klass,
+            )
+            for n in names
+            if n in plan_ops.OPS
+        ]
+        priors = pv.load_priors(ws)
+        ranked = pv.rank_followup(candidates, priors.get("operators", priors))
+        report = pv.render_shadow(
+            declared_first, ranked, floors=floors, coverage=coverage
+        )
+        # Shadow ledger: the paired referee's input. Operational ts only.
+        try:
+            ldir = ws.root / ".ctx-session-reads"
+            ldir.mkdir(parents=True, exist_ok=True)
+            with (ldir / "shadow-rank.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(
+                    _json.dumps(
+                        {
+                            "schema": "ctx.shadow-rank/v1",
+                            "plan": plan.plan_id()[:12],
+                            "declared_first": declared_first,
+                            "shadow_first": ranked[0].op if ranked else None,
+                            "agreement": bool(
+                                ranked and declared_first == ranked[0].op
+                            ),
+                            "ts": _time.time(),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+        except OSError:
+            pass
+        return report
+    except Exception as e:  # report only: never fail the investigation
+        return f"(follow-up shadow report unavailable: {type(e).__name__})"
 
 
 def _cmd_policy(ws, ns) -> int:
@@ -1130,6 +1586,10 @@ def _cmd_policy(ws, ns) -> int:
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     kwargs = {"min_runs": ns.min_runs} if ns.min_runs is not None else {}
+    if getattr(ns, "plan_value", False):
+        from ctx.policy import compile_plan_value
+
+        kwargs["plan_value"] = compile_plan_value(ws)
     policy = compile_policy(store, ws, **kwargs)
     print(render_policy(policy))
     print(f"written: {write_policy(ws, policy)}")

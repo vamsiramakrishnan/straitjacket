@@ -1,0 +1,30 @@
+{
+  "schema": "ctx.model-prices/v1",
+  "updated": "2026-07-20",
+  "currency": "USD",
+  "unit": "per_1m_tokens",
+  "note": "Host-neutral published list prices, standard/paid tier, matched by the `match` string against the session model id on letter boundaries (see ctx/pricing.py). Entries are ordered specific->general; the first match wins, so version-specific rows precede tier-token fallbacks. Estimates only; a session's real spend is preferred from the host when it reports one (Claude Code cost.total_cost_usd). Antigravity/Gemini and OpenAI expose token usage but no dollar cost, so cost there is usage x this table. Refresh from each `source`; override per repo with .ctx-prices.json or [pricing] in ctx.toml.",
+  "models": [
+    {"match": "opus",                  "vendor": "anthropic", "tier": "premium",  "in": 15.0, "out": 75.0, "cache_write": 18.75, "cache_read": 1.50, "source": "https://www.anthropic.com/pricing"},
+    {"match": "sonnet",                "vendor": "anthropic", "tier": "standard", "in": 3.0,  "out": 15.0, "cache_write": 3.75,  "cache_read": 0.30, "source": "https://www.anthropic.com/pricing"},
+    {"match": "haiku",                 "vendor": "anthropic", "tier": "economy",  "in": 1.0,  "out": 5.0,  "cache_write": 1.25,  "cache_read": 0.10, "source": "https://www.anthropic.com/pricing"},
+
+    {"match": "gemini-3.5-flash",      "vendor": "google", "tier": "standard", "in": 1.50, "out": 9.00,  "cache_write": 1.50, "cache_read": 0.15,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
+    {"match": "gemini-3.1-flash-lite", "vendor": "google", "tier": "economy",  "in": 0.25, "out": 1.50,  "cache_write": 0.25, "cache_read": 0.04,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
+    {"match": "gemini-3-flash",        "vendor": "google", "tier": "economy",  "in": 0.50, "out": 3.00,  "cache_write": 0.50, "cache_read": 0.05,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
+    {"match": "gemini-3.1-pro",        "vendor": "google", "tier": "premium",  "in": 2.00, "out": 12.00, "cache_write": 2.00, "cache_read": 0.20,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
+    {"match": "gemini-3-pro",          "vendor": "google", "tier": "premium",  "in": 2.00, "out": 12.00, "cache_write": 2.00, "cache_read": 0.20,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
+    {"match": "flash-lite",            "vendor": "google", "tier": "economy",  "in": 0.25, "out": 1.50,  "cache_write": 0.25, "cache_read": 0.04,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
+    {"match": "flash",                 "vendor": "google", "tier": "standard", "in": 1.50, "out": 9.00,  "cache_write": 1.50, "cache_read": 0.15,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
+
+    {"match": "gpt-5.6-sol",           "vendor": "openai", "tier": "premium",  "in": 5.00, "out": 30.00, "cache_write": 5.00, "cache_read": 0.50,  "source": "https://developers.openai.com/api/docs/pricing"},
+    {"match": "gpt-5.6-terra",         "vendor": "openai", "tier": "standard", "in": 2.50, "out": 15.00, "cache_write": 2.50, "cache_read": 0.25,  "source": "https://developers.openai.com/api/docs/pricing"},
+    {"match": "gpt-5.6-luna",          "vendor": "openai", "tier": "economy",  "in": 1.00, "out": 6.00,  "cache_write": 1.00, "cache_read": 0.10,  "source": "https://developers.openai.com/api/docs/pricing"},
+    {"match": "gpt-5.5",               "vendor": "openai", "tier": "premium",  "in": 5.00, "out": 30.00, "cache_write": 5.00, "cache_read": 0.50,  "source": "https://developers.openai.com/api/docs/pricing"},
+    {"match": "gpt-5.4-nano",          "vendor": "openai", "tier": "economy",  "in": 0.20, "out": 1.25,  "cache_write": 0.20, "cache_read": 0.02,  "source": "https://developers.openai.com/api/docs/pricing"},
+    {"match": "codex",                 "vendor": "openai", "tier": "standard", "in": 1.75, "out": 14.00, "cache_write": 1.75, "cache_read": 0.175, "source": "https://developers.openai.com/api/docs/pricing"},
+    {"match": "nano",                  "vendor": "openai", "tier": "economy",  "in": 0.20, "out": 1.25,  "cache_write": 0.20, "cache_read": 0.02,  "source": "https://developers.openai.com/api/docs/pricing"},
+    {"match": "gpt",                   "vendor": "openai", "tier": "standard", "in": 2.50, "out": 15.00, "cache_write": 2.50, "cache_read": 0.25,  "source": "https://developers.openai.com/api/docs/pricing"}
+  ],
+  "fallback": {"vendor": "unknown", "tier": "unknown", "in": 3.0, "out": 15.0, "cache_write": 3.75, "cache_read": 0.30, "source": ""}
+}

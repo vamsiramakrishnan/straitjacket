@@ -133,9 +133,31 @@ _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
 _NO_REWRITE_PROGS = {"less", "more", "vi", "vim", "nano", "emacs", "top", "htop", "watch", "ssh", "xargs"}
 
 
+_POLICY_CACHE_NAME = "guard-policy-cache.json"
+
+
+def _policy_cache_key(paths: list[Path]) -> list[list[Any]]:
+    """(path, mtime_ns, size) triples for every policy source file; a missing
+    file contributes a zero row so appearing/disappearing invalidates too."""
+    key: list[list[Any]] = []
+    for p in paths:
+        try:
+            st = p.stat()
+            key.append([str(p), st.st_mtime_ns, st.st_size])
+        except OSError:
+            key.append([str(p), 0, 0])
+    return key
+
+
 def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     """Minimal ctx.toml read for the guard section, plus the compiled
-    ctx-policy.toml learned-policy epoch. Never raises."""
+    ctx-policy.toml learned-policy epoch. Never raises.
+
+    The parsed result is cached as JSON in the session ledger keyed by the
+    (mtime_ns, size) of both source files: TOML parsing (and the tomllib
+    import itself, ~5ms) runs only when a source file actually changed.
+    The cache is a pure derivation of the TOMLs — deleting it is always safe.
+    """
     policy: dict[str, Any] = {
         "mode": "guarded",
         "unknown_command": "force_ask",
@@ -157,6 +179,20 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     if not workspace_root:
         return policy
     path = Path(workspace_root) / "ctx.toml"
+    ppath = Path(workspace_root) / _POLICY_FILENAME
+    if not path.is_file() and not ppath.is_file():
+        return policy
+    cache_path = Path(workspace_root) / _LEDGER_DIR_NAME / _POLICY_CACHE_NAME
+    key = _policy_cache_key([path, ppath])
+    try:
+        doc = json.loads(cache_path.read_text(encoding="utf-8"))
+        if doc.get("key") == key and isinstance(doc.get("policy"), dict):
+            # Fresh defaults first so keys added in a newer ctx win over a
+            # cache written by an older one.
+            policy.update(doc["policy"])
+            return policy
+    except Exception:
+        pass
     if path.is_file():
         try:
             import tomllib
@@ -200,7 +236,6 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     # signatures act like allow_commands prefixes; demoted never do. Read in
     # its own fail-open block so a corrupt epoch cannot poison ctx.toml
     # settings (and vice versa).
-    ppath = Path(workspace_root) / _POLICY_FILENAME
     if ppath.is_file():
         try:
             import tomllib
@@ -221,6 +256,15 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
                 policy["demoted_commands"] = demoted
         except Exception:
             pass
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_name(
+            f"{_POLICY_CACHE_NAME}.{os.getpid()}.{os.urandom(4).hex()}"
+        )
+        tmp.write_text(json.dumps({"key": key, "policy": policy}), encoding="utf-8")
+        os.replace(tmp, cache_path)
+    except Exception:
+        pass
     return policy
 
 
@@ -1280,10 +1324,11 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     Returns None to pass the result through untouched. Fail-open: any error →
     None (the raw output is never lost, only un-digested).
 
-    Claude Code only this wave — the Antigravity output-replacement field is
-    unverified upstream, so there we stay nudge-only.
+    Claude Code (``updatedToolOutput``) and Codex (``decision:block`` + reason,
+    https://learn.chatgpt.com/docs/hooks) both have a verified substitution
+    field; Antigravity's is unverified upstream, so there we stay nudge-only.
     """
-    if flavor != "claude-code":
+    if flavor not in ("claude-code", "codex"):
         return None
     try:
         tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
@@ -1330,6 +1375,45 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         return None
 
 
+def main_session_start(flavor: str = "antigravity") -> int:
+    """Entry point for ``ctx hook <flavor> session-start``. Runs the capability
+    surface pre-flight ('bound before bloat') once, before the first turn, and
+    injects a bounded advisory when the discretionary surface exceeds budget.
+    Fires once per session (not the hot path), so the surface import is fine.
+    Fail-open: any error emits a no-op, never a blocked session."""
+    advisory = ""
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        ws = _resolve_workspace_root(payload)
+        if ws:
+            from ctx.config import load_config
+            from ctx.surface import preflight
+
+            sp = load_config(Path(ws)).surface
+            if sp.gate != "off":
+                advisory = preflight(
+                    ws, max_static_tokens=sp.max_static_tokens,
+                    default_profile=sp.default_profile, gateway=sp.gateway,
+                    probe=sp.probe)
+    except Exception:
+        advisory = ""
+    if flavor in ("claude-code", "codex"):
+        emitted: dict[str, Any] = (
+            {"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                    "additionalContext": advisory}}
+            if advisory else {"continue": True}
+        )
+    else:  # antigravity dialect
+        emitted = {"additionalContext": advisory} if advisory else {}
+    sys.stdout.write(json.dumps(emitted, sort_keys=True))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0
+
+
 def main_post_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> post-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON object on stdout: either a
@@ -1355,6 +1439,19 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         if nudge is not None:
             hso["additionalContext"] = nudge
         emitted: dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
+    elif flavor == "codex":
+        # Codex PostToolUse substitutes the model-visible result via
+        # {"decision":"block","reason":<text>}; additionalContext carries a
+        # non-substituting nudge (https://learn.chatgpt.com/docs/hooks).
+        emitted = {}
+        if replacement is not None:
+            emitted["decision"] = "block"
+            emitted["reason"] = replacement
+        chso: dict[str, Any] = {"hookEventName": "PostToolUse"}
+        if nudge is not None:
+            chso["additionalContext"] = nudge
+        if len(chso) > 1:
+            emitted["hookSpecificOutput"] = chso
     elif nudge is not None:  # antigravity dialect: nudge-only (no replacement)
         emitted = {"decision": "allow", "reason": nudge}
     else:
@@ -1386,9 +1483,12 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             decision = _deny("CTX_CONTEXT_GUARD: internal guard error (fail-closed policy)")
         else:
             decision = dict(DECISION_ALLOW)
+    # Codex uses Claude Code's PreToolUse contract verbatim
+    # (hookSpecificOutput.permissionDecision + updatedInput), per
+    # https://learn.chatgpt.com/docs/hooks.
     emitted: dict[str, Any] = (
         _to_claude_code_schema(decision)
-        if flavor == "claude-code"
+        if flavor in ("claude-code", "codex")
         else _to_antigravity_schema(decision)
     )
     sys.stdout.write(json.dumps(emitted, sort_keys=True))

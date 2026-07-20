@@ -1,0 +1,19 @@
+# ctx-harness — straitjacket context containment for Codex CLI.
+# Registers the bounded `ctx` MCP retrieval tool and enables the lifecycle
+# hooks that route flooding command/file output through `ctx run`.
+# Rendered by `ctx wrap codex` / `ctx wrap setup`; remove this file to uninstall.
+
+[features]
+hooks = true
+
+[mcp_servers.ctx-harness]
+command = "{{CTX_EXECUTABLE}}"
+args = ["mcp", "--bounded-only"]
+
+# Status line. Codex renders a fixed set of built-in items (it does not shell
+# out to a command like Claude Code / Antigravity), so we select the useful
+# ones here — model, context pressure, tokens, approval mode. Codex exposes no
+# dollar-cost field anywhere; for a priced summary of a finished session run:
+#   ctx statusline codex --rollout ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+[tui]
+status_line = ["model", "context_usage", "UsedTokens", "approval"]

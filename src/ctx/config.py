@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+# One source of truth for the host-neutral lean-model default (stdlib-only
+# module, no import cycle) so the config default never drifts from the
+# engagement mechanism's own default.
+from ctx.engagement import DEFAULT_LEAN_MODELS as _DEFAULT_LEAN_MODELS
 
 CONFIG_FILENAME = "ctx.toml"
 IGNORE_FILENAME = ".ctxignore"
@@ -74,7 +78,7 @@ class Engagement:
 
     mode: str = "auto"  # auto | active | passive
     activate_after_calls: int = 8
-    lean_models: tuple[str, ...] = ("haiku",)
+    lean_models: tuple[str, ...] = _DEFAULT_LEAN_MODELS
 
 
 @dataclass(frozen=True)
@@ -117,6 +121,20 @@ class Redaction:
 
 
 @dataclass(frozen=True)
+class SurfacePolicy:
+    """Capability-surface containment (the input side). A SessionStart
+    pre-flight gate audits the discretionary surface before any work begins —
+    'bound before bloat', the mirror of the output side's 'capture before
+    flood'. See docs/CAPABILITY-SURFACE.md."""
+
+    max_static_tokens: int = 8000   # discretionary-surface budget per turn
+    gate: str = "warn"              # off | warn (advisory at SessionStart)
+    default_profile: str = ""       # profile to suggest when over budget
+    gateway: bool = False           # gateway is the MCP delivery (progressive disclosure)
+    probe: bool = True              # measure real MCP tool schemas (cached) in the gate
+
+
+@dataclass(frozen=True)
 class Config:
     version: int = 1
     repo_key: str | None = None
@@ -127,6 +145,7 @@ class Config:
     store: StorePolicy = field(default_factory=StorePolicy)
     plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
+    surface: SurfacePolicy = field(default_factory=SurfacePolicy)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # ws:<alias> routing targets: alias -> workspace path (absolute, or
     # relative to this workspace root). Committed in ctx.toml [aliases].
@@ -149,6 +168,10 @@ def load_config(workspace_root: Path | None) -> Config:
     path = workspace_root / CONFIG_FILENAME
     if not path.is_file():
         return Config()
+    # Lazy: tomllib costs ~4ms at import and the common hook-path case
+    # (no ctx.toml present) returns above without ever needing it.
+    import tomllib
+
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
@@ -165,6 +188,7 @@ def load_config(workspace_root: Path | None) -> Config:
     store = _pick(raw.get("store") or {}, StorePolicy)
     plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
+    surface = _pick(raw.get("surface") or {}, SurfacePolicy)
 
     eng_raw = raw.get("engagement") or {}
     engagement = Engagement(
@@ -203,6 +227,7 @@ def load_config(workspace_root: Path | None) -> Config:
         store=store,
         plan=plan,
         redaction=redaction,
+        surface=surface,
         scopes=scopes,
         aliases=aliases,
     )

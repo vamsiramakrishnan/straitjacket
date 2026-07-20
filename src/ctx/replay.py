@@ -26,6 +26,22 @@ Three questions, answered exactly:
   ``ctx eval`` opportunities — the empirical priority list for the next
   coverage wave, mined from real sessions instead of intuition.
 
+- **Evidence regret** (``--regret``): the rate–distortion frontier gap per
+  profile (docs/THEORY.md). For each facts-bearing call, ``oracle`` is the
+  token size of exactly the downstream-used facts (a *lower* bound on the
+  true minimal sufficient statistic, since the trajectory only proves a
+  subset of what was needed), ``actual`` is what the harness charged for
+  that evidence (digest tokens + a deterministic ``ctx get`` hop price per
+  one-hop fact), and ``R = actual − oracle``. Because the oracle proxy is
+  a lower bound, measured R is an **upper bound on the true gap** — the
+  metric can under-flatter but never over-flatter. Calls with no provably
+  used facts are reported as *unattributed digest spend*, never folded
+  into R: the proxy is blind to conclusion-shaped evidence ("all tests
+  passed"), and charging those calls with a zero oracle would drown the
+  signal. ``naive regret`` = raw tokens − oracle on the same calls, so
+  each profile's row shows both the realized saving and what is still on
+  the table.
+
 Open-loop limits, stated plainly: no turn-count or behavioral deltas — the
 recorded trajectory stops being ground truth at the first observation that
 would have changed the model's next action. Those questions belong to the
@@ -47,6 +63,35 @@ from typing import Any
 
 _SLICER_RE = re.compile(r"\|\s*(head|tail|grep|sed|awk|cut|wc)\b")
 _ENV_PREFIX_RE = re.compile(r"^(?:\w+=\S*\s+)*")
+
+# Deterministic hop-price model for one-hop facts (docs/THEORY.md §regret):
+# recovering an omitted fact costs one `ctx get --lines A:B` round — a fixed
+# command/header scaffold plus the returned slice (the fact's line ± context).
+# Declared constants, not measurements, so replay stays byte-deterministic.
+_HOP_SCAFFOLD_TOK = 20
+_HOP_CONTEXT_LINES = 2
+
+
+def _hop_cost(fact: str, raw: str | None) -> int:
+    """Tokens one `ctx get` hop pays to recover ``fact``.
+
+    With the raw bytes at hand, price the actual ±2-line slice around the
+    fact's first occurrence. Without them (already-harnessed results, where
+    replay holds only the digest and the store contract owns the raw), price
+    the floor — scaffold + the fact line itself. The floor direction is
+    declared: it can understate ``actual`` there by a few context lines."""
+    from ctx.textutil import estimate_tokens
+
+    if raw is not None:
+        pos = raw.find(fact)
+        if pos >= 0:
+            lines = raw.splitlines()
+            at = raw[:pos].count("\n")
+            lo = max(0, at - _HOP_CONTEXT_LINES)
+            hi = min(len(lines), at + _HOP_CONTEXT_LINES + 1)
+            window = "\n".join(lines[lo:hi])
+            return _HOP_SCAFFOLD_TOK + estimate_tokens(len(window.encode("utf-8")))
+    return _HOP_SCAFFOLD_TOK + estimate_tokens(len(fact.encode("utf-8")))
 
 
 def _argv_of(call: dict[str, Any]) -> list[str] | None:
@@ -165,6 +210,59 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
     facts_inline = facts_hop = 0
     misses: list[str] = []
 
+    # Evidence-regret ledger (docs/THEORY.md): per-profile, facts-bearing
+    # calls only. Fact-free calls land in the unattributed bucket instead —
+    # the facts proxy cannot see conclusion-shaped evidence, and a zero
+    # oracle there would drown the signal in false regret.
+    regret_by_profile: dict[str, dict[str, int]] = {}
+    unattributed_tok = unattributed_calls = 0
+
+    def _tally_regret(
+        prof: str,
+        facts: list[str],
+        digest: str,
+        digest_tok: int,
+        raw_text: str | None,
+    ) -> None:
+        """``raw_text`` is the recorded raw output when replay holds it
+        (simulated and read-path calls). For already-harnessed calls it is
+        None: the raw stayed in the store, so the naive counterfactual is
+        unknowable and those calls are excluded from naive-R — comparing a
+        digest to itself would fake a closed gap of zero."""
+        nonlocal unattributed_tok, unattributed_calls
+        if not facts:
+            unattributed_tok += digest_tok
+            unattributed_calls += 1
+            return
+        b = regret_by_profile.setdefault(
+            prof,
+            {"calls": 0, "facts": 0, "inline": 0, "hops": 0,
+             "oracle_tok": 0, "actual_tok": 0,
+             "naive_calls": 0, "naive_tok": 0, "naive_oracle_tok": 0,
+             "known_actual_tok": 0},
+        )
+        b["calls"] += 1
+        actual = digest_tok
+        call_oracle = 0
+        for fact in facts:
+            b["facts"] += 1
+            call_oracle += estimate_tokens(len(fact.encode("utf-8")))
+            if fact in digest:
+                b["inline"] += 1
+            else:
+                b["hops"] += 1
+                actual += _hop_cost(fact, raw_text)
+        b["oracle_tok"] += call_oracle
+        b["actual_tok"] += actual
+        if raw_text is not None:
+            # The naive comparison must subtract like from like: naive, its
+            # oracle, and the harness's own charge are all restricted to
+            # this same raw-known population.
+            b["naive_calls"] += 1
+            b["naive_tok"] += estimate_tokens(len(raw_text.encode("utf-8")))
+            b["naive_oracle_tok"] += call_oracle
+            b["known_actual_tok"] += actual
+
     for i, c in enumerate(calls):
         res = c["result"]
         if c["tool"] == "Bash":
@@ -189,20 +287,33 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
             # one-hop otherwise (raw bytes are in the store by contract).
             already_harnessed += 1
             sim_tok += r_tok
-            for fact in downstream_facts(calls, i):
+            facts = downstream_facts(calls, i)
+            for fact in facts:
                 if fact in res:
                     facts_inline += 1
                 else:
                     facts_hop += 1
                     misses.append(fact[:80])
+            prof = (
+                res.split("profile=", 1)[1].split("]", 1)[0]
+                if "profile=" in res
+                else "harnessed"
+            )
+            # digest IS the recorded result; raw bytes live in the store, so
+            # hop pricing falls back to its declared floor (raw_text=None).
+            _tally_regret(prof, facts, res, r_tok, None)
             continue
         if c["tool"] not in ("Bash",) and not c["tool"].startswith("mcp__"):
             # Read/Grep/Glob run under the read path (budgets, native caps),
             # not the emission gate — shape-digesting source-file Reads here
             # would misclaim (a file that *contains* test markers is not a
-            # test run). Count them raw under their own bucket.
+            # test run). Count them raw under their own bucket. For regret
+            # the read path delivers everything inline (digest == raw), so
+            # its row honestly shows regret == naive regret: the whole read
+            # channel is un-collapsed evidence, priced as such.
             sim_tok += r_tok
             profile_tok["read-path"] += r_tok
+            _tally_regret("read-path", downstream_facts(calls, i), res, r_tok, res)
             continue
         # Command-anchored detection: the real steering path hands ctx run
         # the full argv, so replay must too — shape-only dispatch would
@@ -217,16 +328,30 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
         sim_tok += min(d_tok, r_tok) if inline else d_tok
         prof = digest.split("profile=", 1)[1].split("]", 1)[0] if "profile=" in digest else "?"
         profile_tok[("inline" if inline else prof)] += r_tok
-        for fact in downstream_facts(calls, i):
+        facts = downstream_facts(calls, i)
+        for fact in facts:
             if fact in digest:
                 facts_inline += 1
             else:
                 facts_hop += 1
                 misses.append(fact[:80])
+        _tally_regret(
+            "inline" if inline else prof,
+            facts,
+            digest,
+            min(d_tok, r_tok) if inline else d_tok,
+            res,
+        )
 
     from ctx.textutil import sanitize_for_model
 
     safe_misses = [sanitize_for_model(m, ws.config.redaction.patterns)[0] for m in misses[:5]]
+    for b in regret_by_profile.values():
+        b["regret_tok"] = b["actual_tok"] - b["oracle_tok"]
+        # Naive comparison only over calls whose raw bytes replay actually
+        # holds (harnessed calls are excluded — their counterfactual is
+        # unknowable from the transcript alone).
+        b["naive_regret_tok"] = b["naive_tok"] - b["naive_oracle_tok"]
     return {
         "path": str(path),
         "calls": len(calls),
@@ -243,6 +368,9 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
         "facts_inline_in_digest": facts_inline,
         "facts_one_hop": facts_hop,
         "sample_one_hop": safe_misses,
+        "regret_by_profile": {k: dict(v) for k, v in sorted(regret_by_profile.items())},
+        "unattributed_digest_tok": unattributed_tok,
+        "unattributed_calls": unattributed_calls,
     }
 
 
@@ -297,3 +425,124 @@ def render_report(reports: list[dict[str, Any]], *, gaps: bool = False) -> str:
             "the model routes around."
         )
     return "\n".join(out).rstrip()
+
+
+def session_outcomes(path: str | Path) -> list[Any]:
+    """``ctx replay --outcomes``: deterministic evidence_followup/v1 events
+    from one recorded transcript. Read-only; windows still open at
+    transcript end are censored (never negative); investigation ids are
+    never invented for sessions that predate compiled plans."""
+    from ctx.evidence_outcomes import followups_from_session
+
+    return followups_from_session(parse_transcript(path), session_complete=False)
+
+
+def render_outcomes(events: list[Any]) -> str:
+    """The per-operator FOLLOW-UP scoreboard (association, not causation).
+    Counts shown beside every rate; positive rates use all observations as
+    denominator (censoring only under-counts positives); the requery rate
+    excludes censored windows from its denominator."""
+    per: dict[str, dict[str, int]] = {}
+    for e in events:
+        b = per.setdefault(
+            e.operator,
+            {"obs": 0, "censored": 0, "used_exactly": 0,
+             "validation_associated": 0, "equivalent_requery": 0},
+        )
+        b["obs"] += 1
+        if e.censored:
+            b["censored"] += 1
+        for f in ("used_exactly", "validation_associated", "equivalent_requery"):
+            if getattr(e, f):
+                b[f] += 1
+    out = ["Operator follow-up (association, not causation)"]
+    out.append("─" * 78)
+    out.append(
+        f"{'operator':<30} {'n':>4} {'exact-use':>10} {'valid-assoc':>11} "
+        f"{'requery':>8} {'censored':>9}"
+    )
+    if not per:
+        out.append("  (no evidence emissions with extractable identities found)")
+        return "\n".join(out)
+
+    def cell(n: int, d: int) -> str:
+        return f"{n}/{d}" if d else "—"
+
+    for op in sorted(per):
+        b = per[op]
+        non_censored = b["obs"] - b["censored"]
+        out.append(
+            f"{op:<30} {b['obs']:>4} {cell(b['used_exactly'], b['obs']):>10} "
+            f"{cell(b['validation_associated'], b['obs']):>11} "
+            f"{cell(b['equivalent_requery'], non_censored):>8} "
+            f"{b['censored']:>9}"
+        )
+    out.append(
+        "counts, not rates: Wilson lower bounds are derived at ranking time; "
+        "full events in --json"
+    )
+    return "\n".join(out)
+
+
+def render_regret(reports: list[dict[str, Any]]) -> str:
+    """The evidence-regret scoreboard: per-profile frontier gap, aggregated
+    across sessions (docs/THEORY.md). ``frontier`` = oracle/actual ∈ (0, 1];
+    1.00 means the digest delivered exactly the used evidence and nothing
+    else — the rate–distortion frontier under the facts proxy."""
+    agg: dict[str, Counter[str]] = {}
+    unattributed_tok = unattributed_calls = 0
+    for r in reports:
+        for prof, b in r.get("regret_by_profile", {}).items():
+            agg.setdefault(prof, Counter()).update(b)
+        unattributed_tok += r.get("unattributed_digest_tok", 0)
+        unattributed_calls += r.get("unattributed_calls", 0)
+
+    out = ["== evidence regret (R = actual − oracle · upper bound on the frontier gap) =="]
+    if not agg:
+        out.append("  no downstream-used facts found — nothing scoreable")
+    else:
+        out.append(
+            f"  {'profile':<14} {'calls':>5} {'facts':>5} {'in':>4} {'hop':>4}"
+            f" {'oracle':>8} {'actual':>8} {'R':>8} {'naive-R':>9} {'frontier':>9}"
+        )
+        tot: Counter[str] = Counter()
+        for prof, b in sorted(agg.items(), key=lambda kv: -kv[1]["regret_tok"]):
+            tot.update(b)
+            frontier = b["oracle_tok"] / b["actual_tok"] if b["actual_tok"] else 1.0
+            # naive-R is only meaningful where replay held the raw bytes;
+            # already-harnessed calls have no knowable counterfactual.
+            naive_col = f"{b['naive_regret_tok']:,}" if b["naive_calls"] else "—"
+            out.append(
+                f"  {prof:<14} {b['calls']:>5} {b['facts']:>5} {b['inline']:>4}"
+                f" {b['hops']:>4} {b['oracle_tok']:>8,} {b['actual_tok']:>8,}"
+                f" {b['regret_tok']:>8,} {naive_col:>9}"
+                f" {frontier:>9.2f}"
+            )
+        out.append(
+            f"  totals: R {tot['regret_tok']:,} tok · frontier "
+            f"{(tot['oracle_tok'] / tot['actual_tok'] if tot['actual_tok'] else 1.0):.2f}"
+        )
+        if tot["naive_calls"]:
+            # Same-population comparison: naive-R and the harness R both
+            # restricted to the raw-known calls (harnessed calls have no
+            # knowable counterfactual and are excluded from BOTH sides).
+            naive_r = tot["naive_tok"] - tot["naive_oracle_tok"]
+            harness_r = tot["known_actual_tok"] - tot["naive_oracle_tok"]
+            closed = (1 - harness_r / naive_r) * 100 if naive_r > 0 else 0.0
+            out.append(
+                f"  naive comparison ({tot['naive_calls']} raw-known calls): "
+                f"naive-R {naive_r:,} tok vs R {harness_r:,} — "
+                f"{closed:.0f}% of the naive gap closed"
+            )
+    if unattributed_calls:
+        out.append(
+            f"  unattributed digest spend: {unattributed_tok:,} tok over "
+            f"{unattributed_calls} fact-free calls (facts proxy is blind to "
+            "conclusion-shaped evidence; excluded from R by design)"
+        )
+    out.append(
+        "  reading: R is an UPPER bound — the facts oracle is a lower bound on "
+        "true sufficiency. A profile with persistent R needs inlining (hops>0) "
+        "or a slimmer digest (oracle ≪ actual with facts inline)."
+    )
+    return "\n".join(out)
