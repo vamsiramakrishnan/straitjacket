@@ -36,6 +36,20 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == "statusline":
         return _statusline_main(args[1:])
 
+    # ------------------------------------------------- surface gateway fast path
+    # `ctx surface gateway` runs the progressive-disclosure MCP server (stdio);
+    # it must not parse the full CLI, exactly like `ctx mcp`.
+    if len(args) >= 2 and args[0] == "surface" and args[1] == "gateway":
+        import os
+
+        from ctx.surface_gateway import serve_gateway
+
+        ws = None
+        if "--workspace" in args:
+            i = args.index("--workspace")
+            ws = args[i + 1] if i + 1 < len(args) else None
+        return serve_gateway(ws or os.getcwd())
+
     # ------------------------------------------------- supervisor fast path
     # Hidden: `ctx job _supervise <jobdir>` is spawned detached by
     # `ctx run --bg`; it must not resolve a workspace or parse the full CLI.
