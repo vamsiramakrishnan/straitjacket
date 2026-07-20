@@ -8,8 +8,23 @@ disk before the stub exists), and the epoch latch (elision sets only grow,
 frozen at threshold crossings)."""
 
 import json
+import time
 
 import pytest
+
+
+def _wait_until(predicate, timeout=5.0, interval=0.02):
+    """Poll ``predicate`` until true or the timeout elapses; returns its
+    last value. Used for state a streaming proxy writes AFTER the client
+    response returns — the relay delivers the body first and records wire
+    telemetry after (correct production ordering), so a test reading
+    wire.jsonl the instant ``post()`` returns races that trailing write."""
+    deadline = time.monotonic() + timeout
+    val = predicate()
+    while not val and time.monotonic() < deadline:
+        time.sleep(interval)
+        val = predicate()
+    return val
 
 
 def _tool_result(text, i):
@@ -182,6 +197,24 @@ def test_proxy_rescue_end_to_end(tmp_path):
 
         post(body)  # no window knowledge yet → forwarded byte-exact
         assert up.captured[0] == body
+
+        # The proxy records window pressure AFTER relaying the first
+        # response (deliver body first, bookkeep after — correct streaming
+        # ordering), and the rescue tier reads that recorded pct. So the
+        # second request must not fire until the first request's window
+        # observation has actually landed, else no rescue triggers. Wait
+        # for it rather than assuming it raced in — the flake this fixes.
+        def _window_pressured():
+            wf = state / "window.json"
+            if not wf.is_file():
+                return False
+            try:
+                return float(json.loads(wf.read_text()).get("window_pct", 0)) >= 70.0
+            except (json.JSONDecodeError, ValueError, AttributeError):
+                return False
+
+        assert _wait_until(_window_pressured), "window pressure never recorded"
+
         post(body)  # window now known at 75% → epoch fires
         forwarded = json.loads(up.captured[1])
         stubs = sum(
@@ -193,7 +226,23 @@ def test_proxy_rescue_end_to_end(tmp_path):
         assert len(up.captured[1]) < len(body)  # transcript actually shrank
         # Elided bytes are on disk; wire discloses the rescue.
         assert list((state / "elided").glob("*.txt"))
-        wire = [json.loads(l) for l in (state / "wire.jsonl").read_text().splitlines()]
-        assert any(r.get("rescued", 0) > 0 for r in wire)
+
+        # wire.jsonl is written AFTER the response is relayed to the client
+        # (the proxy delivers the body first, records telemetry after), so
+        # poll for the trailing write rather than assuming it landed by the
+        # time post() returned — the flake this replaces (race, not a bug).
+        def _rescued_on_wire():
+            wf = state / "wire.jsonl"
+            if not wf.is_file():
+                return False
+            rescued = 0
+            for line in wf.read_text().splitlines():
+                try:
+                    rescued += int(json.loads(line).get("rescued", 0) or 0)
+                except (json.JSONDecodeError, ValueError, AttributeError):
+                    continue  # a concurrently-appended partial line: skip
+            return rescued > 0
+
+        assert _wait_until(_rescued_on_wire), "wire.jsonl never disclosed a rescue"
     finally:
         srv.shutdown(); srv.server_close(); up.shutdown(); up.server_close()
