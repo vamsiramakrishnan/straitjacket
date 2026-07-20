@@ -34,6 +34,28 @@ from ctx import surface
 PROTOCOL_VERSION = "2024-11-05"
 STATE_FILE = ".ctx-surface/gateway-state.json"
 KERNEL_FAMILIES = frozenset({"harness"})  # always revealed
+_MAX_BACKEND_RESULT_BYTES = 16384  # cap proxied backend output (input+output containment)
+
+
+def _bound_result(result: dict[str, Any], max_bytes: int = _MAX_BACKEND_RESULT_BYTES) -> dict[str, Any]:
+    """The gateway is the input-side boundary, but a proxied backend can still
+    return a flood — so bound its text content here, composing capability
+    containment with output containment. An oversized text block is truncated
+    with an honest note; structured/binary blocks pass through."""
+    if not isinstance(result, dict) or not isinstance(result.get("content"), list):
+        return result
+    out_blocks = []
+    for block in result["content"]:
+        if (isinstance(block, dict) and block.get("type") == "text"
+                and isinstance(block.get("text"), str)):
+            raw = block["text"].encode("utf-8")
+            if len(raw) > max_bytes:
+                head = raw[:max_bytes].decode("utf-8", "ignore")
+                block = {**block, "text": head + (
+                    f"\n[ctx-gateway: backend output bounded to {max_bytes:,} of "
+                    f"{len(raw):,} bytes — the gateway caps proxied floods]")}
+        out_blocks.append(block)
+    return {**result, "content": out_blocks}
 
 
 # ------------------------------------------------------------ backend client
@@ -80,7 +102,12 @@ class MCPBackend:
                 pass
 
     def _rpc(self, method: str, params: dict) -> dict | None:
-        """Send a request and read until the matching id response. Best-effort."""
+        """Send a request and read until the matching id response, bounded by a
+        wall-clock deadline so a hung backend cannot block the gateway. Skips
+        interleaved notifications/other-id messages. Best-effort → None."""
+        import select
+        import time
+
         proc = self._proc
         if proc is None or proc.stdin is None or proc.stdout is None:
             return None
@@ -92,7 +119,17 @@ class MCPBackend:
             proc.stdin.flush()
         except (BrokenPipeError, OSError):
             return None
-        for _ in range(10000):
+        deadline = time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                ready, _, _ = select.select([proc.stdout], [], [], remaining)
+            except (OSError, ValueError):
+                return None
+            if not ready:
+                return None  # timed out waiting for the backend
             line = proc.stdout.readline()
             if not line:
                 return None
@@ -105,16 +142,23 @@ class MCPBackend:
                 continue
             if msg.get("id") == rid:
                 return msg
-        return None
 
     def list_tools(self) -> list[dict[str, Any]]:
         if self._tools is not None:
             return self._tools
         if self._ensure() is None:
             return []
-        resp = self._rpc("tools/list", {})
-        tools = (resp or {}).get("result", {}).get("tools", []) if resp else []
-        self._tools = [t for t in tools if isinstance(t, dict)]
+        tools: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _ in range(50):  # bound the page count defensively
+            params = {"cursor": cursor} if cursor else {}
+            resp = self._rpc("tools/list", params)
+            result = (resp or {}).get("result", {}) if resp else {}
+            tools.extend(t for t in result.get("tools", []) if isinstance(t, dict))
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+        self._tools = tools
         return self._tools
 
     def call(self, tool: str, arguments: dict) -> dict[str, Any]:
@@ -282,7 +326,7 @@ class Gateway:
             if self.family_of.get(server) not in self.revealed:
                 return self._text(f"{server} is hidden; surface_reveal "
                                   f"'{self.family_of.get(server)}' first"), False
-            return self._backend(server).call(tool, arguments), False
+            return _bound_result(self._backend(server).call(tool, arguments)), False
         return self._text(f"unknown tool {name!r}"), False
 
     def _index_result(self) -> dict[str, Any]:

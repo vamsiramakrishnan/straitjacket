@@ -168,6 +168,60 @@ def test_gateway_reads_snapshot_over_live_config(tmp_path):
     assert "snap" in b and "ctx-surface-gateway" not in b   # self excluded
 
 
+_FLOOD = (
+    "import sys,json\n"
+    "for line in sys.stdin:\n"
+    " line=line.strip()\n"
+    " if not line: continue\n"
+    " m=json.loads(line); mid=m.get('id'); meth=m.get('method')\n"
+    " if meth=='initialize': print(json.dumps({'jsonrpc':'2.0','id':mid,'result':{'protocolVersion':'2024-11-05','capabilities':{},'serverInfo':{'name':'fl'}}}),flush=True)\n"
+    " elif meth=='tools/list': print(json.dumps({'jsonrpc':'2.0','id':mid,'result':{'tools':[{'name':'dump','description':'d','inputSchema':{'type':'object'}}]}}),flush=True)\n"
+    " elif meth=='tools/call': print(json.dumps({'jsonrpc':'2.0','id':mid,'result':{'content':[{'type':'text','text':'X'*100000}]}}),flush=True)\n"
+)
+
+_HANG = (
+    "import sys,json\n"
+    "for line in sys.stdin:\n"
+    " line=line.strip()\n"
+    " if not line: continue\n"
+    " m=json.loads(line); mid=m.get('id'); meth=m.get('method')\n"
+    " if meth=='initialize': print(json.dumps({'jsonrpc':'2.0','id':mid,'result':{'protocolVersion':'2024-11-05','capabilities':{},'serverInfo':{'name':'h'}}}),flush=True)\n"
+    " elif meth=='tools/list': print(json.dumps({'jsonrpc':'2.0','id':mid,'result':{'tools':[{'name':'stuck','description':'d','inputSchema':{'type':'object'}}]}}),flush=True)\n"
+    " # tools/call: never answer\n"
+)
+
+
+def test_gateway_bounds_backend_flood(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    fake = root / "flood.py"
+    fake.write_text(_FLOOD, encoding="utf-8")
+    (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
+    (root / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "flood": {"command": sys.executable, "args": [str(fake)]}}}), encoding="utf-8")
+    g = gw.Gateway(root)
+    fam = next(f for f in g.families() if f != "harness")
+    g.call("surface_reveal", {"family": fam})
+    res, _ = g.call("mcp__flood__dump", {})
+    text = res["content"][0]["text"]
+    assert len(text.encode()) <= gw._MAX_BACKEND_RESULT_BYTES + 200   # capped
+    assert "backend output bounded" in text                          # honest note
+    g.close()
+
+
+def test_backend_hang_times_out(tmp_path):
+    import time
+
+    hang = tmp_path / "hang.py"
+    hang.write_text(_HANG, encoding="utf-8")
+    b = gw.MCPBackend("h", [sys.executable, str(hang)], timeout=2.0)
+    t0 = time.monotonic()
+    res = b.call("stuck", {})
+    assert time.monotonic() - t0 < 5.0        # returned near the 2s deadline
+    assert res.get("isError") is True
+    b.close()
+
+
 def test_serve_loop_over_stdio(ws):
     """Full JSON-RPC round trip through the real serve loop."""
     payload = "\n".join([
