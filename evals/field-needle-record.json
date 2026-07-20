@@ -23,12 +23,28 @@
       "output_excerpt": "INFO worker-29 request req-00001 processed in 2ms\nINFO worker-6 request req-00002 accepted in 87ms\nINFO worker-6 request req-00003 processed in 47ms\nINFO worker-16 request req-00004 accepted in 5ms\nINFO worker-2 request req-00005 dispatched in 84ms\nINFO worker-31 request req-00006 enqueued in 21ms\nINFO worker-6 request req-00007 forwarded in 16ms\nINFO worker-1 request req-00008 enqueued in 33ms\nIN"
     },
     {
+      "tool": "rtk (bash-hook filter)",
+      "out_tokens": 361,
+      "quiet_needle_survived": false,
+      "loud_needle_survived": true,
+      "retrieval_address": null,
+      "output_excerpt": "INFO worker-29 request req-00001 processed in 2ms\nINFO worker-6 request req-00002 accepted in 87ms\nINFO worker-6 request req-00003 processed in 47ms\nINFO worker-16 request req-00004 accepted in 5ms\nINFO worker-2 request req-00005 dispatched in 84ms\nINFO worker-31 request req-00006 enqueued in 21ms\nINFO worker-6 request req-00007 forwarded in 16ms\nINFO worker-1 request req-00008 enqueued in 33ms\nIN"
+    },
+    {
       "tool": "ponytail (advisory rules)",
       "out_tokens": 302698,
       "quiet_needle_survived": true,
       "loud_needle_survived": true,
       "retrieval_address": null,
       "output_excerpt": "[discipline ladder]\n1. Prefer narrow reads over full dumps.\n2. Summarise; do not restate raw output.\n3. Cite line numbers instead of quoting.\n4. Escalate retrieval only when evidence is insufficient.\n5. Keep narration terse.\n(advisory: the agent is asked to comply; nothing enforces it.)\n\nINFO worker-29 request req-00001 processed in 2ms\nINFO worker-6 request req-00002 accepted in 87ms\nINFO worker-"
+    },
+    {
+      "tool": "maki (sandboxed script)",
+      "out_tokens": 58,
+      "quiet_needle_survived": false,
+      "loud_needle_survived": true,
+      "retrieval_address": null,
+      "output_excerpt": "[maki: sandboxed script scanned 20,001 lines for anomalies]\nERROR db-pool connection refused on shard 7 (attempt 3)\nERROR cache eviction storm: 4128 keys dropped in 200ms window\n[2 anomalies found; script and full log not retained]"
     },
     {
       "tool": "headroom-ai 0.32.1",
@@ -53,7 +69,7 @@
       "quiet_needle_survived": true,
       "loud_needle_survived": true,
       "retrieval_address": true,
-      "output_excerpt": "[ctx run:eefbdc3496fa profile=logtemplate/v1]\ncwd: .\ncommand: cat corpus.log\nexit: 0\nstdout: 20,001 lines \u00b7 979.1 KiB \u00b7 est 250,648 tokens\nstderr: 0 lines \u00b7 0 B\ntemplates: 11 cover 20,000/20,001 lines\n  2,608\u00d7 L6: INFO worker-<*> request req-<*> enqueued in <*> \u00b7 span 0f44195122\n  2,545\u00d7 L11: INFO worker-<*> request req-<*> validated in <*> \u00b7 span 432ba740c9\n  2,508\u00d7 L2: INFO worker-<*> request re"
+      "output_excerpt": "[ctx run:8956c843e556 profile=logtemplate/v1]\ncwd: .\ncommand: cat corpus.log\nexit: 0\nstdout: 20,001 lines \u00b7 979.1 KiB \u00b7 est 250,648 tokens\nstderr: 0 lines \u00b7 0 B\ntemplates: 11 cover 20,000/20,001 lines\n  2,608\u00d7 L6: INFO worker-<*> request req-<*> enqueued in <*> \u00b7 span 0f44195122\n  2,545\u00d7 L11: INFO worker-<*> request req-<*> validated in <*> \u00b7 span 432ba740c9\n  2,508\u00d7 L2: INFO worker-<*> request re"
     }
   ]
 }

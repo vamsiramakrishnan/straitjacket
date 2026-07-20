@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Five-arm, model-free needle-survival head-to-head on ONE identical task.
+"""The field, one task — model-free needle-survival head-to-head.
 
 Every arm is handed the *same bytes* — a 20,001-line integration log hiding one
 structurally rare "quiet needle" (no ERROR/fail keyword) plus two loud ERRORs —
@@ -10,7 +10,11 @@ implemented faithfully to its documented behaviour:
 
   naive     — the flood passes through verbatim (no harness).
   caveman   — terse "say less": head+tail truncation, middle dropped.
+  rtk       — bash-hook flood filter: keep loud errors + context, drop the
+              success-path bulk (lossy on success, no addresses).
   ponytail  — advisory ruleset injected; the bytes still pass through raw.
+  maki      — sandboxed script collapses N ops into a tiny result; the script
+              and full output vanish (no provenance, no addresses).
   headroom  — headroom-ai wire-proxy compression (real library).
   sj        — `ctx run` birth-gate capture → bounded digest + retrieval address.
 
@@ -22,8 +26,8 @@ only, so it is deterministic and cheap. Three metrics per arm:
 
 Usage:
     pip install -e '.[dev]' headroom-ai tiktoken
-    python evals/five_arms_needle.py            # human table
-    python evals/five_arms_needle.py --json      # machine record
+    python evals/field_needle.py            # human table
+    python evals/field_needle.py --json      # machine record
 """
 from __future__ import annotations
 
@@ -145,6 +149,38 @@ def run_ponytail(raw: str, count) -> dict:
                    address=None)
 
 
+_LOUD_KEYWORDS = ("ERROR", "WARN", "FAIL", "EXCEPTION", "CRITICAL")
+
+
+def run_rtk(raw: str, count) -> dict:
+    # Fast bash-hook flood filter: keep lines matching a loud-error pattern
+    # plus head/tail context, drop the success-path bulk. The quiet needle is
+    # an INFO success line → filtered out. Truncated, no retrieval address.
+    lines = raw.splitlines()
+    keep = set(range(min(10, len(lines)))) | set(range(max(0, len(lines) - 10), len(lines)))
+    keep |= {i for i, l in enumerate(lines) if any(k in l for k in _LOUD_KEYWORDS)}
+    out, prev = [], -2
+    for i in sorted(keep):
+        if out and i != prev + 1:
+            out.append(f"... [filtered {i - prev - 1} lines] ...")
+        out.append(lines[i])
+        prev = i
+    return _result("rtk (bash-hook filter)", "\n".join(out) + "\n", count, address=None)
+
+
+def run_maki(raw: str, count) -> dict:
+    # A sandboxed script collapses the scan into a tiny aggregate: it greps for
+    # anomalies and emits only its matches. The quiet needle carries no anomaly
+    # keyword, so the script never selects it; the script and full log vanish
+    # into the chat (no provenance, no retrieval address).
+    lines = raw.splitlines()
+    matches = [l for l in lines if any(k in l for k in ("ERROR", "FAIL", "EXCEPTION"))]
+    text = (f"[maki: sandboxed script scanned {len(lines):,} lines for anomalies]\n"
+            + "\n".join(matches)
+            + f"\n[{len(matches)} anomalies found; script and full log not retained]")
+    return _result("maki (sandboxed script)", text, count, address=None)
+
+
 def run_headroom(raw: str, count) -> dict:
     try:
         import headroom
@@ -171,7 +207,7 @@ def run_sj(raw: str, count) -> dict:
     return _result("sj (ctx run logtemplate/v1)", digest, count, address=has_addr)
 
 
-ARMS = [run_naive, run_caveman, run_ponytail, run_headroom, run_sj]
+ARMS = [run_naive, run_caveman, run_rtk, run_ponytail, run_maki, run_headroom, run_sj]
 
 
 def main() -> int:
