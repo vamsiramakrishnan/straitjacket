@@ -233,8 +233,9 @@ def _main_slow(args: list[str]) -> int:
     p_surface.add_argument(
         "surface_cmd",
         choices=("inventory", "audit", "explain", "trim", "graph", "compile",
-                 "reconcile", "referee"),
-        help="inventory · audit · explain · trim · graph · compile · reconcile · referee",
+                 "reconcile", "referee", "install-gateway"),
+        help="inventory · audit · explain · trim · graph · compile · reconcile · "
+             "referee · install-gateway",
     )
     p_surface.add_argument("target", nargs="?", help="capability id for `explain`")
     p_surface.add_argument("--json", action="store_true", help="emit structured JSON")
@@ -535,6 +536,12 @@ def _main_slow(args: list[str]) -> int:
                 if agent_args.index("--proxy") < tail:
                     use_proxy = True
                     agent_args.remove("--proxy")
+            use_gateway = False
+            if "--gateway" in agent_args:
+                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+                if agent_args.index("--gateway") < tail:
+                    use_gateway = True
+                    agent_args.remove("--gateway")
             rescue_pct = 0.0
             if "--rescue-pct" in agent_args:
                 tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
@@ -553,6 +560,26 @@ def _main_slow(args: list[str]) -> int:
             ws = resolve_workspace(ns.workspace)
             if agent_args and agent_args[0] == "--":
                 agent_args = agent_args[1:]
+            # --gateway: set up the host(s) AND wire the progressive-disclosure
+            # gateway, so unrevealed MCP tool schemas never enter context.
+            if use_gateway:
+                from ctx.installer import install_claude, install_gateway
+
+                hosts = (("claude", "codex", "antigravity")
+                         if ns.host in ("setup", "all") else (ns.host,))
+                if ns.host in ("setup", "all"):
+                    wrap_setup(ws.root)
+                elif ns.host == "codex":
+                    wrap_codex(ws.root)
+                elif ns.host == "antigravity":
+                    wrap_antigravity(ws.root)
+                elif ns.host == "claude":
+                    print(install_claude(resolve_workspace(str(ws.root))))
+                print()
+                for h in hosts:
+                    print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
+                    print()
+                return 0
             # Single-command multi-host setup (built for Antigravity; also
             # harnesses Claude Code and Codex).
             if ns.host in ("setup", "all"):
@@ -744,6 +771,12 @@ def _cmd_surface(ws, ns) -> int:
     import json as _json
 
     from ctx import surface
+
+    if ns.surface_cmd == "install-gateway":
+        from ctx.installer import install_gateway
+
+        print(install_gateway(ws, ns.host, apply=ns.apply))
+        return 0
 
     if ns.surface_cmd in ("reconcile", "referee"):
         from ctx import surface_reconcile as sr

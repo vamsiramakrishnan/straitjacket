@@ -244,6 +244,69 @@ def claude_hook_settings(ctx_exe: str) -> dict:
     }
 
 
+_GATEWAY_NAME = "ctx-surface-gateway"
+
+
+def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
+    """Wire a host to load ONLY the progressive-disclosure gateway instead of
+    every MCP server directly, so unrevealed tool schemas never enter context
+    ('bound before bloat'). Snapshots the current backends to
+    ``.ctx-surface/backends.json`` (the gateway reads them from there) and
+    emits a gateway-only launch config per host under ``.ctx-surface/``. Never
+    rewrites the user's existing configs — the gateway config is a separate
+    file the host loads exclusively. Fail-open."""
+    from ctx import surface
+    from ctx.surface_gateway import _is_gateway_argv
+
+    root = ws.root
+    exe = _ctx_executable()
+    lines: list[str] = []
+
+    backends = {n: {"command": a[0], "args": a[1:]}
+                for n, a in surface._mcp_server_commands(root).items()
+                if not _is_gateway_argv(a)}
+    gw_args = ["surface", "gateway", "--workspace", str(root)]
+
+    files: dict[str, str] = {
+        ".ctx-surface/backends.json": json.dumps({"mcpServers": backends}, indent=2) + "\n",
+    }
+    if host == "claude":
+        files[".ctx-surface/gateway.claude.json"] = json.dumps(
+            {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args}}}, indent=2) + "\n"
+        launch = f"claude --strict-mcp-config --mcp-config .ctx-surface/gateway.claude.json"
+    elif host == "codex":
+        args_toml = ", ".join(json.dumps(a) for a in gw_args)
+        files[".ctx-surface/config.codex.gateway.toml"] = (
+            "# ctx surface gateway — load ONLY the gateway; it fronts the\n"
+            "# backends recorded in .ctx-surface/backends.json.\n"
+            f"[mcp_servers.{_GATEWAY_NAME}]\n"
+            f'command = "{exe}"\nargs = [{args_toml}]\n')
+        launch = f"codex --config .ctx-surface/config.codex.gateway.toml"
+    elif host == "antigravity":
+        files[".ctx-surface/mcp_config.gateway.json"] = json.dumps(
+            {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args, "disabled": False}}},
+            indent=2) + "\n"
+        launch = ("point ~/.gemini/antigravity-cli at "
+                  f".ctx-surface/mcp_config.gateway.json, then Refresh MCP servers")
+    else:
+        return f"unknown host {host!r}; one of claude, codex, antigravity"
+
+    lines.append(f"gateway wiring for {host}: fronts {len(backends)} backend(s) "
+                 f"[{', '.join(sorted(backends)) or 'none'}]")
+    if apply:
+        for rel, content in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        lines.append("  wrote: " + ", ".join(files))
+        lines.append("  tip: set [surface] gateway = true in ctx.toml so the "
+                     "SessionStart gate knows disclosure is progressive")
+    else:
+        lines.append("  preview — pass --apply to write the gateway config")
+    lines.append(f"  launch: {launch}")
+    return "\n".join(lines)
+
+
 def claude_statusline_setting(ctx_exe: str) -> dict:
     """Claude Code ``statusLine`` block: a command that receives session JSON
     on stdin and prints one line (model · context · cost · git). Cost comes

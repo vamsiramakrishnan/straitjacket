@@ -137,6 +137,31 @@ class MCPBackend:
 
 
 # ------------------------------------------------------------ gateway state
+BACKENDS_FILE = ".ctx-surface/backends.json"
+
+
+def _is_gateway_argv(argv: list[str]) -> bool:
+    """True if this argv is the gateway itself (avoid fronting ourselves)."""
+    return len(argv) >= 3 and argv[1:3] == ["surface", "gateway"]
+
+
+def gateway_backends(ws_root: Path | str) -> dict[str, list[str]]:
+    """Backend servers the gateway fronts. Prefer the stable snapshot written
+    at install time (``.ctx-surface/backends.json``) so the host can load ONLY
+    the gateway while the gateway still finds the backends; fall back to live
+    config discovery. The gateway never fronts itself."""
+    root = Path(ws_root)
+    servers: dict[str, list[str]] = {}
+    try:
+        doc = json.loads((root / BACKENDS_FILE).read_text(encoding="utf-8"))
+        for name, cfg in (doc.get("mcpServers") or {}).items():
+            if isinstance(cfg, dict) and cfg.get("command"):
+                servers[str(name)] = [str(cfg["command"])] + [str(a) for a in cfg.get("args", [])]
+    except Exception:
+        servers = dict(surface._mcp_server_commands(ws_root))
+    return {n: a for n, a in servers.items() if not _is_gateway_argv(a)}
+
+
 def _server_family(name: str, argv: list[str]) -> str:
     cap = surface.Capability(id=f"mcp.{name}", kind="mcp_server", provider=name,
                              source="", tokens=0, detail=" ".join(argv))
@@ -195,7 +220,7 @@ class Gateway:
 
     def __init__(self, ws_root: Path | str):
         self.ws_root = Path(ws_root)
-        self.commands = surface._mcp_server_commands(ws_root)
+        self.commands = gateway_backends(ws_root)
         self.family_of = {n: _server_family(n, a) for n, a in self.commands.items()}
         self.revealed = load_state(ws_root)
         self._backends: dict[str, MCPBackend] = {}

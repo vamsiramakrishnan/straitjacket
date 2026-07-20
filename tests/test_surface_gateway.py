@@ -109,6 +109,65 @@ def test_kernel_family_cannot_be_hidden(ws):
     g.close()
 
 
+def test_install_gateway_snapshots_backends_and_host_loads_only_gateway(tmp_path):
+    from ctx.installer import install_gateway
+    from ctx.workspace import resolve_workspace
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
+    (root / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "github": {"command": "gh-mcp", "args": ["serve"]},
+        "ctx-harness": {"command": "ctx", "args": ["mcp"]}}}), encoding="utf-8")
+    wsx = resolve_workspace(str(root))
+
+    install_gateway(wsx, "claude", apply=True)
+    # backends snapshot has the real servers; host config loads only the gateway
+    backends = json.loads((root / gw.BACKENDS_FILE).read_text())["mcpServers"]
+    assert set(backends) == {"github", "ctx-harness"}
+    gwcfg = json.loads((root / ".ctx-surface" / "gateway.claude.json").read_text())
+    assert list(gwcfg["mcpServers"]) == ["ctx-surface-gateway"]
+    # the gateway reads the snapshot and never fronts itself
+    assert set(gw.gateway_backends(root)) == {"github", "ctx-harness"}
+
+
+def test_install_gateway_codex_and_antigravity(tmp_path):
+    import tomllib
+
+    from ctx.installer import install_gateway
+    from ctx.workspace import resolve_workspace
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
+    (root / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "fs": {"command": "fs-mcp"}}}), encoding="utf-8")
+    wsx = resolve_workspace(str(root))
+
+    install_gateway(wsx, "codex", apply=True)
+    cx = tomllib.loads((root / ".ctx-surface" / "config.codex.gateway.toml").read_text())
+    assert list(cx["mcp_servers"]) == ["ctx-surface-gateway"]
+
+    install_gateway(wsx, "antigravity", apply=True)
+    ag = json.loads((root / ".ctx-surface" / "mcp_config.gateway.json").read_text())
+    assert list(ag["mcpServers"]) == ["ctx-surface-gateway"]
+
+
+def test_gateway_reads_snapshot_over_live_config(tmp_path):
+    # snapshot names a server the live .mcp.json does not — gateway trusts the
+    # snapshot (that's how the host loads only the gateway yet finds backends)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "ctx-surface-gateway": {"command": "ctx", "args": ["surface", "gateway"]}}}),
+        encoding="utf-8")
+    (root / ".ctx-surface").mkdir()
+    (root / ".ctx-surface" / "backends.json").write_text(json.dumps({"mcpServers": {
+        "snap": {"command": "snap-mcp", "args": []}}}), encoding="utf-8")
+    b = gw.gateway_backends(root)
+    assert "snap" in b and "ctx-surface-gateway" not in b   # self excluded
+
+
 def test_serve_loop_over_stdio(ws):
     """Full JSON-RPC round trip through the real serve loop."""
     payload = "\n".join([
