@@ -171,6 +171,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "unknown_command": "force_ask",
         "internal_error": "allow",
         "steering": "auto",
+        "collapse": False,  # replacement surface: substitute loop-shapes with collapsed ctx ops
         "max_inline_bytes": _MAX_INLINE_BYTES_DEFAULT,
         "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
         "session_read_budget_bytes": _SESSION_READ_BUDGET_DEFAULT,
@@ -212,6 +213,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             policy["unknown_command"] = str(guard.get("unknown_command", policy["unknown_command"]))
             policy["internal_error"] = str(guard.get("internal_error", policy["internal_error"]))
             policy["steering"] = str(guard.get("steering", policy["steering"]))
+            policy["collapse"] = bool(guard.get("collapse", policy["collapse"]))
             policy["max_inline_bytes"] = int(
                 budgets.get("max_inline_bytes", policy["max_inline_bytes"])
             )
@@ -525,6 +527,42 @@ def _note_records_opportunity(workspace_root: str | None, taught: bool) -> None:
         )
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+    except Exception:
+        pass
+
+
+def _failure_available(workspace_root: str | None) -> bool:
+    """True when a test run has been captured this session, so the
+    ``fails last | in-changed`` slice has data to return. Cheap ledger scan;
+    False on any doubt, so the pytest collapse never fires blind."""
+    if not workspace_root:
+        return False
+    try:
+        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "interventions.jsonl")
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if '"family": "pytest"' in line and "intervention_emitted" in line:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _note_collapse(workspace_root: str | None, shape: str, rung: str) -> None:
+    """Adoption telemetry for the replacement surface: one JSON line per
+    substitution to ``<workspace>/.ctx-session-reads/collapse.jsonl`` — the
+    numerator for 'loop-shapes collapsed'. Fail-open; never blocks."""
+    if not workspace_root:
+        return
+    try:
+        import time
+
+        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        os.makedirs(ledger_dir, exist_ok=True)
+        with open(os.path.join(ledger_dir, "collapse.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(
+                {"op": "collapse", "shape": shape, "rung": rung, "ts": time.time()},
+                sort_keys=True) + "\n")
     except Exception:
         pass
 
@@ -1129,6 +1167,25 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 cwd = v
                 break
         decision = classify_command(command, policy, cwd=cwd or workspace_root)
+        # Replacement surface (docs/REPLACEMENT-SURFACE.md): when collapse is
+        # enabled, a recognised navigation-loop shape — recursive grep, or a
+        # whole-suite re-run after a captured failure — is transparently
+        # substituted with the collapsed, addressable `ctx q` op. Delivered
+        # under the tool the agent already invoked, so the cheap path is taken
+        # *for* the model, not left for it to choose. Off by default; the
+        # substituted op is bounded and lossless (handles page exact bytes).
+        if policy.get("collapse") and _steering_allows(policy):
+            try:
+                from ctx import substitute
+
+                sub = substitute.collapse(
+                    command, failure_available=_failure_available(workspace_root))
+                if sub is not None:
+                    decision = dict(DECISION_ALLOW)
+                    decision["_rewrite"] = {"command": sub.command, "reason": sub.reason}
+                    _note_collapse(workspace_root, sub.shape, sub.rung)
+            except Exception:
+                pass
         # Eval teaching surface: a raw python heredoc / -c chain that hits
         # the guard gets the collapse move appended to its remediation (and
         # to the rewrite reason, so wrapped sessions see it too). Every

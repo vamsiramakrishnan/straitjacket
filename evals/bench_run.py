@@ -39,7 +39,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from bench.dataset import BY_ID, SCENARIOS  # noqa: E402
 
 MODELS = {"haiku": "claude-haiku-4-5-20251001", "sonnet": None}
-WRAPPED = {"sj"}
+WRAPPED = {"sj", "sj-collapse"}
 TOOLS = "Bash Read Grep Glob Edit Write MultiEdit"
 
 VERB_CARD = """\
@@ -84,7 +84,7 @@ def arm_argv(arm, model, prompt, cap):
         base += ["--model", MODELS[model]]
     if arm == "naive":
         return base
-    if arm == "sj":
+    if arm in ("sj", "sj-collapse"):
         return ["ctx", "wrap", "claude", "--proxy", "--"] + base[1:]
     if arm == "headroom":
         return ["headroom", "wrap", "claude", "--"] + base[1:]
@@ -140,8 +140,11 @@ def run_cell(scn, arm, model, rep, out):
         shutil.rmtree(workdir)
     workdir.mkdir(parents=True)
     scn.build(workdir)
-    if arm == "sj":  # straitjacket as installed: deliver the teaching surface
+    if arm in ("sj", "sj-collapse"):  # deliver the teaching surface
         (workdir / "CLAUDE.md").write_text(VERB_CARD, encoding="utf-8")
+    if arm == "sj-collapse":  # the replacement surface: opt into collapse
+        (workdir / "ctx.toml").write_text(
+            'version = 1\n[guard]\ncollapse = true\n', encoding="utf-8")
     cfg = out / f"cc_{tag}"
     cfg.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg), "PIP_REQUIRE_VIRTUALENV": "1"}
@@ -171,9 +174,28 @@ def run_cell(scn, arm, model, rep, out):
         "cost_usd": res.get("total_cost_usd") or res.get("costUSD"),
         "wall_s": round(wall, 1), "tokens": toks, "grade": g,
     }
-    if arm == "sj":
+    if arm in ("sj", "sj-collapse"):
         row["ctx_vocab"] = _vocab(cfg)
+    if arm == "sj-collapse":
+        row["collapse_fires"] = _collapse_fires(workdir)
     return row
+
+
+def _collapse_fires(workdir):
+    """How many loop-shapes the replacement surface actually collapsed, by
+    shape, from the fixture's collapse.jsonl ledger."""
+    out = {}
+    led = pathlib.Path(workdir) / ".ctx-session-reads" / "collapse.jsonl"
+    try:
+        for line in led.read_text(encoding="utf-8").splitlines():
+            try:
+                shape = json.loads(line).get("shape", "?")
+            except json.JSONDecodeError:
+                continue
+            out[shape] = out.get(shape, 0) + 1
+    except OSError:
+        pass
+    return out
 
 
 def main() -> int:
