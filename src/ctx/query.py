@@ -409,14 +409,10 @@ def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "refs", "a <Symbol>")
     from ctx import codeverbs
 
-    sites = None
-    if codeverbs._select_engine() == "jedi":
-        try:
-            sites, _ = codeverbs._jedi_refs(qc.ws, symbol)
-        except Exception:
-            sites = None
-    if sites is None:
-        sites, _ = codeverbs._ast_refs(qc.store, qc.ws, symbol, None)
+    # The shared engine ladder: SCIP (precise) → jedi → ast (docs/SUBSTRATE
+    # §M-K4). The engine label rides the stream note so the code.refs op and
+    # the digest can disclose which tier answered.
+    sites, engine = codeverbs.resolve_refs(qc.store, qc.ws, symbol)
     uniq: dict[tuple[str, int], str] = {}
     for rel, line, text in sites:
         uniq.setdefault((rel, line), text)
@@ -424,7 +420,9 @@ def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         {"file": rel, "line": line, "text": text.strip()[:_LINE_CAP], "symbol": symbol}
         for (rel, line), text in sorted(uniq.items())
     ]
-    return Stream("sites", rows)
+    out = Stream("sites", rows)
+    out.note = f"engine: {engine}"
+    return out
 
 
 def _callgraph(qc: _Ctx):

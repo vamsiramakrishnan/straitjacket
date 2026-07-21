@@ -426,16 +426,59 @@ def _ctags_extract(
 _TS_PACK_NAMES = {"python": "python", "javascript": "javascript", "typescript": "typescript"}
 
 
+# Individual grammar wheels for the modern tree-sitter API (0.22+): each
+# ``tree_sitter_<lang>`` module exposes ``language()`` (a PyCapsule) that
+# ``tree_sitter.Language`` wraps. This is the maintained path — the bundle
+# packages (language_pack, languages) lag the core API and, in sandboxed
+# environments, language_pack fetches parsers at runtime (a network 403
+# here). Grammar wheels are self-contained.
+_TS_GRAMMAR_MODULES = {
+    "python": ("tree_sitter_python",),
+    "javascript": ("tree_sitter_javascript",),
+    # tree-sitter-typescript exposes two grammars under one module.
+    "typescript": ("tree_sitter_typescript",),
+}
+
+
+def _ts_grammar_parser(language: str):
+    """Parser from an individual ``tree_sitter_<lang>`` grammar wheel via
+    the modern core API, or None when no grammar wheel is importable."""
+    mods = _TS_GRAMMAR_MODULES.get(language)
+    if not mods:
+        return None
+    try:
+        import tree_sitter as _ts
+    except Exception:
+        return None
+    for mod_name in mods:
+        try:
+            mod = __import__(mod_name)
+            lang_fn = getattr(mod, "language", None) or getattr(
+                mod, "language_typescript", None
+            )
+            if lang_fn is None:
+                continue
+            return _ts.Parser(_ts.Language(lang_fn()))
+        except Exception:
+            continue
+    return None
+
+
 def _ts_parser(language: str):
     name = _TS_PACK_NAMES.get(language)
     if name is None:
         raise BackendUnavailable(f"tree-sitter: no query set for {language!r}")
+    # Preferred: the bundle packages (one import, many languages) when they
+    # work; then individual grammar wheels (the maintained, offline path).
     for mod_name in ("tree_sitter_language_pack", "tree_sitter_languages"):
         try:
             mod = __import__(mod_name)
             return mod.get_parser(name)
         except Exception:
             continue
+    parser = _ts_grammar_parser(language)
+    if parser is not None:
+        return parser
     raise BackendUnavailable("tree-sitter bindings not importable ([code] extra)")
 
 

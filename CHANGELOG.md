@@ -4,6 +4,39 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.30.0] - 2026-07-21
+
+Building the toolchains that were "not available" — tree-sitter and SCIP.
+
+- **M-K4 · SCIP ingestion, shipped** (`scip_ingest.py`, `_vendor/scip_pb2`):
+  an opportunistic `index.scip` reader adds **precise, compiler-backed
+  references** at the top of the refs engine ladder (**SCIP (exact) →
+  jedi → ast**), disclosed per node (`ctx refs` / `code.refs` show `engine
+  scip (exact)`). `find_index` reads `index.scip` at the workspace root or
+  `$CTX_SCIP_INDEX`; the index is only read, never generated. The protobuf
+  runtime is the `[scip]` extra; the SCIP bindings are vendored
+  (`src/ctx/_vendor/scip_pb2.py` generated from the committed `scip.proto`);
+  either absent → the ingester degrades to None and the ladder falls
+  through — absence costs nothing. `resolve_refs` is now the single ladder
+  used by `ctx refs`, `ctx q refs`, and the `code.refs` op.
+  - **Precision receipt** (`evals/scip_precision.py` + `.md`): on an
+    ambiguity fixture (a name also in a comment, a string, and a shadowing
+    local), SCIP scores 100% precision / 0 false positives vs the textual
+    rung's 50% / 4 false positives. Tested with a committed real
+    `index.scip` (`tests/fixtures/scip_sample.scip`, from `scip-python`),
+    so CI needs only protobuf, not the indexer.
+- **Tree-sitter grammar-wheel backend** (`skeleton.py`): the skeleton
+  tier's tree-sitter extractor gains a third, offline-safe path —
+  individual `tree_sitter_<lang>` grammar wheels via the modern core API
+  (the bundle `tree-sitter-language-pack` fetches parsers at runtime, a
+  sandbox 403). It carries a JS/TS skeleton that stdlib `ast` cannot parse
+  and ctags need not. The `[code]` extra now pins the grammar wheels
+  (`tree-sitter-python/javascript/typescript`) instead of the unreliable
+  language-pack.
+- CI `full` job installs `.[dev,map,fast,code,scip]` so both new backends
+  are exercised, not just skipped. Suite: 994 passed (venv with all
+  extras); tests skip-if-absent so the minimal job stays green.
+
 ## [0.29.0] - 2026-07-20
 
 Finishing the designed-not-built bucket (M-K/M-L), with receipts.

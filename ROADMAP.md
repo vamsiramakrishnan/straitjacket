@@ -243,7 +243,9 @@ now ──► M-L ctx ask: Phase 0 thin ops ✅ Phase 1 locate/impact/diagnose �
         · next: A/B/C payoff referee per intent (flood task); NL sugar
 now ──► M-K tail: K3 records_opportunity ledger ✅ · K5 comby decline-gate
         instrumented ✅ (rung still gated) · K2 scoped-scan receipt ✅
-        (95% file cut, 13× ast-grep) · K4 SCIP deferred (no test toolchain)
+        (95% file cut, 13× ast-grep) · K4 SCIP ingestion ✅ (v0.30.0:
+        precise xrefs, 100% vs 50% precision on the ambiguity fixture;
+        tree-sitter grammar-wheel backend shipped too)
 ```
 
 Deliberately **not** planned: wire-side semantic compression (LLMLingua-class

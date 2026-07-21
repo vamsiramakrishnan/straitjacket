@@ -157,7 +157,7 @@ ladders (left = preferred, `→` = labeled degradation), and status:
 |---|---|---|---|
 | `file_select` | `corpus` (q source) · `repo.files` (plan op) | git ls-files → **fd** → os.walk; `--changed` from generation facts | **Shipped** v0.26.0 (M-K2) |
 | `site_search` | `search`/`refs` (q) · `code.search` (plan) · MCP `search` | rg --json → Python regex | **Shipped** incl. span capture + result blobs, v0.26.0 (M-K1) |
-| `symbol_extract` | `decls`/`outline` (q) · `ast.outline` (plan) · `def/refs` | SCIP → jedi/ast-grep → tree-sitter → ctags --json → heuristic | **Shipped** except SCIP → M-K4 |
+| `symbol_extract` | `decls`/`outline` (q) · `ast.outline` (plan) · `def/refs` | **SCIP (exact)** → jedi/ast-grep → tree-sitter (grammar wheels) → ctags --json → heuristic | **Shipped** incl. SCIP (v0.30.0) + tree-sitter grammar-wheel backend |
 | `record_transform` | `records` source + `where/group/top/count/distinct/histogram` (q) · `evidence.*` (plan) | native stages → **jq/jaq compile target** → `ctx eval` escape hatch | **Shipped** native, v0.26.0 (M-K3); jq engine + opportunity ledger open |
 | `structural_rewrite` | `ast.rewrite.preview/apply` (plan, execute-class, CLI-only) | ast-grep → **comby** → **decline** (never textual) | **Shipped** (1 rung); → M-K5 |
 | `incremental_trigger` | none (generation checks at use time) | content-keyed laziness → broker-era watcher tenant | lazy form **Shipped**; watcher **Deferred** → M-K6 |
@@ -287,16 +287,31 @@ tokens; plus the opportunity ledger reporting ≥1 promotion candidate
 from real sessions before any further stage is added.
 **Effort**: 1–2 days. **Depends on**: M-K1 useful, not required.
 
-### M-K4 · Precise references: SCIP ingestion (M-G increment, resequenced)
+### M-K4 · Precise references: SCIP ingestion — **shipped v0.30.0**
 
-Unchanged in content from ALGEBRA M-G (designed, unbuilt): opportunistic
-`index.scip` reader → `ref` facts with a labeled precision tier;
-`refs`/`code.refs` engine ladder gains SCIP above jedi/ast; absence costs
-nothing. Resequenced *above* the comby rung because precise references
-multiply the value of every downstream join (root-cause query, impact),
-while a second rewrite engine only widens one op. **Acceptance/referee**
-as specified in ALGEBRA §M-G and its root-cause-join eval. **Effort**:
-~2 days.
+Opportunistic `index.scip` reader → precise, compiler-backed reference
+sites at the top of the `refs` engine ladder (**SCIP (exact) → jedi →
+ast**), disclosed per node (`ctx refs` / `code.refs` show `engine scip
+(exact)`). The protobuf runtime is the `[scip]` extra; the generated
+bindings are vendored (`ctx._vendor.scip_pb2`, committed alongside
+`scip.proto`); either absent → the ingester probes and degrades to None,
+the ladder falls through, absence costs nothing (the ripgrep pattern
+applied to a library). `find_index` reads `index.scip` at the workspace
+root or `$CTX_SCIP_INDEX`; the index is only *read*, never generated
+(indexing is a separate build step, exactly as specified).
+
+**Why it matters**: SCIP resolves references *across files with type
+precision* — the fixture's `helper` resolves to its definition in
+`pkg/core.py` plus the import and both call sites in `main.py`, which the
+jedi/ast rungs approximate. This multiplies the value of every downstream
+join (root-cause, impact). **Tested** with a committed real `index.scip`
+fixture (`tests/fixtures/scip_sample.scip`, produced by `scip-python`), so
+CI needs only the protobuf runtime, not the indexer.
+
+The toolchain that was "not available" is now provisioned: `scip-python`
+(npm) produces the index; the SCIP protobuf schema is vendored and
+compiled. What blocked this was never the design — it was the absence of a
+fixture, now built.
 
 ### M-K5 · Rewrite breadth: the comby rung, behind a decline corpus
 

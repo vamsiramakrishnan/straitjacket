@@ -254,12 +254,9 @@ def _op_code_search(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
 
 def _op_code_refs(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     out = _run_q_stage(pc, "refs", [str(args.get("symbol") or "")])
-    try:
-        from ctx.codeverbs import _select_engine
-
-        engine = _select_engine()
-    except Exception:
-        engine = "ast"
+    # The refs stage records the actual ladder tier (scip/jedi/ast) in its
+    # note — disclose it verbatim rather than re-guessing the engine.
+    engine = (out.note or "").removeprefix("engine: ") or "ast"
     return payload("sites", out.rows, omitted=out.omitted, meta={"engine": engine})
 
 
