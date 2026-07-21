@@ -78,8 +78,13 @@ PYTEST_PY = _pytest_python()
 
 
 def arm_argv(arm, model, prompt, cap):
+    # sj-collapse removes the native Grep/Glob tools so search is forced onto
+    # the doors the replacement surface controls: Bash grep (→ substituted) or
+    # ctx verbs (→ already collapsed). This is the wozcode move's missing half
+    # — replace the surface means also *remove* the default tools.
+    tools = "Bash Read Edit Write MultiEdit" if arm == "sj-collapse" else TOOLS
     base = ["claude", "-p", prompt, "--max-turns", str(cap),
-            "--output-format", "json", "--allowedTools", TOOLS]
+            "--output-format", "json", "--allowedTools", tools]
     if MODELS[model]:
         base += ["--model", MODELS[model]]
     if arm == "naive":
