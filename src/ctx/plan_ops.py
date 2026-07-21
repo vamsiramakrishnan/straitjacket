@@ -456,17 +456,56 @@ def _op_test_run(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     return payload("records", rows, meta=meta, artifacts={"run": f"run:{short}"})
 
 
+def _note_rewrite_decline(pc: PlanContext, args: dict, reason: str) -> None:
+    """M-K5 decline corpus (docs/SUBSTRATE.md §M-K5): record a rewrite the
+    ast-grep rung could not express — engine absent, or a pattern that
+    matched nothing. This is the DEMAND denominator; the comby rung merges
+    only if this corpus shows a real population. Fail-open; never raises."""
+    try:
+        import json
+        import time
+
+        d = pc.ws.root / ".ctx-session-reads"
+        d.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(
+            {
+                "op": "comby_candidate",
+                "reason": reason,
+                "pattern": str(args.get("pattern") or ""),
+                "rewrite": str(args.get("rewrite") or ""),
+                "language": args.get("language"),
+                "glob": args.get("glob"),
+                "ts": time.time(),  # operational only
+            },
+            sort_keys=True,
+        )
+        with (d / "rewrite-declines.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
+
+
 def _op_rewrite_preview(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     from ctx import astgrep
 
-    rows, meta = astgrep.rewrite_preview(
-        pc.ws,
-        pc.store,
-        str(args.get("pattern") or ""),
-        str(args.get("rewrite") or ""),
-        language=args.get("language"),
-        glob=args.get("glob"),
-    )
+    try:
+        rows, meta = astgrep.rewrite_preview(
+            pc.ws,
+            pc.store,
+            str(args.get("pattern") or ""),
+            str(args.get("rewrite") or ""),
+            language=args.get("language"),
+            glob=args.get("glob"),
+        )
+    except astgrep.EngineMissing:
+        # The rung is unavailable — a decline the comby corpus should count.
+        _note_rewrite_decline(pc, args, "engine_absent")
+        raise
+    if not rows:
+        # Matched nothing structurally: a candidate the current rung could
+        # not express (or a genuinely absent occurrence — the corpus is a
+        # candidate list a human reviews, not an auto-merge signal).
+        _note_rewrite_decline(pc, args, "no_structural_match")
     artifacts = {}
     if meta.get("patch_blob"):
         artifacts["patch"] = f"blob:{meta['patch_blob']}"
@@ -564,6 +603,26 @@ def _op_evidence_failures(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
         )
     artifacts = {"run": f"run:{run_id}"} if run_id else {}
     return payload("sites", rows, meta=meta, artifacts=artifacts)
+
+
+def _op_evidence_diff(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
+    """Behavioral delta between two captured runs (the shipped ``run_diff``
+    as a plan node) — the ``compare`` intent's engine. Emits the terminal
+    ``text`` kind; missing/unresolvable refs degrade to a declared note,
+    never an error."""
+    a = str(args.get("ref_a") or args.get("run_a") or "")
+    b = str(args.get("ref_b") or args.get("run_b") or "")
+    if not a or not b:
+        return payload("text", [{"text": "compare needs two run refs (ref_a, ref_b)"}],
+                       meta={"engine": "rundiff", "note": "two run: refs required"})
+    from ctx.rundiff import run_diff
+
+    try:
+        text = run_diff(pc.store, pc.ws, a, b)
+    except Exception as e:
+        return payload("text", [{"text": f"diff unavailable: {e}"}],
+                       meta={"engine": "rundiff", "note": "unresolved refs"})
+    return payload("text", [{"text": text}], meta={"engine": "rundiff"})
 
 
 def _op_code_symbols(pc: PlanContext, args: dict, inp: dict | None) -> dict[str, Any]:
@@ -753,6 +812,11 @@ register_op("code.context", _op_code_context, input_kinds=("sites", "symbols"),
             doc="terminal bounded materialization of input regions — sites get "
                 f"line±context, symbols their range (args: context, cap ≤ "
                 f"{OUTLINE_FILE_CAP})")
+register_op("evidence.diff", _op_evidence_diff, input_kinds=(), output_kind="text",
+            provides={"changedness": 0.6, "dynamic_failure": 0.3},
+            cost="index",
+            doc="behavioral delta between two captured runs (args: ref_a, ref_b) "
+                "— the compare intent's engine")
 register_op("test.run", _op_test_run, input_kinds=(), output_kind="records",
             provides={"dynamic_failure": 1.0, "freshness": 0.8, "coverage": 0.3},
             klass="execute", cost="test", cacheable=False,

@@ -52,6 +52,87 @@ def test_locate_and_impact_emit_coverage_only():
         assert json.loads(plan_json)["emit"]["sections"] == ["coverage"]
 
 
+# ------------------------------------------ Phase 2/3 intents (trace..review)
+def test_trace_is_structural_call_path_observe():
+    from ctx import ask
+
+    plan_json, _ = ask.compile_ask("trace", "how does X flow", symbol="X")
+    ops = [s["op"] for s in json.loads(plan_json)["steps"]]
+    assert ops == ["code.refs", "code.callers", "code.callees", "code.impact"]
+    assert "test.run" not in ops  # observe-class: no execution
+
+
+def test_compare_needs_two_runs_and_teaches():
+    from ctx import ask
+
+    with pytest.raises(ask.AskError) as e:
+        ask.compile_ask("compare", "what differs")
+    assert "--against" in str(e.value)
+    plan_json, disc = ask.compile_ask(
+        "compare", "what differs", ref_a="run:aaaa", ref_b="run:bbbb"
+    )
+    steps = json.loads(plan_json)["steps"]
+    assert [s["op"] for s in steps] == ["evidence.diff"]
+    assert steps[0]["args"] == {"ref_a": "run:aaaa", "ref_b": "run:bbbb"}
+    assert any("run:aaaa → run:bbbb" in d for d in disc)
+
+
+def test_verify_and_review_are_execute_class():
+    from ctx import ask
+
+    for intent in ("verify", "review"):
+        plan_json, disc = ask.compile_ask(intent, "q")
+        ops = [s["op"] for s in json.loads(plan_json)["steps"]]
+        assert "test.run" in ops  # they run tests
+        assert any("class: execute" in d for d in disc)
+        assert any("python -m pytest" in d for d in disc)  # default command
+
+
+def test_execute_intents_rejected_on_bounded_tier():
+    """verify/review carry test.run — CLI runs them, the MCP tier rejects
+    them by construction (the observe/execute contract)."""
+    from ctx import ask, plan_ir
+
+    for intent in ("verify", "review"):
+        plan_json, _ = ask.compile_ask(intent, "q")
+        plan = plan_ir.parse_plan(plan_json)
+        assert plan_ir.validate_plan(plan, tier="cli", plan_policy=None) == []
+        mcp = plan_ir.validate_plan(plan, tier="mcp", plan_policy=None)
+        assert any("execute" in r.reason for r in mcp)
+
+
+def test_observe_intents_pass_both_tiers():
+    from ctx import ask, plan_ir
+
+    for intent, kw in (("trace", {"symbol": "X"}),
+                       ("compare", {"ref_a": "run:a", "ref_b": "run:b"})):
+        plan = plan_ir.parse_plan(ask.compile_ask(intent, "q", **kw)[0])
+        assert plan_ir.validate_plan(plan, tier="cli", plan_policy=None) == []
+        assert plan_ir.validate_plan(plan, tier="mcp", plan_policy=None) == []
+
+
+def test_evidence_diff_op_wraps_rundiff(state_home, workspace_dir):
+    from ctx.execution import run_capture
+    from ctx.plan_ops import OPS, PlanContext
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+
+    ws = resolve_workspace(str(workspace_dir))
+    store = Store(ws.workspace_id)
+    a = run_capture(ws, ["printf 'x\\n'"], shell=True, store=store, timeout=30)
+    b = run_capture(ws, ["printf 'y\\n'"], shell=True, store=store, timeout=30)
+    ra = "run:" + str(a.manifest["id"]).removeprefix("sha256:")[:12]
+    rb = "run:" + str(b.manifest["id"]).removeprefix("sha256:")[:12]
+    out = OPS["evidence.diff"].fn(
+        PlanContext(ws=ws, store=store), {"ref_a": ra, "ref_b": rb}, None
+    )
+    assert out["kind"] == "text" and out["meta"]["engine"] == "rundiff"
+    assert "ctx diff" in out["rows"][0]["text"]
+    # Missing refs degrade to a declared note, never an error.
+    out2 = OPS["evidence.diff"].fn(PlanContext(ws=ws, store=store), {}, None)
+    assert "two run" in out2["meta"]["note"]
+
+
 def test_missing_intent_suggests_but_does_not_run():
     from ctx import ask
 

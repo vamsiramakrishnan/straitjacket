@@ -55,11 +55,14 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     bounded live tail, `--wait` collects the digest when you need it.
 16. Answer repository questions with `ctx ask`, not a search/read/search
     loop. It compiles the question into one bounded evidence view:
-    `ctx ask "<q>" --intent locate|impact|diagnose [--symbol X]`. `locate`
-    = where is X defined and used; `impact` = what could break if X
-    changes; `diagnose` = what explains the captured failures (reads the
-    last captured run's facts — it never reruns tests). The receipt
-    discloses its interpretation; pass `--symbol`/`--run` to pin a slot.
+    `ctx ask "<q>" --intent <intent> [--symbol X]`. Intents: `locate`
+    (where is X defined/used), `impact` (what breaks if X changes),
+    `diagnose` (what explains the captured failures — reads the last run's
+    facts, never reruns), `trace` (how control/data flows through X),
+    `compare` (what differs between two runs: `--run A --against B`),
+    `verify` / `review` (run the tests and report — execute-class,
+    CLI-only). The receipt discloses its interpretation; pass
+    `--symbol`/`--run` to pin a slot.
     For a multi-step investigation you can name yourself, compile a
     `ctx.plan/v1` and run `ctx investigate <plan>` — one model round in,
     one causally-organized digest out (see `references/evidence-plans.md`).

@@ -15,11 +15,13 @@ pre-filtering; the digest already selects the load-bearing evidence.
   token printed in the digest. Retrieval is bounded; it cannot re-flood context.
 - Cite coordinates (`file:line`, `run:`/`span:` handles) instead of restating
   file or tool output back into the conversation.
-- Answer repository questions with `ctx ask "<q>" --intent
-  locate|impact|diagnose` — one bounded evidence view instead of a
-  search/read/search loop (`diagnose` reads the last captured run's failure
-  facts; it never reruns tests). For a multi-step investigation you can name,
-  run a compiled `ctx.plan/v1` via the `investigate` op.
+- Answer repository questions with `ctx ask "<q>" --intent <intent>` — one
+  bounded evidence view instead of a search/read/search loop. Intents:
+  `locate`/`impact`/`diagnose` (diagnose reads the last run's failure facts,
+  never reruns), `trace` (call path through X), `compare` (`--run A
+  --against B`), `verify`/`review` (run the tests — execute-class, CLI-only).
+  For a multi-step investigation you can name, run a compiled `ctx.plan/v1`
+  via the `investigate` op.
 - Compose typed facts with `ctx q '<stage> | <stage>'` (a bounded, total
   algebra) instead of piping raw output through grep/awk/jq: e.g.
   `refs X | group file | top 3 | get`, `fails last | in-changed` (failing

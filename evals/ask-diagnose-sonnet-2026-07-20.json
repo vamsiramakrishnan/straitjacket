@@ -1,0 +1,58 @@
+{
+  "model": "sonnet",
+  "max_turns": 30,
+  "gold": "orders/pricing.py:apply_discount",
+  "rows": [
+    {
+      "arm": "naive",
+      "model": "sonnet",
+      "rep": 1,
+      "num_turns": 6,
+      "terminal": "success",
+      "hit_turn_cap": false,
+      "cost_usd": 0.30734859999999997,
+      "wall_s": 20.8,
+      "tokens": {
+        "in": 12,
+        "out": 899,
+        "cache_create": 39345,
+        "cache_read": 190302
+      },
+      "culprit_named": "orders/pricing.py:apply_discount",
+      "culprit_ok": true,
+      "suite_green_after": true,
+      "success": true,
+      "identified_culprit": true
+    },
+    {
+      "arm": "sj_skill",
+      "model": "sonnet",
+      "rep": 1,
+      "num_turns": 9,
+      "terminal": "success",
+      "hit_turn_cap": false,
+      "cost_usd": 0.5292987,
+      "wall_s": 37.2,
+      "tokens": {
+        "in": 18,
+        "out": 1579,
+        "cache_create": 60772,
+        "cache_read": 469759
+      },
+      "culprit_named": "orders/pricing.py:apply_discount",
+      "culprit_ok": true,
+      "suite_green_after": true,
+      "success": true,
+      "identified_culprit": true,
+      "ctx_vocab": {
+        "ask": 1,
+        "q": 0,
+        "investigate": 0,
+        "plan": 0,
+        "run": 2,
+        "get": 0,
+        "search": 0
+      }
+    }
+  ]
+}

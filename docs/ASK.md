@@ -43,20 +43,30 @@ same slots always produce the same plan id — so **every node-cache key is
 stable across phrasings** that resolve to the same slots. Determinism is
 inherited from the plan tier, not re-implemented.
 
-Three intents ship (the ones with strong exact evidence and — for two of
-three — zero execution):
+Seven intents ship (the observe five plus two execute-class):
 
 | intent | question | plan shape | class |
 |---|---|---|---|
 | `locate` | where is X defined and used? | refs → warmed symbol rows → per-file census → definition bodies | observe |
 | `impact` | what could break if X changes? | callers → bounded blast radius → related tests → changes | observe |
 | `diagnose` | what explains the captured failures? | changes × **captured** failures → root-cause join → counter-join → failing-frame context | observe |
+| `trace` | how does control/data flow through X? | X's sites → callers (in) → callees (out) → transitive reach (hop-grouped) | observe |
+| `compare` | what differs between two runs? | `evidence.diff` (the shipped run-diff as a node) | observe |
+| `verify` | what proves this change is correct? | changes → related tests → **run the suite** (birth gate) | execute |
+| `review` | what changed, what is risky, what is under-verified? | changes → symbols → tests → **run** → root-cause join + counterevidence | execute |
 
-Every intent is **observe-class end to end** — `diagnose` reads
-`evidence.failures` (captured facts), it never reruns tests. Two
-invariants are structural, not optional: counterevidence is a real join
-node (the investigate renderer prints the section even when empty —
-anti-anchoring), and the only `text`-emitting node is `code.context`, so
+The observe five are **observe-class end to end** — `diagnose` reads
+`evidence.failures` (captured facts), it never reruns tests. `verify` and
+`review` are **execute-class**: they run tests under the birth gate, so
+they are CLI-only — the plan validator rejects `test.run` on the bounded
+MCP tier (`execute_on_observe_tier`), and the intent discloses its class
+up front. `compare` needs two run refs (`--run A --against B`); its slots
+teach when missing, like every other intent's subject.
+
+Two invariants are structural, not optional: counterevidence is a real
+join node (the investigate renderer prints the section even when empty —
+anti-anchoring), and the only `text`-emitting node is `code.context`
+(and `evidence.diff`/`compare`, terminal by construction), so
 bytes materialize exactly once, terminally (the DIGEST-CLOSURE law).
 
 ## No natural-language parser (the deliberate omission)
@@ -145,7 +155,7 @@ A design review earns its keep by what it declines. From the proposal:
 | Rebrand run/ask to the whole public surface | **Deferred** | `ask` ships as a compiler *in front of* the existing verbs; the rebrand is its own versioned decision |
 | `view:` handles, `ask show`, role projections | **Deferred** | the investigate digest already indexes addressable node blobs; projections need a measured multi-worker use, not a speculative noun |
 | The §4 entity/relation/operation ontology (11 · 14 · 11) | **Cut** | no predicates behind `taints`/`co_fails_with`/`verified_by`; the shipped op names in the intent presets are sufficient and real |
-| verify / review / trace / compare intents | **Deferred** | verify/review carry `test.run` (execute-class — must degrade on the bounded tier); land after the observe intents prove the shape |
+| verify / review / trace / compare intents | **Shipped** (v0.29.0) | trace/compare observe-class; verify/review execute-class with the bounded-tier rejection enforced by the plan validator |
 | Anticipatory inlining | **Deferred to shadow** | promote only from measured exact follow-ups (the house Wilson-gate idiom), never on a hunch |
 
 The keep list underlines the two things better than the average version
@@ -173,8 +183,8 @@ parser gives that referee its C arm now; it runs with the next eval wave.
 ```
 now  ──► Phase 0 thin ops (evidence.failures · code.symbols · code.context) ✅
          Phase 1 intent presets + ctx ask (locate · impact · diagnose) ✅
-next ──► the A/B/C referee, per intent ──► trace/compare intents
-then ──► verify/review (execute-class; bounded-tier degradation) ─┐
+         Phase 2 trace · compare (observe) ✅  ·  Phase 3 verify · review (execute) ✅
+next ──► the A/B/C referee, per intent (retrieval turns ≤ 50% of ctx q/get) ─┐
          NL compiler as sugar over presets (misclassification telemetry) ┤
          role projections + view manifest (after a measured multi-worker need)
 later ─► shadow anticipatory prefetch (Wilson-gated, like every other promotion)

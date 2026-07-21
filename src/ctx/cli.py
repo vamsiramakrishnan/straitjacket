@@ -371,13 +371,13 @@ def _main_slow(args: list[str]) -> int:
     p_ask = sub.add_parser(
         "ask",
         help="answer a repository question via a typed intent preset "
-        "(locate | impact | diagnose) — compiles to one evidence plan",
+        "(locate|impact|diagnose|trace|compare|verify|review) — one evidence plan",
     )
     p_ask.add_argument("question", help="the repository question (plain text)")
     p_ask.add_argument(
         "--intent", dest="ask_intent", default=None,
-        help="locate | impact | diagnose (required unless unambiguous; the "
-        "error suggests one — it never guesses and runs)",
+        help="locate|impact|diagnose|trace|compare|verify|review (required "
+        "unless unambiguous; the error suggests one — it never guesses and runs)",
     )
     p_ask.add_argument(
         "--symbol", dest="ask_symbol", default=None,
@@ -385,10 +385,19 @@ def _main_slow(args: list[str]) -> int:
     )
     p_ask.add_argument(
         "--run", dest="ask_run", default=None,
-        help="run handle for diagnose (default: the latest captured run)",
+        help="run handle: the failure run for diagnose; run A for compare "
+        "(default: the latest captured run)",
+    )
+    p_ask.add_argument(
+        "--against", dest="ask_against", default=None,
+        help="compare: run B (the second run handle to diff --run against)",
+    )
+    p_ask.add_argument(
+        "--command", dest="ask_command", default=None,
+        help="verify/review: the test command to run (default: python -m pytest -q)",
     )
     p_ask.add_argument("--depth", dest="ask_depth", type=int, default=None,
-                       help="impact blast-radius depth (≤6)")
+                       help="impact/trace blast-radius depth (≤6)")
     p_ask.add_argument(
         "--plan", dest="ask_show_plan", action="store_true",
         help="print the compiled ctx.plan/v1 and disclosure, do not execute",
@@ -1549,6 +1558,9 @@ def _cmd_ask(ws, ns) -> int:
             symbol=ns.ask_symbol,
             run=ns.ask_run,
             depth=ns.ask_depth,
+            ref_a=ns.ask_run,
+            ref_b=getattr(ns, "ask_against", None),
+            command=getattr(ns, "ask_command", None),
         )
     except ask.AskError as e:
         print(str(e), file=sys.stderr)

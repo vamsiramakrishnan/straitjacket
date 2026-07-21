@@ -414,6 +414,12 @@ _EVAL_TEACH = (
     "an addressable blob and only a bounded digest returns."
 )
 
+_RECORDS_TEACH = (
+    "Or query the structured records directly: ctx q 'records <run:|blob:> "
+    "--jsonl | group <field> | count' (or distinct/histogram) — bounded, "
+    "typed, no re-parsing."
+)
+
 _PY_PROG_RE = re.compile(r"^python(3(\.\d+)?)?$")
 
 
@@ -468,6 +474,53 @@ def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
         path = os.path.join(ledger_dir, "eval-adoption.jsonl")
         line = json.dumps(
             {"op": "eval_opportunity", "taught": taught, "ts": time.time()},
+            sort_keys=True,
+        )
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
+
+
+# Record-transform shapes that ``ctx q`` (records/group/count/distinct/
+# histogram) collapses (docs/SUBSTRATE.md M-K3): jq programs, sort|uniq -c
+# (group+count), awk field projection, and count-after-filter. Conservative
+# by construction — the shape must be unambiguous, so a bare `sort` or a
+# plain `awk` script never matches. This is the DEMAND denominator that
+# gates promoting further named projections into the algebra.
+_UNIQ_C_RE = re.compile(r"\buniq\s+-\w*c")
+_AWK_PROJECT_RE = re.compile(r"\bg?awk\s+.*\{\s*print\s+\$[0-9]")
+_JQ_RE = re.compile(r"(^|[|;&]\s*)jq\b")
+
+
+def _records_opportunity(command: str) -> bool:
+    """True when ``command`` is a structured-record transform that a
+    bounded ``ctx q`` pipeline expresses (a jq program, a sort|uniq -c
+    group-count, or an awk field projection)."""
+    if _JQ_RE.search(command):
+        return True
+    if _UNIQ_C_RE.search(command):
+        return True
+    if _AWK_PROJECT_RE.search(command):
+        return True
+    return False
+
+
+def _note_records_opportunity(workspace_root: str | None, taught: bool) -> None:
+    """Adoption telemetry for the records-transform surface: one JSON line
+    to ``<workspace>/.ctx-session-reads/records-adoption.jsonl`` — the
+    denominator against which ``ctx q records`` use (store telemetry
+    op="q") is measured. Fail-open; never blocks a decision."""
+    if not workspace_root:
+        return
+    try:
+        import time
+
+        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        os.makedirs(ledger_dir, exist_ok=True)
+        path = os.path.join(ledger_dir, "records-adoption.jsonl")
+        line = json.dumps(
+            {"op": "records_opportunity", "taught": taught, "ts": time.time()},
             sort_keys=True,
         )
         with open(path, "a", encoding="utf-8") as fh:
@@ -1088,6 +1141,16 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 if "_rewrite" in decision:
                     decision["_rewrite"]["reason"] += "\n" + _EVAL_TEACH
             _note_eval_opportunity(workspace_root, taught)
+        # Records-transform teaching surface (M-K3): a jq / sort|uniq -c /
+        # awk-projection pipeline that hits the guard gets the ctx q records
+        # move appended, and is ledgered as the adoption denominator.
+        if _records_opportunity(command):
+            taught = decision.get("decision") in ("deny", "force_ask")
+            if taught:
+                decision["reason"] = decision.get("reason", "") + "\n" + _RECORDS_TEACH
+                if "_rewrite" in decision:
+                    decision["_rewrite"]["reason"] += "\n" + _RECORDS_TEACH
+            _note_records_opportunity(workspace_root, taught)
         # Reflex arc (docs/REFLEX.md layers 1-3): score this command against
         # the session's recorded interventions. A `ctx get`/`ctx search` on a
         # known run handle is a landing (the positive class); anything else

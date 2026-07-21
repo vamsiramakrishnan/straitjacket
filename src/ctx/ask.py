@@ -42,10 +42,13 @@ class Intent:
     doc: str
     needs_symbol: bool
     compile: Callable[..., dict]
+    klass: str = "observe"  # observe | execute (execute runs tests → CLI-only)
+    needs_refs: int = 0  # compare needs two run refs
+    default_command: str | None = None  # verify/review test command
 
 
 # ------------------------------------------------------------------ presets
-def _locate(*, symbol: str, question: str, run=None, depth=None) -> dict[str, Any]:
+def _locate(*, symbol: str, question: str, run=None, depth=None, **_) -> dict[str, Any]:
     """Where is X defined and used? refs → warmed symbol rows → per-file
     census → the definitions' exact bodies (terminal)."""
     return {
@@ -68,7 +71,7 @@ def _locate(*, symbol: str, question: str, run=None, depth=None) -> dict[str, An
     }
 
 
-def _impact(*, symbol: str, question: str, run=None, depth=None) -> dict[str, Any]:
+def _impact(*, symbol: str, question: str, run=None, depth=None, **_) -> dict[str, Any]:
     """What could break if X changes? direct callers → bounded blast
     radius → the tests that plausibly cover it → what already changed."""
     return {
@@ -87,7 +90,7 @@ def _impact(*, symbol: str, question: str, run=None, depth=None) -> dict[str, An
     }
 
 
-def _diagnose(*, question: str, symbol=None, run=None, depth=None) -> dict[str, Any]:
+def _diagnose(*, question: str, symbol=None, run=None, depth=None, **_) -> dict[str, Any]:
     """What explains the captured failures? changes × failures → the
     root-cause join, its counterevidence, and the failing frames' exact
     context. Never reruns tests — freshness is declared, not assumed."""
@@ -111,11 +114,105 @@ def _diagnose(*, question: str, symbol=None, run=None, depth=None) -> dict[str, 
     }
 
 
+def _trace(*, symbol: str, question: str, run=None, depth=None, **_) -> dict[str, Any]:
+    """How does control/data flow through X? A structural call path: who
+    reaches X (callers), what X reaches (callees), and the transitive blast
+    radius (impact, hop-grouped) — the edges are the trace, and unresolved
+    ones are declared in coverage (name-resolution is labeled per node).
+    ``refs`` locates X's own sites so the path is anchored. Dataflow
+    (taint) is a follow-up — it needs a committed semgrep rules file, so
+    the default trace is structural."""
+    return {
+        "version": "ctx.plan/v1",
+        "objective": {"kind": "trace", "question": question},
+        "budget": {"wall_seconds": 90},
+        "emit": {"sections": ["coverage"]},
+        "steps": [
+            {"id": "site", "op": "code.refs", "args": {"symbol": symbol}},
+            {"id": "into", "op": "code.callers", "args": {"symbol": symbol}},
+            {"id": "outof", "op": "code.callees", "args": {"symbol": symbol}},
+            {"id": "reach", "op": "code.impact",
+             "args": {"symbol": symbol, "depth": int(depth or 3)}},
+        ],
+    }
+
+
+def _compare(*, question: str, ref_a: str, ref_b: str, **_) -> dict[str, Any]:
+    """What differs between two captured runs? The behavioral delta
+    (failure-set and template changes with spans), not two full outputs."""
+    return {
+        "version": "ctx.plan/v1",
+        "objective": {"kind": "compare", "question": question},
+        "budget": {"wall_seconds": 60},
+        "emit": {"sections": ["coverage"]},
+        "steps": [
+            {"id": "delta", "op": "evidence.diff",
+             "args": {"ref_a": ref_a, "ref_b": ref_b}},
+        ],
+    }
+
+
+def _verify(*, question: str, command: str, **_) -> dict[str, Any]:
+    """What proves this change is correct? The tests that plausibly cover
+    the change set, then the suite run under the birth gate — outcome in
+    coverage, the run addressable as run:<id>. Execute-class: it runs
+    tests, so it is CLI-only (the plan validator rejects test.run on the
+    bounded tier)."""
+    return {
+        "version": "ctx.plan/v1",
+        "objective": {"kind": "verify", "question": question},
+        "budget": {"wall_seconds": 600},
+        "emit": {"sections": ["coverage"]},
+        "steps": [
+            {"id": "changes", "op": "repo.changed"},
+            {"id": "tests", "op": "code.related_tests", "input": "changes"},
+            {"id": "run", "op": "test.run", "args": {"command": command}},
+        ],
+    }
+
+
+def _review(*, question: str, command: str, **_) -> dict[str, Any]:
+    """What changed, what is risky, and what remains under-verified? The
+    composition: changed symbols + the tests covering them + a fresh run,
+    then the root-cause join over that run's failures against the change
+    set (targeted diagnose) with counterevidence. Execute-class."""
+    return {
+        "version": "ctx.plan/v1",
+        "objective": {"kind": "review", "question": question},
+        "budget": {"wall_seconds": 600},
+        "emit": {"sections": ["conclusion_candidates", "counterevidence", "coverage"]},
+        "steps": [
+            {"id": "changes", "op": "repo.changed"},
+            {"id": "symbols", "op": "code.symbols", "input": "changes"},
+            {"id": "tests", "op": "code.related_tests", "input": "changes"},
+            {"id": "run", "op": "test.run", "args": {"command": command}},
+            {"id": "culprits", "op": "evidence.join",
+             "args": {"on": "failing_in_changed"}, "after": ["run", "changes"]},
+            {"id": "counter", "op": "evidence.join",
+             "args": {"on": "untouched_failures"}, "after": ["run", "changes"]},
+        ],
+    }
+
+
+_DEFAULT_TEST_CMD = "python -m pytest -q"
+
 INTENTS: dict[str, Intent] = {
     "locate": Intent("locate", "where is X defined and used", True, _locate),
     "impact": Intent("impact", "what could break if X changes", True, _impact),
     "diagnose": Intent(
         "diagnose", "what explains the captured failures", False, _diagnose
+    ),
+    "trace": Intent("trace", "how control/data flows through X", True, _trace),
+    "compare": Intent(
+        "compare", "what differs between two runs", False, _compare, needs_refs=2
+    ),
+    "verify": Intent(
+        "verify", "what proves this change is correct", False, _verify,
+        klass="execute", default_command=_DEFAULT_TEST_CMD,
+    ),
+    "review": Intent(
+        "review", "what changed, what is risky, what is under-verified", False,
+        _review, klass="execute", default_command=_DEFAULT_TEST_CMD,
     ),
 }
 
@@ -150,6 +247,11 @@ _INTENT_HINTS: tuple[tuple[str, str], ...] = (
     ("depends", "impact"),
     ("why", "diagnose"), ("failing", "diagnose"), ("fails", "diagnose"),
     ("failure", "diagnose"), ("explains", "diagnose"),
+    ("flow", "trace"), ("reach", "trace"), ("trace", "trace"),
+    ("path", "trace"),
+    ("differ", "compare"), ("difference", "compare"), ("changed between", "compare"),
+    ("prove", "verify"), ("verify", "verify"), ("correct", "verify"),
+    ("review", "review"), ("risky", "review"), ("risk", "review"),
 )
 
 
@@ -169,6 +271,9 @@ def compile_ask(
     symbol: str | None = None,
     run: str | None = None,
     depth: int | None = None,
+    ref_a: str | None = None,
+    ref_b: str | None = None,
+    command: str | None = None,
 ) -> tuple[str, list[str]]:
     """Slots → canonical ``ctx.plan/v1`` JSON + disclosure lines.
 
@@ -198,6 +303,11 @@ def compile_ask(
         )
 
     disclosure = [f"intent: {it.name} — {it.doc}"]
+    if it.klass == "execute":
+        disclosure.append(
+            "class: execute — runs tests under the birth gate (CLI-only; "
+            "the bounded MCP tier rejects it)"
+        )
     if it.needs_symbol and not symbol:
         inferred, cands = infer_symbol(question)
         if inferred is None:
@@ -218,9 +328,23 @@ def compile_ask(
         )
     elif symbol:
         disclosure.append(f"subject: {symbol}")
+
+    if it.needs_refs == 2 and not (ref_a and ref_b):
+        raise AskError(
+            f"ctx ask --intent {it.name} compares two runs: pass "
+            "--run <run:A> --against <run:B>"
+        )
+    if it.needs_refs == 2:
+        disclosure.append(f"comparing: {ref_a} → {ref_b}")
+    if it.default_command is not None:
+        command = command or it.default_command
+        disclosure.append(f"test command: {command}")
     if run:
         disclosure.append(f"run: {run}")
 
     q_text = (question or "").strip() or f"{it.name}: {symbol or run or 'workspace'}"
-    plan = it.compile(symbol=symbol, question=q_text, run=run, depth=depth)
+    plan = it.compile(
+        symbol=symbol, question=q_text, run=run, depth=depth,
+        ref_a=ref_a, ref_b=ref_b, command=command,
+    )
     return json.dumps(plan, sort_keys=True), disclosure

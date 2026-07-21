@@ -242,11 +242,14 @@ wiring is dropped.
 
 ### M-K3 · `records`: the stream algebra over structured artifacts
 
-**Status: shipped v0.26.0** — the `records` source, `distinct`, and
-`histogram` (native engine, closure-pinned). Open, deliberately: the
-jq/jaq physical compile target (pure speed, adds no capability) and the
-`records_opportunity` adoption ledger (ship with the next telemetry
-wave); the eval-collapse records-arm referee runs then.
+**Status: shipped v0.26.0; adoption ledger v0.29.0.** The `records`
+source, `distinct`, and `histogram` (native engine, closure-pinned); and
+now the `records_opportunity` ledger — the hook detects a jq / `sort|uniq
+-c` / awk-projection pipeline, teaches the `ctx q records` collapse, and
+records the opportunity in `.ctx-session-reads/records-adoption.jsonl` as
+the demand denominator. Open, deliberately: the jq/jaq physical compile
+target stays deferred (pure speed, adds no capability); the eval-collapse
+records-arm referee runs once the ledger shows real demand.
 
 *Absorb the jq class without importing the jq language.*
 
@@ -297,11 +300,17 @@ as specified in ALGEBRA §M-G and its root-cause-join eval. **Effort**:
 
 ### M-K5 · Rewrite breadth: the comby rung, behind a decline corpus
 
-**Status: deliverable 3 (sed/awk steering) shipped v0.26.0** — read-only
-steers to capture; in-place force_asks with the preview-first remediation,
-detected in plain argv *and* inside compound expressions (where every
-`{…}` awk program lands). The gate instrumentation and the comby rung
-itself remain designed.
+**Status: deliverable 3 (sed/awk steering) shipped v0.26.0; the decline-
+corpus gate instrumented v0.29.0.** Read-only sed/awk steers to capture;
+in-place force_asks with the preview-first remediation, detected in plain
+argv *and* inside compound expressions (where every `{…}` awk program
+lands). The gate now records `comby_candidate` entries into
+`.ctx-session-reads/rewrite-declines.jsonl` whenever `ast.rewrite.preview`
+declines (ast-grep absent) or matches nothing structurally — the demand
+denominator. **The comby rung itself is still not built, by design**: it
+merges only if this corpus shows a real population. Building it before the
+data would be the exact "receipts before doctrine" violation the gate
+exists to prevent.
 
 *ast-grep → comby → decline. The contract does not change; only the
 ladder grows a rung.*

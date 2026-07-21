@@ -239,8 +239,11 @@ now ──► M-K substrate operators: K1 spans ✅ K2 corpus ✅ K3 records ✅
         K5.3 sed/awk steering ✅ (v0.26.0) · next: K4 SCIP; K5 comby
         behind its decline-corpus gate; K6 waits for M-E
 now ──► M-L ctx ask: Phase 0 thin ops ✅ Phase 1 locate/impact/diagnose ✅
-        (v0.27.0) · next: A/B/C referee per intent; trace/compare;
-        verify/review (execute-class); NL sugar over presets
+        Phase 2 trace/compare ✅ Phase 3 verify/review ✅ (v0.29.0)
+        · next: A/B/C payoff referee per intent (flood task); NL sugar
+now ──► M-K tail: K3 records_opportunity ledger ✅ · K5 comby decline-gate
+        instrumented ✅ (rung still gated) · K2 scoped-scan receipt ✅
+        (95% file cut, 13× ast-grep) · K4 SCIP deferred (no test toolchain)
 ```
 
 Deliberately **not** planned: wire-side semantic compression (LLMLingua-class

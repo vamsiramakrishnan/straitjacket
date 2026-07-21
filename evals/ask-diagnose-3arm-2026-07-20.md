@@ -98,3 +98,23 @@ arms (the verbs' payoff needs a task large enough to amortize them —
 already solved, which *costs* turns rather than saving them). The
 adoption-vs-payoff distinction is the open question: this run shows the
 verbs are *adopted* once surfaced; whether they *win* needs the flood case.
+
+## Addendum — Sonnet confirmation (2026-07-20, v0.29.0)
+
+Re-ran naive vs `sj_skill` on **Sonnet** (the "stronger model" arm the
+caveats named), same task:
+
+| | naive | sj_skill |
+|---|---|---|
+| Suite green · culprit named | ✅ · ✅ | ✅ · ✅ |
+| Turns | **6** | 9 |
+| Cost | **$0.31** | $0.53 |
+| `ctx ask` invoked | – | **1** |
+
+Sonnet **adopts `ctx ask`** with the card in context (haiku did too once
+carded) — so vocabulary delivery works across model tiers. But on this
+no-flood task it still *costs* turns: adoption ≠ payoff. This is the ship
+gate's own discipline restated — the A/B/C referee (retrieval turns ≤ 50 %
+of `ctx q`/`get`) must run on a **flood-bearing** task, per intent, and a
+single-bug fix in a 4-file repo is definitionally not that. Adoption is
+now proven at both tiers; the payoff measurement is the named next eval.

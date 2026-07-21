@@ -4,6 +4,43 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.29.0] - 2026-07-20
+
+Finishing the designed-not-built bucket (M-K/M-L), with receipts.
+
+- **`ctx ask` intent family completed** (`ask.py`, `plan_ops.py`, `cli.py`):
+  four new intents join locate/impact/diagnose. `trace` (structural call
+  path — refs → callers → callees → transitive reach) and `compare`
+  (behavioral run-diff via the new `evidence.diff` plan op) are observe-
+  class. `verify` (changes → related tests → run the suite) and `review`
+  (changes → symbols → tests → run → root-cause join + counterevidence)
+  are **execute-class**: CLI runs them, the bounded MCP tier rejects
+  `test.run` (`execute_on_observe_tier`), and each intent discloses its
+  class. New `--against`/`--command` flags; compare/verify slots teach when
+  missing. All seven compile deterministically to `ctx.plan/v1`.
+- **M-K3 `records_opportunity` ledger** (`hook.py`): a jq / `sort|uniq -c`
+  / awk-projection pipeline is detected, taught the `ctx q records`
+  collapse, and recorded to `.ctx-session-reads/records-adoption.jsonl` —
+  the demand denominator. (The jq physical compile target stays deferred:
+  pure speed, no capability gain.)
+- **M-K5 comby decline-corpus gate** (`plan_ops.py`): `ast.rewrite.preview`
+  now records `comby_candidate` entries (engine absent, or no structural
+  match) to `.ctx-session-reads/rewrite-declines.jsonl`. Instrumentation
+  ONLY — the comby rung stays unbuilt until this corpus shows real demand.
+- **M-K4 SCIP ingestion: deferred, with reason** — no SCIP toolchain or
+  protobuf in this environment to produce a real `.scip` test fixture, so
+  building an untested ingester is the speculative code the project
+  refuses. Recorded in docs/SUBSTRATE.md.
+- **Evals**: M-K2 scoped-scan receipt (`evals/corpus_scoped_scan.py` +
+  receipt) — corpus reduces the eligible set 178→9 files (94.9%), a 13.1×
+  ast-grep wall speedup even on the fast engine (the slow Semgrep arm is
+  declared, not run — Semgrep absent here). Plus a Sonnet addendum to the
+  3-arm diagnosis receipt: a stronger model adopts `ctx ask` once the card
+  is in context (as haiku did), but on a no-flood task adoption still
+  costs turns — the A/B/C payoff referee needs a flood-bearing task.
+- Skill/AGENTS teach all seven intents (skill BODY change — invocation-
+  loaded, no prefix-cache cost; manifest regenerated at PREFIX_VERSION 4).
+
 ## [0.28.0] - 2026-07-20
 
 The skill catches up to the engines, plus a measured three-arm receipt.

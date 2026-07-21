@@ -5,16 +5,21 @@ index entry is not enough; each verb's output is bounded and deterministic.
 
 ## Answer a question / compose facts (start here)
 
-- `ctx ask "<question>" --intent locate|impact|diagnose [--symbol X]
-  [--run r] [--depth N] [--plan]` — compile a repository question into one
-  bounded evidence view (a typed `ctx.plan/v1` preset run through the plan
-  tier). Intents: `locate` (where is X defined and used), `impact` (what
-  could break if X changes — callers + bounded blast radius + related
+- `ctx ask "<question>" --intent <intent> [--symbol X] [--run r]
+  [--against B] [--command C] [--depth N] [--plan]` — compile a repository
+  question into one bounded evidence view (a typed `ctx.plan/v1` preset run
+  through the plan tier). Intents: `locate` (where is X defined/used),
+  `impact` (what breaks if X changes — callers + blast radius + related
   tests), `diagnose` (what explains the captured failures — reads the last
-  captured run's facts and joins them against the change set; **never
-  reruns tests**). No natural-language guessing: `--intent` is required (a
-  missing one teaches and suggests), and the subject is `--symbol` or the
-  question's single identifier-shaped token (disclosed in the receipt).
+  run's facts and joins against the change set; **never reruns tests**),
+  `trace` (structural call path through X — callers/callees/reach),
+  `compare` (behavioral delta between two runs: `--run A --against B`),
+  `verify` (run the tests covering the change and report), `review`
+  (changed symbols + tests + a fresh run + root-cause join). `verify` and
+  `review` are **execute-class** (they run tests) — CLI-only; the bounded
+  MCP tier rejects them. No natural-language guessing: `--intent` is
+  required (a missing one teaches and suggests), and the subject is
+  `--symbol` or the question's single identifier-shaped token (disclosed).
   `--plan` prints the compiled plan without executing.
 - `ctx q '<stage> | <stage> | …'` — total pipeline algebra over typed
   record streams; bounded, no loops, every stage's result minted as an
