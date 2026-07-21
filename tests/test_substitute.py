@@ -54,6 +54,19 @@ def test_unrelated_commands_pass_through(cmd):
     assert collapse(cmd) is None
 
 
+@pytest.mark.parametrize("cmd", [
+    "grep -rn Foo . | wc -l",            # counting — not a listing
+    "grep -rn Foo . | cut -d: -f1",      # field extraction
+    "grep -rn Foo . | awk '{print $2}'",
+    "grep -rn Foo . > out.txt",          # redirect
+    "grep -rn Foo . && echo done",       # chain
+    "echo $(grep -rn Foo .)",            # command substitution
+])
+def test_compound_commands_never_clobbered(cmd):
+    # a pipe/redirect/chain changes what the agent asked for — must pass through
+    assert collapse(cmd) is None
+
+
 def test_pytest_rerun_gated_on_a_captured_failure():
     # no failure on record → do not touch a (possibly first) run
     assert collapse("pytest", failure_available=False) is None

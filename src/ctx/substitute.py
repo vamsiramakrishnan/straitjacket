@@ -44,6 +44,19 @@ _GREP_VALUE_FLAGS = {
     "--after-context", "--before-context", "--context", "--include", "--exclude",
 }
 
+# shell operators that make a command compound — a pipe/redirect/chain changes
+# what the agent asked for (`grep … | wc -l` counts; `grep … > f` redirects), so
+# the whole-command substitution would be wrong. We substitute only a *bare*
+# invocation; anything compound passes through untouched (still bounded at the
+# emission gate).
+_SHELL_OPS = {"|", "||", "&&", ";", "&", ">", ">>", "<", "<<", "2>", "2>>", "|&", "1>"}
+
+
+def _is_compound(toks: list[str], raw: str) -> bool:
+    if any(t in _SHELL_OPS for t in toks):
+        return True
+    return "$(" in raw or "`" in raw  # command substitution
+
 
 @dataclass(frozen=True)
 class Substitution:
@@ -192,6 +205,8 @@ def collapse(command: str, *, failure_available: bool = False) -> Substitution |
     toks = _split(command)
     if not toks:
         return None
+    if _is_compound(toks, command):
+        return None  # a pipe/redirect/chain changes meaning — never clobber it
     sub = _collapse_grep(toks)
     if sub:
         return sub
