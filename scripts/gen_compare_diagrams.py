@@ -132,7 +132,7 @@ def write_pair(name: str, builder):
 # Diagram 1: the field as a treemap of contained ideas
 # ---------------------------------------------------------------------------
 def build_field_treemap(P: dict) -> str:
-    W, H = 1200, 470
+    W, H = 1200, 620
     c = Canvas(W, H, "The field, contained",
                "Each neighbouring tool does one thing well. straitjacket takes the idea "
                "and drops its cost: the amber strip on each tile is what the harness kept.", P)
@@ -149,6 +149,7 @@ def build_field_treemap(P: dict) -> str:
         (318, 224, 276, 150, "RAG / vectors", "recall without resend —", "probabilistic, no provenance", "deterministic addresses", False),
         (604, 224, 276, 150, "Ponytail", "the solution ladder —", "advisory, unmeasured", "A/B-adopted + ctx debt", False),
         (890, 224, 278, 150, "Maki", "one script, N ops —", "output vanishes to chat", "ctx eval, addressable", False),
+        (32, 384, 1136, 150, "wozcode", "replace the tool surface —", "custom-tool schemas add window cost", "transparent substitution, zero new schema", True),
     ]
     for x, y, w, h, title, does, limit, took, emph in tiles:
         sh = P["amber"] if emph else P["shadow"]
@@ -160,8 +161,8 @@ def build_field_treemap(P: dict) -> str:
         c.rect(x + 12, y + h - 46, w - 24, 32, P["amber"])
         c.text(x + 24, y + h - 25, "→ " + took, 12, 700, "#0A0C10", "start")
 
-    c.hline(32, 1168, 410, P["frame"], 2)
-    c.text(600, 442, "one corpus cannot referee this system — the harness answers each tool "
+    c.hline(32, 1168, 560, P["frame"], 2)
+    c.text(600, 592, "one corpus cannot referee this system — the harness answers each tool "
                      "on its own axis, losslessly", 12.5, 400, P["muted"], "middle")
     return c.render()
 
