@@ -259,6 +259,9 @@ _HTML = r"""<title>ctx · context anatomy</title>
   .lb .tk{font-family:var(--mono);font-size:12px;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums}
   .lb .track{height:16px;background:var(--grid);border-radius:5px;overflow:hidden}
   .lb .fill{height:100%;border-radius:5px}
+  .lb.attrib .row{grid-template-columns:172px 1fr 54px}
+  .lb .sub2{grid-column:1 / -1;font-family:var(--mono);font-size:10.5px;color:var(--faint);
+            margin:-3px 0 5px 172px;letter-spacing:.02em}
   .callout{border:1px solid var(--ctx);border-radius:14px;padding:16px 20px;margin-top:18px;
            background:color-mix(in srgb,var(--ctx) 8%,transparent)}
   .callout .big{font-family:var(--mono);font-size:22px;font-weight:600;color:var(--ctx);font-variant-numeric:tabular-nums}
@@ -325,6 +328,33 @@ function stack(c){
   }).join('');
   return `<div class="armhead"><span class="name">${c.label}</span><span class="tot">${fmt(c.total)} tok / turn</span></div>
     <div class="stack">${bars}</div>`;
+}
+
+function attribution(){
+  const t = D.controlled_attribution; if(!t || !t.length) return '';
+  const c = (D.composition||[]).find(x=>!x.empty);
+  const ambient = c ? c.tools : 0;
+  // scale bars against the ambient tool mass so ctx's slivers read true
+  const scale = Math.max(ambient, ...t.map(r=>Math.abs(r.d_total)));
+  const barw = v => Math.max(1.2, Math.abs(v)/scale*100);
+  const NAMES = {'+claudemd':'CLAUDE.md verb card','+append':'output-discipline prompt',
+                 '+agent':'explorer sub-agent','+settings':'hook settings','ctx-wrap':'ctx wrap · everything'};
+  const rows = t.map(r=>{
+    const nm = NAMES[r.component]||r.component;
+    const where = [r.d_system?`sys +${r.d_system}`:'', r.d_messages?`msg +${r.d_messages}`:'', r.d_tools?`tool +${r.d_tools}`:''].filter(Boolean).join(' · ');
+    const full = r.component==='ctx-wrap';
+    return `<div class="row"><div class="nm">${nm}</div>
+      <div class="track"><div class="fill" style="width:${barw(r.d_total)}%;background:${full?'var(--ctx)':'var(--good)'}"></div></div>
+      <div class="tk">+${r.d_total}</div></div>
+      <div class="sub2">${where||'—'}</div>`;
+  }).join('');
+  const ref = `<div class="row"><div class="nm" style="color:var(--faint)">ambient tool schemas</div>
+      <div class="track"><div class="fill" style="width:100%;background:var(--tools);opacity:.55"></div></div>
+      <div class="tk" style="color:var(--faint)">${fmt(ambient)}</div></div>
+      <div class="sub2">host harness — identical in every cell, so it cancels in the deltas above</div>`;
+  return `<h2>the true cost of each piece</h2>
+    <div class="panel"><div class="lb attrib">${rows}${ref}</div>
+    <p class="note" style="margin-top:16px">Measured by capturing the request body at the wire for a controlled matrix — bare → +one component → full wrap — all in one identical environment. Because every cell carries the same ambient schemas, <b>(cell − bare)</b> is each piece's true marginal cost, immune to what the host injects. The explorer sub-agent everyone worries about: <b>+115 tokens</b>, not 16k.</p></div>`;
 }
 
 function composition(){
@@ -410,7 +440,7 @@ function methodology(){
 function render(){
   hero();
   document.getElementById('app').innerHTML =
-    kpiRow() + composition() + leaderboard() + economics() + methodology();
+    kpiRow() + attribution() + composition() + leaderboard() + economics() + methodology();
 }
 render();
 </script>

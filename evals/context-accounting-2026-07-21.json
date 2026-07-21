@@ -1,0 +1,790 @@
+{
+  "bare": {
+    "label": "bare",
+    "captured": true,
+    "system": 4107,
+    "tools": 32637,
+    "messages": 2902,
+    "total": 39773,
+    "tools_count": 41,
+    "tool_leaderboard": [
+      {
+        "name": "Workflow",
+        "tok": 5319
+      },
+      {
+        "name": "Bash",
+        "tok": 2924
+      },
+      {
+        "name": "Artifact",
+        "tok": 2627
+      },
+      {
+        "name": "DesignSync",
+        "tok": 2313
+      },
+      {
+        "name": "Agent",
+        "tok": 2058
+      },
+      {
+        "name": "Monitor",
+        "tok": 1899
+      },
+      {
+        "name": "EnterWorktree",
+        "tok": 1012
+      },
+      {
+        "name": "ScheduleWakeup",
+        "tok": 967
+      },
+      {
+        "name": "Grep",
+        "tok": 929
+      },
+      {
+        "name": "CronCreate",
+        "tok": 919
+      },
+      {
+        "name": "TaskUpdate",
+        "tok": 898
+      },
+      {
+        "name": "TaskCreate",
+        "tok": 713
+      },
+      {
+        "name": "SendUserFile",
+        "tok": 672
+      },
+      {
+        "name": "Read",
+        "tok": 657
+      },
+      {
+        "name": "ExitWorktree",
+        "tok": 634
+      },
+      {
+        "name": "ReportFindings",
+        "tok": 569
+      },
+      {
+        "name": "WebFetch",
+        "tok": 536
+      },
+      {
+        "name": "WebSearch",
+        "tok": 476
+      },
+      {
+        "name": "PushNotification",
+        "tok": 450
+      },
+      {
+        "name": "Edit",
+        "tok": 434
+      },
+      {
+        "name": "NotebookEdit",
+        "tok": 418
+      },
+      {
+        "name": "Skill",
+        "tok": 414
+      },
+      {
+        "name": "SearchMcpRegistry",
+        "tok": 405
+      },
+      {
+        "name": "TaskOutput",
+        "tok": 397
+      }
+    ]
+  },
+  "cells": [
+    {
+      "label": "bare",
+      "captured": true,
+      "system": 4107,
+      "tools": 32637,
+      "messages": 2902,
+      "total": 39773,
+      "tools_count": 41,
+      "tool_leaderboard": [
+        {
+          "name": "Workflow",
+          "tok": 5319
+        },
+        {
+          "name": "Bash",
+          "tok": 2924
+        },
+        {
+          "name": "Artifact",
+          "tok": 2627
+        },
+        {
+          "name": "DesignSync",
+          "tok": 2313
+        },
+        {
+          "name": "Agent",
+          "tok": 2058
+        },
+        {
+          "name": "Monitor",
+          "tok": 1899
+        },
+        {
+          "name": "EnterWorktree",
+          "tok": 1012
+        },
+        {
+          "name": "ScheduleWakeup",
+          "tok": 967
+        },
+        {
+          "name": "Grep",
+          "tok": 929
+        },
+        {
+          "name": "CronCreate",
+          "tok": 919
+        },
+        {
+          "name": "TaskUpdate",
+          "tok": 898
+        },
+        {
+          "name": "TaskCreate",
+          "tok": 713
+        },
+        {
+          "name": "SendUserFile",
+          "tok": 672
+        },
+        {
+          "name": "Read",
+          "tok": 657
+        },
+        {
+          "name": "ExitWorktree",
+          "tok": 634
+        },
+        {
+          "name": "ReportFindings",
+          "tok": 569
+        },
+        {
+          "name": "WebFetch",
+          "tok": 536
+        },
+        {
+          "name": "WebSearch",
+          "tok": 476
+        },
+        {
+          "name": "PushNotification",
+          "tok": 450
+        },
+        {
+          "name": "Edit",
+          "tok": 434
+        },
+        {
+          "name": "NotebookEdit",
+          "tok": 418
+        },
+        {
+          "name": "Skill",
+          "tok": 414
+        },
+        {
+          "name": "SearchMcpRegistry",
+          "tok": 405
+        },
+        {
+          "name": "TaskOutput",
+          "tok": 397
+        }
+      ]
+    },
+    {
+      "label": "+claudemd",
+      "captured": true,
+      "system": 4109,
+      "tools": 32637,
+      "messages": 3059,
+      "total": 39931,
+      "tools_count": 41,
+      "tool_leaderboard": [
+        {
+          "name": "Workflow",
+          "tok": 5319
+        },
+        {
+          "name": "Bash",
+          "tok": 2924
+        },
+        {
+          "name": "Artifact",
+          "tok": 2627
+        },
+        {
+          "name": "DesignSync",
+          "tok": 2313
+        },
+        {
+          "name": "Agent",
+          "tok": 2058
+        },
+        {
+          "name": "Monitor",
+          "tok": 1899
+        },
+        {
+          "name": "EnterWorktree",
+          "tok": 1012
+        },
+        {
+          "name": "ScheduleWakeup",
+          "tok": 967
+        },
+        {
+          "name": "Grep",
+          "tok": 929
+        },
+        {
+          "name": "CronCreate",
+          "tok": 919
+        },
+        {
+          "name": "TaskUpdate",
+          "tok": 898
+        },
+        {
+          "name": "TaskCreate",
+          "tok": 713
+        },
+        {
+          "name": "SendUserFile",
+          "tok": 672
+        },
+        {
+          "name": "Read",
+          "tok": 657
+        },
+        {
+          "name": "ExitWorktree",
+          "tok": 634
+        },
+        {
+          "name": "ReportFindings",
+          "tok": 569
+        },
+        {
+          "name": "WebFetch",
+          "tok": 536
+        },
+        {
+          "name": "WebSearch",
+          "tok": 476
+        },
+        {
+          "name": "PushNotification",
+          "tok": 450
+        },
+        {
+          "name": "Edit",
+          "tok": 434
+        },
+        {
+          "name": "NotebookEdit",
+          "tok": 418
+        },
+        {
+          "name": "Skill",
+          "tok": 414
+        },
+        {
+          "name": "SearchMcpRegistry",
+          "tok": 405
+        },
+        {
+          "name": "TaskOutput",
+          "tok": 397
+        }
+      ]
+    },
+    {
+      "label": "+append",
+      "captured": true,
+      "system": 4327,
+      "tools": 32637,
+      "messages": 2902,
+      "total": 39993,
+      "tools_count": 41,
+      "tool_leaderboard": [
+        {
+          "name": "Workflow",
+          "tok": 5319
+        },
+        {
+          "name": "Bash",
+          "tok": 2924
+        },
+        {
+          "name": "Artifact",
+          "tok": 2627
+        },
+        {
+          "name": "DesignSync",
+          "tok": 2313
+        },
+        {
+          "name": "Agent",
+          "tok": 2058
+        },
+        {
+          "name": "Monitor",
+          "tok": 1899
+        },
+        {
+          "name": "EnterWorktree",
+          "tok": 1012
+        },
+        {
+          "name": "ScheduleWakeup",
+          "tok": 967
+        },
+        {
+          "name": "Grep",
+          "tok": 929
+        },
+        {
+          "name": "CronCreate",
+          "tok": 919
+        },
+        {
+          "name": "TaskUpdate",
+          "tok": 898
+        },
+        {
+          "name": "TaskCreate",
+          "tok": 713
+        },
+        {
+          "name": "SendUserFile",
+          "tok": 672
+        },
+        {
+          "name": "Read",
+          "tok": 657
+        },
+        {
+          "name": "ExitWorktree",
+          "tok": 634
+        },
+        {
+          "name": "ReportFindings",
+          "tok": 569
+        },
+        {
+          "name": "WebFetch",
+          "tok": 536
+        },
+        {
+          "name": "WebSearch",
+          "tok": 476
+        },
+        {
+          "name": "PushNotification",
+          "tok": 450
+        },
+        {
+          "name": "Edit",
+          "tok": 434
+        },
+        {
+          "name": "NotebookEdit",
+          "tok": 418
+        },
+        {
+          "name": "Skill",
+          "tok": 414
+        },
+        {
+          "name": "SearchMcpRegistry",
+          "tok": 405
+        },
+        {
+          "name": "TaskOutput",
+          "tok": 397
+        }
+      ]
+    },
+    {
+      "label": "+agent",
+      "captured": true,
+      "system": 4107,
+      "tools": 32637,
+      "messages": 3017,
+      "total": 39888,
+      "tools_count": 41,
+      "tool_leaderboard": [
+        {
+          "name": "Workflow",
+          "tok": 5319
+        },
+        {
+          "name": "Bash",
+          "tok": 2924
+        },
+        {
+          "name": "Artifact",
+          "tok": 2627
+        },
+        {
+          "name": "DesignSync",
+          "tok": 2313
+        },
+        {
+          "name": "Agent",
+          "tok": 2058
+        },
+        {
+          "name": "Monitor",
+          "tok": 1899
+        },
+        {
+          "name": "EnterWorktree",
+          "tok": 1012
+        },
+        {
+          "name": "ScheduleWakeup",
+          "tok": 967
+        },
+        {
+          "name": "Grep",
+          "tok": 929
+        },
+        {
+          "name": "CronCreate",
+          "tok": 919
+        },
+        {
+          "name": "TaskUpdate",
+          "tok": 898
+        },
+        {
+          "name": "TaskCreate",
+          "tok": 713
+        },
+        {
+          "name": "SendUserFile",
+          "tok": 672
+        },
+        {
+          "name": "Read",
+          "tok": 657
+        },
+        {
+          "name": "ExitWorktree",
+          "tok": 634
+        },
+        {
+          "name": "ReportFindings",
+          "tok": 569
+        },
+        {
+          "name": "WebFetch",
+          "tok": 536
+        },
+        {
+          "name": "WebSearch",
+          "tok": 476
+        },
+        {
+          "name": "PushNotification",
+          "tok": 450
+        },
+        {
+          "name": "Edit",
+          "tok": 434
+        },
+        {
+          "name": "NotebookEdit",
+          "tok": 418
+        },
+        {
+          "name": "Skill",
+          "tok": 414
+        },
+        {
+          "name": "SearchMcpRegistry",
+          "tok": 405
+        },
+        {
+          "name": "TaskOutput",
+          "tok": 397
+        }
+      ]
+    },
+    {
+      "label": "+settings",
+      "captured": true,
+      "system": 4109,
+      "tools": 32637,
+      "messages": 2902,
+      "total": 39775,
+      "tools_count": 41,
+      "tool_leaderboard": [
+        {
+          "name": "Workflow",
+          "tok": 5319
+        },
+        {
+          "name": "Bash",
+          "tok": 2924
+        },
+        {
+          "name": "Artifact",
+          "tok": 2627
+        },
+        {
+          "name": "DesignSync",
+          "tok": 2313
+        },
+        {
+          "name": "Agent",
+          "tok": 2058
+        },
+        {
+          "name": "Monitor",
+          "tok": 1899
+        },
+        {
+          "name": "EnterWorktree",
+          "tok": 1012
+        },
+        {
+          "name": "ScheduleWakeup",
+          "tok": 967
+        },
+        {
+          "name": "Grep",
+          "tok": 929
+        },
+        {
+          "name": "CronCreate",
+          "tok": 919
+        },
+        {
+          "name": "TaskUpdate",
+          "tok": 898
+        },
+        {
+          "name": "TaskCreate",
+          "tok": 713
+        },
+        {
+          "name": "SendUserFile",
+          "tok": 672
+        },
+        {
+          "name": "Read",
+          "tok": 657
+        },
+        {
+          "name": "ExitWorktree",
+          "tok": 634
+        },
+        {
+          "name": "ReportFindings",
+          "tok": 569
+        },
+        {
+          "name": "WebFetch",
+          "tok": 536
+        },
+        {
+          "name": "WebSearch",
+          "tok": 476
+        },
+        {
+          "name": "PushNotification",
+          "tok": 450
+        },
+        {
+          "name": "Edit",
+          "tok": 434
+        },
+        {
+          "name": "NotebookEdit",
+          "tok": 418
+        },
+        {
+          "name": "Skill",
+          "tok": 414
+        },
+        {
+          "name": "SearchMcpRegistry",
+          "tok": 405
+        },
+        {
+          "name": "TaskOutput",
+          "tok": 397
+        }
+      ]
+    },
+    {
+      "label": "ctx-wrap",
+      "captured": true,
+      "system": 4328,
+      "tools": 32637,
+      "messages": 3017,
+      "total": 40109,
+      "tools_count": 41,
+      "tool_leaderboard": [
+        {
+          "name": "Workflow",
+          "tok": 5319
+        },
+        {
+          "name": "Bash",
+          "tok": 2924
+        },
+        {
+          "name": "Artifact",
+          "tok": 2627
+        },
+        {
+          "name": "DesignSync",
+          "tok": 2313
+        },
+        {
+          "name": "Agent",
+          "tok": 2058
+        },
+        {
+          "name": "Monitor",
+          "tok": 1899
+        },
+        {
+          "name": "EnterWorktree",
+          "tok": 1012
+        },
+        {
+          "name": "ScheduleWakeup",
+          "tok": 967
+        },
+        {
+          "name": "Grep",
+          "tok": 929
+        },
+        {
+          "name": "CronCreate",
+          "tok": 919
+        },
+        {
+          "name": "TaskUpdate",
+          "tok": 898
+        },
+        {
+          "name": "TaskCreate",
+          "tok": 713
+        },
+        {
+          "name": "SendUserFile",
+          "tok": 672
+        },
+        {
+          "name": "Read",
+          "tok": 657
+        },
+        {
+          "name": "ExitWorktree",
+          "tok": 634
+        },
+        {
+          "name": "ReportFindings",
+          "tok": 569
+        },
+        {
+          "name": "WebFetch",
+          "tok": 536
+        },
+        {
+          "name": "WebSearch",
+          "tok": 476
+        },
+        {
+          "name": "PushNotification",
+          "tok": 450
+        },
+        {
+          "name": "Edit",
+          "tok": 434
+        },
+        {
+          "name": "NotebookEdit",
+          "tok": 418
+        },
+        {
+          "name": "Skill",
+          "tok": 414
+        },
+        {
+          "name": "SearchMcpRegistry",
+          "tok": 405
+        },
+        {
+          "name": "TaskOutput",
+          "tok": 397
+        }
+      ]
+    }
+  ],
+  "attribution": [
+    {
+      "component": "+claudemd",
+      "d_system": 2,
+      "d_tools": 0,
+      "d_messages": 157,
+      "d_total": 158
+    },
+    {
+      "component": "+append",
+      "d_system": 220,
+      "d_tools": 0,
+      "d_messages": 0,
+      "d_total": 220
+    },
+    {
+      "component": "+agent",
+      "d_system": 0,
+      "d_tools": 0,
+      "d_messages": 115,
+      "d_total": 115
+    },
+    {
+      "component": "+settings",
+      "d_system": 2,
+      "d_tools": 0,
+      "d_messages": 0,
+      "d_total": 2
+    },
+    {
+      "component": "ctx-wrap",
+      "d_system": 221,
+      "d_tools": 0,
+      "d_messages": 115,
+      "d_total": 336
+    }
+  ]
+}
