@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "ctx-harness"
 version = "0.30.0"
-description = "straitjacket: artifact-backed, repository-aware context containment harness for Antigravity. Unbounded tool output becomes an immutable artifact plus a bounded deterministic digest."
+description = "Artifact-backed context containment for coding agents. Complete tool output becomes immutable evidence plus a bounded deterministic digest."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "straitjacket contributors" }]
-keywords = ["antigravity", "context", "agent", "harness", "mcp"]
+keywords = ["agent", "antigravity", "claude-code", "codex", "context", "harness", "mcp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -26,6 +26,7 @@ dependencies = ["pathspec>=0.12"]
 
 [project.urls]
 Homepage = "https://github.com/vamsiramakrishnan/straitjacket"
+Documentation = "https://github.com/vamsiramakrishnan/straitjacket/tree/main/docs"
 Repository = "https://github.com/vamsiramakrishnan/straitjacket"
 Changelog = "https://github.com/vamsiramakrishnan/straitjacket/blob/main/CHANGELOG.md"
 
