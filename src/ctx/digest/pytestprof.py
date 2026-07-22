@@ -28,6 +28,25 @@ from ctx.digest.base import DigestContext, Profile
 from ctx.evidence import EvidenceGraph, EvidenceItem, EvidenceRef
 from ctx.textutil import fmt_int
 
+# Word-anchored pytest invocation: the name as a program basename or a
+# module target, never as an interior path component. A raw substring
+# test misclaims commands whose INTERPRETER lives under a pytest-named
+# directory (uv tool shims: .../tools/pytest/bin/python) or whose args
+# carry pytest-named paths (/tmp/pytest-of-root/...). Doctrine: a
+# command that merely MENTIONS pytest's name is not a test run — the
+# replay read-path rule, applied at birth. The char after the word may
+# not be `/` (interior path component) or `-` (pytest-of-root, and any
+# pytest-*-named artifact).
+_PYTEST_WORD_RE = re.compile(r"(?:^|[\s/=])(?:pytest|py\.test)(?=[\s'\";|&)]|$)")
+
+
+def argv_invokes_pytest(argv) -> bool:
+    """True when the command genuinely invokes pytest (shared with the
+    facts tier's family detection)."""
+    joined = " ".join(str(a) for a in argv)
+    return bool(_PYTEST_WORD_RE.search(joined))
+
+
 _SESSION_RE = re.compile(r"=+ test session starts =+")
 _SUMMARY_RE = re.compile(
     r"=+ (?P<body>[^=]*?(?:passed|failed|error|skipped|xfailed|xpassed|deselected|warnings?)[^=]*?) =+"
@@ -368,8 +387,7 @@ class PytestProfile(Profile):
 
     def detect(self, ctx: DigestContext) -> str | None:
         argv = ctx.manifest["argv"]
-        joined = " ".join(argv)
-        if "pytest" in joined or "py.test" in joined:
+        if argv_invokes_pytest(argv):
             return "argv invokes pytest"
         text = ctx.stdout.text
         if _SESSION_RE.search(text[:4000]):

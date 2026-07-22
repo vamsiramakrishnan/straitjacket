@@ -98,6 +98,14 @@ _UNBOUNDED_CMDS = {
 # git subcommands that flood; the rest of git is judged separately.
 _GIT_UNBOUNDED = {"log", "diff", "show", "blame", "reflog", "shortlog", "whatchanged"}
 
+# Text-transform tools (M-K5.3, docs/SUBSTRATE.md): read-only invocations
+# are unbounded-output commands (→ ctx run capture, like grep/find); an
+# IN-PLACE invocation is a structural-rewrite smell and force_asks with a
+# preview-first remediation — a textual approximation of a codemod is the
+# bug-generator failure mode, so it is never silently rerouted.
+_TEXT_TOOLS = {"sed", "awk", "gawk", "mawk", "nawk"}
+_SED_INPLACE_RE = re.compile(r"^-[a-zA-Z]*i")  # -i, -i.bak, clustered -ni
+
 # Bounded-by-construction commands: allow natively.
 _BOUNDED_CMDS = {
     "pwd", "whoami", "hostname", "true", "false", "echo", "printf",
@@ -163,6 +171,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "unknown_command": "force_ask",
         "internal_error": "allow",
         "steering": "auto",
+        "collapse": True,  # replacement surface (default posture): substitute loop-shapes with collapsed ctx ops; set guard.collapse=false to break-glass off
         "max_inline_bytes": _MAX_INLINE_BYTES_DEFAULT,
         "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
         "session_read_budget_bytes": _SESSION_READ_BUDGET_DEFAULT,
@@ -204,6 +213,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             policy["unknown_command"] = str(guard.get("unknown_command", policy["unknown_command"]))
             policy["internal_error"] = str(guard.get("internal_error", policy["internal_error"]))
             policy["steering"] = str(guard.get("steering", policy["steering"]))
+            policy["collapse"] = bool(guard.get("collapse", policy["collapse"]))
             policy["max_inline_bytes"] = int(
                 budgets.get("max_inline_bytes", policy["max_inline_bytes"])
             )
@@ -406,6 +416,12 @@ _EVAL_TEACH = (
     "an addressable blob and only a bounded digest returns."
 )
 
+_RECORDS_TEACH = (
+    "Or query the structured records directly: ctx q 'records <run:|blob:> "
+    "--jsonl | group <field> | count' (or distinct/histogram) — bounded, "
+    "typed, no re-parsing."
+)
+
 _PY_PROG_RE = re.compile(r"^python(3(\.\d+)?)?$")
 
 
@@ -468,6 +484,116 @@ def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
         pass
 
 
+# Record-transform shapes that ``ctx q`` (records/group/count/distinct/
+# histogram) collapses (docs/SUBSTRATE.md M-K3): jq programs, sort|uniq -c
+# (group+count), awk field projection, and count-after-filter. Conservative
+# by construction — the shape must be unambiguous, so a bare `sort` or a
+# plain `awk` script never matches. This is the DEMAND denominator that
+# gates promoting further named projections into the algebra.
+_UNIQ_C_RE = re.compile(r"\buniq\s+-\w*c")
+_AWK_PROJECT_RE = re.compile(r"\bg?awk\s+.*\{\s*print\s+\$[0-9]")
+_JQ_RE = re.compile(r"(^|[|;&]\s*)jq\b")
+
+
+def _records_opportunity(command: str) -> bool:
+    """True when ``command`` is a structured-record transform that a
+    bounded ``ctx q`` pipeline expresses (a jq program, a sort|uniq -c
+    group-count, or an awk field projection)."""
+    if _JQ_RE.search(command):
+        return True
+    if _UNIQ_C_RE.search(command):
+        return True
+    if _AWK_PROJECT_RE.search(command):
+        return True
+    return False
+
+
+def _note_records_opportunity(workspace_root: str | None, taught: bool) -> None:
+    """Adoption telemetry for the records-transform surface: one JSON line
+    to ``<workspace>/.ctx-session-reads/records-adoption.jsonl`` — the
+    denominator against which ``ctx q records`` use (store telemetry
+    op="q") is measured. Fail-open; never blocks a decision."""
+    if not workspace_root:
+        return
+    try:
+        import time
+
+        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        os.makedirs(ledger_dir, exist_ok=True)
+        path = os.path.join(ledger_dir, "records-adoption.jsonl")
+        line = json.dumps(
+            {"op": "records_opportunity", "taught": taught, "ts": time.time()},
+            sort_keys=True,
+        )
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
+
+
+def _failure_available(workspace_root: str | None) -> bool:
+    """True when a test run has been captured this session, so the
+    ``fails last | in-changed`` slice has data to return. Cheap ledger scan;
+    False on any doubt, so the pytest collapse never fires blind."""
+    if not workspace_root:
+        return False
+    try:
+        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "interventions.jsonl")
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if '"family": "pytest"' in line and "intervention_emitted" in line:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _symbols_resolvable(workspace_root: str | None) -> bool:
+    """Cheap check: can `ctx q refs` resolve symbols in this repo? True when a
+    SCIP index is present or the tree has Python sources (ast/jedi handle
+    those). Bounded scan; on a miss a symbol grep degrades to bounded content
+    search, never to nothing. False on any doubt."""
+    if not workspace_root:
+        return False
+    try:
+        root = Path(workspace_root)
+        if (root / "index.scip").is_file() or (root / ".ctx" / "index.scip").is_file():
+            return True
+        seen = 0
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith(".") and d not in
+                           ("node_modules", "venv", "__pycache__", "dist", "build")]
+            for fn in filenames:
+                if fn.endswith(".py"):
+                    return True
+                seen += 1
+                if seen > 2000:  # bounded — don't walk a huge non-Python tree
+                    return False
+    except Exception:
+        return False
+    return False
+
+
+def _note_collapse(workspace_root: str | None, shape: str, rung: str) -> None:
+    """Adoption telemetry for the replacement surface: one JSON line per
+    substitution to ``<workspace>/.ctx-session-reads/collapse.jsonl`` — the
+    numerator for 'loop-shapes collapsed'. Fail-open; never blocks."""
+    if not workspace_root:
+        return
+    try:
+        import time
+
+        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        os.makedirs(ledger_dir, exist_ok=True)
+        with open(os.path.join(ledger_dir, "collapse.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(
+                {"op": "collapse", "shape": shape, "rung": rung, "ts": time.time()},
+                sort_keys=True) + "\n")
+    except Exception:
+        pass
+
+
 def _deny_cmd(
     argv: list[str],
     policy: dict[str, Any],
@@ -491,6 +617,42 @@ def _deny_cmd(
         cmd = "ctx run -- " + " ".join(shlex.quote(a) for a in argv)
     decision["_rewrite"] = {"command": cmd, "reason": _REWRITE_REASON}
     return decision
+
+
+def _inplace_text_edit_in(stripped: str) -> bool:
+    """Conservative token scan for an in-place sed/awk-family invocation
+    anywhere in a compound expression. False positives only force_ask."""
+    try:
+        toks = shlex.split(stripped)
+    except ValueError:
+        return False
+    for j, t in enumerate(toks):
+        prog = os.path.basename(t)
+        if prog in _TEXT_TOOLS and _text_tool_inplace(prog, toks[j:]):
+            return True
+    return False
+
+
+def _text_tool_inplace(prog: str, argv: list[str]) -> bool:
+    """Does this sed/awk-family invocation mutate files in place?
+
+    sed: ``-i``/``-i.bak`` (possibly clustered, e.g. ``-ni``) or
+    ``--in-place[=suffix]``. awk family: gawk's ``-i inplace`` /
+    ``--include=inplace``. False positives only force_ask — safe."""
+    rest = argv[1:]
+    if prog == "sed":
+        for a in rest:
+            if a == "--in-place" or a.startswith("--in-place="):
+                return True
+            if not a.startswith("--") and _SED_INPLACE_RE.match(a):
+                return True
+        return False
+    for j, a in enumerate(rest):
+        if a in ("-i", "--include") and j + 1 < len(rest) and rest[j + 1].startswith("inplace"):
+            return True
+        if a.startswith("--include=inplace") or a.startswith("-iinplace"):
+            return True
+    return False
 
 
 def _split_simple_chain(stripped: str) -> list[str] | None:
@@ -664,6 +826,20 @@ def classify_command(
         # Canonical decision stays force_ask; under rewrite steering the
         # whole expression is steered into a bounded `ctx run --shell`
         # capture instead (secret/outside-workspace force_asks never are).
+        # Exception (M-K5.3): an IN-PLACE text edit inside the expression
+        # (sed -i, gawk -i inplace — awk programs always carry `{}`, so
+        # they land here, not in the plain-argv branch) is a mutation; a
+        # capture rewrite would still mutate files, so it keeps the plain
+        # force_ask with the preview-first remediation instead.
+        if _inplace_text_edit_in(stripped):
+            return _force_ask(
+                "CTX_CONTEXT_GUARD: in-place text edit over files. A textual "
+                "approximation of a structural rewrite is a bug generator — "
+                "collapse the whole find-and-edit into one op: "
+                "ctx rewrite '<pattern>' '<replacement>' --lang <l> --apply "
+                "(previewed, generation-guarded, transactional) — or the "
+                "editor's edit tool."
+            )
         fa = _force_ask(
             "CTX_CONTEXT_GUARD: compound shell expression with unproven output bound. "
             f"Prefer: ctx run --shell -- {shlex.quote(stripped)}"
@@ -728,6 +904,18 @@ def classify_command(
                 ),
             }
             return decision
+
+    if prog in _TEXT_TOOLS:
+        if _text_tool_inplace(prog, argv):
+            return _force_ask(
+                "CTX_CONTEXT_GUARD: in-place text edit over files. A textual "
+                "approximation of a structural rewrite is a bug generator — "
+                "collapse the whole find-and-edit into one op: "
+                "ctx rewrite '<pattern>' '<replacement>' --lang <l> --apply "
+                "(previewed, generation-guarded, transactional); for plain-text "
+                f"targets, capture it: ctx run -- {' '.join(shlex.quote(a) for a in argv)}"
+            )
+        return _deny_cmd(argv, policy)  # read-only: bounded capture via ctx run
 
     if prog in _UNBOUNDED_CMDS:
         return _deny_cmd(argv, policy)
@@ -1007,6 +1195,26 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 cwd = v
                 break
         decision = classify_command(command, policy, cwd=cwd or workspace_root)
+        # Replacement surface (docs/REPLACEMENT-SURFACE.md): when collapse is
+        # enabled, a recognised navigation-loop shape — recursive grep, or a
+        # whole-suite re-run after a captured failure — is transparently
+        # substituted with the collapsed, addressable `ctx q` op. Delivered
+        # under the tool the agent already invoked, so the cheap path is taken
+        # *for* the model, not left for it to choose. Off by default; the
+        # substituted op is bounded and lossless (handles page exact bytes).
+        if policy.get("collapse") and _steering_allows(policy):
+            try:
+                from ctx import substitute
+
+                sub = substitute.collapse(
+                    command, failure_available=_failure_available(workspace_root),
+                    symbols_resolvable=_symbols_resolvable(workspace_root))
+                if sub is not None:
+                    decision = dict(DECISION_ALLOW)
+                    decision["_rewrite"] = {"command": sub.command, "reason": sub.reason}
+                    _note_collapse(workspace_root, sub.shape, sub.rung)
+            except Exception:
+                pass
         # Eval teaching surface: a raw python heredoc / -c chain that hits
         # the guard gets the collapse move appended to its remediation (and
         # to the rewrite reason, so wrapped sessions see it too). Every
@@ -1019,6 +1227,16 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 if "_rewrite" in decision:
                     decision["_rewrite"]["reason"] += "\n" + _EVAL_TEACH
             _note_eval_opportunity(workspace_root, taught)
+        # Records-transform teaching surface (M-K3): a jq / sort|uniq -c /
+        # awk-projection pipeline that hits the guard gets the ctx q records
+        # move appended, and is ledgered as the adoption denominator.
+        if _records_opportunity(command):
+            taught = decision.get("decision") in ("deny", "force_ask")
+            if taught:
+                decision["reason"] = decision.get("reason", "") + "\n" + _RECORDS_TEACH
+                if "_rewrite" in decision:
+                    decision["_rewrite"]["reason"] += "\n" + _RECORDS_TEACH
+            _note_records_opportunity(workspace_root, taught)
         # Reflex arc (docs/REFLEX.md layers 1-3): score this command against
         # the session's recorded interventions. A `ctx get`/`ctx search` on a
         # known run handle is a landing (the positive class); anything else
@@ -1087,10 +1305,36 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
 _NATIVE_GREP_CAP = 60  # matches returned before the model should narrow
 
 
+def _native_search_redirect(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Remediation that points a native Grep/Glob call at the collapsed op.
+    Under the replacement surface a host's own search tool is off — it cannot
+    be transparently rewritten into a ``ctx q`` call (unlike a shell command),
+    so it is denied with the equivalent collapsed op named."""
+    pat = tool_input.get("pattern") or tool_input.get("query") or ""
+    if "grep" not in tool_name.lower():  # Glob / file-name search
+        collapsed = "ctx q 'files --glob <glob>'"
+    elif isinstance(pat, str) and re.match(r"^[A-Za-z_]\w*$", pat):
+        collapsed = f"ctx q 'refs {pat} | group file'"
+    elif pat:
+        collapsed = f"ctx q 'search {pat} | files'"
+    else:
+        collapsed = "ctx q 'refs <Symbol>'  (symbol)  or  ctx q 'search <pattern>'"
+    return ("CTX_CONTEXT_GUARD: native search is off under the replacement "
+            "surface (guard.collapse). Use  " + collapsed + "  for a bounded, "
+            "addressable answer — or run `grep -rn <pattern>` in Bash, which is "
+            "auto-collapsed to the same op.")
+
+
 def _classify_native_search(
     tool_name: str, tool_input: dict[str, Any], policy: dict[str, Any]
 ) -> dict[str, Any]:
     lowered = tool_name.lower()
+    # Replacement surface: with collapse on, the host's native search tool is
+    # removed from the surface — deny and redirect to the collapsed ctx op (or
+    # to Bash grep, which is transparently substituted). One code path, so the
+    # gap closes for every harness whose hook sees a native search tool.
+    if policy.get("collapse"):
+        return _deny(_native_search_redirect(tool_name, tool_input))
     recursive = bool(tool_input.get("Recursive") or tool_input.get("recursive"))
     # Glob / file-name search / listings return paths (bounded-ish); only a
     # recursive one under strict steering is worth redirecting.

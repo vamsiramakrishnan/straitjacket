@@ -4,6 +4,216 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.30.0] - 2026-07-21
+
+Building the toolchains that were "not available" — tree-sitter and SCIP.
+
+- **M-K4 · SCIP ingestion, shipped** (`scip_ingest.py`, `_vendor/scip_pb2`):
+  an opportunistic `index.scip` reader adds **precise, compiler-backed
+  references** at the top of the refs engine ladder (**SCIP (exact) →
+  jedi → ast**), disclosed per node (`ctx refs` / `code.refs` show `engine
+  scip (exact)`). `find_index` reads `index.scip` at the workspace root or
+  `$CTX_SCIP_INDEX`; the index is only read, never generated. The protobuf
+  runtime is the `[scip]` extra; the SCIP bindings are vendored
+  (`src/ctx/_vendor/scip_pb2.py` generated from the committed `scip.proto`);
+  either absent → the ingester degrades to None and the ladder falls
+  through — absence costs nothing. `resolve_refs` is now the single ladder
+  used by `ctx refs`, `ctx q refs`, and the `code.refs` op.
+  - **Precision receipt** (`evals/scip_precision.py` + `.md`): on an
+    ambiguity fixture (a name also in a comment, a string, and a shadowing
+    local), SCIP scores 100% precision / 0 false positives vs the textual
+    rung's 50% / 4 false positives. Tested with a committed real
+    `index.scip` (`tests/fixtures/scip_sample.scip`, from `scip-python`),
+    so CI needs only protobuf, not the indexer.
+- **Tree-sitter grammar-wheel backend** (`skeleton.py`): the skeleton
+  tier's tree-sitter extractor gains a third, offline-safe path —
+  individual `tree_sitter_<lang>` grammar wheels via the modern core API
+  (the bundle `tree-sitter-language-pack` fetches parsers at runtime, a
+  sandbox 403). It carries a JS/TS skeleton that stdlib `ast` cannot parse
+  and ctags need not. The `[code]` extra now pins the grammar wheels
+  (`tree-sitter-python/javascript/typescript`) instead of the unreliable
+  language-pack.
+- CI `full` job installs `.[dev,map,fast,code,scip]` so both new backends
+  are exercised, not just skipped. Suite: 994 passed (venv with all
+  extras); tests skip-if-absent so the minimal job stays green.
+
+## [0.29.0] - 2026-07-20
+
+Finishing the designed-not-built bucket (M-K/M-L), with receipts.
+
+- **`ctx ask` intent family completed** (`ask.py`, `plan_ops.py`, `cli.py`):
+  four new intents join locate/impact/diagnose. `trace` (structural call
+  path — refs → callers → callees → transitive reach) and `compare`
+  (behavioral run-diff via the new `evidence.diff` plan op) are observe-
+  class. `verify` (changes → related tests → run the suite) and `review`
+  (changes → symbols → tests → run → root-cause join + counterevidence)
+  are **execute-class**: CLI runs them, the bounded MCP tier rejects
+  `test.run` (`execute_on_observe_tier`), and each intent discloses its
+  class. New `--against`/`--command` flags; compare/verify slots teach when
+  missing. All seven compile deterministically to `ctx.plan/v1`.
+- **M-K3 `records_opportunity` ledger** (`hook.py`): a jq / `sort|uniq -c`
+  / awk-projection pipeline is detected, taught the `ctx q records`
+  collapse, and recorded to `.ctx-session-reads/records-adoption.jsonl` —
+  the demand denominator. (The jq physical compile target stays deferred:
+  pure speed, no capability gain.)
+- **M-K5 comby decline-corpus gate** (`plan_ops.py`): `ast.rewrite.preview`
+  now records `comby_candidate` entries (engine absent, or no structural
+  match) to `.ctx-session-reads/rewrite-declines.jsonl`. Instrumentation
+  ONLY — the comby rung stays unbuilt until this corpus shows real demand.
+- **M-K4 SCIP ingestion: deferred, with reason** — no SCIP toolchain or
+  protobuf in this environment to produce a real `.scip` test fixture, so
+  building an untested ingester is the speculative code the project
+  refuses. Recorded in docs/SUBSTRATE.md.
+- **Evals**: M-K2 scoped-scan receipt (`evals/corpus_scoped_scan.py` +
+  receipt) — corpus reduces the eligible set 178→9 files (94.9%), a 13.1×
+  ast-grep wall speedup even on the fast engine (the slow Semgrep arm is
+  declared, not run — Semgrep absent here). Plus a Sonnet addendum to the
+  3-arm diagnosis receipt: a stronger model adopts `ctx ask` once the card
+  is in context (as haiku did), but on a no-flood task adoption still
+  costs turns — the A/B/C payoff referee needs a flood-bearing task.
+- Skill/AGENTS teach all seven intents (skill BODY change — invocation-
+  loaded, no prefix-cache cost; manifest regenerated at PREFIX_VERSION 4).
+
+## [0.28.0] - 2026-07-20
+
+The skill catches up to the engines, plus a measured three-arm receipt.
+
+- **Skill vocabulary refresh** (`plugins/antigravity/skills/ctx-harness/`,
+  Codex `AGENTS.md` block): `SKILL.md` and `references/verbs.md` stopped at
+  the pre-M-J `run/search/get/stats` vocabulary. They now teach `ctx ask`
+  (intents locate/impact/diagnose), `ctx q` (the composition algebra incl.
+  `corpus`/`records`/`distinct`/`histogram`), and `ctx investigate`/`plan`.
+  **PREFIX_VERSION 3 → 4**: the skill body/frontmatter are prefix-resident,
+  so this is a one-time full-prefix cache rewrite per user (the injected-
+  prefix stability contract; `prefixassets.py` manifest regenerated).
+- **Claude Code teaching surface** (`installer.py`): `install_claude` now
+  upserts a compact ctx verb card into the workspace `CLAUDE.md` (marker-
+  delimited, idempotent, mirroring the Codex `AGENTS.md` block). Measured
+  gap — the shipped verbs had no teaching surface on Claude Code, so agents
+  never invoked them (see the receipt below); with the card in context,
+  they do.
+- **Three-arm diagnosis receipt** (`evals/ask_diagnose_3arm.py`,
+  `evals/ask-diagnose-3arm-2026-07-20.md`): real coding agents (Haiku),
+  naive vs Headroom vs straitjacket vs straitjacket+card, on a seeded
+  single-bug diagnosis with a model-free grader. Findings: on a no-flood
+  task all arms solve it and containment is bounded overhead (the expected
+  low-complexity regime); and the vocabulary is adopted only when it
+  reaches the agent (0 `ctx ask`/`ctx q` bare; both invoked once the card
+  is in `CLAUDE.md`). Reusable 3/4-arm harness with a transcript-derived
+  adoption counter.
+
+## [0.27.0] - 2026-07-20
+
+The `ctx ask` wave (ROADMAP M-L, docs/ASK.md): a repository question
+compiles into a typed intent preset — a frozen `ctx.plan/v1` template
+with typed slots — executed on the shipped plan tier. Collapses the
+*decision cost* of exploration (which verbs, in what order) the way M-J
+collapsed its *turn cost*. The adopted core of an external retrieval
+proposal, audited: the natural-language parser, `reveal`/`audit` verbs,
+the whole-surface rebrand, and the entity/relation ontology were cut;
+what shipped is the elegant, testable spine.
+
+- **Phase 0 · thin observe ops** (`plan_ops.py`):
+  - `evidence.failures` — failure census from CAPTURED facts, never a
+    rerun. Freshness against the current generation is computed and
+    DECLARED: stale facts carry `fresh: false` + a note proposing (never
+    running) a refresh — the observe invariant made legible, using the
+    same `generation_hash` semantics as the rest of the system.
+  - `code.symbols` — structured symbol rows (identity · kind · range ·
+    span) from skeleton-derived facts; census before detail, no outline
+    text. An input warms facts for exactly those files (content-keyed).
+  - `code.context` — terminal bounded materialization (sites get
+    line±context, symbols their clamped range); emits `text`, the
+    refinement boundary at the plan tier.
+- **Phase 1 · intents + `ctx ask`** (`ask.py`, `cli.py`): `locate`,
+  `impact`, `diagnose` as deterministic slot→`ctx.plan/v1` presets
+  (`json.dumps(sort_keys=True)` ⇒ stable plan id ⇒ stable node-cache
+  keys). **No natural-language parser**: `--intent` is a flag; the
+  subject is `--symbol` or the question's sole identifier-shaped token
+  (dotted/snake/CamelCase — capitalized English is skipped), inferred
+  only when unambiguous and always disclosed. A missing/ambiguous slot
+  is a teaching error that SUGGESTS an intent and never guesses-and-runs.
+  The interpretation (`intent:`/`subject:`) rides above the digest, never
+  behind `--trace`. `ctx ask "q" --intent <i> [--symbol X] [--run r]
+  [--depth N] [--plan]`.
+- Every intent is observe-class end to end (diagnose reads captured
+  failures, never reruns); counterevidence is a structural join node
+  (rendered even when empty); the only text-emitting node is
+  `code.context` (bytes materialize once, terminally — the closure law).
+- Verified end to end: on a seeded regression (`raise` in a changed
+  function, its failing run captured), `ctx ask --intent diagnose` names
+  the culprit symbol with plane attribution in one digest, no rerun.
+- Tests: `test_ask.py` (compiler determinism, teaching-not-guessing,
+  no-rerun invariant at compile time and end to end, freshness
+  declaration, terminal materialization). Suite 968 passed / 0 failed.
+
+## [0.26.0] - 2026-07-20
+
+The substrate wave (ROADMAP M-K, docs/SUBSTRATE.md): the operator classes
+beneath the semantic layers, from the audited external "evidence algebra"
+proposal. Phases K1–K3 + K5.3 shipped; K4 (SCIP) and K5 (comby, gated on a
+decline corpus) remain designed; K6 (watch warming) waits for the broker.
+
+- **M-K1 · span-precise sites** (`rg_engine.py`, `search.py`, `query.py`):
+  search results carry 1-based half-open `[col_a, col_b)` character
+  columns — captured from the rg `--json` submatches already on the wire,
+  and from `finditer` spans in the Python engine (leftmost match per line,
+  parity by construction; pattern-index recovery is span-anchored, the
+  whole-line re-match demoted to labeled fallback). Every `ctx search`
+  emission now mints a `ctx.search/v1` result blob (`result: blob:<id>`)
+  so a search is citable as one handle — engine parity extends to
+  byte-identical blobs.
+- **M-K2 · the file-set algebra** (`filesets.py`, new): the missing
+  `file_select` operator class. `ctx q 'corpus [--ext E]… [--glob G]…
+  [--exclude G]… [--changed] [--max N]'` and the `repo.files` plan op
+  emit a bounded eligible file set with a coverage receipt (`considered ·
+  selected · engine [· gen]`) that survives combinators and rides the
+  minted payload. Engine ladder git ls-files → **fd** (opportunistic, run
+  `--no-ignore` so `ws.is_ignored` stays the single ignore authority —
+  listings byte-identical across engines by construction;
+  `CTX_FILES_ENGINE` kill-switch) → os.walk. `--changed` binds to the
+  generation snapshot, never mtime (SUBSTRATE §2.4). Scoping
+  `semantic.*` to a `repo.files` result confines the engine to the
+  selected set — *select files before scanning*.
+- **M-K3 · the records algebra** (`query.py`): `records <run:|blob:>
+  [--jsonl] [--pointer /p]` opens stored JSON/JSONL artifacts (compiler
+  output, test JSON, SARIF, lockfiles) as the `records` kind, where the
+  shipped combinators plus new total stages `distinct <field>` and
+  `histogram <field> [--buckets N]` (numeric buckets or categorical
+  census, capped with declared omission) absorb the jq class without
+  importing the jq language. All four new stages carry derived closure
+  classes; the digest-closure pins extend to them.
+- **M-K5.3 · text-tool steering** (`hook.py`): `sed`/`awk`-family
+  commands leave the unknown-command limbo. Read-only invocations steer
+  into bounded `ctx run` capture like grep/find; **in-place** invocations
+  (`sed -i`, `gawk -i inplace` — detected in plain argv and inside
+  compound expressions, which is where every `{…}` awk program lands)
+  force_ask with a preview-first remediation and are never auto-rewritten
+  into a capture that would still mutate files.
+- Tests: `test_filesets.py` (engine parity incl. fd skip-if-absent,
+  generation-bound `--changed`, receipts), `test_substrate.py` (span
+  blobs, records/distinct/histogram, totality), closure pins, rg/python
+  column-parity extension, sed/awk steering cases.
+- **Word-anchored pytest detection** (`pytestprof.py`, `facts.py`): the
+  profile claim and the facts-tier family detection matched `"pytest"`
+  as a raw substring of the joined argv, so a command whose INTERPRETER
+  lives under a pytest-named directory (uv tool shims:
+  `…/tools/pytest/bin/python -c …`) or whose args carry pytest-named
+  paths (`/tmp/pytest-of-root/…`) was misclaimed as a test run — the
+  replay doctrine's "a file containing test markers is not a test run",
+  violated at birth. Detection is now word-anchored (program basename or
+  `-m` module target; never an interior path component), shared via
+  `argv_invokes_pytest`, and regression-pinned.
+- **Environment-robust fixtures**: three fixtures invoked a bare
+  `python3 -m pytest` (the one interpreter NOT guaranteed to carry
+  pytest) — `test_plan_exec`'s diagnosis plan, `evals/plan_collapse.py`'s
+  plan arm (its other two arms already used `sys.executable`), and
+  `test_reflex`'s ground-truth run — all now `sys.executable`. The
+  scaffold-slim overhead budget in `test_lint_and_gain` is now relative
+  to the rendered command line (a venv-deep interpreter path must not
+  fail a fixed byte budget). Full suite green under both a clean venv
+  and a uv-tool pytest shim.
+
 ## [0.25.0] - 2026-07-19
 
 The compiled-evidence-plans wave (ROADMAP M-J, docs/EVIDENCE-PLANS.md):

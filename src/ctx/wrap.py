@@ -57,6 +57,35 @@ def _with_output_discipline(agent_args: list[str]) -> list[str]:
     return ["--append-system-prompt", _OUTPUT_DISCIPLINE, *agent_args]
 
 
+_NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
+
+
+def _collapse_enabled(workspace_root: Path) -> bool:
+    """The replacement surface is the default posture — search is forced onto
+    the doors the harness controls unless a workspace breaks glass with
+    ``[guard] collapse = false`` in ctx.toml. Absent config → enabled."""
+    path = workspace_root / "ctx.toml"
+    if not path.is_file():
+        return True
+    try:
+        import tomllib
+
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+        return bool((raw.get("guard") or {}).get("collapse", True))
+    except Exception:
+        return True
+
+
+def _with_collapse_tool_removal(agent_args: list[str], workspace_root: Path) -> list[str]:
+    """Under the replacement surface, remove Claude Code's native Grep/Glob
+    tools so search is forced onto the doors the harness controls — Bash grep
+    (transparently substituted) or the ctx verbs (already collapsed). No-op
+    unless collapse is enabled, or if the caller already set --disallowedTools."""
+    if "--disallowedTools" in agent_args or not _collapse_enabled(workspace_root):
+        return agent_args
+    return ["--disallowedTools", *_NATIVE_SEARCH_TOOLS, *agent_args]
+
+
 def _explorer_agent_source() -> Path:
     """The packaged explorer agent definition (shipped with the plugin)."""
     from ctx.installer import _template_dir
@@ -206,6 +235,7 @@ def wrap_claude(
 
     exe = ctx_exe or _ctx_executable()
     agent_args = _with_output_discipline(agent_args)
+    agent_args = _with_collapse_tool_removal(agent_args, workspace_root)
     settings = prepare_claude(workspace_root, exe)
     # The explorer agent lives alongside the hooks for the session's lifetime.
     agent_file = _install_explorer_agent(workspace_root)

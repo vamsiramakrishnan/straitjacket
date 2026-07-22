@@ -161,6 +161,70 @@ referee gates C ≥ B on turns at no correctness loss.
 contracts (shipped), `ctx q` stage registry (shipped), facts store joins
 (shipped); ast-grep/Semgrep are opportunistic tiers, never required.
 
+## M-K · The substrate operator classes (file sets · spans · records · rewrite breadth)
+
+**K1–K3 + K5.3 shipped v0.26.0** (same day; 948-test suite green, live-
+verified on this repository). Remaining: K4 SCIP, K5 comby behind its
+gate, K3's optional jq engine + opportunity ledger, K2's scoped-scan
+referee, K6 behind the broker.
+
+**Designed 2026-07-20**, from the external "evidence algebra" proposal —
+audited, corrected, and phased in [`docs/SUBSTRATE.md`](docs/SUBSTRATE.md).
+The audit's verdict: the proposal's principle (integrate operator classes,
+not binaries) is already M-J's shipped doctrine, and three of its six
+additions already exist (`rg --json`, `ctags --json`, transactional
+generation-guarded rewrites). What survives, in leverage order:
+
+- **M-K1** span-precise sites: capture the rg submatch columns already on
+  the wire; per-result search provenance. (~½ day)
+- **M-K2** `corpus` / `repo.files`: the missing file-set operator class —
+  bounded, receipted eligible-file sets that scan-class ops (`ast.search`,
+  `semantic.*`) scope to via capped `foreach`; engines git ls-files → fd →
+  os.walk; `--changed` from generation facts, never mtime. (~1 day)
+- **M-K3** `records` source + `distinct`/`histogram` stages: the jq class
+  absorbed as physical engine and instrumented escape hatch, never as
+  bounded-tier vocabulary. (1–2 days)
+- **M-K4** SCIP ingestion (M-G increment, resequenced above rewrites).
+- **M-K5** comby as a second rewrite rung — if and only if a committed
+  decline-corpus gate shows the population; explicit sed/awk steering
+  ships independently.
+- **M-K6** watch-based warming: deferred to the broker era (M-E) on the
+  record; content-keyed laziness is the incremental algebra until then.
+
+**Acceptance**: per-phase gates and named referees in the design doc;
+engine parity byte-identical with kill-switches, coverage receipts on
+every new emission kind, totality preserved (`test_digest_closure`).
+
+## M-L · `ctx ask` — intents as typed plan presets (retrieval, decision-cost)
+
+**Phase 0 + core intents shipped v0.27.0** — the adopted core of an
+external `ctx ask` retrieval proposal, audited and resequenced in
+[`docs/ASK.md`](docs/ASK.md). Compile a repository question into a frozen
+`ctx.plan/v1` template with typed slots, execute on the shipped plan
+executor, answer with the investigate digest. Collapses the *decision
+cost* of exploration (which verbs, in what order) the way M-J collapsed
+its *turn cost*.
+
+- **Phase 0 · thin ops**: `evidence.failures` (failure census from
+  captured facts — never a rerun; freshness vs the current generation
+  declared), `code.symbols` (structured rows, census-before-detail),
+  `code.context` (terminal bounded materialization — the closure
+  boundary at the plan tier).
+- **Phase 1 · intents + `ctx ask`**: `locate`, `impact`, `diagnose` as
+  deterministic slot→plan presets. NO natural-language parser — intent is
+  a flag, subject is a flag or the one unambiguous identifier token
+  (disclosed); a missing/ambiguous slot is a teaching error that
+  *suggests* and never guesses-and-runs. Every intent observe-class;
+  counterevidence structural; bytes materialize once, terminally.
+
+**Cut from the proposal** (recorded in the doc): the NL parser as primary
+path, `reveal`/`audit` verbs, the whole-surface rebrand, the
+entity/relation/operation ontology, and speculative `view:` projections.
+**Deferred**: verify/review (execute-class), trace/compare, NL as sugar
+over presets, role projections, shadow prefetch — each behind the per-
+intent A/B/C referee (retrieval turns ≤ 50% of `ctx q`/`get` at no
+recall loss).
+
 ## Sequencing
 
 ```
@@ -171,6 +235,17 @@ next ─► M-B code verbs v1 (jedi) ──► MCP op growth, skill update
 then ─► M-E broker ──► M-B multi-language LSP · M-C cached indexes
         + learned policy epochs (telemetry → committed policy, existing plan)
 now ──► M-J compiled evidence plans (shipped v0.25.0; P4 + referee open)
+now ──► M-K substrate operators: K1 spans ✅ K2 corpus ✅ K3 records ✅
+        K5.3 sed/awk steering ✅ (v0.26.0) · next: K4 SCIP; K5 comby
+        behind its decline-corpus gate; K6 waits for M-E
+now ──► M-L ctx ask: Phase 0 thin ops ✅ Phase 1 locate/impact/diagnose ✅
+        Phase 2 trace/compare ✅ Phase 3 verify/review ✅ (v0.29.0)
+        · next: A/B/C payoff referee per intent (flood task); NL sugar
+now ──► M-K tail: K3 records_opportunity ledger ✅ · K5 comby decline-gate
+        instrumented ✅ (rung still gated) · K2 scoped-scan receipt ✅
+        (95% file cut, 13× ast-grep) · K4 SCIP ingestion ✅ (v0.30.0:
+        precise xrefs, 100% vs 50% precision on the ambiguity fixture;
+        tree-sitter grammar-wheel backend shipped too)
 ```
 
 Deliberately **not** planned: wire-side semantic compression (LLMLingua-class

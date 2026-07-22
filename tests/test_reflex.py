@@ -1020,7 +1020,7 @@ def test_ab_algebra_fixture_ground_truth(tmp_path):
     base = tmp_path / "base"
     ab.make_fixture(base, introduced=False)
     p = subprocess.run(
-        ["python3", "-m", "pytest", "tests", "-q", "-rf", "--no-header",
+        [sys.executable, "-m", "pytest", "tests", "-q", "-rf", "--no-header",
          "-p", "no:cacheprovider"],
         cwd=base, capture_output=True, text=True, timeout=180,
     )
@@ -1029,7 +1029,7 @@ def test_ab_algebra_fixture_ground_truth(tmp_path):
     work = tmp_path / "work"
     ab.make_fixture(work)
     p2 = subprocess.run(
-        ["python3", "-m", "pytest", "tests", "-q", "-rf", "--no-header",
+        [sys.executable, "-m", "pytest", "tests", "-q", "-rf", "--no-header",
          "-p", "no:cacheprovider"],
         cwd=work, capture_output=True, text=True, timeout=180,
     )

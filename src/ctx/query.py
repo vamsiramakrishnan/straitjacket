@@ -115,6 +115,10 @@ class Stream:
     omitted: int = 0  # rows dropped by declared caps anywhere upstream
     groups: list[tuple[str, int]] | None = None  # set by ``group``
     note: str | None = None  # runtime empty-result hint (facts note channel)
+    # Selection receipt (M-K2, additive): a source that SELECTS from a larger
+    # population (``corpus``) attaches {considered, selected, engine, …} here;
+    # the executor carries it through combinators and the renderer declares it.
+    coverage: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -244,6 +248,13 @@ _EXAMPLES: dict[str, tuple[str, ...]] = {
     "impact": ("impact TokenBucket --depth 3",),
     "search": ("search TODO --glob 'src/*.py' | files",),
     "files": ("search TODO --glob 'src/*.py' | files",),
+    "corpus": (
+        "corpus --ext py --changed | outline",
+        "corpus --glob 'src/**' --max 20",
+    ),
+    "records": ("records run:<id>#stdout --jsonl | group level | count",),
+    "distinct": ("search TODO --glob 'src/*.py' | distinct file",),
+    "histogram": ("search TODO --glob 'src/*.py' | histogram file",),
     "outline": ("search TODO --glob 'src/*.py' | files | outline",),
     "get": ("refs TokenBucket | get --context 5",),
     "group": ("search TODO --glob 'src/*.py' | group file | count",),
@@ -382,19 +393,26 @@ def _flag(args: list[str], name: str, default, cast=str):
     return default
 
 
+def _multi_flag(args: list[str], name: str) -> list[str]:
+    """All values of a repeatable ``--flag value`` pair, in order."""
+    out: list[str] = []
+    for i, a in enumerate(args):
+        if a == name:
+            if i + 1 >= len(args):
+                raise QueryError(f"ctx q: {name} needs a value")
+            out.append(args[i + 1])
+    return out
+
+
 # ------------------------------------------------------------ source stages
 def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "refs", "a <Symbol>")
     from ctx import codeverbs
 
-    sites = None
-    if codeverbs._select_engine() == "jedi":
-        try:
-            sites, _ = codeverbs._jedi_refs(qc.ws, symbol)
-        except Exception:
-            sites = None
-    if sites is None:
-        sites, _ = codeverbs._ast_refs(qc.store, qc.ws, symbol, None)
+    # The shared engine ladder: SCIP (precise) → jedi → ast (docs/SUBSTRATE
+    # §M-K4). The engine label rides the stream note so the code.refs op and
+    # the digest can disclose which tier answered.
+    sites, engine = codeverbs.resolve_refs(qc.store, qc.ws, symbol)
     uniq: dict[tuple[str, int], str] = {}
     for rel, line, text in sites:
         uniq.setdefault((rel, line), text)
@@ -402,7 +420,9 @@ def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         {"file": rel, "line": line, "text": text.strip()[:_LINE_CAP], "symbol": symbol}
         for (rel, line), text in sorted(uniq.items())
     ]
-    return Stream("sites", rows)
+    out = Stream("sites", rows)
+    out.note = f"engine: {engine}"
+    return out
 
 
 def _callgraph(qc: _Ctx):
@@ -492,9 +512,146 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         if _LEDGER_DIR in str(t.label).replace("\\", "/").split("/"):
             continue
         for i, ln in enumerate(t.text.splitlines(), start=1):
-            if rx.search(ln):
-                rows.append({"file": t.label, "line": i, "text": ln.strip()[:_LINE_CAP]})
+            m = rx.search(ln)
+            if m:
+                # Span-precise sites (M-K1): 1-based [col_a, col_b) character
+                # columns of the first match on the line.
+                rows.append(
+                    {
+                        "file": t.label,
+                        "line": i,
+                        "col_a": m.start() + 1,
+                        "col_b": m.end() + 1,
+                        "text": ln.strip()[:_LINE_CAP],
+                    }
+                )
     return Stream("sites", rows)
+
+
+def _stage_corpus(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """M-K2 ``file_select``: the bounded eligible file set, with a coverage
+    receipt. Engines (git → fd → walk) live in ``ctx.filesets``."""
+    from ctx import filesets
+
+    rows, coverage, omitted = filesets.select(
+        qc.ws,
+        exts=_multi_flag(args, "--ext"),
+        globs=_multi_flag(args, "--glob"),
+        excludes=_multi_flag(args, "--exclude"),
+        changed="--changed" in args,
+        max_files=_flag(args, "--max", None, int),
+    )
+    out = Stream("files", rows, omitted=omitted)
+    out.coverage = coverage
+    if not rows and "--changed" in args:
+        out.note = (
+            "no changed files this generation — clean tree, or a non-git "
+            "workspace (changed binds to generation facts, never mtime); "
+            "drop --changed to select from the full corpus"
+        )
+    return out
+
+
+def _json_pointer(doc, pointer: str):
+    cur = doc
+    for seg in pointer.split("/")[1:]:
+        seg = seg.replace("~1", "/").replace("~0", "~")
+        if isinstance(cur, list):
+            cur = cur[int(seg)]
+        elif isinstance(cur, dict):
+            cur = cur[seg]
+        else:
+            raise KeyError(seg)
+    return cur
+
+
+def _records_rows(text: str, *, jsonl: bool, pointer: str | None) -> list[dict]:
+    """Typed rows from a stored JSON/JSONL artifact. Dict items become rows
+    verbatim; scalars/arrays are wrapped as ``{"value": item}``."""
+
+    def _norm(items) -> list[dict]:
+        if isinstance(items, dict):
+            items = [items]
+        if not isinstance(items, list):
+            items = [items]
+        return [
+            it if isinstance(it, dict) else {"value": it}
+            for it in items
+        ]
+
+    if jsonl:
+        rows: list[dict] = []
+        for i, ln in enumerate(text.splitlines(), start=1):
+            if not ln.strip():
+                continue
+            try:
+                obj = json.loads(ln)
+            except json.JSONDecodeError as e:
+                raise QueryError(
+                    f"ctx q: records --jsonl: line {i} is not JSON ({e.msg})"
+                ) from e
+            rows.extend(_norm(obj))
+        return rows
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError:
+        # One labeled retry as JSONL before failing: tool output is often
+        # JSON Lines without saying so.
+        try:
+            return _records_rows(text, jsonl=True, pointer=None)
+        except QueryError:
+            raise QueryError(
+                "ctx q: records: artifact is neither a JSON document nor JSON "
+                "Lines; for line-delimited streams pass --jsonl"
+            ) from None
+    if pointer:
+        try:
+            doc = _json_pointer(doc, pointer)
+        except (KeyError, IndexError, ValueError) as e:
+            raise QueryError(
+                f"ctx q: records --pointer {pointer!r} does not resolve ({e})"
+            ) from e
+    return _norm(doc)
+
+
+def _stage_records_src(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """M-K3 ``record_transform`` source: open a stored artifact (run stream
+    or blob) as the ``records`` kind — compiler/test/SARIF/lockfile JSON
+    becomes queryable where it already lives, the store."""
+    handle = _need_arg(args, "records", "a <handle> (run:<id>[#stream] | blob:<id>)")
+    pointer = _flag(args, "--pointer", None)
+    jsonl = "--jsonl" in args
+    from ctx.refs import parse_ref
+
+    try:
+        ref = parse_ref(handle)
+    except Exception as e:
+        raise QueryError(f"ctx q: records: bad handle {handle!r} ({e})") from e
+    from ctx._retrieval.targets import _resolve_run_targets, _stream_text
+
+    try:
+        if ref.kind == "blob":
+            blob_id = qc.store.resolve_id(ref.id or "", kinds=("blob",))
+            text = _stream_text(qc.store, blob_id)
+        elif ref.kind == "run":
+            targets, _skipped = _resolve_run_targets(qc.store, ref)
+            if not targets:
+                out = Stream("records", [])
+                out.note = (
+                    f"{handle} has no text streams — pick one with "
+                    "#stdout/#stderr, or the run captured nothing"
+                )
+                return out
+            text = targets[0].text
+        else:
+            raise QueryError(
+                f"ctx q: records reads run:/blob: handles, got {ref.kind!r}"
+            )
+    except QueryError:
+        raise
+    except Exception as e:
+        raise QueryError(f"ctx q: records: cannot resolve {handle!r} ({e})") from e
+    return Stream("records", _records_rows(text, jsonl=jsonl, pointer=pointer))
 
 
 # ------------------------------------------------------- transform stages
@@ -638,6 +795,56 @@ def _stage_count(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     return Stream("records", rows, omitted=stream.omitted)
 
 
+def _stage_distinct(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """M-K3: the unique values of one field, sorted — ``sort -u`` as a
+    typed, closed stage."""
+    fld = _need_arg(args, "distinct", "a <field>")
+    vals = sorted({str(r.get(fld, "")) for r in stream.rows})
+    return Stream("records", [{fld: v} for v in vals], omitted=stream.omitted)
+
+
+_HISTOGRAM_BUCKETS = 10
+
+
+def _stage_histogram(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """M-K3: value distribution of one field. All-numeric values get
+    equal-width buckets; otherwise a categorical census sorted by
+    (-count, value), capped at the bucket count with declared omission."""
+    fld = _need_arg(args, "histogram", "a <field>")
+    n_buckets = max(1, _flag(args, "--buckets", _HISTOGRAM_BUCKETS, int))
+    raw = [str(r.get(fld, "")) for r in stream.rows]
+    nums: list[float] | None
+    try:
+        nums = [float(v) for v in raw] if raw else None
+    except ValueError:
+        nums = None
+    if nums:
+        lo, hi = min(nums), max(nums)
+        if lo == hi:
+            rows = [{"bucket": format(lo, "g"), "n": len(nums)}]
+            return Stream("records", rows, omitted=stream.omitted)
+        width = (hi - lo) / n_buckets
+        counts = [0] * n_buckets
+        for v in nums:
+            counts[min(n_buckets - 1, int((v - lo) / width))] += 1
+        rows = [
+            {
+                "bucket": f"{format(lo + i * width, 'g')}–{format(lo + (i + 1) * width, 'g')}",
+                "n": c,
+            }
+            for i, c in enumerate(counts)
+        ]
+        return Stream("records", rows, omitted=stream.omitted)
+    sizes: dict[str, int] = {}
+    for v in raw:
+        sizes[v] = sizes.get(v, 0) + 1
+    order = sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0]))
+    kept = order[:n_buckets]
+    omitted = stream.omitted + sum(c for _, c in order[n_buckets:])
+    rows = [{"bucket": k, "n": c} for k, c in kept]
+    return Stream("records", rows, omitted=omitted)
+
+
 # ------------------------------------------------------------ registration
 register_stage("refs", _stage_refs, input_kinds=(), output_kind="sites",
                doc="refs <Symbol> — reference sites (codeverbs engine)")
@@ -649,6 +856,16 @@ register_stage("impact", _stage_impact, input_kinds=(), output_kind="sites",
                doc="impact <Symbol> [--depth N] — transitive callers, depth≤6")
 register_stage("search", _stage_search, input_kinds=(), output_kind="sites",
                doc="search <pattern> [--glob G] — regex over repo files")
+register_stage("corpus", _stage_corpus, input_kinds=(), output_kind="files",
+               doc="corpus [--ext E]… [--glob G]… [--exclude G]… [--changed] "
+                   "[--max N] — bounded eligible file set (git → fd → walk)",
+               empty_hint="no files selected — loosen --ext/--glob/--exclude, "
+                          "or drop --changed on a clean tree")
+register_stage("records", _stage_records_src, input_kinds=(), output_kind="records",
+               doc="records <handle> [--jsonl] [--pointer /p] — stored JSON/JSONL "
+                   "artifact as a typed record stream",
+               empty_hint="the artifact parsed to zero records — check the "
+                          "handle's stream (#stdout/#stderr) and --pointer")
 register_stage("files", _stage_files, input_kinds=("sites",), output_kind="files",
                doc="files — dedup sites to per-file counts")
 register_stage("outline", _stage_outline, input_kinds=("files",), output_kind="text",
@@ -663,6 +880,13 @@ register_stage("where", _stage_where, input_kinds=KINDS, output_kind=SAME,
                doc="where <field><op><value> — filter rows (= != ~substring)")
 register_stage("count", _stage_count, input_kinds=KINDS, output_kind="records",
                doc="count — row count, or per-group counts after group")
+register_stage("distinct", _stage_distinct, input_kinds=REPRESENTATION_KINDS,
+               output_kind="records",
+               doc="distinct <field> — unique values of a field, sorted")
+register_stage("histogram", _stage_histogram, input_kinds=REPRESENTATION_KINDS,
+               output_kind="records",
+               doc="histogram <field> [--buckets N] — numeric buckets or "
+                   "categorical census of a field")
 
 
 # ---------------------------------------------------------------- execution
@@ -795,7 +1019,11 @@ def _row_line(kind: str, r: dict) -> str:
         depth = f" · depth {r['depth']}" if "depth" in r else ""
         return f"repo:{r.get('file','')}:L{r.get('line','?')}: {what}{depth}"
     if kind == "files":
-        return f"{r.get('file','')} · {fmt_int(int(r.get('n', 0)))} sites"
+        if "n" in r:
+            return f"{r.get('file','')} · {fmt_int(int(r.get('n', 0)))} sites"
+        if "size" in r:
+            return f"{r.get('file','')} · {fmt_int(int(r.get('size', 0)))} B"
+        return str(r.get("file", ""))
     if kind == "symbols":
         return f"{r.get('symbol', r.get('name',''))}  {r.get('file','')}:{r.get('line','')}"
     # records (and any future kind): sorted key=value, private fields hidden
@@ -826,6 +1054,8 @@ def _render(
         "rows": public_rows,
         "omitted_upstream": out.omitted,
     }
+    if out.coverage:
+        payload["coverage"] = out.coverage
     blob_id = store.put_blob(canonical_json(payload))
     short = blob_id[:12]
 
@@ -839,6 +1069,16 @@ def _render(
             "narrow with where/top)"
         )
     lines.append(census)
+    if out.coverage:
+        cov = out.coverage
+        seg = (
+            f"coverage: considered {fmt_int(int(cov.get('considered', 0)))} · "
+            f"selected {fmt_int(int(cov.get('selected', 0)))} · "
+            f"engine {cov.get('engine', '?')}"
+        )
+        if cov.get("generation"):
+            seg += f" · gen {cov['generation']}"
+        lines.append(seg)
     # Self-healing emptiness: a 0-row result is never a bare census — the
     # per-stage diagnosis (and, on an identical dry re-issue, the stronger
     # banner) is evidence, not a suggestion; it must survive the
@@ -892,7 +1132,10 @@ def run_query(
         for i, (name, args) in enumerate(parsed, start=1):
             st = STAGES[name]
             n_in = len(stream.rows)
+            prev_coverage = stream.coverage
             stream = st.fn(qc, stream, args)
+            if stream.coverage is None and prev_coverage is not None:
+                stream.coverage = prev_coverage  # selection receipt survives
             if len(stream.rows) > st.row_cap:
                 stream.omitted += len(stream.rows) - st.row_cap
                 stream.rows = stream.rows[: st.row_cap]

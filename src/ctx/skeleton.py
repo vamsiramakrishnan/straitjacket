@@ -423,19 +423,65 @@ def _ctags_extract(
 
 
 # ------------------------------------------------------------ tree-sitter
-_TS_PACK_NAMES = {"python": "python", "javascript": "javascript", "typescript": "typescript"}
+_TS_PACK_NAMES = {"python": "python", "javascript": "javascript", "typescript": "typescript",
+                  "go": "go", "rust": "rust"}
+
+
+# Individual grammar wheels for the modern tree-sitter API (0.22+): each
+# ``tree_sitter_<lang>`` module exposes ``language()`` (a PyCapsule) that
+# ``tree_sitter.Language`` wraps. This is the maintained path — the bundle
+# packages (language_pack, languages) lag the core API and, in sandboxed
+# environments, language_pack fetches parsers at runtime (a network 403
+# here). Grammar wheels are self-contained.
+_TS_GRAMMAR_MODULES = {
+    "python": ("tree_sitter_python",),
+    "javascript": ("tree_sitter_javascript",),
+    # tree-sitter-typescript exposes two grammars under one module.
+    "typescript": ("tree_sitter_typescript",),
+    "go": ("tree_sitter_go",),
+    "rust": ("tree_sitter_rust",),
+}
+
+
+def _ts_grammar_parser(language: str):
+    """Parser from an individual ``tree_sitter_<lang>`` grammar wheel via
+    the modern core API, or None when no grammar wheel is importable."""
+    mods = _TS_GRAMMAR_MODULES.get(language)
+    if not mods:
+        return None
+    try:
+        import tree_sitter as _ts
+    except Exception:
+        return None
+    for mod_name in mods:
+        try:
+            mod = __import__(mod_name)
+            lang_fn = getattr(mod, "language", None) or getattr(
+                mod, "language_typescript", None
+            )
+            if lang_fn is None:
+                continue
+            return _ts.Parser(_ts.Language(lang_fn()))
+        except Exception:
+            continue
+    return None
 
 
 def _ts_parser(language: str):
     name = _TS_PACK_NAMES.get(language)
     if name is None:
         raise BackendUnavailable(f"tree-sitter: no query set for {language!r}")
+    # Preferred: the bundle packages (one import, many languages) when they
+    # work; then individual grammar wheels (the maintained, offline path).
     for mod_name in ("tree_sitter_language_pack", "tree_sitter_languages"):
         try:
             mod = __import__(mod_name)
             return mod.get_parser(name)
         except Exception:
             continue
+    parser = _ts_grammar_parser(language)
+    if parser is not None:
+        return parser
     raise BackendUnavailable("tree-sitter bindings not importable ([code] extra)")
 
 
@@ -504,6 +550,79 @@ def _tree_sitter_extract(source: str, language: str) -> tuple[list[dict[str, Any
                     walk_py(body, name)
 
         walk_py(root, None)
+    elif language == "go":
+
+        def _go_imports(node) -> None:
+            if node.type == "import_spec":
+                p = node.child_by_field_name("path")
+                if p is not None:
+                    imports.append(text(p).strip("`\"'"))
+            else:
+                for c in node.named_children:
+                    _go_imports(c)
+
+        def walk_go(node, scope: str | None) -> None:
+            for child in node.children:
+                t = child.type
+                if t == "function_declaration":
+                    name = name_of(child)
+                    if name:
+                        add(child, name, "function", scope)
+                elif t == "method_declaration":
+                    name = name_of(child)
+                    if name:
+                        add(child, name, "method", scope)
+                elif t == "type_declaration":
+                    for spec in child.named_children:
+                        if spec.type == "type_spec":
+                            name = name_of(spec)
+                            if name:
+                                add(spec, name, "type", scope)
+                elif t == "import_declaration":
+                    _go_imports(child)
+
+        walk_go(root, None)
+    elif language == "rust":
+
+        def walk_rust(node, scope: str | None) -> None:
+            for child in node.children:
+                t = child.type
+                if t == "function_item":
+                    name = name_of(child)
+                    if name:
+                        add(child, name, "method" if scope else "function", scope)
+                elif t == "struct_item":
+                    name = name_of(child)
+                    if name:
+                        add(child, name, "struct", scope)
+                elif t == "enum_item":
+                    name = name_of(child)
+                    if name:
+                        add(child, name, "enum", scope)
+                elif t == "trait_item":
+                    name = name_of(child)
+                    if name:
+                        add(child, name, "trait", scope)
+                        body = child.child_by_field_name("body")
+                        if body is not None:
+                            walk_rust(body, name)
+                elif t == "impl_item":
+                    ty = child.child_by_field_name("type")
+                    cls = text(ty) if ty is not None else scope
+                    body = child.child_by_field_name("body")
+                    if body is not None:
+                        walk_rust(body, cls)
+                elif t == "mod_item":
+                    name = name_of(child)
+                    body = child.child_by_field_name("body")
+                    if body is not None:
+                        walk_rust(body, name or scope)
+                elif t == "use_declaration":
+                    arg = child.child_by_field_name("argument")
+                    if arg is not None:
+                        imports.append(text(arg))
+
+        walk_rust(root, None)
     else:  # javascript / typescript
         classy = {"class_declaration", "abstract_class_declaration"}
         fn_values = {"arrow_function", "function_expression", "function", "generator_function"}

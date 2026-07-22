@@ -294,3 +294,26 @@ def test_plan_op_ast_search_discloses_engine(git_ws, tmp_path, monkeypatch):
         assert "engine ast-grep 9.9.9-test" in text
     finally:
         astgrep.binary.cache_clear()
+
+
+def test_ctx_rewrite_verb_previews_then_applies(git_ws, tmp_path, monkeypatch):
+    """The `ctx rewrite` verb collapses find-and-edit into one op: preview by
+    default (worktree untouched), --apply writes transactionally."""
+    from argparse import Namespace
+
+    from ctx import astgrep, cli
+
+    _fake_astgrep(tmp_path, monkeypatch, _FAKE_REWRITE)
+    try:
+        ws = make_ws(git_ws)
+        ns = Namespace(pattern="old_client.fetch($X)",
+                       replacement="new_client.fetch(resource=$X)",
+                       lang=None, glob=None, apply=False)
+        assert cli._cmd_rewrite(ws, ns) == 0
+        assert "old_client" in (git_ws / "m.py").read_text(encoding="utf-8")  # preview only
+
+        ns.apply = True
+        assert cli._cmd_rewrite(ws, ns) == 0
+        assert "new_client.fetch(resource=x)" in (git_ws / "m.py").read_text(encoding="utf-8")
+    finally:
+        astgrep.binary.cache_clear()

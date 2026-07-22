@@ -243,6 +243,32 @@ def _ast_refs(
     return sites, scanned
 
 
+def resolve_refs(
+    store: Store, ws: Workspace, symbol: str
+) -> tuple[list[tuple[str, int, str]], str]:
+    """The reference-resolution engine ladder, one place: SCIP (precise,
+    compiler-backed — when an ``index.scip`` and the protobuf runtime are
+    present) → jedi (semantic) → ast (textual approximation). Returns
+    ``(sites, engine_label)``; the label is disclosed by callers so a
+    fallback is never anonymous (CONTRIBUTING rule)."""
+    try:
+        from ctx import scip_ingest
+
+        scip_sites = scip_ingest.refs(ws, symbol)
+        if scip_sites:  # a non-empty precise answer wins the ladder
+            return scip_sites, "scip (exact)"
+    except Exception:
+        pass
+    if _select_engine() == _ENGINE_JEDI:
+        try:
+            sites, _ = _jedi_refs(ws, symbol)
+            return sites, _ENGINE_JEDI
+        except Exception:
+            pass
+    sites, _ = _ast_refs(store, ws, symbol, None)
+    return sites, "ast (textual)"
+
+
 def cmd_refs(
     store: Store, ws: Workspace, symbol: str, scope_path: str | None = None
 ) -> str:
@@ -251,16 +277,7 @@ def cmd_refs(
     budget = ws.config.budgets
     cap = budget.max_matches
 
-    engine = _select_engine()
-    label = engine
-    if engine == _ENGINE_JEDI:
-        try:
-            sites, scanned = _jedi_refs(ws, symbol)
-        except Exception:
-            engine = _ENGINE_AST
-    if engine == _ENGINE_AST:
-        label = "ast (textual)"
-        sites, scanned = _ast_refs(store, ws, symbol, scope_path)
+    sites, label = resolve_refs(store, ws, symbol)
 
     if scope_path:
         pfx = scope_path.strip("/")
@@ -303,6 +320,9 @@ def cmd_refs(
             f"(narrow scope; {fmt_int(len(ordered) - len(shown))} sites omitted)"
         )
     result = _emit(ws, "\n".join(out), budget.result_tokens, continuation)
+    # Input-bytes proxy for telemetry: the resolved sites' text (the engine
+    # ladder abstracts away per-engine scan volume).
+    scanned = sum(len(t) for _, _, t in sites)
     record_telemetry(store, "code", scanned, len(result.encode("utf-8")))
     return result
 

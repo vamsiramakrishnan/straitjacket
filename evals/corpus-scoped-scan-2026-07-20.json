@@ -1,0 +1,19 @@
+{
+  "pattern": "def $NAME($$$)",
+  "repeats": 7,
+  "whole": {
+    "files": 178,
+    "considered": 350,
+    "matches": 2283,
+    "median_s": 0.136
+  },
+  "scoped": {
+    "files": 9,
+    "glob": "src/ctx/_retrieval/**",
+    "matches": 33,
+    "median_s": 0.01
+  },
+  "file_reduction_pct": 94.9,
+  "wall_speedup_x": 13.1,
+  "semgrep_arm": "declared, not run (semgrep not installed)"
+}

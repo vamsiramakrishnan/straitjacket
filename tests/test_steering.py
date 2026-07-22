@@ -160,6 +160,57 @@ def test_grep_single_file_gets_match_cap_injected(tmp_path):
     assert rw is None or "-m 25" not in rw["updatedInput"]["CommandLine"]
 
 
+# ------------------------------------------------- text tools (M-K5.3)
+def test_sed_readonly_steers_to_ctx_run(tmp_path):
+    (tmp_path / "notes.txt").write_text("a\nb\n", encoding="utf-8")
+    d = _classify(
+        "run_command",
+        {"CommandLine": "sed -n 1,5p notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d["decision"] == "deny"  # canonical layer: unbounded output
+    assert d["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run -- sed")
+
+
+def test_sed_inplace_force_asks_with_preview_remediation(tmp_path):
+    for cmd in (
+        "sed -i s/a/b/ notes.txt",
+        "sed -i.bak s/a/b/ notes.txt",
+        "sed --in-place=.bak s/a/b/ notes.txt",
+        "sed -ni s/a/b/p notes.txt",
+    ):
+        d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
+        assert d["decision"] == "force_ask", cmd
+        assert "ctx rewrite" in d["reason"], cmd
+        assert "rewrite" not in d, cmd  # mutation is never silently rerouted
+
+
+def test_awk_inplace_force_asks_readonly_steers(tmp_path):
+    d = _classify(
+        "run_command",
+        {"CommandLine": "gawk -i inplace '{print}' notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d["decision"] == "force_ask" and "ctx rewrite" in d["reason"]
+    # Read-only awk with a program text carries `{}` → the compound path:
+    # force_ask, steered into a bounded shell capture (mutation-free).
+    d2 = _classify(
+        "run_command",
+        {"CommandLine": "awk '{print $1}' notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d2["decision"] == "force_ask"
+    assert d2["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --shell -- ")
+    # Braceless read-only awk (-f progfile) takes the plain-argv rung.
+    d3 = _classify(
+        "run_command",
+        {"CommandLine": "awk -f prog.awk notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d3["decision"] == "deny"
+    assert d3["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run -- awk")
+
+
 # ----------------------------------------------------------- read rewrites
 def test_oversized_read_bounded_with_limit_under_auto(tmp_path):
     big = tmp_path / "big.txt"

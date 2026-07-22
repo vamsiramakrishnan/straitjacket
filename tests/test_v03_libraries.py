@@ -60,6 +60,12 @@ def test_rg_and_python_engines_agree(state_home, workspace_dir, monkeypatch):
 
     assert evidence(out_rg) == evidence(out_py)
     assert "matches: 1" in out_rg and "matches: 1" in out_py
+    # M-K1 span parity: identical columns ⇒ identical ctx.search/v1 result
+    # blobs (the per-result provenance handle agrees across engines).
+    def result_blob(text):
+        return [ln for ln in text.splitlines() if ln.startswith("result: blob:")]
+
+    assert result_blob(out_rg) == result_blob(out_py) and result_blob(out_rg)
 
 
 @pytest.mark.skipif(not HAS_RG, reason="ripgrep not installed")

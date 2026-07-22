@@ -30,7 +30,7 @@ jobs:
 
       - name: Install package with all extras
         run: |
-          pip install -e '.[dev,map,fast]'
+          pip install -e '.[dev,map,fast,code,scip]'
           pip install jedi
 
       - name: Run acceptance suite

@@ -184,6 +184,15 @@ def _main_slow(args: list[str]) -> int:
     p_diff.add_argument("ref_a", help="baseline run: reference")
     p_diff.add_argument("ref_b", help="comparison run: reference")
 
+    p_rewrite = sub.add_parser(
+        "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
+    p_rewrite.add_argument("pattern", help="ast-grep metavariable pattern, e.g. 'foo($A)'")
+    p_rewrite.add_argument("replacement", help="rewrite template, e.g. 'bar($A)'")
+    p_rewrite.add_argument("--lang", help="language: py|js|ts|go|rust|…")
+    p_rewrite.add_argument("--glob", help="path glob to scope files")
+    p_rewrite.add_argument("--apply", action="store_true",
+                           help="write the change (default: preview the diff only)")
+
     p_stats = sub.add_parser("stats", help="bounded schema/shape statistics")
     p_stats.add_argument("ref", nargs="?", default="repo:")
     p_stats.add_argument("--scope", help="named monorepo scope")
@@ -366,6 +375,45 @@ def _main_slow(args: list[str]) -> int:
         help="after execution: shadow follow-up report — declared vs "
         "empirically-preferred operator ordering with the lexicographic "
         "reason (report only: nothing is reordered or suppressed)",
+    )
+
+    p_ask = sub.add_parser(
+        "ask",
+        help="answer a repository question via a typed intent preset "
+        "(locate|impact|diagnose|trace|compare|verify|review) — one evidence plan",
+    )
+    p_ask.add_argument("question", help="the repository question (plain text)")
+    p_ask.add_argument(
+        "--intent", dest="ask_intent", default=None,
+        help="locate|impact|diagnose|trace|compare|verify|review (required "
+        "unless unambiguous; the error suggests one — it never guesses and runs)",
+    )
+    p_ask.add_argument(
+        "--symbol", dest="ask_symbol", default=None,
+        help="the subject symbol (overrides inference from the question)",
+    )
+    p_ask.add_argument(
+        "--run", dest="ask_run", default=None,
+        help="run handle: the failure run for diagnose; run A for compare "
+        "(default: the latest captured run)",
+    )
+    p_ask.add_argument(
+        "--against", dest="ask_against", default=None,
+        help="compare: run B (the second run handle to diff --run against)",
+    )
+    p_ask.add_argument(
+        "--command", dest="ask_command", default=None,
+        help="verify/review: the test command to run (default: python -m pytest -q)",
+    )
+    p_ask.add_argument("--depth", dest="ask_depth", type=int, default=None,
+                       help="impact/trace blast-radius depth (≤6)")
+    p_ask.add_argument(
+        "--plan", dest="ask_show_plan", action="store_true",
+        help="print the compiled ctx.plan/v1 and disclosure, do not execute",
+    )
+    p_ask.add_argument(
+        "--replans", type=int, default=None,
+        help="epoch allowance for this objective (default from ctx.toml [plan])",
     )
 
     p_policy = sub.add_parser("policy", help="compiled steering policy")
@@ -655,6 +703,8 @@ def _main_slow(args: list[str]) -> int:
             )
             _emit_bounded_digest(ws, store, text, plan)
             return 0 if code == 0 else 3
+        if ns.cmd == "rewrite":
+            return _cmd_rewrite(ws, ns)
         if ns.cmd == "gain":
             return _cmd_gain(ws)
         if ns.cmd == "surface":
@@ -696,6 +746,8 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_plan(ws, ns)
         if ns.cmd == "investigate":
             return _cmd_investigate(ws, ns)
+        if ns.cmd == "ask":
+            return _cmd_ask(ws, ns)
         if ns.cmd == "policy":
             return _cmd_policy(ws, ns)
         if ns.cmd == "init":
@@ -853,7 +905,7 @@ def _cmd_surface(ws, ns) -> int:
         return 0
     if ns.surface_cmd == "trim":
         tp = a["trim_preview"]
-        print(f"[ctx surface trim --preview · advisory only, nothing hidden]")
+        print("[ctx surface trim --preview · advisory only, nothing hidden]")
         if not tp["ids"]:
             print("  nothing to defer: surface is already lean")
             return 0
@@ -864,6 +916,47 @@ def _cmd_surface(ws, ns) -> int:
         print(f"  ── est {tp['est_token_reduction']:,} tokens/turn recoverable")
         return 0
     print(surface.render_audit(a))
+    return 0
+
+
+def _cmd_rewrite(ws, ns) -> int:
+    """Structural multi-file rewrite in one bounded op — the edit-loop collapse.
+
+    One call replaces the search-read-edit-per-file loop: ast-grep computes the
+    mechanical rewrite across every matching file, mints the unified diff as an
+    addressable ``blob:``, and (with ``--apply``) applies it transactionally
+    (generation-guarded git apply, all-or-nothing). Preview by default."""
+    from ctx import astgrep
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        rows, meta = astgrep.rewrite_preview(
+            ws, store, ns.pattern, ns.replacement,
+            language=ns.lang, glob=ns.glob)
+    except Exception as e:  # EngineMissing / RewriteError / parse failure
+        print(f"ctx rewrite: {e}", file=sys.stderr)
+        return 2
+    blob = meta.get("patch_blob")
+    total = sum(int(r.get("edits", 0)) for r in rows)
+    print(f"[ctx rewrite · preview] {meta.get('files', 0)} file(s), "
+          f"{total} edit(s) · {meta.get('precision', 'structural')} · {meta.get('engine')}")
+    for r in rows:
+        print(f"  {r['file']}: {r.get('edits', 0)} edit(s)")
+    if not blob:
+        print("no matches — nothing to rewrite")
+        return 0
+    print(f"patch: {blob}   (ctx get {blob}  for the unified diff)")
+    if not ns.apply:
+        print("dry run — add --apply to write the change transactionally")
+        return 0
+    try:
+        applied, ameta = astgrep.rewrite_apply(ws, store, blob, meta.get("generation"))
+    except Exception as e:
+        print(f"ctx rewrite: apply refused — {e}", file=sys.stderr)
+        return 2
+    print(f"[ctx rewrite · applied] {ameta.get('applied_files', len(applied))} file(s) "
+          f"in one transactional op")
     return 0
 
 
@@ -1495,6 +1588,51 @@ def _cmd_investigate(ws, ns) -> int:
     if getattr(ns, "inv_advise", False):
         print()
         print(_investigate_advice(ws, plan, node_rows))
+    return code
+
+
+def _cmd_ask(ws, ns) -> int:
+    """`ctx ask "<question>" --intent <intent>` — compile a typed intent
+    preset into one ctx.plan/v1 and execute it through the SAME executor
+    and emission tail as investigate. No natural-language parser: the
+    subject is a flag or the question's sole identifier token (disclosed);
+    a missing/ambiguous slot is a teaching error that suggests, never
+    acts. The disclosure rides ABOVE the digest so the interpretation is
+    always visible (never hidden behind --trace)."""
+    from ctx import ask
+    from ctx.plan_exec import execute_plan
+    from ctx.store import Store
+
+    try:
+        plan_json, disclosure = ask.compile_ask(
+            ns.ask_intent,
+            ns.question,
+            symbol=ns.ask_symbol,
+            run=ns.ask_run,
+            depth=ns.ask_depth,
+            ref_a=ns.ask_run,
+            ref_b=getattr(ns, "ask_against", None),
+            command=getattr(ns, "ask_command", None),
+        )
+    except ask.AskError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+
+    header = "\n".join(f"  {ln}" for ln in disclosure)
+    if getattr(ns, "ask_show_plan", False):
+        print(f"[ctx ask]\n{header}\n")
+        print(plan_json)
+        return 0
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    out, code = execute_plan(ws, store, plan_json, tier="cli")
+    if code == 2:  # a validation rejection: the text IS the typed reason
+        print(f"[ctx ask]\n{header}")
+        print(out)
+        return 2
+    # Disclosure first, then the shared investigation emission tail.
+    print(f"[ctx ask]\n{header}")
+    _emit_investigation(ws, store, out)
     return code
 
 

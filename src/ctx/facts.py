@@ -1075,7 +1075,12 @@ def _pytest_family_run_exists(store: Store) -> bool:
         for (rid,) in rows:
             with contextlib.suppress(Exception):
                 argv = store.get_manifest(rid).get("argv") or []
-                if any("pytest" in str(a) for a in argv):
+                # Word-anchored (shared with the profile's detect): an
+                # interpreter path under a pytest-named directory is not
+                # a pytest family run.
+                from ctx.digest.pytestprof import argv_invokes_pytest
+
+                if argv_invokes_pytest(argv):
                     return True
         return False
     except Exception as e:

@@ -1,0 +1,42 @@
+{
+  "symbol": "helper",
+  "ground_truth": [
+    "main.py:1",
+    "main.py:12",
+    "pkg/core.py:1",
+    "pkg/core.py:6"
+  ],
+  "scip": {
+    "engine": "scip (exact)",
+    "recall": 1.0,
+    "precision": 1.0,
+    "false_positives": [],
+    "found": [
+      "main.py:1",
+      "main.py:12",
+      "pkg/core.py:1",
+      "pkg/core.py:6"
+    ]
+  },
+  "fallback": {
+    "engine": "ast (textual)",
+    "recall": 1.0,
+    "precision": 0.5,
+    "false_positives": [
+      "main.py:3",
+      "main.py:4",
+      "main.py:8",
+      "main.py:9"
+    ],
+    "found": [
+      "main.py:1",
+      "main.py:12",
+      "main.py:3",
+      "main.py:4",
+      "main.py:8",
+      "main.py:9",
+      "pkg/core.py:1",
+      "pkg/core.py:6"
+    ]
+  }
+}

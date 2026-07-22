@@ -1,0 +1,110 @@
+{
+  "model": "haiku",
+  "max_turns": 30,
+  "gold": "orders/pricing.py:apply_discount",
+  "rows": [
+    {
+      "arm": "naive",
+      "model": "haiku",
+      "rep": 1,
+      "num_turns": 8,
+      "terminal": "success",
+      "hit_turn_cap": false,
+      "cost_usd": 0.045244,
+      "wall_s": 33.8,
+      "tokens": {
+        "in": 50,
+        "out": 2116,
+        "cache_create": 8647,
+        "cache_read": 166530
+      },
+      "culprit_named": "orders/pricing.py:apply_discount",
+      "culprit_ok": true,
+      "suite_green_after": true,
+      "success": true,
+      "identified_culprit": true
+    },
+    {
+      "arm": "headroom",
+      "model": "haiku",
+      "rep": 1,
+      "num_turns": 7,
+      "terminal": "success",
+      "hit_turn_cap": false,
+      "cost_usd": 0.0726657,
+      "wall_s": 53.1,
+      "tokens": {
+        "in": 19374,
+        "out": 2517,
+        "cache_create": 22938,
+        "cache_read": 120342
+      },
+      "culprit_named": "orders/pricing.py:apply_discount",
+      "culprit_ok": true,
+      "suite_green_after": true,
+      "success": true,
+      "identified_culprit": true
+    },
+    {
+      "arm": "sj",
+      "model": "haiku",
+      "rep": 1,
+      "num_turns": 9,
+      "terminal": "success",
+      "hit_turn_cap": false,
+      "cost_usd": 0.063566,
+      "wall_s": 36.0,
+      "tokens": {
+        "in": 354,
+        "out": 2129,
+        "cache_create": 11106,
+        "cache_read": 303550
+      },
+      "culprit_named": "orders/pricing.py:apply_discount",
+      "culprit_ok": true,
+      "suite_green_after": true,
+      "success": true,
+      "identified_culprit": true,
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "plan": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      }
+    },
+    {
+      "arm": "sj_skill",
+      "model": "haiku",
+      "rep": 1,
+      "num_turns": 12,
+      "terminal": "success",
+      "hit_turn_cap": false,
+      "cost_usd": 0.0913082,
+      "wall_s": 53.1,
+      "tokens": {
+        "in": 98,
+        "out": 2563,
+        "cache_create": 12418,
+        "cache_read": 535592
+      },
+      "culprit_named": "orders/pricing.py:apply_discount",
+      "culprit_ok": true,
+      "suite_green_after": true,
+      "success": true,
+      "identified_culprit": true,
+      "ctx_vocab": {
+        "ask": 1,
+        "q": 1,
+        "investigate": 0,
+        "plan": 0,
+        "run": 1,
+        "get": 0,
+        "search": 0
+      }
+    }
+  ],
+  "note": "vocab counts derived from agent transcripts; see receipt"
+}
