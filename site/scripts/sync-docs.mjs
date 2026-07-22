@@ -1,13 +1,16 @@
 // Sync canonical Markdown from ../docs into the Starlight content tree.
-// The repository Markdown remains the single source of truth. This script
-// removes GitHub-only chrome and adds page frontmatter for the docs site.
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+// Repository Markdown remains the single source of truth. This script removes
+// GitHub-only chrome, rewrites repository-relative links for the site, and
+// adds page frontmatter.
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const docsDir = join(here, '..', '..', 'docs');
 const outDir = join(here, '..', 'src', 'content', 'docs');
+const siteBase = '/straitjacket';
+const githubBase = 'https://github.com/vamsiramakrishnan/straitjacket';
 
 const PAGES = [
   ['GETTING-STARTED.md', 'start/getting-started.md', 'Getting started', 'Install Straitjacket, configure a workspace, and complete the first capture and retrieval workflow.'],
@@ -32,16 +35,71 @@ const PAGES = [
   ['DOCUMENTATION-STYLE.md', 'extend/documentation-style.md', 'Documentation style', 'Writing, terminology, source-of-truth, command-verification, and review standards.'],
 ];
 
+const ROUTES = new Map(
+  PAGES.map(([src, dest]) => [src, `${siteBase}/${dest.replace(/\.md$/, '')}/`]),
+);
+ROUTES.set('README.md', `${siteBase}/`);
+
+function rewriteLinks(text) {
+  // Links between canonical docs become site routes.
+  text = text.replace(
+    /\]\((?:\.\/)?([A-Z0-9-]+\.md)(#[^)]+)?\)/g,
+    (match, file, fragment = '') => {
+      const route = ROUTES.get(file);
+      return route ? `](${route}${fragment})` : match;
+    },
+  );
+
+  // Links from docs/ back into repository sources remain GitHub links.
+  text = text.replace(
+    /\]\(\.\.\/([^)#]+)(#[^)]+)?\)/g,
+    (_match, path, fragment = '') => {
+      const target = path.endsWith('/')
+        ? `${githubBase}/tree/main/${path}`
+        : `${githubBase}/blob/main/${path}`;
+      return `](${target}${fragment})`;
+    },
+  );
+
+  // The same rules for simple HTML anchors used by older design pages.
+  text = text.replace(
+    /href="(?:\.\/)?([A-Z0-9-]+\.md)(#[^"]+)?"/g,
+    (match, file, fragment = '') => {
+      const route = ROUTES.get(file);
+      return route ? `href="${route}${fragment}"` : match;
+    },
+  );
+  text = text.replace(
+    /href="\.\.\/([^"#]+)(#[^"]+)?"/g,
+    (_match, path, fragment = '') => {
+      const target = path.endsWith('/')
+        ? `${githubBase}/tree/main/${path}`
+        : `${githubBase}/blob/main/${path}`;
+      return `href="${target}${fragment}"`;
+    },
+  );
+
+  return text;
+}
+
+// Remove generated route groups before writing. Keep index.mdx and any
+// hand-authored site assets outside these directories.
+for (const dir of ['start', 'guides', 'reference', 'architecture', 'extend', 'shipped', 'wave']) {
+  rmSync(join(outDir, dir), { recursive: true, force: true });
+}
+
 for (const [src, dest, title, description] of PAGES) {
   let text = readFileSync(join(docsDir, src), 'utf8');
-  // Strip GitHub-only chrome. Starlight renders its own page title and the
-  // site owns navigation, so repository banners, breadcrumbs, and H1s would
-  // otherwise appear twice or resolve against the wrong asset root.
+  // Starlight owns the title and navigation. Repository banners,
+  // breadcrumbs, and H1s would otherwise appear twice or resolve against
+  // the wrong asset root.
   text = text
     .replace(/^\s*<picture>[\s\S]*?<\/picture>\s*/, '')
     .replace(/^\s*<img[^>]*>\s*/, '')
     .replace(/^\s*<sub>[\s\S]*?<\/sub>\s*/, '')
     .replace(/^\s*#\s.*(?:\n|$)/, '');
+  text = rewriteLinks(text);
+
   const fm = `---\ntitle: "${title}"\ndescription: "${description.replaceAll('"', '\\"')}"\n---\n\n`;
   const outPath = join(outDir, dest);
   mkdirSync(dirname(outPath), { recursive: true });
