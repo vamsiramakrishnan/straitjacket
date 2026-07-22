@@ -1,251 +1,394 @@
 # Use cases
 
-Straitjacket is most valuable when a coding agent must inspect more evidence than its
-transcript can safely hold. The common thread is not “large output” by itself. It is
-**large output whose decisive evidence must remain recoverable after the first turn**.
+Straitjacket is useful when a coding agent needs more evidence than its transcript should retain.
 
-This page starts with the work, not the mechanism. Each pattern names the failure mode,
-the smallest useful Straitjacket verb, and the evidence that should cross back into the
-model’s context.
+The relevant question is not simply whether an operation produces a large result. The question is whether the decisive evidence must remain recoverable after the first turn.
 
-## Choose by failure mode
+## Choose by task
 
-| You are doing | The usual failure | Start with |
+| Task | Typical failure | Start with |
 |---|---|---|
-| Running a noisy test suite | The first failure crowds out the failure census | `ctx run -- pytest -q` |
-| Inspecting many files | Every intermediate read becomes permanent transcript history | `ctx seq` or `ctx eval` |
-| Following a long build | The agent idles, polls, and repeatedly absorbs partial logs | `ctx run --bg-after …` + `ctx job` |
-| Searching a large repository | Text matches create a low-precision wall of bytes | `ctx q`, `ctx map`, `ctx search` |
-| Comparing verification runs | The model rereads two complete outputs to infer a delta | `ctx diff run:A run:B` |
-| Delegating exploration | The parent receives an unauditable summary or the whole trace | `ctx-explorer` with cited handles |
-| Calling verbose MCP tools | Connector payloads become transcript residency | host interception + artifact-backed digest |
+| Diagnose a noisy test suite | A long traceback hides the failure census | `ctx run -- pytest -q` |
+| Investigate a repository | Intermediate searches and reads accumulate across turns | `ctx ask`, `ctx q`, or `ctx plan` |
+| Run known verification steps | The model schedules each deterministic step in a separate turn | `ctx seq` |
+| Execute a computed investigation | Branching and aggregation happen inside the transcript | `ctx eval` |
+| Follow a long build | The agent polls and repeatedly absorbs partial logs | `ctx run --bg-after` and `ctx job` |
+| Compare before and after | The model rereads two full results to infer a delta | `ctx diff` |
+| Inspect a large connector response | A structured payload becomes permanent transcript history | Host interception and bounded retrieval |
+| Delegate exploration | The parent receives either the full trace or an unauditable summary | Address-backed evidence and checkpoints |
 
-## 1. A test suite fails loudly
+## 1. Diagnose a noisy test suite
 
-### The failure mode
+### Problem
 
-A large suite can print hundreds of thousands of tokens. Conventional truncation keeps
-an arbitrary slice; “first failure only” hides whether five tests share one cause; a later
-compaction may remove the exact traceback that mattered.
+A large test run can produce thousands of lines. Arbitrary truncation may hide the complete failing-test set. Showing only the first failure can hide a shared cause. Later compaction may remove the traceback that matters.
 
-### The bounded path
+### Workflow
+
+Capture the run:
 
 ```bash
 ctx run -- pytest -q
 ```
 
-A useful test digest should preserve:
-
-- the complete failing-test identity census;
-- one compact evidence line per failure when the budget permits;
-- exact traceback/output coordinates;
-- declared overflow with a continuation address;
-- the full raw run as an immutable artifact.
-
-Use retrieval only for the failure you are actively diagnosing:
+Read the failure census before retrieving detailed tracebacks. Then retrieve only the active failure:
 
 ```bash
 ctx get run:<id>#stdout --lines 418:472
 ```
 
-### Why it helps
+Search the captured result when the relevant exception is known:
 
-The model reasons over the **shape of the failure set** before it commits to one
-traceback. Detail remains one bounded page fault away.
+```bash
+ctx search run:<id>#stdout "MissingTenantError" --context 3
+```
 
-### Do not use it when
+Ask Straitjacket to diagnose captured failures without rerunning them:
 
-The command is statically small and already returns the complete answer. Straitjacket
-should not turn a six-line unit-test result into a retrieval workflow.
+```bash
+ctx ask "Why did the test run fail?" --intent diagnose --run run:<id>
+```
 
-## 2. Repository exploration fans out
+### Expected result
 
-### The failure mode
+The model sees:
 
-The model repeatedly lists files, searches names, opens candidates, searches callers,
-then opens tests. Even when every operation is individually bounded, the transcript
-accumulates the intermediate exploration state and pays for it again on subsequent
-turns.
+- the complete failure identity census;
+- selected evidence for each failure;
+- declared omission and coverage;
+- exact addresses for tracebacks and output regions;
+- one immutable run handle for later comparison.
 
-### The bounded path
+### Do not use this pattern when
 
-Use `ctx seq` when the fan-out is known before execution:
+The complete test output is already small. Small results should pass through without creating unnecessary retrieval steps.
+
+## 2. Locate a symbol and its use sites
+
+### Problem
+
+A model often lists files, searches a name, opens several candidates, then searches callers. Each step may be individually small while the accumulated exploration remains in the transcript.
+
+### Workflow
+
+Use a typed intent:
+
+```bash
+ctx ask "Where is AuthContext defined and used?" \
+  --intent locate \
+  --symbol AuthContext
+```
+
+Use direct commands when you already know the operation:
+
+```bash
+ctx def repo:src/auth.py:AuthContext
+ctx refs AuthContext --path src
+ctx callers AuthContext.resolve
+ctx callees AuthContext.resolve
+```
+
+### Expected result
+
+The model receives an organized set of definition and use-site identities with file and span coordinates. It does not need to retain the raw results of every intermediate search.
+
+## 3. Estimate change impact
+
+### Problem
+
+A text search over a common symbol can create a large low-precision result. The model then manually infers which references are definitions, calls, tests, or unrelated text.
+
+### Workflow
+
+```bash
+ctx ask "What could break if CacheKey.build changes?" \
+  --intent impact \
+  --symbol CacheKey.build \
+  --depth 4
+```
+
+Or use the call graph directly:
+
+```bash
+ctx impact CacheKey.build --depth 4
+```
+
+### Expected result
+
+The result should separate direct sites from bounded transitive reach and disclose the active analysis engine. Treat the output as structural evidence, not proof that every runtime path is covered.
+
+## 4. Run known verification steps in one round
+
+### Problem
+
+The model already knows the commands it needs to run, but executes each command through a separate reasoning turn. Model latency surrounds deterministic work, and every intermediate output becomes context.
+
+### Workflow
 
 ```bash
 ctx seq \
-  --step 'rg -n "TokenBucket" src tests' \
-  --step 'git diff --stat HEAD~1' \
-  --step 'pytest -q tests/test_token_bucket.py'
+  'git diff --stat' \
+  'python -m pytest tests/unit -q' \
+  'ruff check src tests'
 ```
 
-Use `ctx eval` when later operations depend on structured results from earlier ones:
+Use `--keep-going` when later checks remain useful after a failure:
+
+```bash
+ctx seq --keep-going \
+  'python -m pytest tests/unit -q' \
+  'ruff check src tests' \
+  'python -m mypy src'
+```
+
+### Expected result
+
+Each step retains its own evidence identity. The model receives one combined bounded result instead of scheduling and parsing each command separately.
+
+### Operating rule
+
+Batch deterministic fan-out. Return to the model when new evidence can change the next action.
+
+## 5. Execute a computed investigation
+
+### Problem
+
+The workflow requires loops, branching, parsing, or aggregation. A fixed command sequence cannot express it, but implementing the control flow through model turns is slow and context-heavy.
+
+### Workflow
 
 ```bash
 ctx eval investigation.py
 ```
 
-Use `ctx q` when the intent is expressible as a total pipeline over typed records:
+Example:
 
-```bash
-ctx q 'fails last | in-changed | group symbol | top 10'
+```python
+from pathlib import Path
+
+files = list(Path("src").rglob("*.py"))
+large = sorted(
+    ((path.stat().st_size, path) for path in files),
+    reverse=True,
+)[:20]
+
+for size, path in large:
+    print(f"{size:>8} {path}")
 ```
 
-### Why it helps
+### Expected result
 
-Deterministic fan-out executes beside the repository. The model receives one organized
-evidence result instead of becoming the scheduler, parser, join engine, and state store
-for every intermediate command.
+The script and complete output remain addressable. Only the bounded final digest enters context.
 
-### The operating rule
+### Security note
 
-> Batch deterministic fan-out. Return to the model when new evidence can change the
-> hypothesis.
+`ctx eval` is a capture boundary, not an operating-system sandbox. The script runs with the authority of the invoking user.
 
-One giant plan is not always better. A plan that efficiently investigates the wrong
-hypothesis wastes less context and more time. Batch within an epistemic epoch; re-plan
-at genuine uncertainty boundaries.
+## 6. Follow a long-running build or integration test
 
-## 3. A build or integration test runs for minutes
+### Problem
 
-### The failure mode
+The agent waits, polls, rereads a growing log, or times out while the child process continues. Partial output repeatedly enters context and process state becomes implicit.
 
-The agent waits, polls, rereads growing output, or times out while the child process
-continues. Partial logs repeatedly enter context, and process lifecycle becomes implicit.
-
-### The bounded path
+### Workflow
 
 ```bash
 ctx run --bg-after 30 -- ./scripts/integration-test
 ```
 
-If the process outlives the foreground window, the command returns a `job:<id>` handle.
-Continue working, then request a bounded tail:
+Continue other work. Inspect the job later:
 
 ```bash
-ctx job <id>
-ctx job <id> --wait
+ctx job <job-id>
+ctx job <job-id> --tail 100
+ctx job <job-id> --wait
 ```
 
-A finalized job becomes an ordinary run artifact, so the same search, retrieval, and
-diff operations apply.
-
-### Why it helps
-
-Model latency is removed from the process critical path. The transcript records stable
-state transitions rather than a polling conversation.
-
-## 4. The conclusion is in the tail—or one anomaly is in the middle
-
-### The failure mode
-
-Many CLIs print progress first and conclusions last. Head-only truncation preserves
-startup ceremony while dropping the result. Conversely, a rare operational anomaly may
-occur once in the middle of 20,000 repetitive lines.
-
-### The bounded path
+Stop the process group when required:
 
 ```bash
-ctx run -- ./service-load-test
+ctx job <job-id> --kill
 ```
 
-The text profile keeps a head/tail window. Log-oriented profiles group recurring
-templates and surface structurally rare lines. Omitted regions receive spans rather than
-being discarded.
+### Expected result
 
-### Why it helps
+The transcript contains stable lifecycle transitions and bounded tails rather than a polling conversation. A completed job finalizes into a normal `run:` artifact.
 
-Straitjacket treats position and rarity as evidence-selection signals while keeping the
-underlying bytes intact. “Not shown” remains different from “lost.”
+## 7. Compare verification runs
 
-## 5. You need the delta, not two transcripts
+### Problem
 
-### The failure mode
+After a change, the model rereads the complete before and after outputs and attempts to infer the behavioral delta.
 
-After an edit, the agent reruns a command and manually compares two large digests or raw
-outputs. Duplicate evidence dominates the context; the behavioral change is implicit.
+### Workflow
 
-### The bounded path
+Capture both runs:
+
+```bash
+ctx run -- pytest -q
+# make the change
+ctx run -- pytest -q
+```
+
+Compare the handles:
 
 ```bash
 ctx diff run:<before> run:<after>
 ```
 
-The useful output is a delta census:
+Or use the typed intent:
 
-- exit or signal changes;
-- failures added, removed, or changed;
-- log templates appearing or disappearing;
-- stream-size changes;
-- exact coordinates for evidence new in the second run.
+```bash
+ctx ask "What changed between the verification runs?" \
+  --intent compare \
+  --run run:<before> \
+  --against run:<after>
+```
 
-### Why it helps
+### Expected result
 
-Verification asks a comparative question. A comparative operator should answer it
-directly instead of asking the model to implement a diff in attention.
+The comparison should identify changes in exits, failures, templates, signals, and stream sizes. New evidence should retain exact coordinates.
 
-## 6. A sub-agent explores on behalf of the parent
+## 8. Review or verify a change
 
-### The failure mode
+### Problem
 
-Inline delegation floods the parent. Summary-only delegation saves context but makes
-claims unauditable.
+A coding agent performs repository inspection, test selection, execution, and evidence joining as an open-ended series of tool calls. The boundary between observation and mutation is unclear.
 
-### The bounded path
+### Workflow
 
-The `ctx-explorer` agent reports in checkpoint shape:
+Preview the compiled plan:
 
-1. conclusion;
-2. cited evidence handles and coordinates;
-3. searches attempted, including negative searches;
-4. unresolved claims explicitly labeled as hypotheses.
+```bash
+ctx ask "Review the current change" \
+  --intent review \
+  --command 'python -m pytest -q' \
+  --plan
+```
 
-The parent can spot-check any claim:
+Execute it after reviewing the plan:
+
+```bash
+ctx ask "Review the current change" \
+  --intent review \
+  --command 'python -m pytest -q'
+```
+
+Use `verify` for a narrower verification workflow:
+
+```bash
+ctx ask "Verify the current change" \
+  --intent verify \
+  --command 'python -m pytest -q'
+```
+
+### Expected result
+
+The plan declares its execution class. `review` and `verify` may run tests. `locate`, `impact`, `diagnose`, `trace`, and `compare` are observation-only.
+
+## 9. Search or aggregate a large repository corpus
+
+### Problem
+
+A broad search returns thousands of text matches. The model needs a bounded file set, a census, or a grouped summary rather than every line.
+
+### Workflow
+
+Select files before scanning:
+
+```bash
+ctx q 'corpus --ext py --changed | outline'
+```
+
+Group references by file:
+
+```bash
+ctx q 'refs TokenBucket | group file | top 10'
+```
+
+Aggregate structured records from a captured artifact:
+
+```bash
+ctx q 'records run:<id>#stdout --jsonl | group level | count'
+```
+
+### Expected result
+
+The pipeline carries typed records and coverage through each stage. The final view is bounded, and intermediate results remain addressable.
+
+## 10. Inspect a large connector or MCP response
+
+### Problem
+
+Repository, cloud, browser, and MCP tools can return thousands of objects. The model often needs a count, schema, filtered subset, or one exact object rather than the complete serialization on every later turn.
+
+### Workflow
+
+Use the host integration so the post-tool gate can capture oversized responses. The bounded result should preserve:
+
+- result count and coverage;
+- stable object identities;
+- schema or column information;
+- exceptional or high-value rows;
+- continuation handles for the complete payload.
+
+Use `ctx get` or `ctx search` against the returned handle to recover exact objects or regions.
+
+### Expected result
+
+The transcript carries queryable identity and coverage, not permanent residency of the full connector payload.
+
+## 11. Delegate exploration with evidence
+
+### Problem
+
+A parent agent either receives the sub-agent's entire trace or accepts a short summary with no way to verify it.
+
+### Workflow
+
+A delegated investigation should return:
+
+1. a conclusion;
+2. evidence handles with coordinates;
+3. searches and checks performed, including negative searches;
+4. unresolved claims labeled as hypotheses.
+
+The parent can inspect any cited claim:
 
 ```bash
 ctx get <handle>
 ```
 
-### Why it helps
+Use a checkpoint when the result must survive a long task boundary:
 
-Delegation becomes quarantine with provenance. The parent receives the result, not the
-fork’s entire working memory, without accepting an evidence-free conclusion.
-
-## 7. A connector returns a giant structured payload
-
-### The failure mode
-
-Repository, cloud, browser, and MCP tools can return thousands of objects in one call.
-The model often needs a census, a filtered subset, or one exact object—not the entire
-serialization on every later round.
-
-### The bounded path
-
-Intercept the result at entry, store the complete payload, and emit a shape-aware digest:
-
-- schema or column census;
-- result count and coverage;
-- ranked exceptional rows;
-- stable object identities;
-- continuation handles for the complete result set.
-
-### Why it helps
-
-The transcript carries queryable identity, not connector payload residency.
-
-## A useful success criterion
-
-Containment is successful only when it preserves task-relevant evidence. Track both:
-
-```text
-containment ratio = 1 - visible tool-output tokens / raw tool-output tokens
-
-evidence preservation = tasks solved with containment / tasks solved natively
+```bash
+ctx checkpoint \
+  --goal "identify the authentication regression" \
+  --state "root cause isolated" \
+  --evidence "run:<id>#stdout failing traceback" \
+  --evidence "snapshot:<id> AuthContext.resolve"
 ```
 
-A small digest with poor decisive-evidence recall is not an optimization. The target is
-high containment **at matched or better task success**, with every omission declared and
-resolvable.
+### Expected result
+
+Delegation becomes bounded and auditable. The parent receives the result and its evidence addresses, not the fork's entire working context.
+
+## Evaluate success correctly
+
+Containment is useful only when it preserves task-relevant evidence.
+
+Track both:
+
+```text
+containment ratio
+  = 1 - model-visible tool-output tokens / captured tool-output tokens
+
+evidence preservation
+  = tasks solved with containment / tasks solved without containment
+```
+
+A smaller digest is not automatically better. The target is lower context residency at matched or better task success, with every omission declared and resolvable.
 
 ---
 
-[Getting started](GETTING-STARTED.md) · [CLI guide](CLI.md) · [Concepts](CONCEPTS.md) · [Why Straitjacket](WHY-STRAITJACKET.md)
+[Documentation](README.md) · [Getting started](GETTING-STARTED.md) · [CLI guide](CLI.md) · [Core concepts](CONCEPTS.md)
