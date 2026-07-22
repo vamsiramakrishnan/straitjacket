@@ -1,263 +1,235 @@
 # Why Straitjacket
 
-Coding agents do not merely consume context. They repeatedly **carry prior tool output
-through a probabilistic control loop**. That makes context management a cumulative-cost
-problem across tokens, cache behavior, turns, latency, and decision quality.
+Coding agents use tools to read files, run tests, inspect logs, query repositories, and call external systems. The results of those tools become part of the model context.
 
-Straitjacket changes the data structure of the interaction:
+That creates a cumulative systems problem. A large result is not paid for only once. It can remain in later model inputs, compete with newer evidence, slow the session, and eventually be reduced by a compaction step that may not preserve an exact route back to the original detail.
 
-> Keep evidence in an immutable, addressable store. Keep only a bounded index over that
-> evidence in the transcript.
+Straitjacket changes where evidence lives:
 
-The immediate benefit is smaller prompts. The deeper benefit is fewer expensive
-boundary crossings between deterministic computation and probabilistic reasoning.
+> Store complete evidence outside the transcript. Put only a bounded, addressable view in model context.
 
-## The naive loop is cumulative
+The result is a smaller context surface without treating omitted evidence as disposable.
 
-Let:
+## The problem is context residency
 
-- $R$ be the number of model reasoning rounds;
-- $P_0$ be the fixed prompt prefix;
-- $O_i$ be tool output introduced after round $i$.
+A coding agent may need to inspect a large output once but reason over it for several turns.
 
-Without perfect cache reuse, total model-visible input is approximately:
+Common examples include:
 
-$$
-C_{input} \approx R P_0 + \sum_{i=1}^{R}(R-i)O_i
-$$
+- a test suite with thousands of lines and several failures;
+- a build that emits long progress logs before the final error;
+- a repository search with many low-value matches;
+- a cloud or MCP tool that returns a large structured payload;
+- repeated before-and-after verification runs.
 
-If outputs have average size $\bar O$, the growing-history term approaches:
+The raw result becomes resident in the conversation even when the model only needs a few identities, one anomaly, or a small exact region.
 
-$$
-O(R^2 \bar O)
-$$
+A larger context window raises the ceiling. It does not change this residency model.
 
-The expensive mistake is not only printing 100,000 tokens once. It is introducing those
-tokens early enough that later rounds repeatedly inherit them.
+## Why truncation is not enough
 
-Compaction changes the failure mode rather than solving it: the context becomes smaller
-by deleting evidence without a durable route back to the exact source.
+Truncation can make an output smaller, but it introduces three problems.
 
-## Bounded digests reduce the inner term
+### Selection is often arbitrary
 
-Straitjacket captures every raw byte and replaces each unbounded output with a digest
-whose visible size is bounded by $B$:
+Head-only truncation favors startup output. Tail-only truncation can hide the first causal error. Keyword selection misses evidence that does not announce itself with words such as `ERROR` or `FAIL`.
 
-$$
-C_{bounded} = O(RP_0 + R^2B), \quad B \ll \bar O
-$$
+### Coverage becomes unclear
 
-This is a large improvement, but interactive exploration can still require many model
-rounds. Bounded output removes payload growth; it does not automatically remove control
-loop growth.
+A short excerpt does not tell the reader whether it contains every failure, every object identity, or only a convenient sample.
 
-## Compiled evidence work reduces boundary crossings
+### Omission may become irreversible
 
-Many exploration steps are deterministic fan-out:
+Once the removed bytes have no stable address, the agent must rerun the operation or accept that the evidence is gone.
+
+Straitjacket treats omission as a view decision, not a deletion decision.
+
+## The storage model
 
 ```text
-search names → list candidates → inspect signatures → find callers → run tests → join results
+complete tool output
+        │
+        ▼
+immutable local artifact
+        │
+        ├──> typed evidence ──> bounded digest ──> model context
+        │
+        └<── exact retrieval ───────────────────── ctx get / ctx search
 ```
 
-The model should specify the epistemic objective. A local evidence program can schedule,
-parallelize, cache, deduplicate, and join the operations beside the repository, then
-return one bounded result.
+The artifact store owns completeness. The digest owns relevance, coverage, and budget. Retrieval reconnects the two when more detail is required.
 
-Let $H$ be the number of genuine hypothesis transitions. A well-planned workflow aims
-for model rounds proportional to $H$, not the number of shell commands $M$:
+This separation enables four properties that ordinary truncation does not provide.
 
-$$
-C_{planned} = O(H(P + D))
-$$
+## 1. Bounded context
 
-where $D$ is the decision-oriented digest for one hypothesis epoch and usually
-$H \ll M$.
+A digest has an explicit token budget that does not grow with the original payload.
 
-The right rule is not “plan everything once.” It is:
+The renderer can preserve a complete identity census while limiting detail. For example, a test digest can show every failing test name, include selected traceback evidence, and provide exact coordinates for the remaining tracebacks.
 
-> Batch deterministic work within an epistemic epoch. Return to the model when evidence
-> can materially change the next plan.
+Small outputs may pass through unchanged. Containment should not add ceremony when the complete result is already bounded.
 
-## Cost: local compute is cheaper than repeated inference
+## 2. Reversible omission
 
-Repository parsing, AST search, database joins, and artifact indexing still consume
-compute. The system objective is not minimum compute; it is minimum weighted cost:
+Every omitted region retains a stable address.
 
-$$
-\min(\alpha C_{model} + \beta C_{latency} + \gamma C_{quality\ loss} + \delta C_{local})
-$$
+```bash
+ctx get run:<id>#stdout --lines 1280:1300
+ctx search run:<id>#stdout "MissingTenantError"
+```
 
-For current coding-agent economics, repeated inference, extra turns, and wrong decisions
-usually dominate incremental local CPU. Content-keyed indexes make the local term cheaper
-again across turns and sessions.
+The original command does not need to run again. The model can page in the exact evidence required for the current decision.
 
-## Cache: reduce entropy, not only bytes
+An omission with an address is a paging decision. An omission without an address is an irreversible quality bet.
 
-Prompt caching rewards stable prefixes. Interactive exploration injects volatile data:
+## 3. Deterministic views
 
-- timings and temporary paths;
-- nondeterministic result order;
-- partial logs;
-- repeated plans and summaries;
-- tool-specific metadata;
-- slightly different reruns.
+Straitjacket normalizes incidental variation before rendering model-visible output. Absolute paths, ANSI sequences, unstable ordering, temporary paths, and non-evidentiary timing noise should not cause two equivalent results to produce different digests.
 
-A deterministic digest keeps the transcript closer to an append-only sequence of stable
-bytes. Two equally short prompts are not equally cheap when one preserves the provider’s
-cache prefix and the other diverges early.
+Determinism matters for:
 
-This is why determinism is both a correctness property and an economic property.
+- reproducible evaluation;
+- meaningful run comparison;
+- stable prompt prefixes;
+- content-keyed caching;
+- debugging the harness itself.
 
-## Turns: model latency surrounds cheap tools
+Two short prompts are not operationally equivalent when one changes unpredictably on every run.
 
-A 100 ms local search can cost seconds when it requires another model turn to select,
-parse, and react to it. Interactive execution approaches:
+## 4. Fewer model-mediated operations
 
-$$
-T_{serial} = \sum_i T_{tool_i} + M T_{model}
-$$
+Bounded output solves payload growth. It does not automatically reduce the number of reasoning rounds.
 
-A local DAG approaches:
+Many repository workflows contain deterministic work:
 
-$$
-T_{planned} = T_{plan} + T_{critical\ path} + T_{reason}
-$$
+```text
+select files
+search symbols
+resolve references
+run checks
+join results
+rank evidence
+```
 
-Independent operators can run in parallel. More importantly, repeated model queueing,
-prompt ingestion, inference, and tool selection disappear from the critical path.
+The model should define the objective and decide when evidence changes the hypothesis. Local code can schedule, parse, join, deduplicate, and render the deterministic steps.
 
-## Quality: more context is not monotonic progress
+Straitjacket therefore provides several execution shapes:
 
-Large context can lower quality through:
+| Work | Operation |
+|---|---|
+| One command | `ctx run` |
+| Known steps | `ctx seq` |
+| Computed control flow | `ctx eval` |
+| Typed evidence composition | `ctx q` |
+| Validated investigation graph | `ctx plan` and `ctx investigate` |
+| Typed repository question | `ctx ask` |
 
-- attention dilution;
-- stale or contradictory evidence;
-- duplicate findings;
-- anchoring on the first verbose failure;
-- arbitrary salience created by output order;
-- compaction that removes the causal line;
-- premature commitment before the failure census is visible.
+The operating rule is simple: batch deterministic work while the hypothesis is stable. Return to the model when the evidence can change the plan.
 
-The useful quantity is evidence density:
+## Addresses instead of summaries
 
-$$
-\rho = \frac{decision\text{-}relevant\ evidence}{model\text{-}visible\ evidence}
-$$
+A summary can be useful, but it is not a sufficient evidence contract.
 
-But density alone can be gamed by dropping decisive evidence. The delivery objective is:
+A summary alone does not guarantee:
 
-$$
-quality \propto recall_{decisive} \times precision_{presented} \times coverage\ confidence
-$$
+- complete identity coverage;
+- stable provenance;
+- exact recovery;
+- deterministic rendering;
+- declared omission;
+- compatibility across extractors.
 
-That is why a Straitjacket digest includes a census, exact addresses, declared omission,
-and a coverage receipt—not merely a compressed summary.
+A Straitjacket digest may contain summary text, but it also carries coverage and retrieval coordinates. The summary is a view over stored evidence, not the only surviving representation.
 
-## The architecture follows from the economics
+## How this differs from neighboring approaches
 
-The LLM should own:
+| Approach | Useful property | Limitation addressed by Straitjacket |
+|---|---|---|
+| Larger context windows | More capacity | Raw evidence still accumulates and competes for attention |
+| Post-hoc compaction | Reclaims an already-large context | Exact omitted evidence may not remain addressable |
+| Source-side filters | Prevent some floods early | Removed bytes may be discarded without provenance |
+| Rewriting proxies | Can reduce resident history | Rewriting changes prior prompt bytes and may drop evidence |
+| Vector or semantic memory | Supports probabilistic recall | Retrieval may not return exact source bytes or complete identities |
+| Terse prompting | Reduces narration | It does not govern tool payloads or preserve omitted evidence |
 
-- objective interpretation;
-- hypothesis generation;
-- uncertainty resolution;
-- repair design;
-- trade-offs and final judgment.
-
-The harness should own:
-
-- capture and process supervision;
-- query planning and parallel scheduling;
-- structural extraction and indexing;
-- joins and deduplication;
-- budgeting and deterministic rendering;
-- provenance and coverage;
-- artifact retention and retrieval.
-
-Making the model act as planner, scheduler, parser, join engine, and state store is an
-expensive category error.
-
-## Why addresses instead of lossy compression
-
-Lossy compression answers “what can be removed?” Straitjacket asks a stricter question:
-
-> What can leave the current view while preserving an exact, bounded route back?
-
-An omission without an address becomes an irreversible quality bet. An omission with a
-span is a paging decision. The transcript can stay small without pretending the omitted
-evidence never existed.
-
-This is the architectural fault line between Straitjacket and the neighbouring tools.
-A rewriting proxy compresses *after* the bytes are already resident and discards the
-original; source-side filters and terse-prompting styles cut earlier but still throw the
-cut bytes away. Straitjacket captures at the source into an addressable store and puts
-only a bounded digest — plus a resolvable address for every omitted byte — on the wire.
+Straitjacket's position is narrower: capture deterministic evidence at the source, retain it exactly, and expose bounded views with stable addresses.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two lanes. Top: an agent loop feeds a rewriting proxy that compresses messages and rewrites history on each call; the model sees a rewritten log and the quiet needle is silently dropped with no address. Bottom: Straitjacket captures tool output at the birth gate into an immutable addressable store, sends the model a bounded digest, and ctx get resolves any omitted line by address.">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="A rewriting proxy changes transcript history after output is resident. Straitjacket captures output at the source, stores it as immutable evidence, and sends a bounded digest with retrieval addresses.">
 </picture>
 
-The same divergence, seen across the whole field — each tile names a neighbour's one
-good idea and the lossless form Straitjacket adopted (the amber strip):
+Detailed comparisons and reproducible workloads belong in [`evals/`](../evals/), not in this explanation page.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap-light.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail, Maki and wozcode. Each tile names the tool's one good idea, its limitation, and the lossless form Straitjacket adopted.">
-</picture>
+## When Straitjacket helps most
+
+The strongest use cases have three properties:
+
+1. the operation can produce much more evidence than the model should retain;
+2. the decisive detail is not known before the operation runs;
+3. the evidence may be needed again after the first turn.
+
+Examples include large test suites, operational logs, repository-wide analysis, structured connector payloads, long-running processes, and delegated investigations.
+
+## When it may not help
+
+Straitjacket should stay out of the way when:
+
+- the complete result is already small;
+- the task ends immediately after one bounded command;
+- a simple local filter can produce the exact required answer with no loss of identity or provenance;
+- the model needs the complete payload and it already fits the intended context budget.
+
+Containment has overhead. The correct target is not maximum compression. It is the smallest reversible view that preserves task success.
+
+## How success should be measured
+
+A context system should be evaluated on more than token reduction.
+
+Track:
+
+- task success;
+- decisive-evidence recall;
+- visible tool-output tokens;
+- model rounds;
+- wall time;
+- repeated operations;
+- retrieval success;
+- false interventions;
+- unresolved omissions.
+
+A smaller digest that causes the agent to miss the causal line is a regression.
+
+Evaluation receipts in [`evals/`](../evals/) publish positive results, neutral regimes, and observed losses. Start with the [benchmark charter](../evals/BENCHMARK.md).
 
 ## What Straitjacket is not
 
 ### Not agent memory
 
-Memory systems decide what prior information to recall. Straitjacket governs the birth,
-residence, and delivery of evidence generated during tool use. It can support memory,
-but its contract is narrower and more testable.
+Memory systems decide which prior information to recall. Straitjacket governs the capture, storage, and delivery of evidence produced during tool use.
 
-### Not a summarizer
+### Not only a summarizer
 
-A summary may be useful, but a summary alone does not prove coverage, preserve identity,
-or resolve to exact source bytes.
+Profiles may summarize, classify, or rank evidence. The product contract also requires bounds, coverage, determinism, and retrieval addresses.
 
-### Not a sandbox—yet
+### Not a general sandbox
 
-Current capture constrains output, paths, and process handling within the agent’s existing
-execution authority. Separate-identity broker isolation and capability authorization are
-a distinct security boundary.
+Commands currently run with the authority of the invoking user. Output containment and repository-relative path controls do not provide separate-identity process isolation.
 
-### Not a larger context window
+### Not a claim that less context is always better
 
-A larger window raises the ceiling while preserving cumulative transcript growth. It
-also increases the amount of evidence the model must discriminate. Straitjacket changes
-what occupies the window.
+Some tasks need complete local detail. Straitjacket preserves that detail in the artifact store and exposes it on demand rather than assuming that every byte belongs in every later model input.
 
-## The product-level metric
+## The product thesis
 
-A containment claim is meaningful only at matched or better task success:
+Straitjacket began as output containment. The broader design principle is:
 
-$$
-S_{SJ} \geq S_{native} - \epsilon
-$$
+> Minimize unnecessary model boundary crossings while preserving reversible access to deterministic evidence.
 
-while reducing:
+That principle connects capture, typed evidence, bounded retrieval, repository analysis, compiled investigations, delegated work, evaluation, and future broker isolation.
 
-$$
-tokens + \lambda_1 turns + \lambda_2 latency + \lambda_3 unresolved\ omissions
-$$
-
-The most honest public result is a Pareto frontier: success, tokens, turns, wall time,
-re-execution, evidence recall, and false interventions—not one proprietary score.
-
-## The stronger thesis
-
-Straitjacket began as output containment. Its broader opportunity is:
-
-> **Minimize probabilistic boundary crossings while preserving reversible access to
-> deterministic evidence.**
-
-That framing unifies capture, typed evidence, query algebra, compiled investigation
-plans, auditable delegation, and future broker isolation. The transcript becomes a
-control surface over evidence—not the place evidence goes to live.
+The transcript becomes a control surface over evidence, not the database where evidence must live.
 
 ---
 
-[Concepts](CONCEPTS.md) · [Use cases](USE-CASES.md) · [Architecture sequence](README.md) · [Evaluation receipts](../evals/)
+[Documentation](README.md) · [How it works](HOW-IT-WORKS.md) · [Use cases](USE-CASES.md) · [Theory](THEORY.md) · [Evaluation receipts](../evals/)
