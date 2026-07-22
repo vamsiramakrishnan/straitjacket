@@ -3,22 +3,19 @@ import starlight from '@astrojs/starlight';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
-// Deployed under GitHub Pages at /straitjacket/ — adjust `site`/`base` if
-// you host elsewhere.
+// Deployed under GitHub Pages at /straitjacket/.
 export default defineConfig({
   site: 'https://vamsiramakrishnan.github.io',
   base: '/straitjacket',
-  // Render the \( … \) and \[ … \] math in the design docs (currently only
-  // WHY-STRAITJACKET) instead of leaking raw TeX onto the page.
   markdown: {
     remarkPlugins: [remarkMath],
     rehypePlugins: [rehypeKatex],
   },
   integrations: [
     starlight({
-      title: 'straitjacket',
+      title: 'Straitjacket',
       description:
-        'Artifact-backed context containment harness for coding agents. Unbounded tool output becomes an immutable artifact plus a bounded, span-addressed digest.',
+        'Artifact-backed context containment for coding agents. Complete tool output becomes immutable evidence plus a bounded deterministic digest.',
       social: [
         {
           icon: 'github',
@@ -28,28 +25,49 @@ export default defineConfig({
       ],
       sidebar: [
         {
-          label: 'Practical guides',
+          label: 'Start',
+          items: [
+            { label: 'Getting started', slug: 'start/getting-started' },
+            { label: 'How it works', slug: 'start/how-it-works' },
+          ],
+        },
+        {
+          label: 'Guides',
           items: [
             { label: 'Use cases', slug: 'guides/use-cases' },
-            { label: 'CLI guide', slug: 'guides/cli' },
-            { label: 'Writing a profile', slug: 'guides/writing-a-profile' },
-            { label: 'Why straitjacket', slug: 'guides/why-straitjacket' },
           ],
         },
         {
-          label: 'Shipped theses',
+          label: 'Reference',
           items: [
-            { label: 'Priced Context', slug: 'shipped/priced-context' },
-            { label: 'Lossless Rescue', slug: 'shipped/lossless-rescue' },
+            { label: 'CLI guide', slug: 'reference/cli' },
+            { label: 'Core concepts', slug: 'reference/core-concepts' },
           ],
         },
         {
-          label: 'The current wave',
+          label: 'Architecture',
+          collapsed: true,
           items: [
-            { label: '1 · Ladders', slug: 'wave/ladders' },
-            { label: '2 · Reflex', slug: 'wave/reflex' },
-            { label: '3 · EDC', slug: 'wave/edc' },
-            { label: '4 · Algebra', slug: 'wave/algebra' },
+            { label: 'Why Straitjacket', slug: 'architecture/why-straitjacket' },
+            { label: 'Capability surface', slug: 'architecture/capability-surface' },
+            { label: 'Priced context', slug: 'architecture/priced-context' },
+            { label: 'Lossless rescue', slug: 'architecture/lossless-rescue' },
+            { label: 'Ladders', slug: 'architecture/ladders' },
+            { label: 'Reflex', slug: 'architecture/reflex' },
+            { label: 'Evidence Delivery Controller', slug: 'architecture/edc' },
+            { label: 'Evidence algebra', slug: 'architecture/algebra' },
+            { label: 'Digest closure', slug: 'architecture/digest-closure' },
+            { label: 'Evidence plans', slug: 'architecture/evidence-plans' },
+            { label: 'Typed intents', slug: 'architecture/ask' },
+            { label: 'Operator substrate', slug: 'architecture/substrate' },
+            { label: 'Theory', slug: 'architecture/theory' },
+          ],
+        },
+        {
+          label: 'Extend',
+          items: [
+            { label: 'Writing an evidence profile', slug: 'extend/writing-a-profile' },
+            { label: 'Documentation style', slug: 'extend/documentation-style' },
           ],
         },
       ],
