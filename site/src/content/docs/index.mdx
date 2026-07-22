@@ -33,22 +33,22 @@ Complete tool output stays in the artifact store. Model context carries a bounde
 ## Choose a path
 
 <CardGrid>
-  <Card title="Install and try it" icon="rocket">
+  <Card title="Install and try it">
     Follow [Getting started](/straitjacket/start/getting-started/) to configure a workspace, capture one command, and retrieve exact evidence.
   </Card>
-  <Card title="Understand the model" icon="open-book">
+  <Card title="Understand the model">
     Read [How it works](/straitjacket/start/how-it-works/) and [Core concepts](/straitjacket/reference/core-concepts/).
   </Card>
-  <Card title="Find a command" icon="document">
+  <Card title="Find a command">
     Use the [CLI guide](/straitjacket/reference/cli/) for task-based syntax and command selection.
   </Card>
-  <Card title="Start from a task" icon="list-format">
+  <Card title="Start from a task">
     Open [Use cases](/straitjacket/guides/use-cases/) for tests, repository analysis, long-running work, verification, and connector payloads.
   </Card>
-  <Card title="Inspect the design" icon="seti:config">
+  <Card title="Inspect the design">
     Begin with [Why Straitjacket](/straitjacket/architecture/why-straitjacket/), then use the Architecture section for deeper mechanisms.
   </Card>
-  <Card title="Verify the claims" icon="approve-check">
+  <Card title="Verify the claims">
     Read the repository's [evaluation receipts](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals) and [benchmark charter](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/BENCHMARK.md).
   </Card>
 </CardGrid>
@@ -56,16 +56,16 @@ Complete tool output stays in the artifact store. Model context carries a bounde
 ## Core guarantees
 
 <CardGrid>
-  <Card title="Bounded output" icon="seti:clock">
+  <Card title="Bounded output">
     Digest size is constrained independently of the original payload size. Small complete results may pass through unchanged.
   </Card>
-  <Card title="Reversible omission" icon="link">
+  <Card title="Reversible omission">
     Omitted evidence retains a stable address. `ctx get` and `ctx search` recover exact stored regions without rerunning the operation.
   </Card>
-  <Card title="Deterministic rendering" icon="seti:lock">
+  <Card title="Deterministic rendering">
     Equivalent evidence under the same contract produces stable model-visible bytes.
   </Card>
-  <Card title="Declared coverage" icon="information">
+  <Card title="Declared coverage">
     A digest states what it parsed, showed, and omitted. Short output is not treated as success when required identities disappear.
   </Card>
 </CardGrid>
