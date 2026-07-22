@@ -1,0 +1,610 @@
+{
+  "model": "haiku",
+  "rows": [
+    {
+      "scenario": "comp-grep",
+      "category": "comprehension",
+      "flood": "high",
+      "arm": "naive",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 2,
+      "terminal": "success",
+      "cost_usd": 0.061130199999999996,
+      "wall_s": 13.0,
+      "tokens": {
+        "in": 18,
+        "out": 434,
+        "cache_create": 27782,
+        "cache_read": 27422
+      },
+      "grade": {
+        "success": true,
+        "answered": [
+          "m04.py",
+          "m06.py",
+          "m09.py",
+          "m16.py",
+          "m18.py",
+          "m35.py"
+        ],
+        "gold": [
+          "m04.py",
+          "m06.py",
+          "m09.py",
+          "m16.py",
+          "m18.py",
+          "m35.py"
+        ],
+        "n_gold": 6
+      }
+    },
+    {
+      "scenario": "comp-grep",
+      "category": "comprehension",
+      "flood": "high",
+      "arm": "sj",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 2,
+      "terminal": "success",
+      "cost_usd": 0.09363089999999999,
+      "wall_s": 13.0,
+      "tokens": {
+        "in": 18,
+        "out": 326,
+        "cache_create": 43814,
+        "cache_read": 43549
+      },
+      "grade": {
+        "success": true,
+        "answered": [
+          "m04.py",
+          "m06.py",
+          "m09.py",
+          "m16.py",
+          "m18.py",
+          "m35.py"
+        ],
+        "gold": [
+          "m04.py",
+          "m06.py",
+          "m09.py",
+          "m16.py",
+          "m18.py",
+          "m35.py"
+        ],
+        "n_gold": 6
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      }
+    },
+    {
+      "scenario": "comp-grep",
+      "category": "comprehension",
+      "flood": "high",
+      "arm": "sj-collapse",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 2,
+      "terminal": "success",
+      "cost_usd": 0.0919086,
+      "wall_s": 11.8,
+      "tokens": {
+        "in": 18,
+        "out": 453,
+        "cache_create": 42697,
+        "cache_read": 42316
+      },
+      "grade": {
+        "success": true,
+        "answered": [
+          "m04.py",
+          "m06.py",
+          "m09.py",
+          "m16.py",
+          "m18.py",
+          "m35.py"
+        ],
+        "gold": [
+          "m04.py",
+          "m06.py",
+          "m09.py",
+          "m16.py",
+          "m18.py",
+          "m35.py"
+        ],
+        "n_gold": 6
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      },
+      "collapse_fires": {}
+    },
+    {
+      "scenario": "comp-refs",
+      "category": "comprehension",
+      "flood": "medium",
+      "arm": "naive",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 9,
+      "terminal": "success",
+      "cost_usd": 0.040832600000000004,
+      "wall_s": 26.6,
+      "tokens": {
+        "in": 50,
+        "out": 1956,
+        "cache_create": 7014,
+        "cache_read": 163496
+      },
+      "grade": {
+        "success": true,
+        "answered": "2",
+        "gold": 2
+      }
+    },
+    {
+      "scenario": "comp-refs",
+      "category": "comprehension",
+      "flood": "medium",
+      "arm": "sj",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 6,
+      "terminal": "success",
+      "cost_usd": 0.0493963,
+      "wall_s": 28.0,
+      "tokens": {
+        "in": 50,
+        "out": 1157,
+        "cache_create": 8961,
+        "cache_read": 256393
+      },
+      "grade": {
+        "success": true,
+        "answered": "2",
+        "gold": 2
+      },
+      "ctx_vocab": {
+        "ask": 2,
+        "q": 2,
+        "investigate": 0,
+        "run": 0,
+        "get": 1,
+        "search": 0
+      }
+    },
+    {
+      "scenario": "comp-refs",
+      "category": "comprehension",
+      "flood": "medium",
+      "arm": "sj-collapse",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 5,
+      "terminal": "success",
+      "cost_usd": 0.0437072,
+      "wall_s": 21.2,
+      "tokens": {
+        "in": 42,
+        "out": 1123,
+        "cache_create": 8744,
+        "cache_read": 205622
+      },
+      "grade": {
+        "success": true,
+        "answered": "2",
+        "gold": 2
+      },
+      "ctx_vocab": {
+        "ask": 2,
+        "q": 1,
+        "investigate": 0,
+        "run": 0,
+        "get": 1,
+        "search": 0
+      },
+      "collapse_fires": {}
+    },
+    {
+      "scenario": "comp-nav",
+      "category": "comprehension",
+      "flood": "high",
+      "arm": "naive",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 3,
+      "terminal": "success",
+      "cost_usd": 0.0509927,
+      "wall_s": 12.7,
+      "tokens": {
+        "in": 26,
+        "out": 554,
+        "cache_create": 19893,
+        "cache_read": 77647
+      },
+      "grade": {
+        "success": true,
+        "answered": "-1",
+        "gold": "-1"
+      }
+    },
+    {
+      "scenario": "comp-nav",
+      "category": "comprehension",
+      "flood": "high",
+      "arm": "sj",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 4,
+      "terminal": "success",
+      "cost_usd": 0.041788500000000006,
+      "wall_s": 16.4,
+      "tokens": {
+        "in": 34,
+        "out": 751,
+        "cache_create": 10424,
+        "cache_read": 171515
+      },
+      "grade": {
+        "success": true,
+        "answered": "-1",
+        "gold": "-1"
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      }
+    },
+    {
+      "scenario": "comp-nav",
+      "category": "comprehension",
+      "flood": "high",
+      "arm": "sj-collapse",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 5,
+      "terminal": "success",
+      "cost_usd": 0.045798,
+      "wall_s": 17.8,
+      "tokens": {
+        "in": 42,
+        "out": 772,
+        "cache_create": 10483,
+        "cache_read": 209300
+      },
+      "grade": {
+        "success": true,
+        "answered": "-1",
+        "gold": "-1"
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      },
+      "collapse_fires": {}
+    },
+    {
+      "scenario": "comp-trace",
+      "category": "comprehension",
+      "flood": "medium",
+      "arm": "naive",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 5,
+      "terminal": "success",
+      "cost_usd": 0.023553400000000002,
+      "wall_s": 15.0,
+      "tokens": {
+        "in": 26,
+        "out": 752,
+        "cache_create": 5672,
+        "cache_read": 77714
+      },
+      "grade": {
+        "success": true,
+        "answered": [
+          "endpoint",
+          "handle",
+          "persist"
+        ],
+        "gold": [
+          "endpoint",
+          "handle",
+          "persist"
+        ]
+      }
+    },
+    {
+      "scenario": "comp-trace",
+      "category": "comprehension",
+      "flood": "medium",
+      "arm": "sj",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 6,
+      "terminal": "success",
+      "cost_usd": 0.0499021,
+      "wall_s": 22.4,
+      "tokens": {
+        "in": 50,
+        "out": 1234,
+        "cache_create": 8994,
+        "cache_read": 256941
+      },
+      "grade": {
+        "success": true,
+        "answered": [
+          "endpoint",
+          "handle",
+          "persist"
+        ],
+        "gold": [
+          "endpoint",
+          "handle",
+          "persist"
+        ]
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      }
+    },
+    {
+      "scenario": "comp-trace",
+      "category": "comprehension",
+      "flood": "medium",
+      "arm": "sj-collapse",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 6,
+      "terminal": "success",
+      "cost_usd": 0.0405504,
+      "wall_s": 23.3,
+      "tokens": {
+        "in": 34,
+        "out": 1235,
+        "cache_create": 9030,
+        "cache_read": 162814
+      },
+      "grade": {
+        "success": true,
+        "answered": [
+          "endpoint",
+          "handle",
+          "persist"
+        ],
+        "gold": [
+          "endpoint",
+          "handle",
+          "persist"
+        ]
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      },
+      "collapse_fires": {
+        "grep_symbol": 1
+      }
+    },
+    {
+      "scenario": "bug-flood",
+      "category": "bug",
+      "flood": "high",
+      "arm": "naive",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 9,
+      "terminal": "success",
+      "cost_usd": 0.059192,
+      "wall_s": 36.2,
+      "tokens": {
+        "in": 74,
+        "out": 1684,
+        "cache_create": 11983,
+        "cache_read": 261000
+      },
+      "grade": {
+        "success": true,
+        "suite": "61 passed in 0.04s",
+        "invariant_ok": true
+      }
+    },
+    {
+      "scenario": "bug-flood",
+      "category": "bug",
+      "flood": "high",
+      "arm": "sj",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 9,
+      "terminal": "success",
+      "cost_usd": 0.0708394,
+      "wall_s": 34.2,
+      "tokens": {
+        "in": 66,
+        "out": 1844,
+        "cache_create": 12900,
+        "cache_read": 357534
+      },
+      "grade": {
+        "success": true,
+        "suite": "61 passed in 0.04s",
+        "invariant_ok": true
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      }
+    },
+    {
+      "scenario": "bug-flood",
+      "category": "bug",
+      "flood": "high",
+      "arm": "sj-collapse",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 9,
+      "terminal": "success",
+      "cost_usd": 0.0752208,
+      "wall_s": 37.6,
+      "tokens": {
+        "in": 74,
+        "out": 1971,
+        "cache_create": 12955,
+        "cache_read": 393818
+      },
+      "grade": {
+        "success": true,
+        "suite": "61 passed in 0.04s",
+        "invariant_ok": true
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      },
+      "collapse_fires": {}
+    },
+    {
+      "scenario": "data-aggregate",
+      "category": "data",
+      "flood": "high",
+      "arm": "naive",
+      "model": "haiku",
+      "rep": 1,
+      "success": false,
+      "num_turns": 2,
+      "terminal": "success",
+      "cost_usd": 0.017501299999999997,
+      "wall_s": 9.7,
+      "tokens": {
+        "in": 18,
+        "out": 319,
+        "cache_create": 5127,
+        "cache_read": 50003
+      },
+      "grade": {
+        "success": false,
+        "answered": 1520,
+        "gold": 304
+      }
+    },
+    {
+      "scenario": "data-aggregate",
+      "category": "data",
+      "flood": "high",
+      "arm": "sj",
+      "model": "haiku",
+      "rep": 1,
+      "success": false,
+      "num_turns": 5,
+      "terminal": "success",
+      "cost_usd": 0.0417809,
+      "wall_s": 17.2,
+      "tokens": {
+        "in": 42,
+        "out": 683,
+        "cache_create": 8579,
+        "cache_read": 211659
+      },
+      "grade": {
+        "success": false,
+        "answered": 1520,
+        "gold": 304
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      }
+    },
+    {
+      "scenario": "data-aggregate",
+      "category": "data",
+      "flood": "high",
+      "arm": "sj-collapse",
+      "model": "haiku",
+      "rep": 1,
+      "success": true,
+      "num_turns": 4,
+      "terminal": "success",
+      "cost_usd": 0.036101100000000004,
+      "wall_s": 15.9,
+      "tokens": {
+        "in": 34,
+        "out": 572,
+        "cache_create": 8472,
+        "cache_read": 162631
+      },
+      "grade": {
+        "success": true,
+        "answered": 304,
+        "gold": 304
+      },
+      "ctx_vocab": {
+        "ask": 0,
+        "q": 0,
+        "investigate": 0,
+        "run": 0,
+        "get": 0,
+        "search": 0
+      },
+      "collapse_fires": {}
+    }
+  ]
+}
