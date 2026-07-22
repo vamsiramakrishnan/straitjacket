@@ -61,18 +61,19 @@ _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
 
 
 def _collapse_enabled(workspace_root: Path) -> bool:
-    """True when this workspace opts into the replacement surface
-    (``[guard] collapse = true`` in ctx.toml). Cheap, fail-closed."""
+    """The replacement surface is the default posture — search is forced onto
+    the doors the harness controls unless a workspace breaks glass with
+    ``[guard] collapse = false`` in ctx.toml. Absent config → enabled."""
     path = workspace_root / "ctx.toml"
     if not path.is_file():
-        return False
+        return True
     try:
         import tomllib
 
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-        return bool((raw.get("guard") or {}).get("collapse", False))
+        return bool((raw.get("guard") or {}).get("collapse", True))
     except Exception:
-        return False
+        return True
 
 
 def _with_collapse_tool_removal(agent_args: list[str], workspace_root: Path) -> list[str]:

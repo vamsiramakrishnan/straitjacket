@@ -75,7 +75,10 @@ def test_search_does_not_steal_lint_or_logs(tmp_path):
 def ws(tmp_path):
     d = tmp_path / "proj"
     d.mkdir()
-    (d / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    # These tests target the native-Grep head_limit *cap*, which is the
+    # break-glass (collapse-off) behaviour; under the default posture native
+    # search is removed from the surface instead (see test_substitute.py).
+    (d / "ctx.toml").write_text("version = 1\n[guard]\ncollapse = false\n", encoding="utf-8")
     return d
 
 
@@ -110,8 +113,10 @@ def test_native_grep_respects_existing_bound_and_modes(ws):
 def test_native_grep_strict_steering_denies(ws):
     from ctx.hook import classify
 
+    # collapse off isolates the strict-steering deny path (with collapse on,
+    # native search is removed by the replacement surface first).
     (ws / "ctx.toml").write_text(
-        "version = 1\n[guard]\nsteering = \"deny\"\n", encoding="utf-8"
+        "version = 1\n[guard]\ncollapse = false\nsteering = \"deny\"\n", encoding="utf-8"
     )
     d = classify({
         "tool_name": "Grep",

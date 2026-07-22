@@ -33,6 +33,14 @@ def test_symbol_search_collapses_to_refs(cmd, expected):
     assert sub.shape == "grep_symbol" and sub.rung == "reuse-index"
 
 
+def test_symbol_grep_degrades_to_search_when_unresolvable():
+    # symbols_resolvable=False → a symbol hunt becomes bounded content search,
+    # never nothing (the agent is never stranded)
+    sub = collapse("grep -rn TokenBucket .", symbols_resolvable=False)
+    assert sub is not None and sub.shape == "grep_content"
+    assert sub.command == "ctx q 'search TokenBucket | files'"
+
+
 @pytest.mark.parametrize("cmd", [
     'grep -rn "TODO: fix" .',
     'grep -rn "return None" src',
@@ -95,23 +103,33 @@ def _classify(cmd, workspace):
     })
 
 
-def test_hook_substitutes_when_collapse_enabled(tmp_path):
-    (tmp_path / "ctx.toml").write_text(
-        'version = 1\n[guard]\ncollapse = true\n', encoding="utf-8")
+def test_hook_substitutes_by_default(tmp_path):
+    # collapse is the default posture — no config needed. A Python source makes
+    # symbols resolvable, so a symbol grep collapses to refs.
+    (tmp_path / "m.py").write_text("class WidgetFactory:\n    pass\n", encoding="utf-8")
     d = _classify("grep -rn WidgetFactory .", tmp_path)
     rw = d.get("rewrite")
-    assert rw is not None, f"expected a substitution, got {d}"
+    assert rw is not None, f"expected a substitution by default, got {d}"
     assert rw["updatedInput"]["command"] == "ctx q 'refs WidgetFactory | group file'"
 
 
-def test_hook_leaves_command_untouched_when_collapse_disabled(tmp_path):
-    # no collapse flag: the recursive grep is not rewritten to a ctx q op
-    (tmp_path / "ctx.toml").write_text('version = 1\n', encoding="utf-8")
+def test_symbol_grep_degrades_to_search_without_symbols(tmp_path):
+    # no Python / no index → refs can't resolve, so the symbol grep degrades to
+    # bounded content search rather than stranding the agent.
     d = _classify("grep -rn WidgetFactory .", tmp_path)
-    rw = d.get("rewrite") or {}
-    substituted = rw.get("updatedInput", {}).get("command", "")
-    assert not substituted.startswith("ctx q 'refs"), \
-        f"collapse fired without the flag: {d}"
+    cmd = (d.get("rewrite") or {}).get("updatedInput", {}).get("command", "")
+    assert cmd == "ctx q 'search WidgetFactory | files'", d
+
+
+def test_break_glass_off_switch(tmp_path):
+    # guard.collapse=false disables the whole posture (not a second mode — an
+    # off-switch): the recursive grep runs untouched.
+    (tmp_path / "m.py").write_text("class WidgetFactory: pass\n", encoding="utf-8")
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n[guard]\ncollapse = false\n', encoding="utf-8")
+    d = _classify("grep -rn WidgetFactory .", tmp_path)
+    cmd = (d.get("rewrite") or {}).get("updatedInput", {}).get("command", "")
+    assert not cmd.startswith("ctx q "), f"off-switch failed: {d}"
 
 
 # ── native search tools are removed from the surface under collapse ─────────
@@ -123,27 +141,28 @@ def _classify_tool(tool_name, tool_input, workspace):
     })
 
 
-def test_native_grep_denied_and_redirected_under_collapse(tmp_path):
-    (tmp_path / "ctx.toml").write_text(
-        'version = 1\n[guard]\ncollapse = true\n', encoding="utf-8")
+def test_native_grep_denied_and_redirected_by_default(tmp_path):
+    # collapse is default → native search is off the surface, denied+redirected
     d = _classify_tool("Grep", {"pattern": "handle_request", "output_mode": "content"}, tmp_path)
     assert d.get("decision") == "deny", f"native Grep should be denied: {d}"
     assert "ctx q 'refs handle_request" in d.get("reason", "")
 
 
-def test_native_grep_capped_not_denied_without_collapse(tmp_path):
-    # default behaviour is preserved: content grep gets a head_limit, not a deny
-    (tmp_path / "ctx.toml").write_text('version = 1\n', encoding="utf-8")
+def test_native_grep_capped_not_denied_when_off(tmp_path):
+    # break-glass off → the old behaviour returns: content grep gets a
+    # head_limit cap, not a deny
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n[guard]\ncollapse = false\n', encoding="utf-8")
     d = _classify_tool("Grep", {"pattern": "x", "output_mode": "content"}, tmp_path)
     assert d.get("decision") != "deny"
 
 
-def test_wrap_removes_native_search_under_collapse(tmp_path):
+def test_wrap_removes_native_search_by_default(tmp_path):
     from ctx.wrap import _with_collapse_tool_removal
-    (tmp_path / "ctx.toml").write_text(
-        'version = 1\n[guard]\ncollapse = true\n', encoding="utf-8")
+    # default posture → Grep/Glob removed from the surface, no config needed
     out = _with_collapse_tool_removal(["-p", "do it"], tmp_path)
     assert out[:3] == ["--disallowedTools", "Grep", "Glob"]
-    # no flag → untouched
-    (tmp_path / "ctx.toml").write_text('version = 1\n', encoding="utf-8")
+    # break-glass off → untouched
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n[guard]\ncollapse = false\n', encoding="utf-8")
     assert _with_collapse_tool_removal(["-p", "x"], tmp_path) == ["-p", "x"]

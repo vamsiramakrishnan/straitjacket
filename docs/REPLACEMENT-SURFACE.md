@@ -81,9 +81,14 @@ each as a property of the substituted op:
   substitution costs at most one bounded digest, never a flood.
 - **Cheapest rung first.** Recognisers are ordered so the first match is the
   cheapest equivalent op; each carries its rung for the ctx-debt ledger.
-- **Off by default.** Enabled per-repo via `[guard] collapse = true` in
-  `ctx.toml`. The substitution is only ever an *equivalent* of what the agent
-  asked for; when in doubt, it does nothing.
+- **The default posture — one mode, not two.** The replacement surface *is*
+  the harness; there is no opt-in flag to remember and no second product to
+  choose between. Safety is by construction rather than by a fallback mode:
+  a symbol grep degrades to bounded content search when the repo can't resolve
+  refs (`_symbols_resolvable` — a SCIP index or Python sources), and Bash grep
+  always remains, so the agent is never stranded. `[guard] collapse = false`
+  in `ctx.toml` is a break-glass off-switch for emergencies, not a supported
+  operating mode.
 
 ## Safety argument
 
@@ -123,16 +128,20 @@ So the surface is delivered per harness, but through one shared mechanism — th
 The common rule, enforced once in `_classify_native_search`: **with collapse
 on, a native search tool is denied and redirected** to the collapsed op (or to
 Bash `grep`, which is auto-substituted). For Claude Code the wrap additionally
-*removes* the tool so the deny never has to fire. All of it is gated on
-`guard.collapse`; default-off leaves every host's behaviour unchanged.
+*removes* the tool so the deny never has to fire. This is the default posture
+on every host; `guard.collapse = false` is the break-glass off-switch.
 
 ## Measurement
 
-The `sj-collapse` benchmark arm (`evals/bench_run.py`) is `sj` plus
-`[guard] collapse = true`, run against `naive` and the guarded `sj` default on
-the flood-bearing and navigation scenarios. The row carries `collapse_fires`
-(loop-shapes collapsed, by shape) so adoption is measured directly — the
-numerator the old vocab metric missed. The claim to test is narrow and
-falsifiable: **on the navigation/flood tasks, substitution makes the collapsed
-op actually run, and cost/turns fall below the guarded default.** If it does
-not, the engine — not just the delivery — is in question.
+The `sj` benchmark arm (`evals/bench_run.py`) *is* the collapsed product —
+`ctx wrap` removes native search by default — so no separate arm is needed. The
+row carries `collapse_fires` (loop-shapes collapsed, by shape) so adoption is
+measured directly, the numerator the old vocab metric missed.
+
+The first measured run (`evals/replacement-surface-2026-07-22.md`) is an honest
+**N=1 null**: `collapse_fires` was 1 across six cells, adoption was flat, and
+the one success flip was variance. What it *did* establish: the surface is
+correct, safe, and cache-neutral (95% hit, undisturbed). The claim still to be
+settled — with N≥5 repeats and loop-dominated tasks on a real repo — is whether
+a fired substitution moves cost/success at all, or whether the engine, not just
+the delivery, is the limit.

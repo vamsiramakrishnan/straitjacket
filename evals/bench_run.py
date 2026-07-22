@@ -39,7 +39,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from bench.dataset import BY_ID, SCENARIOS  # noqa: E402
 
 MODELS = {"haiku": "claude-haiku-4-5-20251001", "sonnet": None}
-WRAPPED = {"sj", "sj-collapse"}
+WRAPPED = {"sj"}  # sj IS the collapsed product — ctx wrap removes native search by default
 TOOLS = "Bash Read Grep Glob Edit Write MultiEdit"
 
 VERB_CARD = """\
@@ -78,18 +78,16 @@ PYTEST_PY = _pytest_python()
 
 
 def arm_argv(arm, model, prompt, cap):
-    # sj-collapse removes the native Grep/Glob tools so search is forced onto
-    # the doors the replacement surface controls: Bash grep (→ substituted) or
-    # ctx verbs (→ already collapsed). This is the wozcode move's missing half
-    # — replace the surface means also *remove* the default tools.
-    tools = "Bash Read Edit Write MultiEdit" if arm == "sj-collapse" else TOOLS
     base = ["claude", "-p", prompt, "--max-turns", str(cap),
-            "--output-format", "json", "--allowedTools", tools]
+            "--output-format", "json", "--allowedTools", TOOLS]
     if MODELS[model]:
         base += ["--model", MODELS[model]]
     if arm == "naive":
         return base
-    if arm in ("sj", "sj-collapse"):
+    if arm == "sj":
+        # ctx wrap is the collapsed product: it removes native Grep/Glob (the
+        # replacement surface's default posture), so search lands on the doors
+        # the harness controls — no per-arm tool hack needed.
         return ["ctx", "wrap", "claude", "--proxy", "--"] + base[1:]
     if arm == "headroom":
         return ["headroom", "wrap", "claude", "--"] + base[1:]
@@ -145,11 +143,8 @@ def run_cell(scn, arm, model, rep, out):
         shutil.rmtree(workdir)
     workdir.mkdir(parents=True)
     scn.build(workdir)
-    if arm in ("sj", "sj-collapse"):  # deliver the teaching surface
+    if arm == "sj":  # deliver the teaching surface (collapse is on by default)
         (workdir / "CLAUDE.md").write_text(VERB_CARD, encoding="utf-8")
-    if arm == "sj-collapse":  # the replacement surface: opt into collapse
-        (workdir / "ctx.toml").write_text(
-            'version = 1\n[guard]\ncollapse = true\n', encoding="utf-8")
     cfg = out / f"cc_{tag}"
     cfg.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg), "PIP_REQUIRE_VIRTUALENV": "1"}
@@ -179,9 +174,8 @@ def run_cell(scn, arm, model, rep, out):
         "cost_usd": res.get("total_cost_usd") or res.get("costUSD"),
         "wall_s": round(wall, 1), "tokens": toks, "grade": g,
     }
-    if arm in ("sj", "sj-collapse"):
+    if arm == "sj":
         row["ctx_vocab"] = _vocab(cfg)
-    if arm == "sj-collapse":
         row["collapse_fires"] = _collapse_fires(workdir)
     return row
 

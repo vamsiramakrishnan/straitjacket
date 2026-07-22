@@ -171,7 +171,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "unknown_command": "force_ask",
         "internal_error": "allow",
         "steering": "auto",
-        "collapse": False,  # replacement surface: substitute loop-shapes with collapsed ctx ops
+        "collapse": True,  # replacement surface (default posture): substitute loop-shapes with collapsed ctx ops; set guard.collapse=false to break-glass off
         "max_inline_bytes": _MAX_INLINE_BYTES_DEFAULT,
         "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
         "session_read_budget_bytes": _SESSION_READ_BUDGET_DEFAULT,
@@ -544,6 +544,33 @@ def _failure_available(workspace_root: str | None) -> bool:
                 if '"family": "pytest"' in line and "intervention_emitted" in line:
                     return True
     except OSError:
+        return False
+    return False
+
+
+def _symbols_resolvable(workspace_root: str | None) -> bool:
+    """Cheap check: can `ctx q refs` resolve symbols in this repo? True when a
+    SCIP index is present or the tree has Python sources (ast/jedi handle
+    those). Bounded scan; on a miss a symbol grep degrades to bounded content
+    search, never to nothing. False on any doubt."""
+    if not workspace_root:
+        return False
+    try:
+        root = Path(workspace_root)
+        if (root / "index.scip").is_file() or (root / ".ctx" / "index.scip").is_file():
+            return True
+        seen = 0
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith(".") and d not in
+                           ("node_modules", "venv", "__pycache__", "dist", "build")]
+            for fn in filenames:
+                if fn.endswith(".py"):
+                    return True
+                seen += 1
+                if seen > 2000:  # bounded — don't walk a huge non-Python tree
+                    return False
+    except Exception:
         return False
     return False
 
@@ -1179,7 +1206,8 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 from ctx import substitute
 
                 sub = substitute.collapse(
-                    command, failure_available=_failure_available(workspace_root))
+                    command, failure_available=_failure_available(workspace_root),
+                    symbols_resolvable=_symbols_resolvable(workspace_root))
                 if sub is not None:
                     decision = dict(DECISION_ALLOW)
                     decision["_rewrite"] = {"command": sub.command, "reason": sub.reason}

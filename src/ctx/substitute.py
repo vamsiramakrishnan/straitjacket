@@ -124,7 +124,7 @@ def _glob_hint(paths: list[str]) -> str:
     return ""
 
 
-def _collapse_grep(toks: list[str]) -> Substitution | None:
+def _collapse_grep(toks: list[str], symbols_resolvable: bool) -> Substitution | None:
     prog = toks[0].rsplit("/", 1)[-1]
     git_grep = prog == "git" and len(toks) > 1 and toks[1] == "grep"
     if git_grep:
@@ -138,8 +138,11 @@ def _collapse_grep(toks: list[str]) -> Substitution | None:
     pattern, paths = _grep_pattern_and_globs(toks)
     if not pattern:
         return None
-    if _IDENT_RE.match(pattern):
-        # a symbol hunt → the index answers it exactly, span-precise, grouped.
+    if _IDENT_RE.match(pattern) and symbols_resolvable:
+        # a symbol hunt on a repo where refs can resolve → the index answers it
+        # exactly, span-precise, grouped. When symbols are NOT resolvable (no
+        # index, unsupported language) we fall through to bounded content search
+        # below — never to nothing, so the agent is never stranded.
         return Substitution(
             command=f"ctx q {shlex.quote(f'refs {pattern} | group file')}",
             reason=("CTX_CONTEXT_GUARD: recursive search for the identifier "
@@ -195,19 +198,22 @@ def _collapse_pytest(command: str, failure_available: bool) -> Substitution | No
         rung="failure-slice", shape="pytest_rerun")
 
 
-def collapse(command: str, *, failure_available: bool = False) -> Substitution | None:
+def collapse(command: str, *, failure_available: bool = False,
+             symbols_resolvable: bool = True) -> Substitution | None:
     """Recognise a collapsible loop-shape in ``command`` and return the
     collapsed ``ctx`` op, or ``None`` to leave the command untouched.
 
     Cheapest rung first: symbol/content search (always safe, pure) before the
-    store-gated pytest re-run slice.
+    store-gated pytest re-run slice. ``symbols_resolvable`` degrades a symbol
+    hunt to bounded content search when the repo has no way to resolve refs,
+    so the collapse is safe on any repo and never strands the agent.
     """
     toks = _split(command)
     if not toks:
         return None
     if _is_compound(toks, command):
         return None  # a pipe/redirect/chain changes meaning — never clobber it
-    sub = _collapse_grep(toks)
+    sub = _collapse_grep(toks, symbols_resolvable)
     if sub:
         return sub
     return _collapse_pytest(command, failure_available)
