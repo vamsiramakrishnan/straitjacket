@@ -1,205 +1,122 @@
-<div align="center">
+# Straitjacket documentation
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs-header.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs-header-light.svg" width="100%" alt="straitjacket documentation — use the harness, understand the architecture, verify the claims, and extend the evidence system.">
-</picture>
+Straitjacket is an artifact-backed context containment harness for coding agents. It captures potentially unbounded tool output, stores the complete evidence locally, and returns a bounded deterministic view with exact retrieval addresses.
 
-**Use it. Understand it. Verify it. Extend it.**
+This documentation is organized by task. Start with the page that matches what you need to do.
 
-[How it works](HOW-IT-WORKS.md) · [Getting started](GETTING-STARTED.md) · [Core concepts](CONCEPTS.md) · [Architecture path](#architecture-reading-path) · [Evaluation receipts](../evals/) · [Normative specs](../spec/)
+## Start here
 
-</div>
-
-straitjacket’s implementation is built around a simple promise: **unbounded output becomes immutable evidence plus a bounded, deterministic, addressable view.** The documentation explains how to operate that system, why each mechanism exists, and what evidence justified shipping it.
-
-The project separates four kinds of truth:
-
-| Source | What it tells you |
+| Goal | Read |
 |---|---|
-| [`docs/`](.) | design intent, conceptual model, and mechanism reasoning |
-| [`spec/`](../spec/) | normative schemas and behavioural contracts |
-| [`evals/`](../evals/) | measurements, fixtures, referees, and negative results |
-| [`CHANGELOG.md`](../CHANGELOG.md) | what actually shipped and when |
+| Install Straitjacket and complete a first capture | [Getting started](GETTING-STARTED.md) |
+| Understand the data flow and core terms | [How it works](HOW-IT-WORKS.md) |
+| Choose a command and check its syntax | [CLI guide](CLI.md) |
+| Start from a common task or failure mode | [Use cases](USE-CASES.md) |
+| Learn the vocabulary and invariants | [Core concepts](CONCEPTS.md) |
+| Understand the product and economic thesis | [Why Straitjacket](WHY-STRAITJACKET.md) |
+| Extend extraction or rendering | [Writing an evidence profile](WRITING-A-PROFILE.md) |
+| Verify a performance or quality claim | [`evals/`](../evals/) |
+| Check a normative contract | [`spec/`](../spec/) |
 
-A design document is not automatically current product behaviour. It may describe a mechanism before implementation, preserve a rejected direction, or explain why an earlier design changed. Use status labels literally and prefer the specifications plus changelog when compatibility matters.
+## Documentation types
 
-## Choose your path
+The repository separates different kinds of information so that design intent is not confused with current behavior.
 
-### Use straitjacket
-
-Start with **[How it works](HOW-IT-WORKS.md)** (a ten-minute plain-language walkthrough), then **[Getting started](GETTING-STARTED.md)**.
-
-You will learn how to:
-
-- set up all three hosts (Antigravity, Claude Code, Codex) in one command;
-- run one harnessed or ephemeral agent session;
-- capture, inspect, search, and retrieve evidence;
-- choose between `run`, `seq`, `eval`, `q`, and background jobs;
-- interpret the session scorecard;
-- understand the current trust boundary.
-
-### Understand the mental model
-
-Read **[Core concepts](CONCEPTS.md)** before the longer architecture documents. It defines artifacts, handles, spans, digests, evidence graphs, contracts, delivery plans, coverage receipts, gates, reflexes, and policy epochs.
-
-The shortest useful model is:
-
-```text
-complete evidence stays in the store
-bounded context carries addresses
-retrieval reconnects the two on demand
-```
-
-### Verify the claims
-
-Read **[`evals/`](../evals/)**.
-
-straitjacket does not treat mechanism plausibility as evidence. Important changes are paired with a named referee, frozen acceptance gates, and a receipt that records both positive and negative findings. Several shipped mechanisms exist specifically because an earlier design lost a live A/B.
-
-### Extend the system
-
-First identify which plane owns the change:
-
-| Plane | Responsibility | Examples |
+| Location | Purpose | Use it for |
 |---|---|---|
-| **Safety** | hard, non-adaptive limits | path confinement, timeouts, redaction, quotas |
-| **Execution** | running and capturing work | commands, sequences, jobs, host interception |
-| **Derivation** | producing repository facts | outlines, symbols, references, change generations |
-| **Evidence** | extracting typed findings | test failures, diagnostics, log templates, coverage |
-| **Delivery** | selecting and rendering views | contracts, plans, budgets, deterministic digests |
-| **Behaviour** | measuring agent response | retrieval landings, reruns, reflexes, policy epochs |
+| [`README.md`](../README.md) | Product overview | The value proposition, first commands, and navigation |
+| [`docs/`](.) | Guides and explanations | Learning, operating, and extending the system |
+| [`spec/`](../spec/) | Normative contracts | Schemas, compatibility, invariants, and acceptance requirements |
+| [`evals/`](../evals/) | Evaluation evidence | Workloads, referees, results, and negative findings |
+| [`CHANGELOG.md`](../CHANGELOG.md) | Shipped history | Current version behavior and release-level changes |
+| [`ROADMAP.md`](../ROADMAP.md) | Planned work | Designed mechanisms that have not shipped |
 
-A new mechanism should fit one plane, reuse the existing evidence and delivery contracts, and name its acceptance referee before implementation.
+When sources disagree, use this order:
 
----
+1. `spec/` for required behavior;
+2. `CHANGELOG.md` for what shipped;
+3. executable tests for enforced acceptance criteria;
+4. design documents for rationale and alternatives.
 
-## Foundations already shipped
+A design document may describe a proposal, a rejected direction, or an implementation that later changed. Treat its status label literally.
 
-These documents explain mechanisms that have already crossed their acceptance gates.
+## Product guides
 
-| Document | The question it answers |
-|---|---|
-| **[PRICED CONTEXT](PRICED-CONTEXT.md)** | How should an agent decide whether to retrieve more evidence? Put the token price at the decision point, relate it to the remaining window, and offer the cheaper continuation. |
-| **[LOSSLESS RESCUE](LOSSLESS-RESCUE.md)** | How can an already-bloated session be reduced without repeating the destructive behaviour of transcript rewriting? Elide resident bytes only after preserving them behind stable addresses. |
+### Getting started
+
+[Getting started](GETTING-STARTED.md) covers:
+
+- source installation;
+- workspace setup for Antigravity, Claude Code, and Codex;
+- the first `ctx run`, `ctx get`, and `ctx search` workflow;
+- optional analysis engines;
+- common setup problems.
+
+### How it works
+
+[How it works](HOW-IT-WORKS.md) follows one command through capture, storage, evidence extraction, digest rendering, and retrieval. Read it before the architecture papers if the terms `artifact`, `profile`, `digest`, `span`, and `handle` are new.
+
+### CLI guide
+
+[CLI guide](CLI.md) is the task-oriented command reference. It groups commands by setup, capture, retrieval, repository analysis, evidence composition, measurement, and lifecycle management.
+
+### Use cases
+
+[Use cases](USE-CASES.md) starts from the work rather than the mechanism: noisy test suites, repository exploration, long-running commands, large connector responses, verification, and delegated investigation.
 
 ## Architecture reading path
 
-The current architecture sequence began with a measured failure: a regime where the harness obeyed its containment rules but still made the agent worse. The documents follow the diagnosis in order.
+Read [Core concepts](CONCEPTS.md) first. Then choose the part of the system you are changing or evaluating.
 
-### 1. [LADDERS — conditionality must be measured](LADDERS.md)
+| Document | Question |
+|---|---|
+| [CAPABILITY-SURFACE](CAPABILITY-SURFACE.md) | Which tools and schemas should enter the model's capability surface? |
+| [LADDERS](LADDERS.md) | When should a conditional mechanism engage? |
+| [REFLEX](REFLEX.md) | How are interventions evaluated against observed agent behavior? |
+| [EDC](EDC.md) | How are typed evidence, coverage contracts, budgets, and delivery plans resolved? |
+| [ALGEBRA](ALGEBRA.md) | How are repository facts derived, joined, and queried? |
+| [DIGEST-CLOSURE](DIGEST-CLOSURE.md) | Which operations can execute on bounded representations without rehydrating bytes? |
+| [EVIDENCE-PLANS](EVIDENCE-PLANS.md) | How are multi-step investigations compiled into one bounded execution plan? |
+| [ASK](ASK.md) | How do typed intents compile repository questions into evidence plans? |
+| [PRICED-CONTEXT](PRICED-CONTEXT.md) | How should retrieval cost be exposed at the decision point? |
+| [LOSSLESS-RESCUE](LOSSLESS-RESCUE.md) | How can an already-large transcript be reduced without orphaning evidence? |
+| [SUBSTRATE](SUBSTRATE.md) | Which physical engines sit behind the logical operator surface? |
+| [THEORY](THEORY.md) | What objective and structural invariants organize the system? |
 
-A taxonomy of every tiered or conditional mechanism in the system. Its governing rule is blunt: **a conditional is only as good as the signal that controls it.** This document separates genuine adaptation from thresholds that merely look adaptive.
+These documents preserve reasoning, trade-offs, and measured failures. They are not substitutes for the CLI guide or normative specifications.
 
-### 2. [REFLEX — close the loop around behaviour](REFLEX.md)
+## System planes
 
-The open-loop ladders fired on output volume while the actual failure lived on the information axis. REFLEX defines interventions as hypotheses about the model’s next action, then scores the observed outcome: retrieval, narrowing, validation, equivalent rerun, workaround, or censored expiry.
+A mechanism should have one primary owner.
 
-### 3. [EDC — govern evidence delivery](EDC.md)
+| Plane | Responsibility | Examples |
+|---|---|---|
+| Safety | Hard, non-adaptive constraints | Path confinement, redaction, quotas, timeouts |
+| Execution | Running and capturing work | Commands, sequences, jobs, host interception |
+| Derivation | Producing repository facts | Symbols, references, outlines, change generations |
+| Evidence | Extracting typed findings | Test failures, diagnostics, templates, coverage |
+| Delivery | Selecting and rendering views | Contracts, plans, budgets, deterministic digests |
+| Behavior | Measuring agent response | Retrieval, reruns, interventions, policy epochs |
 
-The Evidence Delivery Controller replaces profile-specific truncation logic with typed evidence, command-family contracts, one policy resolver, deterministic plans, and coverage receipts. **Coverage is the objective; size is the constraint.**
-
-### 4. [ALGEBRA — derive and compose evidence](ALGEBRA.md)
-
-The EDC governs how evidence is delivered; ALGEBRA governs how it is produced and joined. Tree-sitter skeletons, opportunistic SCIP ingestion, a typed fact store, bounded query stages, and static × dynamic × temporal joins make repository investigation compositional without making it Turing-complete.
-
-### 4b. [DIGEST-CLOSURE — compute on the compressed form](DIGEST-CLOSURE.md)
-
-The closure audit of the algebra: which operators run at digest-rate (homomorphic over the representation) versus which rehydrate raw bytes. Closure turns out to be a total function of the `ctx q` type signature, and the single-refinement-boundary theorem — bytes materialize at most once, and only terminally — is a structural invariant of the kind graph, pinned in [`tests/test_digest_closure.py`](../tests/test_digest_closure.py).
-
-### 4c. [THEORY — the objective, the theorems, the measured gap](THEORY.md)
-
-The formalization in one page: the information-bottleneck objective with the lazy-lossless constraint, the two enforced theorems (determinism, single refinement boundary), the evidence-regret metric (`ctx replay --regret`) that scores every digest profile's distance from the rate–distortion frontier on real trajectories, and the honest ledger of which mechanisms are derived from the objective versus empirically adopted under it.
-
-### 4d. [SUBSTRATE — operator classes under the semantic layers](SUBSTRATE.md)
-
-The audit of the "just add Unix tools" instinct. Six proposed additions (fd,
-rg --json, ctags, jq, comby, watchexec) examined against the shipped tree:
-three already exist, one is rephrased to survive determinism, and the rest
-become the M-K phases — a file-set algebra (`corpus`), a records algebra over
-stored artifacts, span-precise sites, and a gated second rewrite rung. The
-governing rule: every binary is an engine behind a logical operator, every
-operator carries a contract, and no tool merges without a referee.
-
-### 4e. [ASK — intents as typed plan presets](ASK.md)
-
-The retrieval front door done without a natural-language parser. A repository
-question becomes a frozen `ctx.plan/v1` template with typed slots
-(`locate`/`impact`/`diagnose`), executed on the shipped plan tier and answered
-with the investigate digest — collapsing the *decision cost* of exploration the
-way evidence plans collapsed its *turn cost*. Includes the audit's cut list:
-what an elegant system declines (the NL parser as primary path, a speculative
-ontology, unscoped new verbs) matters as much as what it builds.
-
-### 5. [EVIDENCE-PLANS — compile the investigation](EVIDENCE-PLANS.md)
-
-The model compiles its exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx investigate`); the harness validates, prices, and executes it locally, and one causally organized digest returns. ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). Shipped v0.25.0; measured in [`evals/plan-collapse-2026-07-19.md`](../evals/plan-collapse-2026-07-19.md).
-
----
+Behavioral measurements may change delivery policy. They must not weaken safety constraints.
 
 ## Status language
 
-The docs use four explicit states:
+Architecture and roadmap documents use four states:
 
 - **Shipped** — implemented and covered by acceptance tests.
-- **Shadow** — computes or records a decision without enforcing it.
-- **Designed** — specified with a named referee, not yet implemented.
+- **Shadow** — records or scores a decision without enforcing it.
+- **Designed** — specified with an acceptance referee, but not implemented.
 - **Rejected** — investigated and deliberately not adopted.
 
-These labels are not decorative. They prevent architecture diagrams from collapsing intent, experiment, and product reality into one misleading picture.
+Do not describe designed or shadow behavior as available product functionality.
 
-## House rules for mechanisms
+## Documentation standards
 
-Every mechanism inherits the same invariants:
+Use [Documentation style](DOCUMENTATION-STYLE.md) when creating or revising a page. The guide defines terminology, page types, source-of-truth rules, command verification, and review checks.
 
-1. **Capture before flood.** Potentially unbounded bytes do not enter the transcript raw.
-2. **Omission keeps an address.** Evidence may leave active context; it may not become unrecoverable.
-3. **Coverage is declared.** A short digest is not a success if required identities disappear.
-4. **Rendering is deterministic.** Same evidence, contract, and plan means identical bytes.
-5. **Safety does not adapt.** Behavioural signals may tune delivery, never weaken hard limits.
-6. **Degradation is labeled.** Optional precision may fail open; it may not pretend to be exact.
-7. **Receipts precede doctrine.** A mechanism ships on measured behaviour, not aesthetic confidence.
-
-## Documentation map
-
-| Need | Read |
-|---|---|
-| the ten-minute overview | [HOW-IT-WORKS.md](HOW-IT-WORKS.md) |
-| first successful session | [GETTING-STARTED.md](GETTING-STARTED.md) |
-| vocabulary and invariants | [CONCEPTS.md](CONCEPTS.md) |
-| retrieval economics | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
-| context rescue | [LOSSLESS-RESCUE.md](LOSSLESS-RESCUE.md) |
-| conditional mechanisms | [LADDERS.md](LADDERS.md) |
-| closed-loop adaptation | [REFLEX.md](REFLEX.md) |
-| evidence contracts and plans | [EDC.md](EDC.md) |
-| compute on the compressed form | [DIGEST-CLOSURE.md](DIGEST-CLOSURE.md) |
-| the objective, theorems, and the measured gap | [THEORY.md](THEORY.md) |
-| facts, indexing, and queries | [ALGEBRA.md](ALGEBRA.md) |
-| compiled evidence plans | [EVIDENCE-PLANS.md](EVIDENCE-PLANS.md) |
-| the input side — capability surface containment | [CAPABILITY-SURFACE.md](CAPABILITY-SURFACE.md) |
-| schemas and compatibility | [`spec/`](../spec/) |
-| benchmark receipts | [`evals/`](../evals/) |
-| shipped history | [`CHANGELOG.md`](../CHANGELOG.md) |
-| unshipped mechanisms | [`ROADMAP.md`](../ROADMAP.md) |
-
-
-<!-- docs-phase2:start -->
-## Practical guides
-
-| Guide | Use it when |
-|---|---|
-| [Use cases](USE-CASES.md) | You know the task or failure mode and want the shortest path through the harness. |
-| [CLI guide](CLI.md) | You need to choose a verb, retrieve evidence, or interpret a scorecard. |
-| [Writing an evidence profile](WRITING-A-PROFILE.md) | You are extending extraction, contracts, or rendering. |
-| [Why Straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
-<!-- docs-phase2:end -->
+The central rule is simple: explain one job per page, keep claims close to their evidence, and do not duplicate volatile facts such as versions or test counts across multiple documents.
 
 ---
 
-<div align="center">
-
-**The store keeps the truth. The transcript keeps the address.**
-
-<sub><a href="../README.md">« repository</a> · <a href="index.md">docs page</a> · <a href="../spec/">specifications</a> · <a href="../evals/">evaluation receipts</a> · <a href="../ROADMAP.md">roadmap</a></sub>
-
-</div>
+[Repository](../README.md) · [Getting started](GETTING-STARTED.md) · [CLI](CLI.md) · [Specifications](../spec/) · [Evaluation receipts](../evals/)
