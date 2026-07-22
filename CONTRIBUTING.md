@@ -1,83 +1,151 @@
-# Contributing to straitjacket / ctx-harness
+# Contributing to Straitjacket
 
-## Dev setup
+Straitjacket accepts changes that preserve its core contract: potentially unbounded output becomes immutable evidence plus a bounded, deterministic, addressable view.
 
-```bash
-pip install -e '.[dev]'
-```
+Read this page before changing a public command, evidence profile, host integration, specification, or evaluation claim.
 
-That is the whole baseline: Python ≥ 3.11, `pathspec` (the one runtime
-dependency), plus `pytest` and `jsonschema` from the dev extra. Optional
-extras unlock faster or richer engines but are never required:
+## Development setup
+
+Install the package and baseline development dependencies:
 
 ```bash
-pip install -e '.[dev,map,fast,code]'   # grimp+networkx map engine, orjson, jedi
-# and, if you want the binary-accelerated paths:
-apt-get install ripgrep universal-ctags
+python -m pip install -e '.[dev]'
 ```
 
-## Running tests
+Install all optional Python engines when working on repository analysis or the full CI path:
+
+```bash
+python -m pip install -e '.[dev,map,fast,code,scip,sem]'
+```
+
+Optional system binaries such as ripgrep and Universal Ctags may improve speed or precision. They must not become mandatory for the core capture path.
+
+## Run the test suite
 
 ```bash
 python -m pytest tests/ -q
 ```
 
-The suite is acceptance-oriented (determinism, budgets, hook contract,
-path/symlink escapes, redaction) and must pass on a bare `[dev]` install with
-no binaries present. CI runs both configurations: the full matrix with every
-engine installed, and a "minimal" job with `CTX_SEARCH_ENGINE=python
-CTX_MAP_ENGINE=builtin CTX_CODE_ENGINE=ast` and no optional deps. If your
-change only works when ripgrep/ctags/grimp/jedi are installed, it is not done.
+The suite is acceptance-oriented. It covers determinism, budgets, hook contracts, path and symlink escapes, redaction, engine fallbacks, and public behavior.
 
-## The four load-bearing conventions
+CI exercises both a rich environment and a minimal environment. A feature that works only when an optional binary or extra is installed is incomplete unless the specification explicitly requires that dependency.
 
-These are the invariants every change is reviewed against:
+## Core engineering rules
 
-1. **Stdlib-first, with opportunistic binaries and optional pure-Python
-   extras, always backed by a deterministic fallback.** A dependency that
-   cannot install everywhere must never be the only path — ripgrep, ctags,
-   grimp/networkx, orjson, and jedi accelerate or enrich, but the builtin
-   engine ships the same output contract and the same coordinates.
-2. **Determinism rules for digests: no timestamps, no absolute host paths,
-   no locale-dependent text, no ANSI, in any model-visible byte.** Identical
-   input bytes must yield byte-identical digests so prompt-cache prefixes
-   stay stable across sessions, machines, and replays.
-3. **Hook hot-path contract: stdlib-only imports, fail-open on internal
-   error, exactly one JSON decision object on every code path.** The
-   PreToolUse guard runs on every tool call — a slow, crashy, or chatty hook
-   bricks the host session, so `hook.py` may not import third-party code.
-4. **Budgets and declared omission on every model-visible surface.** Every
-   verb output fits a token budget, and anything omitted is declared with a
-   count plus a resolvable continuation coordinate — silent truncation is
-   the failure mode this project exists to prevent.
+### 1. Capture before flood
 
-## Acceptance suite as merge gate
+Potentially unbounded output must be captured before it enters the model transcript. Post-hoc truncation is a safety net, not the preferred architecture.
 
-`spec/ACCEPTANCE.md` is normative and `tests/` is its executable form: a
-green suite is the merge gate. New mechanisms inherit the invariants
-(determinism, budgets, declared omission, telemetry) or they don't merge —
-ship the acceptance tests in the same change as the mechanism.
+### 2. Omission keeps an address
 
-## Engine disclosure convention
+A model-visible result may omit evidence to stay within budget. It must declare the omission and retain a resolvable continuation address.
 
-When an output can be produced by more than one engine, the active engine is
-disclosed in the output header and participates in any cache key — e.g.
-`ctx map` prints `engine grimp+networkx` or `engine builtin`, `ctx doctor`
-reports the active search engine and ignore matcher. Fallbacks are
-transparent in behavior but never anonymous: a labeled note, never a silent
-swap and never an error.
+Silent truncation is a contract violation.
+
+### 3. Rendering is deterministic
+
+Model-visible bytes must not contain incidental variation such as:
+
+- absolute host paths;
+- timestamps or temporary paths without evidentiary value;
+- locale-dependent output;
+- ANSI control sequences;
+- unstable ordering.
+
+Identical evidence under the same contract and budget must produce identical output.
+
+### 4. Optional engines have deterministic fallbacks
+
+Optional engines may improve speed or precision. Their absence must produce a labeled fallback, not a broken command or an anonymous behavior change.
+
+The active engine must be disclosed when it affects interpretation.
+
+### 5. The hook hot path stays small
+
+The pre-tool hook runs on every intercepted call. It must:
+
+- remain standard-library only;
+- avoid expensive initialization;
+- emit exactly one valid host decision on every path;
+- follow the configured internal-error policy;
+- preserve host usability when optional instrumentation fails.
+
+### 6. Safety does not adapt
+
+Behavioral measurements may tune evidence delivery. They must not weaken hard path, process, storage, redaction, or quota constraints.
+
+### 7. Claims require a referee
+
+A mechanism does not ship because it is plausible or elegant. Define the workload, comparison, acceptance criteria, and failure conditions before treating the mechanism as product truth.
+
+Record the result in `evals/`, including negative findings and regimes where the mechanism does not win.
+
+## Specifications and acceptance
+
+`spec/` is normative. The executable test suite is the acceptance gate.
+
+A behavior change should include, as applicable:
+
+1. a specification or schema change;
+2. acceptance tests;
+3. implementation;
+4. CLI and guide updates;
+5. a changelog entry;
+6. an evaluation receipt when the change carries a performance or quality claim.
+
+Do not merge a new public mechanism with implementation only.
+
+## Documentation changes
+
+Use [Documentation style](docs/DOCUMENTATION-STYLE.md).
+
+A public CLI or behavior change is incomplete until the owning documentation changes in the same pull request.
+
+Inspect at least:
+
+| Change | Documentation owner |
+|---|---|
+| First-use or installation flow | `README.md`, `docs/GETTING-STARTED.md` |
+| CLI syntax or semantics | `docs/CLI.md` |
+| Recommended task workflow | `docs/USE-CASES.md` |
+| Vocabulary or invariant | `docs/CONCEPTS.md`, `spec/` |
+| Architecture rationale | Relevant document in `docs/` |
+| Shipped behavior | `CHANGELOG.md` |
+| Measured claim | `evals/` |
+
+Do not duplicate volatile versions, test counts, or benchmark totals across entry-point pages. Link to their source of truth.
+
+## Change workflow
+
+1. Identify the system plane that owns the change: safety, execution, derivation, evidence, delivery, or behavior.
+2. Define the contract and acceptance referee.
+3. Add or update tests before relying on the mechanism.
+4. Implement the smallest complete change.
+5. Run the minimal and relevant optional-engine paths.
+6. Update the specification, documentation, changelog, and evaluation evidence.
+7. Review the diff for new model-visible nondeterminism, silent omission, and unbounded output.
+
+## Engine disclosure
+
+When several engines can produce the same logical result, disclose the selected engine and include it in relevant cache keys.
+
+Examples include search, repository maps, symbol extraction, and reference resolution. Fallbacks should preserve the public output contract and coordinate semantics even when precision differs.
 
 ## Versioning
 
-0.x throughout: expect breaking changes. The minor version bumps once per
-mechanism wave (v0.4 steering + wrap, v0.5 zoom spans, v0.6 map/diff/
-explorer/governor), recorded in `CHANGELOG.md`; patch-level churn within a
-wave does not get its own release.
+The project remains pre-1.0. Breaking changes are possible.
 
-## Where things are decided
+The package version in `pyproject.toml` is authoritative. Record shipped behavior in `CHANGELOG.md`. Avoid embedding the current version in multiple guide pages.
 
-- `spec/` — the normative SPEC, acceptance suite, ADRs, and wire schemas.
-- `ROADMAP.md` — planned mechanisms (M-A…M-E) with contracts and acceptance
-  gates; check it before proposing a new verb.
-- `evals/` — measured results behind every performance or quality claim; new
-  claims need an eval doc, not adjectives.
+## Where decisions live
+
+- [`spec/`](spec/) — normative contracts, schemas, ADRs, and acceptance requirements.
+- [`tests/`](tests/) — executable acceptance behavior.
+- [`docs/`](docs/) — guides, explanations, and architecture rationale.
+- [`evals/`](evals/) — measured claims, fixtures, referees, and negative results.
+- [`ROADMAP.md`](ROADMAP.md) — designed work that has not shipped.
+- [`CHANGELOG.md`](CHANGELOG.md) — release history and current shipped behavior.
+
+---
+
+[Documentation](docs/README.md) · [Documentation style](docs/DOCUMENTATION-STYLE.md) · [Specifications](spec/) · [Evaluation receipts](evals/)
