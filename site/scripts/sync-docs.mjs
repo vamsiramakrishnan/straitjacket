@@ -39,11 +39,12 @@ const ROUTES = new Map(
   PAGES.map(([src, dest]) => [src, `${siteBase}/${dest.replace(/\.md$/, '')}/`]),
 );
 ROUTES.set('README.md', `${siteBase}/`);
+ROUTES.set('index.md', `${siteBase}/`);
 
 function rewriteLinks(text) {
   // Links between canonical docs become site routes.
   text = text.replace(
-    /\]\((?:\.\/)?([A-Z0-9-]+\.md)(#[^)]+)?\)/g,
+    /\]\((?:\.\/)?([A-Za-z0-9-]+\.md)(#[^)]+)?\)/g,
     (match, file, fragment = '') => {
       const route = ROUTES.get(file);
       return route ? `](${route}${fragment})` : match;
@@ -63,7 +64,7 @@ function rewriteLinks(text) {
 
   // The same rules for simple HTML anchors used by older design pages.
   text = text.replace(
-    /href="(?:\.\/)?([A-Z0-9-]+\.md)(#[^"]+)?"/g,
+    /href="(?:\.\/)?([A-Za-z0-9-]+\.md)(#[^"]+)?"/g,
     (match, file, fragment = '') => {
       const route = ROUTES.get(file);
       return route ? `href="${route}${fragment}"` : match;
