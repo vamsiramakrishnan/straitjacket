@@ -1,44 +1,100 @@
 # CLI guide
 
-The CLI is organized around four operations:
+The Straitjacket command is `ctx`.
 
-1. **capture** an operation before it can flood;
-2. **query** stored evidence without replaying raw output;
-3. **resolve** an address to exact bytes or a bounded sub-digest;
-4. **measure** what the harness changed in the session.
+```text
+ctx [--workspace PATH] <command> [options]
+```
 
-The command surface is larger than four verbs because different execution shapes need
-different safety contracts. The mental model can stay small.
+Use `--workspace` when the current directory is not the workspace you want to operate on.
+
+This guide is organized by task. It is not a duplicate of `ctx --help`; it explains which command to choose and the contract each command provides.
 
 ## Command chooser
 
-| Need | Command | Why |
-|---|---|---|
-| One noisy command | `ctx run -- <command>` | One birth gate, one immutable run artifact |
-| A shell pipeline | `ctx run --shell '<pipeline>'` | Captures the stream-shaped program as one operation |
-| Known steps | `ctx seq …` | Per-step provenance without model round-trips |
-| Computed control flow | `ctx eval <script>` | Branch, loop, aggregate; one bounded final digest |
-| Long-running work | `ctx run --bg-after N -- …` | Returns a job handle instead of idling |
-| Inspect a job | `ctx job <id>` | Bounded live tail and lifecycle control |
-| Exact evidence | `ctx get <handle>` | Address in, exact bytes or bounded zoom out |
-| Search stored evidence | `ctx search …` | Search artifacts without re-execution |
-| Compose typed facts | `ctx q '<pipeline>'` | Total, bounded repository/evidence query algebra |
-| Answer a question | `ctx ask "…" --intent <i>` | Typed intent preset (locate/impact/diagnose) → one evidence view |
-| Compare two runs | `ctx diff run:A run:B` | Behavioral delta instead of two complete outputs |
-| Session scorecard | `ctx stats --session` | Wire residency, rounds, behavior and interventions |
-| Cumulative savings | `ctx gain` | Containment savings by command family/verb |
-| Replay histories | `ctx replay …` | Read-only counterfactual analysis over recorded sessions |
+| Need | Command |
+|---|---|
+| Configure a workspace | `ctx wrap setup` |
+| Preview host configuration | `ctx wrap <host> --print-config` |
+| Validate the installation | `ctx doctor` |
+| Capture one command | `ctx run -- <command>` |
+| Capture a shell pipeline | `ctx run --shell '<pipeline>'` |
+| Run known steps in one round | `ctx seq '<step 1>' '<step 2>'` |
+| Run computed control flow | `ctx eval <script>` |
+| Preview or apply a structural rewrite | `ctx rewrite <pattern> <replacement>` |
+| Supervise long-running work | `ctx run --bg-after <seconds> -- <command>` and `ctx job` |
+| Retrieve exact evidence | `ctx get <ref>` |
+| Search an artifact or repository | `ctx search <ref> <pattern>...` |
+| Inspect repository structure | `ctx map`, `ctx def`, `ctx refs`, `ctx callers`, `ctx callees`, `ctx impact`, `ctx diag` |
+| Compose typed evidence | `ctx q '<pipeline>'` |
+| Compile a repository question | `ctx ask "<question>" --intent <intent>` |
+| Validate or run an evidence plan | `ctx plan` and `ctx investigate` |
+| Compare two captured runs | `ctx diff run:<before> run:<after>` |
+| Inspect context economics | `ctx stats --session` and `ctx gain` |
+| Replay recorded behavior | `ctx replay` |
+| Manage artifact retention | `ctx pin`, `ctx gc`, `ctx checkpoint` |
 
-## Initialize a workspace
+## Workspace setup
+
+### `ctx init`
+
+Write the baseline workspace files:
 
 ```bash
 ctx init
 ```
 
-This writes the workspace configuration and ignore policy. Commit the files when the
-policy is intended to be shared; keep machine- or secret-specific exclusions local.
+Use this when you want `ctx.toml` and `.ctxignore` without installing a host integration.
 
-## Capture one command: `ctx run`
+### `ctx wrap`
+
+Configure one or more coding-agent hosts.
+
+```bash
+ctx wrap setup
+ctx wrap antigravity
+ctx wrap claude
+ctx wrap codex
+```
+
+`setup` and `all` configure Antigravity, Claude Code, and Codex in the current workspace.
+
+Preview the exact host configuration without writing it:
+
+```bash
+ctx wrap codex --print-config
+```
+
+Run Claude Code ephemerally:
+
+```bash
+ctx wrap claude -- -p "fix the failing tests"
+```
+
+Measure the true Anthropic wire traffic for that child session:
+
+```bash
+ctx wrap claude --proxy -- -p "fix the failing tests"
+```
+
+The proxy is optional and fail-open. It is required for `ctx stats --session` because that scorecard uses recorded wire observations.
+
+### `ctx doctor`
+
+Validate workspace, store, and integration health:
+
+```bash
+ctx doctor
+ctx doctor --antigravity
+```
+
+Use `--antigravity` to include workspace-plugin checks.
+
+## Capture and execution
+
+### `ctx run`
+
+Capture one command before its output can flood the transcript.
 
 ```bash
 ctx run -- pytest -q
@@ -46,232 +102,512 @@ ctx run -- ruff check .
 ctx run -- git diff --stat
 ```
 
-`--` ends Straitjacket’s options. Everything after it is the child command.
+Syntax:
 
-A run has two products:
+```text
+ctx run [--focus TEXT] [--cwd PATH] [--timeout SECONDS]
+        [--bg | --bg-after SECONDS] [--shell] -- <command>
+```
 
-- the full stdout/stderr artifact and manifest;
-- a deterministic digest selected by the detected profile.
+The command produces:
 
-The digest header contains the run handle. Use it for later retrieval, search, or diff.
+- an immutable run artifact containing complete stdout and stderr;
+- a bounded digest selected by the detected evidence profile.
 
-### Shell syntax
+`--` ends Straitjacket's options. Everything after it is passed to the child process.
 
-Use shell mode only when shell semantics are part of the operation:
+#### Shell mode
+
+Use shell mode only when shell semantics are required:
 
 ```bash
 ctx run --shell 'rg -n "TODO" src | sort | head -200'
 ```
 
-Prefer argv execution for a single command. It avoids quoting ambiguity and gives the
-harness a clearer command identity.
+Prefer direct argument execution for one command. It avoids quoting ambiguity and gives the harness a clearer command identity.
 
-### Background after a threshold
+#### Working directory
 
-```bash
-ctx run --bg-after 30 -- ./gradlew integrationTest
-```
-
-If the command finishes before the threshold, the result is identical to a foreground
-run. Otherwise the transcript receives a `job:<id>` while output continues spooling to
-the store.
-
-## Inspect long-running work: `ctx job`
+Run relative to a directory inside the workspace:
 
 ```bash
-ctx job <id>
-ctx job <id> --wait
-ctx job <id> --kill
+ctx run --cwd services/payments -- pytest -q
 ```
 
-`ctx job` is a bounded observation surface, not `tail -f` routed into the transcript.
-Finalized jobs resolve to ordinary `run:` artifacts.
+#### Evidence focus
 
-## Execute declared steps: `ctx seq`
+Bias evidence selection toward a question without changing the stored artifact:
 
-Use a sequence when the operations are known before execution and each step should keep
-its own evidence identity.
+```bash
+ctx run --focus "authentication failures" -- pytest -q
+```
+
+### `ctx seq`
+
+Run a known sequence of shell command strings in one model round.
 
 ```bash
 ctx seq \
-  --step 'git diff --stat HEAD~1' \
-  --step 'pytest -q tests/unit' \
-  --step 'ruff check src tests'
+  'git diff --stat HEAD~1' \
+  'pytest -q tests/unit' \
+  'ruff check src tests'
 ```
 
-A sequence is preferable to several model-mediated tool calls because scheduling,
-capture, and intermediate storage remain local. It is preferable to `ctx eval` when no
-computed control flow is needed.
+Options:
 
-## Execute computed control flow: `ctx eval`
+```text
+--keep-going       Continue after a failed step
+--timeout SECONDS  Per-step timeout
+--focus TEXT       Bias the combined digest
+```
 
-Use eval when a script must branch, loop, or aggregate structured intermediate results.
+Use `ctx seq` when all steps are known before execution and each step should retain its own evidence identity.
+
+Do not use the obsolete `--step` form. Steps are positional command strings.
+
+### `ctx eval`
+
+Run a Python evidence program under the same birth-time capture boundary.
 
 ```bash
 ctx eval investigation.py
+ctx eval --file tools/investigate.py
 ```
 
-The script itself is stored as an addressable artifact. Intermediate command output does
-not enter the transcript; failures remain deterministic and retrievable.
+Read the script from standard input:
 
-`ctx eval` provides bounded capture, not OS isolation. Treat it as having the same
-execution authority as `ctx run` until the broker security boundary ships.
+```bash
+ctx eval - <<'PY'
+from pathlib import Path
+print(sum(1 for _ in Path("src").rglob("*.py")))
+PY
+```
 
-## Retrieve exact evidence: `ctx get`
+Use `ctx eval` when the workflow requires branching, loops, or aggregation. The script and intermediate output remain addressable. Only the bounded result enters context.
+
+`ctx eval` is not an operating-system sandbox. It runs with the authority of the invoking user.
+
+### `ctx rewrite`
+
+Preview a structural multi-file rewrite:
+
+```bash
+ctx rewrite 'old_call($A)' 'new_call($A)' --lang py --glob 'src/**/*.py'
+```
+
+Apply the rewrite only after reviewing the preview:
+
+```bash
+ctx rewrite 'old_call($A)' 'new_call($A)' --lang py --glob 'src/**/*.py' --apply
+```
+
+The default is preview-only.
+
+### Background work: `--bg`, `--bg-after`, `ctx job`, and `ctx jobs`
+
+Background immediately:
+
+```bash
+ctx run --bg -- ./scripts/integration-test
+```
+
+Stay in the foreground for a bounded period, then background if still running:
+
+```bash
+ctx run --bg-after 30 -- ./scripts/integration-test
+```
+
+Inspect or control a job:
+
+```bash
+ctx job <job-id>
+ctx job <job-id> --tail 100
+ctx job <job-id> --wait
+ctx job <job-id> --wait --timeout 300
+ctx job <job-id> --kill
+ctx jobs
+```
+
+A completed job finalizes into an ordinary `run:` artifact.
+
+## Retrieval
+
+### Reference types
+
+Straitjacket uses two broad address spaces.
+
+#### Live repository references
+
+```text
+repo:
+repo:src/auth.py
+repo:services/payments
+ws:api/repo:src/main.py
+```
+
+Repository references resolve against current workspace state. Reads are snapshotted when materialized.
+
+#### Immutable artifact references
+
+```text
+run:<id>
+run:<id>#stdout
+run:<id>#stderr
+blob:<id>
+snapshot:<id>
+checkpoint:<id>
+job:<id>
+```
+
+Artifact handles identify stored evidence.
+
+### `ctx get`
+
+Retrieve an exact bounded selection:
 
 ```bash
 ctx get run:<id>#stdout --lines 120:180
-ctx get blob:<id>
-ctx get <span-id>
+ctx get run:<id>#stderr --bytes 0:4096
+ctx get blob:<id> --json-pointer /results/0
+ctx get snapshot:<id> --symbol AuthContext.resolve
+ctx get run:<id>#stdout --span <span-id>
 ```
 
-Small regions return exact bytes. A region too large for the retrieval budget returns a
-bounded zoom digest with further spans. Retrieval cannot recursively re-flood the
-transcript.
+Selectors:
 
-A handle is an address today. It becomes an authorization capability only in the
-broker-era design; do not present current content identifiers as a sandbox boundary.
+```text
+--lines A:B
+--bytes A:B
+--records A:B
+--json-pointer POINTER
+--symbol DOTTED_NAME
+--span SPAN_ID
+```
 
-## Search captured artifacts: `ctx search`
+Small selections return exact bytes. Large selections return a bounded zoom digest with narrower addresses.
 
-Use search when the evidence already exists in the store:
+### `ctx search`
+
+Search an artifact:
 
 ```bash
-ctx search 'MissingTenantError'
-ctx search 'authorization failed' --run run:<id>
+ctx search run:<id>#stdout "MissingTenantError"
+ctx search run:<id>#stdout "tenant" "permission" --context 3
 ```
 
-Searching an artifact is cheaper and more trustworthy than rerunning a command merely
-to recover text the harness already captured.
-
-## Answer a question: `ctx ask`
+Search the repository:
 
 ```bash
-ctx ask "Where is AuthContext defined and used" --intent locate
-ctx ask "What could break if CacheKey.build changes" --intent impact --symbol CacheKey.build
-ctx ask "Why are the authentication tests failing" --intent diagnose
-ctx ask "Where is TokenBucket defined" --intent locate --plan   # show the compiled plan, don't run
+ctx search repo: "MissingTenantError" --glob "**/*.py" --context 3
 ```
 
-`ctx ask` compiles a repository question into a typed intent preset — a frozen
-`ctx.plan/v1` — and runs it on the plan executor, answering with the investigate
-digest. Three intents ship: `locate` (where is X), `impact` (what breaks if X
-changes), `diagnose` (what explains the captured failures — reads captured facts,
-never reruns tests). There is no natural-language parser: `--intent` is required
-(a missing one is a teaching error that suggests, never guesses), and the subject
-is `--symbol` or the question's sole identifier-shaped token, always disclosed.
-See [docs/ASK.md](ASK.md).
+Useful options:
 
-## Compose evidence: `ctx q`
+```text
+--fixed          Treat patterns as fixed strings
+--all            Require all patterns per target
+--context N      Include N surrounding lines
+--glob PATTERN   Restrict repository paths
+--scope NAME     Use a named monorepo scope from ctx.toml
+--max-matches N  Bound the result count
+```
+
+The syntax always starts with a reference: `ctx search <ref> <pattern>...`.
+
+## Repository analysis
+
+### `ctx map`
+
+Render a ranked, budget-fitted repository map:
+
+```bash
+ctx map
+ctx map --budget 800 --focus payments
+```
+
+### `ctx def`
+
+Locate a symbol definition:
+
+```bash
+ctx def repo:src/auth.py:AuthContext.resolve
+```
+
+### `ctx refs`
+
+Find reference sites:
+
+```bash
+ctx refs AuthContext
+ctx refs AuthContext.resolve --path src
+```
+
+The active reference engine is disclosed. The engine ladder can use SCIP, Jedi, or a built-in fallback depending on available data and dependencies.
+
+### `ctx callers`, `ctx callees`, and `ctx impact`
+
+```bash
+ctx callers AuthContext.resolve
+ctx callees AuthContext.resolve
+ctx impact AuthContext.resolve --depth 4
+```
+
+Use `impact` for a bounded transitive caller analysis. The maximum supported depth is six.
+
+### `ctx diag`
+
+Produce a bounded syntax and diagnostic view:
+
+```bash
+ctx diag
+ctx diag src/auth
+```
+
+## Evidence composition
+
+### `ctx q`
+
+Compose bounded operations over typed evidence streams:
 
 ```bash
 ctx q 'fails last | in-changed'
 ctx q 'refs TokenBucket | group file | top 5'
-ctx q 'fails last | shared-cause | top 10'
 ctx q 'corpus --ext py --changed | outline'
 ctx q 'records run:<id>#stdout --jsonl | group level | count'
-ctx q 'search TODO --glob "src/*.py" | histogram file'
 ```
 
-`ctx q` operates over typed record streams such as failures, symbols, files, and sites.
-`corpus` selects a bounded eligible file set with a coverage receipt (`--changed` binds
-to worktree generations, never mtime); `records` opens a stored JSON/JSONL artifact as a
-record stream; `distinct` and `histogram` summarize any field.
-The algebra is deliberately total: bounded stages, no loops, no recursion. This makes
-costs statically boundable and every stage’s result addressable.
+Add stage provenance:
 
-Use `ctx eval` when the control flow is genuinely computational. Use `ctx q` when the
-intent is a bounded composition of repository and evidence facts.
+```bash
+ctx q 'refs TokenBucket | group file | top 5' --trace
+```
 
-## Compare runs: `ctx diff`
+The query algebra is total and bounded: no recursion, no unbounded loops, and a fixed stage budget. Use `ctx q` when the work is a composition of repository and evidence facts. Use `ctx eval` when the control flow is genuinely computational.
+
+### `ctx ask`
+
+Compile a repository question into a typed evidence plan.
+
+```bash
+ctx ask "Where is AuthContext defined and used?" --intent locate --symbol AuthContext
+ctx ask "What could break if CacheKey.build changes?" --intent impact --symbol CacheKey.build
+ctx ask "Why did the last test run fail?" --intent diagnose --run run:<id>
+ctx ask "Trace calls from Router.dispatch" --intent trace --symbol Router.dispatch
+ctx ask "What changed between these runs?" --intent compare --run run:<a> --against run:<b>
+ctx ask "Verify the current change" --intent verify --command 'python -m pytest -q'
+ctx ask "Review the current change" --intent review --command 'python -m pytest -q'
+```
+
+Supported intents:
+
+| Intent | Purpose | Execution class |
+|---|---|---|
+| `locate` | Find a symbol and its use sites | Observe |
+| `impact` | Estimate structural blast radius | Observe |
+| `diagnose` | Explain captured failures without rerunning them | Observe |
+| `trace` | Follow structural call paths | Observe |
+| `compare` | Compare two captured runs | Observe |
+| `verify` | Select and run verification work | Execute |
+| `review` | Inspect changes, related symbols, tests, and counterevidence | Execute |
+
+Preview the compiled plan without running it:
+
+```bash
+ctx ask "What could break if CacheKey.build changes?" \
+  --intent impact --symbol CacheKey.build --plan
+```
+
+The intent should be explicit. Straitjacket may suggest a missing intent, but it does not guess and execute an ambiguous plan.
+
+### `ctx plan`
+
+Validate, price, or run a `ctx.plan/v1` document:
+
+```bash
+ctx plan validate plan.json
+ctx plan price plan.json
+ctx plan price plan.json --value
+ctx plan run plan.json
+ctx plan ops
+```
+
+`validate` checks boundedness and capabilities. `price` reports the planned work before execution. `run` executes the DAG and returns one investigation digest.
+
+### `ctx investigate`
+
+Execute one hypothesis epoch from a plan:
+
+```bash
+ctx investigate plan.json
+ctx investigate plan.json --replans 1
+ctx investigate plan.json --advise
+```
+
+`--advise` reports a shadow comparison between the declared operator order and the order suggested by recorded follow-up evidence. It does not silently reorder or suppress work.
+
+## Comparison and measurement
+
+### `ctx diff`
+
+Compare two captured runs directly:
 
 ```bash
 ctx diff run:<before> run:<after>
 ```
 
-The comparison should answer the verification question directly: what failures,
-templates, exits, signals, or stream sizes changed? New evidence receives coordinates.
+The result focuses on behavioral changes: exits, failures, templates, signals, and stream sizes. It avoids asking the model to compare two complete outputs manually.
 
-## Measure a session
+### `ctx stats`
+
+Inspect a repository or artifact shape:
+
+```bash
+ctx stats repo:src/ctx
+ctx stats run:<id>#stdout
+```
+
+Render the current session scorecard:
 
 ```bash
 ctx stats --session
+```
+
+The session scorecard requires observations captured by `ctx wrap claude --proxy`.
+
+### `ctx gain`
+
+Show cumulative containment savings by operation family:
+
+```bash
 ctx gain
 ```
 
-Read the scorecard in this order:
+Treat `gain` as an accounting view, not a quality score. Pair savings with evidence preservation and task success.
 
-1. **task outcome** — containment is irrelevant if the task regressed;
-2. **wire residency** — what actually crossed into context;
-3. **rounds and repeated commands** — whether the harness removed control-loop churn;
-4. **retrieval landings** — whether the reader followed evidence addresses;
-5. **interventions** — whether steering fired, and on which measured condition.
+### `ctx replay`
 
-`ctx gain` is an accounting view, not a quality score. Pair savings with evidence
-preservation and task success.
-
-## Run a host under the harness
-
-### Claude Code
+Run deterministic analysis over recorded transcripts:
 
 ```bash
-ctx wrap claude --proxy -- -p "fix the failing tests"
+ctx replay session.jsonl
+ctx replay --all-projects
+ctx replay session.jsonl --regret
+ctx replay session.jsonl --outcomes
+ctx replay session.jsonl --outcomes --append-ledger
 ```
 
-The wrapper injects host settings for the session and removes them when the process
-ends.
+`--regret` evaluates the distance between an emitted digest and an evidence frontier. `--outcomes` reports observable follow-up behavior. These are offline analyses; runtime does not rewrite committed policy automatically.
 
-### Antigravity
+## Artifact and task lifecycle
+
+### `ctx checkpoint`
+
+Create a durable task checkpoint:
 
 ```bash
-ctx antigravity install
+ctx checkpoint \
+  --goal "fix token expiry handling" \
+  --state "failure reproduced" \
+  --decision "preserve existing refresh semantics" \
+  --evidence "run:<id>#stdout failing traceback"
 ```
 
-The plugin is persistent. Both hosts use the same artifact store, digest contracts, and
-retrieval vocabulary.
-
-## Score the loop: regret, follow-up, shadow
+Render an existing checkpoint:
 
 ```bash
-ctx replay --regret <t.jsonl>            # per-profile frontier gap (docs/THEORY.md)
-ctx replay --outcomes <t.jsonl>          # per-operator follow-up counts (association, not causation)
-ctx replay --outcomes --append-ledger …  # explicit: feed the workspace follow-up ledger
-ctx policy compile --plan-value          # aggregate ledger → committed [plan_value] COUNTS
-ctx plan price --value <plan.json>       # price card + shadow follow-up ranking (report only)
-ctx investigate --advise <plan.json>     # digest + shadow report + shadow ledger line
+ctx checkpoint --show checkpoint:<id>
 ```
 
-Counts, not rates, in the committed table; Wilson lower bounds derive at
-read time. The shadow ranking never reorders or suppresses anything —
-promotion to a conservative tie-break waits on the paired referee, and
-hard constraints always dominate. Runtime never writes the policy file.
+### `ctx pin` and `ctx gc`
+
+Protect an artifact from collection:
+
+```bash
+ctx pin run:<id>
+```
+
+Run mark-and-sweep collection:
+
+```bash
+ctx gc
+ctx gc --retention-days 30
+```
+
+### `ctx debt`
+
+Record an explicitly deferred engineering decision:
+
+```bash
+ctx debt add "defer Windows process-group parity" --ref repo:src/ctx/execution.py
+ctx debt list
+ctx debt resolve <id>
+```
+
+### `ctx policy`
+
+Compile and inspect reviewable steering policy:
+
+```bash
+ctx policy compile
+ctx policy compile --plan-value
+ctx policy show
+```
+
+Runtime observations may feed the compiler, but runtime does not silently edit the committed policy file.
+
+## Advanced surfaces
+
+### `ctx surface`
+
+Audit and reduce the model-visible capability surface:
+
+```bash
+ctx surface inventory
+ctx surface audit
+ctx surface explain <capability-id>
+ctx surface graph
+ctx surface compile --profile read-only --host claude
+ctx surface reconcile --intent "review the current change"
+```
+
+Use `ctx surface --help` for the complete advanced surface workflow.
+
+### `ctx proxy`
+
+Run the Anthropic observer proxy directly:
+
+```bash
+ctx proxy \
+  --port 8765 \
+  --upstream https://api.anthropic.com \
+  --state-dir .ctx-session-reads/proxy
+```
+
+Most users should prefer `ctx wrap claude --proxy`, which scopes the proxy environment to the child process and shuts it down with the session.
 
 ## Failure semantics
 
-Straitjacket distinguishes safety from optional intelligence:
+Straitjacket separates hard containment from optional intelligence.
 
-- safety gates fail closed when allowing an operation could violate the containment
-  invariant;
-- optional extractors, indexes, and accelerators fail open to a labeled lower-precision
-  mode;
-- degraded precision is disclosed in the digest;
-- omission is declared and addressed, never silent.
+- Safety gates fail closed when allowing an operation could violate a hard containment rule.
+- Optional extractors and accelerators fall back to a labeled lower-precision mode.
+- Omission is declared and addressable.
+- Internal hook failures follow the configured policy and must still emit a valid host decision.
 
-## Output discipline
+## Output contract
 
-A good command result answers five questions:
+A model-visible result should answer:
 
 ```text
 What happened?
 What evidence supports it?
 What was omitted?
 How complete is the view?
-What exact address retrieves the next useful detail?
+Which exact address retrieves the next useful detail?
 ```
 
-That shape is the CLI’s real compatibility contract. Renderers and backends may evolve;
-addressability, bounds, determinism, and declared coverage may not.
+Renderers and engines may evolve. Boundedness, determinism, declared coverage, and addressability are compatibility properties.
 
 ---
 
-[Use cases](USE-CASES.md) · [Getting started](GETTING-STARTED.md) · [Concepts](CONCEPTS.md) · [Profile authoring](WRITING-A-PROFILE.md)
+[Documentation](README.md) · [Getting started](GETTING-STARTED.md) · [Use cases](USE-CASES.md) · [Core concepts](CONCEPTS.md)
