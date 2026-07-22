@@ -1276,10 +1276,36 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
 _NATIVE_GREP_CAP = 60  # matches returned before the model should narrow
 
 
+def _native_search_redirect(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Remediation that points a native Grep/Glob call at the collapsed op.
+    Under the replacement surface a host's own search tool is off — it cannot
+    be transparently rewritten into a ``ctx q`` call (unlike a shell command),
+    so it is denied with the equivalent collapsed op named."""
+    pat = tool_input.get("pattern") or tool_input.get("query") or ""
+    if "grep" not in tool_name.lower():  # Glob / file-name search
+        collapsed = "ctx q 'files --glob <glob>'"
+    elif isinstance(pat, str) and re.match(r"^[A-Za-z_]\w*$", pat):
+        collapsed = f"ctx q 'refs {pat} | group file'"
+    elif pat:
+        collapsed = f"ctx q 'search {pat} | files'"
+    else:
+        collapsed = "ctx q 'refs <Symbol>'  (symbol)  or  ctx q 'search <pattern>'"
+    return ("CTX_CONTEXT_GUARD: native search is off under the replacement "
+            "surface (guard.collapse). Use  " + collapsed + "  for a bounded, "
+            "addressable answer — or run `grep -rn <pattern>` in Bash, which is "
+            "auto-collapsed to the same op.")
+
+
 def _classify_native_search(
     tool_name: str, tool_input: dict[str, Any], policy: dict[str, Any]
 ) -> dict[str, Any]:
     lowered = tool_name.lower()
+    # Replacement surface: with collapse on, the host's native search tool is
+    # removed from the surface — deny and redirect to the collapsed ctx op (or
+    # to Bash grep, which is transparently substituted). One code path, so the
+    # gap closes for every harness whose hook sees a native search tool.
+    if policy.get("collapse"):
+        return _deny(_native_search_redirect(tool_name, tool_input))
     recursive = bool(tool_input.get("Recursive") or tool_input.get("recursive"))
     # Glob / file-name search / listings return paths (bounded-ish); only a
     # recursive one under strict steering is worth redirecting.

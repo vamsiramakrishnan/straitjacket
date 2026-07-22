@@ -112,3 +112,38 @@ def test_hook_leaves_command_untouched_when_collapse_disabled(tmp_path):
     substituted = rw.get("updatedInput", {}).get("command", "")
     assert not substituted.startswith("ctx q 'refs"), \
         f"collapse fired without the flag: {d}"
+
+
+# ── native search tools are removed from the surface under collapse ─────────
+def _classify_tool(tool_name, tool_input, workspace):
+    return classify({
+        "tool_name": tool_name,
+        "tool_input": {**tool_input, "Cwd": str(workspace)},
+        "workspacePaths": [str(workspace)],
+    })
+
+
+def test_native_grep_denied_and_redirected_under_collapse(tmp_path):
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n[guard]\ncollapse = true\n', encoding="utf-8")
+    d = _classify_tool("Grep", {"pattern": "handle_request", "output_mode": "content"}, tmp_path)
+    assert d.get("decision") == "deny", f"native Grep should be denied: {d}"
+    assert "ctx q 'refs handle_request" in d.get("reason", "")
+
+
+def test_native_grep_capped_not_denied_without_collapse(tmp_path):
+    # default behaviour is preserved: content grep gets a head_limit, not a deny
+    (tmp_path / "ctx.toml").write_text('version = 1\n', encoding="utf-8")
+    d = _classify_tool("Grep", {"pattern": "x", "output_mode": "content"}, tmp_path)
+    assert d.get("decision") != "deny"
+
+
+def test_wrap_removes_native_search_under_collapse(tmp_path):
+    from ctx.wrap import _with_collapse_tool_removal
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n[guard]\ncollapse = true\n', encoding="utf-8")
+    out = _with_collapse_tool_removal(["-p", "do it"], tmp_path)
+    assert out[:3] == ["--disallowedTools", "Grep", "Glob"]
+    # no flag → untouched
+    (tmp_path / "ctx.toml").write_text('version = 1\n', encoding="utf-8")
+    assert _with_collapse_tool_removal(["-p", "x"], tmp_path) == ["-p", "x"]

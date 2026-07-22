@@ -102,6 +102,30 @@ so the bar is equivalence, not improvement:
    grep to a working `ctx q refs` (exit 0, real sites, a blob handle) on a cold
    workspace with no warmed index.
 
+## Coverage across harnesses
+
+Transparent substitution only works where the agent's action is a **shell
+command string** the hook can rewrite in place. A host's *own* search tool
+(Claude Code's `Grep`/`Glob`) is a distinct tool call, not a command, so
+`updatedInput` cannot swap it into a `ctx q` invocation — it can only cap it.
+The first collapse benchmark proved the consequence: the agent searched with
+the native `Grep` tool and `collapse_fires` stayed at zero.
+
+So the surface is delivered per harness, but through one shared mechanism — the
+`ctx hook` PreToolUse path that every host runs:
+
+| harness | how search reaches the model | how the gap is closed |
+|---|---|---|
+| **Claude Code** | distinct `Grep`/`Glob` tools *and* Bash | `ctx wrap` sets `--disallowedTools Grep Glob` under collapse (tool absent, no wasted turn); the shared hook denies-and-redirects as a backstop |
+| **Codex** | shell tool (ripgrep/grep in a command) | already covered — the shell command hits the Bash substitution path |
+| **Antigravity** | command tool + any native search | command search is substituted; a native search tool is denied-and-redirected by the shared hook |
+
+The common rule, enforced once in `_classify_native_search`: **with collapse
+on, a native search tool is denied and redirected** to the collapsed op (or to
+Bash `grep`, which is auto-substituted). For Claude Code the wrap additionally
+*removes* the tool so the deny never has to fire. All of it is gated on
+`guard.collapse`; default-off leaves every host's behaviour unchanged.
+
 ## Measurement
 
 The `sj-collapse` benchmark arm (`evals/bench_run.py`) is `sj` plus
