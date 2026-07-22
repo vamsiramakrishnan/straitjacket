@@ -1,143 +1,191 @@
 # Getting started
 
-<sub><a href="index.md">« documentation</a></sub>
+This guide takes you from a source checkout to a verified Straitjacket workspace. You will capture one command, retrieve an exact region, and search the stored result without rerunning it.
 
-This guide gets you from a checkout to one harnessed coding-agent session, then shows the three operations that make the rest of straitjacket understandable: **capture, inspect, retrieve**.
+## Prerequisites
 
-## Before you begin
-
-straitjacket currently requires:
+You need:
 
 - Python 3.11 or newer;
-- a local repository workspace;
-- Antigravity, Claude Code, or Codex for automatic host integration
-  (or none — every capture/retrieval verb also works standalone);
-- optional binaries such as `rg` and `ctags` for richer repository analysis.
+- a local project workspace;
+- Git for the source installation;
+- Antigravity, Claude Code, or Codex only if you want automatic host integration.
 
-The Python core remains deliberately small. Optional analysis backends improve precision or speed, but their absence should degrade capability rather than break capture.
+The standalone `ctx` commands work without an agent host.
 
-## Install and set up (one command)
+Optional tools such as ripgrep, tree-sitter grammars, SCIP data, Semgrep, and graph libraries improve precision or speed. They are not required for the core capture and retrieval workflow.
+
+## 1. Install from source
 
 ```bash
+git clone https://github.com/vamsiramakrishnan/straitjacket.git
+cd straitjacket
 python -m pip install -e .
-cd your-repo
+```
+
+Confirm that the CLI is available:
+
+```bash
+ctx --help
+```
+
+The installed Python package is named `ctx-harness`. The command is `ctx`. The product name is Straitjacket.
+
+## 2. Configure a workspace
+
+Move to the project where the agent will work:
+
+```bash
+cd /path/to/your/project
 ctx wrap setup
 ```
 
-`ctx wrap setup` writes the workspace configuration (`ctx.toml`,
-`.ctxignore`) and installs the harness for every host it supports —
-Antigravity, Claude Code, and Codex — in one idempotent command. Existing
-host config is merged, never clobbered; re-running is a no-op. Verify:
+`ctx wrap setup` performs two jobs:
 
-```bash
-ctx doctor --antigravity    # 15 health checks
-ctx wrap codex --print-config   # preview any host's config without writing
-```
+1. it writes the workspace files used by the harness, including `ctx.toml` and `.ctxignore` when needed;
+2. it configures every supported host for the current workspace.
 
-Per host, what setup writes:
+The operation is idempotent. It merges with existing configuration and does not replace user-owned settings wholesale.
 
-| Host | Files | Enforcement |
+### What setup writes
+
+| Host | Workspace files | Behavior |
 |---|---|---|
-| Antigravity | `.agents/plugins/ctx-harness/` (MCP tool + hooks) | enforced |
-| Claude Code | `.claude/settings.json` hooks + explorer agent | enforced |
-| Codex | `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` block | enforced |
+| Antigravity | `.agents/plugins/ctx-harness/` | Persistent workspace plugin with hooks, MCP configuration, skill, and explorer agent |
+| Claude Code | Hook configuration and a bounded `ctx` command card | Persistent workspace setup; an ephemeral wrapper is also available |
+| Codex | `.codex/config.toml`, `.codex/hooks.json`, and a managed `AGENTS.md` block | Persistent workspace setup |
 
-Prefer a single host? `ctx wrap antigravity`, `ctx wrap claude`, or
-`ctx wrap codex` do exactly one.
-
-## Or: one ephemeral session, zero residue
+Preview the generated configuration for one host without writing it:
 
 ```bash
-ctx wrap claude --proxy -- -p "fix the failing tests"
+ctx wrap antigravity --print-config
+ctx wrap claude --print-config
+ctx wrap codex --print-config
 ```
 
-The `--` form injects host settings for this process only and removes them
-when the session exits — nothing persistent is left behind. (`--proxy`
-additionally routes API traffic through a localhost observer that measures
-the session's true wire cost; optional.)
-
-During the session, operations that could produce unbounded output are captured and replaced with bounded evidence digests. Small outputs may still pass through whole when containment would add no value.
-
-After the session:
+Configure only one host when required:
 
 ```bash
-ctx stats --session
-ctx gain
+ctx wrap antigravity
+ctx wrap codex
 ```
 
-`ctx stats --session` explains what crossed the wire and how the session behaved. `ctx gain` shows cumulative containment savings by operation family.
+Run one ephemeral Claude Code session without retaining the wrapper configuration:
 
-## Learn the core loop manually
+```bash
+ctx wrap claude -- -p "fix the failing tests"
+```
 
-Automatic steering is useful, but the product becomes clearer when you run the core loop yourself.
+The wrapper injects temporary hook settings for the child process and restores the workspace when the process exits. Existing user configuration remains authoritative.
 
-### 1. Capture a noisy command
+## 3. Verify the installation
+
+Run the general health check:
+
+```bash
+ctx doctor
+```
+
+For an Antigravity workspace, include the plugin checks:
+
+```bash
+ctx doctor --antigravity
+```
+
+Use `--print-config` when a host is not behaving as expected. It shows the exact configuration Straitjacket intends to install and is safe to use in CI or review workflows.
+
+## 4. Capture a command
+
+Run a command through the birth-time capture gate:
 
 ```bash
 ctx run -- pytest -q
 ```
 
-straitjacket stores complete stdout and stderr, then returns either the original small result or a bounded digest. A large test run might look conceptually like:
+The `--` separator ends Straitjacket's options. Everything after it is the child command.
+
+Small output may pass through unchanged. Large output is stored in full and replaced with a bounded digest. A digest includes:
+
+- the command and exit status;
+- the detected evidence profile;
+- a concise evidence census;
+- coverage and omission information;
+- retrieval addresses for omitted regions.
+
+Example:
 
 ```text
-[ctx run:ba3d1020ee8f profile=pytest/v2]
+[ctx run:8d8335db6848 profile=pytest/v2]
 command: pytest -q
 exit: 1
-failures: 7
-...
+failing tests:
+  tests/test_auth.py::test_token_expiry   tests/test_auth.py:42
 coverage:
-  identities: 7/7
-  detail shown: 2/7
+  identities: 1/1
+  omitted: 4,098 lines
 next:
-  ctx get run:ba3d1020ee8f#failure-3
+  ctx get run:8d8335db6848#stdout --lines 1280:1300
 ```
 
-The handle identifies immutable evidence. The digest is a view over that evidence, not a replacement for it.
+The `run:` value is an immutable artifact handle. Keep it when you need to inspect, search, compare, pin, or cite the run later.
 
-### 2. Retrieve the exact region you need
+## 5. Retrieve exact evidence
+
+Use the address suggested by the digest:
 
 ```bash
-ctx get run:ba3d1020ee8f#failure-3
+ctx get run:8d8335db6848#stdout --lines 1280:1300
 ```
 
-For line-addressed streams:
+A small selection returns exact bytes. A selection that exceeds the retrieval budget returns a bounded zoom view with narrower continuation addresses.
+
+Retrieval cannot recursively flood the transcript.
+
+## 6. Search the stored result
+
+Search the captured artifact without rerunning the command:
 
 ```bash
-ctx get run:ba3d1020ee8f#stdout --lines 140:220
+ctx search run:8d8335db6848#stdout "MissingTenantError"
 ```
 
-Large retrievals remain bounded. A broad request returns a smaller zoom digest with further addresses rather than reflooding the transcript.
-
-### 3. Search captured evidence
+Search accepts multiple patterns:
 
 ```bash
-ctx search run:ba3d1020ee8f "MissingTenantError"
+ctx search run:8d8335db6848#stdout "MissingTenantError" "tenant_id" --context 3
 ```
 
-Search operates over stored evidence. It does not rerun the original command and does not require the whole artifact to re-enter the model context.
+Search the live repository by using `repo:` as the reference:
 
-## Choose the right capture verb
+```bash
+ctx search repo: "MissingTenantError" --glob "**/*.py" --context 3
+```
 
-Use the least powerful operation that can express the work:
+Repository reads are live and snapshot on retrieval. Captured `run:` and `blob:` artifacts are immutable.
 
-| Work shape | Use |
+## 7. Choose the right execution shape
+
+Use the least powerful command that expresses the work.
+
+| Work shape | Command |
 |---|---|
-| one command | `ctx run -- <command>` |
-| shell syntax or a pipeline | `ctx run --shell '<pipeline>'` |
-| a known sequence of operations | `ctx seq` |
-| computed branching, loops, or aggregation | `ctx eval` |
-| bounded composition over typed evidence | `ctx q` |
-| work that may outlive the turn | `--bg-after` and `ctx job` |
+| One command | `ctx run -- <command>` |
+| A shell pipeline | `ctx run --shell '<pipeline>'` |
+| Known steps | `ctx seq '<step 1>' '<step 2>'` |
+| Computed branching, loops, or aggregation | `ctx eval <script>` |
+| Typed evidence composition | `ctx q '<pipeline>'` |
+| A repository question with a known intent | `ctx ask "<question>" --intent <intent>` |
+| Work that may outlive the turn | `ctx run --bg-after <seconds> -- <command>` |
 
-A useful rule: **batch deterministic fan-out, not uncertainty**. Use `seq`, `eval`, or `q` when the next operations are already knowable. Return to the model when new evidence could change the hypothesis.
+A useful rule is: batch deterministic fan-out, not uncertainty. Run several known operations locally. Return to the model when the evidence can change the hypothesis or plan.
 
-## Work with long-running commands
+## 8. Supervise long-running work
 
 ```bash
-ctx run --bg-after 30 -- pytest tests/integration -q
+ctx run --bg-after 30 -- ./scripts/integration-test
 ```
 
-If the command completes within 30 seconds, the result is identical to a normal foreground capture. If it runs longer, the transcript receives a `job:` handle while output continues to spool into the store.
+If the command finishes within 30 seconds, it behaves like a normal foreground run. If it continues, Straitjacket returns a `job:` handle while the process remains supervised in the background.
 
 ```bash
 ctx job <job-id>
@@ -147,54 +195,64 @@ ctx job <job-id> --kill
 
 A completed job finalizes into an ordinary `run:` artifact.
 
-## Ask bounded questions over repository evidence
+## Optional analysis engines
 
-`ctx q` composes typed stages without arbitrary code execution:
-
-```bash
-ctx q 'fails last | in-changed'
-ctx q 'refs TokenBucket | group file | top 5'
-ctx q 'decls auth | where kind=function | count'
-```
-
-Queries are deliberately total: bounded stage count, no recursion, no unbounded loops. That makes their cost statically constrainable and their intermediate results addressable.
-
-## Read the session scorecard
-
-After a harnessed session:
+Install all optional Python extras for development and richer repository analysis:
 
 ```bash
-ctx stats --session
+python -m pip install -e '.[dev,map,fast,code,scip,sem]'
 ```
 
-The scorecard may include:
+The core design requires a documented fallback when an optional engine is absent. A missing accelerator should reduce precision or speed in a disclosed way; it should not break capture.
 
-- model-visible versus captured bytes;
-- command families and digest profiles;
-- equivalent reruns and successful retrievals;
-- window pressure and rescue activity;
-- intervention outcomes;
-- prompt-cache classes;
-- opportunities where deterministic work could have been collapsed.
+## Common problems
 
-Treat the scorecard as an engineering receipt, not a vanity dashboard. Its purpose is to identify the next mechanism or policy change from observed behaviour.
+### `ctx: command not found`
 
-## Understand the trust boundary
+Confirm that the environment used for installation is active and that its scripts directory is on `PATH`.
 
-straitjacket currently provides:
+```bash
+python -m pip show ctx-harness
+python -m ctx.cli --help
+```
 
-- output containment;
-- deterministic evidence rendering;
-- repository-relative path confinement;
-- symlink and traversal rejection;
-- command timeouts and process-group handling;
-- bounded retrieval and emission.
+### The output was not compressed
 
-It is not yet a complete process sandbox. Commands execute with the authority of the invoking user. Capability handles, a separately owned artifact store, and broker-grade process isolation are planned as a distinct security boundary.
+Small outputs intentionally pass through. Capture is useful when containment saves context; it should not turn a complete six-line result into a retrieval workflow.
 
-## Where to go next
+### A host is not intercepting commands
 
-- Read [Core concepts](CONCEPTS.md) for the vocabulary used throughout the project.
-- Read [the documentation map](README.md) for the architecture sequence.
-- Inspect [`evals/`](../evals/) to reproduce the measured claims.
-- Use [`spec/`](../spec/) when you need normative schemas or compatibility contracts.
+Run:
+
+```bash
+ctx wrap <host> --print-config
+ctx doctor
+```
+
+For Antigravity, also run `ctx doctor --antigravity`. Check that the generated workspace files are visible to the host and that `ctx` resolves from the host process environment.
+
+### An optional engine is missing
+
+The digest or command output should disclose the active fallback. Install the relevant extra only when the richer engine is required for the task.
+
+### A command needs shell syntax
+
+Use `--shell` only when pipes, redirects, variable expansion, or other shell semantics are part of the operation:
+
+```bash
+ctx run --shell 'rg -n "TODO" src | sort | head -200'
+```
+
+Prefer direct argument execution for a single command.
+
+## Next steps
+
+- Read [How it works](HOW-IT-WORKS.md) for the complete data flow.
+- Use the [CLI guide](CLI.md) as the command reference.
+- Open [Use cases](USE-CASES.md) for task-specific workflows.
+- Read [Core concepts](CONCEPTS.md) before the architecture documents.
+- Inspect [`evals/`](../evals/) before relying on a performance claim.
+
+---
+
+[Documentation](README.md) · [How it works](HOW-IT-WORKS.md) · [CLI guide](CLI.md) · [Use cases](USE-CASES.md)
