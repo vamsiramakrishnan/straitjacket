@@ -52,6 +52,27 @@ def test_content_search_collapses_to_search(cmd):
     assert "| files'" in sub.command
 
 
+@pytest.mark.parametrize("cmd,rel", [
+    ("cat src/app.py", "src/app.py"),
+    ("cat handlers.ts", "handlers.ts"),
+    ("cat pkg/main.go", "pkg/main.go"),
+])
+def test_cat_source_file_collapses_to_skeleton(cmd, rel):
+    sub = collapse(cmd)
+    assert sub is not None and sub.shape == "cat_skeleton"
+    assert sub.command == f"ctx stats repo:{rel}"
+    assert sub.rung == "skeleton-first"
+
+
+@pytest.mark.parametrize("cmd", [
+    "cat notes.txt", "cat config.json", "cat README.md",  # not source we outline
+    "cat a.py b.py",                                        # concatenation, not a read
+    "cat data.csv",
+])
+def test_cat_non_source_or_multi_is_left_alone(cmd):
+    assert collapse(cmd) is None
+
+
 def test_single_file_grep_is_left_alone():
     # bounded already (one file) — handled by the -m cap elsewhere, not here
     assert collapse("grep -n foo bar.py") is None

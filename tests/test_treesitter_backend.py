@@ -68,3 +68,49 @@ def test_tree_sitter_carries_js_skeleton_without_ctags(
     syms = sk.get("symbols") if isinstance(sk, dict) else None
     names = {s.get("name") for s in (syms or [])}
     assert "greet" in names  # tree-sitter extracted the function
+
+
+HAS_TS_GO = True
+try:
+    import tree_sitter  # noqa: F401
+    import tree_sitter_go  # noqa: F401
+except Exception:
+    HAS_TS_GO = False
+
+HAS_TS_RUST = True
+try:
+    import tree_sitter  # noqa: F401
+    import tree_sitter_rust  # noqa: F401
+except Exception:
+    HAS_TS_RUST = False
+
+
+@pytest.mark.skipif(not HAS_TS_GO, reason="tree-sitter-go grammar wheel absent")
+def test_go_skeleton_extracts_types_methods_funcs_imports():
+    from ctx.skeleton import _tree_sitter_extract
+
+    src = ('package main\nimport "fmt"\n'
+           'type Server struct { port int }\n'
+           'func (s *Server) Start() error { return nil }\n'
+           'func handle(w int) { fmt.Println(w) }\n')
+    syms, imports = _tree_sitter_extract(src, "go")
+    by = {s["name"]: s["kind"] for s in syms}
+    assert by == {"Server": "type", "Start": "method", "handle": "function"}
+    assert imports == ["fmt"]
+
+
+@pytest.mark.skipif(not HAS_TS_RUST, reason="tree-sitter-rust grammar wheel absent")
+def test_rust_skeleton_extracts_structs_impl_methods_imports():
+    from ctx.skeleton import _tree_sitter_extract
+
+    src = ('use std::collections::HashMap;\n'
+           'pub struct Cache { size: usize }\n'
+           'impl Cache { pub fn new() -> Self { Cache{size:0} } fn evict(&mut self){} }\n'
+           'pub fn build() -> Cache { Cache::new() }\n')
+    syms, imports = _tree_sitter_extract(src, "rust")
+    by = {s["name"]: (s["kind"], s.get("scope")) for s in syms}
+    assert by["Cache"] == ("struct", None)
+    assert by["new"] == ("method", "Cache")
+    assert by["evict"] == ("method", "Cache")
+    assert by["build"] == ("function", None)
+    assert imports == ["std::collections::HashMap"]

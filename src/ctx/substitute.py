@@ -162,6 +162,36 @@ def _collapse_grep(toks: list[str], symbols_resolvable: bool) -> Substitution | 
         rung="bounded-search", shape="grep_content")
 
 
+# source extensions the skeleton tier can outline (kept in sync with
+# skeleton.py's supported languages) — a whole-file `cat` of one of these is a
+# read-the-whole-file flood the skeleton-first outline collapses.
+_SKELETON_EXTS = (".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+                  ".go", ".rs")
+
+
+def _collapse_cat(toks: list[str]) -> Substitution | None:
+    """Whole-file ``cat <source-file>`` → the priced symbol outline. Maki's
+    skeleton-first read, delivered under the agent's own command: it gets the
+    structure (signatures + line ranges) plus handles to page exact bytes,
+    instead of the entire file re-ingested next turn."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "cat":
+        return None
+    args = [t for t in toks[1:] if not t.startswith("-")]
+    if len(args) != 1:  # `cat a b` concatenates — not a single-file read
+        return None
+    f = args[0]
+    if not f.endswith(_SKELETON_EXTS):
+        return None
+    return Substitution(
+        command=f"ctx stats {shlex.quote('repo:' + f)}",
+        reason=("CTX_CONTEXT_GUARD: cat of a whole source file re-floods the "
+                "turn. `ctx stats repo:<file>` gives the priced symbol outline "
+                "(signatures + line ranges) with handles to page exact bytes — "
+                "`ctx get repo:<file> --symbol <Name>` or `--lines A:B`."),
+        rung="skeleton-first", shape="cat_skeleton")
+
+
 # flags that narrow a pytest run to a subset (the agent is already slicing).
 _PYTEST_NARROW_FLAGS = {"-k", "-m", "--lf", "--last-failed", "--ff", "--failed-first"}
 
@@ -214,6 +244,9 @@ def collapse(command: str, *, failure_available: bool = False,
     if _is_compound(toks, command):
         return None  # a pipe/redirect/chain changes meaning — never clobber it
     sub = _collapse_grep(toks, symbols_resolvable)
+    if sub:
+        return sub
+    sub = _collapse_cat(toks)
     if sub:
         return sub
     return _collapse_pytest(command, failure_available)
