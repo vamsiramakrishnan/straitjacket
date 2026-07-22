@@ -213,8 +213,10 @@ Confirm that the environment used for installation is active and that its script
 
 ```bash
 python -m pip show ctx-harness
-python -m ctx.cli --help
+python -m pip install -e /path/to/straitjacket
 ```
+
+Then open a new shell or reactivate the environment and run `ctx --help`.
 
 ### The output was not compressed
 
