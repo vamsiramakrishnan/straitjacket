@@ -1,17 +1,16 @@
 ---
-title: straitjacket
-description: Artifact-backed context containment harness for coding agents.
+title: Straitjacket
+description: Artifact-backed context containment for coding agents.
 template: splash
 hero:
-  title: straitjacket
+  title: Keep the evidence. Bound the context.
   tagline: >-
-    Unbounded tool output becomes an immutable artifact plus a bounded,
-    deterministic, span-addressed digest. The transcript keeps small digests
-    and exact addresses instead of the raw bytes, so your context window and
-    per-turn cost stay down and any omitted byte is retrievable later.
+    Straitjacket captures potentially unbounded tool output, stores the complete
+    result locally, and returns a small deterministic digest with exact retrieval
+    addresses.
   actions:
-    - text: Read the design docs
-      link: /straitjacket/shipped/priced-context/
+    - text: Get started
+      link: /straitjacket/start/getting-started/
       icon: right-arrow
       variant: primary
     - text: GitHub
@@ -24,50 +23,64 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 ## How it works
 
-Raw bytes stop at the gate. The transcript carries the digest and its
-addresses, and any address resolves back to the exact original bytes later.
+Complete tool output stays in the artifact store. Model context carries a bounded view and stable addresses. Retrieval reconnects the two when more detail is required.
 
 <div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow);">
-  <img className="sj-dark" src="/straitjacket/diagrams/flow.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time." style="display:block" />
-  <img className="sj-light" src="/straitjacket/diagrams/flow-light.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time." style="display:block" />
+  <img className="sj-dark" src="/straitjacket/diagrams/flow.svg" width="100%" alt="Tool output is captured into an immutable artifact store. The model receives a bounded digest with retrieval addresses. ctx get returns exact stored evidence on demand." style="display:block" />
+  <img className="sj-light" src="/straitjacket/diagrams/flow-light.svg" width="100%" alt="Tool output is captured into an immutable artifact store. The model receives a bounded digest with retrieval addresses. ctx get returns exact stored evidence on demand." style="display:block" />
 </div>
 
-## The four gates
-
-A token passes four points in its life. One artifact store handles all four as
-gates, and every shipped mechanism attaches to exactly one of them.
+## Choose a path
 
 <CardGrid>
-  <Card title="1 · Birth" icon="rocket">
-    Can this output flood at the source? `ctx run`/`seq`/`eval` capture,
-    supervised backgrounding, head/tail evidence windows, deterministic
-    digest profiles, failure-asymmetric budgets.
+  <Card title="Install and try it" icon="rocket">
+    Follow [Getting started](/straitjacket/start/getting-started/) to configure a workspace, capture one command, and retrieve exact evidence.
   </Card>
-  <Card title="2 · Entry" icon="magnifier">
-    What actually crosses the wire? Tier-0 byte-exact observer proxy,
-    shape-dispatched PostToolUse gate for every faucet, scorecards.
+  <Card title="Understand the model" icon="open-book">
+    Read [How it works](/straitjacket/start/how-it-works/) and [Core concepts](/straitjacket/reference/core-concepts/).
   </Card>
-  <Card title="3 · Residence" icon="seti:clock">
-    What may stay, and for how long? Session read ledger, window-pressure
-    loop, priced steering, epoch-latched lossless rescue, checkpoints.
+  <Card title="Find a command" icon="document">
+    Use the [CLI guide](/straitjacket/reference/cli/) for task-based syntax and command selection.
   </Card>
-  <Card title="4 · Emission" icon="pencil">
-    What does the model put back? Emission governor tiers, cite-don't-quote,
-    solution ladder + backward planning, deliverable metrics.
+  <Card title="Start from a task" icon="list-format">
+    Open [Use cases](/straitjacket/guides/use-cases/) for tests, repository analysis, long-running work, verification, and connector payloads.
+  </Card>
+  <Card title="Inspect the design" icon="seti:config">
+    Begin with [Why Straitjacket](/straitjacket/architecture/why-straitjacket/), then use the Architecture section for deeper mechanisms.
+  </Card>
+  <Card title="Verify the claims" icon="approve-check">
+    Read the repository's [evaluation receipts](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals) and [benchmark charter](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/BENCHMARK.md).
   </Card>
 </CardGrid>
 
-## The measured results
+## Core guarantees
 
-<div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow); margin-bottom: 1rem;">
-  <img className="sj-dark" src="/straitjacket/diagrams/econ.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
-  <img className="sj-light" src="/straitjacket/diagrams/econ-light.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
-</div>
+<CardGrid>
+  <Card title="Bounded output" icon="seti:clock">
+    Digest size is constrained independently of the original payload size. Small complete results may pass through unchanged.
+  </Card>
+  <Card title="Reversible omission" icon="link">
+    Omitted evidence retains a stable address. `ctx get` and `ctx search` recover exact stored regions without rerunning the operation.
+  </Card>
+  <Card title="Deterministic rendering" icon="seti:lock">
+    Equivalent evidence under the same contract produces stable model-visible bytes.
+  </Card>
+  <Card title="Declared coverage" icon="information">
+    A digest states what it parsed, showed, and omitted. Short output is not treated as success when required identities disappear.
+  </Card>
+</CardGrid>
 
-Every steering change ships only after a measured A/B or head-to-head, all
-recorded in
-[`evals/`](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals).
-A 304,113-token log becomes ~210 model-visible tokens, and the one anomalous
-line survives verbatim with an exact retrieval coordinate. Every branch a
-mechanism takes records what it did, and those records compile into the next
-epoch's steering policy.
+## Current trust boundary
+
+Straitjacket provides output containment, bounded retrieval, repository-relative path controls, traversal and symlink checks, timeouts, process-group handling, and deterministic rendering.
+
+It is not yet a general process sandbox. Commands run with the authority of the invoking user. Separate-identity execution and capability-authorized handles remain a distinct planned boundary.
+
+## Source of truth
+
+Use the repository sources according to their role:
+
+- [`spec/`](https://github.com/vamsiramakrishnan/straitjacket/tree/main/spec) for normative behavior;
+- [`CHANGELOG.md`](https://github.com/vamsiramakrishnan/straitjacket/blob/main/CHANGELOG.md) for shipped history;
+- [`evals/`](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals) for measured claims and negative results;
+- architecture pages for rationale, alternatives, and designed work.
