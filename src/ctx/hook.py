@@ -835,9 +835,10 @@ def classify_command(
             return _force_ask(
                 "CTX_CONTEXT_GUARD: in-place text edit over files. A textual "
                 "approximation of a structural rewrite is a bug generator — "
-                "prefer a previewed, generation-guarded rewrite (ctx plan: "
-                "ast.rewrite.preview → ast.rewrite.apply) or the editor's "
-                "edit tool."
+                "collapse the whole find-and-edit into one op: "
+                "ctx rewrite '<pattern>' '<replacement>' --lang <l> --apply "
+                "(previewed, generation-guarded, transactional) — or the "
+                "editor's edit tool."
             )
         fa = _force_ask(
             "CTX_CONTEXT_GUARD: compound shell expression with unproven output bound. "
@@ -909,10 +910,10 @@ def classify_command(
             return _force_ask(
                 "CTX_CONTEXT_GUARD: in-place text edit over files. A textual "
                 "approximation of a structural rewrite is a bug generator — "
-                "prefer a previewed, generation-guarded rewrite (ctx plan: "
-                "ast.rewrite.preview → ast.rewrite.apply) or the editor's "
-                "edit tool; for plain-text targets, capture it: "
-                f"ctx run -- {' '.join(shlex.quote(a) for a in argv)}"
+                "collapse the whole find-and-edit into one op: "
+                "ctx rewrite '<pattern>' '<replacement>' --lang <l> --apply "
+                "(previewed, generation-guarded, transactional); for plain-text "
+                f"targets, capture it: ctx run -- {' '.join(shlex.quote(a) for a in argv)}"
             )
         return _deny_cmd(argv, policy)  # read-only: bounded capture via ctx run
 

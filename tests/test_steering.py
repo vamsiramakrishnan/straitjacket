@@ -181,7 +181,7 @@ def test_sed_inplace_force_asks_with_preview_remediation(tmp_path):
     ):
         d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
         assert d["decision"] == "force_ask", cmd
-        assert "ast.rewrite.preview" in d["reason"], cmd
+        assert "ctx rewrite" in d["reason"], cmd
         assert "rewrite" not in d, cmd  # mutation is never silently rerouted
 
 
@@ -191,7 +191,7 @@ def test_awk_inplace_force_asks_readonly_steers(tmp_path):
         {"CommandLine": "gawk -i inplace '{print}' notes.txt", "Cwd": str(tmp_path)},
         tmp_path,
     )
-    assert d["decision"] == "force_ask" and "ast.rewrite.preview" in d["reason"]
+    assert d["decision"] == "force_ask" and "ctx rewrite" in d["reason"]
     # Read-only awk with a program text carries `{}` → the compound path:
     # force_ask, steered into a bounded shell capture (mutation-free).
     d2 = _classify(
