@@ -73,7 +73,7 @@ ctx run -- ruff check .
 ctx run -- git diff --stat
 ```
 
-`--` ends Straitjacket’s options. Everything after it is the child command.
+`--` ends straitjacket’s options. Everything after it is the child command.
 
 A run has two products:
 
@@ -280,7 +280,7 @@ hard constraints always dominate. Runtime never writes the policy file.
 
 ## Failure semantics
 
-Straitjacket distinguishes safety from optional intelligence:
+straitjacket distinguishes safety from optional intelligence:
 
 - safety gates fail closed when allowing an operation could violate the containment
   invariant;
