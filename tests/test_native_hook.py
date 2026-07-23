@@ -6,6 +6,7 @@ Golden cases cover silence paths, both dialect nudges, tier dedup, and the
 shared engagement.json state file both implementations must agree on."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,9 +16,25 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 NATIVE = REPO / "native" / "ctx-hook-native" / "target" / "release" / "ctx-hook-native"
 
+# CI sets CTX_REQUIRE_NATIVE=1 after building the binary, so a missing shim is a
+# hard failure instead of a silent skip: the whole point of this suite is to
+# catch Rust<->Python drift, and a suite that quietly skips catches nothing.
+REQUIRE_NATIVE = os.environ.get("CTX_REQUIRE_NATIVE") == "1"
+
 pytestmark = pytest.mark.skipif(
-    not NATIVE.is_file(), reason="native shim not built (cargo build --release)"
+    not NATIVE.is_file() and not REQUIRE_NATIVE,
+    reason="native shim not built (cargo build --release)",
 )
+
+
+def test_native_binary_present_when_required():
+    """Guard against a green-but-vacuous CI run: if CTX_REQUIRE_NATIVE is set,
+    the binary must actually exist so the parity assertions below really run."""
+    if REQUIRE_NATIVE:
+        assert NATIVE.is_file(), (
+            f"CTX_REQUIRE_NATIVE=1 but {NATIVE} is missing — the CI build step "
+            "must run `cargo build --release` before this suite."
+        )
 
 
 def _python(flavor: str, payload: str) -> str:
