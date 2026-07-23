@@ -2,6 +2,10 @@ node_modules/
 dist/
 .astro/
 # generated from ../docs by scripts/sync-docs.mjs
+src/content/docs/start/
 src/content/docs/guides/
+src/content/docs/contributing/
+src/content/docs/design/
+# legacy generated folders (pre-overhaul layout)
 src/content/docs/shipped/
 src/content/docs/wave/

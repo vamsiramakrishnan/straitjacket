@@ -7,6 +7,13 @@
 
 # Lossless mid-session rescue: taking the rewriting proxy's last edge, without its costs
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+
 **The gap.** All our gates are forward-looking: they prevent bloat at birth,
 entry, and emission, but cannot un-spend a transcript that is already
 large. A rewriting proxy (Headroom) can — that was its one structural

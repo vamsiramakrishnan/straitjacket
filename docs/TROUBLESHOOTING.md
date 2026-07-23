@@ -112,7 +112,7 @@ outside the workspace root. **Fix:** confirm the prompt, pass `--workspace` to
 widen the root, or set `[workspace] allow_outside_root = true` if this is
 routine for your setup.
 
-### "unknown output bound for '<prog>'"
+### "unknown output bound for '`<prog>`'"
 
 **Cause:** under `guarded` mode, a command the classifier doesn't recognize is
 force-asked in case its output is large. **Fix:** if it's safe and bounded, run

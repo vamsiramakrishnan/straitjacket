@@ -7,6 +7,16 @@
 
 # Ladders: the conditionality audit
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+>
+> This is an internal audit that lists known rough edges and design debt by
+> source coordinate — read those as engineering notes, not as product behaviour.
+
 **Date:** 2026-07-18 · analysis pass over every tiered/conditional construct
 in the product — how each is traversed, whether they stack, where the rough
 edges are, and the one change that brings them together. House criterion

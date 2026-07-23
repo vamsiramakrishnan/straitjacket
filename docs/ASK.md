@@ -2,6 +2,13 @@
 
 # ctx ask: intents as typed plan presets
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. Want to *use* `ctx ask`? The [CLI guide](CLI.md) has
+> the seven intents and examples; this doc is the design behind them.
+
 **Date:** 2026-07-20 · M-L, shipped v0.27.0 (Phase 0 + core intents). The
 adopted core of an external `ctx ask` retrieval proposal, audited against
 the house constitution and resequenced so the elegant, testable pieces

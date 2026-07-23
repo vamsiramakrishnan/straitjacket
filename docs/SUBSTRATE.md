@@ -2,6 +2,17 @@
 
 # The substrate: operator classes under the semantic layers
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+>
+> This one is written as a review of an external proposal, so it argues with a
+> source you can't see; skim the verdict tables and the operator-class registry
+> for the shipped shape.
+
 **Date:** 2026-07-20 · review and adoption plan for an external proposal
 ("complete a small evidence algebra beneath ast-grep and Semgrep": fd ·
 rg --json · ctags --json · jq/jaq · comby · watchexec). Verdict up front:

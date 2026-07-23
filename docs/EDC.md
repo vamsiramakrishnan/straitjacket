@@ -7,6 +7,19 @@
 
 # Evidence Delivery Controller (EDC)
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+>
+> This one is dense: it's written as a point-by-point adoption of a numbered
+> design proposal ("§N adopted with amendments"), so it reads best once you know
+> the pipeline it builds — extractor → evidence graph → contract → resolver →
+> plan → renderer. [Writing a profile](WRITING-A-PROFILE.md) walks that pipeline
+> concretely and is the gentler way in.
+
 **Status:** adopted target architecture (2026-07-19) for the digest layer —
 the ten reflex design rules (docs/REFLEX.md) assembled into one system.
 Builds via the pytest/v2 instance first (rule 10), judged by the n≥3
