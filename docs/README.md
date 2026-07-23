@@ -72,6 +72,11 @@ First identify which plane owns the change:
 
 A new mechanism should fit one plane, reuse the existing evidence and delivery contracts, and name its acceptance referee before implementation.
 
+Then find the code: **[ARCHITECTURE.md](ARCHITECTURE.md)** maps every module to
+its plane with a "which file do I touch for X" table. To add a digest profile,
+follow **[Writing a profile](WRITING-A-PROFILE.md)**; for setup, the invariants,
+and how to run the tests and evals, see **[`CONTRIBUTING.md`](../CONTRIBUTING.md)**.
+
 ---
 
 ## Foundations already shipped
@@ -169,6 +174,7 @@ Every mechanism inherits the same invariants:
 | vocabulary and invariants | [CONCEPTS.md](CONCEPTS.md) |
 | every `ctx.toml` setting | [CONFIGURATION.md](CONFIGURATION.md) |
 | when something breaks | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
+| the code map (which file for what) | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | retrieval economics | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
 | context rescue | [LOSSLESS-RESCUE.md](LOSSLESS-RESCUE.md) |
 | conditional mechanisms | [LADDERS.md](LADDERS.md) |
