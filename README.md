@@ -43,6 +43,12 @@ retrievable after compaction would have dropped it.
 Raw bytes stop at the gate. The transcript carries the digest and its
 addresses. Any address resolves back to the exact original bytes later.
 
+> **New here?** The CLI is `ctx`, installed from a clone (no PyPI release yet).
+> The gentlest introduction is **[How it works](docs/HOW-IT-WORKS.md)** — one
+> command walked through the whole system in plain language, ten minutes. The
+> rest of this README is the reference tour; skip to [Quickstart](#-quickstart)
+> to just install it.
+
 ## ⚡ Quickstart
 
 Three commands, from zero to a harnessed agent:
@@ -80,7 +86,7 @@ Setting up one host only, or checking what setup writes first:
 | `ctx wrap antigravity` / `claude` / `codex` | set up a single host |
 | `ctx wrap <host> --print-config` | preview the exact config without writing it |
 | `ctx wrap claude -- -p "fix the tests"` | one ephemeral Claude session, zero residue |
-| `ctx doctor --antigravity` | verify the install (15 health checks) |
+| `ctx doctor --antigravity` | verify the install (hooks, store, classifier, plugin) |
 
 Everything else — the wire-observer proxy, mid-session rescue, pip extras,
 the optional Rust hook accelerator — is opt-in and documented in
@@ -475,6 +481,8 @@ Full flags and when-to-use detail:
 | `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/--records/--json-pointer/--bytes`) · shape stats, or a priced symbol outline on a single code file |
 | `map` / `def` / `refs` / `diag` | ranked priced codebase map · symbol definition/reference/diagnostic verbs |
 | `callers` / `callees` / `impact` | call graph: direct callers, callees, transitive blast radius (`--depth ≤6`) — one query replaces a recursive grep trace |
+| `q` | total, bounded composition over typed evidence: `fails last \| in-changed`, `refs Foo \| group file \| top 5` — no loops, statically priced, every stage addressable |
+| `ask` | a repository question through a typed intent (`locate`, `impact`, `diagnose`, `trace`, `compare`, `verify`, `review`) → one investigation digest |
 | `plan` / `investigate` | compiled evidence plans ([`docs/EVIDENCE-PLANS.md`](docs/EVIDENCE-PLANS.md)): `validate`/`price` a `ctx.plan/v1` DAG statically, `run` it locally (joins, tests, structural/semantic scans), get ONE ranked investigation digest — O(hypothesis epochs) model rounds instead of O(operations) |
 | `diff run:A run:B` | regression delta between captured runs, span-backed |
 | `stats --session` / `gain` | wire scorecard (rounds, cache classes, effort mix) · cumulative savings |

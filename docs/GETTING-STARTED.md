@@ -47,7 +47,10 @@ Per host, what setup writes:
 | Codex | `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` block | enforced |
 
 Prefer a single host? `ctx wrap antigravity`, `ctx wrap claude`, or
-`ctx wrap codex` do exactly one.
+`ctx wrap codex` do exactly one. (For Antigravity, `ctx wrap antigravity` renders
+and installs the plugin — the same thing `ctx antigravity install` does directly,
+which is why `ctx doctor` refers to that lower-level command when the plugin is
+missing.)
 
 ## Or: one ephemeral session, zero residue
 
@@ -93,22 +96,20 @@ coverage:
   identities: 7/7
   detail shown: 2/7
 next:
-  ctx get run:ba3d1020ee8f#failure-3
+  ctx get run:ba3d1020ee8f#stdout --lines 140:220
 ```
 
-The handle identifies immutable evidence. The digest is a view over that evidence, not a replacement for it.
+The handle identifies immutable evidence. The digest is a view over that evidence, not a replacement for it. Every digest ends with a ready-made `next:` retrieval command — you rarely have to construct one yourself.
 
 ### 2. Retrieve the exact region you need
 
-```bash
-ctx get run:ba3d1020ee8f#failure-3
-```
-
-For line-addressed streams:
+Run the `next:` command the digest gave you, or address a stream by line range yourself:
 
 ```bash
 ctx get run:ba3d1020ee8f#stdout --lines 140:220
 ```
+
+A stream is addressed by `#stdout` or `#stderr` plus a selector (`--lines`, `--span`, `--bytes`). The digest also mints span tokens you can retrieve directly with `ctx get <span-id>`.
 
 Large retrievals remain bounded. A broad request returns a smaller zoom digest with further addresses rather than reflooding the transcript.
 

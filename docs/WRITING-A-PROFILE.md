@@ -41,11 +41,16 @@ A profile is a small class plus a committed contract. Four concrete steps:
 
    `DigestContext` gives you the stream views, the manifest, focus terms, the
    store handle, and helpers (`coverage_lines`, `next_lines`, `mint_span`, …).
-   For a census-grade family, have an extractor build an `EvidenceGraph`
-   (`src/ctx/evidence.py`) and render through
-   `ctx.digest.evidence_render.render_fail_evidence` so the renderer stays pure.
-   **`src/ctx/digest/pytestprof.py` is the reference implementation** — read it
-   first.
+   For a census-grade family, have an extractor build an `EvidenceGraph` and
+   render through `ctx.digest.evidence_render.render_fail_evidence` so the
+   renderer stays pure. The three types live in `src/ctx/evidence.py`:
+   an **`EvidenceItem`** is one typed finding (a failing test, a diagnostic)
+   carrying its identity, source reference, and fact fields; an
+   **`EvidenceGraph`** is the collection of items your extractor emits; and a
+   **`CoverageReceipt`** is its attestation of what was parsed vs. omitted,
+   computed at the extraction seam (never from rendered text).
+   **`src/ctx/digest/pytestprof.py` is the reference implementation** — its
+   extractor is the worked example to copy.
 
 2. **Register it.** Add your class to the `_PROFILES` tuple in
    `src/ctx/digest/__init__.py`. Order is load-bearing: detection is
@@ -185,7 +190,10 @@ extractor/selection boundary where the full typed result set is still available.
 
 ## 4. Write the Evidence Contract
 
-Classify facts by loss behavior:
+Classify facts by loss behavior. These three conceptual tiers map directly to
+the keys in the contract TOML (see the wiring section above): **REQUIRED →
+`required`**, **ELASTIC → `preferred`**, **RETRIEVABLE → `retrievable`**. Write
+`preferred`, not `elastic`, in the file.
 
 ### REQUIRED
 

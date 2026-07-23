@@ -88,6 +88,13 @@ before it runs.
 Secret-bearing paths and outside-workspace access are **always** force-asked and
 **never** rewritten, regardless of `steering` or `collapse`.
 
+**To make the harness stricter,** `mode` and `steering` are different axes:
+`mode` sets *how much* is classified (`advisory` off → `guarded` → `strict`),
+while `steering` sets *what happens* to a flooding command — `auto`/`rewrite`
+transparently reroute it through `ctx run`, and `steering = "deny"` blocks it
+outright so nothing runs until you re-issue it yourself. A locked-down install
+typically pairs `mode = "strict"` with `steering = "deny"`.
+
 ## `[workspace]` — capture boundaries
 
 | Key | Default | Meaning |

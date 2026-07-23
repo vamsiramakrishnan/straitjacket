@@ -58,10 +58,13 @@ A handle identifies an artifact or a region within one:
 ```text
 run:ba3d1020ee8f
 run:ba3d1020ee8f#stdout
-run:ba3d1020ee8f#failure-3
+run:ba3d1020ee8f#stderr
 blob:...
 job:...
 ```
+
+A stream fragment is `#stdout` or `#stderr`; an exact region within it is a
+selector (`--lines`, `--span`, `--bytes`) or a span token minted by a digest.
 
 Handles are the interchange format between model turns, sub-agents, commands, and future host adapters. A good claim cites a handle; a claim without resolvable evidence remains a hypothesis.
 

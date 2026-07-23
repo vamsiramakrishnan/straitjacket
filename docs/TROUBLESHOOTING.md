@@ -208,9 +208,20 @@ exactly one. `ctx wrap setup` does all three.
 `ctx wrap claude -- -p "…"` injects host settings for that process only and
 removes them on exit.
 
-**How do I turn the harness off?**
-Set `[guard] mode = "advisory"` to make the guard a no-op, or remove the host
-integration. For a single break-glass command, confirm the force-ask prompt.
+**How do I turn the harness off, or uninstall it?**
+For a single break-glass command, confirm the force-ask prompt. To disable
+steering everywhere, set `[guard] mode = "advisory"` — but note that only
+neutralizes the PreToolUse guard; the PostToolUse digest gate and the `ctx` MCP
+tool stay registered. To fully remove the host integration, delete the files
+`ctx wrap` added (this is exactly what each host's setup output tells you):
+
+- **Antigravity** — remove the `.agents/plugins/ctx-harness/` directory.
+- **Claude Code** — remove the `ctx` hook entries from `.claude/settings.json`.
+- **Codex** — remove `.codex/config.toml`, `.codex/hooks.json`, and the
+  `ctx-harness` block from `AGENTS.md`.
+
+Ephemeral `ctx wrap <host> -- …` sessions leave nothing behind — their settings
+are injected for the child process only and removed on exit.
 
 **How do I reclaim disk?**
 `ctx gc` mark-and-sweeps expired artifacts (retention is `[store] retention_days`,
