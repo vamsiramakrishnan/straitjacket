@@ -116,6 +116,23 @@ ctx search run:ba3d1020ee8f "MissingTenantError"
 
 Search operates over stored evidence. It does not rerun the original command and does not require the whole artifact to re-enter the model context.
 
+### 4. Understand the repository without reading it into context
+
+Capture, retrieve, and search are the core loop. Three more verbs let an agent
+understand a codebase without `cat`-ing files into the transcript — each returns
+a bounded, priced view:
+
+```bash
+ctx map --budget 500 --focus payments      # a ranked, token-budgeted map of the repo
+ctx ask "Where is TokenBucket defined and used" --intent locate
+ctx plan run investigation.json            # run a compiled multi-step investigation, get ONE digest
+```
+
+`ctx ask` answers a repository question through a typed **intent** (seven ship:
+`locate`, `impact`, `diagnose`, `trace`, `compare`, `verify`, `review`) and
+`ctx plan`/`ctx investigate` collapse a multi-round investigation into a single
+local pass. Full detail is in the [CLI guide](CLI.md).
+
 ## Choose the right capture verb
 
 Use the least powerful operation that can express the work:
