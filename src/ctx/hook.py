@@ -156,10 +156,13 @@ _TOOL_STEM_KINDS = (
     ("command", ("command",)),     # run_command, Command
     ("read", ("read",)),           # Read, ReadFile, ReadManyFiles (not thread)
 )
-# Exact-word kinds (not prefixes): `list_dir` matches, `playlist`/`listener` do not.
-_TOOL_WORD_KIND = {
-    "grep": "search", "glob": "search", "list": "search",
-}
+# Search family. `list` matches as an exact word (`list_dir` yes, `playlist`
+# no). grep/glob match as a whole-word SUFFIX so variants like `ripgrep` /
+# `ripgrep_search` route to search — as the old `"grep" in name` substring did
+# — while non-search words that merely contain the letters (`telegraph`,
+# `playlist`) stay out.
+_TOOL_SEARCH_WORDS = frozenset({"list"})
+_TOOL_SEARCH_SUFFIXES = ("grep", "glob")
 
 
 def _tool_words(tool_name: str) -> list[str]:
@@ -177,10 +180,8 @@ def _tool_kind(tool_name: str) -> str | None:
     for kind, stems in _TOOL_STEM_KINDS:
         if any(w.startswith(stems) for w in words):
             return kind
-    for w in words:
-        kind = _TOOL_WORD_KIND.get(w)
-        if kind:
-            return kind
+    if any(w in _TOOL_SEARCH_WORDS or w.endswith(_TOOL_SEARCH_SUFFIXES) for w in words):
+        return "search"
     return None
 
 # Interactive/stdin-suspect programs: rewriting these into a non-interactive

@@ -25,6 +25,9 @@ TRUE_POSITIVES = [
     ("ReadManyFiles", "read"), ("open_file", "read"), ("view_file", "read"),
     ("Grep", "search"), ("Glob", "search"), ("grep", "search"), ("glob", "search"),
     ("list_dir", "search"), ("find_by_name", "search"),
+    # grep/glob variants must route to search (the old substring caught these);
+    # matched by whole-word suffix, so `ripgrep` yes, `telegraph` no.
+    ("ripgrep", "search"), ("ripgrep_search", "search"), ("RipgrepSearch", "search"),
 ]
 
 # Names that merely CONTAIN a keyword as a substring — must NOT be classified.
@@ -33,6 +36,7 @@ FALSE_POSITIVES = [
     "playlist", "blocklist", "checklist", "allowlist_manager",  # contain "list"
     "listener",       # starts with "list"
     "thread_reply",   # contains "read"
+    "telegraph",      # contains "graph", not a grep suffix
     "get_weather", "slack_post_message", "fetch_url",  # unrelated
 ]
 
