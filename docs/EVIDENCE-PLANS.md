@@ -2,6 +2,13 @@
 
 # Compiled evidence plans (`ctx plan` / `ctx investigate`)
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+
 **Date:** 2026-07-19 · design for the post-ALGEBRA wave (doc 5 of 5).
 **Status:** shipped v0.25.0 — P0–P3 + the P5 surface (`plan_ir` /
 `plan_ops` / `plan_exec` / `astgrep` / `semgrep_engine`, `investigate/v1`

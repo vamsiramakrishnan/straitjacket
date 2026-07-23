@@ -29,6 +29,33 @@ different safety contracts. The mental model can stay small.
 | Cumulative savings | `ctx gain` | Containment savings by command family/verb |
 | Replay histories | `ctx replay …` | Read-only counterfactual analysis over recorded sessions |
 
+### Understand code without reading it into context
+
+| Need | Command | Why |
+|---|---|---|
+| A map of the repo | `ctx map --budget N` | Ranked, token-budgeted file/symbol map instead of a directory dump |
+| Where a symbol lives | `ctx def <symbol>` | Definition site as a snapshot + span |
+| Who uses a symbol | `ctx refs <symbol>` | Reference sites, bounded |
+| Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
+| Blast radius of a change | `ctx impact <symbol> --depth N` | Transitive callers (`--depth ≤ 6`) |
+| Lint/syntax digest | `ctx diag <path>` | Deterministic diagnostics without running a full linter into context |
+| A compiled investigation | `ctx plan …` / `ctx investigate …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
+
+### Manage the store and the session
+
+| Need | Command | Why |
+|---|---|---|
+| Set up a workspace | `ctx init` | Write `ctx.toml` + `.ctxignore` |
+| Verify the install | `ctx doctor` | Validate hooks, manifests, store, and classifier |
+| Harness / unharness a host | `ctx wrap …` | Install or inject host integration (see [Getting started](GETTING-STARTED.md)) |
+| Freeze a cache epoch | `ctx checkpoint` | Mark a task boundary for lossless rescue |
+| Protect / reclaim storage | `ctx pin` / `ctx gc` | Retention leases and mark-and-sweep |
+| Track deferred decisions | `ctx debt …` | Declared-omission ledger (`add`/`list`/`resolve`) |
+| Inspect steering policy | `ctx policy show` | Print the compiled, committed policy |
+
+Full flags for every verb live in the skill reference
+([`verbs.md`](../plugins/antigravity/skills/ctx-harness/references/verbs.md)).
+
 ## Initialize a workspace
 
 ```bash
@@ -155,9 +182,14 @@ ctx ask "Where is TokenBucket defined" --intent locate --plan   # show the compi
 
 `ctx ask` compiles a repository question into a typed intent preset — a frozen
 `ctx.plan/v1` — and runs it on the plan executor, answering with the investigate
-digest. Three intents ship: `locate` (where is X), `impact` (what breaks if X
-changes), `diagnose` (what explains the captured failures — reads captured facts,
-never reruns tests). There is no natural-language parser: `--intent` is required
+digest. Seven intents ship — five that observe and two that execute:
+`locate` (where is X defined and used), `impact` (what could break if X
+changes), `diagnose` (what explains the captured failures — reads captured
+facts, never reruns tests), `trace` (how control/data flows through X),
+`compare` (what differs between two runs), `verify` (what proves a change is
+correct — execute-class, runs the test command), and `review` (what changed,
+what is risky, what is under-verified — execute-class). There is no
+natural-language parser: `--intent` is required
 (a missing one is a teaching error that suggests, never guesses), and the subject
 is `--symbol` or the question's sole identifier-shaped token, always disclosed.
 See [docs/ASK.md](ASK.md).

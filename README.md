@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 798 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.30.0 (pre-1.0, minor bump per mechanism) · 1,074 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -42,6 +42,12 @@ retrievable after compaction would have dropped it.
 
 Raw bytes stop at the gate. The transcript carries the digest and its
 addresses. Any address resolves back to the exact original bytes later.
+
+> **New here?** The CLI is `ctx`, installed from a clone (no PyPI release yet).
+> The gentlest introduction is **[How it works](docs/HOW-IT-WORKS.md)** — one
+> command walked through the whole system in plain language, ten minutes. The
+> rest of this README is the reference tour; skip to [Quickstart](#-quickstart)
+> to just install it.
 
 ## ⚡ Quickstart
 
@@ -80,7 +86,7 @@ Setting up one host only, or checking what setup writes first:
 | `ctx wrap antigravity` / `claude` / `codex` | set up a single host |
 | `ctx wrap <host> --print-config` | preview the exact config without writing it |
 | `ctx wrap claude -- -p "fix the tests"` | one ephemeral Claude session, zero residue |
-| `ctx doctor --antigravity` | verify the install (15 health checks) |
+| `ctx doctor --antigravity` | verify the install (hooks, store, classifier, plugin) |
 
 Everything else — the wire-observer proxy, mid-session rescue, pip extras,
 the optional Rust hook accelerator — is opt-in and documented in
@@ -88,13 +94,14 @@ the optional Rust hook accelerator — is opt-in and documented in
 **[How it works](docs/HOW-IT-WORKS.md)** first — it walks one command
 through the whole system in plain language.
 
-## 🆕 New in v0.25
+## 🆕 Recent highlights
 
-Plain-language highlights; full detail in [`CHANGELOG.md`](CHANGELOG.md).
+Plain-language highlights from recent releases; full detail in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 - **One-command, three-host setup.** `ctx wrap setup` harnesses Antigravity,
-  Claude Code, *and Codex* (new — with real enforcement, not just advice)
-  in a single idempotent command.
+  Claude Code, *and Codex* (with real enforcement, not just advice) in a
+  single idempotent command.
 - **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
   — measured 6 rounds → 1 ([receipt](evals/plan-collapse-2026-07-19.md)).
@@ -377,124 +384,10 @@ What each still does better than us, by design: Headroom's zero-integration
 generality, rtk's 15-host reach and <10ms single binary, Ponytail's 20-host
 rule files, Maki's OS-level sandbox (ours arrives with the broker, Phase 3).
 
-### How each neighbour is built — and where the harness diverges
-
-The neighbours split into two architectural families. **Headroom** sits on the
-wire and rewrites transcript history on every request — compression happens
-_after_ the bytes are already resident, and the original is gone. **rtk** and
-**Caveman** cut earlier, at the shell hook or in the prompt, but throw the cut
-bytes away. The harness's move is orthogonal to all three: capture at the
-source into an immutable, addressable store, and put only a bounded digest —
-plus a resolvable address for every omitted byte — on the wire.
-
-<div align="center">
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/headroom-arch.svg">
-  <img src="assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two lanes. Top: an agent loop feeds a Headroom proxy that compresses messages and rewrites history on each call; the model sees a rewritten log and the quiet needle is silently dropped with no address. Bottom: straitjacket captures tool output at the birth gate into an immutable artifact store where every line is addressed, sends the model a bounded digest, and ctx get resolves any omitted line by address.">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/filters-arch.svg">
-  <img src="assets/readme/diagrams/filters-arch-light.svg" width="100%" alt="rtk filters a flooding shell command at a fast bash hook and emits truncated output with no addresses; Caveman prompts the agent to narrate tersely, squeezing evidence into prose that cannot be resolved. Both feed into the harness's answer: keep the bytes in the store and carry a cited, resolvable handle, under a failure-asymmetric budget.">
-</picture>
-
-</div>
-
-### The one we ran head-to-head — Headroom
-
-Headroom is the only neighbour that is a drop-in library, so it is the only one
-we can run behind our own observer. The needle-drop comparison is **model-free
-and reproducible** — it exercises the compression/digest layer only, no LLM, so
-it re-runs in a review sandbox in seconds
-([`evals/headroom_needle_v2.py`](evals/headroom_needle_v2.py)):
-
-```bash
-pip install -e '.[dev]' headroom-ai tiktoken
-python evals/headroom_needle_v2.py
-```
-
-Rerun **2026-07-19 against the current `headroom-ai==0.32.1`** on a 20,001-line
-log (302,628 tok) hiding one structurally rare "quiet needle" with no error
-keyword ([receipt](evals/headroom-needle-2026-07-19.md)):
-
-| | Headroom 0.32.1 | `ctx run` logtemplate/v1 |
-|---|---|---|
-| Output | **357 tok** (847×) | **~520 tok** (584×) |
-| Loud ERROR line | ✅ kept (keyword window) | ✅ kept, at `L17650` |
-| **Quiet structural needle** | ❌ **silently dropped** | ✅ **verbatim at `L14238`** |
-| Omission keeps an address | ❌ none | ✅ `ctx get run:<id>#stdout --lines 14238:14241` |
-
-Headroom compresses harder and keeps the ERROR **because it announces itself**;
-the quiet needle, structurally identical to an INFO line, vanishes with no
-trace. `ctx` spends ~160 more tokens to buy the evidence that _doesn't_ announce
-itself, plus an address for every omitted line — **needle-drop rate 100% vs 0%**
-on this workload. (On the long task our mechanisms also beat Headroom outright:
-42 turns / 243s vs 53 / 279s at comparable cost, per the
-[2026-07-17 run](evals/headroom-needle-drop-2026-07-17.md).) The same anomalous
-line, drawn out under each approach:
-
-<div align="center">
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/fates.svg">
-  <img src="assets/readme/diagrams/fates-light.svg" width="100%" alt="A 20,001-line log with one anomalous line. Compaction deletes it without trace. A rewriting proxy dropped it in every measured run. straitjacket's logtemplate profile kept it verbatim with an exact retrieval address.">
-</picture>
-
-</div>
-
-### Regime scoreboard (worst case and best case, all measured)
-
-| Regime | straitjacket vs naive | vs the field |
-|---|---|---|
-| Catastrophic floods | 456 tok vs ~222k first exposure (487×) | Headroom silently dropped the needle (347,595→68) |
-| Repo comprehension | only-correct-answers across rounds; first-ever haiku pass | untested by others |
-| Long overhaul | −21% turns, −9% time, −16% output | beats Headroom on turns/time at par cost |
-| Tiny surgical tasks | parity (was 4.5×; graduated engagement fixed it) | rtk-class tasks: parity is the ceiling |
-| Mechanical bulk repair | parity after per-file-span iteration | our worst regime, no longer a loss |
-| Small spec-driven creation (haiku) | **current loss**: 33 turns (cap) vs naive's 11–26 at 2.7–3.8× cost; quality tied (16/16 holdout all arms), cache hit still best (96–98%) | diagnosed to one loop — pytest digest lacks the failing-test census — fix candidates ranked, referee frozen ([`evals/spec3-haiku-2026-07-18.md`](evals/spec3-haiku-2026-07-18.md)) |
-
-Depth, per topic:
-[`evals/matrix-2026-07-18.md`](evals/matrix-2026-07-18.md) (scenario matrix +
-cache economics) ·
-[`evals/headroom-needle-2026-07-19.md`](evals/headroom-needle-2026-07-19.md)
-(needle-drop rerun vs headroom 0.32.1, model-free + reproducible) ·
-[`evals/headroom-needle-drop-2026-07-17.md`](evals/headroom-needle-drop-2026-07-17.md)
-(original needle-drop head-to-head) ·
-[`evals/ab-claude-code-2026-07-17.md`](evals/ab-claude-code-2026-07-17.md)
-(N=5 A/B: cost parity, 5/5 correct both arms, zero denials) ·
-[`evals/antigravity-gemini-2026-07-19.md`](evals/antigravity-gemini-2026-07-19.md)
-(first non-Claude host: Antigravity SDK + `gemini-3.5-flash`, −30% total / 152×
-less tool-output on an unavoidable flood, honest parity-loss on the greppable one) ·
-[`evals/overhaul-3arm-2026-07-17.md`](evals/overhaul-3arm-2026-07-17.md)
-(v0.6 rematch: −40% cost vs naive at quality parity) ·
-[`evals/rtk-corpus-2026-07-18.md`](evals/rtk-corpus-2026-07-18.md)
-(real-corpus reversals + live lint-fix rounds) ·
-[`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)
-(programmable capture) ·
-[`evals/plan-collapse-2026-07-19.md`](evals/plan-collapse-2026-07-19.md)
-(compiled evidence plans: rounds 6→1, resend cost 9.0×↓, byte-stable digest) ·
-[`docs/LOSSLESS-RESCUE.md`](docs/LOSSLESS-RESCUE.md) ·
-[`docs/PRICED-CONTEXT.md`](docs/PRICED-CONTEXT.md) ·
-[`docs/LADDERS.md`](docs/LADDERS.md) (the conditionality audit behind v0.20).
-
-### What we took from each
-
-- **rtk** → real corpora reversed our hypotheses before we built: diagnostics
-  needed *structure, not compression* (`lint/v1` exact censuses; the live
-  lint-fix benchmark went honest-loss → iterate → parity), and our own
-  scaffold was inflating small outputs (slim inline: ~100–400 tok overhead →
-  ~20).
-- **Headroom** → its one structural edge (rescuing a bloated transcript) taken
-  losslessly: epoch-latched elision, +$0.05 where per-request rewriting pays
-  $0.90 in churn, 18 turns of lossless runway per 27k elided; live-validated
-  with 10/10 facts correct including elided ones.
-- **Ponytail** → solution ladder adopted only after the A/B won on every axis;
-  rebuilt with enforcement (`ctx debt`) and per-session measurement.
-- **Caveman** → terse narration kept, the loss dropped: citations resolve,
-  compressed prose doesn't.
-- **Maki** → the interpreter collapse generalized (`ctx seq` declared → `ctx
-  eval` computed) with the provenance a raw sandbox drops.
+**Full detail lives in [`docs/COMPARISONS.md`](docs/COMPARISONS.md):** how each
+neighbour is architected and where the harness diverges, the model-free
+head-to-head against Headroom, the worst-case/best-case regime scoreboard, and
+the measured receipt behind every number above.
 
 ## 🏗️ Architecture & deployment
 
@@ -570,7 +463,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 733 acceptance-oriented determinism & security tests
+└── tests/             # 1,074 acceptance-oriented determinism & security tests
 ```
 
 ## 📖 Reference
@@ -588,6 +481,8 @@ Full flags and when-to-use detail:
 | `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/--records/--json-pointer/--bytes`) · shape stats, or a priced symbol outline on a single code file |
 | `map` / `def` / `refs` / `diag` | ranked priced codebase map · symbol definition/reference/diagnostic verbs |
 | `callers` / `callees` / `impact` | call graph: direct callers, callees, transitive blast radius (`--depth ≤6`) — one query replaces a recursive grep trace |
+| `q` | total, bounded composition over typed evidence: `fails last \| in-changed`, `refs Foo \| group file \| top 5` — no loops, statically priced, every stage addressable |
+| `ask` | a repository question through a typed intent (`locate`, `impact`, `diagnose`, `trace`, `compare`, `verify`, `review`) → one investigation digest |
 | `plan` / `investigate` | compiled evidence plans ([`docs/EVIDENCE-PLANS.md`](docs/EVIDENCE-PLANS.md)): `validate`/`price` a `ctx.plan/v1` DAG statically, `run` it locally (joins, tests, structural/semantic scans), get ONE ranked investigation digest — O(hypothesis epochs) model rounds instead of O(operations) |
 | `diff run:A run:B` | regression delta between captured runs, span-backed |
 | `stats --session` / `gain` | wire scorecard (rounds, cache classes, effort mix) · cumulative savings |
@@ -657,7 +552,7 @@ injection, so the prompt-cache prefix never churns:
   "name": "ctx",
   "description": "Bounded retrieval against repository state or captured artifacts.",
   "input": {
-    "op": "search | get | stats | map | repo | doctor",
+    "op": "search | get | stats | map | def | refs | diag | callers | callees | impact | diff | investigate | repo | doctor",
     "ref": "run:<id>[#stdout|#stderr] | snapshot:<id> | repo:[path]",
     "patterns": ["TimeoutError", "deadline"],
     "selector": {"lines": "8412:8440"},
@@ -718,7 +613,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 798 tests: determinism, budgets, hook contract, escapes
+pytest        # 1,074 tests: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

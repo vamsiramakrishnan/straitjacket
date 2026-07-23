@@ -1,10 +1,29 @@
 # Core concepts
 
-<sub><a href="index.md">« documentation</a></sub>
+<sub><a href="README.md">« straitjacket / docs</a></sub>
 
 straitjacket is easiest to understand as an evidence-delivery system with a strict separation between **what happened**, **what is stored**, and **what the model is allowed to see at once**.
 
-This page defines the vocabulary used across the CLI, specifications, architecture documents, and benchmark receipts.
+This page defines the vocabulary used across the CLI, specifications, architecture documents, and benchmark receipts. New here? Read [How it works](HOW-IT-WORKS.md) first for the plain-language walkthrough; this page is the reference you come back to.
+
+## Quick glossary
+
+Scan this first; the sections below explain each term in depth.
+
+| Term | In one sentence |
+|---|---|
+| **Artifact** | An immutable stored result — command output, a file snapshot, a query result — the durable source a view is rendered from. |
+| **Handle** | A stable reference to an artifact or a region of one, e.g. `run:ba3d1020ee8f#stdout`. |
+| **Span** | An exact range inside an artifact: lines, bytes, a failure block, a symbol body. |
+| **Digest** | The small, deterministic, bounded rendering of an artifact that the model actually sees. |
+| **Profile** | The parser that knows a command family's shape (pytest, logs, JSON…) and extracts typed evidence from it. |
+| **Evidence contract** | The declaration of what a command family must preserve (REQUIRED / ELASTIC / RETRIEVABLE). |
+| **Delivery plan** | The resolved decision about how an artifact is shown right now, given the contract, budget, and pressure. |
+| **Coverage receipt** | The digest's honest account of what it kept, what it omitted, and how to retrieve the rest. |
+| **The four gates** | Birth, Entry, Residence, Emission — the four moments in a byte's life where the harness can act. |
+| **Capture ladder** | The choice of the least-powerful verb that fits the work: native read → `run` → `--shell` → `seq` → `eval`, with `q` alongside. |
+| **Reflex vs. policy epoch** | A within-session adjustment (fast loop) versus a reviewed, committed config change (slow loop). |
+| **Determinism** | Same evidence + same contract + same plan → byte-identical digest, so caches stay warm and diffs are real signal. |
 
 ## The central distinction: evidence versus context
 
@@ -39,10 +58,13 @@ A handle identifies an artifact or a region within one:
 ```text
 run:ba3d1020ee8f
 run:ba3d1020ee8f#stdout
-run:ba3d1020ee8f#failure-3
+run:ba3d1020ee8f#stderr
 blob:...
 job:...
 ```
+
+A stream fragment is `#stdout` or `#stderr`; an exact region within it is a
+selector (`--lines`, `--span`, `--bytes`) or a span token minted by a digest.
 
 Handles are the interchange format between model turns, sub-agents, commands, and future host adapters. A good claim cites a handle; a claim without resolvable evidence remains a hypothesis.
 

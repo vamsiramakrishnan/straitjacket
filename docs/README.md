@@ -72,6 +72,11 @@ First identify which plane owns the change:
 
 A new mechanism should fit one plane, reuse the existing evidence and delivery contracts, and name its acceptance referee before implementation.
 
+Then find the code: **[ARCHITECTURE.md](ARCHITECTURE.md)** maps every module to
+its plane with a "which file do I touch for X" table. To add a digest profile,
+follow **[Writing a profile](WRITING-A-PROFILE.md)**; for setup, the invariants,
+and how to run the tests and evals, see **[`CONTRIBUTING.md`](../CONTRIBUTING.md)**.
+
 ---
 
 ## Foundations already shipped
@@ -167,6 +172,9 @@ Every mechanism inherits the same invariants:
 | the ten-minute overview | [HOW-IT-WORKS.md](HOW-IT-WORKS.md) |
 | first successful session | [GETTING-STARTED.md](GETTING-STARTED.md) |
 | vocabulary and invariants | [CONCEPTS.md](CONCEPTS.md) |
+| every `ctx.toml` setting | [CONFIGURATION.md](CONFIGURATION.md) |
+| when something breaks | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
+| the code map (which file for what) | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | retrieval economics | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
 | context rescue | [LOSSLESS-RESCUE.md](LOSSLESS-RESCUE.md) |
 | conditional mechanisms | [LADDERS.md](LADDERS.md) |
@@ -190,8 +198,11 @@ Every mechanism inherits the same invariants:
 |---|---|
 | [Use cases](USE-CASES.md) | You know the task or failure mode and want the shortest path through the harness. |
 | [CLI guide](CLI.md) | You need to choose a verb, retrieve evidence, or interpret a scorecard. |
+| [Configuration](CONFIGURATION.md) | You want to tune budgets, the guard, scopes, or redaction in `ctx.toml`. |
+| [Troubleshooting & FAQ](TROUBLESHOOTING.md) | Something isn't working, or you have a "does it…?" question. |
 | [Writing an evidence profile](WRITING-A-PROFILE.md) | You are extending extraction, contracts, or rendering. |
 | [Why Straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
+| [Comparisons](COMPARISONS.md) | You want the head-to-head data versus Headroom, rtk, Ponytail, Caveman, Maki, and the rest of the field. |
 <!-- docs-phase2:end -->
 
 ---
@@ -200,6 +211,6 @@ Every mechanism inherits the same invariants:
 
 **The store keeps the truth. The transcript keeps the address.**
 
-<sub><a href="../README.md">« repository</a> · <a href="index.md">docs page</a> · <a href="../spec/">specifications</a> · <a href="../evals/">evaluation receipts</a> · <a href="../ROADMAP.md">roadmap</a></sub>
+<sub><a href="../README.md">« repository</a> · <a href="../spec/">specifications</a> · <a href="../evals/">evaluation receipts</a> · <a href="../ROADMAP.md">roadmap</a></sub>
 
 </div>

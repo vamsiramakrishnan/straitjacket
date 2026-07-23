@@ -25,6 +25,83 @@ pure renderer
 bounded digest + CoverageReceipt + addresses
 ```
 
+Sections 1–10 below are the design discipline. If you just want to know *where
+the code goes*, start here.
+
+## The code: where a profile lives and how to register it
+
+A profile is a small class plus a committed contract. Four concrete steps:
+
+1. **Write the profile.** Create `src/ctx/digest/<family>prof.py` with a class
+   that subclasses `Profile` (from `ctx.digest.base`). Set a class attribute
+   `version = "<family>/v1"` and implement two methods:
+   - `detect(self, ctx) -> str | None` — return a short match-reason string, or
+     `None` to decline this artifact;
+   - `render(self, ctx) -> str` — produce the digest body.
+
+   `DigestContext` gives you the stream views, the manifest, focus terms, the
+   store handle, and helpers (`coverage_lines`, `next_lines`, `mint_span`, …).
+   For a census-grade family, have an extractor build an `EvidenceGraph` and
+   render through `ctx.digest.evidence_render.render_fail_evidence` so the
+   renderer stays pure. The three types live in `src/ctx/evidence.py`:
+   an **`EvidenceItem`** is one typed finding (a failing test, a diagnostic)
+   carrying its identity, source reference, and fact fields; an
+   **`EvidenceGraph`** is the collection of items your extractor emits; and a
+   **`CoverageReceipt`** is its attestation of what was parsed vs. omitted,
+   computed at the extraction seam (never from rendered text).
+   **`src/ctx/digest/pytestprof.py` is the reference implementation** — its
+   extractor is the worked example to copy.
+
+2. **Register it.** Add your class to the `_PROFILES` tuple in
+   `src/ctx/digest/__init__.py`. Order is load-bearing: detection is
+   first-match-wins in tuple order, and `text/v1` must remain last as the
+   universal fallback. Place your profile *before* any more-generic shape it
+   could be confused with (e.g. diagnostics before generic search, because both
+   carry a `file:line` shape but diagnostics also carry severity).
+
+3. **Write the contract.** Add `src/ctx/contracts/<family>.toml`. It is
+   auto-discovered by family name — no registration code. The shape:
+
+   ```toml
+   schema  = "ctx.evidence-contract/v1"
+   family  = "pytest"
+   profile = "pytest/v2"
+   decision_unit = "failing_test"
+
+   [outcomes.fail]
+   required    = ["aggregate_counts", "complete_identity_census", "location"]
+   preferred   = ["one_line_summary", "root_detail"]
+   retrievable = ["full_traceback", "stdout", "stderr"]
+   [outcomes.pass]     # ...
+   [outcomes.default]  # fallback outcome
+
+   [loss_severities]   # catastrophic | major | minor
+   complete_identity_census = "catastrophic"
+
+   [rendering]
+   stable_order          = "occurrence"
+   evidence_floor_tokens = 256
+   hard_ceiling_tokens   = 4000
+   ```
+
+   The contract is validated over **typed facts** at the selection seam, never
+   by re-parsing rendered text. The special `complete_identity_census` class is
+   the full item-identity set — the thing that must survive budget pressure.
+
+4. **Emit two renderings per outcome (optional).** If pass and fail should
+   render differently, set `ctx.meta_profile_version` inside `render()` (as the
+   pytest profile does for `pytest/v2`); `render_run_digest` stamps the digest
+   meta from it.
+
+**Tests to add:** profile acceptance in `tests/test_coverage_profiles.py`,
+contract validity in `tests/test_contract_conformance.py`, and a family census
+test modelled on `tests/test_pytest_census.py`. The [testing
+guide](../CONTRIBUTING.md#running-and-writing-tests) explains the CI split your
+change must survive.
+
+Everything below is the *why* — the discipline that makes the four steps above
+produce a safe digest rather than a clever truncation.
+
 ## Before adding a profile
 
 Add a family-specific profile only when the output has a stable semantic shape that a
@@ -113,7 +190,10 @@ extractor/selection boundary where the full typed result set is still available.
 
 ## 4. Write the Evidence Contract
 
-Classify facts by loss behavior:
+Classify facts by loss behavior. These three conceptual tiers map directly to
+the keys in the contract TOML (see the wiring section above): **REQUIRED →
+`required`**, **ELASTIC → `preferred`**, **RETRIEVABLE → `retrievable`**. Write
+`preferred`, not `elastic`, in the file.
 
 ### REQUIRED
 

@@ -1,6 +1,6 @@
 # Getting started
 
-<sub><a href="index.md">« documentation</a></sub>
+<sub><a href="README.md">« straitjacket / docs</a></sub>
 
 This guide gets you from a checkout to one harnessed coding-agent session, then shows the three operations that make the rest of straitjacket understandable: **capture, inspect, retrieve**.
 
@@ -30,9 +30,13 @@ Antigravity, Claude Code, and Codex — in one idempotent command. Existing
 host config is merged, never clobbered; re-running is a no-op. Verify:
 
 ```bash
-ctx doctor --antigravity    # 15 health checks
+ctx doctor                      # validate the install, store, hooks, and classifier
+ctx doctor --antigravity        # also validate the Antigravity plugin files
 ctx wrap codex --print-config   # preview any host's config without writing
 ```
+
+Each check prints a `✓` or `✗`; a non-zero exit means something needs
+attention. [Troubleshooting](TROUBLESHOOTING.md) explains every failing check.
 
 Per host, what setup writes:
 
@@ -43,7 +47,10 @@ Per host, what setup writes:
 | Codex | `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` block | enforced |
 
 Prefer a single host? `ctx wrap antigravity`, `ctx wrap claude`, or
-`ctx wrap codex` do exactly one.
+`ctx wrap codex` do exactly one. (For Antigravity, `ctx wrap antigravity` renders
+and installs the plugin — the same thing `ctx antigravity install` does directly,
+which is why `ctx doctor` refers to that lower-level command when the plugin is
+missing.)
 
 ## Or: one ephemeral session, zero residue
 
@@ -89,22 +96,20 @@ coverage:
   identities: 7/7
   detail shown: 2/7
 next:
-  ctx get run:ba3d1020ee8f#failure-3
+  ctx get run:ba3d1020ee8f#stdout --lines 140:220
 ```
 
-The handle identifies immutable evidence. The digest is a view over that evidence, not a replacement for it.
+The handle identifies immutable evidence. The digest is a view over that evidence, not a replacement for it. Every digest ends with a ready-made `next:` retrieval command — you rarely have to construct one yourself.
 
 ### 2. Retrieve the exact region you need
 
-```bash
-ctx get run:ba3d1020ee8f#failure-3
-```
-
-For line-addressed streams:
+Run the `next:` command the digest gave you, or address a stream by line range yourself:
 
 ```bash
 ctx get run:ba3d1020ee8f#stdout --lines 140:220
 ```
+
+A stream is addressed by `#stdout` or `#stderr` plus a selector (`--lines`, `--span`, `--bytes`). The digest also mints span tokens you can retrieve directly with `ctx get <span-id>`.
 
 Large retrievals remain bounded. A broad request returns a smaller zoom digest with further addresses rather than reflooding the transcript.
 
@@ -115,6 +120,23 @@ ctx search run:ba3d1020ee8f "MissingTenantError"
 ```
 
 Search operates over stored evidence. It does not rerun the original command and does not require the whole artifact to re-enter the model context.
+
+### 4. Understand the repository without reading it into context
+
+Capture, retrieve, and search are the core loop. Three more verbs let an agent
+understand a codebase without `cat`-ing files into the transcript — each returns
+a bounded, priced view:
+
+```bash
+ctx map --budget 500 --focus payments      # a ranked, token-budgeted map of the repo
+ctx ask "Where is TokenBucket defined and used" --intent locate
+ctx plan run investigation.json            # run a compiled multi-step investigation, get ONE digest
+```
+
+`ctx ask` answers a repository question through a typed **intent** (seven ship:
+`locate`, `impact`, `diagnose`, `trace`, `compare`, `verify`, `review`) and
+`ctx plan`/`ctx investigate` collapse a multi-round investigation into a single
+local pass. Full detail is in the [CLI guide](CLI.md).
 
 ## Choose the right capture verb
 
@@ -195,6 +217,9 @@ It is not yet a complete process sandbox. Commands execute with the authority of
 ## Where to go next
 
 - Read [Core concepts](CONCEPTS.md) for the vocabulary used throughout the project.
+- Keep the [CLI guide](CLI.md) handy for the full verb reference.
+- Tune budgets, the guard, and scopes in the [Configuration reference](CONFIGURATION.md).
+- Hit a snag? [Troubleshooting & FAQ](TROUBLESHOOTING.md) is symptom → cause → fix.
 - Read [the documentation map](README.md) for the architecture sequence.
 - Inspect [`evals/`](../evals/) to reproduce the measured claims.
 - Use [`spec/`](../spec/) when you need normative schemas or compatibility contracts.
