@@ -136,6 +136,53 @@ _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
 
 _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
 
+# --- Tool-kind classification -------------------------------------------------
+# Which guard branch a tool name takes (edit / command / read / search), matched
+# by EXACT name or by whole WORD — never by raw substring. Substring matching
+# silently mis-routed unrelated third-party tools: `credit_check` contains
+# "edit", `playlist` contains "list", `thread_reply` contains "read". Priority
+# order is load-bearing (edit → command → read → search): an `edit_command`-style
+# name classifies as edit, exactly as the old ordered `if` chain did.
+_TOOL_EXACT_KIND = {
+    "create_file": "edit", "replace_file_content": "edit",
+    "bash": "command", "shell": "command", "exec": "command",
+    "open_file": "read", "view_file": "read",
+    "grep": "search", "glob": "search", "find_by_name": "search",
+}
+# (kind, word-stems): a name matches this kind if any of its words starts with a
+# stem. `editor` starts with "edit"; `credit` does not.
+_TOOL_STEM_KINDS = (
+    ("edit", ("edit", "write")),   # Edit, MultiEdit, str_replace_editor, Write, WriteFile
+    ("command", ("command",)),     # run_command, Command
+    ("read", ("read",)),           # Read, ReadFile, ReadManyFiles (not thread)
+)
+# Exact-word kinds (not prefixes): `list_dir` matches, `playlist`/`listener` do not.
+_TOOL_WORD_KIND = {
+    "grep": "search", "glob": "search", "list": "search",
+}
+
+
+def _tool_words(tool_name: str) -> list[str]:
+    """Split a tool name into lowercased words on camelCase and delimiters."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", tool_name)
+    return [w.lower() for w in re.findall(r"[A-Za-z0-9]+", spaced)]
+
+
+def _tool_kind(tool_name: str) -> str | None:
+    """Classify a tool name into edit/command/read/search, or None. Pure."""
+    exact = _TOOL_EXACT_KIND.get(tool_name.lower())
+    if exact:
+        return exact
+    words = _tool_words(tool_name)
+    for kind, stems in _TOOL_STEM_KINDS:
+        if any(w.startswith(stems) for w in words):
+            return kind
+    for w in words:
+        kind = _TOOL_WORD_KIND.get(w)
+        if kind:
+            return kind
+    return None
+
 # Interactive/stdin-suspect programs: rewriting these into a non-interactive
 # `ctx run` capture would hang or change semantics, so they stay plain deny.
 _NO_REWRITE_PROGS = {"less", "more", "vi", "vim", "nano", "emacs", "top", "htop", "watch", "ssh", "xargs"}
@@ -1165,13 +1212,13 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
     except Exception:
         pass
 
-    lowered = tool_name.lower()
+    kind = _tool_kind(tool_name)
 
     # Reflex v2 (spec3 round-2 finding): an Edit/Write disarms starvation
     # detection — run → census → edit → re-run is healthy verification, and
     # v1 counted it as starvation (6 spurious events on the referee). Pure
     # observation: always allow, never rewrite, fail-open.
-    if "edit" in lowered or "write" in lowered or lowered in ("create_file", "replace_file_content"):
+    if kind == "edit":
         try:
             from ctx import reflex
 
@@ -1180,7 +1227,7 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
             pass
         return dict(DECISION_ALLOW)
 
-    if "command" in lowered or lowered in ("bash", "shell", "exec"):
+    if kind == "command":
         command = ""
         command_key = None
         for key in ("CommandLine", "command", "Command", "cmd"):
@@ -1274,7 +1321,7 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 pass
         return _apply_rewrite(decision, tool_input, command_key)
 
-    if "read" in lowered or lowered in ("open_file", "view_file"):
+    if kind == "read":
         session_id = str(
             payload.get("session_id") or payload.get("conversation_id") or "unknown"
         )
@@ -1286,9 +1333,7 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
                 )
         return dict(DECISION_ALLOW)
 
-    if lowered in ("grep", "glob") or "grep" in lowered or "glob" in lowered or (
-        "list" in lowered or "find_by_name" in lowered
-    ):
+    if kind == "search":
         return _apply_rewrite(_classify_native_search(tool_name, tool_input, policy), tool_input)
 
     return dict(DECISION_ALLOW)
