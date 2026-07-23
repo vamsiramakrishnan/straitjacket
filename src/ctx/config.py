@@ -69,6 +69,15 @@ class Guard:
     unknown_command: str = "force_ask"  # allow | deny | ask | force_ask
     internal_error: str = "allow"  # availability-safe default (SPEC §10.2)
     steering: str = "auto"  # auto | rewrite | deny — deny keeps pure deny-with-remediation
+    # Replacement surface (default posture): substitute loop-shapes with
+    # collapsed ctx ops; set collapse=false to break-glass off.
+    collapse: bool = True
+    # Repo-tunable classification: prefix matches against the canonical argv.
+    allow_commands: tuple[str, ...] = ()
+    deny_commands: tuple[str, ...] = ()
+    # NOTE: the guard hot path (ctx.hook._load_guard_policy) re-reads these
+    # keys with its own stdlib-only parser for latency. tests/test_config_hook_
+    # parity.py pins the two readers so they can never silently drift.
 
 
 @dataclass(frozen=True)
@@ -79,6 +88,9 @@ class Engagement:
     mode: str = "auto"  # auto | active | passive
     activate_after_calls: int = 8
     lean_models: tuple[str, ...] = _DEFAULT_LEAN_MODELS
+    # Emission-gate nudge budget (read on the hot path by ctx.hook); pinned to
+    # the guard reader by tests/test_config_hook_parity.py.
+    emission_nudge_tokens: int = 20000
 
 
 @dataclass(frozen=True)
@@ -184,18 +196,34 @@ def load_config(workspace_root: Path | None) -> Config:
             scopes[str(name)] = tuple(str(r) for r in roots)
 
     budgets = _pick(raw.get("budgets") or {}, Budgets)
-    guard = _pick(raw.get("guard") or {}, Guard)
+    # Guard is hand-built (not _pick) so list keys coerce to tuples and bools
+    # coerce honestly — and so Config models every key the hot-path guard reads.
+    guard_raw = raw.get("guard") or {}
+    gd = Guard()
+    guard = Guard(
+        mode=str(guard_raw.get("mode", gd.mode)),
+        unknown_command=str(guard_raw.get("unknown_command", gd.unknown_command)),
+        internal_error=str(guard_raw.get("internal_error", gd.internal_error)),
+        steering=str(guard_raw.get("steering", gd.steering)),
+        collapse=bool(guard_raw.get("collapse", gd.collapse)),
+        allow_commands=tuple(str(x) for x in guard_raw.get("allow_commands", ())),
+        deny_commands=tuple(str(x) for x in guard_raw.get("deny_commands", ())),
+    )
     store = _pick(raw.get("store") or {}, StorePolicy)
     plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
     surface = _pick(raw.get("surface") or {}, SurfacePolicy)
 
     eng_raw = raw.get("engagement") or {}
+    ed = Engagement()
     engagement = Engagement(
-        mode=str(eng_raw.get("mode", "auto")),
-        activate_after_calls=int(eng_raw.get("activate_after_calls", 8)),
+        mode=str(eng_raw.get("mode", ed.mode)),
+        activate_after_calls=int(eng_raw.get("activate_after_calls", ed.activate_after_calls)),
         lean_models=tuple(
-            str(m) for m in eng_raw.get("lean_models", Engagement().lean_models)
+            str(m) for m in eng_raw.get("lean_models", ed.lean_models)
+        ),
+        emission_nudge_tokens=int(
+            eng_raw.get("emission_nudge_tokens", ed.emission_nudge_tokens)
         ),
     )
 
