@@ -1,6 +1,6 @@
 # Core concepts
 
-<sub><a href="index.md">« documentation</a></sub>
+<sub><a href="README.md">« straitjacket / docs</a></sub>
 
 straitjacket is easiest to understand as an evidence-delivery system with a strict separation between **what happened**, **what is stored**, and **what the model is allowed to see at once**.
 

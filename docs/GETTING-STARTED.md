@@ -1,6 +1,6 @@
 # Getting started
 
-<sub><a href="index.md">« documentation</a></sub>
+<sub><a href="README.md">« straitjacket / docs</a></sub>
 
 This guide gets you from a checkout to one harnessed coding-agent session, then shows the three operations that make the rest of straitjacket understandable: **capture, inspect, retrieve**.
 

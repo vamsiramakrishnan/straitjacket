@@ -192,6 +192,7 @@ Every mechanism inherits the same invariants:
 | [CLI guide](CLI.md) | You need to choose a verb, retrieve evidence, or interpret a scorecard. |
 | [Writing an evidence profile](WRITING-A-PROFILE.md) | You are extending extraction, contracts, or rendering. |
 | [Why Straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
+| [Comparisons](COMPARISONS.md) | You want the head-to-head data versus Headroom, rtk, Ponytail, Caveman, Maki, and the rest of the field. |
 <!-- docs-phase2:end -->
 
 ---
@@ -200,6 +201,6 @@ Every mechanism inherits the same invariants:
 
 **The store keeps the truth. The transcript keeps the address.**
 
-<sub><a href="../README.md">« repository</a> · <a href="index.md">docs page</a> · <a href="../spec/">specifications</a> · <a href="../evals/">evaluation receipts</a> · <a href="../ROADMAP.md">roadmap</a></sub>
+<sub><a href="../README.md">« repository</a> · <a href="../spec/">specifications</a> · <a href="../evals/">evaluation receipts</a> · <a href="../ROADMAP.md">roadmap</a></sub>
 
 </div>

@@ -5,16 +5,20 @@ on:
     paths:
       - "docs/**"
       - "assets/**"
+      - "README.md"
       - "scripts/fix_docs_svgs.py"
       - "scripts/check_docs_links.py"
+      - "scripts/check_docs_facts.py"
       - ".github/workflows/docs-integrity.yml"
   push:
     branches: [main]
     paths:
       - "docs/**"
       - "assets/**"
+      - "README.md"
       - "scripts/fix_docs_svgs.py"
       - "scripts/check_docs_links.py"
+      - "scripts/check_docs_facts.py"
       - ".github/workflows/docs-integrity.yml"
 
 permissions:
@@ -32,3 +36,5 @@ jobs:
         run: python scripts/fix_docs_svgs.py --check
       - name: Validate documentation links and SVG files
         run: python scripts/check_docs_links.py
+      - name: Check documentation facts against source of truth
+        run: python scripts/check_docs_facts.py

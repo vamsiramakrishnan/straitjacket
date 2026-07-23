@@ -155,9 +155,14 @@ ctx ask "Where is TokenBucket defined" --intent locate --plan   # show the compi
 
 `ctx ask` compiles a repository question into a typed intent preset — a frozen
 `ctx.plan/v1` — and runs it on the plan executor, answering with the investigate
-digest. Three intents ship: `locate` (where is X), `impact` (what breaks if X
-changes), `diagnose` (what explains the captured failures — reads captured facts,
-never reruns tests). There is no natural-language parser: `--intent` is required
+digest. Seven intents ship — five that observe and two that execute:
+`locate` (where is X defined and used), `impact` (what could break if X
+changes), `diagnose` (what explains the captured failures — reads captured
+facts, never reruns tests), `trace` (how control/data flows through X),
+`compare` (what differs between two runs), `verify` (what proves a change is
+correct — execute-class, runs the test command), and `review` (what changed,
+what is risky, what is under-verified — execute-class). There is no
+natural-language parser: `--intent` is required
 (a missing one is a teaching error that suggests, never guesses), and the subject
 is `--symbol` or the question's sole identifier-shaped token, always disclosed.
 See [docs/ASK.md](ASK.md).
