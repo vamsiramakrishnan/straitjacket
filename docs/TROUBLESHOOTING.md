@@ -190,7 +190,7 @@ never edited. Anything left out of a digest keeps a coordinate you can retrieve.
 **Does it change task outcomes?**
 In measured A/Bs, task success is at parity; the wins are cost, latency, turns,
 and evidence preservation. When output is small, digests pass it through roughly
-1:1. See [Why Straitjacket](WHY-STRAITJACKET.md) and [`evals/`](../evals/).
+1:1. See [Why straitjacket](WHY-STRAITJACKET.md) and [`evals/`](../evals/).
 
 **Do I need ripgrep / ctags / other binaries?**
 No. They accelerate or enrich analysis, but every path has a pure-Python

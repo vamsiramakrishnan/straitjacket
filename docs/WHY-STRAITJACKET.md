@@ -1,16 +1,15 @@
-# Why Straitjacket
+# Why straitjacket
 
-Coding agents do not merely consume context. They repeatedly **carry prior tool output
-through a probabilistic control loop**. That makes context management a cumulative-cost
-problem across tokens, cache behavior, turns, latency, and decision quality.
+Coding agents do not just consume context once. They carry prior tool output through a
+probabilistic control loop, turn after turn. That makes context management a
+cumulative-cost problem across tokens, cache behavior, turns, latency, and decision
+quality.
 
-Straitjacket changes the data structure of the interaction:
-
-> Keep evidence in an immutable, addressable store. Keep only a bounded index over that
-> evidence in the transcript.
+straitjacket changes how the interaction is stored: the complete evidence goes into an
+immutable, addressable store, and the transcript keeps only a bounded index into it.
 
 The immediate benefit is smaller prompts. The deeper benefit is fewer expensive
-boundary crossings between deterministic computation and probabilistic reasoning.
+crossings between deterministic computation and probabilistic reasoning.
 
 ## The naive loop is cumulative
 
@@ -40,7 +39,7 @@ by deleting evidence without a durable route back to the exact source.
 
 ## Bounded digests reduce the inner term
 
-Straitjacket captures every raw byte and replaces each unbounded output with a digest
+straitjacket captures every raw byte and replaces each unbounded output with a digest
 whose visible size is bounded by $B$:
 
 $$
@@ -150,7 +149,7 @@ $$
 quality \propto recall_{decisive} \times precision_{presented} \times coverage\ confidence
 $$
 
-That is why a Straitjacket digest includes a census, exact addresses, declared omission,
+That is why a straitjacket digest includes a census, exact addresses, declared omission,
 and a coverage receipt—not merely a compressed summary.
 
 ## The architecture follows from the economics
@@ -178,38 +177,38 @@ expensive category error.
 
 ## Why addresses instead of lossy compression
 
-Lossy compression answers “what can be removed?” Straitjacket asks a stricter question:
+Lossy compression answers “what can be removed?” straitjacket asks a stricter question:
 
-> What can leave the current view while preserving an exact, bounded route back?
+> What can leave the current view while keeping an exact, bounded route back?
 
-An omission without an address becomes an irreversible quality bet. An omission with a
-span is a paging decision. The transcript can stay small without pretending the omitted
-evidence never existed.
+An omission without an address is a permanent loss. An omission with a span is only
+paging: the bytes are still in the store, one retrieval away. The transcript can stay
+small without discarding the omitted evidence.
 
-This is the architectural fault line between Straitjacket and the neighbouring tools.
+This is the architectural fault line between straitjacket and the neighbouring tools.
 A rewriting proxy compresses *after* the bytes are already resident and discards the
 original; source-side filters and terse-prompting styles cut earlier but still throw the
-cut bytes away. Straitjacket captures at the source into an addressable store and puts
+cut bytes away. straitjacket captures at the source into an addressable store and puts
 only a bounded digest — plus a resolvable address for every omitted byte — on the wire.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two lanes. Top: an agent loop feeds a rewriting proxy that compresses messages and rewrites history on each call; the model sees a rewritten log and the quiet needle is silently dropped with no address. Bottom: Straitjacket captures tool output at the birth gate into an immutable addressable store, sends the model a bounded digest, and ctx get resolves any omitted line by address.">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two lanes. Top: an agent loop feeds a rewriting proxy that compresses messages and rewrites history on each call; the model sees a rewritten log and the quiet needle is silently dropped with no address. Bottom: straitjacket captures tool output at the birth gate into an immutable addressable store, sends the model a bounded digest, and ctx get resolves any omitted line by address.">
 </picture>
 
 The same divergence, seen across the whole field — each tile names a neighbour's one
-good idea and the lossless form Straitjacket adopted (the amber strip):
+good idea and the lossless form straitjacket adopted (the amber strip):
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap-light.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail, Maki and wozcode. Each tile names the tool's one good idea, its limitation, and the lossless form Straitjacket adopted.">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap-light.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail, Maki and wozcode. Each tile names the tool's one good idea, its limitation, and the lossless form straitjacket adopted.">
 </picture>
 
-## What Straitjacket is not
+## What straitjacket is not
 
 ### Not agent memory
 
-Memory systems decide what prior information to recall. Straitjacket governs the birth,
+Memory systems decide what prior information to recall. straitjacket governs the birth,
 residence, and delivery of evidence generated during tool use. It can support memory,
 but its contract is narrower and more testable.
 
@@ -227,7 +226,7 @@ a distinct security boundary.
 ### Not a larger context window
 
 A larger window raises the ceiling while preserving cumulative transcript growth. It
-also increases the amount of evidence the model must discriminate. Straitjacket changes
+also increases the amount of evidence the model must discriminate. straitjacket changes
 what occupies the window.
 
 ## The product-level metric
@@ -249,14 +248,13 @@ re-execution, evidence recall, and false interventions—not one proprietary sco
 
 ## The stronger thesis
 
-Straitjacket began as output containment. Its broader opportunity is:
+straitjacket began as output containment. Its broader goal is to minimize the crossings
+between deterministic computation and probabilistic reasoning while keeping reversible
+access to the evidence.
 
-> **Minimize probabilistic boundary crossings while preserving reversible access to
-> deterministic evidence.**
-
-That framing unifies capture, typed evidence, query algebra, compiled investigation
-plans, auditable delegation, and future broker isolation. The transcript becomes a
-control surface over evidence—not the place evidence goes to live.
+That goal unifies capture, typed evidence, the query algebra, compiled investigation
+plans, auditable delegation, and future broker isolation. The transcript holds pointers
+to evidence; the evidence itself stays in the store.
 
 ---
 

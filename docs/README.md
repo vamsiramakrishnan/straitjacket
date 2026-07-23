@@ -5,8 +5,6 @@
   <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs-header-light.svg" width="100%" alt="straitjacket documentation — use the harness, understand the architecture, verify the claims, and extend the evidence system.">
 </picture>
 
-**Use it. Understand it. Verify it. Extend it.**
-
 [How it works](HOW-IT-WORKS.md) · [Getting started](GETTING-STARTED.md) · [Core concepts](CONCEPTS.md) · [Architecture path](#architecture-reading-path) · [Evaluation receipts](../evals/) · [Normative specs](../spec/)
 
 </div>
@@ -102,7 +100,7 @@ The open-loop ladders fired on output volume while the actual failure lived on t
 
 ### 3. [EDC — govern evidence delivery](EDC.md)
 
-The Evidence Delivery Controller replaces profile-specific truncation logic with typed evidence, command-family contracts, one policy resolver, deterministic plans, and coverage receipts. **Coverage is the objective; size is the constraint.**
+The Evidence Delivery Controller replaces profile-specific truncation logic with typed evidence, command-family contracts, one policy resolver, deterministic plans, and coverage receipts. It optimizes for keeping the required facts, and treats the token budget as the limit to fit them into.
 
 ### 4. [ALGEBRA — derive and compose evidence](ALGEBRA.md)
 
@@ -201,15 +199,13 @@ Every mechanism inherits the same invariants:
 | [Configuration](CONFIGURATION.md) | You want to tune budgets, the guard, scopes, or redaction in `ctx.toml`. |
 | [Troubleshooting & FAQ](TROUBLESHOOTING.md) | Something isn't working, or you have a "does it…?" question. |
 | [Writing an evidence profile](WRITING-A-PROFILE.md) | You are extending extraction, contracts, or rendering. |
-| [Why Straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
+| [Why straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
 | [Comparisons](COMPARISONS.md) | You want the head-to-head data versus Headroom, rtk, Ponytail, Caveman, Maki, and the rest of the field. |
 <!-- docs-phase2:end -->
 
 ---
 
 <div align="center">
-
-**The store keeps the truth. The transcript keeps the address.**
 
 <sub><a href="../README.md">« repository</a> · <a href="../spec/">specifications</a> · <a href="../evals/">evaluation receipts</a> · <a href="../ROADMAP.md">roadmap</a></sub>
 

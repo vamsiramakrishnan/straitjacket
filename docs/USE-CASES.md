@@ -1,11 +1,11 @@
 # Use cases
 
-Straitjacket is most valuable when a coding agent must inspect more evidence than its
+straitjacket is most valuable when a coding agent must inspect more evidence than its
 transcript can safely hold. The common thread is not “large output” by itself. It is
 **large output whose decisive evidence must remain recoverable after the first turn**.
 
 This page starts with the work, not the mechanism. Each pattern names the failure mode,
-the smallest useful Straitjacket verb, and the evidence that should cross back into the
+the smallest useful straitjacket verb, and the evidence that should cross back into the
 model’s context.
 
 ## Choose by failure mode
@@ -55,7 +55,7 @@ traceback. Detail remains one bounded page fault away.
 
 ### Do not use it when
 
-The command is statically small and already returns the complete answer. Straitjacket
+The command is statically small and already returns the complete answer. straitjacket
 should not turn a six-line unit-test result into a retrieval workflow.
 
 ## 2. Repository exploration fans out
@@ -154,8 +154,8 @@ being discarded.
 
 ### Why it helps
 
-Straitjacket treats position and rarity as evidence-selection signals while keeping the
-underlying bytes intact. “Not shown” remains different from “lost.”
+straitjacket treats position and rarity as selection signals and keeps the underlying
+bytes intact, so an omitted region stays retrievable instead of being lost.
 
 ## 5. You need the delta, not two transcripts
 
@@ -248,4 +248,4 @@ resolvable.
 
 ---
 
-[Getting started](GETTING-STARTED.md) · [CLI guide](CLI.md) · [Concepts](CONCEPTS.md) · [Why Straitjacket](WHY-STRAITJACKET.md)
+[Getting started](GETTING-STARTED.md) · [CLI guide](CLI.md) · [Concepts](CONCEPTS.md) · [Why straitjacket](WHY-STRAITJACKET.md)

@@ -282,7 +282,7 @@ A receipt is a durable explanation of a mechanism decision or benchmark result. 
 - a repeated command classified as equivalent;
 - a benchmark gate and its measured verdict.
 
-The project’s house rule is **receipts before doctrine**. A mechanism is adopted because observed behaviour supports it, not because the design sounds plausible.
+A mechanism is adopted because measured behaviour supports it, not because the design sounds plausible.
 
 ## The one-sentence model
 
