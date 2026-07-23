@@ -140,6 +140,8 @@ mechanical.
 |---|---|
 | to install and try it | [GETTING-STARTED.md](GETTING-STARTED.md) |
 | the vocabulary (artifact, span, digest, contract) | [CONCEPTS.md](CONCEPTS.md) |
+| to tune budgets, the guard, or scopes | [CONFIGURATION.md](CONFIGURATION.md) |
+| to fix a problem or ask "does it…?" | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 | the numbers behind every claim | [`evals/`](../evals/) — one receipt per claim |
 | why retrieval choices carry price tags | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
 | the formal objective and its theorems | [THEORY.md](THEORY.md) |

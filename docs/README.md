@@ -167,6 +167,8 @@ Every mechanism inherits the same invariants:
 | the ten-minute overview | [HOW-IT-WORKS.md](HOW-IT-WORKS.md) |
 | first successful session | [GETTING-STARTED.md](GETTING-STARTED.md) |
 | vocabulary and invariants | [CONCEPTS.md](CONCEPTS.md) |
+| every `ctx.toml` setting | [CONFIGURATION.md](CONFIGURATION.md) |
+| when something breaks | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 | retrieval economics | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
 | context rescue | [LOSSLESS-RESCUE.md](LOSSLESS-RESCUE.md) |
 | conditional mechanisms | [LADDERS.md](LADDERS.md) |
@@ -190,6 +192,8 @@ Every mechanism inherits the same invariants:
 |---|---|
 | [Use cases](USE-CASES.md) | You know the task or failure mode and want the shortest path through the harness. |
 | [CLI guide](CLI.md) | You need to choose a verb, retrieve evidence, or interpret a scorecard. |
+| [Configuration](CONFIGURATION.md) | You want to tune budgets, the guard, scopes, or redaction in `ctx.toml`. |
+| [Troubleshooting & FAQ](TROUBLESHOOTING.md) | Something isn't working, or you have a "does it…?" question. |
 | [Writing an evidence profile](WRITING-A-PROFILE.md) | You are extending extraction, contracts, or rendering. |
 | [Why Straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
 | [Comparisons](COMPARISONS.md) | You want the head-to-head data versus Headroom, rtk, Ponytail, Caveman, Maki, and the rest of the field. |

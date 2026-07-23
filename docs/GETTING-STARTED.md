@@ -30,9 +30,13 @@ Antigravity, Claude Code, and Codex — in one idempotent command. Existing
 host config is merged, never clobbered; re-running is a no-op. Verify:
 
 ```bash
-ctx doctor --antigravity    # 15 health checks
+ctx doctor                      # validate the install, store, hooks, and classifier
+ctx doctor --antigravity        # also validate the Antigravity plugin files
 ctx wrap codex --print-config   # preview any host's config without writing
 ```
+
+Each check prints a `✓` or `✗`; a non-zero exit means something needs
+attention. [Troubleshooting](TROUBLESHOOTING.md) explains every failing check.
 
 Per host, what setup writes:
 
@@ -212,6 +216,9 @@ It is not yet a complete process sandbox. Commands execute with the authority of
 ## Where to go next
 
 - Read [Core concepts](CONCEPTS.md) for the vocabulary used throughout the project.
+- Keep the [CLI guide](CLI.md) handy for the full verb reference.
+- Tune budgets, the guard, and scopes in the [Configuration reference](CONFIGURATION.md).
+- Hit a snag? [Troubleshooting & FAQ](TROUBLESHOOTING.md) is symptom → cause → fix.
 - Read [the documentation map](README.md) for the architecture sequence.
 - Inspect [`evals/`](../evals/) to reproduce the measured claims.
 - Use [`spec/`](../spec/) when you need normative schemas or compatibility contracts.
