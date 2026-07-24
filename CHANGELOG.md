@@ -39,10 +39,17 @@ routing work across the harnesses it finds by what their models cost.
   fallback DAG (explore→implement→verify) is used, so orchestration works
   offline. Bounded by `max_waves` / `max_replans` / `budget_usd`; fail-open
   throughout; a single installed harness degrades with zero claimed saving.
-- **Capability × price on the registry**: `HostSpec` gains `capability_tier`
-  (frontier > standard > economy), `strengths` tags, and `coordinator_model`
-  (the cheap model each host runs when planning). New `gemini-3.5-flash-lite`
-  economy price row.
+- **Routing is by model, not just harness.** `HostSpec` carries a `models`
+  catalog — each harness runs several models spanning tiers (Claude:
+  opus-4.8/sonnet-4.6/haiku-4.5; Codex: gpt-5.6 sol/terra/luna; Antigravity:
+  gemini-3.1-pro/3.6-flash/3.6-flash-lite), researched from each CLI's model
+  list. `hosts.pick_model` chooses the cheapest `(harness, model)` that clears a
+  node's tier and covers its roles, so **ordinary implementation routes to a
+  cheap standard model (Gemini 3.6 Flash) and planning to a frontier model — even
+  within a single harness** (Claude-only still routes explore→Haiku, plan→Opus,
+  implement→Sonnet). Nodes can pin `"model"`; escalation bumps to a stronger
+  model; the model catalog is documented in the routing skill. New
+  gemini-3.6-flash / 3.6-flash-lite / 3.5-flash-lite price rows.
 - **Routing skill** (`references/harness-collaboration.md`): the `ctx.route/v1`
   contract and capability×price routing rules, kept in lockstep with
   `ROUTING_CONTRACT` so the coordinator behaves the same from the skill or the

@@ -8,35 +8,60 @@ whether it read this skill or only the inlined prompt.
 
 ## The idea
 
-Not every part of a task needs the strongest model. Searching, triaging logs,
-and running a verification are cheap work; synthesis and code edits are not.
-The coordinator (a cheap model — e.g. Antigravity on Gemini-flash-lite) splits
-the task into a small dependency graph and assigns each node to the harness
-whose *capability* fits, spending the *cheapest* harness that clears the bar.
-Nodes hand off **addressed evidence** — a `checkpoint:` in the shared store —
-never raw bytes, so a dependent sees a bounded digest and resolves handles with
-`ctx get`.
+Not every part of a task needs the strongest model, and the unit of routing is
+the **model**, not the harness — each harness runs several models across tiers.
+Searching and triaging are economy work; **ordinary implementation and edits are
+fine on a cheap *standard* model** (e.g. Gemini 3.6 Flash), not a frontier one;
+architecture and hard reasoning want a frontier model (Opus, Gemini 3.1 Pro, GPT
+Sol). The coordinator (a cheap model — Antigravity on Gemini-flash-lite) splits
+the task into a small dependency graph and assigns each node a `(harness, model)`
+by *capability × price*: the cheapest model that clears the node's tier and
+covers its roles. Nodes hand off **addressed evidence** — a `checkpoint:` in the
+shared store — never raw bytes.
 
 This is task coordination, not open-loop calling: independent nodes run in
-parallel; a failed node escalates to a stronger harness; after a wave the
+parallel; a failed node escalates to a stronger model; after a wave the
 coordinator may add follow-up nodes from what came back.
+
+## Supported models per harness (2026-07)
+
+Researched from Claude Code `/model`, the Codex model picker, and Antigravity's
+model list. Tiers are a declared, overridable heuristic. Adding a model is a
+data edit in `ctx/hosts.py` (`HostSpec.models`); prices live in
+`ctx/data/model-prices.json`.
+
+| Harness | frontier (plan/reason) | standard (implement/edit) | economy (explore/verify) |
+|---|---|---|---|
+| **claude** (Claude Code) | claude-opus-4.8 | claude-sonnet-4.6 | claude-haiku-4.5 |
+| **codex** (Codex CLI) | gpt-5.6-sol | gpt-5.6-terra | gpt-5.6-luna |
+| **antigravity** (Gemini) | gemini-3.1-pro | gemini-3.6-flash | gemini-3.6-flash-lite |
+
+(Antigravity is BYO-model and can also run Claude/GPT; only its Gemini tiers are
+modeled here.) `ctx orchestrate` passes the *installed* subset of this catalog to
+the coordinator as the live menu, with each model's list price.
 
 ## The menu
 
-`ctx orchestrate` hands the coordinator the installed harnesses with their
-capability tier, list price, and strengths, e.g.:
+`ctx orchestrate` hands the coordinator every installed `(harness, model)` with
+tier, price, and roles, e.g.:
 
 ```
-harnesses available (capability · $in/$out per 1M):
-  antigravity economy   $0.50/$3.00   strengths: search, triage, bulk, verify, summarize, explore
-  codex       standard  $2.50/$15.00  strengths: code, implement, edit, test
-  claude      frontier  $3.00/$15.00  strengths: reason, synthesize, implement, edit, code, review, decide
+harnesses & models available (model · tier · $in/$out per 1M · roles):
+  antigravity:
+    gemini-3.1-pro         frontier  $2.00/$12.00  plan, reason, review, architect
+    gemini-3.6-flash       standard  $1.25/$7.50   implement, edit, code, summarize
+    gemini-3.6-flash-lite  economy   $0.15/$1.00   explore, search, triage, verify
+  claude:
+    claude-opus-4.8        frontier  $15.00/$75.00 plan, reason, synthesize, decide, review, architect
+    claude-sonnet-4.6      standard  $3.00/$15.00  implement, edit, code, review
+    claude-haiku-4.5       economy   $1.00/$5.00   explore, search, triage, verify, summarize
 ```
 
 Capability tiers, strongest → weakest: **frontier > standard > economy**. A
 node's `min_tier` is the *weakest* tier that can do it; the router picks the
-cheapest installed harness at or above that tier that covers the node's
-capability tags.
+cheapest `(harness, model)` at or above that tier that covers the node's roles.
+Pin `"model"` on a node to override — e.g. planning is often worth Opus even
+when a cheaper frontier model exists.
 
 ## The output contract — `ctx.route/v1`
 
@@ -59,21 +84,24 @@ Output **only** a JSON object, no prose:
 }
 ```
 
-Per-node fields: `id` (unique), `goal` (what the assigned harness must do),
+Per-node fields: `id` (unique), `goal` (what the assigned model must do),
 `role` (a short label), `min_tier`, `needs` (capability tags), `deps` (node ids
 that must finish first — their checkpoints are handed to this node),
 `est_input_tokens` / `est_output_tokens` (to price the plan). Optional
-`"host": "<name>"` pins a specific harness instead of letting the router choose.
+`"host": "<name>"` and/or `"model": "<id from the menu>"` pin a specific harness
+or model instead of letting the router pick the cheapest eligible one.
 
 ## Rules
 
 1. **Decompose only where it helps.** A trivial task is ONE node. Fan out only
    when subtasks are genuinely independent (they run in parallel) or form a real
    dependency chain.
-2. **Cheapest tier that can do the work.** Put exploration / search / triage /
-   verification at `economy`; code generation at `standard`; synthesis, edits,
-   and decisions at `frontier`. Do not send everything to the frontier model —
-   that defeats the point.
+2. **Route by model — cheapest tier that can do the work.** Exploration /
+   search / triage / verification → `economy`; **ordinary implementation and
+   edits → `standard`** (a cheap capable model like Gemini flash, not a frontier
+   one); architecture, planning, and hard reasoning → `frontier`. Do not send
+   everything to the frontier model — that defeats the point. Pin `"model"` only
+   when the specific model matters (e.g. Opus for a hard planning node).
 3. **Keep the graph acyclic and small** (bounded by `[orchestrate] max_nodes`).
    `deps` express ordering; a dependent waits for its upstreams and receives
    their checkpoints.

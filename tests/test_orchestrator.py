@@ -42,13 +42,16 @@ def _ok_launch(host, root, prompt, exe, *, timeout, model=""):
 # --------------------------------------------------------------- fallback route
 
 
-def test_fallback_route_is_capability_routed():
+def test_fallback_route_is_model_routed():
     plan = fallback_route("t", _hosts("claude", "antigravity"), _POLICY())
-    by_id = {a.node.id: a.host.name for a in plan.assigned}
-    assert by_id["explore"] == "antigravity"    # economy tier
-    assert by_id["implement"] == "claude"        # frontier tier
-    assert by_id["verify"] == "antigravity"      # economy tier
-    # Coordinator is the cheapest planner (antigravity/flash-lite).
+    by_id = {a.node.id: a for a in plan.assigned}
+    # plan gets a frontier model; ordinary implementation gets a STANDARD model
+    # (the cheap flash), not a frontier one — the point of routing by model.
+    assert by_id["explore"].model.tier == "economy"
+    assert by_id["plan"].model.tier == "frontier"
+    assert by_id["implement"].model.tier == "standard"
+    assert by_id["implement"].model.id == "gemini-3.6-flash"
+    assert by_id["verify"].model.tier == "economy"
     assert plan.coordinator.name == "antigravity"
 
 
@@ -57,10 +60,14 @@ def test_fallback_route_beats_single_premium():
     assert plan.est_total_usd < plan.est_single_premium_usd
 
 
-def test_single_host_degrades_with_zero_saving():
+def test_single_host_routes_across_its_own_models():
+    # Even one harness collaborates *across its models*: cheap explore/verify,
+    # frontier plan, standard implement — so it still beats an all-frontier run.
     plan = fallback_route("t", _hosts("claude"), _POLICY())
     assert {a.host.name for a in plan.assigned} == {"claude"}
-    assert plan.est_total_usd == pytest.approx(plan.est_single_premium_usd)
+    tiers = {a.node.id: a.model.tier for a in plan.assigned}
+    assert tiers["explore"] == "economy" and tiers["plan"] == "frontier"
+    assert plan.est_total_usd < plan.est_single_premium_usd
 
 
 # --------------------------------------------------------------- route IR
@@ -77,17 +84,27 @@ def _plan_raw(**over):
     return base
 
 
-def test_build_route_plan_assigns_by_capability():
+def test_build_route_plan_assigns_by_model_tier():
     plan = build_route_plan("t", _plan_raw(), _hosts("claude", "antigravity"), _POLICY())
-    by_id = {a.node.id: a.host.name for a in plan.assigned}
-    assert by_id["a"] == "antigravity"   # economy
-    assert by_id["b"] == "claude"        # frontier
+    by_id = {a.node.id: a for a in plan.assigned}
+    assert by_id["a"].model.tier == "economy"    # search node
+    assert by_id["b"].model.tier == "frontier"   # edit-at-frontier node
 
 
 def test_host_pin_is_honored_when_installed():
     raw = {"nodes": [{"id": "a", "goal": "x", "min_tier": "economy", "host": "claude", "deps": []}]}
     plan = build_route_plan("t", raw, _hosts("claude", "antigravity"), _POLICY())
     assert plan.assigned[0].host.name == "claude"
+
+
+def test_model_pin_is_honored():
+    # The coordinator can pin a specific model (e.g. Opus for planning quality),
+    # overriding the cheapest-model default.
+    raw = {"nodes": [{"id": "p", "goal": "plan it", "min_tier": "frontier",
+                      "host": "claude", "model": "claude-opus-4.8", "deps": []}]}
+    plan = build_route_plan("t", raw, _hosts("claude", "antigravity"), _POLICY())
+    assert plan.assigned[0].host.name == "claude"
+    assert plan.assigned[0].model.id == "claude-opus-4.8"
 
 
 def test_cycle_is_rejected():
@@ -197,25 +214,28 @@ def test_dependent_node_sees_upstream_checkpoints(state_home, git_workspace):
     saw = {}
 
     def launch(host, root, prompt, exe, *, timeout, model=""):
-        saw[host.name] = "checkpoint:" in prompt
-        return 0, f"{host.name} ok", ""
+        # record whether each node saw an upstream checkpoint, keyed by node id
+        nid = "a" if "node 'a'" in prompt else "b"
+        saw[nid] = "checkpoint:" in prompt
+        return 0, "ok", ""
 
     run_route(ws, plan, ws.config.orchestrate, launch=launch)
-    assert saw["antigravity"] is False   # node a, no upstream
-    assert saw["claude"] is True         # node b sees a's checkpoint
+    assert saw["a"] is False   # node a, no upstream
+    assert saw["b"] is True    # node b sees a's checkpoint
 
 
-def test_failed_node_escalates_to_stronger_harness(state_home, git_workspace):
+def test_failed_node_escalates_to_stronger_model(state_home, git_workspace):
     ws = make_ws(git_workspace)
     raw = {"nodes": [{"id": "a", "goal": "x", "min_tier": "economy", "deps": []}]}
     plan = build_route_plan("t", raw, _hosts("claude", "antigravity"), ws.config.orchestrate)
-
+    # Economy models fail; a stronger tier recovers.
     def launch(host, root, prompt, exe, *, timeout, model=""):
-        return (1, "", "boom") if host.name == "antigravity" else (0, "recovered", "")
+        return (1, "", "boom") if model.endswith("flash-lite") or "haiku" in model else (0, "recovered", "")
 
     result = run_route(ws, plan, ws.config.orchestrate, launch=launch)
     o = result.outcomes[0]
-    assert o.status == "ok" and o.escalated_to == "claude"
+    assert o.status == "ok"
+    assert o.escalated_to and "/" in o.escalated_to   # escalated to a stronger (host, model)
 
 
 def test_dependent_skipped_when_upstream_fails(state_home, git_workspace):

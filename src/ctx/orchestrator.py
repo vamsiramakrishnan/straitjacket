@@ -41,9 +41,10 @@ from pathlib import Path
 
 from ctx.hosts import (
     DetectedHost,
+    ModelChoice,
     installed_harnessable,
     pick_coordinator,
-    pick_worker,
+    pick_model,
     tier_rank,
 )
 
@@ -69,10 +70,14 @@ Rules:
 - Decompose only where it helps. A trivial task is ONE node. Fan out only when
   subtasks are genuinely independent or form a real dependency chain.
 - Each node: {"id","goal","role","min_tier","needs":[tags],"deps":[ids],
-  "est_input_tokens","est_output_tokens"}. Optionally pin "host":"<name>".
+  "est_input_tokens","est_output_tokens"}. Optionally pin "host":"<name>" and/or
+  "model":"<model id from the menu>".
 - min_tier is the weakest capability that can do the node: economy < standard <
-  frontier. Put exploration/search/triage/verify at economy; synthesis/edit/
-  decisions at frontier. The router picks the cheapest eligible harness.
+  frontier. Route by MODEL, not just harness: put exploration/search/triage/
+  verify at economy; ordinary implementation/edits at STANDARD (a cheap capable
+  model like Gemini-flash, not the frontier one); architecture/planning/hard
+  reasoning at frontier. The router picks the cheapest model that meets the tier
+  and covers the roles across all harnesses.
 - deps make a node wait for others; their evidence (a checkpoint:) is handed to
   it. Keep the graph acyclic.
 Return: {"schema":"ctx.route/v1","nodes":[ ... ]}
@@ -92,15 +97,17 @@ class RouteNode:
     deps: tuple[str, ...]
     est_input_tokens: int
     est_output_tokens: int
-    host_pin: str = ""   # optional explicit harness name from the coordinator
+    host_pin: str = ""    # optional explicit harness name from the coordinator
+    model_pin: str = ""   # optional explicit model id from the coordinator
 
 
 @dataclass
 class AssignedNode:
     node: RouteNode
     host: DetectedHost
+    model: ModelChoice
     est_cost_usd: float
-    tier_met: bool  # False when no installed host met min_tier (assigned strongest)
+    tier_met: bool  # False when no installed model met min_tier (assigned strongest)
 
 
 @dataclass
@@ -116,12 +123,14 @@ class RoutePlan:
 
     @property
     def est_single_premium_usd(self) -> float:
-        premium = _premium(self.hosts)
-        if premium is None:
+        frontier = _frontier_model(list(self.hosts))
+        if frontier is None:
             return 0.0
+        host, model = frontier
+        price = host.model_price(model.id)
         i = sum(a.node.est_input_tokens for a in self.assigned)
         o = sum(a.node.est_output_tokens for a in self.assigned)
-        return premium.price.cost_usd(input_tokens=i, output_tokens=o)
+        return price.cost_usd(input_tokens=i, output_tokens=o)
 
     def waves(self) -> list[list[AssignedNode]]:
         """Topological layers: each wave's nodes depend only on earlier waves.
@@ -141,11 +150,15 @@ class RoutePlan:
         return layers
 
 
-def _premium(hosts: tuple[DetectedHost, ...] | list[DetectedHost]) -> DetectedHost | None:
-    inst = [h for h in hosts if h.installed]
-    if not inst:
+def _frontier_model(hosts: list[DetectedHost]) -> tuple[DetectedHost, ModelChoice] | None:
+    """The strongest model available (highest tier, then priciest) — the
+    baseline the collaboration is measured against."""
+    cands = [(h, m) for h in hosts if h.installed for m in h.models]
+    if not cands:
         return None
-    return sorted(inst, key=lambda h: (h.price.output, h.price.input, h.name))[-1]
+    return sorted(
+        cands, key=lambda hm: (tier_rank(hm[1].tier), hm[0].model_price(hm[1].id).output)
+    )[-1]
 
 
 def cost_ladder(hosts: list[DetectedHost]) -> list[DetectedHost]:
@@ -161,23 +174,36 @@ class RouteError(Exception):
 
 
 def _assign_host(node: RouteNode, hosts: list[DetectedHost]) -> AssignedNode:
-    """Resolve a node to a harness: an explicit pin if it is installed, else the
-    cheapest capability-eligible harness (pick_worker). Price the node."""
-    host = None
+    """Resolve a node to a (harness, model): honour explicit host/model pins when
+    valid, else pick the cheapest model that meets the tier and covers the roles
+    across all harnesses (pick_model). Price the node on the chosen model."""
+    host: DetectedHost | None = None
+    model: ModelChoice | None = None
     if node.host_pin:
-        host = next(
-            (h for h in hosts if h.installed and h.name == node.host_pin), None
-        )
-    if host is None:
-        host = pick_worker(hosts, min_tier=node.min_tier, need_tags=node.need_tags)
-    if host is None:
-        raise RouteError("no installed harness to assign a node to")
-    cost = host.price.cost_usd(
+        host = next((h for h in hosts if h.installed and h.name == node.host_pin), None)
+        if host is not None and node.model_pin:
+            model = host.spec.model(node.model_pin)
+    if host is not None and model is None:
+        # Host pinned but not the model: cheapest eligible model on that host.
+        model = _cheapest_model_on(host, node.min_tier, node.need_tags)
+    if host is None or model is None:
+        got = pick_model(hosts, min_tier=node.min_tier, need_tags=node.need_tags)
+        if got is None:
+            raise RouteError("no installed harness/model to assign a node to")
+        host, model = got
+    price = host.model_price(model.id)
+    cost = price.cost_usd(
         input_tokens=node.est_input_tokens, output_tokens=node.est_output_tokens
     )
     return AssignedNode(
-        node=node, host=host, est_cost_usd=cost, tier_met=host.meets_tier(node.min_tier)
+        node=node, host=host, model=model, est_cost_usd=cost,
+        tier_met=tier_rank(model.tier) >= tier_rank(node.min_tier),
     )
+
+
+def _cheapest_model_on(host: DetectedHost, min_tier: str, need_tags: tuple[str, ...]) -> ModelChoice | None:
+    got = pick_model([host], min_tier=min_tier, need_tags=need_tags)
+    return got[1] if got else None
 
 
 def _coerce_node(raw: dict, i: int) -> RouteNode:
@@ -194,6 +220,7 @@ def _coerce_node(raw: dict, i: int) -> RouteNode:
         est_input_tokens=int(raw.get("est_input_tokens") or 20000),
         est_output_tokens=int(raw.get("est_output_tokens") or 3000),
         host_pin=str(raw.get("host") or raw.get("host_pin") or "").strip(),
+        model_pin=str(raw.get("model") or raw.get("model_pin") or "").strip(),
     )
 
 
@@ -249,9 +276,13 @@ def _assert_acyclic(nodes: list[RouteNode]) -> None:
 
 
 def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
-    """Deterministic capability-routed DAG for when no coordinator can run:
-    explore (economy) -> implement (frontier) -> verify (economy). Same handoff
-    and pricing as a coordinator plan, no model call."""
+    """Deterministic model-routed DAG for when no coordinator can run:
+    explore (economy) -> plan (frontier) -> implement (STANDARD) -> verify
+    (economy). Planning gets a frontier model; ordinary implementation gets the
+    cheapest capable *standard* model (e.g. Gemini-flash), not the frontier one
+    — the point of routing by model. Same handoff/pricing as a coordinator plan,
+    no model call."""
+    plan_in = max(1, cfg.implement_input_tokens // 3)
     nodes = [
         RouteNode(
             "explore",
@@ -262,10 +293,17 @@ def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
             cfg.explore_input_tokens, cfg.explore_output_tokens,
         ),
         RouteNode(
+            "plan",
+            "from the explore checkpoint, decide the approach and the exact edits",
+            "plan", "frontier",
+            ("plan", "reason", "architect"), ("explore",),
+            plan_in, cfg.explore_output_tokens,
+        ),
+        RouteNode(
             "implement",
-            "make the change from the addressed evidence in the explore checkpoint",
-            "implement", "frontier",
-            ("synthesize", "implement", "edit"), ("explore",),
+            "make the edits the plan checkpoint specifies",
+            "implement", "standard",
+            ("implement", "edit", "code"), ("plan",),
             cfg.implement_input_tokens, cfg.implement_output_tokens,
         ),
         RouteNode(
@@ -291,15 +329,17 @@ def _usd(x: float) -> str:
 
 
 def build_menu(hosts: list[DetectedHost]) -> str:
-    """The capability x price menu handed to the coordinator and shown to the
-    user — the harnesses it may route to."""
-    rows = ["harnesses available (capability · $in/$out per 1M):"]
+    """The capability × price × model menu handed to the coordinator and shown to
+    the user — every (harness, model) it may route to, so it can pin a model."""
+    rows = ["harnesses & models available (model · tier · $in/$out per 1M · roles):"]
     for h in cost_ladder(hosts):
-        rows.append(
-            f"  {h.name:11} {h.capability_tier:9} "
-            f"{_usd(h.price.input)}/{_usd(h.price.output)}  "
-            f"strengths: {', '.join(h.strengths) or '—'}"
-        )
+        rows.append(f"  {h.name}:")
+        for m in sorted(h.models, key=lambda m: (-tier_rank(m.tier), h.model_price(m.id).output)):
+            p = h.model_price(m.id)
+            rows.append(
+                f"    {m.id:22} {m.tier:9} {_usd(p.input)}/{_usd(p.output)}  "
+                f"{', '.join(m.roles) or '—'}"
+            )
     return "\n".join(rows)
 
 
@@ -320,8 +360,8 @@ def render_route_plan(plan: RoutePlan) -> str:
             dep = f" ⇐ {','.join(a.node.deps)}" if a.node.deps else ""
             warn = "" if a.tier_met else "  ⚠ tier unmet (assigned strongest)"
             lines.append(
-                f"    {a.node.id:10} → {a.host.name:11} "
-                f"({a.node.min_tier}/{a.host.capability_tier}) "
+                f"    {a.node.id:10} → {a.host.name}/{a.model.id} "
+                f"({a.node.min_tier}→{a.model.tier}) "
                 f"est ~{_usd(a.est_cost_usd)}{dep}{warn}"
             )
     baseline = plan.est_single_premium_usd
@@ -514,16 +554,20 @@ def _node_prompt(node: RouteNode, task: str, dep_docs: list[str]) -> str:
     return p
 
 
-def _stronger_host(current: DetectedHost, hosts: list[DetectedHost]) -> DetectedHost | None:
-    """The cheapest installed host strictly more capable than ``current`` — the
-    escalation target for a failed node."""
-    stronger = [
-        h for h in hosts
-        if h.installed and tier_rank(h.capability_tier) > tier_rank(current.capability_tier)
+def _escalate(
+    cur_model: ModelChoice, hosts: list[DetectedHost]
+) -> tuple[DetectedHost, ModelChoice] | None:
+    """The cheapest (host, model) strictly more capable than the failed node's
+    model — the escalation target. One tier up, cheapest, across all harnesses."""
+    better = [
+        (h, m) for h in hosts if h.installed for m in h.models
+        if tier_rank(m.tier) > tier_rank(cur_model.tier)
     ]
-    if not stronger:
+    if not better:
         return None
-    return sorted(stronger, key=lambda h: (h.price.output, h.price.input, h.name))[0]
+    return sorted(
+        better, key=lambda hm: (tier_rank(hm[1].tier), hm[0].model_price(hm[1].id).output, hm[0].name)
+    )[0]
 
 
 def run_route(
@@ -563,18 +607,20 @@ def run_route(
     def run_one(a: AssignedNode) -> NodeOutcome:
         dep_docs = [docs[d] for d in a.node.deps if d in docs]
         prompt = _node_prompt(a.node, plan.task, dep_docs)
-        code, out, err = launch(a.host, ws.root, prompt, resolved_exe, timeout=timeout)
+        host, model = a.host, a.model
+        code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout, model=model.id)
         escalated = None
         if code != 0:
-            target = _stronger_host(a.host, hosts)
+            target = _escalate(a.model, hosts)
             if target is not None:
-                escalated = target.name
-                code, out, err = launch(target, ws.root, prompt, resolved_exe, timeout=timeout)
+                host, model = target
+                escalated = f"{host.name}/{model.id}"
+                code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout, model=model.id)
         ref = _checkpoint_node(ws, a.node, plan.task, out, err)
         tail = (out or err or "").strip().splitlines()
         return NodeOutcome(
             node_id=a.node.id,
-            host_name=escalated or a.host.name,
+            host_name=f"{host.name}/{model.id}",
             status="ok" if code == 0 else "failed",
             checkpoint_ref=ref,
             detail=(tail[-1][:200] if tail else "(no output)"),

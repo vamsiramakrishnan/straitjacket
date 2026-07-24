@@ -28,7 +28,7 @@ def test_detect_resolves_installed_and_price():
         hosts.host_by_name("claude"), which=_which_of("claude"), env={}
     )
     assert d.installed and d.path == "/usr/bin/claude"
-    assert d.model == "claude-sonnet"
+    assert d.model == "claude-sonnet-4.6"
     # Priced off the shipped table (sonnet tier).
     assert d.price.tier == "standard"
     assert d.price.output == 15.0
@@ -87,22 +87,32 @@ def test_capability_tiers_ordered():
     assert hosts.tier_rank("nonsense") == 0  # unknown fails safe (lowest)
 
 
-def test_pick_worker_gates_on_tier_then_price():
+def test_pick_model_picks_cheapest_at_tier():
     got = hosts.installed_harnessable(which=_which_of("claude", "codex", "antigravity"))
-    # economy work -> cheapest eligible (antigravity)
-    assert hosts.pick_worker(got, min_tier="economy", need_tags=("search",)).name == "antigravity"
-    # frontier work -> only claude qualifies
-    assert hosts.pick_worker(got, min_tier="frontier", need_tags=("edit",)).name == "claude"
-    # standard code work -> cheapest coverer at standard (codex)
-    assert hosts.pick_worker(got, min_tier="standard", need_tags=("code",)).name == "codex"
+    # economy work -> cheapest economy model across all harnesses
+    h, m = hosts.pick_model(got, min_tier="economy", need_tags=("search",))
+    assert (h.name, m.id, m.tier) == ("antigravity", "gemini-3.6-flash-lite", "economy")
+    # ordinary implementation only needs a standard model -> the cheap flash, not
+    # a frontier model. This is the point: implementation by Gemini flash.
+    h, m = hosts.pick_model(got, min_tier="standard", need_tags=("implement", "edit"))
+    assert (h.name, m.id, m.tier) == ("antigravity", "gemini-3.6-flash", "standard")
+    # a frontier node picks the cheapest frontier model
+    h, m = hosts.pick_model(got, min_tier="frontier", need_tags=("plan",))
+    assert m.tier == "frontier"
 
 
-def test_pick_worker_falls_back_to_strongest_when_tier_unmet():
+def test_pick_model_routes_within_a_single_harness():
+    # Even with only Claude installed, routing picks a different *model* per tier.
+    got = hosts.installed_harnessable(which=_which_of("claude"))
+    assert hosts.pick_model(got, min_tier="economy", need_tags=("explore",))[1].id == "claude-haiku-4.5"
+    assert hosts.pick_model(got, min_tier="standard", need_tags=("code",))[1].id == "claude-sonnet-4.6"
+    assert hosts.pick_model(got, min_tier="frontier", need_tags=("plan",))[1].id == "claude-opus-4.8"
+
+
+def test_pick_model_falls_back_to_strongest_when_tier_unmet():
     got = hosts.installed_harnessable(which=_which_of("antigravity"))
-    # frontier demanded but only economy installed -> strongest available, flagged by caller
-    picked = hosts.pick_worker(got, min_tier="frontier", need_tags=("edit",))
-    assert picked.name == "antigravity"
-    assert picked.meets_tier("frontier") is False
+    # frontier demanded; antigravity's ceiling is gemini-3.1-pro (frontier) -> met
+    assert hosts.pick_model(got, min_tier="frontier")[1].tier == "frontier"
 
 
 def test_pick_coordinator_is_cheapest_planner():
@@ -110,5 +120,5 @@ def test_pick_coordinator_is_cheapest_planner():
     coord = hosts.pick_coordinator(got)
     # Antigravity plans on Gemini-flash-lite — cheapest coordinator model.
     assert coord.name == "antigravity"
-    assert coord.spec.coord_model == "gemini-3.5-flash-lite"
+    assert coord.spec.coord_model == "gemini-3.6-flash-lite"
     assert coord.coordinator_price().output < coord.price.output

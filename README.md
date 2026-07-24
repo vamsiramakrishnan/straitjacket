@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,115 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,117 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -102,14 +102,16 @@ Plain-language highlights from recent releases; full detail in
 - **One-command, three-host setup.** `ctx wrap setup` harnesses Antigravity,
   Claude Code, *and Codex* (with real enforcement, not just advice) in a
   single idempotent command.
-- **Harness collaboration by capability × price.** `ctx wrap detect` finds every
-  coding-agent CLI on PATH and prices it by its model; `ctx orchestrate "<task>"`
-  then has a cheap coordinator (Gemini-flash-lite) split the task into a
-  `ctx.route/v1` DAG — economy work (search/triage/verify) to the cheap harness,
-  frontier work (synthesis/edit) to the strong one — and a **closed loop** runs
-  it: parallel waves, addressed-evidence handoff (not bytes), failure escalation
-  to a stronger harness, bounded re-planning. ~36% cheaper than a single-premium
-  run when an economy harness is present
+- **Harness collaboration by capability × price, per model.** `ctx wrap detect`
+  finds every coding-agent CLI on PATH and prices it by its model;
+  `ctx orchestrate "<task>"` then has a cheap coordinator (Gemini-flash-lite)
+  split the task into a `ctx.route/v1` DAG and route each node to the cheapest
+  *(harness, model)* that clears its tier — explore → an economy model, ordinary
+  **implementation → a cheap standard model (Gemini 3.6 Flash)**, planning → a
+  frontier model (Opus/Sol), even within one harness. A **closed loop** runs it:
+  parallel waves, addressed-evidence handoff (not bytes), failure escalation to a
+  stronger model, bounded re-planning. Routing across a harness's own models
+  saves ~72% vs an all-frontier run; ~92% with an economy harness present
   ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)).
 - **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
@@ -509,7 +511,7 @@ Full flags and when-to-use detail:
 | `debt` | declared-omission ledger for deferred engineering decisions (`add`/`list`/`resolve`) |
 | `policy` | compiled steering policy from telemetry (`compile`/`show`) |
 | `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages; `wrap detect` lists installed CLIs priced by model, `wrap setup` harnesses the ones it finds |
-| `orchestrate` | harness collaboration: a cheap coordinator (Gemini-flash-lite) splits a task across installed harnesses by **capability × price** into a `ctx.route/v1` DAG, then a closed loop runs it — parallel waves, `checkpoint:` handoff (evidence, not bytes), failure escalation to a stronger harness, bounded re-planning; prices the plan, then runs it |
+| `orchestrate` | harness collaboration: a cheap coordinator (Gemini-flash-lite) splits a task into a `ctx.route/v1` DAG and routes each node to the cheapest **(harness, model)** that clears its tier — implement on a cheap standard model, plan on a frontier one — then a closed loop runs it: parallel waves, `checkpoint:` handoff (evidence, not bytes), failure escalation to a stronger model, bounded re-planning; prices the plan, then runs it |
 | `init` / `doctor` | write `ctx.toml` + `.ctxignore` · validate hooks, manifests, store, classifier |
 
 Examples:

@@ -53,6 +53,20 @@ def tier_rank(tier: str) -> int:
 
 
 @dataclass(frozen=True)
+class ModelChoice:
+    """One model a harness can run, with its capability tier and the subtask
+    roles it is good at. Price comes from ``ctx.pricing.price_for(id)`` — this
+    table is capability, not cost. Researched per harness (Claude Code `/model`,
+    Codex model picker, Antigravity's BYO-model list) as of 2026-07; tiers are a
+    declared, overridable heuristic (fail-safe: the costly error is over-trusting
+    a weak model)."""
+
+    id: str
+    tier: str
+    roles: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class HostSpec:
     """Everything the harness needs to know about one coding-agent CLI.
 
@@ -77,10 +91,11 @@ class HostSpec:
     print_flag: tuple[str, ...] = ("-p",)   # one-shot / non-interactive run
     model_flag: str = "--model"             # flag that pins the model, if any
     vendor_hint: str = "unknown"
-    # Routing (capability x price). capability_tier reflects the host's *default*
-    # worker model; strengths are the subtask kinds it is good at; the router
-    # matches a subtask's needs against these and breaks ties on price.
-    capability_tier: str = "standard"
+    # Routing (capability x price). ``models`` is the catalog of models this
+    # harness can run, spanning tiers; the router picks a (harness, model) pair
+    # per subtask — the cheapest model that meets the tier and covers the roles.
+    # ``strengths`` are host-level orientation tags folded into role coverage.
+    models: tuple[ModelChoice, ...] = ()
     strengths: tuple[str, ...] = ()
     # The cheap model this host runs when it is the *coordinator* (planning/
     # routing), pinned via model_flag. Defaults to the worker model.
@@ -96,6 +111,23 @@ class HostSpec:
     def coord_model(self) -> str:
         return self.coordinator_model or self.default_model
 
+    def model(self, model_id: str) -> ModelChoice | None:
+        return next((m for m in self.models if m.id == model_id), None)
+
+    @property
+    def capability_tier(self) -> str:
+        """Headline tier = the default worker model's tier (for the detect
+        table). A harness typically spans several tiers via ``models``."""
+        m = self.model(self.default_model)
+        return m.tier if m else "standard"
+
+    @property
+    def max_tier(self) -> str:
+        """The strongest tier this harness can reach across its catalog."""
+        if not self.models:
+            return self.capability_tier
+        return max((m.tier for m in self.models), key=tier_rank)
+
 
 # ---------------------------------------------------------------------------
 # The registry. Order is display order (fully wired hosts first). The three
@@ -106,8 +138,8 @@ _REGISTRY: tuple[HostSpec, ...] = (
     HostSpec(
         name="antigravity",
         cli_bins=("antigravity",),
-        # Antigravity's default tier is Gemini flash (see ctx.engagement notes).
-        default_model="gemini-3-flash",
+        # Antigravity is BYO-model; its worker default is a Gemini flash tier.
+        default_model="gemini-3.6-flash",
         model_env=("ANTIGRAVITY_MODEL", "GEMINI_MODEL"),
         installer="install_antigravity",
         wrapper="wrap_antigravity",
@@ -116,16 +148,22 @@ _REGISTRY: tuple[HostSpec, ...] = (
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="google",
-        capability_tier="economy",
-        strengths=("search", "triage", "bulk", "verify", "summarize", "explore"),
-        # The cheapest Gemini tier — used when Antigravity is the coordinator.
-        coordinator_model="gemini-3.5-flash-lite",
-        notes="built-for host; cheap explore/verify; output gate nudge-only",
+        # Antigravity runs Gemini across tiers (it can also BYO Claude/GPT, not
+        # modeled here). Flash is a capable *implementation* model, not just
+        # explore — the whole point of routing by model.
+        models=(
+            ModelChoice("gemini-3.1-pro", "frontier", ("plan", "reason", "review", "architect")),
+            ModelChoice("gemini-3.6-flash", "standard", ("implement", "edit", "code", "summarize")),
+            ModelChoice("gemini-3.6-flash-lite", "economy", ("explore", "search", "triage", "verify")),
+        ),
+        strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
+        coordinator_model="gemini-3.6-flash-lite",
+        notes="built-for host; Gemini flash implements cheaply; output gate nudge-only",
     ),
     HostSpec(
         name="claude",
         cli_bins=("claude",),
-        default_model="claude-sonnet",
+        default_model="claude-sonnet-4.6",
         model_env=("ANTHROPIC_MODEL",),
         installer="install_claude",
         wrapper="wrap_claude",
@@ -133,9 +171,15 @@ _REGISTRY: tuple[HostSpec, ...] = (
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="anthropic",
-        capability_tier="frontier",
+        # Claude Code /model spans Opus (planning/reasoning) -> Sonnet (coding)
+        # -> Haiku (fast exploration). Model-level routing within one harness.
+        models=(
+            ModelChoice("claude-opus-4.8", "frontier", ("plan", "reason", "synthesize", "decide", "review", "architect")),
+            ModelChoice("claude-sonnet-4.6", "standard", ("implement", "edit", "code", "review")),
+            ModelChoice("claude-haiku-4.5", "economy", ("explore", "search", "triage", "verify", "summarize")),
+        ),
         strengths=("reason", "synthesize", "implement", "edit", "code", "review", "decide"),
-        coordinator_model="claude-haiku",
+        coordinator_model="claude-haiku-4.5",
         notes="ephemeral --settings wrap; reports real cost.total_cost_usd",
     ),
     HostSpec(
@@ -149,7 +193,13 @@ _REGISTRY: tuple[HostSpec, ...] = (
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="openai",
-        capability_tier="standard",
+        # Codex GPT-5.6 lineup: Sol (detail/polish) -> Terra (workhorse) ->
+        # Luna (repeatable). Strong code-gen across tiers.
+        models=(
+            ModelChoice("gpt-5.6-sol", "frontier", ("plan", "reason", "review", "architect")),
+            ModelChoice("gpt-5.6-terra", "standard", ("implement", "edit", "code", "test")),
+            ModelChoice("gpt-5.6-luna", "economy", ("explore", "verify", "triage")),
+        ),
         strengths=("code", "implement", "edit", "test"),
         coordinator_model="gpt-5.4-nano",
         notes="persistent .codex/ MCP + hooks; strong code-gen",
@@ -249,6 +299,10 @@ class DetectedHost:
         return self.spec.strengths
 
     @property
+    def models(self) -> tuple[ModelChoice, ...]:
+        return self.spec.models
+
+    @property
     def output_dollars_per_mtok(self) -> float:
         """The dominant term for agent work: output-token list price."""
         return self.price.output
@@ -259,13 +313,18 @@ class DetectedHost:
         """List price of the cheap model this host runs when coordinating."""
         return price_for(self.spec.coord_model, workspace_root=workspace_root)
 
+    def model_price(self, model_id: str, workspace_root: Path | str | None = None) -> Price:
+        return price_for(model_id, workspace_root=workspace_root)
+
     def covers(self, need_tags: tuple[str, ...]) -> int:
-        """How many of the needed capability tags this host is strong at."""
+        """How many of the needed capability tags this host is strong at
+        (host-level orientation; per-model coverage is finer, see pick_model)."""
         s = set(self.strengths)
         return sum(1 for t in need_tags if t in s)
 
     def meets_tier(self, min_tier: str) -> bool:
-        return tier_rank(self.capability_tier) >= tier_rank(min_tier)
+        """True when the harness can reach ``min_tier`` with *some* model."""
+        return tier_rank(self.spec.max_tier) >= tier_rank(min_tier)
 
 
 def _probe_version(path: str, argv: tuple[str, ...], *, timeout: float = 4.0) -> str | None:
@@ -353,28 +412,61 @@ def installed_harnessable(
     ]
 
 
+def _model_candidates(hosts: list[DetectedHost]) -> list[tuple[DetectedHost, ModelChoice]]:
+    """Every (installed host, model) pair the router may choose from."""
+    out: list[tuple[DetectedHost, ModelChoice]] = []
+    for h in hosts:
+        if not h.installed:
+            continue
+        for m in h.models:
+            out.append((h, m))
+    return out
+
+
+def pick_model(
+    hosts: list[DetectedHost],
+    *,
+    min_tier: str = "economy",
+    need_tags: tuple[str, ...] = (),
+) -> tuple[DetectedHost, ModelChoice] | None:
+    """The (harness, model) to run a subtask on: capability gates, price breaks
+    ties. This is the core of routing-by-model — a subtask that only needs a
+    standard model (e.g. an ordinary edit) picks the *cheapest* standard model
+    across all harnesses (say Gemini-flash), not a frontier one.
+
+    Eligible = models at or above ``min_tier``. Among those, prefer the most
+    role coverage (model roles + host strengths), then the cheapest output
+    price, then name/id (determinism). If nothing meets the tier, fall back to
+    the single strongest model available so a demanding subtask is never
+    silently dropped onto a too-weak model — the caller can see the tier was
+    unmet via ``ModelChoice.tier``."""
+    cands = _model_candidates(hosts)
+    if not cands:
+        return None
+    eligible = [(h, m) for (h, m) in cands if tier_rank(m.tier) >= tier_rank(min_tier)]
+    if eligible:
+        def score(hm: tuple[DetectedHost, ModelChoice]) -> tuple:
+            h, m = hm
+            cover = len(set(need_tags) & (set(m.roles) | set(h.strengths)))
+            p = h.model_price(m.id)
+            return (-cover, p.output, p.input, h.name, m.id)
+
+        return sorted(eligible, key=score)[0]
+    # Tier unmet: strongest model available (highest tier, then cheapest).
+    return sorted(
+        cands, key=lambda hm: (-tier_rank(hm[1].tier), hm[0].model_price(hm[1].id).output, hm[0].name)
+    )[0]
+
+
 def pick_worker(
     hosts: list[DetectedHost],
     *,
     min_tier: str = "economy",
     need_tags: tuple[str, ...] = (),
 ) -> DetectedHost | None:
-    """The harness to run a subtask on: capability gates, price breaks ties.
-
-    Eligible = installed hosts at or above ``min_tier``. Among those, prefer the
-    ones that cover the most needed capability tags, then the cheapest by output
-    price (then name, for determinism). If none meet the tier, fall back to the
-    single most capable installed host so a demanding subtask is never dropped
-    onto a too-weak model silently — the caller can see the tier was unmet."""
-    installed = [h for h in hosts if h.installed]
-    if not installed:
-        return None
-    eligible = [h for h in installed if h.meets_tier(min_tier)]
-    pool = eligible or installed
-    return sorted(
-        pool,
-        key=lambda h: (-h.covers(need_tags), h.price.output, h.price.input, h.name),
-    )[0]
+    """Back-compat host-level pick: the harness of the chosen (host, model)."""
+    got = pick_model(hosts, min_tier=min_tier, need_tags=need_tags)
+    return got[0] if got else None
 
 
 def pick_coordinator(hosts: list[DetectedHost]) -> DetectedHost | None:
@@ -391,6 +483,7 @@ def pick_coordinator(hosts: list[DetectedHost]) -> DetectedHost | None:
 
 __all__ = [
     "HostSpec",
+    "ModelChoice",
     "DetectedHost",
     "CAPABILITY_TIERS",
     "tier_rank",
@@ -401,6 +494,7 @@ __all__ = [
     "detect",
     "detect_all",
     "installed_harnessable",
+    "pick_model",
     "pick_worker",
     "pick_coordinator",
 ]
