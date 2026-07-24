@@ -640,6 +640,12 @@ def _main_slow(args: list[str]) -> int:
                 if agent_args.index("--proxy") < tail:
                     use_proxy = True
                     agent_args.remove("--proxy")
+            use_orchestrate = False
+            if "--orchestrate" in agent_args:
+                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+                if agent_args.index("--orchestrate") < tail:
+                    use_orchestrate = True
+                    agent_args.remove("--orchestrate")
             use_gateway = False
             if "--gateway" in agent_args:
                 tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
@@ -698,7 +704,8 @@ def _main_slow(args: list[str]) -> int:
             if ns.host == "claude":
                 if agent_args:
                     return wrap_claude(
-                        ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct
+                        ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct,
+                        orchestrate=use_orchestrate,
                     )
                 from ctx.installer import install_claude
 

@@ -46,7 +46,26 @@ _OUTPUT_DISCIPLINE = (
 )
 
 
-def _with_output_discipline(agent_args: list[str]) -> list[str]:
+# Orchestration belongs in the session, not in a command a human types.
+# `ctx orchestrate "<task>"` makes routing something you invoke; nobody wants to
+# stop and hand-route their own work. Wrapping with --orchestrate turns it into
+# a *mode*: the session itself splits multi-step work across the installed
+# models by cost, and the person just keeps working.
+_ORCHESTRATION_MODE = (
+    "Model routing is ON for this session. You have more than one model "
+    "available; spend the cheapest one that can do each part. Before a "
+    "multi-step task, split it: exploration, search, triage and verification "
+    "go to an economy model; ordinary edits to a standard model; only "
+    "architecture, planning and hard reasoning go to the flagship. Run "
+    "`ctx wrap detect` to see which harnesses and models are installed with "
+    "their prices, and `ctx orchestrate \"<task>\" --dry-run` to have the "
+    "routing planned and priced for you. Hand work between steps as ctx "
+    "handles (a checkpoint: or run:/blob:), never by pasting output. Do not "
+    "ask the user to route work — routing is your job now."
+)
+
+
+def _with_output_discipline(agent_args: list[str], *, orchestrate: bool = False) -> list[str]:
     """Prepend the emission-discipline system prompt for print-mode runs."""
     if os.environ.get("CTX_WRAP_NO_DISCIPLINE"):
         return agent_args
@@ -54,7 +73,10 @@ def _with_output_discipline(agent_args: list[str]) -> list[str]:
         return agent_args  # the user's own instruction wins
     if "-p" not in agent_args and "--print" not in agent_args:
         return agent_args  # interactive session: leave the human in charge
-    return ["--append-system-prompt", _OUTPUT_DISCIPLINE, *agent_args]
+    prompt = _OUTPUT_DISCIPLINE
+    if orchestrate:
+        prompt = prompt + " " + _ORCHESTRATION_MODE
+    return ["--append-system-prompt", prompt, *agent_args]
 
 
 _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
@@ -221,6 +243,7 @@ def wrap_claude(
     ctx_exe: str | None = None,
     use_proxy: bool = False,
     rescue_pct: float = 0.0,
+    orchestrate: bool = False,
 ) -> int:
     """Launch `claude` with harness hooks injected; leave zero residue."""
     claude = shutil.which("claude")
@@ -234,7 +257,7 @@ def wrap_claude(
         return 127
 
     exe = ctx_exe or _ctx_executable()
-    agent_args = _with_output_discipline(agent_args)
+    agent_args = _with_output_discipline(agent_args, orchestrate=orchestrate)
     agent_args = _with_collapse_tool_removal(agent_args, workspace_root)
     settings = prepare_claude(workspace_root, exe)
     # The explorer agent lives alongside the hooks for the session's lifetime.

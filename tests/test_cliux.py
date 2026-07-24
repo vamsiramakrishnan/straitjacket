@@ -57,13 +57,22 @@ def test_every_parser_command_is_listed_somewhere():
     assert real - listed == set(), f"parser has commands no help lists: {real - listed}"
 
 
-def test_front_door_stays_small():
-    """The first screen is a path, not a wall. If this fails, justify the growth."""
+def test_front_door_is_only_what_a_human_needs():
+    """A person sets it up, checks it, and looks at what it saved. The agent
+    runs everything else. If this grows, someone has confused the audiences."""
     visible = [c for _, items in cliux.GROUPS for c, _ in items]
-    assert len(visible) <= 16, f"front door grew to {len(visible)} commands"
-    # the three commands the quickstart promises must be visible
-    for must in ("wrap", "run", "get"):
-        assert must in visible
+    assert visible == ["wrap", "doctor", "gain"], visible
+    # the verbs the agent drives must NOT be on the human's first screen
+    for agent_verb in ("run", "get", "search", "ask", "refs", "orchestrate"):
+        assert agent_verb not in visible
+
+
+def test_help_says_whose_job_the_rest_is():
+    out = cliux.render_help()
+    assert "Your agent runs these" in cliux.render_help(show_all=True)
+    assert "agent runs for you once wrapped" in out
+    # and it points at the context view rather than more commands to learn
+    assert "kept out" in out
 
 
 def test_no_jargon_on_the_first_screen():
@@ -82,7 +91,7 @@ def test_help_is_grouped_and_has_a_next_step():
     out = cliux.render_help()
     for title, _ in cliux.GROUPS:
         assert f"{title}:" in out
-    assert "New here:" in out
+    assert "Getting started:" in out
     assert "ctx wrap setup" in out
     assert "ctx help --all" in out
 
@@ -113,3 +122,46 @@ def test_one_word_for_a_pointer():
     screen = cliux.render_help(show_all=True).lower()
     for rival in (" ref ", "coordinate", "reference"):
         assert rival not in screen, f"competing pointer word on screen: {rival!r}"
+
+
+# ---------------------------------------------------- wrap-and-forget surface
+
+
+def test_orchestration_is_a_wrap_mode_not_a_command_to_type(tmp_path):
+    """Routing work across models should happen because you wrapped with it on,
+    not because a human stopped to hand-route their own task."""
+    from ctx.wrap import _ORCHESTRATION_MODE, _with_output_discipline
+
+    off = _with_output_discipline(["-p", "do a thing"])
+    on = _with_output_discipline(["-p", "do a thing"], orchestrate=True)
+    assert _ORCHESTRATION_MODE not in " ".join(off)
+    assert _ORCHESTRATION_MODE in " ".join(on)
+    # it tells the session to route, and not to push the choice back on the user
+    assert "cheapest one that can do each part" in _ORCHESTRATION_MODE
+    assert "routing is your job now" in _ORCHESTRATION_MODE
+
+
+def test_context_view_reports_containment_without_the_proxy(state_home, git_workspace):
+    """The number that shows the harness is working must appear on the ordinary
+    `ctx wrap` path — it used to require opting into --proxy, so a normal user
+    never saw it."""
+    import json as _json
+
+    from ctx.statusline import render
+    from ctx.store import Store
+
+    from conftest import make_ws
+
+    ws = make_ws(git_workspace)
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    store.audit_dir.mkdir(parents=True, exist_ok=True)
+    (store.audit_dir / "telemetry.jsonl").write_text(
+        "".join(
+            _json.dumps({"op": "run", "raw_bytes": 400_000, "emitted_bytes": 800}) + "\n"
+            for _ in range(3)
+        ),
+        encoding="utf-8",
+    )
+    line = render("claude-code", {"model": {"display_name": "Sonnet"}}, ws.root)
+    assert "kept out" in line, line
+    assert "ctx◇" in line
