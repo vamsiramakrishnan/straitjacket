@@ -126,12 +126,16 @@ asserted in [`tests/test_orchestrator.py`](../tests/test_orchestrator.py) and
 [orchestrate]`; every step is fail-open. Prices are estimates; a session's real
 spend is read from wire truth (`ctx.scorecard`) after each node runs.
 
-## TO-BUILD: the live billed A/B
+## Live: the collaboration runs (proven), the full A/B still TO-BUILD
 
-Not yet measured: a real task driven end-to-end across two live harnesses,
-comparing **billed tokens** for the coordinated route (cheap-explore →
-frontier-implement → cheap-verify, handoff via checkpoint, coordinator on
-flash-lite) against a single-frontier-harness run of the same task. The harness
-is the same shape as [`ab_eval_live.py`](ab_eval_live.py); the blocker is
-identical to the Antigravity receipt's — headless, API-key-driveable access to
-two hosts at once. Recorded as debt rather than asserted as a result.
+The two-model collaboration is now demonstrated live — real Gemini (Antigravity's
+model) + real Claude through the actual `run_route` loop, with the CAS checkpoint
+handoff verified and real tokens billed:
+[`live-collab-antigravity-claude-2026-07-24.md`](live-collab-antigravity-claude-2026-07-24.md).
+
+Still **TO-BUILD**: a full A/B comparing billed tokens for a coordinated route
+against a single-model baseline on a hard task (the numbers above are the
+deterministic estimate, not a live A/B). The remaining blocker is the same as
+the Antigravity receipt's — headless access to enough hosts to run both arms;
+the live receipt drives Antigravity's model via the API (its CLI is OAuth-only)
+and does not exercise Codex.

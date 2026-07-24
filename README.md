@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,117 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,118 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -112,7 +112,10 @@ Plain-language highlights from recent releases; full detail in
   parallel waves, addressed-evidence handoff (not bytes), failure escalation to a
   stronger model, bounded re-planning. Routing across a harness's own models
   saves ~72% vs an all-frontier run; ~92% with an economy harness present
-  ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)).
+  ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)). Demonstrated
+  **live**: real Gemini + real Claude collaborating through the loop with a
+  verified checkpoint handoff
+  ([receipt](evals/live-collab-antigravity-claude-2026-07-24.md)).
 - **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
   — measured 6 rounds → 1 ([receipt](evals/plan-collapse-2026-07-19.md)).

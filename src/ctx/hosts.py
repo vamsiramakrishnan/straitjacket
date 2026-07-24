@@ -64,6 +64,15 @@ class ModelChoice:
     id: str
     tier: str
     roles: tuple[str, ...] = ()
+    # The id passed to the host's --model / API at launch, when it differs from
+    # the display/pricing id. Verified against the live drivers (Claude Code
+    # wants the alias `haiku`, not `claude-haiku-4.5`; the Gemini API serves
+    # `gemini-3.5-flash-lite`, not a `-3.6-` lite). Defaults to `id`.
+    cli_id: str = ""
+
+    @property
+    def launch_id(self) -> str:
+        return self.cli_id or self.id
 
 
 @dataclass(frozen=True)
@@ -152,9 +161,11 @@ _REGISTRY: tuple[HostSpec, ...] = (
         # modeled here). Flash is a capable *implementation* model, not just
         # explore — the whole point of routing by model.
         models=(
-            ModelChoice("gemini-3.1-pro", "frontier", ("plan", "reason", "review", "architect")),
+            ModelChoice("gemini-3.1-pro", "frontier", ("plan", "reason", "review", "architect"),
+                        cli_id="gemini-3.1-pro-preview"),
             ModelChoice("gemini-3.6-flash", "standard", ("implement", "edit", "code", "summarize")),
-            ModelChoice("gemini-3.6-flash-lite", "economy", ("explore", "search", "triage", "verify")),
+            ModelChoice("gemini-3.6-flash-lite", "economy", ("explore", "search", "triage", "verify"),
+                        cli_id="gemini-3.5-flash-lite"),
         ),
         strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
         coordinator_model="gemini-3.6-flash-lite",
@@ -174,9 +185,9 @@ _REGISTRY: tuple[HostSpec, ...] = (
         # Claude Code /model spans Opus (planning/reasoning) -> Sonnet (coding)
         # -> Haiku (fast exploration). Model-level routing within one harness.
         models=(
-            ModelChoice("claude-opus-4.8", "frontier", ("plan", "reason", "synthesize", "decide", "review", "architect")),
-            ModelChoice("claude-sonnet-4.6", "standard", ("implement", "edit", "code", "review")),
-            ModelChoice("claude-haiku-4.5", "economy", ("explore", "search", "triage", "verify", "summarize")),
+            ModelChoice("claude-opus-4.8", "frontier", ("plan", "reason", "synthesize", "decide", "review", "architect"), cli_id="opus"),
+            ModelChoice("claude-sonnet-4.6", "standard", ("implement", "edit", "code", "review"), cli_id="sonnet"),
+            ModelChoice("claude-haiku-4.5", "economy", ("explore", "search", "triage", "verify", "summarize"), cli_id="haiku"),
         ),
         strengths=("reason", "synthesize", "implement", "edit", "code", "review", "decide"),
         coordinator_model="claude-haiku-4.5",
@@ -193,6 +204,10 @@ _REGISTRY: tuple[HostSpec, ...] = (
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="openai",
+        # Codex is non-interactive via `codex exec "<prompt>"` (not -p). Exact
+        # argv/flag order is unverified pending a live Codex run — Codex is not
+        # installed in the environment where the live A/B ran.
+        print_flag=("exec",),
         # Codex GPT-5.6 lineup: Sol (detail/polish) -> Terra (workhorse) ->
         # Luna (repeatable). Strong code-gen across tiers.
         models=(

@@ -115,6 +115,19 @@ def test_pick_model_falls_back_to_strongest_when_tier_unmet():
     assert hosts.pick_model(got, min_tier="frontier")[1].tier == "frontier"
 
 
+def test_model_launch_id_resolves_to_provider_id():
+    # The id shown/priced differs from the id passed to the provider at launch;
+    # verified against the live drivers (Claude wants `haiku`, the Gemini API
+    # serves `gemini-3.5-flash-lite`). See the live-collab receipt.
+    claude = hosts.host_by_name("claude")
+    haiku = claude.model("claude-haiku-4.5")
+    assert haiku.launch_id == "haiku"
+    antig = hosts.host_by_name("antigravity")
+    assert antig.model("gemini-3.6-flash-lite").launch_id == "gemini-3.5-flash-lite"
+    # Default: launch_id falls back to id when no cli_id is set.
+    assert antig.model("gemini-3.6-flash").launch_id == "gemini-3.6-flash"
+
+
 def test_pick_coordinator_is_cheapest_planner():
     got = hosts.installed_harnessable(which=_which_of("claude", "codex", "antigravity"))
     coord = hosts.pick_coordinator(got)

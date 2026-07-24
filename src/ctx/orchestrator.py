@@ -608,14 +608,14 @@ def run_route(
         dep_docs = [docs[d] for d in a.node.deps if d in docs]
         prompt = _node_prompt(a.node, plan.task, dep_docs)
         host, model = a.host, a.model
-        code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout, model=model.id)
+        code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout, model=model.launch_id)
         escalated = None
         if code != 0:
             target = _escalate(a.model, hosts)
             if target is not None:
                 host, model = target
                 escalated = f"{host.name}/{model.id}"
-                code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout, model=model.id)
+                code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout, model=model.launch_id)
         ref = _checkpoint_node(ws, a.node, plan.task, out, err)
         tail = (out or err or "").strip().splitlines()
         return NodeOutcome(

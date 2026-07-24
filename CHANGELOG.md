@@ -57,10 +57,19 @@ routing work across the harnesses it finds by what their models cost.
 - **`[orchestrate]` config block** (`ctx.config.OrchestratePolicy`): closed-loop
   bounds (`max_nodes`/`max_waves`/`max_replans`/`budget_usd`/`node_timeout`),
   `fallback_only`, `confirm` gate, and per-node token estimates.
-- **Receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
-  deterministic cost model, offline-reproducible — ~36% cheaper than a
-  single-premium run with an economy harness, 4% for two standard harnesses, 0%
-  (honest degrade) for one. Live billed A/B is a declared TO-BUILD.
+- **Live cross-vendor collaboration, proven** (`evals/live-collab-antigravity-claude-2026-07-24.md`):
+  real Gemini (Antigravity's model, via the API) + real Claude run a two-node
+  route through the actual `run_route` loop, with the CAS `checkpoint:` handoff
+  verified in-harness and real tokens billed (total ~$0.02). Surfaced and fixed
+  a real gap: launch-time model ids differ from display/pricing ids — Claude
+  wants `haiku`, the Gemini API serves `gemini-3.5-flash-lite`. Added
+  `ModelChoice.cli_id` (`launch_id`), threaded through `run_route`; Codex's
+  non-interactive form corrected to `codex exec` (flag order still unverified —
+  Codex not installed where the live A/B ran).
+- **Offline receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
+  deterministic cost model — ~72% cheaper than an all-frontier run within a
+  single harness, ~92% with an economy harness. The full billed A/B vs a
+  single-model baseline remains TO-BUILD.
 - Tests: `tests/test_hosts.py` (capability tiers, `pick_worker` gating,
   cheapest-coordinator), `tests/test_orchestrator.py` (route-IR validation —
   cycles/unknown-deps/budget/node-cap, topological waves, deterministic priced
