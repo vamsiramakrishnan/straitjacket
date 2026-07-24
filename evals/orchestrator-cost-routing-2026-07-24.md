@@ -10,7 +10,8 @@ orchestrator) · **Modules:** [`src/ctx/hosts.py`](../src/ctx/hosts.py),
 This receipt covers the **deterministic half** of the orchestrator: given the
 coding-agent CLIs installed on a machine, which harness each subtask is routed
 to (by capability *and* price) and what the collaboration is estimated to cost
-versus running the whole task on the premium harness. It is computed offline
+versus single-model baselines — honestly, against Opus *and* Sonnet, since the
+comparison flatters or flops depending on which you pick. It is computed offline
 from the shipped price table — no CLI is launched, no tokens are billed — so it
 is reproducible on any checkout. The **live billed A/B** is a declared TO-BUILD
 below, exactly as the dynamic Terminal-Bench half is in
@@ -76,23 +77,32 @@ routing (4 nodes, 4 waves):
 ```
 
 A *simple* task instead routes `implement → antigravity/gemini-3.5-flash-lite`
-(economy). `saved` below is versus the **single-frontier baseline** (the whole
-budget on Opus @ $75/Mout — a legitimate "naive: run it all on my best model"
-baseline):
+(economy). Routed total is **~$0.61** for the same 108k-in/17.5k-out budget. What
+that costs against a *single-model* baseline depends entirely on which model you
+compare to — pick the baseline honestly:
 
-| Installed CLIs | est. total | single-frontier baseline | saved | plan / implement |
-|---|---|---|---|---|
-| claude + codex + antigravity | **$0.61** | $2.93 | **79%** | opus / gemini-3.6-flash |
-| claude + antigravity | **$0.61** | $2.93 | **79%** | opus / gemini-3.6-flash |
-| claude + codex | **$0.79** | $2.93 | **73%** | opus / gpt-5.6-terra |
-| claude **only** | **$0.82** | $2.93 | **72%** | opus / claude-sonnet-4.6 |
+| Single-model baseline (whole task on one model) | its cost | routing vs it |
+|---|---|---|
+| all-Opus (your most expensive model) | $2.93 | **−79%** (routing far cheaper) |
+| **all-Sonnet** (a realistic coding default) | $0.59 | **+4% — routing is slightly *more* expensive** |
+| all-Haiku (cheapest, low quality) | $0.20 | +211% (routing much dearer) |
+
+**Read this straight: the headline "72–79% cheaper" is only true against
+all-Opus, which nobody actually runs.** Against a sane default (all-Sonnet)
+routing is roughly break-even — because the ~$0.47 spent on the Opus *plan* node
+cancels what you save routing the bulk to Gemini flash / flash-lite. So the
+mechanism is not a dollar-saver against a reasonable baseline; it is a **quality
+allocator**: it spends flagship money *only on planning* and keeps every other
+phase cheap, for about the price of a flat Sonnet run. If you don't want the Opus
+plan, set `prefer:cheap` on it and the total drops below Sonnet.
 
 Two honest readings:
 
-- **Deliberate model routing, even within one harness.** Claude-only still saves
-  72%: explore/verify → Haiku, plan → Opus, implement → Sonnet, instead of
-  running everything on Opus. Planning pays for the flagship on purpose; the
-  cheap phases don't.
+- **It's allocation, not savings.** Model routing lets you buy Opus-grade
+  planning without paying Opus rates for explore/implement/verify — net cost
+  ≈ a flat Sonnet run, with a stronger plan and cheaper bulk. The only baseline
+  it beats by a lot is the one where you'd have run *everything* on your top
+  model.
 - **Cheapest-model-per-tier can favor one vendor.** With this price table Gemini
   is cheapest at economy/standard, so implement and explore/verify land on
   Antigravity while plan lands on Claude's Opus. Cross-harness beyond that

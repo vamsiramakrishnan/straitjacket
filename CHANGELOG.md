@@ -75,9 +75,11 @@ routing work across the harnesses it finds by what their models cost.
   through `run_route`; Codex corrected to `codex exec` (flag order still
   unverified — Codex absent).
 - **Offline receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
-  deterministic cost model — an estimated ~72% cheaper than an all-frontier run
-  within a single harness, up to ~79% with an economy harness present. The full
-  billed A/B vs a single-model baseline remains TO-BUILD.
+  deterministic cost model, stated against multiple baselines honestly — routing
+  is ~79% under running the whole task on Opus, but **≈break-even vs a flat
+  Sonnet run** (the Opus plan node cancels the bulk savings). The mechanism is a
+  quality allocator (flagship money only on planning), not a dollar-saver against
+  a sane baseline. The full live billed A/B remains TO-BUILD.
 - Tests: `tests/test_hosts.py` (capability tiers, `pick_model` gating + prefer,
   cheapest-coordinator), `tests/test_orchestrator.py` (route-IR validation —
   cycles/unknown-deps/budget/node-cap, topological waves, deterministic priced

@@ -110,13 +110,15 @@ Plain-language highlights from recent releases; full detail in
   complexity-adaptive** (Gemini 3.6 Flash for real work, 3.5 Flash-lite for a
   simple edit), explore/verify → an economy model — even within one harness. A
   **closed loop** runs it: parallel waves, addressed-evidence handoff (not
-  bytes), failure escalation to a stronger model, bounded re-planning. Deliberate
-  per-model routing saves an **estimated** ~72–79% vs running the whole task on
-  the flagship ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)).
-  Separately demonstrated **live on a real task** — a cross-vendor handoff (the
-  cheap Gemini node planned, Claude implemented with its own tools, no API key)
-  where the failing test went green through the actual loop with a verified
-  checkpoint handoff
+  bytes), failure escalation to a stronger model, bounded re-planning. The point
+  is **allocation, not raw savings**: it spends the flagship (Opus) only on the
+  plan step and keeps every other phase cheap — about the cost of running the
+  whole task on Sonnet, and far under running it all on Opus. The
+  [receipt](evals/orchestrator-cost-routing-2026-07-24.md) shows the honest
+  per-baseline math (it is *not* cheaper than a flat Sonnet run). Separately, a
+  **live real-task** run had the cheap Gemini node plan and Claude implement with
+  its own tools (no API key) until a failing test went green — a cross-vendor
+  handoff through the loop, not a cost demo
   ([receipt](evals/live-collab-antigravity-claude-2026-07-24.md)).
 - **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
   run a bounded multi-step evidence program in **one round instead of N**

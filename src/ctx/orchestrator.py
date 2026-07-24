@@ -376,13 +376,17 @@ def render_route_plan(plan: RoutePlan) -> str:
                 f"({a.node.min_tier}→{a.model.tier}) "
                 f"est ~{_usd(a.est_cost_usd)}{dep}{warn}"
             )
-    baseline = plan.est_single_premium_usd
-    saved = baseline - plan.est_total_usd
+    # Honest framing: show the all-flagship figure as a neutral reference, not a
+    # claimed "saving" — routing only beats the baseline where you'd otherwise
+    # have run every node on your most expensive model. It spends the flagship on
+    # the plan node and keeps the rest cheap; it is not cheaper than a flat mid-
+    # tier (e.g. Sonnet) run. See evals/orchestrator-cost-routing-2026-07-24.md.
+    fm = _frontier_model(list(plan.hosts))
+    fname = fm[1].id if fm else "the flagship"
     lines.append(
         f"estimated total: ~{_usd(plan.est_total_usd)}  "
-        f"(single-premium baseline ~{_usd(baseline)}"
-        + (f", saves ~{_usd(saved)}" if saved > 0 else "")
-        + ")"
+        f"(for reference, running every node on {fname} would be "
+        f"~{_usd(plan.est_single_premium_usd)})"
     )
     lines.append(
         "handoff: each node writes a checkpoint: to the shared store; its "
