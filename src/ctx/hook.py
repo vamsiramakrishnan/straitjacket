@@ -148,6 +148,11 @@ _TOOL_EXACT_KIND = {
     "bash": "command", "shell": "command", "exec": "command",
     "open_file": "read", "view_file": "read",
     "grep": "search", "glob": "search", "find_by_name": "search",
+    # Antigravity's semantic search: an exact name, not a word-match, so it is
+    # contained under the collapse posture like grep_search/glob_search — while
+    # unrelated "*_search" MCP tools (search_issues, search_code, web_search)
+    # keep falling through to allow (never denied).
+    "codebase_search": "search",
 }
 # (kind, word-stems): a name matches this kind if any of its words starts with a
 # stem. `editor` starts with "edit"; `credit` does not.

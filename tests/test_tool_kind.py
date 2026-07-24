@@ -28,6 +28,8 @@ TRUE_POSITIVES = [
     # grep/glob variants must route to search (the old substring caught these);
     # matched by whole-word suffix, so `ripgrep` yes, `telegraph` no.
     ("ripgrep", "search"), ("ripgrep_search", "search"), ("RipgrepSearch", "search"),
+    # Antigravity's semantic search is contained like the other search tools.
+    ("codebase_search", "search"),
 ]
 
 # Names that merely CONTAIN a keyword as a substring — must NOT be classified.
@@ -37,6 +39,9 @@ FALSE_POSITIVES = [
     "listener",       # starts with "list"
     "thread_reply",   # contains "read"
     "telegraph",      # contains "graph", not a grep suffix
+    # "*_search" tools that are NOT native lexical search must stay allowed —
+    # denying GitHub's search_issues/search_code would break them.
+    "search_issues", "search_code", "web_search", "semantic_search",
     "get_weather", "slack_post_message", "fetch_url",  # unrelated
 ]
 
