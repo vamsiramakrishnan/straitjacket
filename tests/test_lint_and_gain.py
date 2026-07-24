@@ -188,10 +188,14 @@ def test_cmd_gain_reports_savings(ws_store, capsys):
     assert "[ctx gain" in out
     assert "est tokens kept out of context: 121,750" in out
     assert "run" in out and "search" in out
-    # Host-neutral dollar framing: no session model recorded here, so a
-    # cheap->premium band is shown rather than any one vendor's model name.
+    # Host-neutral dollar framing: no session model recorded here. A min->max
+    # sweep of the price table spans ~100x, which is not a number a human can
+    # act on, so quote ONE figure at the table's mid-tier fallback and name the
+    # assumption (plus how to make it exact) instead of a meaningless band.
     assert "input-priced" in out
-    assert "economy–premium input rates" in out
+    assert "no model seen yet" in out
+    assert "/Mtok in" in out
+    assert "ctx wrap" in out  # tells the user how to get their real rate
     for vendor_model in ("sonnet", "haiku"):
         assert vendor_model not in out  # no Claude-specific hardcode leaks
 

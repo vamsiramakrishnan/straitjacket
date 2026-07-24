@@ -156,8 +156,17 @@ def _main_slow(args: list[str]) -> int:
             print(cliux.did_you_mean(first), file=sys.stderr)
             return 2
 
-    parser = argparse.ArgumentParser(
+    class _Parser(argparse.ArgumentParser):
+        """argparse's default usage line is the 34-name brace expansion, so a
+        single mistyped flag re-floods the wall we just removed. Print the
+        compact usage and point at `ctx help` instead."""
+
+        def error(self, message: str):  # noqa: D102
+            self.exit(2, f"ctx: {message}\n\nSee:  ctx help\n")
+
+    parser = _Parser(
         prog="ctx",
+        usage="ctx [--workspace PATH] <command> [args]",
         description=cliux.TAGLINE,
         epilog=cliux.QUICKSTART,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1079,12 +1088,15 @@ def _cmd_gain(ws) -> int:
             f"({model} @ ${p.input:g}/Mtok in)"
         )
     else:
-        tbl = pricing.load_table(ws.root)
-        ins = sorted(float(r.get("in", 0)) for r in tbl["models"] if float(r.get("in", 0)) > 0)
-        lo, hi = (ins[0], ins[-1]) if ins else (1.0, 15.0)
+        # No session model recorded yet. A min-to-max sweep of the whole price
+        # table spans ~100x, which is not an answer a human can use. Quote one
+        # number at the table's mid-tier fallback, name the assumption, and say
+        # how to make it exact.
+        rate = float((pricing.load_table(ws.root).get("fallback") or {}).get("in", 3.0))
         print(
-            f"est spend avoided (input-priced): ~${saved_tok * lo / 1e6:.2f}–"
-            f"${saved_tok * hi / 1e6:.2f} (economy–premium input rates)"
+            f"est spend avoided (input-priced): ~${saved_tok * rate / 1e6:.2f} "
+            f"(assuming ${rate:g}/Mtok in — no model seen yet; "
+            f"run under `ctx wrap` for your real rate)"
         )
     print("by verb:")
     for op, s in sorted(per_op.items(), key=lambda kv: -kv[1]["raw"]):
