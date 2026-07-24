@@ -472,14 +472,30 @@ def _main_slow(args: list[str]) -> int:
     )
     p_wrap.add_argument(
         "host",
-        choices=["setup", "all", "claude", "antigravity", "codex"],
-        help="'setup' (or 'all') harnesses every host in one command",
+        choices=["setup", "all", "detect", "claude", "antigravity", "codex"],
+        help="'setup' detects & harnesses installed CLIs; 'all' forces every "
+        "supported host; 'detect' lists installed CLIs priced by model",
     )
     p_wrap.add_argument(
         "--print-config", action="store_true", dest="print_config",
         help="print the host configuration instead of launching",
     )
     p_wrap.add_argument("agent_args", nargs=argparse.REMAINDER, help="-- <agent args...>")
+
+    p_orch = sub.add_parser(
+        "orchestrate",
+        help="route a task's phases across installed harnesses by model cost "
+        "(harness collaboration); prices the plan, then runs it",
+    )
+    p_orch.add_argument("task", help="the task to collaborate on")
+    p_orch.add_argument(
+        "--dry-run", action="store_true", dest="dry_run",
+        help="print the priced routing plan and stop (launch no harness)",
+    )
+    p_orch.add_argument(
+        "--run", action="store_true", dest="force_run",
+        help="execute even when [orchestrate] confirm=true",
+    )
 
     p_agy = sub.add_parser("antigravity", help="Antigravity integration")
     agy_sub = p_agy.add_subparsers(dest="agy_cmd", required=True)
@@ -567,6 +583,7 @@ def _main_slow(args: list[str]) -> int:
                 wrap_antigravity,
                 wrap_claude,
                 wrap_codex,
+                wrap_detect,
                 wrap_setup,
             )
 
@@ -606,6 +623,8 @@ def _main_slow(args: list[str]) -> int:
                 print(print_config(host))
                 return 0
             ws = resolve_workspace(ns.workspace)
+            if ns.host == "detect":
+                return wrap_detect(ws.root, probe_version="--versions" in agent_args)
             if agent_args and agent_args[0] == "--":
                 agent_args = agent_args[1:]
             # --gateway: set up the host(s) AND wire the progressive-disclosure
@@ -628,10 +647,10 @@ def _main_slow(args: list[str]) -> int:
                     print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
                     print()
                 return 0
-            # Single-command multi-host setup (built for Antigravity; also
-            # harnesses Claude Code and Codex).
+            # Single-command multi-host setup: `setup` detects installed CLIs
+            # and harnesses those; `all` forces every supported host.
             if ns.host in ("setup", "all"):
-                return wrap_setup(ws.root)
+                return wrap_setup(ws.root, force_all=(ns.host == "all"))
             if ns.host == "codex":
                 return wrap_codex(ws.root)
             if ns.host == "antigravity":
@@ -653,6 +672,15 @@ def _main_slow(args: list[str]) -> int:
             return wrap_antigravity(ws.root)
 
         ws = resolve_workspace(ns.workspace)
+
+        if ns.cmd == "orchestrate":
+            from ctx.orchestrator import orchestrate
+
+            code, text = orchestrate(
+                ws, ns.task, dry_run=ns.dry_run, force_run=ns.force_run
+            )
+            print(text)
+            return code
 
         if ns.cmd == "run":
             return _cmd_run(ws, ns)

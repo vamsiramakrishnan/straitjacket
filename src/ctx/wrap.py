@@ -335,13 +335,106 @@ def wrap_codex(workspace_root: Path, ctx_exe: str | None = None) -> int:
     return 0
 
 
-def wrap_setup(workspace_root: Path, hosts: list[str] | None = None) -> int:
-    """Single-command multi-host setup: `ctx wrap setup` harnesses Antigravity,
-    Claude Code, and Codex in this workspace in one shot."""
-    from ctx.installer import setup_hosts
+def _fmt_price(dollars_per_mtok: float) -> str:
+    """Compact per-1M-token dollar price for the detect table."""
+    return f"${dollars_per_mtok:g}"
+
+
+def render_detect_table(detected: list) -> str:
+    """Deterministic table of every registered host: installed?, resolved
+    model, price tier, and whether the harness can wrap it. Prices come from
+    ctx.pricing so the same rows feed the cost-routing orchestrator."""
+    from ctx.hosts import DetectedHost  # noqa: F401 (type reference only)
+
+    rows: list[tuple[str, ...]] = []
+    header = ("host", "installed", "model", "tier", "$in/$out per 1M", "wrap")
+    for d in detected:
+        installed = "yes" if d.installed else "no"
+        wrap = "yes" if d.harnessable else "todo"
+        price = f"{_fmt_price(d.price.input)}/{_fmt_price(d.price.output)}"
+        rows.append(
+            (d.name, installed, d.model, d.price.tier, price, wrap)
+        )
+    widths = [
+        max(len(header[i]), *(len(r[i]) for r in rows)) if rows else len(header[i])
+        for i in range(len(header))
+    ]
+
+    def line(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells)).rstrip()
+
+    out = ["ctx wrap detect — installed coding-agent CLIs, priced by model", ""]
+    out.append(line(header))
+    out.append(line(tuple("-" * w for w in widths)))
+    out.extend(line(r) for r in rows)
+    installed_wrappable = [d for d in detected if d.installed and d.harnessable]
+    out.append("")
+    if installed_wrappable:
+        names = ", ".join(d.name for d in installed_wrappable)
+        out.append(f"harnessable now: {names}")
+        out.append("  ctx wrap setup           # configure the installed hosts")
+        out.append("  ctx orchestrate \"<task>\"  # route work across them by cost")
+    else:
+        out.append(
+            "no harnessable CLI detected on PATH — install one of: claude, "
+            "codex, antigravity"
+        )
+    return "\n".join(out)
+
+
+def wrap_detect(workspace_root: Path, *, probe_version: bool = False) -> int:
+    """`ctx wrap detect`: probe PATH for every registered coding-agent CLI and
+    print an installed/model/price table. This is the input to detection-driven
+    setup and to the cost-routing orchestrator."""
+    from ctx.hosts import detect_all
+
+    detected = detect_all(workspace_root=workspace_root, probe_version=probe_version)
+    print(render_detect_table(detected))
+    return 0
+
+
+def wrap_setup(
+    workspace_root: Path, hosts: list[str] | None = None, *, force_all: bool = False
+) -> int:
+    """Single-command multi-host setup. By default this now *detects* which
+    coding-agent CLIs are installed and configures exactly those (reporting the
+    ones it skipped), instead of unconditionally writing config for all three.
+
+    ``force_all`` (``ctx wrap all``/``--all``) restores the configure-everything
+    behaviour; an explicit ``hosts`` list overrides detection entirely. When no
+    harnessable CLI is found on PATH, setup falls back to configuring all
+    supported hosts (config is inert until a CLI reads it) with a note."""
+    from ctx.installer import SETUP_HOSTS, setup_hosts
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(str(workspace_root))
+
+    if hosts is None and not force_all:
+        from ctx.hosts import detect_all
+
+        detected = detect_all(workspace_root=ws.root)
+        installed = [d.name for d in detected if d.installed and d.harnessable]
+        skipped = [
+            d.name for d in detected if d.harnessable and not d.installed
+        ]
+        if installed:
+            report = setup_hosts(ws, installed)
+            print(report)
+            if skipped:
+                print()
+                print(
+                    "not on PATH, skipped: "
+                    + ", ".join(skipped)
+                    + "  (use `ctx wrap all` to configure them anyway)"
+                )
+            return 0
+        # Nothing detected: configure all supported hosts so the workspace is
+        # ready the moment a CLI is installed. Idempotent and non-destructive.
+        print(
+            "no coding-agent CLI detected on PATH; configuring all supported "
+            f"hosts ({', '.join(SETUP_HOSTS)}) — config is inert until a CLI reads it.\n"
+        )
+
     print(setup_hosts(ws, hosts))
     return 0
 

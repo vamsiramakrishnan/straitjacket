@@ -4,6 +4,46 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [0.31.0] - 2026-07-24
+
+Harness collaboration: `ctx wrap` stops knowing three hosts by name, and starts
+routing work across the harnesses it finds by what their models cost.
+
+- **M-M · Data-driven host registry** (`src/ctx/hosts.py`): one `HostSpec` per
+  coding-agent CLI states how to detect it on PATH, how to resolve its model,
+  which installer/wrapper wires it, and whether its output side can substitute
+  (enforced) or only nudge. Adding a host is a data edit. Each detected CLI is
+  joined to `ctx.pricing` so it carries a model→price tier. The three shipped
+  hosts move in verbatim; extra CLIs (Gemini, Cursor, aider, opencode) are
+  detected and priced but marked not-yet-harnessable rather than silently
+  dropped.
+- **`ctx wrap detect`** prints an installed/model/price table across every
+  registered CLI; **`ctx wrap setup` is now detection-driven** — it configures
+  the harnessable CLIs it finds and names the ones it skipped, while
+  **`ctx wrap all`** forces every supported host (the old behaviour). The
+  low-level `setup_hosts` primitive is unchanged.
+- **M-M · Harness collaboration orchestrator** (`src/ctx/orchestrator.py`,
+  `ctx orchestrate "<task>"`): ranks installed harnesses cheapest→premium by
+  their model's list price and routes the default explore→implement→review
+  pipeline by cost — lean phases to the cheapest harness, the capable phase to
+  the premium one. It **prices the plan up front, shows it, then runs it**
+  (the rewrite-not-ask posture; a `[orchestrate] confirm` gate or `--dry-run`
+  stops before spend). The cross-harness handoff is `ctx.checkpoint/v1`: each
+  phase deposits its output as a `blob:` and freezes a checkpoint the next
+  phase reads — addressed evidence, never raw bytes. Fail-open throughout; a
+  single installed harness degrades to that harness with zero claimed saving.
+- **`[orchestrate]` config block** (`ctx.config.OrchestratePolicy`): host pins
+  for the lean/capable roles, per-phase token estimates, and the `confirm`
+  gate.
+- **Receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
+  deterministic cost model, offline-reproducible from the shipped price table —
+  ~36% cheaper than a single-premium run when an economy harness is present,
+  4% for two standard harnesses, 0% (honest degrade) for one. The live billed
+  A/B is a declared TO-BUILD.
+- Tests: `tests/test_hosts.py`, `tests/test_orchestrator.py` (registry
+  detection, cost-ladder ordering, cost/pin routing, deterministic priced plan,
+  checkpoint handoff threading, fail-open execution).
+
 ## [0.30.0] - 2026-07-21
 
 Building the toolchains that were "not available" — tree-sitter and SCIP.

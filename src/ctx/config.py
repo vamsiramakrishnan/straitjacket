@@ -94,6 +94,28 @@ class Engagement:
 
 
 @dataclass(frozen=True)
+class OrchestratePolicy:
+    """Harness collaboration (ctx.orchestrator): route a task's phases across
+    the installed harnesses by model cost. Lean phases (explore/gather/review)
+    go to the cheapest installed harness; capable phases (implement/synthesize)
+    to the most expensive. Pins override the cost pick; ``confirm`` is off by
+    default — the plan is priced, shown, then run (the project's rewrite-not-
+    ask posture)."""
+
+    lean_host: str = ""       # pin a host for lean phases (else cheapest installed)
+    capable_host: str = ""    # pin a host for capable phases (else premium installed)
+    confirm: bool = False     # print the priced plan and stop before running
+    # Coarse per-phase token estimates used only to *price the plan up front*;
+    # the real spend is reconciled from wire truth after each phase runs.
+    explore_input_tokens: int = 24000
+    explore_output_tokens: int = 3000
+    implement_input_tokens: int = 48000
+    implement_output_tokens: int = 9000
+    review_input_tokens: int = 20000
+    review_output_tokens: int = 2500
+
+
+@dataclass(frozen=True)
 class StorePolicy:
     backend: str = "user-state"  # user-state | local (advisory only)
     retention_days: int = 30
@@ -154,6 +176,7 @@ class Config:
     budgets: Budgets = field(default_factory=Budgets)
     guard: Guard = field(default_factory=Guard)
     engagement: Engagement = field(default_factory=Engagement)
+    orchestrate: OrchestratePolicy = field(default_factory=OrchestratePolicy)
     store: StorePolicy = field(default_factory=StorePolicy)
     plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
@@ -209,6 +232,7 @@ def load_config(workspace_root: Path | None) -> Config:
         allow_commands=tuple(str(x) for x in guard_raw.get("allow_commands", ())),
         deny_commands=tuple(str(x) for x in guard_raw.get("deny_commands", ())),
     )
+    orchestrate = _pick(raw.get("orchestrate") or {}, OrchestratePolicy)
     store = _pick(raw.get("store") or {}, StorePolicy)
     plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
@@ -252,6 +276,7 @@ def load_config(workspace_root: Path | None) -> Config:
         budgets=budgets,
         guard=guard,
         engagement=engagement,
+        orchestrate=orchestrate,
         store=store,
         plan=plan,
         redaction=redaction,

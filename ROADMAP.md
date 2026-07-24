@@ -225,6 +225,44 @@ over presets, role projections, shadow prefetch — each behind the per-
 intent A/B/C referee (retrieval turns ≤ 50% of `ctx q`/`get` at no
 recall loss).
 
+## M-M · Harness collaboration orchestrator (cost-tied routing)
+
+*The cross-harness generalization of M-A: a cheap harness explores, an
+expensive harness synthesizes, and the handoff is addressed evidence.*
+
+`ctx wrap` used to know exactly three hosts by name. This mechanism makes the
+set **data** and adds a router that spends the cheapest harness that can do each
+phase.
+
+**Deliverables (shipped)**
+- `src/ctx/hosts.py` — a declarative host registry: one `HostSpec` per
+  coding-agent CLI (detect on PATH, resolve model, name installer/wrapper,
+  declare output-substitution capability). Adding a host is a data edit; the
+  model tie joins each CLI to `ctx.pricing`.
+- `ctx wrap detect` — probe PATH for every registered CLI and print an
+  installed/model/**price** table; `ctx wrap setup` becomes detection-driven
+  (configure the CLIs it finds; `ctx wrap all` forces every supported host).
+- `src/ctx/orchestrator.py` + `ctx orchestrate "<task>"` — rank installed
+  harnesses cheapest→premium, route the explore→implement→review pipeline by
+  cost (lean phases to the cheapest, capable to the premium), **price the plan
+  up front, then run it**. Each phase deposits its output as a `blob:` and
+  freezes a `checkpoint:` the next phase reads — the same `ctx.checkpoint/v1`
+  handoff M-A uses, generalized across process/host boundaries. Fail-open: a
+  missing or failing harness is recorded and skipped; a single installed
+  harness degrades to that harness with zero claimed saving.
+- `[orchestrate]` config block (host pins, per-phase token estimates, a
+  `confirm` gate); receipt in
+  [`evals/orchestrator-cost-routing-2026-07-24.md`](evals/orchestrator-cost-routing-2026-07-24.md).
+
+**Acceptance**: routing and the priced plan are byte-deterministic for a fixed
+install set and price table; lean phases verifiably pick the economy harness;
+the cross-harness handoff carries only checkpoints + handles (no raw payload);
+estimate is shown before spend and reconciled against wire truth after.
+
+**TO-BUILD**: the live billed A/B (two live harnesses, real tokens) — same
+blocker as the Antigravity receipt (headless dual-host access), recorded as debt
+in the receipt.
+
 ## Sequencing
 
 ```

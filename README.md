@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.30.0 (pre-1.0, minor bump per mechanism) · 1,074 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,100 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -102,6 +102,12 @@ Plain-language highlights from recent releases; full detail in
 - **One-command, three-host setup.** `ctx wrap setup` harnesses Antigravity,
   Claude Code, *and Codex* (with real enforcement, not just advice) in a
   single idempotent command.
+- **Harness collaboration by cost.** `ctx wrap detect` finds every coding-agent
+  CLI on PATH and prices it by its model; `ctx orchestrate "<task>"` then routes
+  a task's phases across those harnesses — cheap explore → premium implement →
+  cheap review — handing off addressed evidence (not bytes) through the shared
+  store, ~36% cheaper than a single-premium run when an economy harness is
+  present ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)).
 - **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
   — measured 6 rounds → 1 ([receipt](evals/plan-collapse-2026-07-19.md)).
@@ -464,7 +470,8 @@ fail-open on internal error is the default, fail-closed is one config line.
 straitjacket/
 ├── src/ctx/           # cli, hook (stdlib-only hot path), mcp, store (CAS+SQLite),
 │                      # execution, refs, retrieval, repomap, rundiff, jobs, pyeval,
-│                      # rescue, proxy, wrap, scorecard, digest/ (profiles)
+│                      # rescue, proxy, wrap, hosts (registry), orchestrator,
+│                      # pricing, scorecard, digest/ (profiles)
 ├── native/ctx-hook-native/  # optional Rust post-hook shim (~3 ms), parity-tested
 ├── plugins/antigravity/     # plugin template: hooks, MCP config, skill, ctx-explorer agent
 ├── plugins/codex/           # Codex template: config.toml (MCP+hooks), hooks.json, AGENTS.md
@@ -498,7 +505,8 @@ Full flags and when-to-use detail:
 | `checkpoint` / `pin` / `gc` | cache epochs · retention leases · mark-and-sweep |
 | `debt` | declared-omission ledger for deferred engineering decisions (`add`/`list`/`resolve`) |
 | `policy` | compiled steering policy from telemetry (`compile`/`show`) |
-| `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages |
+| `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages; `wrap detect` lists installed CLIs priced by model, `wrap setup` harnesses the ones it finds |
+| `orchestrate` | harness collaboration: route a task's phases across installed harnesses by model cost (cheap explore → premium implement → cheap review), handing off `checkpoint:` evidence — not bytes — through the shared store; prices the plan, then runs it |
 | `init` / `doctor` | write `ctx.toml` + `.ctxignore` · validate hooks, manifests, store, classifier |
 
 Examples:
