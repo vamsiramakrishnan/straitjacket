@@ -36,10 +36,22 @@ class TextProfile(Profile):
             )
             if r["timedOut"]:
                 status += " · timed out"
-            slim = [
-                f"command: {ctx.command_line()}",
-                f"{status} · output (complete):",
-            ]
+            # Provenance must pay for itself. The command echo is the model's
+            # own input coming back — free when it annotates a large capture,
+            # pure overhead when the output is a line or two. Measured before
+            # this rule: an 11-byte output rendered as a 140-byte digest
+            # (12.7x), which is why replaying our own sessions showed the
+            # harness *costing* tokens on short calls. Dropped when it is not
+            # smaller than the content it describes; the run handle on the
+            # header line still addresses the capture either way.
+            command_line = f"command: {ctx.command_line()}"
+            content_bytes = sum(
+                v.bytes for v in (ctx.stdout, ctx.stderr) if v.bytes
+            )
+            slim = []
+            if len(command_line.encode("utf-8")) < content_bytes:
+                slim.append(command_line)
+            slim.append(f"{status} · output (complete):")
             for view in (ctx.stdout, ctx.stderr):
                 if view.bytes:
                     if view is ctx.stderr and ctx.stdout.bytes:
