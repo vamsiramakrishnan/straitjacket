@@ -134,6 +134,9 @@ def _py_imports(tree: ast.Module, rel: str, index: dict[str, list[str]]) -> set[
 
 # ---------------------------------------------------------- ctags (optional)
 def _ctags_enabled() -> bool:
+    """Whether the map's opportunistic ctags pass may run. ``CTX_NO_CTAGS``
+    is honoured here and in ``skeleton._ctags_path`` — the two places that
+    shell out to ctags — so setting it silences both."""
     if os.environ.get("CTX_NO_CTAGS"):
         return False
     return shutil.which("ctags") is not None

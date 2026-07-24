@@ -106,6 +106,16 @@ routing work across the harnesses it finds by what their models cost.
   cycles/unknown-deps/budget/node-cap, topological waves, deterministic priced
   plan, coordinator JSON parse, and the closed loop — parallel handoff, failure
   escalation, dependent-skip, bounded re-plan).
+- **MCP tool description now documents all 14 ops** (`mcp.py`): the `op` enum
+  declared 14 operations while the prose catalogue in the tool description
+  listed 9 — `callers`, `callees`, `impact`, `diff` and `investigate` were
+  callable but undiscoverable to a model reading the tool definition. Each now
+  carries a gloss alongside the existing nine, and
+  `test_tool_description_documents_every_enum_op` asserts every enum member is
+  described, so the catalogue cannot drift from the enum again.
+  **Cache impact:** the tool description is a prefix-resident asset, so
+  `PREFIX_VERSION` moves 5 → 6 and every user pays one cold prompt-cache write
+  per model on first use after upgrading.
 
 ## [0.30.0] - 2026-07-21
 
