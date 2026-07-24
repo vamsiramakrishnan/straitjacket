@@ -845,6 +845,59 @@ def _path_outside(path_str: str, workspace_root: str | None) -> bool:
 def classify_command(
     command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
 ) -> dict[str, str]:
+    """Classify a command, then abbreviate any lesson already taught.
+
+    The guard has ~20 places that build remediation prose, and each one used to
+    re-send its full explanation every time. Replaying this repo's own
+    transcripts found sessions the harness made *worse* (128 -> 439 tokens,
+    -243%) purely from repeated advice. Decay is applied here, once, so every
+    builder inherits it instead of 20 of them each remembering to."""
+    return _classify_command_inner(command, policy, _depth, cwd=cwd)
+
+
+def _lesson_key(reason: str) -> str:
+    """A stable name for the lesson a reason teaches: its headline, not the
+    command it happened to be about."""
+    head = reason.strip().splitlines()[0] if reason.strip() else ""
+    head = head.replace("CTX_CONTEXT_GUARD:", "").strip()
+    return " ".join(head.split()[:6]).rstrip(".,")
+
+
+def _decay_taught_reason(decision: dict[str, Any], workspace_root: str | None) -> None:
+    """Drop teaching prose already sent this session, keeping the verdict line.
+
+    Scope is deliberately narrow: only a decision that *allows* the call while
+    rewriting it. That is transparent usability steering — the command runs,
+    just in bounded form. Safety-class outcomes (secret paths, workspace
+    escape, committed deny_commands) are deny/force_ask and are therefore
+    untouched by construction, which is what the rule-7 invariant in
+    tests/test_safety_invariant.py requires: no adaptive state may reword a
+    safety denial, however many times it fires."""
+    if workspace_root is None or not isinstance(decision, dict):
+        return
+    if decision.get("_safety") or not decision.get("_rewrite"):
+        return
+    try:
+        from ctx.engagement import note_taught
+    except Exception:
+        return
+    for holder in (decision, decision.get("_rewrite")):
+        if not isinstance(holder, dict):
+            continue
+        reason = holder.get("reason")
+        if not isinstance(reason, str) or "\n" not in reason:
+            continue  # already one line: nothing to save
+        try:
+            if note_taught(workspace_root, _lesson_key(reason)):
+                continue  # first time: teach it in full
+            holder["reason"] = reason.splitlines()[0].strip()
+        except Exception:
+            continue
+
+
+def _classify_command_inner(
+    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
+) -> dict[str, str]:
     """Classify a shell command string. Conservative and config-driven; not a
     shell-security parser (SPEC §11)."""
     stripped = command.strip()
@@ -898,7 +951,12 @@ def classify_command(
     canonical = " ".join(argv)
     for prefix in policy.get("deny_commands", []):
         if canonical.startswith(prefix):
-            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+            # Safety class: a rule the repo committed on purpose. Its wording is
+            # frozen by the rule-7 invariant (tests/test_safety_invariant.py) —
+            # no adaptive state may reword it, so mark it and never decay it.
+            d = _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+            d["_safety"] = "1"
+            return d
     # A prefix allow/promotion applies to a single command only. When shell
     # metacharacters survived the chain/redirect handling above (e.g.
     # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary
@@ -1214,6 +1272,12 @@ def classify_read(
     return dict(DECISION_ALLOW)
 
 
+# The workspace root for the decision currently being built. classify() is the
+# only writer and runs once per hook invocation, so this is a hand-off between
+# two functions in one call, not shared mutable state across calls.
+_APPLY_ROOT: dict[str, Any] = {}
+
+
 def _apply_rewrite(
     decision: dict[str, Any],
     tool_input: dict[str, Any],
@@ -1222,6 +1286,8 @@ def _apply_rewrite(
     """Convert the layer-1 ``_rewrite`` hint into the public ``rewrite``
     field, preserving the original tool_input key names and every unrelated
     field (description, timeout, …) untouched in ``updatedInput``."""
+    _decay_taught_reason(decision, _APPLY_ROOT.get("root"))
+    decision.pop("_safety", None)
     hint = decision.pop("_rewrite", None)
     if not hint:
         return decision
@@ -1244,6 +1310,10 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
 
     workspace_root = _resolve_workspace_root(payload)
     policy = _load_guard_policy(workspace_root)
+    # The policy dict already carries computed extras (_window_note); the root
+    # rides along so remediation can tell a first lesson from a repeat.
+    policy["_ws_root"] = workspace_root
+    _APPLY_ROOT["root"] = workspace_root
 
     if policy.get("mode") == "advisory":
         return dict(DECISION_ALLOW)

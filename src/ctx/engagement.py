@@ -286,3 +286,35 @@ def suggestion_cap(
     if is_lean_model(workspace_root, lean_models):
         return LEAN_SUGGESTIONS
     return DEFAULT_SUGGESTIONS
+
+
+def note_taught(workspace_root: Path | str | None, lesson: str) -> bool:
+    """Record that ``lesson`` has been taught this session; True the first time.
+
+    The guard's remediation text is itself context. Replaying this repo's own
+    transcripts showed sessions where the harness *cost* tokens rather than
+    saving them (worst: 128 -> 439, -243%), because six denials each re-emitted
+    the same ~50-token explanation of a lesson the model had already taken on
+    call one. So a lesson is spelled out once and then referred to.
+
+    Fail-open: any problem returns True (teach in full), because an unexplained
+    denial is worse than a repeated one."""
+    if workspace_root is None or not lesson:
+        return True
+    try:
+        seen: list[str] = []
+
+        def _fn(state: dict[str, Any]) -> dict[str, Any]:
+            taught = state.get("taught")
+            if not isinstance(taught, list):
+                taught = []
+            seen.append(lesson if lesson in taught else "")
+            if lesson not in taught:
+                taught = [*taught, lesson][-32:]  # bounded: a session's lessons
+            state["taught"] = taught
+            return state
+
+        _mutate_state(workspace_root, _fn)
+        return not (seen and seen[0])
+    except Exception:
+        return True
