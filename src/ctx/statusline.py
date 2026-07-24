@@ -144,14 +144,68 @@ def render(host: str, payload: dict[str, Any],
             segs.append(f"⎇ {branch}{dirty}")
 
         # Harness signature segment: what ctx has contained this session, read
-        # cheaply from the session ledger. Absent = nothing shown (fail-open).
-        saved = _harness_saved(workspace_root)
-        if saved:
-            segs.append(f"ctx◇ {saved}")
+        # cheaply from the session ledger.
+        seg = _harness_segment(workspace_root)
+        if seg:
+            segs.append(seg)
 
         return _SEP.join(str(s) for s in segs if s)
     except Exception:
         return ""
+
+
+# Host config files whose presence-with-a-ctx-hook means "this repo is
+# harnessed". Matched as plain substrings so the check costs one small read
+# and no JSON parse — a status line re-renders on every REPL turn.
+_HOOK_MARKERS: tuple[tuple[str, str], ...] = (
+    (".claude/settings.json", "hook claude-code"),
+    (".claude/settings.local.json", "hook claude-code"),
+    (".codex/hooks.json", "hook codex"),
+)
+_PLUGIN_REL = ".agents/plugins/ctx-harness"
+
+
+def _harness_installed(root: Path) -> bool:
+    """Whether any agent in this repo is actually hooked into ctx.
+
+    Cheap and fail-open: a status line must never raise, and must never make
+    the host's REPL wait. Mirrors doctor's "an agent is wrapped" check."""
+    try:
+        for rel, marker in _HOOK_MARKERS:
+            try:
+                if marker in (root / rel).read_text(encoding="utf-8", errors="replace"):
+                    return True
+            except OSError:
+                continue
+        return (root / _PLUGIN_REL).is_dir()
+    except Exception:
+        return False
+
+
+def _harness_segment(workspace_root: Path | str | None) -> str | None:
+    """The status line's one statement about ctx.
+
+    Before, this segment was simply omitted whenever there was nothing to
+    report — so "ctx is off" and "ctx is on and idle" rendered identically,
+    and the failure mode the status line exists to surface (nothing is
+    hooked, so nothing is being contained) was the one it could not show.
+    Three distinguishable states now:
+
+        ctx◇ 12K kept out   the harness is working, here is the number
+        ctx◇ idle           hooked, nothing contained yet this session
+        ctx◇ off            nothing is hooked — run `ctx wrap setup`
+
+    None only when there is no workspace to speak about at all."""
+    if workspace_root is None:
+        return None
+    try:
+        root = Path(workspace_root)
+        saved = _harness_saved(root)
+        if saved:
+            return f"ctx◇ {saved}"
+        return "ctx◇ idle" if _harness_installed(root) else "ctx◇ off"
+    except Exception:
+        return None
 
 
 def _harness_saved(workspace_root: Path | str | None) -> str | None:

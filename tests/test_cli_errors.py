@@ -308,3 +308,59 @@ def test_cli_and_mcp_share_one_error_prefix():
 
 def test_ctx_debug_is_documented():
     assert "CTX_DEBUG" in _cli_doc()
+
+
+# --------------------- 7. "the harness did nothing" blames the right thing
+def test_gain_with_no_telemetry_goes_to_stderr_and_points_at_doctor(ws_root, capsys):
+    """It printed to stdout (every other error goes to stderr) and told the
+    user to "run some commands under the harness first" — assuming the
+    harness works, when the usual cause is that nothing is hooked."""
+    rc = _run(ws_root, "gain")
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert cap.out == ""  # not stdout
+    assert "ctx doctor" in cap.err  # the check that answers this question
+    assert "wrap" in cap.err  # ...and the fix
+    assert "hooked" in cap.err  # ...naming the real cause
+
+
+def test_statusline_distinguishes_off_from_idle(tmp_path):
+    """`_harness_saved` returning None omitted the segment, so "ctx is off"
+    and "ctx is on and idle" rendered identically — the one failure the
+    status line exists to surface was the one it could not show."""
+    from ctx import statusline
+
+    unhooked = tmp_path / "cold"
+    unhooked.mkdir()
+    hooked = tmp_path / "warm"
+    (hooked / ".claude").mkdir(parents=True)
+    (hooked / ".claude" / "settings.json").write_text(
+        '{"hooks": {"PreToolUse": [{"hooks": [{"command": '
+        '"/usr/bin/ctx hook claude-code pre-tool-use"}]}]}}',
+        encoding="utf-8",
+    )
+    payload = {"model": {"display_name": "gemini-3-pro"}}
+    off = statusline.render("antigravity", payload, workspace_root=unhooked)
+    idle = statusline.render("antigravity", payload, workspace_root=hooked)
+    assert "ctx◇ off" in off
+    assert "ctx◇ idle" in idle
+    assert off != idle
+
+
+def test_statusline_still_prefers_the_number_and_never_raises(tmp_path):
+    from ctx import statusline
+
+    root = tmp_path / "busy"
+    (root / ".ctx-session-reads" / "proxy").mkdir(parents=True)
+    (root / ".ctx-session-reads" / "proxy" / "window.json").write_text(
+        '{"contained_tokens": 12000}', encoding="utf-8"
+    )
+    line = statusline.render(
+        "antigravity", {"model": {"display_name": "x"}}, workspace_root=root
+    )
+    assert "ctx◇ 12K kept out" in line
+    # No workspace to speak about ⇒ still no claim either way.
+    assert "ctx◇" not in statusline.render(
+        "antigravity", {"model": {"display_name": "x"}}
+    )
+    assert statusline._harness_segment(object()) is None  # fail-open

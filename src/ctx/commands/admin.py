@@ -123,7 +123,19 @@ def cmd_gain(ws, ns=None) -> int:
             slot["raw"] += int(ev.get("raw_bytes", 0))
             slot["emitted"] += int(ev.get("emitted_bytes", 0))
     if not per_op:
-        print("no telemetry yet — run some commands under the harness first")
+        # Two failures in one line, before: it went to stdout while every
+        # other error goes to stderr, and it blamed the user for not having
+        # run anything — when the usual cause is that nothing is hooked, so
+        # commands ran and were never intercepted. `ctx doctor` answers
+        # exactly that question ("an agent is wrapped"), so send them there.
+        print(
+            "ctx gain: no telemetry for this workspace yet.\n"
+            "  Most often this means no agent is hooked, not that nothing ran —\n"
+            "  commands went straight to the shell and ctx never saw them.\n"
+            "  Check:  ctx doctor        (look for 'an agent is wrapped')\n"
+            "  Fix:    ctx wrap setup    (hook the agents you have installed)",
+            file=sys.stderr,
+        )
         return 1
     total_raw = sum(s["raw"] for s in per_op.values())
     total_emitted = sum(s["emitted"] for s in per_op.values())
