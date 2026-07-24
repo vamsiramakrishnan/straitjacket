@@ -10,7 +10,7 @@ commands: set it up, check it works, see what it saved. Everything else is
 agent tooling, kept behind `ctx help --all` for the times a human wants to
 drive it by hand.
 
-`ctx` has 33 commands. A handful are the product; the rest are machinery a
+`ctx` has 34 commands. A handful are the product; the rest are machinery a
 user grows into. Argparse showed all of them at equal weight in source order,
 which reads as a wall and hides the one path that actually works. This module
 holds the curated surface: what is shown first, in what groups, in what words.
