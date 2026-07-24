@@ -1,0 +1,189 @@
+"""Find-and-read and code-navigation verbs: search · get · stats ·
+diff · map · def · refs · diag · callers · callees · impact · q."""
+
+from __future__ import annotations
+
+import sys
+
+from ctx.commands.emit import (
+    _delivery_plan,
+    _emit_bounded_digest,
+    _emit_retrieval,
+)
+
+
+def _retrieval(ws, ns, verb: str) -> int:
+    from ctx.retrieval import RetrievalError, Selector, _span, get, search, stats
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        if verb == "search":
+            out = search(
+                store,
+                ws,
+                ns.ref,
+                ns.patterns,
+                fixed=ns.fixed,
+                mode_all=ns.all,
+                context=ns.context,
+                glob=ns.glob,
+                scope=ns.scope,
+                max_matches=ns.max_matches,
+            )
+        elif verb == "get":
+            selector = Selector(
+                lines=_span(ns.lines) if ns.lines else None,
+                bytes=_span(ns.bytes) if ns.bytes else None,
+                records=_span(ns.records) if ns.records else None,
+                json_pointer=ns.json_pointer,
+                symbol=ns.symbol,
+                span=ns.span,
+            )
+            out = get(store, ws, ns.ref, selector)
+        else:
+            out = stats(store, ws, ns.ref, scope=ns.scope)
+    except RetrievalError as e:
+        print(f"ctx {verb}: {e}", file=sys.stderr)
+        return 1
+
+    return _emit_retrieval(ws, store, out)
+
+
+def cmd_search(ws, ns) -> int:
+    return _retrieval(ws, ns, "search")
+
+
+def cmd_get(ws, ns) -> int:
+    return _retrieval(ws, ns, "get")
+
+
+def cmd_stats(ws, ns) -> int:
+    """`ctx stats [--session]` — bounded shape statistics, or the session's
+    wire scorecard when the proxy recorded one."""
+    if getattr(ns, "session", False):
+        from ctx.scorecard import compute_scorecard, render_scorecard
+
+        sc = compute_scorecard(ws.root / ".ctx-session-reads" / "proxy")
+        if sc is None:
+            print(
+                "no wire observations for this workspace "
+                "(run under `ctx wrap claude --proxy`)"
+            )
+            return 1
+        print(render_scorecard(sc))
+        return 0
+    return _retrieval(ws, ns, "stats")
+
+
+def cmd_diff(ws, ns) -> int:
+    from ctx.retrieval import RetrievalError
+    from ctx.rundiff import run_diff
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        out = run_diff(store, ws, ns.ref_a, ns.ref_b)
+    except RetrievalError as e:
+        print(f"ctx diff: {e}", file=sys.stderr)
+        return 1
+    return _emit_retrieval(ws, store, out)
+
+
+def cmd_map(ws, ns) -> int:
+    from ctx import resolver
+    from ctx.repomap import repo_map
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    # The map's explicit --budget routes through the same resolver choke
+    # point (today: returned verbatim; pressure hook-in comes later).
+    budget = resolver.resolve_retrieval_budget(
+        ws.config, resolver.environment_signals(ws.root), requested=ns.budget
+    )
+    out = repo_map(store, ws, budget=budget, focus=ns.focus)
+    return _emit_retrieval(ws, store, out)
+
+
+def _code(ws, ns) -> int:
+    """def · refs · diag share one store, one error shape (the verb comes from
+    ns.cmd) and one emission tail."""
+    from ctx.codeverbs import cmd_def as _def
+    from ctx.codeverbs import cmd_diag as _diag
+    from ctx.codeverbs import cmd_refs as _refs
+    from ctx.retrieval import RetrievalError
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        if ns.cmd == "def":
+            out = _def(store, ws, ns.target)
+        elif ns.cmd == "refs":
+            out = _refs(store, ws, ns.symbol, ns.path)
+        else:
+            out = _diag(store, ws, ns.path)
+    except RetrievalError as e:
+        print(f"ctx {ns.cmd}: {e}", file=sys.stderr)
+        return 1
+    return _emit_retrieval(ws, store, out)
+
+
+def cmd_def(ws, ns) -> int:
+    return _code(ws, ns)
+
+
+def cmd_refs(ws, ns) -> int:
+    return _code(ws, ns)
+
+
+def cmd_diag(ws, ns) -> int:
+    return _code(ws, ns)
+
+
+def cmd_callers(ws, ns) -> int:
+    from ctx.callgraph import cmd_callers as _callers
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(_callers(store, ws, ns.symbol))
+    return 0
+
+
+def cmd_callees(ws, ns) -> int:
+    from ctx.callgraph import cmd_callees as _callees
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(_callees(store, ws, ns.symbol))
+    return 0
+
+
+def cmd_impact(ws, ns) -> int:
+    from ctx.callgraph import cmd_impact as _impact
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(_impact(store, ws, ns.symbol, depth=ns.depth))
+    return 0
+
+
+def cmd_q(ws, ns) -> int:
+    """`ctx q '<stage> | …'` — the M-H composition algebra (docs/ALGEBRA.md).
+    Total by construction (no loops, ≤8 stages), so its cost is statically
+    boundable — the property that makes it MCP-tier-safe later (no MCP
+    wiring this wave). Emission rides the same engagement filter + bounded
+    backstop as the other verbs."""
+    from ctx.query import run_query
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    text, code = run_query(ws, store, ns.query, trace=ns.trace)
+    if code != 0:
+        print(text, file=sys.stderr)
+        return code
+    plan = _delivery_plan(
+        ws, outcome="success", family="q",
+        base_tokens=ws.config.budgets.result_tokens,
+    )
+    _emit_bounded_digest(ws, store, text, plan)
+    return 0

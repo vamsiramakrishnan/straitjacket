@@ -452,15 +452,18 @@ def test_plan_receipt_appended_to_telemetry(ws_store, capsys):
 
 # --------------------------------------------------- the seven-site audit
 def test_no_hand_rolled_budget_math_left_in_cli():
-    """Mechanical form of the module docstring's seven-site audit: cli.py
-    no longer multiplies by failure_budget_factor or chooses digest-vs-
-    result budgets outside the resolver, and every retrieval verb funnels
-    through the single _emit_retrieval choke point."""
+    """Mechanical form of the module docstring's seven-site audit: the CLI
+    layer (cli.py plus the ctx.commands package that holds the command
+    bodies) no longer multiplies by failure_budget_factor or chooses
+    digest-vs-result budgets outside the resolver, and every retrieval verb
+    funnels through the single _emit_retrieval choke point."""
     from pathlib import Path
 
     import ctx.cli as cli_mod
 
-    src = Path(cli_mod.__file__).read_text(encoding="utf-8")
+    cli_layer = [Path(cli_mod.__file__)]
+    cli_layer += sorted(Path(cli_mod.__file__).parent.joinpath("commands").glob("*.py"))
+    src = "\n".join(p.read_text(encoding="utf-8") for p in cli_layer)
     assert "failure_budget_factor" not in src  # budget math lives in resolver.py
     assert src.count("_emit_retrieval(ws, store, out)") == 4  # diff/map/code/retrieval
     assert src.count("_delivery_plan(") >= 3  # run + eval + seq (+ render plan)
