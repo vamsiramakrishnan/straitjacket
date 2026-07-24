@@ -115,7 +115,7 @@ verdicts over recorded commands, recorded-vs-simulated wire residency,
 and evidence sufficiency (facts the model provably used downstream,
 scored inline-in-digest vs one-hop). `--gaps` aggregates the empirical
 coverage priority list: raw tokens by claiming profile, slicer-heavy
-programs, `ctx eval` opportunities. Read results are counted under the
+programs, `ctx py` opportunities. Read results are counted under the
 read path, never shape-digested (a file containing test markers is not a
 test run).
 
@@ -134,7 +134,7 @@ test run).
 zero writes outside the throwaway store; redaction applied to every
 printed fragment.
 
-## M-J · Compiled evidence plans (`ctx plan` / `ctx investigate`)
+## M-J · Compiled evidence plans (`ctx plan` / `ctx plan run`)
 
 **Shipped v0.25.0** (P0–P3 + P5 surface; P4 cost-table epoch = debt e319eef641; live four-arm referee open).
 

@@ -1,4 +1,4 @@
-"""Acceptance: ctx eval (programmable capture, the Maki absorption).
+"""Acceptance: ctx py (programmable capture, the Maki absorption).
 
 The contract under test: a Python script chains N operations in one round;
 only its bounded digest returns; the script itself is a content-addressed
@@ -37,7 +37,7 @@ def test_eval_collapses_computation_to_one_digest(ws_store):
     )
     text, code = run_eval(ws, store, script)
     assert code == 0
-    assert text.startswith("[ctx eval · script blob:")
+    assert text.startswith("[ctx py · script blob:")
     assert "· 2 lines]" in text
     assert "checksum: 488890" in text  # only the emitted result rides
 
@@ -152,13 +152,13 @@ def test_cli_eval_exit_codes_and_stdin(ws_store, capsys, monkeypatch):
 
     ws, _ = ws_store
     root = str(ws.root)
-    assert main(["--workspace", root, "eval", "print('ok')"]) == 0
+    assert main(["--workspace", root, "py", "print('ok')"]) == 0
     assert "ok" in capsys.readouterr().out
-    assert main(["--workspace", root, "eval", "raise SystemExit(7)"]) == 3
+    assert main(["--workspace", root, "py", "raise SystemExit(7)"]) == 3
     capsys.readouterr()
 
     monkeypatch.setattr("sys.stdin", io.StringIO("print('from-stdin')"))
-    assert main(["--workspace", root, "eval"]) == 0
+    assert main(["--workspace", root, "py"]) == 0
     assert "from-stdin" in capsys.readouterr().out
 
 
@@ -167,9 +167,9 @@ def test_cli_eval_file_mode_confined(ws_store, capsys, tmp_path):
 
     ws, _ = ws_store
     (ws.root / "job.py").write_text("print('from-file')\n", encoding="utf-8")
-    assert main(["--workspace", str(ws.root), "eval", "--file", "job.py"]) == 0
+    assert main(["--workspace", str(ws.root), "py", "--file", "job.py"]) == 0
     assert "from-file" in capsys.readouterr().out
     # Escapes are rejected before any read.
     (tmp_path / "outside.py").write_text("print('escape')\n", encoding="utf-8")
-    assert main(["--workspace", str(ws.root), "eval", "--file", "../outside.py"]) != 0
+    assert main(["--workspace", str(ws.root), "py", "--file", "../outside.py"]) != 0
     assert "escape" not in capsys.readouterr().out

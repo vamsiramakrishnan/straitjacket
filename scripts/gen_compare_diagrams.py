@@ -148,7 +148,7 @@ def build_field_treemap(P: dict) -> str:
         (32, 224, 276, 150, "Compaction", "reclaim a window —", "rewrites history", "checkpoint-then-rescue", False),
         (318, 224, 276, 150, "RAG / vectors", "recall without resend —", "probabilistic, no provenance", "deterministic addresses", False),
         (604, 224, 276, 150, "Ponytail", "the solution ladder —", "advisory, unmeasured", "A/B-adopted + ctx debt", False),
-        (890, 224, 278, 150, "Maki", "one script, N ops —", "output vanishes to chat", "ctx eval, addressable", False),
+        (890, 224, 278, 150, "Maki", "one script, N ops —", "output vanishes to chat", "ctx py, addressable", False),
         (32, 384, 1136, 150, "wozcode", "replace the tool surface —", "custom-tool schemas add window cost", "transparent substitution, zero new schema", True),
     ]
     for x, y, w, h, title, does, limit, took, emph in tiles:

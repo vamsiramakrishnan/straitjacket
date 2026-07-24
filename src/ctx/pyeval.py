@@ -1,4 +1,4 @@
-"""`ctx eval`: programmable capture — a Python script runs under the birth
+"""`ctx py`: programmable capture — a Python script runs under the birth
 gate and only its bounded digest returns.
 
 The Maki absorption (maki.sh, studied 2026-07-18): its sandboxed interpreter
@@ -71,7 +71,7 @@ def run_eval(
     digest, manifest = render_run_digest(store, ws, capture.manifest, focus=focus, op="eval")
 
     unit = "line" if lines == 1 else "lines"
-    header = f"[ctx eval · script blob:{script_blob[:12]} · {lines} {unit}]"
+    header = f"[ctx py · script blob:{script_blob[:12]} · {lines} {unit}]"
     result = manifest["result"]
     if result["timedOut"]:
         code = 124

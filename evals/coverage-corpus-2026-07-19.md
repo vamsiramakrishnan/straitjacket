@@ -112,7 +112,7 @@ What exists, and what each actually measures:
   for a cost-vs-success Pareto frontier. Notable: turn count barely
   correlates with success.
 - **Anthropic's own upper bounds**: code-execution-with-MCP 150k → 2k
-  (98.7%) — the ctx eval mechanism class; context-editing 84% token cut on
+  (98.7%) — the ctx py mechanism class; context-editing 84% token cut on
   a 100-turn eval.
 
 Nobody publishes a benchmark that jointly scores (a) end-to-end task

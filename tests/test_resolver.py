@@ -392,7 +392,7 @@ def test_golden_eval_digest_byte_identical_to_legacy(ws_store, capsys, fail):
     script = "".join(f"print('ERROR: eval item {i}')\n" for i in range(400)) + (
         "raise SystemExit(2)\n" if fail else ""
     )
-    rc = main(["--workspace", str(ws.root), "eval", script])
+    rc = main(["--workspace", str(ws.root), "py", script])
     assert rc == (3 if fail else 0)
     emitted = capsys.readouterr().out
 

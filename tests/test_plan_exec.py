@@ -328,7 +328,7 @@ def test_cli_plan_run_and_investigate(seeded_repo, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "profile=investigate/v1" in out
-    rc = main(["--workspace", str(seeded_repo), "investigate", "plan.json"])
+    rc = main(["--workspace", str(seeded_repo), "plan", "run", "plan.json"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "profile=investigate/v1" in out
@@ -347,7 +347,7 @@ def test_replan_budget_banner(seeded_repo, capsys):
     plan_path.write_text(json.dumps(obs), encoding="utf-8")
     for _ in range(3):
         rc = main(
-            ["--workspace", str(seeded_repo), "investigate", "plan.json", "--replans", "1"]
+            ["--workspace", str(seeded_repo), "plan", "run", "plan.json", "--replans", "1"]
         )
         assert rc == 0
         out = capsys.readouterr().out

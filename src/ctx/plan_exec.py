@@ -697,7 +697,7 @@ def _render_investigation(
     n_skip = sum(1 for m in node_meta.values() if m.get("status") == "skipped")
     n_err = sum(1 for m in node_meta.values() if m.get("status") == "error")
 
-    lines = [f"[ctx investigate:{inv_id[:12]} profile={PROFILE_VERSION}]"]
+    lines = [f"[ctx plan run:{inv_id[:12]} profile={PROFILE_VERSION}]"]
     lines.append(f"objective: {plan.question}")
     lines.append(
         f"plan: blob:{plan_blob[:12]} · generation: {generation or 'unknown'} · "

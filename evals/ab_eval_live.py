@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Live A/B for `ctx eval`: mechanism-isolated arms on a held-out task.
+"""Live A/B for `ctx py`: mechanism-isolated arms on a held-out task.
 
 Design (the Ponytail-ladder pattern — adopt on evidence):
 - Both arms run a real agent (`claude -p`) against the same seeded fixture
   with `ctx` installed and one appended system-prompt line of routing
   doctrine. The ONLY difference between arms is whether that line permits
-  `ctx eval` — everything else (model, tools, task, fixture, turn cap) is
+  `ctx py` — everything else (model, tools, task, fixture, turn cap) is
   identical, so the delta isolates the mechanism, not the harness.
 - Held-out rule: the mechanical eval set (`evalset_collapse.py`) was tuned
   on per-module PASS RATES; this task asks for per-module P95 LATENCY over
@@ -50,7 +50,7 @@ DOCTRINE = {
     "no-eval": (
         "ctx is installed. Route potentially large output through "
         "ctx run / ctx search / ctx get / ctx stats and cite handles. "
-        "Do NOT use ctx eval."
+        "Do NOT use ctx py."
     ),
     # Scoped phrasing (debt c23a8ccdf5): terseness governs the SCRIPT's
     # output only. Runs 1-3 used an unscoped "print only what the
@@ -60,7 +60,7 @@ DOCTRINE = {
         "ctx is installed. Route potentially large output through "
         "ctx run / ctx search / ctx get / ctx stats and cite handles. "
         "For multi-step data-dependent work (parse, aggregate, branch), "
-        "prefer writing ONE short python script run as: ctx eval '<script>'. "
+        "prefer writing ONE short python script run as: ctx py '<script>'. "
         "Keep the script's printed output minimal — but your final answer "
         "must still satisfy the task's required output format in full."
     ),

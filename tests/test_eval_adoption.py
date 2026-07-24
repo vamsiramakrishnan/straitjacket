@@ -1,5 +1,5 @@
-"""Acceptance: ctx eval teaching surface (measured gap: eval-collapse A/B,
-finding 2 — 0/3 live adoption of `ctx eval`, agents write raw python
+"""Acceptance: ctx py teaching surface (measured gap: eval-collapse A/B,
+finding 2 — 0/3 live adoption of `ctx py`, agents write raw python
 heredocs / -c chains).
 
 Three contracts:
@@ -107,7 +107,7 @@ def test_detection_negative():
         "python3 --version",
         "pytest -q",
         "cat big.log",
-        "ctx eval 'print(1)'",  # already the collapsed form
+        "ctx py 'print(1)'",  # already the collapsed form
         "",
     ):
         assert not _eval_opportunity(cmd), cmd
@@ -123,7 +123,7 @@ def test_denied_python_dash_c_teaches_ctx_eval(tmp_path):
     )
     assert d["decision"] == "deny"
     assert "ctx run -- " in d["reason"]  # existing remediation intact
-    assert "ctx eval" in d["reason"]  # teach appended
+    assert "ctx py" in d["reason"]  # teach appended
 
 
 def test_force_ask_python_heredoc_teaches_ctx_eval(tmp_path):
@@ -132,20 +132,20 @@ def test_force_ask_python_heredoc_teaches_ctx_eval(tmp_path):
         "run_command", {"CommandLine": HEREDOC_CMD, "Cwd": str(tmp_path)}, tmp_path
     )
     assert d["decision"] == "force_ask"
-    assert "ctx eval" in d["reason"]
+    assert "ctx py" in d["reason"]
 
 
 def test_teach_rides_rewrite_reason_under_auto_steering(tmp_path):
     # Default steering: the heredoc is rewritten to ctx run --shell (never
-    # auto-rewritten into ctx eval), and the teach line rides the reason.
+    # auto-rewritten into ctx py), and the teach line rides the reason.
     d = _classify(
         "run_command", {"CommandLine": HEREDOC_CMD, "Cwd": str(tmp_path)}, tmp_path
     )
     assert d["decision"] == "force_ask"  # canonical layer unchanged
     rewritten = d["rewrite"]["updatedInput"]["CommandLine"]
     assert rewritten.startswith("ctx run --shell -- ")
-    assert "ctx eval" not in rewritten  # teaching-only: no eval auto-rewrite
-    assert "ctx eval" in d["rewrite"]["reason"]
+    assert "ctx py" not in rewritten  # teaching-only: no eval auto-rewrite
+    assert "ctx py" in d["rewrite"]["reason"]
 
 
 def test_non_python_deny_does_not_teach(tmp_path):
@@ -154,7 +154,7 @@ def test_non_python_deny_does_not_teach(tmp_path):
         "run_command", {"CommandLine": "pytest -q", "Cwd": str(tmp_path)}, tmp_path
     )
     assert d["decision"] == "deny"
-    assert "ctx eval" not in d["reason"]
+    assert "ctx py" not in d["reason"]
 
 
 # --------------------------------------------------------- adoption ledger
@@ -203,7 +203,7 @@ def test_ledger_io_failure_does_not_break_decision(tmp_path):
         tmp_path,
     )
     assert d["decision"] in ("deny", "force_ask")
-    assert "ctx eval" in d["reason"]  # teaching still fires
+    assert "ctx py" in d["reason"]  # teaching still fires
 
 
 # ------------------------------------------------------ decision JSON contract
@@ -214,7 +214,7 @@ def test_hook_end_to_end_antigravity_heredoc(tmp_path):
     # Default steering: rewrite wire form, teach line in the reason.
     assert out["decision"] == "allow"
     assert out["updatedInput"]["CommandLine"].startswith("ctx run --shell -- ")
-    assert "ctx eval" in out["reason"]
+    assert "ctx py" in out["reason"]
 
 
 def test_hook_end_to_end_claude_code_denied_dash_c(tmp_path):
@@ -230,12 +230,12 @@ def test_hook_end_to_end_claude_code_denied_dash_c(tmp_path):
     hso = out["hookSpecificOutput"]
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["permissionDecision"] == "deny"
-    assert "ctx eval" in hso["permissionDecisionReason"]
+    assert "ctx py" in hso["permissionDecisionReason"]
 
 
 def test_plain_ctx_eval_command_stays_allowed(tmp_path):
     d = _classify(
-        "run_command", {"CommandLine": "ctx eval 'print(1)'", "Cwd": str(tmp_path)}, tmp_path
+        "run_command", {"CommandLine": "ctx py 'print(1)'", "Cwd": str(tmp_path)}, tmp_path
     )
     assert d == {"decision": "allow"}
     assert _ledger_lines(tmp_path) == []

@@ -23,7 +23,7 @@ Three questions, answered exactly:
 
 - **Gaps** (``--gaps``): where the raw bytes fell — which profiles claimed
   them, how much fell to ``text/v1``, hand-rolled slicer frequency, and
-  ``ctx eval`` opportunities — the empirical priority list for the next
+  ``ctx py`` opportunities — the empirical priority list for the next
   coverage wave, mined from real sessions instead of intuition.
 
 - **Evidence regret** (``--regret``): the rate–distortion frontier gap per

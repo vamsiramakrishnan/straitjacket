@@ -4,6 +4,27 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [Unreleased]
+
+Breaking, taken deliberately while the user count is zero: two command names
+were wrong, so they were fixed at the source rather than described around.
+
+- **`ctx eval` is now `ctx py`.** It runs a Python script; `eval` reads as
+  shell-eval and taught the wrong thing every time an agent saw it. The hook's
+  teaching string, the skill, and all docs move with it.
+- **`ctx investigate` is gone; use `ctx plan run`.** Its own docstring said it
+  was "Same execution as `ctx plan run`, plus the epochal-control ledger" — one
+  behaviour behind two names. `plan run` absorbed the ledger and the
+  `--replans` / `--advise` flags; `investigate` survives where it is still the
+  right word: the artifact family and the `investigate/v1` digest an
+  investigation *produces*.
+- **Prompt-cache impact:** both names appear in cache-keyed prefix assets, so
+  `PREFIX_VERSION` goes 4 → 5 and every model's prompt prefix is rewritten once
+  on first use. Cost is one cold prefix per model; taken now precisely because
+  it is free today and would not be later.
+- `ctx --help` no longer lists 34 commands as a wall (see the CLI front-door
+  entry below); the count is now 33.
+
 ## [0.31.0] - 2026-07-24
 
 Harness collaboration: `ctx wrap` stops knowing three hosts by name, and starts
@@ -164,7 +185,7 @@ The skill catches up to the engines, plus a measured three-arm receipt.
   Codex `AGENTS.md` block): `SKILL.md` and `references/verbs.md` stopped at
   the pre-M-J `run/search/get/stats` vocabulary. They now teach `ctx ask`
   (intents locate/impact/diagnose), `ctx q` (the composition algebra incl.
-  `corpus`/`records`/`distinct`/`histogram`), and `ctx investigate`/`plan`.
+  `corpus`/`records`/`distinct`/`histogram`), and `ctx plan run`/`plan`.
   **PREFIX_VERSION 3 → 4**: the skill body/frontmatter are prefix-resident,
   so this is a one-time full-prefix cache rewrite per user (the injected-
   prefix stability contract; `prefixassets.py` manifest regenerated).
@@ -340,7 +361,7 @@ executes it locally; one causally organized digest returns.
 - **EvidenceGraph v2 relations** (additive): typed `(from, relation, to)`
   triples from a closed vocabulary; a graph without relations serializes
   byte-identically to v1, so every pinned golden and cache key holds.
-- **CLI + MCP**: `ctx plan validate|price|run|ops`, `ctx investigate`
+- **CLI + MCP**: `ctx plan validate|price|run|ops`, `ctx plan run`
   (epochal control: replans beyond the `[plan]` allowance get a declared
   banner + reflex-plane ledger event, never a block). MCP op
   `investigate` accepts observe-class plans only; execute-class ops are
@@ -576,7 +597,7 @@ keeping what a raw interpreter sandbox drops: provenance. Maki's script and
 its intermediates vanish into the chat log with no address; here every
 piece keeps one.
 
-- **`ctx eval`** (`ctx.pyeval`): a Python script runs under birth-gate
+- **`ctx py`** (`ctx.pyeval`): a Python script runs under birth-gate
   capture and only its bounded digest returns. The script is stored first
   as a content-addressed blob, cited in the digest header
   (`script blob:<id>`) and in the final manifest (`eval.script`) —

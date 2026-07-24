@@ -236,16 +236,16 @@ def _main_slow(args: list[str]) -> int:
         help="render the current session's wire scorecard (proxy required)",
     )
 
-    p_eval = sub.add_parser(
-        "eval", help="run a Python script under the birth gate; only its digest returns"
+    p_py = sub.add_parser(
+        "py", help="run a Python script; only its digest returns"
     )
-    p_eval.add_argument(
+    p_py.add_argument(
         "script", nargs="?", help="script text ('-' or omitted reads stdin/heredoc)"
     )
-    p_eval.add_argument("--file", help="read the script from a workspace file")
-    p_eval.add_argument("--cwd", help="working directory relative to the workspace")
-    p_eval.add_argument("--timeout", type=float, default=600.0)
-    p_eval.add_argument("--focus", help="deterministic evidence-selection query")
+    p_py.add_argument("--file", help="read the script from a workspace file")
+    p_py.add_argument("--cwd", help="working directory relative to the workspace")
+    p_py.add_argument("--timeout", type=float, default=600.0)
+    p_py.add_argument("--focus", help="deterministic evidence-selection query")
 
     p_job = sub.add_parser("job", help="inspect or control a backgrounded run")
     p_job.add_argument("job_id", help="job id from `ctx run --bg` (prefix ok)")
@@ -384,6 +384,19 @@ def _main_slow(args: list[str]) -> int:
             "plan_file", nargs="?", default="-",
             help="plan JSON path ('-' or omitted reads stdin)",
         )
+        if _pc == "run":
+            # Absorbed from the old top-level `investigate`, which was this same
+            # execution plus a replan ledger — a flag, never a second command.
+            _pp.add_argument(
+                "--replans", type=int, default=None,
+                help="how many replans this question may take "
+                "(default from ctx.toml [plan])",
+            )
+            _pp.add_argument(
+                "--advise", dest="inv_advise", action="store_true",
+                help="afterwards, report which operator order the recorded "
+                "history would have preferred (report only; nothing is changed)",
+            )
         if _pc == "price":
             _pp.add_argument(
                 "--value", dest="plan_value_explain", action="store_true",
@@ -391,25 +404,6 @@ def _main_slow(args: list[str]) -> int:
                 "(Wilson lower bounds over compiled counts; report only)",
             )
     plan_sub.add_parser("ops", help="registered logical operators (the plan author's inventory)")
-
-    p_inv = sub.add_parser(
-        "investigate",
-        help="one hypothesis epoch: execute a compiled evidence plan, get one digest",
-    )
-    p_inv.add_argument(
-        "plan_file", nargs="?", default="-",
-        help="plan JSON path ('-' or omitted reads stdin)",
-    )
-    p_inv.add_argument(
-        "--replans", type=int, default=None,
-        help="epoch allowance for this objective (default from ctx.toml [plan])",
-    )
-    p_inv.add_argument(
-        "--advise", dest="inv_advise", action="store_true",
-        help="after execution: shadow follow-up report — declared vs "
-        "empirically-preferred operator ordering with the lexicographic "
-        "reason (report only: nothing is reordered or suppressed)",
-    )
 
     p_ask = sub.add_parser(
         "ask",
@@ -733,7 +727,7 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_job(ws, ns)
         if ns.cmd == "jobs":
             return _cmd_jobs(ws)
-        if ns.cmd == "eval":
+        if ns.cmd == "py":
             return _cmd_eval(ws, ns)
         if ns.cmd == "search":
             return _cmd_retrieval(ws, ns, "search")
@@ -817,8 +811,6 @@ def _main_slow(args: list[str]) -> int:
             return _cmd_q(ws, ns)
         if ns.cmd == "plan":
             return _cmd_plan(ws, ns)
-        if ns.cmd == "investigate":
-            return _cmd_investigate(ws, ns)
         if ns.cmd == "ask":
             return _cmd_ask(ws, ns)
         if ns.cmd == "policy":
@@ -1365,13 +1357,13 @@ def _cmd_eval(ws, ns) -> int:
         full = ws.confine(ns.file, must_exist=True)
         rel = ws.relativize(full)
         if ws.is_ignored(rel):
-            print(f"ctx eval: path is excluded from capture by policy: {rel}", file=sys.stderr)
+            print(f"ctx py: path is excluded from capture by policy: {rel}", file=sys.stderr)
             return 1
         script = full.read_text(encoding="utf-8")
     elif ns.script in (None, "-"):
         if sys.stdin.isatty():
             print(
-                "ctx eval: no script given (pass text, --file <path>, or pipe stdin)",
+                "ctx py: no script given (pass text, --file <path>, or pipe stdin)",
                 file=sys.stderr,
             )
             return 2
@@ -1385,7 +1377,7 @@ def _cmd_eval(ws, ns) -> int:
             ws, store, script, timeout=ns.timeout, cwd=ns.cwd, focus=ns.focus
         )
     except ExecutionError as e:
-        print(f"ctx eval: {e}", file=sys.stderr)
+        print(f"ctx py: {e}", file=sys.stderr)
         return 1
 
     # Delivery plan (EDC §13): zero-hop inline uses the result budget;
@@ -1517,7 +1509,6 @@ def _cmd_plan(ws, ns) -> int:
     (docs/EVIDENCE-PLANS.md). Validation and pricing are static: nothing
     executes; `run` executes the DAG and emits one investigation digest."""
     from ctx import plan_ir, plan_ops
-    from ctx.store import Store
 
     if ns.plan_cmd == "ops":
         print(plan_ops.ops_census())
@@ -1566,16 +1557,8 @@ def _cmd_plan(ws, ns) -> int:
             print(pv.render_shadow(declared, ranked, floors=floors))
         return 0
 
-    # run
-    from ctx.plan_exec import execute_plan
-
-    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    out, code = execute_plan(ws, store, text, tier="cli")
-    if code == 2:
-        print(out)
-        return 2
-    _emit_investigation(ws, store, out)
-    return code
+    # run — one implementation, shared with what used to be `ctx plan run`
+    return _run_investigation(ws, ns)
 
 
 def _emit_investigation(ws, store, text: str) -> None:
@@ -1592,12 +1575,14 @@ def _emit_investigation(ws, store, text: str) -> None:
     _emit_bounded_digest(ws, store, text, plan)
 
 
-def _cmd_investigate(ws, ns) -> int:
-    """`ctx investigate <plan.json>` — one hypothesis epoch. Same execution
-    as `ctx plan run`, plus the epochal-control ledger: replans beyond the
-    budget are declared with a banner and recorded for the reflex plane
-    (the asymmetric-loss doctrine: warn and record, never block local
-    evidence-gathering)."""
+def _run_investigation(ws, ns) -> int:
+    """`ctx plan run <plan.json>` — execute an evidence plan and return one
+    digest, keeping a replan ledger: replans past the budget are declared with
+    a banner and recorded, never blocked (warn and record, never stop someone
+    gathering evidence).
+
+    This was a separate `ctx plan run` command until it became clear it was
+    `plan run` plus a ledger — one behaviour behind two names."""
     import hashlib as _hashlib
     import json as _json
 
@@ -1611,7 +1596,7 @@ def _cmd_investigate(ws, ns) -> int:
     try:
         plan = plan_ir.parse_plan(text)
     except plan_ir.PlanError as e:
-        print(f"ctx investigate: {e}", file=sys.stderr)
+        print(f"ctx plan run: {e}", file=sys.stderr)
         return 2
 
     replans = ns.replans if ns.replans is not None else ws.config.plan.replans
@@ -1720,7 +1705,7 @@ def _cmd_ask(ws, ns) -> int:
 
 
 def _investigate_advice(ws, plan, node_rows=None) -> str:
-    """Shadow follow-up report for `ctx investigate --advise` (report only —
+    """Shadow follow-up report for `ctx plan run --advise` (report only —
     never reorders, inserts, or suppresses anything). Shows the declared
     plan's first op against what the empirical follow-up ordering would have
     preferred among the same already-applicable candidates, with the full

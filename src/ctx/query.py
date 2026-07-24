@@ -4,7 +4,7 @@ A TOTAL pipeline language over typed record streams: stages joined by
 ``|``, no loops, no recursion, hard cap of 8 stages. Totality is by
 construction — every query terminates and its cost is statically
 boundable, which is exactly WHY this algebra is safe for the bounded MCP
-tier later, where arbitrary-code ``ctx eval`` can never live. This wave
+tier later, where arbitrary-code ``ctx py`` can never live. This wave
 deliberately ships NO MCP wiring (prefix-asset churn); the CLI verb is
 the only entry point.
 

@@ -61,7 +61,7 @@ No behavioural signal may weaken anything here.
 | `store.py` | The content-addressed artifact store and quota enforcement (SPEC §12). |
 | `jobs.py` | Long-runner backgrounding: `ctx run --bg`, `ctx job(s)`. |
 | `seq.py` | `ctx seq` — declared command trees (round economy without losing gates). |
-| `pyeval.py` | `ctx eval` — programmable capture; a Python script runs under the birth gate, only its digest returns. |
+| `pyeval.py` | `ctx py` — programmable capture; a Python script runs under the birth gate, only its digest returns. |
 | `wrap.py` | `ctx wrap <host>` — run an agent under the harness, ephemerally. |
 | `installer.py` | Plugin rendering, installation, and health checks; `ctx doctor`, `ctx antigravity install` (SPEC §4, §18). |
 | `proxy.py` | The Tier-0 observer proxy: byte-exact relay for API traffic that measures wire ground truth. |

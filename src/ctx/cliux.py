@@ -1,9 +1,9 @@
 """The shape of the CLI a human meets.
 
-`ctx` has 34 commands. Six of them are the product; the rest are machinery a
-user grows into. Argparse shows all 34 at equal weight in source order, which
-reads as a wall and hides the one path that actually works. This module holds
-the curated surface: what is shown first, in what groups, in what words.
+`ctx` has 33 commands. A handful are the product; the rest are machinery a
+user grows into. Argparse showed all of them at equal weight in source order,
+which reads as a wall and hides the one path that actually works. This module
+holds the curated surface: what is shown first, in what groups, in what words.
 
 Rules this file exists to enforce:
 
@@ -15,8 +15,10 @@ Rules this file exists to enforce:
 * **Front door first.** The commands a new user needs are listed first and
   named as a path; everything else lives behind `ctx help --all`.
 
-Command names themselves are NOT changed here — docs, skills and muscle memory
-reference them. This is the presentation layer over the same parser.
+This is the presentation layer over the parser. Where a *name* itself was the
+problem it was fixed at the source instead of described around: `eval` became
+`py` (it runs a Python script, it is not shell-eval) and `investigate` was
+folded into `plan run` (it was that same execution plus a replan ledger).
 """
 
 from __future__ import annotations
@@ -81,13 +83,12 @@ ADVANCED: tuple[tuple[str, str], ...] = (
     ("checkpoint", "save task state so a fresh session can pick the work up"),
     ("debt", "track work you deliberately deferred"),
     ("q", "chain retrieval steps into one query"),
-    ("plan", "build a multi-step evidence plan; check and price it before running"),
-    ("investigate", "run an evidence plan and get a single digest back"),
+    ("plan", "build, price and run a multi-step evidence plan"),
     ("surface", "see and trim the tools your agent exposes (they cost tokens too)"),
     ("job", "inspect or stop one background run"),
     ("jobs", "list background runs in this repo"),
     ("seq", "run several commands as one step"),
-    ("eval", "run a Python script the way `run` runs a command"),
+    ("py", "run a Python script the way `run` runs a command"),
     ("rewrite", "find and edit across many files in one transaction"),
     ("diag", "lint and type errors as a short digest"),
     ("policy", "the steering rules ctx compiled from your own history"),

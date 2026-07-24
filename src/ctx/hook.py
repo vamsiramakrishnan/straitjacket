@@ -459,13 +459,13 @@ def _steering_allows(policy: dict[str, Any]) -> bool:
 
 # ------------------------------------------------- eval teaching surface
 # Measured gap (evals/eval-collapse-2026-07-18.md, finding 2): agents write
-# raw `python3 << 'EOF'` heredocs / `python -c` chains instead of `ctx eval`
+# raw `python3 << 'EOF'` heredocs / `python -c` chains instead of `ctx py`
 # — 0/3 live adoption, because the verb has no teaching surface on this
 # host. When such a command hits the guard, the remediation additionally
 # teaches the collapse move. Teaching-only this wave: heredocs are NEVER
-# auto-rewritten into `ctx eval` (quoting hazards).
+# auto-rewritten into `ctx py` (quoting hazards).
 _EVAL_TEACH = (
-    "Or collapse the chain: ctx eval '<python script>' — the script becomes "
+    "Or collapse the chain: ctx py '<python script>' — the script becomes "
     "an addressable blob and only a bounded digest returns."
 )
 
@@ -481,7 +481,7 @@ _PY_PROG_RE = re.compile(r"^python(3(\.\d+)?)?$")
 def _eval_opportunity(command: str) -> bool:
     """True when ``command`` is a raw python invocation carrying inline code
     — a heredoc/herestring (``<<``) or a ``-c`` flag — i.e. the chain shape
-    ``ctx eval`` collapses. Conservative by construction: the program must
+    ``ctx py`` collapses. Conservative by construction: the program must
     be python/python3/python3.N after unwrapping, and ``-c`` counts only
     among python's own leading options (before ``-m``, ``--``, or a script
     path), so ``python3 -m pytest`` and ``python3 script.py`` never match."""
@@ -516,7 +516,7 @@ def _eval_opportunity(command: str) -> bool:
 def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
     """Adoption telemetry for the eval teaching surface: append one JSON
     line to ``<workspace>/.ctx-session-reads/eval-adoption.jsonl``. This is
-    the denominator of the measurement loop (actual ``ctx eval`` use is
+    the denominator of the measurement loop (actual ``ctx py`` use is
     counted in store telemetry as op="eval"). Fail-open by contract: any IO
     error counts nothing and never blocks a decision."""
     if not workspace_root:

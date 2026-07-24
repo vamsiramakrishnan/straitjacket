@@ -17,7 +17,7 @@ different safety contracts. The mental model can stay small.
 | One noisy command | `ctx run -- <command>` | One birth gate, one immutable run artifact |
 | A shell pipeline | `ctx run --shell '<pipeline>'` | Captures the stream-shaped program as one operation |
 | Known steps | `ctx seq …` | Per-step provenance without model round-trips |
-| Computed control flow | `ctx eval <script>` | Branch, loop, aggregate; one bounded final digest |
+| Computed control flow | `ctx py <script>` | Branch, loop, aggregate; one bounded final digest |
 | Long-running work | `ctx run --bg-after N -- …` | Returns a job handle instead of idling |
 | Inspect a job | `ctx job <id>` | Bounded live tail and lifecycle control |
 | Exact evidence | `ctx get <handle>` | Address in, exact bytes or bounded zoom out |
@@ -39,7 +39,7 @@ different safety contracts. The mental model can stay small.
 | Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
 | Blast radius of a change | `ctx impact <symbol> --depth N` | Transitive callers (`--depth ≤ 6`) |
 | Lint/syntax digest | `ctx diag <path>` | Deterministic diagnostics without running a full linter into context |
-| A compiled investigation | `ctx plan …` / `ctx investigate …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
+| A compiled investigation | `ctx plan …` / `ctx plan run …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
 
 ### Manage the store and the session
 
@@ -127,21 +127,21 @@ ctx seq \
 ```
 
 A sequence is preferable to several model-mediated tool calls because scheduling,
-capture, and intermediate storage remain local. It is preferable to `ctx eval` when no
+capture, and intermediate storage remain local. It is preferable to `ctx py` when no
 computed control flow is needed.
 
-## Execute computed control flow: `ctx eval`
+## Execute computed control flow: `ctx py`
 
 Use eval when a script must branch, loop, or aggregate structured intermediate results.
 
 ```bash
-ctx eval investigation.py
+ctx py investigation.py
 ```
 
 The script itself is stored as an addressable artifact. Intermediate command output does
 not enter the transcript; failures remain deterministic and retrievable.
 
-`ctx eval` provides bounded capture, not OS isolation. Treat it as having the same
+`ctx py` provides bounded capture, not OS isolation. Treat it as having the same
 execution authority as `ctx run` until the broker security boundary ships.
 
 ## Retrieve exact evidence: `ctx get`
@@ -212,7 +212,7 @@ record stream; `distinct` and `histogram` summarize any field.
 The algebra is deliberately total: bounded stages, no loops, no recursion. This makes
 costs statically boundable and every stage’s result addressable.
 
-Use `ctx eval` when the control flow is genuinely computational. Use `ctx q` when the
+Use `ctx py` when the control flow is genuinely computational. Use `ctx q` when the
 intent is a bounded composition of repository and evidence facts.
 
 ## Compare runs: `ctx diff`
@@ -270,7 +270,7 @@ ctx replay --outcomes <t.jsonl>          # per-operator follow-up counts (associ
 ctx replay --outcomes --append-ledger …  # explicit: feed the workspace follow-up ledger
 ctx policy compile --plan-value          # aggregate ledger → committed [plan_value] COUNTS
 ctx plan price --value <plan.json>       # price card + shadow follow-up ranking (report only)
-ctx investigate --advise <plan.json>     # digest + shadow report + shadow ledger line
+ctx plan run --advise <plan.json>     # digest + shadow report + shadow ledger line
 ```
 
 Counts, not rates, in the committed table; Wilson lower bounds derive at

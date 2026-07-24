@@ -129,7 +129,7 @@ unwritable state-home override is the usual cause of "store" errors; see
 
 ## `[plan]` — bounds on compiled investigations
 
-Ceilings a `ctx plan` / `ctx investigate` program may only *tighten*, never
+Ceilings a `ctx plan` / `ctx plan run` program may only *tighten*, never
 exceed.
 
 | Key | Default | Meaning |

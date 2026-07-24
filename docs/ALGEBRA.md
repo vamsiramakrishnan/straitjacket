@@ -16,7 +16,7 @@
 
 **Date:** 2026-07-19 · design for the post-EDC wave. Four questions
 (tree-sitter indexing · Glean/modern indexers · a compositional algebra
-more token-efficient than `ctx eval` · Angle-inspired mechanisms) that
+more token-efficient than `ctx py` · Angle-inspired mechanisms) that
 converge on one architecture: **the EDC governs how evidence is
 delivered; this layer governs how evidence is derived and composed.**
 
@@ -71,7 +71,7 @@ class for a stdlib-first harness. Adopt the idea:
 > homomorphism over the bounded representation (runs at digest-rate), and the
 > type system guarantees bytes are materialized at most once, terminally.
 
-`ctx eval` is Turing-complete Python: ~150–300 tokens of model output,
+`ctx py` is Turing-complete Python: ~150–300 tokens of model output,
 quoting hazards, and a trust envelope that keeps it off the MCP tier.
 Most real compositions don't need Turing-completeness — they need
 pipeline algebra over bounded verbs:

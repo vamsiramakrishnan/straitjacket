@@ -31,7 +31,7 @@ from pathlib import Path
 # measured A/B win (evals/rtk-corpus eval doc).
 # v3: backward planning adopted after a held-out A/B win on every axis
 # (Tura wave): -17% cost, -16% turns, -18% output, more tests.
-PREFIX_VERSION = 4
+PREFIX_VERSION = 5
 
 _MANIFEST_NAME = "prefix-manifest.json"
 

@@ -120,7 +120,7 @@ Plain-language highlights from recent releases; full detail in
   its own tools (no API key) until a failing test went green — a cross-vendor
   handoff through the loop, not a cost demo
   ([receipt](evals/live-collab-antigravity-claude-2026-07-24.md)).
-- **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
+- **Compiled investigations.** `ctx plan` / `ctx plan run` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
   — measured 6 rounds → 1 ([receipt](evals/plan-collapse-2026-07-19.md)).
 - **The harness now measures itself.** `ctx replay --regret` scores each
@@ -219,7 +219,7 @@ The most common question — which verb do I use — as a flowchart:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ladder.svg">
-  <img src="assets/readme/diagrams/ladder-light.svg" width="100%" alt="The capture ladder: native read for small bounded output; ctx run for one noisy command; ctx run --shell for pipe chains; ctx seq for N declared steps; ctx eval for computed control flow. Long work backgrounds into a job handle.">
+  <img src="assets/readme/diagrams/ladder-light.svg" width="100%" alt="The capture ladder: native read for small bounded output; ctx run for one noisy command; ctx run --shell for pipe chains; ctx seq for N declared steps; ctx py for computed control flow. Long work backgrounds into a job handle.">
 </picture>
 
 </div>
@@ -230,7 +230,7 @@ backgrounds into a `job:` handle instead of idling the session.
 The measured differences
 ([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)):
 a bash pipeline under `ctx run --shell` already collapses stream-shaped
-chains (266 tok, one round). `ctx eval` wins on round count only when the
+chains (266 tok, one round). `ctx py` wins on round count only when the
 intermediate results are *structured*: the 30-file aggregate is 146 tok in
 one round vs 96k naive, and a bounded-slice baseline cannot finish that task
 at all. When a script fails mid-corpus, debugging is retrieval, not
@@ -366,7 +366,7 @@ Concretely:
   full cold cache rewrite per model (~56k tokens).
 - A measured A/B is the bar for shipping a steering change: the solution
   ladder shipped only after −28% turns / −33% time / −17% cost; backward
-  planning after −17% cost / −16% turns. The `ctx eval` adoption ledger
+  planning after −17% cost / −16% turns. The `ctx py` adoption ledger
   exists because a live A/B showed the discipline winning while the verb went
   unadopted — recorded as debt, then instrumented.
 
@@ -396,7 +396,7 @@ each tile below is the idea the harness kept — losslessly.
 | **rtk** (bash-hook filter binary) | filter floods at the source | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` |
 | **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
 | **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
-| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx eval`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
 
 What each still does better than us, by design: Headroom's zero-integration
 generality, rtk's 15-host reach and <10ms single binary, Ponytail's 20-host
@@ -527,7 +527,7 @@ Examples:
 ctx run --focus "find test failures" --cwd services/payments -- pytest -q
 ctx run --bg-after 30 -- npm run build          # backgrounds if it outlives 30s
 ctx seq 'pytest -q' 'ruff check .' 'npm run build'
-ctx eval - <<'EOF'                              # computed control flow, one round
+ctx py - <<'EOF'                              # computed control flow, one round
 import json, glob, statistics
 lat = [json.loads(l)["ms"] for f in glob.glob("runs/*.jsonl") for l in open(f)]
 print(f"p95: {statistics.quantiles(lat, n=20)[18]:.0f}ms over {len(lat)} records")

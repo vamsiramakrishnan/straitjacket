@@ -12,12 +12,12 @@ cap, generalized to a DAG:
   silently;
 - **guards, not expressions**: ``when`` admits only a micro-grammar over
   upstream results (``<node>.count > 0``, ``<node>.outcome == fail``) —
-  computed control flow stays in ``ctx eval``, off the MCP tier;
+  computed control flow stays in ``ctx py``, off the MCP tier;
 - **static cost**: every op carries a cost class, so ``ctx plan price``
   renders the bill before anything executes (the PRICED-CONTEXT idiom).
 
 Plans are JSON (stdlib-parsed; canonical-JSON identity; stored as ``blob:``
-and cited in the digest header, like ``ctx eval`` scripts). Never YAML —
+and cited in the digest header, like ``ctx py`` scripts). Never YAML —
 it would be the core's first hard dependency.
 
 Validation failures are typed ``Rejection`` records with reasons drawn
