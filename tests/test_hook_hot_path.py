@@ -34,6 +34,22 @@ _FORBIDDEN = ("typing", "pathlib", "dataclasses", "inspect", "ast", "dis",
 # Every module hook.py imports per call, so the same discipline binds them.
 _HOT_MODULES = ("ctx.hook", "ctx.engagement", "ctx.reflex", "ctx.substitute")
 
+_PROBE = f"','.join(m for m in {_FORBIDDEN!r} if m in sys.modules)"
+
+
+def _interpreter_baseline() -> set[str]:
+    """Which forbidden modules this interpreter loads before any of our code.
+
+    Not hypothetical: Python 3.13 imports `linecache` during startup, so a bare
+    `m in sys.modules` check reads as "the guard imported it" on 3.13 and passes
+    on 3.11/3.12. What the contract actually cares about is the cost *we* add,
+    so measure the floor and subtract it.
+    """
+    out = subprocess.run([sys.executable, "-c", f"import sys\nprint({_PROBE})"],
+                         capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+    assert out.returncode == 0, out.stderr
+    return {m for m in out.stdout.strip().split(",") if m}
+
 
 def test_hot_path_import_graph_excludes_expensive_modules():
     src = str(Path(__file__).resolve().parent.parent / "src")
@@ -41,16 +57,17 @@ def test_hot_path_import_graph_excludes_expensive_modules():
         "import sys\n"
         f"for m in {_HOT_MODULES!r}:\n"
         "    __import__(m)\n"
-        f"print(','.join(m for m in {_FORBIDDEN!r} if m in sys.modules))\n"
+        f"print({_PROBE})\n"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True,
                          text=True, env={"PYTHONPATH": src, "PATH": "/usr/bin:/bin"})
     assert out.returncode == 0, out.stderr
-    loaded = out.stdout.strip()
-    assert loaded == "", (
-        f"hot-path modules now import {loaded} — see the latency contract in "
-        "hook.py. Move it under `if TYPE_CHECKING:` or into the function that "
-        "needs it."
+    loaded = {m for m in out.stdout.strip().split(",") if m}
+    added = loaded - _interpreter_baseline()
+    assert added == set(), (
+        f"hot-path modules now import {', '.join(sorted(added))} — see the "
+        "latency contract in hook.py. Move it under `if TYPE_CHECKING:` or into "
+        "the function that needs it."
     )
 
 
@@ -66,14 +83,16 @@ def test_guard_entry_point_does_not_load_expensive_modules():
         "import sys\n"
         "from ctx.cli import main\n"
         "main()\n"
-        f"sys.stderr.write(','.join(m for m in {_FORBIDDEN!r} if m in sys.modules))\n"
+        f"sys.stderr.write({_PROBE})\n"
     )
     out = subprocess.run(
         [sys.executable, "-c", code, "hook", "claude-code", "pre-tool-use"],
         input=payload, capture_output=True, text=True,
         env={"PYTHONPATH": str(root / "src"), "PATH": "/usr/bin:/bin"}, cwd=str(root))
     assert json.loads(out.stdout)  # exactly one decision was emitted
-    assert out.stderr.strip() == "", f"entry point loaded {out.stderr.strip()}"
+    loaded = {m for m in out.stderr.strip().split(",") if m}
+    added = loaded - _interpreter_baseline()
+    assert added == set(), f"entry point loaded {', '.join(sorted(added))}"
 
 
 # ---------------------------------------------------------------- P6 cursor
