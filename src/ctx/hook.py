@@ -193,6 +193,48 @@ def _tool_kind(tool_name: str) -> str | None:
 # `ctx run` capture would hang or change semantics, so they stay plain deny.
 _NO_REWRITE_PROGS = {"less", "more", "vi", "vim", "nano", "emacs", "top", "htop", "watch", "ssh", "xargs"}
 
+# A follow flag means the command never exits. `head`/`tail` already refuse to
+# be rewritten for this reason, but the same shape rides on journalctl, docker
+# logs, kubectl logs and friends — and those were being rewritten into a
+# *blocking* `ctx run`, which waits out the full 600s timeout. Steering the
+# model into a hang is worse than not steering it at all. These get `--bg`,
+# which returns a job handle immediately and is what the skill already teaches.
+#
+# `-f` is badly overloaded — it is *file* in `grep -f`, `make -f`,
+# `docker build -f`, and *force* in `rm -f`/`cp -f`. Treating every `-f` as
+# follow backgrounds builds and searches, which is its own bug. So the short
+# form counts only for the programs where it genuinely means follow (matched
+# with the log-reading subcommand where one exists); the long `--follow` is
+# unambiguous and counts anywhere.
+_FOLLOW_PROGS = {"tail", "head", "journalctl"}
+_FOLLOW_SUBCOMMANDS = {"docker": "logs", "podman": "logs", "kubectl": "logs",
+                       "oc": "logs", "nerdctl": "logs", "heroku": "logs"}
+
+
+def _follows_forever(argv: list[str]) -> bool:
+    """Does this invocation follow a stream, so that it never terminates?
+
+    A foreground capture of such a command blocks until the timeout, so the
+    caller steers it to `--bg` instead. Conservative by construction: a false
+    negative just means the old behaviour, while a false positive would
+    background a build the model needed to read inline."""
+    if not argv:
+        return False
+    prog = os.path.basename(argv[0])
+    rest = argv[1:]
+    if any(a == "--follow" or a.startswith("--follow=") for a in rest):
+        return True
+    short_means_follow = prog in _FOLLOW_PROGS or (
+        prog in _FOLLOW_SUBCOMMANDS
+        and any(a == _FOLLOW_SUBCOMMANDS[prog] for a in rest)
+    )
+    if not short_means_follow:
+        return False
+    return any(
+        a == "-f" or (len(a) > 1 and a[0] == "-" and a[1] != "-" and "f" in a[1:])
+        for a in rest
+    )
+
 
 _POLICY_CACHE_NAME = "guard-policy-cache.json"
 
@@ -664,11 +706,21 @@ def _deny_cmd(
     prog = os.path.basename(argv[0]) if argv else ""
     if prog in _NO_REWRITE_PROGS:
         return decision
+    # A never-terminating command must not be steered into a blocking capture.
+    bg = " --bg" if _follows_forever(argv) else ""
     if has_meta and original:
-        cmd = "ctx run --shell -- " + shlex.quote(original)
+        cmd = f"ctx run{bg} --shell -- " + shlex.quote(original)
     else:
-        cmd = "ctx run -- " + " ".join(shlex.quote(a) for a in argv)
-    decision["_rewrite"] = {"command": cmd, "reason": _REWRITE_REASON}
+        cmd = f"ctx run{bg} -- " + " ".join(shlex.quote(a) for a in argv)
+    reason = _REWRITE_REASON
+    if bg:
+        reason = (
+            "CTX_CONTEXT_GUARD: this follows output and never exits, so a "
+            "foreground capture would block until the timeout. Backgrounded "
+            "instead — it returns a job handle immediately; read a bounded "
+            "tail with `ctx job <id>`, or collect it with `ctx job <id> --wait`."
+        )
+    decision["_rewrite"] = {"command": cmd, "reason": reason}
     return decision
 
 
