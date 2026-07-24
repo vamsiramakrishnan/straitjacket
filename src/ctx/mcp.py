@@ -31,7 +31,11 @@ TOOL_SCHEMA: dict[str, Any] = {
         "stats (schema and repository shape), map (ranked budget-fitted codebase map), "
         "def (symbol definition site with snapshot + span), refs (reference sites for "
         "a symbol), diag (deterministic lint/syntax digest), "
-        "repo (workspace summary), doctor (health)."
+        "callers (direct call-graph callers of a symbol), callees (direct call-graph "
+        "callees of a symbol), impact (transitive callers of a symbol — blast radius, "
+        "bounded depth), diff (regression delta between two captured run: refs), "
+        "repo (workspace summary), doctor (health), investigate (one observe-class "
+        "ctx.plan/v1 evidence plan executed as a single bounded digest)."
     ),
     "inputSchema": {
         "type": "object",

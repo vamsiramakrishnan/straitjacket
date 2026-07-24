@@ -4,6 +4,19 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [Unreleased]
+
+- **MCP tool description now documents all 14 ops** (`mcp.py`): the `op` enum
+  declared 14 operations while the prose catalogue in the tool description
+  listed 9 — `callers`, `callees`, `impact`, `diff` and `investigate` were
+  callable but undiscoverable to a model reading the tool definition. Each now
+  carries a gloss alongside the existing nine, and
+  `test_tool_description_documents_every_enum_op` asserts every enum member is
+  described, so the catalogue cannot drift from the enum again.
+  **Cache impact:** the tool description is a prefix-resident asset, so
+  `PREFIX_VERSION` moves 4 → 5 and every user pays one cold prompt-cache write
+  per model on first use after upgrading.
+
 ## [0.30.0] - 2026-07-21
 
 Building the toolchains that were "not available" — tree-sitter and SCIP.
