@@ -70,3 +70,80 @@ def test_unknown_id_error_still_carries_its_prefix(ws_root):
     store = Store(resolve_workspace(str(ws_root)).workspace_id)
     with pytest.raises(UnknownIdError, match="abc123def"):
         store.resolve_id("abc123def")
+
+
+# ------------------------------------------- 2. truncation keeps the handle
+def _tiny_budget_ws(root, *, engagement="active"):
+    (root / "ctx.toml").write_text(
+        "version = 1\n"
+        "[budgets]\ndigest_tokens = 60\nresult_tokens = 60\n"
+        f'[engagement]\nmode = "{engagement}"\n',
+        encoding="utf-8",
+    )
+    return root
+
+
+NOISY = "for i in range(400): print('line %d some content here to fill space' % i)"
+
+
+@pytest.mark.parametrize("engagement", ["active", "passive"])
+def test_truncated_run_digest_still_ends_with_a_retrieval_handle(
+    ws_root, capsys, engagement
+):
+    """bounded() cuts from the bottom and `next:` is last in every profile,
+    so the clamp deleted the retrieval affordance exactly when it was needed.
+    filter_digest compounded it: cap 0 (passive / lean-model sessions, the
+    default) dropped the whole block before the clamp ever ran."""
+    import sys
+
+    _tiny_budget_ws(ws_root, engagement=engagement)
+    rc = _run(ws_root, "run", "--", sys.executable, "-c", NOISY)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[ctx:truncated" in out, out  # precondition: it really was cut
+    last = [ln for ln in out.strip().splitlines() if ln.strip()][-1]
+    assert last.startswith("next: "), out  # a handle, not a dead end
+    assert "ctx " in last  # ...carrying a verb
+    assert "run:" in last  # ...and an address
+
+
+def test_untruncated_digest_gains_no_extra_next_line(ws_root, capsys):
+    """The handle is a truncation remedy, not a new affordance: a digest that
+    fits must stay byte-identical, and a passive session must still get no
+    suggestions."""
+    import sys
+
+    (ws_root / "ctx.toml").write_text(
+        'version = 1\n[engagement]\nmode = "passive"\n', encoding="utf-8"
+    )
+    rc = _run(ws_root, "run", "--", sys.executable, "-c", "print('ok')")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[ctx:truncated" not in out
+    assert "next:" not in out
+
+
+def test_truncation_handle_reads_through_the_engagement_filter():
+    """The handle is read from the UNFILTERED digest, so cap 0 cannot hide
+    it, and it falls back to the first artifact handle when a digest carries
+    no `next:` block at all."""
+    from ctx.commands.emit import _truncation_handle
+
+    digest = (
+        "[ctx run:abc123abc123 profile=text/v1]\nbody\nnext:\n"
+        "  ctx get run:abc123abc123#stdout --lines 6:395\n"
+        "  ctx search run:abc123abc123 '<pattern>'\n"
+    )
+    assert _truncation_handle(digest) == "ctx get run:abc123abc123#stdout --lines 6:395"
+    assert _truncation_handle("[ctx run:abc123abc123]\nbody\n") == (
+        "ctx get run:abc123abc123"
+    )
+    assert _truncation_handle("no handle anywhere") is None
+
+
+def test_bounded_truncation_continuation_only_fires_on_a_cut():
+    from ctx.textutil import bounded
+
+    assert bounded("short", 100, truncation_continuation="ctx get run:x") == "short"
+    cut = bounded("x" * 4000, 10, truncation_continuation="ctx get run:x")
+    assert cut.endswith("next: ctx get run:x")

@@ -150,9 +150,24 @@ def decode_stream(data: bytes) -> tuple[str, str | None, str]:
         return data.decode("utf-8", "replace"), "utf-8", "text/plain; lossy"
 
 
-def bounded(text: str, budget_tokens: int, continuation: str | None = None) -> str:
+def bounded(
+    text: str,
+    budget_tokens: int,
+    continuation: str | None = None,
+    *,
+    truncation_continuation: str | None = None,
+) -> str:
     """Enforce an output token budget. Oversized text is cut at a line
-    boundary with explicit truncation metadata (never silent flooding)."""
+    boundary with explicit truncation metadata (never silent flooding).
+
+    ``continuation`` is the caller's own "here is the rest" address and is
+    appended whether or not anything was cut. ``truncation_continuation`` is
+    the fallback handle appended ONLY when this function actually cut
+    something: the clamp cuts from the bottom, and the ``next:`` affordance
+    block is last in every digest profile, so the one moment a reader most
+    needs a retrieval address is the moment the clamp deletes it. Callers
+    that can name a handle pass it here; nothing is added to an untruncated
+    digest, so an emission that fits stays byte-identical."""
     budget_bytes = budget_tokens * 4
     raw = text.encode("utf-8")
     if len(raw) <= budget_bytes:
@@ -165,6 +180,7 @@ def bounded(text: str, budget_tokens: int, continuation: str | None = None) -> s
         cut = cut[:nl]
     total_est = estimate_tokens(len(raw))
     note = f"\n[ctx:truncated shown≈{budget_tokens} of ≈{total_est} est tokens]"
-    if continuation:
-        note += f"\nnext: {continuation}"
+    tail = continuation or truncation_continuation
+    if tail:
+        note += f"\nnext: {tail}"
     return cut + note
