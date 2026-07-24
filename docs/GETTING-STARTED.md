@@ -42,9 +42,22 @@ Per host, what setup writes:
 
 | Host | Files | Enforcement |
 |---|---|---|
-| Antigravity | `.agents/plugins/ctx-harness/` (MCP tool + hooks) | enforced |
-| Claude Code | `.claude/settings.json` hooks + explorer agent | enforced |
-| Codex | `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` block | enforced |
+| Antigravity | `.agents/plugins/ctx-harness/` (MCP tool + hooks) | birth-gate enforced; output-side nudge-only |
+| Claude Code | `.claude/settings.json` hooks + explorer agent | fully enforced (birth + output) |
+| Codex | `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` block | fully enforced (birth + output) |
+
+There's one honest per-host difference. All three contain floods at the
+**birth gate** (a flooding command is rewritten through `ctx run`; native and
+semantic search are steered to bounded `ctx` ops) — that's the primary
+mechanism and it's the same everywhere. But the **output-side safety net**
+(the PostToolUse gate that replaces an oversized tool result with a digest)
+needs a host API that can substitute a tool's output. Claude Code
+(`updatedToolOutput`) and Codex (`decision:block`) have one; **Antigravity does
+not (yet) upstream**, so there the harness stays *nudge-only* — it can't shrink
+an already-produced result, only nudge the model to retrieve boundedly next
+time. Practically: a verbose **MCP/connector result** can still reach the
+transcript on Antigravity. Mitigation: use the bounded `ctx` MCP tool
+(`ctx search`/`get`/`stats`) for retrieval, which is capped by construction.
 
 Prefer a single host? `ctx wrap antigravity`, `ctx wrap claude`, or
 `ctx wrap codex` do exactly one. (For Antigravity, `ctx wrap antigravity` renders
