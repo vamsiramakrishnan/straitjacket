@@ -344,7 +344,13 @@ class Store:
             rows = [r for r in rows if r[1] in kinds]
         ids = [r[0] for r in rows]
         if not ids:
-            raise UnknownIdError(f"no object matches id prefix {short!r} in this workspace")
+            raise UnknownIdError(
+                f"no object matches id prefix {short!r} in this workspace; it was "
+                "either never captured here, or `ctx gc` / the retention window "
+                "has already collected it. Re-capture the evidence "
+                "(`ctx run -- <command>`); `ctx pin <handle>` keeps an artifact "
+                "past retention next time"
+            )
         if len(ids) > 1:
             raise AmbiguousIdError(short, ids)
         return ids[0]
