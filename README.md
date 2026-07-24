@@ -416,6 +416,15 @@ canonical hook decision, translated to each host's dialect: Antigravity's plugin
 (`hookSpecificOutput` PreToolUse + `decision:block` PostToolUse substitution).
 One classifier, three emitters — `ctx wrap setup` wires all three at once.
 
+The **birth-gate** decision (PreToolUse: rewrite flooding commands, steer native
+and semantic search to bounded `ctx` ops) is identical on all three. The
+**output-side** gate (PostToolUse: replace an oversized tool result with a
+digest) needs a host field that can substitute output — Claude Code
+(`updatedToolOutput`) and Codex (`decision:block`) have one; Antigravity does not
+upstream yet, so there the output gate is **nudge-only**. A verbose MCP/connector
+result can still reach the transcript on Antigravity; retrieve through the
+bounded `ctx` MCP tool to stay capped.
+
 ### Steering policy (the hooks)
 
 The PreToolUse classifier is conservative and config-driven. Here is what
