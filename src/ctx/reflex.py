@@ -169,8 +169,19 @@ import os
 import re
 import shlex
 import time
-from pathlib import Path
-from typing import Any
+
+# Hot path: hook.py imports this module on every intercepted command, so
+# `pathlib` (~4.7 ms) and `typing` (~4.3 ms) are kept out of module scope.
+# Path handling here is joins plus existence checks, which `os.path` does
+# more cheaply (and it accepts the `Path` values callers still pass, via the
+# os.PathLike protocol); `from __future__ import annotations` makes `Any` and
+# `Path` annotation-only names that are never evaluated at runtime. Spelled
+# with a local constant rather than `from typing import TYPE_CHECKING`, since
+# that import would pull in the module being avoided.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from pathlib import Path
+    from typing import Any
 
 _LEDGER_DIR = ".ctx-session-reads"
 _STATE_NAME = "reflex.json"
@@ -548,8 +559,8 @@ def landing_ref(command: str) -> str | None:
 # ------------------------------------------------------------------ state
 
 
-def _state_path(ws_root: Path | str) -> Path:
-    return Path(ws_root) / _LEDGER_DIR / _STATE_NAME
+def _state_path(ws_root: Path | str) -> str:
+    return os.path.join(ws_root, _LEDGER_DIR, _STATE_NAME)
 
 
 def read_state(ws_root: Path | str | None) -> dict[str, Any]:
@@ -557,7 +568,8 @@ def read_state(ws_root: Path | str | None) -> dict[str, Any]:
     if ws_root is None:
         return {}
     try:
-        state = json.loads(_state_path(ws_root).read_text(encoding="utf-8"))
+        with open(_state_path(ws_root), encoding="utf-8") as fh:
+            state = json.load(fh)
         return state if isinstance(state, dict) else {}
     except Exception:
         return {}
@@ -567,11 +579,12 @@ def _write_state(ws_root: Path | str, state: dict[str, Any]) -> None:
     """Atomic write: temp file in the ledger dir + rename. Raises to the
     caller (every caller is fail-open)."""
     path = _state_path(ws_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
     payload = json.dumps(state, sort_keys=True)
     # Hand-rolled unique temp name instead of tempfile.mkstemp: importing
     # tempfile pulls shutil (~4ms) into every hook call for one mkstemp.
-    tmp = str(path.parent / f"{_STATE_NAME}.{os.getpid()}.{os.urandom(4).hex()}")
+    tmp = os.path.join(parent, f"{_STATE_NAME}.{os.getpid()}.{os.urandom(4).hex()}")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -620,8 +633,8 @@ def _append_outcome(
 ) -> None:
     """Append one FROZEN-schema line to the outcome ledger. Raises to the
     caller (every caller is fail-open). ``ts`` is operational only."""
-    path = Path(ws_root) / _LEDGER_DIR / _OUTCOMES_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = os.path.join(ws_root, _LEDGER_DIR, _OUTCOMES_NAME)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     line = json.dumps(
         {
             "ts": time.time(),
@@ -642,8 +655,8 @@ def _append_outcome(
 def _append_jsonl(ws_root: Path | str, name: str, doc: dict[str, Any]) -> None:
     """Append one sorted-keys JSON line to a session ledger. Raises to the
     caller (every caller is fail-open)."""
-    path = Path(ws_root) / _LEDGER_DIR / name
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = os.path.join(ws_root, _LEDGER_DIR, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(doc, sort_keys=True) + "\n")
 
@@ -1400,7 +1413,7 @@ def _q_line_signature(rec: dict[str, Any]) -> str:
 
 
 def _fold_q_ledger(
-    state: dict[str, Any], ops_path: Path | None, json_path: Path | None
+    state: dict[str, Any], ops_path: str | None, json_path: str | None
 ) -> tuple[list[dict[str, Any]], bool]:
     """Fold unseen q-dry ledger content into reflex state; return
     (event docs to append, state changed). Op lines are consumed once via
@@ -1413,7 +1426,8 @@ def _fold_q_ledger(
     changed = False
     if ops_path is not None:
         try:
-            lines = ops_path.read_text(encoding="utf-8").splitlines()
+            with open(ops_path, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
         except Exception:
             lines = None
         if lines is not None:
@@ -1458,7 +1472,8 @@ def _fold_q_ledger(
     if json_path is not None:
         blob: Any = None
         try:
-            blob = json.loads(json_path.read_text(encoding="utf-8"))
+            with open(json_path, encoding="utf-8") as fh:
+                blob = json.load(fh)
         except Exception:
             blob = None
         if isinstance(blob, dict) and isinstance(blob.get("dry"), list):
@@ -1525,10 +1540,10 @@ def sync_query_outcomes(ws_root: Path | str | None) -> None:
     if ws_root is None:
         return
     try:
-        led = Path(ws_root) / _LEDGER_DIR
-        ops_path = led / _Q_DRY_OPS_NAME
-        json_path = led / _Q_DRY_STATE_NAME
-        has_ops, has_json = ops_path.is_file(), json_path.is_file()
+        led = os.path.join(ws_root, _LEDGER_DIR)
+        ops_path = os.path.join(led, _Q_DRY_OPS_NAME)
+        json_path = os.path.join(led, _Q_DRY_STATE_NAME)
+        has_ops, has_json = os.path.isfile(ops_path), os.path.isfile(json_path)
         if not has_ops and not has_json:
             return
         state = _normalized(read_state(ws_root))

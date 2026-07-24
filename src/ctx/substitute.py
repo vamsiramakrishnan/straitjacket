@@ -17,7 +17,11 @@ question in one bounded call instead of a grep dump the next turn re-ingests.
 Design constraints, all deliberate:
 
   * **Pure and total.** No I/O, no store access, no shell-out; a token scan and
-    a table. Trivially testable, and it can never hang or flood.
+    a table. Trivially testable, and it can never hang or flood. The two
+    environment facts a couple of recognisers need (``failure_available``,
+    ``symbols_resolvable``) are *supplied* by the caller, never gathered here;
+    they may be passed as thunks so the caller's I/O is deferred to the point
+    of use, but this module still performs none of its own.
   * **Cheapest rung first (the Ponytail ladder).** Recognisers are ordered so
     the first match is the cheapest equivalent; each carries its ``rung`` for
     the ctx-debt ledger.
@@ -29,7 +33,17 @@ from __future__ import annotations
 
 import re
 import shlex
-from dataclasses import dataclass
+
+# `dataclasses`/`typing` stay out of this module: hook.py imports it on the hot
+# path of every intercepted command (see the latency contract in hook.py), and
+# `from __future__ import annotations` makes annotations strings, so nothing
+# below needs them at runtime. Not `from typing import TYPE_CHECKING`, which
+# would import a module this file exists to keep off the hot path.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    Probe = bool | Callable[[], bool]
 
 # a bare identifier — the signal that a search is for a *symbol* (→ refs, which
 # resolves through the symbol index) rather than free text (→ bounded search).
@@ -52,19 +66,68 @@ _GREP_VALUE_FLAGS = {
 _SHELL_OPS = {"|", "||", "&&", ";", "&", ">", ">>", "<", "<<", "2>", "2>>", "|&", "1>"}
 
 
+# ``failure_available`` / ``symbols_resolvable`` are answers to questions that
+# cost real I/O (a session-ledger scan and a repo scan respectively), but only a
+# small minority of commands reach the recogniser branch that needs them. Both
+# parameters therefore accept a zero-arg callable as well as a plain bool, and
+# the callable is invoked at the point of use — never on the way in. Passing a
+# bool keeps the original semantics exactly.
+def _probe(flag: Probe) -> bool:
+    return bool(flag() if callable(flag) else flag)
+
+
 def _is_compound(toks: list[str], raw: str) -> bool:
     if any(t in _SHELL_OPS for t in toks):
         return True
     return "$(" in raw or "`" in raw  # command substitution
 
 
-@dataclass(frozen=True)
 class Substitution:
-    """A collapsed op that replaces a loop-shape command."""
-    command: str   # the ctx invocation to run instead
-    reason: str    # remediation text: what it does and why it's cheaper
-    rung: str      # Ponytail ladder rung (for the ctx-debt ledger)
-    shape: str     # which loop-shape matched (telemetry)
+    """A collapsed op that replaces a loop-shape command.
+
+    Hand-rolled rather than ``@dataclass(frozen=True)``: this module is
+    imported on the hot path of every intercepted command, and the decorator's
+    only cost that matters is the ``dataclasses`` import, which drags in
+    ``inspect`` → ``ast``/``dis``/``tokenize``/``linecache`` — measured at
+    ~9.8 ms per tool call, the single largest item in the guard's import
+    graph. Four read-only string fields do not earn that.
+
+    Semantics are kept identical to the frozen dataclass — positional and
+    keyword construction, value equality against its own type only,
+    hashability, immutability (including no new attributes, via ``__slots__``),
+    and the same ``repr`` shape — so the type stays substitutable and only the
+    import cost is gone. `tests/test_hook_hot_path.py` pins that equivalence.
+    """
+
+    __slots__ = ("command", "reason", "rung", "shape")
+
+    def __init__(self, command: str, reason: str, rung: str, shape: str) -> None:
+        s = object.__setattr__
+        s(self, "command", command)  # the ctx invocation to run instead
+        s(self, "reason", reason)    # remediation: what it does, why it's cheaper
+        s(self, "rung", rung)        # Ponytail ladder rung (for the ctx-debt ledger)
+        s(self, "shape", shape)      # which loop-shape matched (telemetry)
+
+    def _fields(self) -> tuple[str, str, str, str]:
+        return (self.command, self.reason, self.rung, self.shape)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError(f"cannot assign to field {name!r}")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"cannot delete field {name!r}")
+
+    def __eq__(self, other: object) -> bool:
+        if other.__class__ is not Substitution:
+            return NotImplemented
+        return self._fields() == other._fields()  # type: ignore[attr-defined]
+
+    def __hash__(self) -> int:
+        return hash(self._fields())
+
+    def __repr__(self) -> str:
+        return (f"Substitution(command={self.command!r}, reason={self.reason!r}, "
+                f"rung={self.rung!r}, shape={self.shape!r})")
 
 
 def _split(command: str) -> list[str] | None:
@@ -124,7 +187,7 @@ def _glob_hint(paths: list[str]) -> str:
     return ""
 
 
-def _collapse_grep(toks: list[str], symbols_resolvable: bool) -> Substitution | None:
+def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution | None:
     prog = toks[0].rsplit("/", 1)[-1]
     git_grep = prog == "git" and len(toks) > 1 and toks[1] == "grep"
     if git_grep:
@@ -138,7 +201,9 @@ def _collapse_grep(toks: list[str], symbols_resolvable: bool) -> Substitution | 
     pattern, paths = _grep_pattern_and_globs(toks)
     if not pattern:
         return None
-    if _IDENT_RE.match(pattern) and symbols_resolvable:
+    # `_probe` second: the repo scan behind `symbols_resolvable` is only worth
+    # paying once we know this really is a bare-identifier hunt.
+    if _IDENT_RE.match(pattern) and _probe(symbols_resolvable):
         # a symbol hunt on a repo where refs can resolve → the index answers it
         # exactly, span-precise, grouped. When symbols are NOT resolvable (no
         # index, unsupported language) we fall through to bounded content search
@@ -196,12 +261,16 @@ def _collapse_cat(toks: list[str]) -> Substitution | None:
 _PYTEST_NARROW_FLAGS = {"-k", "-m", "--lf", "--last-failed", "--ff", "--failed-first"}
 
 
-def _collapse_pytest(command: str, failure_available: bool) -> Substitution | None:
+def _collapse_pytest(command: str, failure_available: Probe) -> Substitution | None:
     # ``pytest`` with no path/-k/-m narrowing: the whole-suite (re-)run. On its
     # own this is captured at the emission gate; the collapse only helps on a
     # *re-run after a captured failure*, hence ``failure_available``.
-    if not failure_available:
-        return None
+    #
+    # The syntactic tests come FIRST and the `failure_available` probe last.
+    # The two are a plain conjunction, so the outcome is unchanged — but the
+    # probe is a scan of the session intervention ledger, and this way it runs
+    # only for a command that is genuinely a bare whole-suite pytest run,
+    # instead of on every command the agent issues.
     toks = _split(command)
     if not toks:
         return None
@@ -219,6 +288,8 @@ def _collapse_pytest(command: str, failure_available: bool) -> Substitution | No
     for t in body:
         if t in _PYTEST_NARROW_FLAGS or "::" in t or (not t.startswith("-")):
             return None
+    if not _probe(failure_available):
+        return None
     return Substitution(
         command="ctx q 'fails last | in-changed'",
         reason=("CTX_CONTEXT_GUARD: a captured failure is on record — re-running "
@@ -228,8 +299,8 @@ def _collapse_pytest(command: str, failure_available: bool) -> Substitution | No
         rung="failure-slice", shape="pytest_rerun")
 
 
-def collapse(command: str, *, failure_available: bool = False,
-             symbols_resolvable: bool = True) -> Substitution | None:
+def collapse(command: str, *, failure_available: Probe = False,
+             symbols_resolvable: Probe = True) -> Substitution | None:
     """Recognise a collapsible loop-shape in ``command`` and return the
     collapsed ``ctx`` op, or ``None`` to leave the command untouched.
 
@@ -237,6 +308,13 @@ def collapse(command: str, *, failure_available: bool = False,
     store-gated pytest re-run slice. ``symbols_resolvable`` degrades a symbol
     hunt to bounded content search when the repo has no way to resolve refs,
     so the collapse is safe on any repo and never strands the agent.
+
+    ``failure_available`` and ``symbols_resolvable`` each accept either a bool
+    or a zero-arg callable returning one. The callable form is what the guard
+    passes: both answers cost I/O, and only a small minority of commands reach
+    a branch that consults them, so the caller hands over the *question* and
+    the recogniser asks it only if the answer can change the outcome. Results
+    are identical either way; this module stays pure and total.
     """
     toks = _split(command)
     if not toks:
