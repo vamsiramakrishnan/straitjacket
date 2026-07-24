@@ -42,6 +42,46 @@ class SearchHit:
     col_b: int = 0
 
 
+_LINE_CHARS = 200  # rendered width cap for one matched/context line
+
+
+def _line_snippet(text: str, line_start: int, limit: int = _LINE_CHARS) -> str:
+    """The line at ``line_start``, truncated to ``limit`` characters.
+
+    Equivalent to ``target.line_text_at(line_start)[:limit]`` but it never
+    materializes the full line first: a minified bundle is one enormous
+    "line", and slicing 3.2 MB out just to keep 200 characters costs a
+    megabyte-scale copy per rendered hit. Bounded by construction instead.
+    """
+    end = text.find("\n", line_start, line_start + limit)
+    return text[line_start : end if end != -1 else min(len(text), line_start + limit)]
+
+
+def _line_numbers(shown: list[SearchHit], by_label: dict[str, SearchTarget]) -> dict[
+    tuple[str, int], int
+]:
+    """1-based line numbers for the shown hits, one forward pass per target.
+
+    ``shown`` is sorted by (target, line_start), so newlines are counted once
+    between consecutive line starts. Resolving each hit independently with
+    ``target.line_no_of`` re-counted from offset 0 every time — and did it
+    twice per hit (rendered line + sites row): measured 94 ms for 79 hits
+    spread over a 3.2 MB file, 1.2 ms with the forward pass.
+    """
+    out: dict[tuple[str, int], int] = {}
+    label: str | None = None
+    text = ""
+    prev = 0
+    n = 1
+    for hit in shown:
+        if hit.target != label:
+            label, text, prev, n = hit.target, by_label[hit.target].text, 0, 1
+        n += text.count("\n", prev, hit.line_start)
+        prev = hit.line_start
+        out[(hit.target, hit.line_start)] = n
+    return out
+
+
 def _mint_search_blob(
     store: Store,
     ref_text: str,
@@ -148,11 +188,24 @@ def search(
         per_line: dict[int, tuple[int, int, int]] = {}  # start → (pi, a, b)
         text = target.text
         for pi, rx in enumerate(rxs):
+            # ``finditer`` yields matches in ascending start order, so the
+            # enclosing line start only ever moves forward: advance a cursor
+            # by one forward memchr per line actually crossed. The previous
+            # form asked ``text.rfind("\n", 0, m.start())`` per match, an
+            # O(offset) backward rescan each time — quadratic exactly when a
+            # file has few newlines to stop the scan. Measured on a 3.2 MB
+            # newline-free minified bundle (67,369 matches): 2811 ms in this
+            # loop before, 8 ms after. See tests/test_search_perf.py.
+            line_start = 0
+            next_nl = text.find("\n")
             for m in rx.finditer(text):
-                line_start = text.rfind("\n", 0, m.start()) + 1
+                start = m.start()
+                while next_nl != -1 and next_nl < start:
+                    line_start = next_nl + 1
+                    next_nl = text.find("\n", line_start)
                 prev = per_line.get(line_start)
-                if prev is None or (m.start(), pi) < (prev[1], prev[0]):
-                    per_line[line_start] = (pi, m.start(), m.end())
+                if prev is None or (start, pi) < (prev[1], prev[0]):
+                    per_line[line_start] = (pi, start, m.end())
         for line_start, (pi, a, b) in per_line.items():
             matches.append(
                 SearchHit(
@@ -182,12 +235,13 @@ def search(
     out.append("patterns: " + " ".join(repr(p) for p in patterns) + (" (all)" if mode_all else " (any)"))
     last_target = None
     by_label = {t.label: t for t in targets}
+    line_nos = _line_numbers(shown, by_label)
     for hit in shown:
         if hit.target != last_target:
             out.append(f"{hit.target}:")
             last_target = hit.target
         t = by_label[hit.target]
-        line_no = t.line_no_of(hit.line_start)
+        line_no = line_nos[(hit.target, hit.line_start)]
         if context:
             back: list[int] = []
             ls: int | None = hit.line_start
@@ -205,12 +259,12 @@ def search(
                     break
                 fwd.append(ls)
             for i, ls_k in enumerate(back):
-                out.append(f"  L{line_no - len(back) + i}: {t.line_text_at(ls_k)[:200]}")
-            out.append(f" >L{line_no}: {t.line_text_at(hit.line_start)[:200]}")
+                out.append(f"  L{line_no - len(back) + i}: {_line_snippet(t.text, ls_k)}")
+            out.append(f" >L{line_no}: {_line_snippet(t.text, hit.line_start)}")
             for i, ls_k in enumerate(fwd, start=1):
-                out.append(f"  L{line_no + i}: {t.line_text_at(ls_k)[:200]}")
+                out.append(f"  L{line_no + i}: {_line_snippet(t.text, ls_k)}")
         else:
-            out.append(f"  L{line_no}: {t.line_text_at(hit.line_start)[:200]}")
+            out.append(f"  L{line_no}: {_line_snippet(t.text, hit.line_start)}")
 
     out.append("coverage:")
     out.append(
@@ -224,7 +278,7 @@ def search(
     sites_rows = [
         {
             "target": h.target,
-            "line": by_label[h.target].line_no_of(h.line_start),
+            "line": line_nos[(h.target, h.line_start)],
             "col_a": h.col_a,
             "col_b": h.col_b,
         }
