@@ -548,185 +548,21 @@ def _main_slow(args: list[str]) -> int:
 
     try:
         if ns.cmd == "replay":
-            # Workspace-free by design: history replay must run on any
-            # machine that has ~/.claude/projects, harnessed or not.
-            import json as _json
-
-            from ctx.replay import (
-                default_history_paths,
-                render_regret,
-                render_report,
-                simulate_session,
-            )
-
-            paths = list(ns.transcripts)
-            if ns.all_projects:
-                paths += default_history_paths()
-            if not paths:
-                print("no transcripts given (pass paths or --all-projects)")
-                return 1
-            if ns.replay_outcomes:
-                from ctx.replay import render_outcomes, session_outcomes
-
-                events = [e for p in paths for e in session_outcomes(p)]
-                if ns.replay_append_ledger:
-                    from ctx.workspace import resolve_workspace as _rw
-
-                    _ws = _rw(ns.workspace)
-                    ldir = _ws.root / ".ctx-session-reads"
-                    ldir.mkdir(parents=True, exist_ok=True)
-                    with (ldir / "evidence-followups.jsonl").open(
-                        "a", encoding="utf-8"
-                    ) as fh:
-                        for e in events:
-                            fh.write(_json.dumps(e.payload(), sort_keys=True) + "\n")
-                    print(f"appended {len(events)} events to {ldir / 'evidence-outcomes.jsonl'}")
-                if ns.replay_json:
-                    print(_json.dumps([e.payload() for e in events], indent=2))
-                else:
-                    print(render_outcomes(events))
-                return 0
-            reports = [simulate_session(p) for p in paths]
-            if ns.replay_json:
-                print(_json.dumps(reports, indent=2))
-            elif ns.replay_regret:
-                print(render_regret(reports))
-            else:
-                print(render_report(reports, gaps=ns.gaps))
-            return 0
+            return _cmd_replay(ns)
 
         if ns.cmd == "antigravity" and ns.agy_cmd == "install":
-            ws = resolve_workspace(ns.workspace or ns.agy_workspace)
-            from ctx.installer import install_antigravity
-
-            print(install_antigravity(ws))
-            return 0
+            return _cmd_antigravity(ns)
 
         if ns.cmd == "proxy":
-            from pathlib import Path as _Path
-
-            from ctx.proxy import serve_proxy
-
-            serve_proxy(
-                ns.port,
-                ns.upstream,
-                _Path(ns.state_dir),
-                ns.workspace_id,
-                rescue_pct=ns.rescue_pct,
-            )
-            return 0
+            return _cmd_proxy(ns)
 
         if ns.cmd == "wrap":
-            from ctx.wrap import (
-                print_config,
-                wrap_antigravity,
-                wrap_claude,
-                wrap_codex,
-                wrap_detect,
-                wrap_setup,
-            )
-
-            agent_args = list(ns.agent_args)
-            # REMAINDER swallows options placed after the host positional;
-            # recognize --print-config there too (but never past the `--`).
-            if "--print-config" in agent_args:
-                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
-                if agent_args.index("--print-config") < tail:
-                    ns.print_config = True
-                    agent_args.remove("--print-config")
-            use_proxy = False
-            if "--proxy" in agent_args:
-                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
-                if agent_args.index("--proxy") < tail:
-                    use_proxy = True
-                    agent_args.remove("--proxy")
-            use_orchestrate = False
-            if "--orchestrate" in agent_args:
-                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
-                if agent_args.index("--orchestrate") < tail:
-                    use_orchestrate = True
-                    agent_args.remove("--orchestrate")
-            use_gateway = False
-            if "--gateway" in agent_args:
-                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
-                if agent_args.index("--gateway") < tail:
-                    use_gateway = True
-                    agent_args.remove("--gateway")
-            rescue_pct = 0.0
-            if "--rescue-pct" in agent_args:
-                tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
-                i = agent_args.index("--rescue-pct")
-                if i < tail and i + 1 < len(agent_args):
-                    try:
-                        rescue_pct = float(agent_args[i + 1])
-                    except ValueError:
-                        rescue_pct = 0.0
-                    del agent_args[i : i + 2]
-                    use_proxy = True  # rescue implies the proxy
-            if ns.print_config:
-                host = "claude" if ns.host in ("setup", "all") else ns.host
-                print(print_config(host))
-                return 0
-            ws = resolve_workspace(ns.workspace)
-            if ns.host == "detect":
-                return wrap_detect(ws.root, probe_version="--versions" in agent_args)
-            if agent_args and agent_args[0] == "--":
-                agent_args = agent_args[1:]
-            # --gateway: set up the host(s) AND wire the progressive-disclosure
-            # gateway, so unrevealed MCP tool schemas never enter context.
-            if use_gateway:
-                from ctx.installer import install_claude, install_gateway
-
-                hosts = (("claude", "codex", "antigravity")
-                         if ns.host in ("setup", "all") else (ns.host,))
-                if ns.host in ("setup", "all"):
-                    wrap_setup(ws.root)
-                elif ns.host == "codex":
-                    wrap_codex(ws.root)
-                elif ns.host == "antigravity":
-                    wrap_antigravity(ws.root)
-                elif ns.host == "claude":
-                    print(install_claude(resolve_workspace(str(ws.root))))
-                print()
-                for h in hosts:
-                    print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
-                    print()
-                return 0
-            # Single-command multi-host setup: `setup` detects installed CLIs
-            # and harnesses those; `all` forces every supported host.
-            if ns.host in ("setup", "all"):
-                return wrap_setup(ws.root, force_all=(ns.host == "all"))
-            if ns.host == "codex":
-                return wrap_codex(ws.root)
-            if ns.host == "antigravity":
-                return wrap_antigravity(ws.root)
-            # claude: launch ephemerally when given agent args, else persist.
-            if ns.host == "claude":
-                if agent_args:
-                    return wrap_claude(
-                        ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct,
-                        orchestrate=use_orchestrate,
-                    )
-                from ctx.installer import install_claude
-
-                print(install_claude(resolve_workspace(str(ws.root))))
-                print()
-                print("Claude Code sessions in this workspace are now harnessed. "
-                      "For an ephemeral, zero-residue run instead: "
-                      "ctx wrap claude -- -p \"...\"")
-                return 0
-            return wrap_antigravity(ws.root)
+            return _cmd_wrap(ns)
 
         ws = resolve_workspace(ns.workspace)
 
         if ns.cmd == "orchestrate":
-            from ctx.orchestrator import orchestrate
-
-            code, text = orchestrate(
-                ws, ns.task, dry_run=ns.dry_run, force_run=ns.force_run
-            )
-            print(text)
-            return code
+            return _cmd_orchestrate(ws, ns)
 
         if ns.cmd == "run":
             return _cmd_run(ws, ns)
@@ -737,46 +573,13 @@ def _main_slow(args: list[str]) -> int:
         if ns.cmd == "py":
             return _cmd_eval(ws, ns)
         if ns.cmd == "search":
-            return _cmd_retrieval(ws, ns, "search")
+            return _cmd_search(ws, ns)
         if ns.cmd == "get":
-            return _cmd_retrieval(ws, ns, "get")
+            return _cmd_get(ws, ns)
         if ns.cmd == "stats":
-            if getattr(ns, "session", False):
-                from ctx.scorecard import compute_scorecard, render_scorecard
-
-                sc = compute_scorecard(ws.root / ".ctx-session-reads" / "proxy")
-                if sc is None:
-                    print(
-                        "no wire observations for this workspace "
-                        "(run under `ctx wrap claude --proxy`)"
-                    )
-                    return 1
-                print(render_scorecard(sc))
-                return 0
-            return _cmd_retrieval(ws, ns, "stats")
+            return _cmd_stats(ws, ns)
         if ns.cmd == "seq":
-            from ctx.seq import run_seq
-            from ctx.store import Store as _Store
-
-            store = _Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-            text, code = run_seq(
-                ws, store, ns.steps,
-                halt_on_fail=not ns.keep_going,
-                timeout=ns.timeout, focus=ns.focus,
-            )
-            # Delivery plan (EDC §13): seq always emits against the result
-            # budget; failure asymmetry + pressure compose in the resolver.
-            # Engagement parity with run/eval (docs/LADDERS.md edge 1): lean
-            # or passive sessions must not pay for suggestion lines here
-            # either — _emit_bounded_digest applies the same filter.
-            plan = _delivery_plan(
-                ws,
-                outcome="success" if code == 0 else "failure",
-                family="seq",
-                base_tokens=ws.config.budgets.result_tokens,
-            )
-            _emit_bounded_digest(ws, store, text, plan)
-            return 0 if code == 0 else 3
+            return _cmd_seq(ws, ns)
         if ns.cmd == "rewrite":
             return _cmd_rewrite(ws, ns)
         if ns.cmd == "gain":
@@ -784,36 +587,19 @@ def _main_slow(args: list[str]) -> int:
         if ns.cmd == "surface":
             return _cmd_surface(ws, ns)
         if ns.cmd == "debt":
-            from ctx import debt as _debt
-
-            if ns.debt_cmd == "add":
-                eid = _debt.add(ws.root, ns.note, ref=ns.ref)
-                print(f"declared: {eid}")
-                return 0
-            if ns.debt_cmd == "resolve":
-                ok = _debt.resolve(ws.root, ns.id)
-                print("resolved" if ok else f"unknown debt id: {ns.id}")
-                return 0 if ok else 1
-            print(_debt.render(ws.root))
-            return 0
+            return _cmd_debt(ws, ns)
         if ns.cmd == "diff":
             return _cmd_diff(ws, ns)
         if ns.cmd == "map":
             return _cmd_map(ws, ns)
         if ns.cmd in ("def", "refs", "diag"):
             return _cmd_code(ws, ns)
-        if ns.cmd in ("callers", "callees", "impact"):
-            from ctx.callgraph import cmd_callees, cmd_callers, cmd_impact
-            from ctx.store import Store as _S
-
-            store = _S(ws.workspace_id, retention_days=ws.config.store.retention_days)
-            if ns.cmd == "callers":
-                print(cmd_callers(store, ws, ns.symbol))
-            elif ns.cmd == "callees":
-                print(cmd_callees(store, ws, ns.symbol))
-            else:
-                print(cmd_impact(store, ws, ns.symbol, depth=ns.depth))
-            return 0
+        if ns.cmd == "callers":
+            return _cmd_callers(ws, ns)
+        if ns.cmd == "callees":
+            return _cmd_callees(ws, ns)
+        if ns.cmd == "impact":
+            return _cmd_impact(ws, ns)
         if ns.cmd == "q":
             return _cmd_q(ws, ns)
         if ns.cmd == "plan":
@@ -823,67 +609,15 @@ def _main_slow(args: list[str]) -> int:
         if ns.cmd == "policy":
             return _cmd_policy(ws, ns)
         if ns.cmd == "init":
-            from ctx.installer import init_workspace
-
-            print("\n".join(init_workspace(ws.root)) or "nothing to do")
-            # Writing two config files is not a result a user can feel. Say what
-            # it bought them and where to go next, so init is never a dead end.
-            print()
-            print("This repo now has ctx settings (edit ctx.toml to tune budgets).")
-            print("Next:")
-            print("  ctx wrap setup        hook ctx into the agents you have installed")
-            print("  ctx run -- pytest -q  try it on something noisy")
-            return 0
+            return _cmd_init(ws, ns)
         if ns.cmd == "doctor":
-            from ctx.installer import doctor_report
-
-            report = doctor_report(ws, antigravity=ns.antigravity)
-            print(report)
-            return 0 if "PROBLEMS" not in report.splitlines()[0] else 1
+            return _cmd_doctor(ws, ns)
         if ns.cmd == "gc":
-            from ctx.store import Store
-
-            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-            days = ns.retention_days or ws.config.store.retention_days
-            result = store.gc(days)
-            print(
-                f"gc: removed {result['blobs_removed']} blobs, "
-                f"{result['manifests_removed']} manifests (retention {days}d)"
-            )
-            return 0
+            return _cmd_gc(ws, ns)
         if ns.cmd == "pin":
-            from ctx.refs import parse_ref
-            from ctx.store import Store
-
-            ref = parse_ref(ns.ref)
-            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-            store.pin(ref.id or "")
-            print(f"pinned {ref.display()}")
-            return 0
+            return _cmd_pin(ws, ns)
         if ns.cmd == "checkpoint":
-            from ctx.checkpoint import create_checkpoint, show_checkpoint
-            from ctx.store import Store
-
-            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-            if ns.show:
-                print(show_checkpoint(store, ws, ns.show))
-                return 0
-            if not ns.goal:
-                print("ctx checkpoint: --goal is required (or --show <checkpoint:id>)", file=sys.stderr)
-                return 2
-            _, doc = create_checkpoint(
-                store,
-                ws,
-                goal=ns.goal,
-                state=ns.state,
-                decisions=ns.decisions,
-                hypotheses=ns.hypotheses,
-                evidence=ns.evidence,
-                attempted=ns.attempted,
-                files=ns.files,
-            )
-            print(doc)
-            return 0
+            return _cmd_checkpoint(ws, ns)
     except WorkspaceError as e:
         print(f"ctx: workspace error: {e}", file=sys.stderr)
         return 2
@@ -893,6 +627,370 @@ def _main_slow(args: list[str]) -> int:
 
     parser.error(f"unhandled command {ns.cmd!r}")
     return 2  # pragma: no cover
+
+
+# ------------------------------------------------- workspace-free commands
+def _cmd_replay(ns) -> int:
+    """`ctx replay` — workspace-free by design: history replay must run on
+    any machine that has ~/.claude/projects, harnessed or not."""
+    import json as _json
+
+    from ctx.replay import (
+        default_history_paths,
+        render_regret,
+        render_report,
+        simulate_session,
+    )
+
+    paths = list(ns.transcripts)
+    if ns.all_projects:
+        paths += default_history_paths()
+    if not paths:
+        print("no transcripts given (pass paths or --all-projects)")
+        return 1
+    if ns.replay_outcomes:
+        from ctx.replay import render_outcomes, session_outcomes
+
+        events = [e for p in paths for e in session_outcomes(p)]
+        if ns.replay_append_ledger:
+            from ctx.workspace import resolve_workspace as _rw
+
+            _ws = _rw(ns.workspace)
+            ldir = _ws.root / ".ctx-session-reads"
+            ldir.mkdir(parents=True, exist_ok=True)
+            with (ldir / "evidence-followups.jsonl").open(
+                "a", encoding="utf-8"
+            ) as fh:
+                for e in events:
+                    fh.write(_json.dumps(e.payload(), sort_keys=True) + "\n")
+            print(f"appended {len(events)} events to {ldir / 'evidence-outcomes.jsonl'}")
+        if ns.replay_json:
+            print(_json.dumps([e.payload() for e in events], indent=2))
+        else:
+            print(render_outcomes(events))
+        return 0
+    reports = [simulate_session(p) for p in paths]
+    if ns.replay_json:
+        print(_json.dumps(reports, indent=2))
+    elif ns.replay_regret:
+        print(render_regret(reports))
+    else:
+        print(render_report(reports, gaps=ns.gaps))
+    return 0
+
+
+def _cmd_antigravity(ns) -> int:
+    """`ctx antigravity install` — render the repo-scoped plugin. Resolves
+    its own workspace: the global `--workspace` falls back to the
+    subcommand's own `--workspace`."""
+    from ctx.installer import install_antigravity
+    from ctx.workspace import resolve_workspace
+
+    ws = resolve_workspace(ns.workspace or ns.agy_workspace)
+    print(install_antigravity(ws))
+    return 0
+
+
+def _cmd_proxy(ns) -> int:
+    """`ctx proxy` — pass-through observer for host API traffic. Never
+    resolves a workspace: the state dir is passed explicitly."""
+    from pathlib import Path as _Path
+
+    from ctx.proxy import serve_proxy
+
+    serve_proxy(
+        ns.port,
+        ns.upstream,
+        _Path(ns.state_dir),
+        ns.workspace_id,
+        rescue_pct=ns.rescue_pct,
+    )
+    return 0
+
+
+def _cmd_wrap(ns) -> int:
+    """`ctx wrap <host>` — hook the harness into a coding agent. Resolves its
+    own workspace, because `--print-config` must work outside one."""
+    from ctx.workspace import resolve_workspace
+    from ctx.wrap import (
+        print_config,
+        wrap_antigravity,
+        wrap_claude,
+        wrap_codex,
+        wrap_detect,
+        wrap_setup,
+    )
+
+    agent_args = list(ns.agent_args)
+    # REMAINDER swallows options placed after the host positional;
+    # recognize --print-config there too (but never past the `--`).
+    if "--print-config" in agent_args:
+        tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+        if agent_args.index("--print-config") < tail:
+            ns.print_config = True
+            agent_args.remove("--print-config")
+    use_proxy = False
+    if "--proxy" in agent_args:
+        tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+        if agent_args.index("--proxy") < tail:
+            use_proxy = True
+            agent_args.remove("--proxy")
+    use_orchestrate = False
+    if "--orchestrate" in agent_args:
+        tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+        if agent_args.index("--orchestrate") < tail:
+            use_orchestrate = True
+            agent_args.remove("--orchestrate")
+    use_gateway = False
+    if "--gateway" in agent_args:
+        tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+        if agent_args.index("--gateway") < tail:
+            use_gateway = True
+            agent_args.remove("--gateway")
+    rescue_pct = 0.0
+    if "--rescue-pct" in agent_args:
+        tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+        i = agent_args.index("--rescue-pct")
+        if i < tail and i + 1 < len(agent_args):
+            try:
+                rescue_pct = float(agent_args[i + 1])
+            except ValueError:
+                rescue_pct = 0.0
+            del agent_args[i : i + 2]
+            use_proxy = True  # rescue implies the proxy
+    if ns.print_config:
+        host = "claude" if ns.host in ("setup", "all") else ns.host
+        print(print_config(host))
+        return 0
+    ws = resolve_workspace(ns.workspace)
+    if ns.host == "detect":
+        return wrap_detect(ws.root, probe_version="--versions" in agent_args)
+    if agent_args and agent_args[0] == "--":
+        agent_args = agent_args[1:]
+    # --gateway: set up the host(s) AND wire the progressive-disclosure
+    # gateway, so unrevealed MCP tool schemas never enter context.
+    if use_gateway:
+        from ctx.installer import install_claude, install_gateway
+
+        hosts = (("claude", "codex", "antigravity")
+                 if ns.host in ("setup", "all") else (ns.host,))
+        if ns.host in ("setup", "all"):
+            wrap_setup(ws.root)
+        elif ns.host == "codex":
+            wrap_codex(ws.root)
+        elif ns.host == "antigravity":
+            wrap_antigravity(ws.root)
+        elif ns.host == "claude":
+            print(install_claude(resolve_workspace(str(ws.root))))
+        print()
+        for h in hosts:
+            print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
+            print()
+        return 0
+    # Single-command multi-host setup: `setup` detects installed CLIs
+    # and harnesses those; `all` forces every supported host.
+    if ns.host in ("setup", "all"):
+        return wrap_setup(ws.root, force_all=(ns.host == "all"))
+    if ns.host == "codex":
+        return wrap_codex(ws.root)
+    if ns.host == "antigravity":
+        return wrap_antigravity(ws.root)
+    # claude: launch ephemerally when given agent args, else persist.
+    if ns.host == "claude":
+        if agent_args:
+            return wrap_claude(
+                ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct,
+                orchestrate=use_orchestrate,
+            )
+        from ctx.installer import install_claude
+
+        print(install_claude(resolve_workspace(str(ws.root))))
+        print()
+        print("Claude Code sessions in this workspace are now harnessed. "
+              "For an ephemeral, zero-residue run instead: "
+              "ctx wrap claude -- -p \"...\"")
+        return 0
+    return wrap_antigravity(ws.root)
+
+
+# ---------------------------------------------- workspace-scoped commands
+def _cmd_orchestrate(ws, ns) -> int:
+    """`ctx orchestrate` — route a task's phases across installed harnesses
+    by model cost. Usually a wrap mode rather than something a human types."""
+    from ctx.orchestrator import orchestrate
+
+    code, text = orchestrate(
+        ws, ns.task, dry_run=ns.dry_run, force_run=ns.force_run
+    )
+    print(text)
+    return code
+
+
+def _cmd_stats(ws, ns) -> int:
+    """`ctx stats [--session]` — bounded shape statistics, or the session's
+    wire scorecard when the proxy recorded one."""
+    if getattr(ns, "session", False):
+        from ctx.scorecard import compute_scorecard, render_scorecard
+
+        sc = compute_scorecard(ws.root / ".ctx-session-reads" / "proxy")
+        if sc is None:
+            print(
+                "no wire observations for this workspace "
+                "(run under `ctx wrap claude --proxy`)"
+            )
+            return 1
+        print(render_scorecard(sc))
+        return 0
+    return _cmd_retrieval(ws, ns, "stats")
+
+
+def _cmd_search(ws, ns) -> int:
+    return _cmd_retrieval(ws, ns, "search")
+
+
+def _cmd_get(ws, ns) -> int:
+    return _cmd_retrieval(ws, ns, "get")
+
+
+def _cmd_seq(ws, ns) -> int:
+    """`ctx seq` — run several commands as one step."""
+    from ctx.seq import run_seq
+    from ctx.store import Store as _Store
+
+    store = _Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    text, code = run_seq(
+        ws, store, ns.steps,
+        halt_on_fail=not ns.keep_going,
+        timeout=ns.timeout, focus=ns.focus,
+    )
+    # Delivery plan (EDC §13): seq always emits against the result
+    # budget; failure asymmetry + pressure compose in the resolver.
+    # Engagement parity with run/eval (docs/LADDERS.md edge 1): lean
+    # or passive sessions must not pay for suggestion lines here
+    # either — _emit_bounded_digest applies the same filter.
+    plan = _delivery_plan(
+        ws,
+        outcome="success" if code == 0 else "failure",
+        family="seq",
+        base_tokens=ws.config.budgets.result_tokens,
+    )
+    _emit_bounded_digest(ws, store, text, plan)
+    return 0 if code == 0 else 3
+
+
+def _cmd_debt(ws, ns) -> int:
+    """`ctx debt add|list|resolve` — track work deliberately deferred."""
+    from ctx import debt as _debt
+
+    if ns.debt_cmd == "add":
+        eid = _debt.add(ws.root, ns.note, ref=ns.ref)
+        print(f"declared: {eid}")
+        return 0
+    if ns.debt_cmd == "resolve":
+        ok = _debt.resolve(ws.root, ns.id)
+        print("resolved" if ok else f"unknown debt id: {ns.id}")
+        return 0 if ok else 1
+    print(_debt.render(ws.root))
+    return 0
+
+
+def _cmd_callers(ws, ns) -> int:
+    from ctx.callgraph import cmd_callers as _callers
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(_callers(store, ws, ns.symbol))
+    return 0
+
+
+def _cmd_callees(ws, ns) -> int:
+    from ctx.callgraph import cmd_callees as _callees
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(_callees(store, ws, ns.symbol))
+    return 0
+
+
+def _cmd_impact(ws, ns) -> int:
+    from ctx.callgraph import cmd_impact as _impact
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(_impact(store, ws, ns.symbol, depth=ns.depth))
+    return 0
+
+
+def _cmd_init(ws, ns) -> int:
+    from ctx.installer import init_workspace
+
+    print("\n".join(init_workspace(ws.root)) or "nothing to do")
+    # Writing two config files is not a result a user can feel. Say what
+    # it bought them and where to go next, so init is never a dead end.
+    print()
+    print("This repo now has ctx settings (edit ctx.toml to tune budgets).")
+    print("Next:")
+    print("  ctx wrap setup        hook ctx into the agents you have installed")
+    print("  ctx run -- pytest -q  try it on something noisy")
+    return 0
+
+
+def _cmd_doctor(ws, ns) -> int:
+    from ctx.installer import doctor_report
+
+    report = doctor_report(ws, antigravity=ns.antigravity)
+    print(report)
+    return 0 if "PROBLEMS" not in report.splitlines()[0] else 1
+
+
+def _cmd_gc(ws, ns) -> int:
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    days = ns.retention_days or ws.config.store.retention_days
+    result = store.gc(days)
+    print(
+        f"gc: removed {result['blobs_removed']} blobs, "
+        f"{result['manifests_removed']} manifests (retention {days}d)"
+    )
+    return 0
+
+
+def _cmd_pin(ws, ns) -> int:
+    from ctx.refs import parse_ref
+    from ctx.store import Store
+
+    ref = parse_ref(ns.ref)
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    store.pin(ref.id or "")
+    print(f"pinned {ref.display()}")
+    return 0
+
+
+def _cmd_checkpoint(ws, ns) -> int:
+    from ctx.checkpoint import create_checkpoint, show_checkpoint
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    if ns.show:
+        print(show_checkpoint(store, ws, ns.show))
+        return 0
+    if not ns.goal:
+        print("ctx checkpoint: --goal is required (or --show <checkpoint:id>)", file=sys.stderr)
+        return 2
+    _, doc = create_checkpoint(
+        store,
+        ws,
+        goal=ns.goal,
+        state=ns.state,
+        decisions=ns.decisions,
+        hypotheses=ns.hypotheses,
+        evidence=ns.evidence,
+        attempted=ns.attempted,
+        files=ns.files,
+    )
+    print(doc)
+    return 0
 
 
 def _cmd_surface(ws, ns) -> int:
