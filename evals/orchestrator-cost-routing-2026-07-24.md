@@ -52,46 +52,53 @@ defaults fail safe).
 | codex (Codex CLI) | gpt-5.6-sol | gpt-5.6-terra | gpt-5.6-luna | gpt-5.4-nano |
 | antigravity (Gemini) | gemini-3.1-pro | gemini-3.6-flash | gemini-3.6-flash-lite | gemini-3.6-flash-lite |
 
-## The routing: cheapest model that clears each node's tier
+## The routing: the flagship plans, the cheap model implements
 
-The default pipeline is `explore → plan → implement → verify`. Crucially,
-**planning gets a frontier model; ordinary implementation gets a cheap *standard*
-model** (Gemini 3.6 Flash), not a frontier one. Example plan (all three installed):
+The default pipeline is `explore → plan → implement → verify`, and each role
+routes to a deliberately different model:
+
+- **plan → the frontier *flagship* (Opus)** via `prefer:"strong"` — a good plan
+  is worth the strong model, so planning does *not* take the cheapest frontier
+  model.
+- **implement → complexity-adaptive:** `standard` (Gemini 3.6 Flash) for real
+  work, `economy` (Gemini 3.5 Flash-lite) for a simple edit
+  (`[orchestrate] implement_tier`, or the coordinator's judgment per task).
+- **explore / verify → economy** (Gemini flash-lite).
+
+Example plan (all three installed, complex implement):
 
 ```
-coordinator: antigravity [gemini-3.6-flash-lite] ~$1.00/Mout
 routing (4 nodes, 4 waves):
-  explore    → antigravity/gemini-3.6-flash-lite (economy→economy)  est ~$0.01
-  plan       → antigravity/gemini-3.1-pro        (frontier→frontier) est ~$0.07  ⇐ explore
-  implement  → antigravity/gemini-3.6-flash      (standard→standard) est ~$0.13  ⇐ plan
-  verify     → codex/gpt-5.6-luna                (economy→economy)   est ~$0.04  ⇐ implement
+  explore    → antigravity/gemini-3.6-flash-lite (economy)   est ~$0.01
+  plan       → claude/claude-opus-4.8            (frontier)  est ~$0.47  ⇐ explore   [prefer strong]
+  implement  → antigravity/gemini-3.6-flash      (standard)  est ~$0.13  ⇐ plan
+  verify     → antigravity/gemini-3.6-flash-lite (economy)   est ~$0.01  ⇐ implement
 ```
 
-`implement` lands on **Gemini 3.6 Flash** — a cheap standard model doing the
-edit — while `plan` gets a frontier model. `saved` below is versus the
-**single-frontier baseline**: the same token budget run entirely on the
-strongest available model (here claude-opus-4.8 at $75/Mout — an aggressive but
-legitimate "naive: run it all on my best model" baseline).
+A *simple* task instead routes `implement → antigravity/gemini-3.5-flash-lite`
+(economy). `saved` below is versus the **single-frontier baseline** (the whole
+budget on Opus @ $75/Mout — a legitimate "naive: run it all on my best model"
+baseline):
 
-| Installed CLIs | est. total | single-frontier baseline | saved | implement routed to |
+| Installed CLIs | est. total | single-frontier baseline | saved | plan / implement |
 |---|---|---|---|---|
-| claude + codex + antigravity | **$0.237** | $2.93 | **92%** | gemini-3.6-flash |
-| claude + antigravity | **$0.208** | $2.93 | **93%** | gemini-3.6-flash |
-| claude + codex | **$0.499** | $2.93 | **83%** | gpt-5.6-terra |
-| claude **only** | **$0.816** | $2.93 | **72%** | claude-sonnet-4.6 |
+| claude + codex + antigravity | **$0.61** | $2.93 | **79%** | opus / gemini-3.6-flash |
+| claude + antigravity | **$0.61** | $2.93 | **79%** | opus / gemini-3.6-flash |
+| claude + codex | **$0.79** | $2.93 | **73%** | opus / gpt-5.6-terra |
+| claude **only** | **$0.82** | $2.93 | **72%** | opus / claude-sonnet-4.6 |
 
 Two honest readings:
 
-- **Model routing is the lever — even within one harness.** Claude-only still
-  saves 72%, because the pipeline routes explore/verify to Haiku, plan to Opus,
-  and implement to Sonnet instead of running everything on Opus. You do not need
-  multiple CLIs to benefit; you need multiple *models*.
+- **Deliberate model routing, even within one harness.** Claude-only still saves
+  72%: explore/verify → Haiku, plan → Opus, implement → Sonnet, instead of
+  running everything on Opus. Planning pays for the flagship on purpose; the
+  cheap phases don't.
 - **Cheapest-model-per-tier can favor one vendor.** With this price table Gemini
-  is cheapest at every tier, so the cost-only fallback routes most nodes to
-  Antigravity; cross-harness happens via role coverage (verify → codex, which is
-  test-oriented), a coordinator's quality pin (e.g. `"model":"claude-opus-4.8"`
-  for a hard plan), escalation, or a harness being absent. The router never
-  manufactures a saving the price table doesn't support.
+  is cheapest at economy/standard, so implement and explore/verify land on
+  Antigravity while plan lands on Claude's Opus. Cross-harness beyond that
+  happens via role coverage, a coordinator pin, escalation, or a harness being
+  absent. The router never manufactures a saving the price table doesn't
+  support.
 
 ## Reproduce
 

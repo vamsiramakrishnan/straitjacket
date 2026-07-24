@@ -89,19 +89,25 @@ Per-node fields: `id` (unique), `goal` (what the assigned model must do),
 that must finish first — their checkpoints are handed to this node),
 `est_input_tokens` / `est_output_tokens` (to price the plan). Optional
 `"host": "<name>"` and/or `"model": "<id from the menu>"` pin a specific harness
-or model instead of letting the router pick the cheapest eligible one.
+or model; `"prefer": "strong"` takes the flagship at the tier (Opus for a
+frontier plan) instead of the cheapest eligible model.
 
 ## Rules
 
 1. **Decompose only where it helps.** A trivial task is ONE node. Fan out only
    when subtasks are genuinely independent (they run in parallel) or form a real
    dependency chain.
-2. **Route by model — cheapest tier that can do the work.** Exploration /
-   search / triage / verification → `economy`; **ordinary implementation and
-   edits → `standard`** (a cheap capable model like Gemini flash, not a frontier
-   one); architecture, planning, and hard reasoning → `frontier`. Do not send
-   everything to the frontier model — that defeats the point. Pin `"model"` only
-   when the specific model matters (e.g. Opus for a hard planning node).
+2. **Route by model, and judge complexity.**
+   - Exploration / search / triage / verification → `economy`.
+   - **Implementation is complexity-adaptive:** a SIMPLE edit (a line, a small
+     well-specified function) → `economy` (the cheapest model, Gemini
+     3.5-flash-lite); a COMPLEX change (multiple files, real design, tricky
+     logic) → `standard` (Gemini 3.6-flash). Judge the task; don't default
+     everything to one tier.
+   - **Planning / architecture / hard reasoning → `frontier` with
+     `"prefer": "strong"`**, so it takes the flagship (Opus), not the cheapest
+     frontier model — a good plan is worth the strong model.
+   Pin `"model"` only when a specific model matters beyond this.
 3. **Keep the graph acyclic and small** (bounded by `[orchestrate] max_nodes`).
    `deps` express ordering; a dependent waits for its upstreams and receives
    their checkpoints.

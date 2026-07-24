@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,118 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,120 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -105,13 +105,13 @@ Plain-language highlights from recent releases; full detail in
 - **Harness collaboration by capability × price, per model.** `ctx wrap detect`
   finds every coding-agent CLI on PATH and prices it by its model;
   `ctx orchestrate "<task>"` then has a cheap coordinator (Gemini-flash-lite)
-  split the task into a `ctx.route/v1` DAG and route each node to the cheapest
-  *(harness, model)* that clears its tier — explore → an economy model, ordinary
-  **implementation → a cheap standard model (Gemini 3.6 Flash)**, planning → a
-  frontier model (Opus/Sol), even within one harness. A **closed loop** runs it:
-  parallel waves, addressed-evidence handoff (not bytes), failure escalation to a
-  stronger model, bounded re-planning. Routing across a harness's own models
-  saves ~72% vs an all-frontier run; ~92% with an economy harness present
+  split the task into a `ctx.route/v1` DAG and route each node to the right
+  *(harness, model)*: **planning → the flagship (Opus)**, **implementation →
+  complexity-adaptive** (Gemini 3.6 Flash for real work, 3.5 Flash-lite for a
+  simple edit), explore/verify → an economy model — even within one harness. A
+  **closed loop** runs it: parallel waves, addressed-evidence handoff (not
+  bytes), failure escalation to a stronger model, bounded re-planning. Deliberate
+  per-model routing saves ~72–79% vs running the whole task on the flagship
   ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)). Demonstrated
   **live on a real task**: Gemini planned, Claude implemented with its own tools
   (no API key), and the failing test went green — through the actual loop with a

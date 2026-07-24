@@ -164,7 +164,9 @@ _REGISTRY: tuple[HostSpec, ...] = (
             ModelChoice("gemini-3.1-pro", "frontier", ("plan", "reason", "review", "architect"),
                         cli_id="gemini-3.1-pro-preview"),
             ModelChoice("gemini-3.6-flash", "standard", ("implement", "edit", "code", "summarize")),
-            ModelChoice("gemini-3.6-flash-lite", "economy", ("explore", "search", "triage", "verify"),
+            # Flash-lite is the cheap simple-implementer as well as the explorer:
+            # good for a small well-specified edit (the economy implement tier).
+            ModelChoice("gemini-3.6-flash-lite", "economy", ("explore", "search", "triage", "verify", "implement", "edit"),
                         cli_id="gemini-3.5-flash-lite"),
         ),
         strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
@@ -443,18 +445,24 @@ def pick_model(
     *,
     min_tier: str = "economy",
     need_tags: tuple[str, ...] = (),
+    prefer: str = "cheap",
 ) -> tuple[DetectedHost, ModelChoice] | None:
-    """The (harness, model) to run a subtask on: capability gates, price breaks
-    ties. This is the core of routing-by-model — a subtask that only needs a
-    standard model (e.g. an ordinary edit) picks the *cheapest* standard model
-    across all harnesses (say Gemini-flash), not a frontier one.
+    """The (harness, model) to run a subtask on: capability gates, then a
+    preference. This is the core of routing-by-model.
 
-    Eligible = models at or above ``min_tier``. Among those, prefer the most
-    role coverage (model roles + host strengths), then the cheapest output
-    price, then name/id (determinism). If nothing meets the tier, fall back to
-    the single strongest model available so a demanding subtask is never
-    silently dropped onto a too-weak model — the caller can see the tier was
-    unmet via ``ModelChoice.tier``."""
+    ``prefer="cheap"`` (default) — among models that meet the tier and cover the
+    roles, pick the *cheapest*. A subtask that only needs a standard model (an
+    ordinary edit) lands on the cheapest standard model (Gemini-flash), not a
+    frontier one.
+
+    ``prefer="strong"`` — pick the most *capable* instead: highest tier, then the
+    flagship (priciest, a capability proxy). A ``plan`` node prefers strong, so
+    it lands on the frontier flagship (Opus) rather than the cheapest frontier
+    model. Coverage is primary in both modes.
+
+    If nothing meets the tier, fall back to the single strongest model available
+    so a demanding subtask is never silently dropped onto a too-weak model — the
+    caller can see the tier was unmet via ``ModelChoice.tier``."""
     cands = _model_candidates(hosts)
     if not cands:
         return None
@@ -462,8 +470,14 @@ def pick_model(
     if eligible:
         def score(hm: tuple[DetectedHost, ModelChoice]) -> tuple:
             h, m = hm
-            cover = len(set(need_tags) & (set(m.roles) | set(h.strengths)))
+            # Coverage is per-MODEL (its roles), not host-level strengths —
+            # otherwise a host tagged broadly (Claude: implement/edit/code) wins
+            # every tier and pulls work off the cheaper model that fits.
+            cover = len(set(need_tags) & set(m.roles))
             p = h.model_price(m.id)
+            if prefer == "strong":
+                # highest coverage, then most capable (tier, then flagship price)
+                return (-cover, -tier_rank(m.tier), -p.output, h.name, m.id)
             return (-cover, p.output, p.input, h.name, m.id)
 
         return sorted(eligible, key=score)[0]

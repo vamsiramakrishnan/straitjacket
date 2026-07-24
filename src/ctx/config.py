@@ -110,6 +110,10 @@ class OrchestratePolicy:
     max_replans: int = 2
     budget_usd: float = 0.0     # 0 = unbounded (still bounded by nodes/waves)
     node_timeout: float = 900.0
+    # Complexity-adaptive implementation tier for the deterministic fallback:
+    # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
+    # simple edits. A live coordinator overrides this per task.
+    implement_tier: str = "standard"
     # Coarse per-node token estimates for the deterministic fallback route and
     # for pricing the plan up front; real spend is reconciled from wire truth.
     explore_input_tokens: int = 24000

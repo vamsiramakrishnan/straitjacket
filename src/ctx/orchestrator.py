@@ -70,14 +70,21 @@ Rules:
 - Decompose only where it helps. A trivial task is ONE node. Fan out only when
   subtasks are genuinely independent or form a real dependency chain.
 - Each node: {"id","goal","role","min_tier","needs":[tags],"deps":[ids],
-  "est_input_tokens","est_output_tokens"}. Optionally pin "host":"<name>" and/or
-  "model":"<model id from the menu>".
+  "est_input_tokens","est_output_tokens"}. Optionally pin "host":"<name>",
+  "model":"<model id from the menu>", and/or "prefer":"strong".
 - min_tier is the weakest capability that can do the node: economy < standard <
-  frontier. Route by MODEL, not just harness: put exploration/search/triage/
-  verify at economy; ordinary implementation/edits at STANDARD (a cheap capable
-  model like Gemini-flash, not the frontier one); architecture/planning/hard
-  reasoning at frontier. The router picks the cheapest model that meets the tier
-  and covers the roles across all harnesses.
+  frontier. Route by MODEL, not just harness:
+    * exploration / search / triage / verify -> economy
+    * IMPLEMENTATION is complexity-adaptive: a SIMPLE edit (a line, a small
+      well-specified function) -> economy (the cheapest model, e.g.
+      Gemini-3.5-flash-lite); a COMPLEX change (multiple files, real design,
+      tricky logic) -> standard (Gemini-3.6-flash). Judge the task and set the
+      tier; do not default everything to standard.
+    * PLANNING / architecture / hard reasoning -> frontier, and set
+      "prefer":"strong" so it takes the flagship (Opus), not the cheapest
+      frontier model — a good plan is worth the strong model.
+  The router picks the model that meets the tier and covers the roles; "prefer":
+  "cheap" (default) takes the cheapest, "strong" takes the flagship.
 - deps make a node wait for others; their evidence (a checkpoint:) is handed to
   it. Keep the graph acyclic.
 Return: {"schema":"ctx.route/v1","nodes":[ ... ]}
@@ -99,6 +106,7 @@ class RouteNode:
     est_output_tokens: int
     host_pin: str = ""    # optional explicit harness name from the coordinator
     model_pin: str = ""   # optional explicit model id from the coordinator
+    prefer: str = "cheap"  # "cheap" (default) | "strong" (flagship at the tier)
 
 
 @dataclass
@@ -184,10 +192,11 @@ def _assign_host(node: RouteNode, hosts: list[DetectedHost]) -> AssignedNode:
         if host is not None and node.model_pin:
             model = host.spec.model(node.model_pin)
     if host is not None and model is None:
-        # Host pinned but not the model: cheapest eligible model on that host.
-        model = _cheapest_model_on(host, node.min_tier, node.need_tags)
+        # Host pinned but not the model: best eligible model on that host.
+        got1 = pick_model([host], min_tier=node.min_tier, need_tags=node.need_tags, prefer=node.prefer)
+        model = got1[1] if got1 else None
     if host is None or model is None:
-        got = pick_model(hosts, min_tier=node.min_tier, need_tags=node.need_tags)
+        got = pick_model(hosts, min_tier=node.min_tier, need_tags=node.need_tags, prefer=node.prefer)
         if got is None:
             raise RouteError("no installed harness/model to assign a node to")
         host, model = got
@@ -199,11 +208,6 @@ def _assign_host(node: RouteNode, hosts: list[DetectedHost]) -> AssignedNode:
         node=node, host=host, model=model, est_cost_usd=cost,
         tier_met=tier_rank(model.tier) >= tier_rank(node.min_tier),
     )
-
-
-def _cheapest_model_on(host: DetectedHost, min_tier: str, need_tags: tuple[str, ...]) -> ModelChoice | None:
-    got = pick_model([host], min_tier=min_tier, need_tags=need_tags)
-    return got[1] if got else None
 
 
 def _coerce_node(raw: dict, i: int) -> RouteNode:
@@ -221,6 +225,7 @@ def _coerce_node(raw: dict, i: int) -> RouteNode:
         est_output_tokens=int(raw.get("est_output_tokens") or 3000),
         host_pin=str(raw.get("host") or raw.get("host_pin") or "").strip(),
         model_pin=str(raw.get("model") or raw.get("model_pin") or "").strip(),
+        prefer=("strong" if str(raw.get("prefer") or "").strip().lower() == "strong" else "cheap"),
     )
 
 
@@ -277,12 +282,18 @@ def _assert_acyclic(nodes: list[RouteNode]) -> None:
 
 def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
     """Deterministic model-routed DAG for when no coordinator can run:
-    explore (economy) -> plan (frontier) -> implement (STANDARD) -> verify
-    (economy). Planning gets a frontier model; ordinary implementation gets the
-    cheapest capable *standard* model (e.g. Gemini-flash), not the frontier one
-    — the point of routing by model. Same handoff/pricing as a coordinator plan,
-    no model call."""
+    explore (economy) -> plan (frontier, prefer STRONG) -> implement -> verify
+    (economy). Planning takes the frontier *flagship* (Opus when Claude is
+    installed), because a good plan is worth the strong model. Implementation is
+    complexity-adaptive: ``[orchestrate] implement_tier`` (default ``standard`` =
+    Gemini-3.6-flash) for real work, set ``economy`` (Gemini-3.5-flash-lite) for
+    simple edits. A live coordinator makes this call per task; the fallback uses
+    the configured default. Same handoff/pricing as a coordinator plan."""
     plan_in = max(1, cfg.implement_input_tokens // 3)
+    impl_tier = getattr(cfg, "implement_tier", "standard") or "standard"
+    # A simple (economy) edit needs less than heavy code-gen: lighter role needs
+    # let the cheap flash-lite implementer win; complex work asks for "code".
+    impl_tags = ("implement", "edit") if impl_tier == "economy" else ("implement", "edit", "code")
     nodes = [
         RouteNode(
             "explore",
@@ -298,12 +309,13 @@ def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
             "plan", "frontier",
             ("plan", "reason", "architect"), ("explore",),
             plan_in, cfg.explore_output_tokens,
+            prefer="strong",   # the flagship planner (Opus), not the cheapest frontier
         ),
         RouteNode(
             "implement",
             "make the edits the plan checkpoint specifies",
-            "implement", "standard",
-            ("implement", "edit", "code"), ("plan",),
+            "implement", impl_tier,
+            impl_tags, ("plan",),
             cfg.implement_input_tokens, cfg.implement_output_tokens,
         ),
         RouteNode(

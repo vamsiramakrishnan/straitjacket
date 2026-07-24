@@ -42,17 +42,28 @@ def _ok_launch(host, root, prompt, exe, *, timeout, model=""):
 # --------------------------------------------------------------- fallback route
 
 
-def test_fallback_route_is_model_routed():
+def test_fallback_route_plan_is_opus_implement_is_flash():
     plan = fallback_route("t", _hosts("claude", "antigravity"), _POLICY())
     by_id = {a.node.id: a for a in plan.assigned}
-    # plan gets a frontier model; ordinary implementation gets a STANDARD model
-    # (the cheap flash), not a frontier one — the point of routing by model.
-    assert by_id["explore"].model.tier == "economy"
-    assert by_id["plan"].model.tier == "frontier"
-    assert by_id["implement"].model.tier == "standard"
+    # plan takes the frontier FLAGSHIP (Opus), not the cheapest frontier model.
+    assert by_id["plan"].node.prefer == "strong"
+    assert by_id["plan"].host.name == "claude" and by_id["plan"].model.id == "claude-opus-4.8"
+    # complex implementation (default standard tier) -> the cheap standard flash.
     assert by_id["implement"].model.id == "gemini-3.6-flash"
+    assert by_id["explore"].model.tier == "economy"
     assert by_id["verify"].model.tier == "economy"
-    assert plan.coordinator.name == "antigravity"
+
+
+def test_implement_tier_is_complexity_adaptive():
+    from dataclasses import replace
+
+    hosts = _hosts("claude", "codex", "antigravity")
+    complex_ = fallback_route("t", hosts, _POLICY())
+    simple = fallback_route("t", hosts, replace(_POLICY(), implement_tier="economy"))
+    impl = lambda p: next(a for a in p.assigned if a.node.id == "implement")  # noqa: E731
+    # complex -> standard Gemini flash; simple -> economy Gemini flash-lite
+    assert impl(complex_).model.id == "gemini-3.6-flash"
+    assert impl(simple).model.id == "gemini-3.6-flash-lite"
 
 
 def test_fallback_route_beats_single_premium():

@@ -101,6 +101,15 @@ def test_pick_model_picks_cheapest_at_tier():
     assert m.tier == "frontier"
 
 
+def test_pick_model_prefer_strong_takes_the_flagship():
+    got = hosts.installed_harnessable(which=_which_of("claude", "codex", "antigravity"))
+    # cheap: cheapest frontier (Gemini Pro); strong: the flagship (Opus)
+    _, m_cheap = hosts.pick_model(got, min_tier="frontier", need_tags=("plan",))
+    _, m_strong = hosts.pick_model(got, min_tier="frontier", need_tags=("plan",), prefer="strong")
+    assert m_strong.id == "claude-opus-4.8"          # flagship
+    assert m_cheap.id != "claude-opus-4.8"           # cheap picks a cheaper frontier
+
+
 def test_pick_model_routes_within_a_single_harness():
     # Even with only Claude installed, routing picks a different *model* per tier.
     got = hosts.installed_harnessable(which=_which_of("claude"))
