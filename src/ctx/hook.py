@@ -6,8 +6,23 @@ path (json, os, re, sys, shlex, pathlib, tomllib) and never touches the
 artifact store, git, or the network.
 
 Output contract: exactly one JSON object on stdout for every code path.
-Internal errors follow the configured policy — fail-open (`allow`) in the
-default guarded mode, because a broken guard must not brick the workspace.
+
+Internal errors never silently become permission. On the INPUT side
+(PreToolUse) an internal error follows ``[guard] internal_error``: ``allow``
+by default (a broken guard must not brick the workspace, SPEC §10.2),
+``deny`` when configured — and that ``deny`` is honoured even if the failure
+happened while loading the policy itself. When the configured value cannot be
+determined at all (a ctx.toml that is present but unreadable), the guard
+answers ``force_ask`` rather than guessing in either direction. Every internal
+error is recorded as one line in ``.ctx-session-reads/guard-failures.jsonl``
+with the stage that broke.
+
+On the OUTPUT side the emission gate (``_emission_gate``) fails CLOSED: once a
+tool result is known to be over budget, no bug in gate code may release it raw.
+Failures there degrade to a bounded digest carrying a retrieval handle
+(``ctx get blob:<id>``, or a spill file under
+``.ctx-session-reads/gate-fallback/`` if the store is what broke) — bounded and
+retrievable, never "everything" and never "nothing".
 
 Two-layer steering design ("rewrite, don't reject"):
 
@@ -241,6 +256,13 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "engagement_mode": "auto",
         "engagement_activate_after": 8,
         "emission_nudge_tokens": 20000,
+        # Provenance of the guard section, NOT a setting: "default" (no
+        # ctx.toml), "ok" (parsed), "failed" (present but unreadable /
+        # unparseable). The internal-error policy needs to tell "the config
+        # says allow" apart from "we could not find out what it says" — with
+        # only the values above, a broken ctx.toml is indistinguishable from
+        # an absent one, and the deny knob inverts silently.
+        "_guard_config": "default",
     }
     if not workspace_root:
         return policy
@@ -297,8 +319,12 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             policy["emission_nudge_tokens"] = int(
                 eng.get("emission_nudge_tokens", policy["emission_nudge_tokens"])
             )
+            policy["_guard_config"] = "ok"
         except Exception:
-            pass
+            # Still fail-open for every ordinary budget/mode key (a typo in
+            # ctx.toml must not brick the workspace), but record that the
+            # values below are OUR defaults and not the user's choices.
+            policy["_guard_config"] = "failed"
     # Learned policy epoch (compiled, committed ctx-policy.toml): promoted
     # signatures act like allow_commands prefixes; demoted never do. Read in
     # its own fail-open block so a corrupt epoch cannot poison ctx.toml
@@ -1227,14 +1253,24 @@ def _apply_rewrite(
     return decision
 
 
-def classify(payload: dict[str, Any]) -> dict[str, str]:
+def classify(
+    payload: dict[str, Any], policy: dict[str, Any] | None = None
+) -> dict[str, str]:
+    """Classify one intercepted tool call.
+
+    ``policy`` may be supplied by a caller that has already loaded it (the
+    hook entry point does, so ``_load_guard_policy`` runs once per hook call
+    instead of twice); omitted, it is loaded here exactly as before. The
+    decision is a pure function of (payload, policy) either way.
+    """
     tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
     tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
 
     workspace_root = _resolve_workspace_root(payload)
-    policy = _load_guard_policy(workspace_root)
+    if policy is None:
+        policy = _load_guard_policy(workspace_root)
 
     if policy.get("mode") == "advisory":
         return dict(DECISION_ALLOW)
@@ -1961,27 +1997,111 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     return 0
 
 
+def _internal_error_setting(
+    ws_root: str | None, policy: dict[str, Any] | None
+) -> str:
+    """What ``[guard] internal_error`` says: ``"deny"``, ``"allow"``, or
+    ``"unknown"`` when we could not find out what the user asked for.
+
+    ``deny`` is checked first and unconditionally: an explicit fail-closed
+    choice must never be downgraded by a later error in reading the rest of
+    the file. ``unknown`` covers a ctx.toml that is present but unreadable or
+    unparseable, an unrecognised value, and a policy load that raised — cases
+    where the old code silently answered "allow", i.e. inverted the knob under
+    exactly the condition it exists for.
+    """
+    if policy is None:
+        try:
+            policy = _load_guard_policy(ws_root)
+        except Exception:
+            return "unknown"
+    try:
+        value = str(policy.get("internal_error", "allow"))
+        source = str(policy.get("_guard_config", "default"))
+    except Exception:
+        return "unknown"
+    if value == "deny":
+        return "deny"
+    if source == "failed":
+        return "unknown"  # the file exists but we cannot read their choice
+    if value == "allow":
+        return "allow"
+    return "unknown"  # a value we do not model is not a licence to allow
+
+
+def _internal_error_decision(
+    ws_root: str | None,
+    policy: dict[str, Any] | None,
+    stage: str,
+    exc: BaseException,
+) -> dict[str, str]:
+    """Turn an internal guard error into a decision, with a signal.
+
+    Three answers, never a blanket allow:
+
+    * ``deny``    — configured fail-closed; honoured even if the failure was
+      in loading the policy itself.
+    * ``allow``   — configured (or defaulted, i.e. no ctx.toml at all)
+      availability-safe; SPEC §10.2.
+    * ``force_ask`` — we could not determine what was configured. Neither
+      silently allowing nor hard-denying is honest here, so the unknown is
+      handed to the human, which is this guard's existing idiom for
+      "unknown bound" (``unknown_command = "force_ask"``).
+    """
+    _note_guard_failure(ws_root, op="pre_tool_use", stage=stage, exc=exc)
+    setting = _internal_error_setting(ws_root, policy)
+    if setting == "deny":
+        return _deny("CTX_CONTEXT_GUARD: internal guard error (fail-closed policy)")
+    if setting == "unknown":
+        return _force_ask(
+            "CTX_CONTEXT_GUARD: internal guard error and the configured "
+            "[guard] internal_error policy could not be read, so the guard "
+            "cannot tell whether you asked to fail open or closed. Fix or "
+            "remove ctx.toml, or re-run to confirm this call."
+        )
+    return dict(DECISION_ALLOW)
+
+
 def main_pre_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> pre-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON decision on stdout.
 
     Flavors: ``antigravity`` (spec schema) and ``claude-code``
     (hookSpecificOutput schema). Classification logic is identical.
+
+    Each stage (read input, load policy, classify) is its own narrow ``try``
+    so an error is attributable instead of collapsing into one blanket allow,
+    and so the configured internal-error policy is loaded on a path that
+    cannot be skipped by an earlier failure.
     """
-    internal_error_policy = "allow"
+    payload: dict[str, Any] = {}
+    ws_root: str | None = None
+    policy: dict[str, Any] | None = None
+    decision: dict[str, Any] | None = None
+
     try:
         raw = sys.stdin.read()
-        payload = json.loads(raw) if raw.strip() else {}
-        if not isinstance(payload, dict):
-            payload = {}
-        ws_root = _resolve_workspace_root(payload)
-        internal_error_policy = _load_guard_policy(ws_root).get("internal_error", "allow")
-        decision = classify(payload)
-    except Exception:
-        if internal_error_policy == "deny":
-            decision = _deny("CTX_CONTEXT_GUARD: internal guard error (fail-closed policy)")
-        else:
-            decision = dict(DECISION_ALLOW)
+        parsed = json.loads(raw) if raw.strip() else {}
+        payload = parsed if isinstance(parsed, dict) else {}
+    except Exception as exc:
+        # A payload we cannot read is still an internal error: route it
+        # through the policy rather than assuming it was harmless.
+        decision = _internal_error_decision(None, None, "input", exc)
+
+    if decision is None:
+        try:
+            ws_root = _resolve_workspace_root(payload)
+            # Loaded ONCE per hook call and threaded into classify(), which
+            # used to load it a second time from the same cache.
+            policy = _load_guard_policy(ws_root)
+        except Exception as exc:
+            decision = _internal_error_decision(ws_root, None, "policy", exc)
+
+    if decision is None:
+        try:
+            decision = classify(payload, policy)
+        except Exception as exc:
+            decision = _internal_error_decision(ws_root, policy, "classify", exc)
     # Codex uses Claude Code's PreToolUse contract verbatim
     # (hookSpecificOutput.permissionDecision + updatedInput), per
     # https://learn.chatgpt.com/docs/hooks.
