@@ -34,7 +34,7 @@ data edit in `ctx/hosts.py` (`HostSpec.models`); prices live in
 |---|---|---|---|
 | **claude** (Claude Code) | claude-opus-4.8 | claude-sonnet-4.6 | claude-haiku-4.5 |
 | **codex** (Codex CLI) | gpt-5.6-sol | gpt-5.6-terra | gpt-5.6-luna |
-| **antigravity** (Gemini) | gemini-3.1-pro | gemini-3.6-flash | gemini-3.6-flash-lite |
+| **antigravity** (Gemini) | gemini-3.1-pro | gemini-3.6-flash | gemini-3.5-flash-lite |
 
 (Antigravity is BYO-model and can also run Claude/GPT; only its Gemini tiers are
 modeled here.) `ctx orchestrate` passes the *installed* subset of this catalog to
@@ -50,7 +50,7 @@ harnesses & models available (model · tier · $in/$out per 1M · roles):
   antigravity:
     gemini-3.1-pro         frontier  $2.00/$12.00  plan, reason, review, architect
     gemini-3.6-flash       standard  $1.25/$7.50   implement, edit, code, summarize
-    gemini-3.6-flash-lite  economy   $0.15/$1.00   explore, search, triage, verify
+    gemini-3.5-flash-lite  economy   $0.15/$1.00   explore, search, triage, verify
   claude:
     claude-opus-4.8        frontier  $15.00/$75.00 plan, reason, synthesize, decide, review, architect
     claude-sonnet-4.6      standard  $3.00/$15.00  implement, edit, code, review

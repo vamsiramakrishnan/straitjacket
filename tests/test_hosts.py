@@ -91,7 +91,7 @@ def test_pick_model_picks_cheapest_at_tier():
     got = hosts.installed_harnessable(which=_which_of("claude", "codex", "antigravity"))
     # economy work -> cheapest economy model across all harnesses
     h, m = hosts.pick_model(got, min_tier="economy", need_tags=("search",))
-    assert (h.name, m.id, m.tier) == ("antigravity", "gemini-3.6-flash-lite", "economy")
+    assert (h.name, m.id, m.tier) == ("antigravity", "gemini-3.5-flash-lite", "economy")
     # ordinary implementation only needs a standard model -> the cheap flash, not
     # a frontier model. This is the point: implementation by Gemini flash.
     h, m = hosts.pick_model(got, min_tier="standard", need_tags=("implement", "edit"))
@@ -132,9 +132,11 @@ def test_model_launch_id_resolves_to_provider_id():
     haiku = claude.model("claude-haiku-4.5")
     assert haiku.launch_id == "haiku"
     antig = hosts.host_by_name("antigravity")
-    assert antig.model("gemini-3.6-flash-lite").launch_id == "gemini-3.5-flash-lite"
+    # gemini-3.1-pro is served under a -preview id at launch.
+    assert antig.model("gemini-3.1-pro").launch_id == "gemini-3.1-pro-preview"
     # Default: launch_id falls back to id when no cli_id is set.
     assert antig.model("gemini-3.6-flash").launch_id == "gemini-3.6-flash"
+    assert antig.model("gemini-3.5-flash-lite").launch_id == "gemini-3.5-flash-lite"
 
 
 def test_pick_coordinator_is_cheapest_planner():
@@ -142,5 +144,5 @@ def test_pick_coordinator_is_cheapest_planner():
     coord = hosts.pick_coordinator(got)
     # Antigravity plans on Gemini-flash-lite — cheapest coordinator model.
     assert coord.name == "antigravity"
-    assert coord.spec.coord_model == "gemini-3.6-flash-lite"
+    assert coord.spec.coord_model == "gemini-3.5-flash-lite"
     assert coord.coordinator_price().output < coord.price.output

@@ -37,11 +37,11 @@ scratch repo must be green.
 
 ```
 routing (2 nodes, 2 waves):
-  plan       → antigravity/gemini-3.6-flash-lite (economy)  [→ gemini-3.5-flash-lite]
+  plan       → antigravity/gemini-3.5-flash-lite (economy)  [served as-is]
   implement  → claude/claude-sonnet-4.6          (standard) [→ sonnet]  ⇐ plan
 
 outcomes:
-  plan       antigravity/gemini-3.6-flash-lite  [ok] checkpoint:f876b2266f17
+  plan       antigravity/gemini-3.5-flash-lite  [ok] checkpoint:f876b2266f17
   implement  claude/claude-sonnet-4.6           [ok] checkpoint:1ee5efb2e577
 
 handoff proof: the implement node's prompt carried plan's checkpoint digest.
@@ -93,11 +93,14 @@ real usage / cost:
 ## Gap it closed
 
 The first live run failed the model ids: the catalog's `claude-haiku-4.5` is
-rejected by the CLI (which wants `haiku`), and `gemini-3.6-flash-lite` is not
-served (the API has `gemini-3.5-flash-lite`). Fixed by adding
-`ModelChoice.cli_id` — the id passed to the provider at launch — verified against
-both live drivers. The registry now hands `run_route` the id the provider
-actually serves; the re-run above passed with no mapping in the eval.
+rejected by the CLI (which wants the alias `haiku`), and the economy Gemini was
+mis-named `gemini-3.6-flash-lite` — the served model is `gemini-3.5-flash-lite`
+(only *flash* is 3.6). Fixed two ways: the flash-lite entry now uses the correct
+served id directly, and `ModelChoice.cli_id` carries a launch-time id where it
+still differs from the display id (Claude → `haiku`/`sonnet`/`opus`;
+`gemini-3.1-pro` → `gemini-3.1-pro-preview`). The registry hands `run_route` the
+id the provider actually serves; the re-run above passed with no mapping in the
+eval.
 
 ## Reproduce
 

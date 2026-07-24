@@ -50,7 +50,7 @@ defaults fail safe).
 |---|---|---|---|---|
 | claude (Claude Code) | claude-opus-4.8 | claude-sonnet-4.6 | claude-haiku-4.5 | claude-haiku-4.5 |
 | codex (Codex CLI) | gpt-5.6-sol | gpt-5.6-terra | gpt-5.6-luna | gpt-5.4-nano |
-| antigravity (Gemini) | gemini-3.1-pro | gemini-3.6-flash | gemini-3.6-flash-lite | gemini-3.6-flash-lite |
+| antigravity (Gemini) | gemini-3.1-pro | gemini-3.6-flash | gemini-3.5-flash-lite | gemini-3.5-flash-lite |
 
 ## The routing: the flagship plans, the cheap model implements
 
@@ -69,10 +69,10 @@ Example plan (all three installed, complex implement):
 
 ```
 routing (4 nodes, 4 waves):
-  explore    → antigravity/gemini-3.6-flash-lite (economy)   est ~$0.01
+  explore    → antigravity/gemini-3.5-flash-lite (economy)   est ~$0.01
   plan       → claude/claude-opus-4.8            (frontier)  est ~$0.47  ⇐ explore   [prefer strong]
   implement  → antigravity/gemini-3.6-flash      (standard)  est ~$0.13  ⇐ plan
-  verify     → antigravity/gemini-3.6-flash-lite (economy)   est ~$0.01  ⇐ implement
+  verify     → antigravity/gemini-3.5-flash-lite (economy)   est ~$0.01  ⇐ implement
 ```
 
 A *simple* task instead routes `implement → antigravity/gemini-3.5-flash-lite`

@@ -17,9 +17,10 @@ run we run pytest in the scratch repo and require it green.
 
 Run:  GEMINI_API_KEY=... python evals/live_collab_antigravity_claude.py
 Cost: ~10-20 cents (one Sonnet agentic run + a Gemini plan).
-Note: the Claude node runs with --dangerously-skip-permissions so it can edit
-and run pytest unattended. That is safe here ONLY because it runs inside a
-mktemp throwaway git repo, never your real workspace.
+Note: the Claude node runs with --permission-mode acceptEdits and a narrow
+--allowedTools allowlist so it can edit and run pytest unattended
+(--dangerously-skip-permissions is refused under root). Safe here ONLY because
+it runs inside a mktemp throwaway git repo, never your real workspace.
 """
 
 from __future__ import annotations
@@ -149,7 +150,7 @@ def main() -> int:
         raw = {"nodes": [
             {"id": "plan", "goal": "Give a terse 3-step plan to implement longest_run. No code.",
              "role": "plan", "min_tier": "economy", "host": "antigravity",
-             "model": "gemini-3.6-flash-lite", "deps": [],
+             "model": "gemini-3.5-flash-lite", "deps": [],
              "est_input_tokens": 300, "est_output_tokens": 150},
             {"id": "implement", "goal": "Using the plan in the upstream checkpoint, edit "
              "strings.py so `python -m pytest -q` passes. Run pytest yourself to confirm.",

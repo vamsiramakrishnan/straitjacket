@@ -63,7 +63,7 @@ def test_implement_tier_is_complexity_adaptive():
     impl = lambda p: next(a for a in p.assigned if a.node.id == "implement")  # noqa: E731
     # complex -> standard Gemini flash; simple -> economy Gemini flash-lite
     assert impl(complex_).model.id == "gemini-3.6-flash"
-    assert impl(simple).model.id == "gemini-3.6-flash-lite"
+    assert impl(simple).model.id == "gemini-3.5-flash-lite"
 
 
 def test_fallback_route_beats_single_premium():

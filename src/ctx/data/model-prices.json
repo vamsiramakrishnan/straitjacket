@@ -9,7 +9,6 @@
     {"match": "sonnet",                "vendor": "anthropic", "tier": "standard", "in": 3.0,  "out": 15.0, "cache_write": 3.75,  "cache_read": 0.30, "source": "https://www.anthropic.com/pricing"},
     {"match": "haiku",                 "vendor": "anthropic", "tier": "economy",  "in": 1.0,  "out": 5.0,  "cache_write": 1.25,  "cache_read": 0.10, "source": "https://www.anthropic.com/pricing"},
 
-    {"match": "gemini-3.6-flash-lite", "vendor": "google", "tier": "economy",  "in": 0.15, "out": 1.00,  "cache_write": 0.15, "cache_read": 0.02,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     {"match": "gemini-3.6-flash",      "vendor": "google", "tier": "standard", "in": 1.25, "out": 7.50,  "cache_write": 1.25, "cache_read": 0.12,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     {"match": "gemini-3.5-flash-lite", "vendor": "google", "tier": "economy",  "in": 0.20, "out": 1.20,  "cache_write": 0.20, "cache_read": 0.03,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     {"match": "gemini-3.5-flash",      "vendor": "google", "tier": "standard", "in": 1.50, "out": 9.00,  "cache_write": 1.50, "cache_read": 0.15,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},

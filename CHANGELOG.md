@@ -42,7 +42,7 @@ routing work across the harnesses it finds by what their models cost.
 - **Routing is by model, not just harness.** `HostSpec` carries a `models`
   catalog — each harness runs several models spanning tiers (Claude:
   opus-4.8/sonnet-4.6/haiku-4.5; Codex: gpt-5.6 sol/terra/luna; Antigravity:
-  gemini-3.1-pro/3.6-flash/3.6-flash-lite), researched from each CLI's model
+  gemini-3.1-pro/3.6-flash/3.5-flash-lite), researched from each CLI's model
   list. `hosts.pick_model` chooses the `(harness, model)` that clears a node's
   tier and covers its roles, with a `prefer` knob: **planning takes the frontier
   flagship (Opus) via `prefer:"strong"`**, while **implementation is
@@ -53,7 +53,7 @@ routing work across the harnesses it finds by what their models cost.
   scores on model roles (not host strengths, which had pulled work onto
   broadly-tagged hosts). Nodes can pin `"host"`/`"model"`/`"prefer"`; escalation
   bumps to a stronger model; the catalog is in the routing skill. New
-  gemini-3.6-flash / 3.6-flash-lite / 3.5-flash-lite price rows.
+  gemini-3.6-flash / gemini-3.5-flash-lite price rows.
 - **Routing skill** (`references/harness-collaboration.md`): the `ctx.route/v1`
   contract and capability×price routing rules, kept in lockstep with
   `ROUTING_CONTRACT` so the coordinator behaves the same from the skill or the

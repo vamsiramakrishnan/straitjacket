@@ -67,7 +67,7 @@ class ModelChoice:
     # The id passed to the host's --model / API at launch, when it differs from
     # the display/pricing id. Verified against the live drivers (Claude Code
     # wants the alias `haiku`, not `claude-haiku-4.5`; the Gemini API serves
-    # `gemini-3.5-flash-lite`, not a `-3.6-` lite). Defaults to `id`.
+    # `gemini-3.1-pro-preview`). Defaults to `id`.
     cli_id: str = ""
 
     @property
@@ -164,13 +164,13 @@ _REGISTRY: tuple[HostSpec, ...] = (
             ModelChoice("gemini-3.1-pro", "frontier", ("plan", "reason", "review", "architect"),
                         cli_id="gemini-3.1-pro-preview"),
             ModelChoice("gemini-3.6-flash", "standard", ("implement", "edit", "code", "summarize")),
-            # Flash-lite is the cheap simple-implementer as well as the explorer:
-            # good for a small well-specified edit (the economy implement tier).
-            ModelChoice("gemini-3.6-flash-lite", "economy", ("explore", "search", "triage", "verify", "implement", "edit"),
-                        cli_id="gemini-3.5-flash-lite"),
+            # Flash-lite (the 3.5 line — only *flash* is 3.6) is the cheap
+            # simple-implementer as well as the explorer: good for a small
+            # well-specified edit (the economy implement tier).
+            ModelChoice("gemini-3.5-flash-lite", "economy", ("explore", "search", "triage", "verify", "implement", "edit")),
         ),
         strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
-        coordinator_model="gemini-3.6-flash-lite",
+        coordinator_model="gemini-3.5-flash-lite",
         notes="built-for host; Gemini flash implements cheaply; output gate nudge-only",
     ),
     HostSpec(
