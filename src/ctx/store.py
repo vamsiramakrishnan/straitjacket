@@ -89,7 +89,27 @@ CREATE TABLE IF NOT EXISTS objects (
     created_at REAL NOT NULL,     -- operational only, never in content identity
     meta TEXT NOT NULL DEFAULT '{}'
 );
-CREATE INDEX IF NOT EXISTS objects_kind ON objects(kind);
+-- Every catalog read of a *kind* is really "the newest N of this kind":
+--     SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC, id LIMIT ?
+-- (facts.py, policy.py, repomap.py, installer.py). A plain objects(kind)
+-- index answers only the WHERE half: SQLite then sorts every matching row
+-- in a temp b-tree just to take the first few. The composite carries the
+-- sort order *and* the selected column, so the same query becomes a
+-- covering-index seek that stops at the LIMIT. Measured on a 50k-object
+-- catalog (4,107 runs, SQLite 3.45.1, EXPLAIN QUERY PLAN in
+-- tests/test_store_perf.py):
+--     SEARCH objects USING INDEX objects_kind (kind=?) + TEMP B-TREE FOR ORDER BY
+--         → 2.213 ms (LIMIT 40) / 2.017 ms (LIMIT 1)
+--     SEARCH objects USING COVERING INDEX objects_kind_recent (kind=?)
+--         → 0.012 ms (LIMIT 40) / 0.002 ms (LIMIT 1)
+-- objects(kind) is a strict prefix of this index, so it is now redundant:
+-- every plan it could serve, the composite serves at least as well (the
+-- planner picked the composite even while both existed). Keeping both cost
+-- 50.4 vs 44.6 us per single-row INSERT and ~0.7 MB per 50k objects, so the
+-- old one is dropped. Dropping an index destroys no data and is reversible
+-- (an older ctx reopening the same file just recreates it).
+CREATE INDEX IF NOT EXISTS objects_kind_recent ON objects(kind, created_at DESC, id);
+DROP INDEX IF EXISTS objects_kind;
 CREATE TABLE IF NOT EXISTS leases (
     id TEXT NOT NULL,
     reason TEXT NOT NULL,         -- retention | pin | checkpoint
@@ -298,6 +318,12 @@ class Store:
         in SQL, the planner preferred the secondary ``objects_kind`` index
         over the id range/index, undoing the win above. A prefix match is
         always a handful of rows at most, so the Python-side filter is free.
+
+        (Re-measured when ``objects_kind`` was replaced by the composite
+        ``objects_kind_recent``: the planner now stays on the id index even
+        with the kind filter written in SQL. The Python-side filter is kept
+        anyway — it costs nothing on a handful of rows and does not depend
+        on which secondary index happens to exist or on planner statistics.)
         """
         short = short.removeprefix("sha256:").lower()
         if len(short) == 64:
