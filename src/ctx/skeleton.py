@@ -11,6 +11,9 @@ Backend chain (absence degrades, never errors — the jedi/ripgrep pattern):
     tree-sitter (optional ``[code]`` extra) → universal-ctags on PATH
         → stdlib ast (python only) → none
 
+``CTX_NO_CTAGS`` removes the ctags rung exactly as an absent binary does
+(the same variable also silences the map's ctags pass in ``repomap``).
+
 The frozen schema (``ctx.skeleton/v1``) is the seam the fact store (M-G)
 builds against — treat it as an interchange format, not an implementation
 detail. Absolute paths never enter skeleton bytes or rendered outlines;
@@ -332,7 +335,15 @@ def _ast_extract(source: str) -> tuple[list[dict[str, Any]], list[str]]:
 
 # ------------------------------------------------------------------ ctags
 def _ctags_path() -> str | None:
-    """Seam for tests: universal-ctags binary on PATH, or None."""
+    """Seam for tests: universal-ctags binary on PATH, or None.
+
+    ``CTX_NO_CTAGS`` is the escape hatch for a ctags install that is broken,
+    pathologically slow, or simply unwanted; it must hold for *every* path
+    that would shell out to ctags, this one and ``repomap._ctags_enabled``.
+    Returning None here disables the backend the same way an absent binary
+    does, so the chain degrades to ast/none instead of erroring."""
+    if os.environ.get("CTX_NO_CTAGS"):
+        return None
     return shutil.which("ctags")
 
 
