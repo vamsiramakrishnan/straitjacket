@@ -113,7 +113,8 @@ Plain-language highlights from recent releases; full detail in
   stronger model, bounded re-planning. Routing across a harness's own models
   saves ~72% vs an all-frontier run; ~92% with an economy harness present
   ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)). Demonstrated
-  **live**: real Gemini + real Claude collaborating through the loop with a
+  **live on a real task**: Gemini planned, Claude implemented with its own tools
+  (no API key), and the failing test went green — through the actual loop with a
   verified checkpoint handoff
   ([receipt](evals/live-collab-antigravity-claude-2026-07-24.md)).
 - **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent

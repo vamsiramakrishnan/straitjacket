@@ -57,15 +57,19 @@ routing work across the harnesses it finds by what their models cost.
 - **`[orchestrate]` config block** (`ctx.config.OrchestratePolicy`): closed-loop
   bounds (`max_nodes`/`max_waves`/`max_replans`/`budget_usd`/`node_timeout`),
   `fallback_only`, `confirm` gate, and per-node token estimates.
-- **Live cross-vendor collaboration, proven** (`evals/live-collab-antigravity-claude-2026-07-24.md`):
-  real Gemini (Antigravity's model, via the API) + real Claude run a two-node
-  route through the actual `run_route` loop, with the CAS `checkpoint:` handoff
-  verified in-harness and real tokens billed (total ~$0.02). Surfaced and fixed
-  a real gap: launch-time model ids differ from display/pricing ids — Claude
-  wants `haiku`, the Gemini API serves `gemini-3.5-flash-lite`. Added
-  `ModelChoice.cli_id` (`launch_id`), threaded through `run_route`; Codex's
-  non-interactive form corrected to `codex exec` (flag order still unverified —
-  Codex not installed where the live A/B ran).
+- **Live cross-vendor collaboration on a real task, proven**
+  (`evals/live-collab-antigravity-claude-2026-07-24.md`): Gemini (Antigravity's
+  model, via the API) plans, Claude — running as-is with its own Edit/Bash tools,
+  no `ANTHROPIC_API_KEY` — implements from the plan's `checkpoint:` and runs the
+  test itself; a failing test goes **green**, verified outside the model. Real
+  tokens billed (~$0.11), both providers exercised, through the actual
+  `run_route` loop. Also fired the **failure-escalation** path on a real failure
+  (`--dangerously-skip-permissions` refused under root → node re-routed).
+  Surfaced and fixed a real gap: launch-time model ids differ from
+  display/pricing ids — Claude wants `haiku`, the Gemini API serves
+  `gemini-3.5-flash-lite`. Added `ModelChoice.cli_id` (`launch_id`), threaded
+  through `run_route`; Codex corrected to `codex exec` (flag order still
+  unverified — Codex absent).
 - **Offline receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
   deterministic cost model — ~72% cheaper than an all-frontier run within a
   single harness, ~92% with an economy harness. The full billed A/B vs a

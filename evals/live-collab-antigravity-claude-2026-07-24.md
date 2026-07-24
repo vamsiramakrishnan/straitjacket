@@ -1,16 +1,17 @@
-# LIVE: Antigravity (Gemini) + Claude collaboration — real tokens
+# LIVE: Antigravity (Gemini) plans, Claude implements — a real task, green test
 
 **Date:** 2026-07-24 · **Harness:**
 [`evals/live_collab_antigravity_claude.py`](live_collab_antigravity_claude.py) ·
 **Drives:** `ctx.orchestrator.run_route` (the real closed loop) with a live
 launcher · **Models:** `gemini-3.5-flash-lite` (Antigravity's Gemini, via
-`GEMINI_API_KEY`) + `claude` haiku (Claude Code CLI)
+`GEMINI_API_KEY`) + `claude` Sonnet (Claude Code CLI, **no API key** — runs
+authenticated as-is with its full Bash/Read/Edit tools)
 
 This is the live counterpart to the offline
 [`orchestrator-cost-routing`](orchestrator-cost-routing-2026-07-24.md) receipt.
 It answers one question directly: **do two real, different-vendor harnesses
-actually collaborate through the orchestrator, handing off addressed evidence?**
-Yes.
+actually collaborate through the orchestrator to produce a verifiable
+deliverable?** Yes — a failing test goes green.
 
 ## What ran
 
@@ -18,57 +19,73 @@ The orchestrator's own `run_route` closed loop, unchanged, with the injected
 fake launcher swapped for a **real** one:
 
 - **antigravity nodes → the Gemini API** (`GEMINI_API_KEY`) — the model
-  Antigravity runs. This is the headless-driveable path; the `agy` CLI needs
-  interactive Google OAuth (see [`antigravity-gemini-2026-07-19.md`](antigravity-gemini-2026-07-19.md)),
-  so the SDK/API is how Antigravity's model is driven headless.
-- **claude nodes → `claude -p … --output-format json`** (Claude Code,
-  authenticated in the environment).
+  Antigravity runs. The `agy` CLI needs interactive Google OAuth (see
+  [`antigravity-gemini-2026-07-19.md`](antigravity-gemini-2026-07-19.md)), so
+  the API is how Antigravity's model is driven headless.
+- **claude nodes → `claude -p … --output-format json`** with its real tools
+  (`--permission-mode acceptEdits --allowedTools Edit Write "Bash(python*)"
+  "Bash(pytest*)"`) so it edits files and runs the test itself. No
+  `ANTHROPIC_API_KEY` — the CLI is authenticated in the environment.
 
-A two-node route — **plan** (Gemini, economy) → **implement** (Claude, economy),
-`implement` depends on `plan` — on the task *"write an iterative `fib(n)` with a
-docstring."*
+A throwaway git repo holds a **failing test**: `strings.longest_run(s)` must
+return the `(char, count)` of the longest run of a repeated character. The
+route: **plan** (Gemini, economy) → **implement** (Claude, standard),
+`implement` ⇐ `plan`. Success is verifiable: after the run, `pytest` in the
+scratch repo must be green.
 
 ## Result (real numbers)
 
 ```
 routing (2 nodes, 2 waves):
-  plan       → antigravity/gemini-3.6-flash-lite (economy)   [→ gemini-3.5-flash-lite]
-  implement  → claude/claude-haiku-4.5           (economy)   [→ haiku]  ⇐ plan
+  plan       → antigravity/gemini-3.6-flash-lite (economy)  [→ gemini-3.5-flash-lite]
+  implement  → claude/claude-sonnet-4.6          (standard) [→ sonnet]  ⇐ plan
 
 outcomes:
-  plan       antigravity/gemini-3.6-flash-lite  [ok] checkpoint:b971dcbf9165
-  implement  claude/claude-haiku-4.5            [ok] checkpoint:95df24b7f28e
+  plan       antigravity/gemini-3.6-flash-lite  [ok] checkpoint:f876b2266f17
+  implement  claude/claude-sonnet-4.6           [ok] checkpoint:1ee5efb2e577
 
-handoff proof: the implement node's prompt carried plan's checkpoint —
-  "[ctx checkpoint:b971dcbf9165] goal: node plan … state: 1. Inspect repo:fib.py …"
+handoff proof: the implement node's prompt carried plan's checkpoint digest.
+
+Claude's edit (strings.py) — a real algorithm, not the NotImplementedError stub:
+  def longest_run(s):
+      if not s: return ("", 0)
+      best_char, best_count = s[0], 1
+      ...
+
+verifiable deliverable:  pytest in scratch repo: GREEN ✓
 
 real usage / cost:
-  antigravity/gemini-3.5-flash-lite   in=106  out= 70   $0.0001   (usage x price table)
-  claude/haiku                        in= 26  out=742   $0.0213   (Claude-reported total_cost_usd)
-  TOTAL                                                  $0.0214
+  antigravity/gemini-3.5-flash-lite   in=191  out= 86   $0.0001   (usage x price table)
+  claude/sonnet                       in= 10  out=698   $0.1127   (Claude-reported total_cost_usd)
+  TOTAL                                                  $0.1129
   providers exercised: {anthropic, gemini}
   RESULT: PASS
 ```
 
 ## What this proves
 
-1. **Cross-vendor collaboration is real.** Gemini and Claude ran the two nodes;
-   both providers were exercised; the run completed green.
-2. **The handoff is the CAS checkpoint.** `run_route` wrote Gemini's output to a
-   `blob:` + `checkpoint:` and the Claude node's prompt contained that
-   checkpoint digest — verified in-harness, not asserted.
-3. **Cost is measured, not estimated, here.** Claude's dollar cost is its own
+1. **Cross-vendor collaboration produces a real, verified deliverable.** Gemini
+   planned; Claude — running as-is with its own tools — edited the file and ran
+   pytest; the test is genuinely green (checked outside the model).
+2. **The handoff is the CAS checkpoint.** `run_route` wrote Gemini's plan to a
+   `blob:` + `checkpoint:`, and the Claude node's prompt contained that digest —
+   verified in-harness, not asserted.
+3. **Escalation works live.** The first attempt used
+   `--dangerously-skip-permissions`, which Claude Code refuses under root; the
+   Claude node exited non-zero, and `run_route` **caught it and escalated the
+   node to the next tier** (gemini-3.1-pro) before the flags were corrected —
+   the failure-escalation path firing on a real failure, not a simulated one.
+4. **Cost is measured, not estimated, here.** Claude's dollar cost is its own
    `total_cost_usd`; Gemini's is `usage × ctx.pricing`.
 
 ## What this does NOT yet prove (honest scope)
 
-- **Not a full A/B.** This shows the collaboration runs; it does not yet compare
-  billed tokens for the collaboration against a single-model baseline on a hard
+- **Not a full A/B.** This shows the collaboration produces a correct result; it
+  does not yet compare billed tokens against a single-model baseline on a hard
   task. That larger A/B remains the TO-BUILD in
   [`orchestrator-cost-routing`](orchestrator-cost-routing-2026-07-24.md).
-- **Antigravity via the API, not the `agy` CLI.** The orchestrator's default
-  `_launch_host` shells a CLI; Antigravity's CLI is OAuth-only, so this harness
-  drives Antigravity's *model* through the API (the SDK path). Driving the
+- **Antigravity via the API, not the `agy` CLI.** Antigravity's CLI is
+  OAuth-only, so this drives Antigravity's *model* through the API. Driving the
   Antigravity CLI itself headless is still unverified.
 - **Codex not exercised** (not installed here). Its `exec` argv/flags are
   unverified.
@@ -85,5 +102,8 @@ actually serves; the re-run above passed with no mapping in the eval.
 ## Reproduce
 
 ```bash
-GEMINI_API_KEY=... python evals/live_collab_antigravity_claude.py   # ~2 cents
+GEMINI_API_KEY=... python evals/live_collab_antigravity_claude.py   # ~11 cents
 ```
+
+The Claude node runs with `acceptEdits` + a narrow tool allowlist inside a
+`mktemp` throwaway git repo — never your real workspace.
