@@ -33,6 +33,14 @@ route: **plan** (Gemini, economy) → **implement** (Claude, standard),
 `implement` ⇐ `plan`. Success is verifiable: after the run, `pytest` in the
 scratch repo must be green.
 
+> This route is a **cross-vendor handoff demo, not the cost-optimal routing.**
+> The default policy is plan→flagship (Opus), implement→cheap model (see the
+> [cost-routing receipt](orchestrator-cost-routing-2026-07-24.md)); here the
+> tool-using implement node *must* be Claude (the live Gemini driver is a
+> text-only API call and cannot edit files or run pytest), so the cheap Gemini
+> node takes the plan slot. The point being proven is the live handoff + a
+> real green test across two vendors, not the dollar-optimal assignment.
+
 ## Result (real numbers)
 
 ```

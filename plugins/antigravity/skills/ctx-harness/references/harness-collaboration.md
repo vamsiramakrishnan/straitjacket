@@ -10,17 +10,25 @@ whether it read this skill or only the inlined prompt.
 
 Not every part of a task needs the strongest model, and the unit of routing is
 the **model**, not the harness — each harness runs several models across tiers.
-Searching and triaging are economy work; **ordinary implementation and edits are
-fine on a cheap *standard* model** (e.g. Gemini 3.6 Flash), not a frontier one;
-architecture and hard reasoning want a frontier model (Opus, Gemini 3.1 Pro, GPT
-Sol). The coordinator (a cheap model — Antigravity on Gemini-flash-lite) splits
-the task into a small dependency graph and assigns each node a `(harness, model)`
-by *capability × price*: the cheapest model that clears the node's tier and
-covers its roles. Nodes hand off **addressed evidence** — a `checkpoint:` in the
-shared store — never raw bytes.
+Searching and triaging are economy work; implementation is complexity-adaptive
+(a simple edit runs on the cheap economy model, a complex change on a standard
+model like Gemini 3.6 Flash); architecture and hard reasoning want a frontier
+model (Opus, Gemini 3.1 Pro, GPT Sol).
+
+Two things use the word "plan", and they are different. The **coordinator** is a
+*cheap* model (Antigravity on Gemini 3.5 Flash-lite) whose only job is to
+*decompose* the task into a small dependency graph and assign each node a
+`(harness, model)` by *capability × price*. One node it emits is usually the
+**plan node** — the actual solution design — which it routes to a frontier
+flagship (Opus) via `"prefer": "strong"`. The cheap coordinator decides the
+routing; the expensive flagship does the hard thinking.
+
+Nodes hand off **addressed evidence** — a `checkpoint:` in the shared store (a
+bounded digest carrying retrieval handles, not the raw output) — to their
+dependents, never raw bytes.
 
 This is task coordination, not open-loop calling: independent nodes run in
-parallel; a failed node escalates to a stronger model; after a wave the
+parallel *waves*; a failed node escalates to a stronger model; after a wave the
 coordinator may add follow-up nodes from what came back.
 
 ## Supported models per harness (2026-07)
@@ -50,7 +58,7 @@ harnesses & models available (model · tier · $in/$out per 1M · roles):
   antigravity:
     gemini-3.1-pro         frontier  $2.00/$12.00  plan, reason, review, architect
     gemini-3.6-flash       standard  $1.25/$7.50   implement, edit, code, summarize
-    gemini-3.5-flash-lite  economy   $0.15/$1.00   explore, search, triage, verify
+    gemini-3.5-flash-lite  economy   $0.20/$1.20   explore, search, triage, verify, implement, edit
   claude:
     claude-opus-4.8        frontier  $15.00/$75.00 plan, reason, synthesize, decide, review, architect
     claude-sonnet-4.6      standard  $3.00/$15.00  implement, edit, code, review
@@ -60,8 +68,9 @@ harnesses & models available (model · tier · $in/$out per 1M · roles):
 Capability tiers, strongest → weakest: **frontier > standard > economy**. A
 node's `min_tier` is the *weakest* tier that can do it; the router picks the
 cheapest `(harness, model)` at or above that tier that covers the node's roles.
-Pin `"model"` on a node to override — e.g. planning is often worth Opus even
-when a cheaper frontier model exists.
+To get the flagship instead of the cheapest at a tier (Opus for a plan), set
+`"prefer": "strong"`. Pin `"model"` only for a hard requirement on a *specific*
+model (a known-good version, or a vendor a phase must use).
 
 ## The output contract — `ctx.route/v1`
 
@@ -74,15 +83,25 @@ Output **only** a JSON object, no prose:
     {"id": "scan", "goal": "find the retry sites and the test entry point",
      "role": "search", "min_tier": "economy", "needs": ["search","triage"],
      "deps": [], "est_input_tokens": 15000, "est_output_tokens": 2000},
-    {"id": "impl", "goal": "add the retry from the scan checkpoint",
-     "role": "implement", "min_tier": "frontier", "needs": ["synthesize","edit"],
-     "deps": ["scan"], "est_input_tokens": 40000, "est_output_tokens": 8000},
+    {"id": "plan", "goal": "design the retry change from the scan checkpoint",
+     "role": "plan", "min_tier": "frontier", "prefer": "strong",
+     "needs": ["plan","reason","architect"],
+     "deps": ["scan"], "est_input_tokens": 12000, "est_output_tokens": 3000},
+    {"id": "impl", "goal": "make the edits the plan checkpoint specifies",
+     "role": "implement", "min_tier": "standard", "needs": ["implement","edit","code"],
+     "deps": ["plan"], "est_input_tokens": 40000, "est_output_tokens": 8000},
     {"id": "verify", "goal": "run the tests and inspect the diff",
      "role": "verify", "min_tier": "economy", "needs": ["test","verify"],
      "deps": ["impl"], "est_input_tokens": 10000, "est_output_tokens": 1200}
   ]
 }
 ```
+
+(This is a *complex* change, so `impl` is `standard` and its `needs` include
+`code`. A one-line edit would instead be `economy` with lighter needs like
+`["implement","edit"]` (drop `code` — flash-lite covers `implement`/`edit`, not
+`code`), landing on Gemini 3.5 Flash-lite. `plan` takes the flagship via
+`"prefer": "strong"`.)
 
 Per-node fields: `id` (unique), `goal` (what the assigned model must do),
 `role` (a short label), `min_tier`, `needs` (capability tags), `deps` (node ids
@@ -119,7 +138,7 @@ frontier plan) instead of the cheapest eligible model.
 
 The loop stops at the first of `max_waves`, `max_replans`, or `budget_usd`
 (in `ctx.toml [orchestrate]`). If no coordinator can run, `ctx orchestrate`
-falls back to a deterministic capability-routed graph (explore → implement →
-verify). A single installed harness degrades to that harness with no claimed
-saving. Every step is fail-open — a missing or failing harness is recorded and
-skipped, never fatal.
+falls back to a deterministic graph (explore → plan → implement → verify) with
+the same tier routing. A single installed harness degrades to that harness
+(routing across *its own* models) with no claimed saving. Every step is
+fail-open — a missing or failing harness is recorded and skipped, never fatal.

@@ -27,16 +27,16 @@ routing work across the harnesses it finds by what their models cost.
   cheap coordinator — the cheapest installed harness priced by its *coordinator
   model* (Antigravity on Gemini-flash-lite), guided by the routing skill —
   splits the task into a `ctx.route/v1` DAG. Each node is routed by **capability
-  × price**: the cheapest installed harness that clears the node's `min_tier`
-  and covers its capability tags (`hosts.pick_worker`) — economy work
-  (search/triage/verify) to the economy harness, frontier work (synthesis/edit)
-  to the frontier one. The DAG is validated (acyclic, bounded, budgeted) and
+  × price** at the *(harness, model)* level (`hosts.pick_model`) — the model that
+  clears the node's `min_tier` and covers its roles: explore/verify to an economy
+  model, implementation to a standard model, and the plan node to the frontier
+  flagship. The DAG is validated (acyclic, bounded, budgeted) and
   **priced up front, shown, then run in a closed loop**: ready nodes run in
   parallel waves; each dependent sees only its upstreams' `ctx.checkpoint/v1`
   digests (addressed evidence, never raw bytes); a failed node escalates once to
   a stronger harness; between waves the coordinator may patch the plan with
-  follow-up nodes. When no coordinator can run, a deterministic capability-routed
-  fallback DAG (explore→implement→verify) is used, so orchestration works
+  follow-up nodes. When no coordinator can run, a deterministic model-routed
+  fallback DAG (explore→plan→implement→verify) is used, so orchestration works
   offline. Bounded by `max_waves` / `max_replans` / `budget_usd`; fail-open
   throughout; a single installed harness degrades with zero claimed saving.
 - **Routing is by model, not just harness.** `HostSpec` carries a `models`
@@ -75,10 +75,10 @@ routing work across the harnesses it finds by what their models cost.
   through `run_route`; Codex corrected to `codex exec` (flag order still
   unverified — Codex absent).
 - **Offline receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
-  deterministic cost model — ~72% cheaper than an all-frontier run within a
-  single harness, ~92% with an economy harness. The full billed A/B vs a
-  single-model baseline remains TO-BUILD.
-- Tests: `tests/test_hosts.py` (capability tiers, `pick_worker` gating,
+  deterministic cost model — an estimated ~72% cheaper than an all-frontier run
+  within a single harness, up to ~79% with an economy harness present. The full
+  billed A/B vs a single-model baseline remains TO-BUILD.
+- Tests: `tests/test_hosts.py` (capability tiers, `pick_model` gating + prefer,
   cheapest-coordinator), `tests/test_orchestrator.py` (route-IR validation —
   cycles/unknown-deps/budget/node-cap, topological waves, deterministic priced
   plan, coordinator JSON parse, and the closed loop — parallel handoff, failure

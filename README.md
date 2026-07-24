@@ -111,11 +111,12 @@ Plain-language highlights from recent releases; full detail in
   simple edit), explore/verify → an economy model — even within one harness. A
   **closed loop** runs it: parallel waves, addressed-evidence handoff (not
   bytes), failure escalation to a stronger model, bounded re-planning. Deliberate
-  per-model routing saves ~72–79% vs running the whole task on the flagship
-  ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)). Demonstrated
-  **live on a real task**: Gemini planned, Claude implemented with its own tools
-  (no API key), and the failing test went green — through the actual loop with a
-  verified checkpoint handoff
+  per-model routing saves an **estimated** ~72–79% vs running the whole task on
+  the flagship ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)).
+  Separately demonstrated **live on a real task** — a cross-vendor handoff (the
+  cheap Gemini node planned, Claude implemented with its own tools, no API key)
+  where the failing test went green through the actual loop with a verified
+  checkpoint handoff
   ([receipt](evals/live-collab-antigravity-claude-2026-07-24.md)).
 - **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
