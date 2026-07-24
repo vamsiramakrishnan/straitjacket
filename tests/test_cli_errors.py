@@ -43,7 +43,7 @@ def test_missing_handle_is_attributed_and_names_gc_and_retention(ws_root, capsys
     """
     rc = _run(ws_root, "get", "run:abc123def")
     err = capsys.readouterr().err
-    assert rc == 1
+    assert rc == 2  # ctx rejected the invocation; see the exit-code table below
     assert err.startswith("ctx get: "), err  # attributed to the verb, not bare `ctx:`
     assert "gc" in err and "retention" in err  # the likely cause is named
     assert "ctx pin" in err  # and a remediation for next time
@@ -147,3 +147,39 @@ def test_bounded_truncation_continuation_only_fires_on_a_cut():
     assert bounded("short", 100, truncation_continuation="ctx get run:x") == "short"
     cut = bounded("x" * 4000, 10, truncation_continuation="ctx get run:x")
     assert cut.endswith("next: ctx get run:x")
+
+
+# ------------------------------------------------ 3. one code for bad input
+BAD_INPUT = [
+    # (argv, verb) — one class of user mistake, formerly split 1 vs 2 purely
+    # by which verb family happened to catch it.
+    (["get", "repo:a.py", "--lines", "nope"], "get"),
+    (["get", "zzz:xyz"], "get"),
+    (["get", "run:abc123def"], "get"),
+    (["search", "zzz:xyz", "pat"], "search"),
+    (["stats", "zzz:xyz"], "stats"),
+    (["diff", "repo:a.py", "repo:a.py"], "diff"),
+    (["def", "nonsense"], "def"),
+    (["def", "repo:a.py:Nope"], "def"),
+    (["pin", "zzz:xyz"], "pin"),
+]
+
+
+@pytest.mark.parametrize(
+    "argv,verb", BAD_INPUT, ids=[" ".join(a) for a, _ in BAD_INPUT]
+)
+def test_bad_input_exits_2_and_is_attributed(ws_root, capsys, argv, verb):
+    rc = _run(ws_root, *argv)
+    err = capsys.readouterr().err
+    assert err.startswith(f"ctx {verb}: "), (argv, err)
+    assert rc == 2, (argv, rc, err)
+
+
+def test_bad_input_agrees_across_the_two_verb_families(ws_root, capsys):
+    """`ctx q` and `ctx plan` (and argparse) already said 2; the retrieval
+    family said 1 for the same class of mistake, so a calling script got
+    opposite signals depending on which verb it reached for."""
+    assert _run(ws_root, "q", "nosuchstage") == 2
+    capsys.readouterr()
+    assert _run(ws_root, "get", "repo:a.py", "--lines", "nope") == 2
+    capsys.readouterr()

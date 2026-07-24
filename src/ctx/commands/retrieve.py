@@ -31,9 +31,19 @@ def _bad_input_errors() -> tuple[type[BaseException], ...]:
 def _fail(verb: str, e: BaseException) -> int:
     """One error tail for every retrieval verb: attribute the failure to the
     verb the user typed, and return the documented exit code (docs/CLI.md,
-    "Exit codes")."""
+    "Exit codes").
+
+    Exit 2, not 1. All three of these classes mean the same thing to a
+    calling script — *ctx rejected the invocation* — whether the argument was
+    malformed (`--lines nope`), ungrammatical (`zzz:xyz`), or simply no
+    longer resolves (a handle `ctx gc` collected). They used to split 1/2
+    purely by which verb family caught them: `ctx get` said 1 for a bad
+    selector while `ctx q` and argparse said 2 for the same class of
+    mistake. 2 is the argparse convention and already the majority of this
+    codebase's own usage errors, so 1 is left to mean only "ctx itself
+    failed" — the blanket handler in cli.py."""
     print(f"ctx {verb}: {e}", file=sys.stderr)
-    return 1
+    return 2
 
 
 def _retrieval(ws, ns, verb: str) -> int:

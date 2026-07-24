@@ -42,12 +42,18 @@ def cmd_gc(ws, ns) -> int:
 
 
 def cmd_pin(ws, ns) -> int:
+    from ctx.commands.retrieve import _bad_input_errors, _fail
     from ctx.refs import parse_ref
     from ctx.store import Store
 
-    ref = parse_ref(ns.ref)
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    store.pin(ref.id or "")
+    try:
+        ref = parse_ref(ns.ref)
+        store.pin(ref.id or "")
+    except _bad_input_errors() as e:
+        # `pin` takes the same handles as `get`; it owes the same attributed
+        # message and the same exit code (docs/CLI.md, "Exit codes").
+        return _fail("pin", e)
     print(f"pinned {ref.display()}")
     return 0
 
