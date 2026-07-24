@@ -136,14 +136,36 @@ def _json_dig(obj, *paths):
 def _main_slow(args: list[str]) -> int:
     import argparse
 
+    from ctx import cliux
+
+    # ---- the human front door -------------------------------------------
+    # argparse would print all 34 commands in source order as one wall. Show a
+    # grouped, plain-English path instead; `help --all` still reveals everything.
+    _flags = {a for a in args if a.startswith("-")}
+    _positional = [a for a in args if not a.startswith("-")]
+    _wants_all = "--all" in _flags or "--help-all" in _flags
+    if not args or args[0] in ("help", "-h", "--help", "--help-all"):
+        # `ctx run --help` must still reach argparse; only a bare help asks here.
+        if not _positional or _positional[0] == "help":
+            print(cliux.render_help(show_all=_wants_all))
+            return 0
+    # `ctx summarise` should suggest a command, not dump the whole list twice.
+    if _positional and _positional[0] not in cliux.all_commands():
+        first = _positional[0]
+        if not (args and args[0] == "--workspace"):  # --workspace PATH cmd
+            print(cliux.did_you_mean(first), file=sys.stderr)
+            return 2
+
     parser = argparse.ArgumentParser(
         prog="ctx",
-        description=(
-            "straitjacket context harness: unbounded output becomes an immutable "
-            "artifact plus a bounded deterministic digest."
-        ),
+        description=cliux.TAGLINE,
+        epilog=cliux.QUICKSTART,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--workspace", help="explicit workspace path")
+    parser.add_argument(
+        "--workspace", metavar="PATH",
+        help="repo to work in (default: the git root above the current directory)",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_run = sub.add_parser("run", help="execute a command with birth-time capture")
@@ -162,7 +184,8 @@ def _main_slow(args: list[str]) -> int:
     p_run.add_argument("command", nargs=argparse.REMAINDER, help="-- <command> [args...]")
 
     p_search = sub.add_parser("search", help="multi-pattern bounded search")
-    p_search.add_argument("ref")
+    p_search.add_argument("ref", metavar="handle",
+                          help="what to search: repo:path, or a run:/blob: handle")
     p_search.add_argument("patterns", nargs="+")
     p_search.add_argument("--fixed", action="store_true", help="fixed strings, not regex")
     p_search.add_argument("--all", action="store_true", help="require all patterns per target")
@@ -172,7 +195,8 @@ def _main_slow(args: list[str]) -> int:
     p_search.add_argument("--max-matches", type=int, dest="max_matches")
 
     p_get = sub.add_parser("get", help="exact bounded slice of a file or artifact")
-    p_get.add_argument("ref")
+    p_get.add_argument("ref", metavar="handle",
+                       help="what to read: repo:path, or a run:/blob: handle")
     p_get.add_argument("--lines", help="A:B line span")
     p_get.add_argument("--bytes", help="A:B byte span")
     p_get.add_argument("--records", help="A:B record span (JSONL)")
@@ -181,8 +205,8 @@ def _main_slow(args: list[str]) -> int:
     p_get.add_argument("--span", help="opaque span token minted by a digest")
 
     p_diff = sub.add_parser("diff", help="run-to-run regression delta digest")
-    p_diff.add_argument("ref_a", help="baseline run: reference")
-    p_diff.add_argument("ref_b", help="comparison run: reference")
+    p_diff.add_argument("ref_a", metavar="handle_before", help="the earlier run handle")
+    p_diff.add_argument("ref_b", metavar="handle_after", help="the later run handle")
 
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
@@ -194,7 +218,8 @@ def _main_slow(args: list[str]) -> int:
                            help="write the change (default: preview the diff only)")
 
     p_stats = sub.add_parser("stats", help="bounded schema/shape statistics")
-    p_stats.add_argument("ref", nargs="?", default="repo:")
+    p_stats.add_argument("ref", nargs="?", default="repo:", metavar="handle",
+                         help="what to describe (default: this repo)")
     p_stats.add_argument("--scope", help="named monorepo scope")
     p_stats.add_argument(
         "--session",
@@ -437,7 +462,7 @@ def _main_slow(args: list[str]) -> int:
     p_gc.add_argument("--retention-days", type=int, dest="retention_days")
 
     p_pin = sub.add_parser("pin", help="pin an artifact against garbage collection")
-    p_pin.add_argument("ref")
+    p_pin.add_argument("ref", metavar="handle", help="the artifact handle to keep")
 
     p_cp = sub.add_parser("checkpoint", help="freeze task state into a new cache epoch")
     p_cp.add_argument("--goal", help="task goal (required to create)")
@@ -502,6 +527,17 @@ def _main_slow(args: list[str]) -> int:
     p_install = agy_sub.add_parser("install", help="render the repo-scoped plugin")
     p_install.add_argument("--scope", default="workspace", choices=["workspace"])
     p_install.add_argument("--workspace", dest="agy_workspace", default=".")
+
+    # Every subcommand's one-liner comes from cliux, so the vocabulary a user
+    # meets is edited in one place instead of 34 scattered `help=` strings.
+    # Display-only; guarded so a future argparse internal can never break the CLI.
+    try:
+        for _action in sub._choices_actions:  # noqa: SLF001
+            _line = cliux.help_line(_action.dest)
+            if _line:
+                _action.help = _line
+    except Exception:  # pragma: no cover - cosmetic only
+        pass
 
     ns = parser.parse_args(args)
 
@@ -782,6 +818,13 @@ def _main_slow(args: list[str]) -> int:
             from ctx.installer import init_workspace
 
             print("\n".join(init_workspace(ws.root)) or "nothing to do")
+            # Writing two config files is not a result a user can feel. Say what
+            # it bought them and where to go next, so init is never a dead end.
+            print()
+            print("This repo now has ctx settings (edit ctx.toml to tune budgets).")
+            print("Next:")
+            print("  ctx wrap setup        hook ctx into the agents you have installed")
+            print("  ctx run -- pytest -q  try it on something noisy")
             return 0
         if ns.cmd == "doctor":
             from ctx.installer import doctor_report
