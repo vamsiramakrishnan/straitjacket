@@ -34,6 +34,7 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +46,13 @@ from ctx.hosts import (
     pick_worker,
     tier_rank,
 )
+
+# Parallel wave nodes launch concurrently (the expensive part), but their store
+# writes — blob + checkpoint manifest into one SQLite catalog — must be
+# serialized: concurrent writers otherwise contend on the WAL lock and a losing
+# writer would fail-open to a dropped checkpoint. The launches stay parallel;
+# only the fast checkpoint write is guarded.
+_CHECKPOINT_LOCK = threading.Lock()
 
 ROUTE_SCHEMA = "ctx.route/v1"
 
@@ -469,16 +477,22 @@ def _checkpoint_node(ws, node: RouteNode, task: str, stdout: str, stderr: str) -
         from ctx.checkpoint import create_checkpoint
         from ctx.store import Store
 
-        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
         payload = (stdout or stderr or "").encode("utf-8", "replace")
-        blob_id = store.put_blob(payload) if payload else None
-        evidence = [f"blob:{blob_id} node {node.id} full output"] if blob_id else []
-        cp_id, _ = create_checkpoint(
-            store, ws,
-            goal=f"node {node.id} ({node.role}) of orchestrated task: {task}",
-            state=(stdout or stderr or "").strip()[:600] or f"node {node.id}: no output",
-            evidence=evidence,
-        )
+        state = (stdout or stderr or "").strip()[:600] or f"node {node.id}: no output"
+        # Serialize the store mutation across parallel-wave threads (see the
+        # module comment on _CHECKPOINT_LOCK). Own Store per call so the sqlite
+        # connection is never shared across threads.
+        with _CHECKPOINT_LOCK:
+            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+            blob_id = store.put_blob(payload) if payload else None
+            evidence = [f"blob:{blob_id} node {node.id} full output"] if blob_id else []
+            cp_id, _ = create_checkpoint(
+                store, ws,
+                goal=f"node {node.id} ({node.role}) of orchestrated task: {task}",
+                state=state,
+                evidence=evidence,
+            )
+            store.close()
         return f"checkpoint:{cp_id[:12]}"
     except Exception:
         return None
