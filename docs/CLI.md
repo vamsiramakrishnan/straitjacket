@@ -312,6 +312,17 @@ Human-readable errors go to **stderr**; digests, reports, and status output go t
 **stdout**. An error message names the verb that produced it (`ctx get: …`), so a
 failure in a pipeline is attributable without a traceback.
 
+### When the message is not enough
+
+```bash
+CTX_DEBUG=1 ctx <command> …
+```
+
+`CTX_DEBUG` prints the real traceback for an unhandled error, on the CLI and on the
+MCP server alike. Without it, an exception that escapes a handler is summarized as
+`ctx <command>: <ExceptionType>: <message>` — enough to attribute the failure, not
+enough to fix it.
+
 ## Output discipline
 
 A good command result answers five questions:

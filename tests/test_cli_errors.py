@@ -251,3 +251,60 @@ def test_exit_code_doc_draws_the_line_that_matters():
     assert "gc" in doc and "retention" in doc  # why a well-formed handle can 2
     assert "timed out" in doc and "127" in doc
     assert "stderr" in doc and "stdout" in doc
+
+
+# ---------------------------------- 6. the blanket handler, and its hatch
+def _boom(exc):
+    def handler(ws, ns):
+        raise exc
+
+    return handler
+
+
+def test_unhandled_error_names_the_command_and_the_exception_type(
+    ws_root, capsys, monkeypatch
+):
+    """A KeyError escaping a handler used to render as `ctx: 'focus'` —
+    unactionable, and unattributable to any command."""
+    from ctx import cli
+
+    monkeypatch.setattr(cli, "_handler_for", lambda cmd: (_boom(KeyError("focus")), True))
+    rc = _run(ws_root, "diag")
+    err = capsys.readouterr().err
+    assert rc == 1  # ctx itself failed
+    assert "diag" in err  # attributable to a command
+    assert "KeyError" in err  # and to a kind of failure
+    assert "focus" in err  # without losing what str(e) said
+    assert "CTX_DEBUG" in err  # and it says how to get more
+
+
+def test_ctx_debug_promotes_the_message_to_a_traceback(ws_root, capsys, monkeypatch):
+    from ctx import cli
+
+    monkeypatch.setattr(cli, "_handler_for", lambda cmd: (_boom(KeyError("focus")), True))
+    monkeypatch.setenv(cli.DEBUG_ENV, "1")
+    assert _run(ws_root, "diag") == 1
+    err = capsys.readouterr().err
+    assert "Traceback (most recent call last)" in err
+    assert "KeyError" in err
+    assert "CTX_DEBUG" not in err  # already on: no point advertising it
+
+
+def test_cli_and_mcp_share_one_error_prefix():
+    """The same handler said `ctx:` on the CLI and `ctx error:` over MCP."""
+    from ctx.cli import format_error
+    from ctx.mcp import _tool_call
+
+    res = _tool_call({"name": "ctx", "arguments": {"op": "no-such-op"}})
+    text = res["content"][0]["text"]
+    assert res["isError"] is True
+    assert text.startswith("ctx "), text
+    assert "ctx error:" not in text
+    assert "RetrievalError" in text
+    # ...and MCP spends no context on a hint the model cannot act on.
+    assert "CTX_DEBUG" not in text
+    assert format_error(None, ValueError("x")).startswith("ctx: ValueError: x")
+
+
+def test_ctx_debug_is_documented():
+    assert "CTX_DEBUG" in _cli_doc()
