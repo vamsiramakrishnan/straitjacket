@@ -28,7 +28,11 @@ Common on-ramps:
   (names the modules, the registry, the contract format, and the tests).
 - **Command steering** → `src/ctx/hook.py` (the stdlib-only hot path).
 - **A `ctx q` stage** → `src/ctx/query.py`. **A plan operator** → `src/ctx/plan_ops.py`.
-- **A CLI verb** → `src/ctx/cli.py` dispatch plus the verb's own module.
+- **A CLI verb** → three edits: its parser block and one `_COMMANDS` row in
+  `src/ctx/cli.py`, a `cmd_<verb>(ws, ns)` handler in
+  `src/ctx/commands/<family>.py`, and its plain-English line in
+  `src/ctx/cliux.py`. Tests fail if you skip one. Keep the handler's imports
+  inside the function: the table is lazy on purpose.
 
 ## Running and writing tests
 
