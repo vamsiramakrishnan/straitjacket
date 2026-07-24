@@ -183,3 +183,44 @@ def test_bad_input_agrees_across_the_two_verb_families(ws_root, capsys):
     capsys.readouterr()
     assert _run(ws_root, "get", "repo:a.py", "--lines", "nope") == 2
     capsys.readouterr()
+
+
+# --------------------------------- 4. a failed job is not a ctx failure
+def test_failed_job_exits_3_not_1(ws_root, capsys, monkeypatch):
+    """`ctx job <id>` on a job that failed returned 1 — the same code as the
+    JobError handler on the very next line, so a caller could not tell a
+    failed job from a bad job id. run/py/seq already reserve 1 for ctx's own
+    failure and report an inner failure as 3."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", "."], cwd=ws_root, check=True)
+    from ctx.jobs import _job_dir, _write_meta, jobs_root, start_job
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+
+    ws = resolve_workspace(str(ws_root))
+    store = Store(ws.workspace_id)
+    job_id = start_job(ws, store, ["sleep", "30"])
+    # Park the job in the terminal 'failed' state the supervisor writes when a
+    # launch dies (jobs.py: command not found / spawn failed).
+    jobdir = _job_dir(store, job_id)
+    meta = __import__("json").loads((jobdir / "meta.json").read_text(encoding="utf-8"))
+    meta.update(state="failed", error="command not found: ctx-no-such-cmd-xyz", pid=None)
+    _write_meta(jobdir, meta)
+    assert jobs_root(store).is_dir()
+
+    rc = _run(ws_root, "job", job_id)
+    out = capsys.readouterr().out
+    assert "failed" in out
+    assert rc == 3, out
+
+
+def test_unknown_job_id_still_reports_a_ctx_failure(ws_root, capsys):
+    """The other half of the pair: 3 only means the job failed, so an id ctx
+    cannot resolve must not also be 3."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", "."], cwd=ws_root, check=True)
+    rc = _run(ws_root, "job", "0123456789ab")
+    assert rc != 3
+    assert "ctx job:" in capsys.readouterr().err
