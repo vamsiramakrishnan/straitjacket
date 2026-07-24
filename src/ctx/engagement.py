@@ -42,8 +42,19 @@ from __future__ import annotations
 import json
 import os
 import re
-from pathlib import Path
-from typing import Any
+
+# Hot path: `note_call` runs on every intercepted tool call, so this module is
+# imported by hook.py on every one of them. `pathlib` (~4.7 ms) and `typing`
+# (~4.3 ms) are therefore not imported at module scope — `os.path` covers the
+# joins and existence checks here (and accepts the `Path` arguments callers
+# still pass, via the os.PathLike protocol), and `from __future__ import
+# annotations` makes `Any` a string that is never evaluated at runtime. The
+# guard below deliberately does not use `from typing import TYPE_CHECKING`,
+# which would import the very module being avoided.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from pathlib import Path
+    from typing import Any
 
 _STATE_NAME = "engagement.json"
 _LEDGER_DIR = ".ctx-session-reads"
@@ -64,8 +75,8 @@ DEFAULT_SUGGESTIONS = 3
 LEAN_SUGGESTIONS = 1
 
 
-def _state_path(workspace_root: Path | str) -> Path:
-    return Path(workspace_root) / _LEDGER_DIR / _STATE_NAME
+def _state_path(workspace_root: Path | str) -> str:
+    return os.path.join(workspace_root, _LEDGER_DIR, _STATE_NAME)
 
 
 def _mutate_state(workspace_root: Path | str, fn) -> dict[str, Any]:
@@ -73,7 +84,7 @@ def _mutate_state(workspace_root: Path | str, fn) -> dict[str, Any]:
     Fail-open: any problem returns whatever ``fn`` produces from {}."""
     try:
         path = _state_path(workspace_root)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
         try:
             try:
@@ -106,8 +117,8 @@ def _mutate_state(workspace_root: Path | str, fn) -> dict[str, Any]:
 
 def read_state(workspace_root: Path | str) -> dict[str, Any]:
     try:
-        raw = _state_path(workspace_root).read_text(encoding="utf-8")
-        state = json.loads(raw)
+        with open(_state_path(workspace_root), encoding="utf-8") as fh:
+            state = json.load(fh)
         return state if isinstance(state, dict) else {}
     except Exception:
         return {}
@@ -115,8 +126,9 @@ def read_state(workspace_root: Path | str) -> dict[str, Any]:
 
 def _proxy_doc(workspace_root: Path | str) -> dict[str, Any]:
     try:
-        path = Path(workspace_root) / _LEDGER_DIR / "proxy" / "window.json"
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        path = os.path.join(workspace_root, _LEDGER_DIR, "proxy", "window.json")
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
         return doc if isinstance(doc, dict) else {}
     except Exception:
         return {}
