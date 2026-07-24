@@ -95,18 +95,23 @@ class Engagement:
 
 @dataclass(frozen=True)
 class OrchestratePolicy:
-    """Harness collaboration (ctx.orchestrator): route a task's phases across
-    the installed harnesses by model cost. Lean phases (explore/gather/review)
-    go to the cheapest installed harness; capable phases (implement/synthesize)
-    to the most expensive. Pins override the cost pick; ``confirm`` is off by
-    default — the plan is priced, shown, then run (the project's rewrite-not-
-    ask posture)."""
+    """Harness collaboration (ctx.orchestrator): a cheap coordinator splits a
+    task across the installed harnesses by capability x price and a closed loop
+    coordinates it. The coordinator emits a ``ctx.route/v1`` DAG; when none can
+    run, a deterministic capability-routed fallback is used. ``confirm`` is off
+    by default — the plan is priced, shown, then run (rewrite-not-ask)."""
 
-    lean_host: str = ""       # pin a host for lean phases (else cheapest installed)
-    capable_host: str = ""    # pin a host for capable phases (else premium installed)
-    confirm: bool = False     # print the priced plan and stop before running
-    # Coarse per-phase token estimates used only to *price the plan up front*;
-    # the real spend is reconciled from wire truth after each phase runs.
+    confirm: bool = False       # print the priced plan and stop before running
+    fallback_only: bool = False  # skip the coordinator model; always use the fallback route
+    # Closed-loop totality bounds (mirrors PlanPolicy). The loop stops at the
+    # first bound it hits; a single installed harness degrades gracefully.
+    max_nodes: int = 12
+    max_waves: int = 4
+    max_replans: int = 2
+    budget_usd: float = 0.0     # 0 = unbounded (still bounded by nodes/waves)
+    node_timeout: float = 900.0
+    # Coarse per-node token estimates for the deterministic fallback route and
+    # for pricing the plan up front; real spend is reconciled from wire truth.
     explore_input_tokens: int = 24000
     explore_output_tokens: int = 3000
     implement_input_tokens: int = 48000

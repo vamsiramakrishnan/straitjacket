@@ -35,13 +35,34 @@ from typing import Callable
 from ctx.pricing import Price, price_for
 
 
+# Capability tiers, strongest -> weakest. A subtask's ``min_tier`` requirement
+# is met by any host at or above it. Reasoning strength, *not* price — the two
+# are correlated but the router weighs them separately (capability gates, price
+# breaks ties). Declared heuristic, overridable per repo, in the honesty spirit
+# of engagement.lean_models — the costly error is over-trusting a weak model, so
+# the defaults fail safe.
+CAPABILITY_TIERS = ("frontier", "standard", "economy")
+
+
+def tier_rank(tier: str) -> int:
+    """Higher = more capable. Unknown tiers rank lowest (fail safe)."""
+    try:
+        return len(CAPABILITY_TIERS) - CAPABILITY_TIERS.index(tier)
+    except ValueError:
+        return 0
+
+
 @dataclass(frozen=True)
 class HostSpec:
     """Everything the harness needs to know about one coding-agent CLI.
 
     ``installer`` / ``wrapper`` name functions in :mod:`ctx.installer` and
     :mod:`ctx.wrap` by string to avoid an import cycle; an empty string means
-    "not wired yet" (detected and priced, but not harnessable)."""
+    "not wired yet" (detected and priced, but not harnessable).
+
+    The routing fields — ``capability_tier``, ``strengths``, ``coordinator_model``
+    — let :mod:`ctx.orchestrator` route by *capability x price*, not price alone,
+    and pick a cheap model when this host acts as the coordinator."""
 
     name: str
     cli_bins: tuple[str, ...]
@@ -56,12 +77,24 @@ class HostSpec:
     print_flag: tuple[str, ...] = ("-p",)   # one-shot / non-interactive run
     model_flag: str = "--model"             # flag that pins the model, if any
     vendor_hint: str = "unknown"
+    # Routing (capability x price). capability_tier reflects the host's *default*
+    # worker model; strengths are the subtask kinds it is good at; the router
+    # matches a subtask's needs against these and breaks ties on price.
+    capability_tier: str = "standard"
+    strengths: tuple[str, ...] = ()
+    # The cheap model this host runs when it is the *coordinator* (planning/
+    # routing), pinned via model_flag. Defaults to the worker model.
+    coordinator_model: str = ""
     notes: str = ""
 
     @property
     def harnessable(self) -> bool:
         """True when both an installer and a wrapper are wired for this host."""
         return bool(self.wrapper)
+
+    @property
+    def coord_model(self) -> str:
+        return self.coordinator_model or self.default_model
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +116,11 @@ _REGISTRY: tuple[HostSpec, ...] = (
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="google",
-        notes="built-for host; persistent workspace plugin; output gate nudge-only",
+        capability_tier="economy",
+        strengths=("search", "triage", "bulk", "verify", "summarize", "explore"),
+        # The cheapest Gemini tier — used when Antigravity is the coordinator.
+        coordinator_model="gemini-3.5-flash-lite",
+        notes="built-for host; cheap explore/verify; output gate nudge-only",
     ),
     HostSpec(
         name="claude",
@@ -96,6 +133,9 @@ _REGISTRY: tuple[HostSpec, ...] = (
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="anthropic",
+        capability_tier="frontier",
+        strengths=("reason", "synthesize", "implement", "edit", "code", "review", "decide"),
+        coordinator_model="claude-haiku",
         notes="ephemeral --settings wrap; reports real cost.total_cost_usd",
     ),
     HostSpec(
@@ -109,7 +149,10 @@ _REGISTRY: tuple[HostSpec, ...] = (
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="openai",
-        notes="persistent .codex/ MCP + hooks",
+        capability_tier="standard",
+        strengths=("code", "implement", "edit", "test"),
+        coordinator_model="gpt-5.4-nano",
+        notes="persistent .codex/ MCP + hooks; strong code-gen",
     ),
     # --- detected & priced, not yet harnessable (no installer/wrapper) --------
     HostSpec(
@@ -198,9 +241,31 @@ class DetectedHost:
         return self.spec.harnessable
 
     @property
+    def capability_tier(self) -> str:
+        return self.spec.capability_tier
+
+    @property
+    def strengths(self) -> tuple[str, ...]:
+        return self.spec.strengths
+
+    @property
     def output_dollars_per_mtok(self) -> float:
         """The dominant term for agent work: output-token list price."""
         return self.price.output
+
+    def coordinator_price(
+        self, workspace_root: Path | str | None = None
+    ) -> Price:
+        """List price of the cheap model this host runs when coordinating."""
+        return price_for(self.spec.coord_model, workspace_root=workspace_root)
+
+    def covers(self, need_tags: tuple[str, ...]) -> int:
+        """How many of the needed capability tags this host is strong at."""
+        s = set(self.strengths)
+        return sum(1 for t in need_tags if t in s)
+
+    def meets_tier(self, min_tier: str) -> bool:
+        return tier_rank(self.capability_tier) >= tier_rank(min_tier)
 
 
 def _probe_version(path: str, argv: tuple[str, ...], *, timeout: float = 4.0) -> str | None:
@@ -288,9 +353,47 @@ def installed_harnessable(
     ]
 
 
+def pick_worker(
+    hosts: list[DetectedHost],
+    *,
+    min_tier: str = "economy",
+    need_tags: tuple[str, ...] = (),
+) -> DetectedHost | None:
+    """The harness to run a subtask on: capability gates, price breaks ties.
+
+    Eligible = installed hosts at or above ``min_tier``. Among those, prefer the
+    ones that cover the most needed capability tags, then the cheapest by output
+    price (then name, for determinism). If none meet the tier, fall back to the
+    single most capable installed host so a demanding subtask is never dropped
+    onto a too-weak model silently — the caller can see the tier was unmet."""
+    installed = [h for h in hosts if h.installed]
+    if not installed:
+        return None
+    eligible = [h for h in installed if h.meets_tier(min_tier)]
+    pool = eligible or installed
+    return sorted(
+        pool,
+        key=lambda h: (-h.covers(need_tags), h.price.output, h.price.input, h.name),
+    )[0]
+
+
+def pick_coordinator(hosts: list[DetectedHost]) -> DetectedHost | None:
+    """The cheapest harness to *plan/route* on, priced by its coordinator model
+    (e.g. Antigravity running Gemini-flash-lite). Ties break on name."""
+    installed = [h for h in hosts if h.installed and h.harnessable]
+    if not installed:
+        return None
+    return sorted(
+        installed,
+        key=lambda h: (h.coordinator_price().output, h.coordinator_price().input, h.name),
+    )[0]
+
+
 __all__ = [
     "HostSpec",
     "DetectedHost",
+    "CAPABILITY_TIERS",
+    "tier_rank",
     "all_hosts",
     "host_by_name",
     "harnessable_hosts",
@@ -298,4 +401,6 @@ __all__ = [
     "detect",
     "detect_all",
     "installed_harnessable",
+    "pick_worker",
+    "pick_coordinator",
 ]

@@ -237,27 +237,35 @@ phase.
 **Deliverables (shipped)**
 - `src/ctx/hosts.py` — a declarative host registry: one `HostSpec` per
   coding-agent CLI (detect on PATH, resolve model, name installer/wrapper,
-  declare output-substitution capability). Adding a host is a data edit; the
-  model tie joins each CLI to `ctx.pricing`.
+  declare output-substitution capability, plus **capability tier + strengths +
+  coordinator model** for routing). Adding a host is a data edit; the model tie
+  joins each CLI to `ctx.pricing`.
 - `ctx wrap detect` — probe PATH for every registered CLI and print an
   installed/model/**price** table; `ctx wrap setup` becomes detection-driven
   (configure the CLIs it finds; `ctx wrap all` forces every supported host).
-- `src/ctx/orchestrator.py` + `ctx orchestrate "<task>"` — rank installed
-  harnesses cheapest→premium, route the explore→implement→review pipeline by
-  cost (lean phases to the cheapest, capable to the premium), **price the plan
-  up front, then run it**. Each phase deposits its output as a `blob:` and
-  freezes a `checkpoint:` the next phase reads — the same `ctx.checkpoint/v1`
-  handoff M-A uses, generalized across process/host boundaries. Fail-open: a
-  missing or failing harness is recorded and skipped; a single installed
-  harness degrades to that harness with zero claimed saving.
-- `[orchestrate]` config block (host pins, per-phase token estimates, a
-  `confirm` gate); receipt in
+- `src/ctx/orchestrator.py` + `ctx orchestrate "<task>"` — **task coordination,
+  not open-loop calling.** A cheap coordinator (the cheapest harness, priced by
+  its coordinator model — Antigravity on Gemini-flash-lite — guided by the
+  routing skill) splits the task into a `ctx.route/v1` DAG; each node is routed
+  by **capability × price** (cheapest harness that clears `min_tier` and covers
+  the tags). The DAG is validated (acyclic, bounded, budgeted), **priced up
+  front, shown, then run in a closed loop**: parallel waves, `ctx.checkpoint/v1`
+  handoff (addressed evidence, never raw bytes — the M-A contract generalized
+  across hosts), failure escalation to a stronger harness, bounded re-planning.
+  A deterministic capability-routed fallback DAG runs when no coordinator can.
+  Fail-open; a single installed harness degrades with zero claimed saving.
+- Routing skill `references/harness-collaboration.md` (lockstep with the
+  inlined `ROUTING_CONTRACT`); `[orchestrate]` config block (closed-loop bounds
+  `max_nodes`/`max_waves`/`max_replans`/`budget_usd`, `confirm`, per-node
+  estimates); receipt in
   [`evals/orchestrator-cost-routing-2026-07-24.md`](evals/orchestrator-cost-routing-2026-07-24.md).
 
-**Acceptance**: routing and the priced plan are byte-deterministic for a fixed
-install set and price table; lean phases verifiably pick the economy harness;
-the cross-harness handoff carries only checkpoints + handles (no raw payload);
-estimate is shown before spend and reconciled against wire truth after.
+**Acceptance**: capability routing and the priced DAG are byte-deterministic
+for a fixed install set and price table; economy nodes verifiably pick the
+economy harness and frontier nodes the frontier one; independent nodes run in
+one wave, dependents in the next; the handoff carries only checkpoints + handles
+(no raw payload); a failed node escalates and a bounded re-plan can add recovery
+nodes; estimate is shown before spend and reconciled against wire truth after.
 
 **TO-BUILD**: the live billed A/B (two live harnesses, real tokens) — same
 blocker as the Antigravity receipt (headless dual-host access), recorded as debt

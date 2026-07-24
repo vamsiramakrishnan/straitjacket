@@ -1,27 +1,30 @@
-"""Harness collaboration: route a task's phases across installed harnesses by
-model cost, handing off *addressed evidence* — not bytes — through the shared
-CAS store.
+"""Harness collaboration: a cheap coordinator decides how to split a task across
+the installed harnesses by *capability x price*, and a closed loop coordinates
+the work — dispatching ready subtasks, feeding each one's addressed evidence to
+its dependents through the shared CAS store, escalating failures to a stronger
+harness, and re-planning from what came back.
 
 This is the cross-*harness* generalization of the shipped ctx-explorer fork
-(ROADMAP M-A): a cheap harness explores and deposits evidence handles into the
-store; an expensive harness synthesizes from those handles, seeing only a
-bounded checkpoint, never the raw exploration bytes. The economic lever is the
-one already in the repo — :mod:`ctx.pricing` prices each harness by its model,
-so the router can send lean work to the cheapest capable harness and reserve
-the premium harness for the phase that needs it.
+(ROADMAP M-A), turned into task coordination rather than open-loop calling:
 
-Two halves, deliberately separated so the valuable part is pure and testable:
+* **Coordinate** (:func:`invoke_coordinator`) — the cheapest installed harness
+  (e.g. Antigravity on Gemini-flash-lite), guided by the routing contract in
+  the ctx-harness skill, decomposes the task into a ``ctx.route/v1`` DAG and
+  assigns each node to a harness by capability and price. When no coordinator
+  can run, :func:`fallback_route` produces a deterministic capability-routed DAG
+  so orchestration still works offline.
+* **Price & show** (:func:`build_route_plan`, :func:`render_route_plan`) — the
+  DAG is validated (acyclic, bounded, budgeted), priced up front, and shown
+  before any spend (the project's rewrite-not-ask posture).
+* **Run the loop** (:func:`run_route`) — topological waves: ready nodes run in
+  parallel, each seeing only its dependencies' ``checkpoint:`` digests (not raw
+  bytes); a failed node escalates to a stronger harness; after a wave the
+  coordinator may patch the plan with follow-up nodes, bounded by
+  ``max_waves`` / ``max_replans`` / ``budget_usd``.
 
-* **Plan & price** (:func:`plan_orchestration`, :func:`render_plan`) — pure,
-  deterministic. Given the detected harnesses it assigns each phase to a host
-  by cost, estimates the spend per phase, and prints the priced plan. No CLI is
-  launched. This is what the "priced plan, then run" posture shows first.
-* **Run** (:func:`run_orchestration`) — executes each phase through its
-  assigned harness in print mode inside the harnessed workspace, captures the
-  phase output into the store, and threads a ``checkpoint:`` handoff to the
-  next phase. Fully fail-open: a missing or failing harness records a skipped
-  outcome and the run continues; if nothing is runnable it degrades to the
-  printed plan.
+Everything is fail-open and bounded. Planning/pricing/scheduling is pure and
+deterministic; coordinator invocation and node execution are injectable so the
+loop is tested without a live CLI.
 """
 
 from __future__ import annotations
@@ -31,147 +34,288 @@ import json
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from ctx.hosts import DetectedHost, installed_harnessable
+from ctx.hosts import (
+    DetectedHost,
+    installed_harnessable,
+    pick_coordinator,
+    pick_worker,
+    tier_rank,
+)
+
+ROUTE_SCHEMA = "ctx.route/v1"
+
+# The contract handed to the coordinator model. Kept in lockstep with the skill
+# reference plugins/*/skills/ctx-harness/references/harness-collaboration.md so
+# the coordinator behaves the same whether it read the skill or only this prompt.
+ROUTING_CONTRACT = """\
+You are the COORDINATOR of a multi-harness collaboration run under the ctx
+harness. Do NOT do the task yourself. Split it into subtasks and assign each to
+the harness whose capability fits, spending the cheapest harness that can do the
+work. Output ONLY a JSON object of schema ctx.route/v1 — no prose.
+
+Rules:
+- Decompose only where it helps. A trivial task is ONE node. Fan out only when
+  subtasks are genuinely independent or form a real dependency chain.
+- Each node: {"id","goal","role","min_tier","needs":[tags],"deps":[ids],
+  "est_input_tokens","est_output_tokens"}. Optionally pin "host":"<name>".
+- min_tier is the weakest capability that can do the node: economy < standard <
+  frontier. Put exploration/search/triage/verify at economy; synthesis/edit/
+  decisions at frontier. The router picks the cheapest eligible harness.
+- deps make a node wait for others; their evidence (a checkpoint:) is handed to
+  it. Keep the graph acyclic.
+Return: {"schema":"ctx.route/v1","nodes":[ ... ]}
+"""
 
 
 # ---------------------------------------------------------------------------
-# The default collaboration pipeline. Roles map to cost tiers: "lean" -> the
-# cheapest installed harness, "capable" -> the most expensive. This mirrors
-# ctx.engagement's lean-vs-capable split exactly, one level up (whole harnesses
-# instead of affordance surfaces). Overridable per repo via ctx.toml.
+# Route IR
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
-class Phase:
-    name: str
+class RouteNode:
+    id: str
     goal: str
-    role: str  # "lean" | "capable"
+    role: str
+    min_tier: str
+    need_tags: tuple[str, ...]
+    deps: tuple[str, ...]
     est_input_tokens: int
     est_output_tokens: int
+    host_pin: str = ""   # optional explicit harness name from the coordinator
 
 
-@dataclass(frozen=True)
-class Assignment:
-    phase: Phase
+@dataclass
+class AssignedNode:
+    node: RouteNode
     host: DetectedHost
     est_cost_usd: float
+    tier_met: bool  # False when no installed host met min_tier (assigned strongest)
 
 
-@dataclass(frozen=True)
-class OrchestrationPlan:
+@dataclass
+class RoutePlan:
     task: str
-    ladder: tuple[DetectedHost, ...]        # cheapest -> premium (installed)
-    assignments: tuple[Assignment, ...]
+    hosts: tuple[DetectedHost, ...]
+    coordinator: DetectedHost | None
+    assigned: list[AssignedNode] = field(default_factory=list)
 
     @property
     def est_total_usd(self) -> float:
-        return sum(a.est_cost_usd for a in self.assignments)
+        return sum(a.est_cost_usd for a in self.assigned)
 
     @property
     def est_single_premium_usd(self) -> float:
-        """What the same token budget would cost run entirely on the premium
-        harness — the baseline the collaboration is measured against."""
-        if not self.ladder:
+        premium = _premium(self.hosts)
+        if premium is None:
             return 0.0
-        premium = self.ladder[-1]
-        in_toks = sum(a.phase.est_input_tokens for a in self.assignments)
-        out_toks = sum(a.phase.est_output_tokens for a in self.assignments)
-        return premium.price.cost_usd(input_tokens=in_toks, output_tokens=out_toks)
+        i = sum(a.node.est_input_tokens for a in self.assigned)
+        o = sum(a.node.est_output_tokens for a in self.assigned)
+        return premium.price.cost_usd(input_tokens=i, output_tokens=o)
+
+    def waves(self) -> list[list[AssignedNode]]:
+        """Topological layers: each wave's nodes depend only on earlier waves.
+        Assumes a validated acyclic graph."""
+        done: set[str] = set()
+        layers: list[list[AssignedNode]] = []
+        remaining = list(self.assigned)
+        while remaining:
+            ready = [a for a in remaining if all(d in done for d in a.node.deps)]
+            if not ready:  # defensive: a cycle slipped through — stop cleanly
+                layers.append(remaining)
+                break
+            layers.append(ready)
+            for a in ready:
+                done.add(a.node.id)
+            remaining = [a for a in remaining if a.node.id not in done]
+        return layers
 
 
-def default_phases(cfg) -> tuple[Phase, ...]:
-    """The canonical explore -> implement -> review pipeline, with per-phase
-    token estimates from the [orchestrate] config block."""
-    return (
-        Phase(
-            "explore",
-            "gather the evidence the task needs: search, map, read — deposit "
-            "ctx handles; do not change code",
-            "lean",
-            cfg.explore_input_tokens,
-            cfg.explore_output_tokens,
-        ),
-        Phase(
-            "implement",
-            "make the change from the addressed evidence in the prior checkpoint",
-            "capable",
-            cfg.implement_input_tokens,
-            cfg.implement_output_tokens,
-        ),
-        Phase(
-            "review",
-            "verify the change: run the acceptance check, inspect the diff",
-            "lean",
-            cfg.review_input_tokens,
-            cfg.review_output_tokens,
-        ),
-    )
+def _premium(hosts: tuple[DetectedHost, ...] | list[DetectedHost]) -> DetectedHost | None:
+    inst = [h for h in hosts if h.installed]
+    if not inst:
+        return None
+    return sorted(inst, key=lambda h: (h.price.output, h.price.input, h.name))[-1]
 
 
 def cost_ladder(hosts: list[DetectedHost]) -> list[DetectedHost]:
-    """Installed harnesses ranked cheapest -> premium. Output-token price is the
-    dominant term for agent work; ties break on input price then name so the
-    ladder is fully deterministic."""
-    return sorted(hosts, key=lambda d: (d.price.output, d.price.input, d.name))
+    """Installed harnesses ranked cheapest -> premium by output price."""
+    return sorted(
+        [h for h in hosts if h.installed],
+        key=lambda d: (d.price.output, d.price.input, d.name),
+    )
 
 
-def _pick_host(role: str, ladder: list[DetectedHost], cfg) -> DetectedHost:
-    """Cheapest for lean, premium for capable — unless a config pin names a
-    host that is actually in the ladder."""
-    pin = cfg.lean_host if role == "lean" else cfg.capable_host
-    if pin:
-        for d in ladder:
-            if d.name == pin:
-                return d
-    return ladder[0] if role == "lean" else ladder[-1]
+class RouteError(Exception):
+    """A coordinator plan that could not be validated into a runnable DAG."""
 
 
-def plan_orchestration(
+def _assign_host(node: RouteNode, hosts: list[DetectedHost]) -> AssignedNode:
+    """Resolve a node to a harness: an explicit pin if it is installed, else the
+    cheapest capability-eligible harness (pick_worker). Price the node."""
+    host = None
+    if node.host_pin:
+        host = next(
+            (h for h in hosts if h.installed and h.name == node.host_pin), None
+        )
+    if host is None:
+        host = pick_worker(hosts, min_tier=node.min_tier, need_tags=node.need_tags)
+    if host is None:
+        raise RouteError("no installed harness to assign a node to")
+    cost = host.price.cost_usd(
+        input_tokens=node.est_input_tokens, output_tokens=node.est_output_tokens
+    )
+    return AssignedNode(
+        node=node, host=host, est_cost_usd=cost, tier_met=host.meets_tier(node.min_tier)
+    )
+
+
+def _coerce_node(raw: dict, i: int) -> RouteNode:
+    """One raw JSON node -> RouteNode, tolerant of missing/loose fields."""
+    nid = str(raw.get("id") or f"n{i}").strip()
+    tier = str(raw.get("min_tier") or "standard").strip().lower()
+    return RouteNode(
+        id=nid,
+        goal=str(raw.get("goal") or raw.get("role") or "do the subtask"),
+        role=str(raw.get("role") or "task"),
+        min_tier=tier,
+        need_tags=tuple(str(t) for t in (raw.get("needs") or raw.get("need_tags") or [])),
+        deps=tuple(str(d) for d in (raw.get("deps") or [])),
+        est_input_tokens=int(raw.get("est_input_tokens") or 20000),
+        est_output_tokens=int(raw.get("est_output_tokens") or 3000),
+        host_pin=str(raw.get("host") or raw.get("host_pin") or "").strip(),
+    )
+
+
+def build_route_plan(
     task: str,
+    raw: dict,
     hosts: list[DetectedHost],
     cfg,
     *,
-    phases: tuple[Phase, ...] | None = None,
-) -> OrchestrationPlan:
-    """Assign each phase to a harness by cost and price the plan. Pure and
-    deterministic. Raises ValueError only when no harnessable CLI is installed —
-    the one condition the caller must handle."""
-    ladder = cost_ladder(hosts)
-    if not ladder:
-        raise ValueError("no installed harnessable CLI to orchestrate across")
-    phs = phases if phases is not None else default_phases(cfg)
-    assignments = []
-    for ph in phs:
-        host = _pick_host(ph.role, ladder, cfg)
-        cost = host.price.cost_usd(
-            input_tokens=ph.est_input_tokens, output_tokens=ph.est_output_tokens
+    coordinator: DetectedHost | None = None,
+) -> RoutePlan:
+    """Validate a coordinator-emitted ``ctx.route/v1`` object into a priced DAG.
+    Raises RouteError on anything unrunnable (no nodes, unknown deps, a cycle,
+    over the node bound, or over budget) so the caller can fall back."""
+    nodes_raw = raw.get("nodes") if isinstance(raw, dict) else None
+    if not isinstance(nodes_raw, list) or not nodes_raw:
+        raise RouteError("route plan has no nodes")
+    max_nodes = getattr(cfg, "max_nodes", 12)
+    if len(nodes_raw) > max_nodes:
+        nodes_raw = nodes_raw[:max_nodes]
+    nodes = [_coerce_node(n, i) for i, n in enumerate(nodes_raw) if isinstance(n, dict)]
+    if not nodes:
+        raise RouteError("route plan has no valid nodes")
+    ids = [n.id for n in nodes]
+    if len(set(ids)) != len(ids):
+        raise RouteError("route plan has duplicate node ids")
+    idset = set(ids)
+    for n in nodes:
+        for d in n.deps:
+            if d not in idset:
+                raise RouteError(f"node {n.id!r} depends on unknown node {d!r}")
+    _assert_acyclic(nodes)
+    assigned = [_assign_host(n, hosts) for n in nodes]
+    plan = RoutePlan(
+        task=task, hosts=tuple(hosts), coordinator=coordinator, assigned=assigned
+    )
+    budget = float(getattr(cfg, "budget_usd", 0.0) or 0.0)
+    if budget > 0 and plan.est_total_usd > budget:
+        raise RouteError(
+            f"route plan est ${plan.est_total_usd:.2f} exceeds budget ${budget:.2f}"
         )
-        assignments.append(Assignment(phase=ph, host=host, est_cost_usd=cost))
-    return OrchestrationPlan(task=task, ladder=tuple(ladder), assignments=tuple(assignments))
+    return plan
 
 
+def _assert_acyclic(nodes: list[RouteNode]) -> None:
+    deps = {n.id: set(n.deps) for n in nodes}
+    done: set[str] = set()
+    while len(done) < len(nodes):
+        ready = [nid for nid, ds in deps.items() if nid not in done and ds <= done]
+        if not ready:
+            raise RouteError("route plan has a dependency cycle")
+        done.update(ready)
+
+
+def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
+    """Deterministic capability-routed DAG for when no coordinator can run:
+    explore (economy) -> implement (frontier) -> verify (economy). Same handoff
+    and pricing as a coordinator plan, no model call."""
+    nodes = [
+        RouteNode(
+            "explore",
+            "gather the evidence the task needs (search/map/read); deposit ctx "
+            "handles; change nothing",
+            "explore", "economy",
+            ("search", "triage", "explore"), (),
+            cfg.explore_input_tokens, cfg.explore_output_tokens,
+        ),
+        RouteNode(
+            "implement",
+            "make the change from the addressed evidence in the explore checkpoint",
+            "implement", "frontier",
+            ("synthesize", "implement", "edit"), ("explore",),
+            cfg.implement_input_tokens, cfg.implement_output_tokens,
+        ),
+        RouteNode(
+            "verify",
+            "run the acceptance check and inspect the diff",
+            "verify", "economy",
+            ("verify", "test"), ("implement",),
+            cfg.review_input_tokens, cfg.review_output_tokens,
+        ),
+    ]
+    assigned = [_assign_host(n, hosts) for n in nodes]
+    return RoutePlan(
+        task=task, hosts=tuple(hosts),
+        coordinator=pick_coordinator(hosts), assigned=assigned,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
 def _usd(x: float) -> str:
     return f"${x:.2f}" if x >= 0.005 else f"${x:.4f}"
 
 
-def render_plan(plan: OrchestrationPlan) -> str:
-    """The priced plan, in the repo's priced-context idiom: show the routing and
-    the dollars before spending them."""
-    lines = [f'[ctx orchestrate] task: "{plan.task}"']
-    ladder_str = " · ".join(
-        f"{d.name} {_usd(d.price.output)}/Mout" for d in plan.ladder
-    )
-    lines.append(f"harness cost ladder (installed): {ladder_str}   ← cheapest→premium")
-    lines.append(f"routing ({len(plan.assignments)} phases):")
-    for i, a in enumerate(plan.assignments, 1):
-        lines.append(
-            f"  {i}. {a.phase.name:10} → {a.host.name:11} ({a.phase.role:8}) "
-            f"est ~{_usd(a.est_cost_usd)}   "
-            f"{a.phase.est_input_tokens // 1000}k in / "
-            f"{a.phase.est_output_tokens / 1000:g}k out  [{a.host.model}]"
+def build_menu(hosts: list[DetectedHost]) -> str:
+    """The capability x price menu handed to the coordinator and shown to the
+    user — the harnesses it may route to."""
+    rows = ["harnesses available (capability · $in/$out per 1M):"]
+    for h in cost_ladder(hosts):
+        rows.append(
+            f"  {h.name:11} {h.capability_tier:9} "
+            f"{_usd(h.price.input)}/{_usd(h.price.output)}  "
+            f"strengths: {', '.join(h.strengths) or '—'}"
         )
+    return "\n".join(rows)
+
+
+def render_route_plan(plan: RoutePlan) -> str:
+    lines = [f'[ctx orchestrate] task: "{plan.task}"']
+    if plan.coordinator:
+        lines.append(
+            f"coordinator: {plan.coordinator.name} "
+            f"[{plan.coordinator.spec.coord_model}] "
+            f"~{_usd(plan.coordinator.coordinator_price().output)}/Mout"
+        )
+    lines.append(build_menu(list(plan.hosts)))
+    lines.append(f"routing ({len(plan.assigned)} nodes, "
+                 f"{len(plan.waves())} waves):")
+    for wi, wave in enumerate(plan.waves(), 1):
+        lines.append(f"  wave {wi}:")
+        for a in wave:
+            dep = f" ⇐ {','.join(a.node.deps)}" if a.node.deps else ""
+            warn = "" if a.tier_met else "  ⚠ tier unmet (assigned strongest)"
+            lines.append(
+                f"    {a.node.id:10} → {a.host.name:11} "
+                f"({a.node.min_tier}/{a.host.capability_tier}) "
+                f"est ~{_usd(a.est_cost_usd)}{dep}{warn}"
+            )
     baseline = plan.est_single_premium_usd
     saved = baseline - plan.est_total_usd
     lines.append(
@@ -181,43 +325,34 @@ def render_plan(plan: OrchestrationPlan) -> str:
         + ")"
     )
     lines.append(
-        "handoff: each phase writes a checkpoint: to the shared store; the next "
-        "phase reads only its bounded digest and resolves handles with ctx get."
+        "handoff: each node writes a checkpoint: to the shared store; its "
+        "dependents read only that bounded digest and resolve handles with ctx get."
     )
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Execution. Fail-open at every step: a phase that cannot run is recorded and
-# skipped, never fatal. The handoff channel is the CAS store — a phase's output
-# is stored as a blob and cited from a checkpoint the next phase reads.
+# Coordinator invocation
 # ---------------------------------------------------------------------------
-@dataclass
-class PhaseOutcome:
-    phase: Phase
-    host_name: str
-    status: str            # "ok" | "skipped" | "failed"
-    checkpoint_ref: str | None
-    detail: str
-    exit_code: int | None = None
-
-
-@dataclass
-class OrchestrationResult:
-    plan: OrchestrationPlan
-    outcomes: list[PhaseOutcome]
-
-
 def _launch_host(
-    host: DetectedHost, ws_root: Path, prompt: str, exe: str, *, timeout: float
+    host: DetectedHost,
+    ws_root: Path,
+    prompt: str,
+    exe: str,
+    *,
+    timeout: float,
+    model: str = "",
 ) -> tuple[int, str, str]:
     """Run one harness in print mode with captured output, inside the harnessed
-    workspace. Claude gets the ephemeral --settings hook injection (same source
-    of truth as ctx.wrap); Codex/Antigravity discover their hooks from the
-    workspace tree, so a print run there is already harnessed. Never raises."""
+    workspace. Claude gets the ephemeral --settings hook injection; Codex /
+    Antigravity discover their hooks from the workspace tree. ``model`` pins the
+    model via the host's model flag (used for the cheap coordinator). Never
+    raises."""
     spec = host.spec
     path = host.path or spec.cli_bins[0]
     argv = [path, *spec.print_flag, prompt]
+    if model and spec.model_flag:
+        argv = [path, spec.model_flag, model, *spec.print_flag, prompt]
     settings_tmp: str | None = None
     try:
         if spec.name == "claude":
@@ -229,14 +364,13 @@ def _launch_host(
             json.dump(claude_hook_settings(exe), tmp)
             tmp.close()
             settings_tmp = tmp.name
-            argv = [path, "--settings", settings_tmp, *spec.print_flag, prompt]
+            head = [path, "--settings", settings_tmp]
+            argv = ([*head, spec.model_flag, model, *spec.print_flag, prompt]
+                    if model and spec.model_flag
+                    else [*head, *spec.print_flag, prompt])
         proc = subprocess.run(
-            argv,
-            cwd=ws_root,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env={**os.environ},
+            argv, cwd=ws_root, capture_output=True, text=True,
+            timeout=timeout, env={**os.environ},
         )
         return proc.returncode, proc.stdout or "", proc.stderr or ""
     except (OSError, subprocess.SubprocessError) as e:
@@ -247,44 +381,102 @@ def _launch_host(
                 os.unlink(settings_tmp)
 
 
-def _phase_prompt(phase: Phase, task: str, prior: str | None) -> str:
-    """Build the phase instruction, threading the prior phase's checkpoint."""
-    header = (
-        f"You are the {phase.name.upper()} phase of a multi-harness "
-        f"collaboration run under the ctx harness.\nTask: {task}\n"
-        f"Your job this phase: {phase.goal}.\n"
-        "Use ctx verbs (search/map/get/run) for all retrieval so evidence is "
-        "addressed, not pasted. Cite handles (run:/blob:/repo:file:line)."
+def _extract_json(text: str) -> dict | None:
+    """Pull the first balanced JSON object out of a model's stdout. Tolerant of
+    surrounding prose or ```json fences."""
+    if not text:
+        return None
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        for j in range(start, len(text)):
+            c = text[j]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    with contextlib.suppress(json.JSONDecodeError):
+                        obj = json.loads(text[start : j + 1])
+                        if isinstance(obj, dict):
+                            return obj
+                    break
+        start = text.find("{", start + 1)
+    return None
+
+
+def invoke_coordinator(
+    ws,
+    task: str,
+    hosts: list[DetectedHost],
+    cfg,
+    *,
+    exe: str,
+    extra: str = "",
+    launch=_launch_host,
+    timeout: float = 300.0,
+) -> dict | None:
+    """Ask the cheapest harness to emit a ctx.route/v1 plan. Returns the parsed
+    dict, or None if no coordinator is available or it produced no parseable
+    plan (the caller then uses fallback_route). Fail-open."""
+    coord = pick_coordinator(hosts)
+    if coord is None:
+        return None
+    prompt = (
+        ROUTING_CONTRACT + "\n\n" + build_menu(hosts) + f"\n\nTask: {task}\n" + extra
     )
-    if prior:
-        header += (
-            "\n\nThe previous (cheaper) phase produced this checkpoint — resolve "
-            "any handle with `ctx get`:\n" + prior
+    try:
+        code, out, _err = launch(
+            coord, ws.root, prompt, exe, timeout=timeout, model=coord.spec.coord_model
         )
-    if phase.role == "capable":
-        header += "\n\nMake the change now; keep narration terse."
-    else:
-        header += "\n\nDo not change code; end with a short findings summary."
-    return header
+    except Exception:
+        return None
+    if code != 0:
+        return None
+    return _extract_json(out)
 
 
-def _checkpoint_phase(
-    ws, store, phase: Phase, task: str, stdout: str, stderr: str
-) -> str | None:
-    """Store the phase's captured output as a blob and freeze a checkpoint that
-    cites it — the lossless, addressed handoff to the next phase. Fail-open."""
+# ---------------------------------------------------------------------------
+# Closed-loop execution
+# ---------------------------------------------------------------------------
+@dataclass
+class NodeOutcome:
+    node_id: str
+    host_name: str
+    status: str            # "ok" | "failed" | "skipped"
+    checkpoint_ref: str | None
+    detail: str
+    escalated_to: str | None = None
+    exit_code: int | None = None
+
+
+@dataclass
+class RouteResult:
+    plan: RoutePlan
+    outcomes: list[NodeOutcome]
+    waves_run: int
+    replans: int
+
+
+def _checkpoint_node(ws, node: RouteNode, task: str, stdout: str, stderr: str) -> str | None:
+    """Freeze a node's captured output into a checkpoint citing a blob of the
+    full output — the addressed handoff to its dependents. Fail-open.
+
+    Opens its own Store so it is safe to call from parallel worker threads
+    (sqlite3 connections are check_same_thread by default; a shared connection
+    would raise across threads)."""
     try:
         from ctx.checkpoint import create_checkpoint
+        from ctx.store import Store
 
+        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
         payload = (stdout or stderr or "").encode("utf-8", "replace")
         blob_id = store.put_blob(payload) if payload else None
-        evidence = [f"blob:{blob_id} {phase.name} phase full output"] if blob_id else []
-        state = (stdout or stderr or "").strip()[:600]
+        evidence = [f"blob:{blob_id} node {node.id} full output"] if blob_id else []
         cp_id, _ = create_checkpoint(
-            store,
-            ws,
-            goal=f"{phase.name} phase of orchestrated task: {task}",
-            state=state or f"{phase.name} phase produced no captured output",
+            store, ws,
+            goal=f"node {node.id} ({node.role}) of orchestrated task: {task}",
+            state=(stdout or stderr or "").strip()[:600] or f"node {node.id}: no output",
             evidence=evidence,
         )
         return f"checkpoint:{cp_id[:12]}"
@@ -292,69 +484,194 @@ def _checkpoint_phase(
         return None
 
 
-def run_orchestration(
+def _node_prompt(node: RouteNode, task: str, dep_docs: list[str]) -> str:
+    p = (
+        f"You are node '{node.id}' ({node.role}) of a multi-harness collaboration "
+        f"under the ctx harness.\nOverall task: {task}\n"
+        f"Your subtask: {node.goal}.\n"
+        "Use ctx verbs for retrieval; cite handles (run:/blob:/repo:file:line), "
+        "do not paste output."
+    )
+    if dep_docs:
+        p += (
+            "\n\nUpstream nodes produced these checkpoints — resolve any handle "
+            "with `ctx get`:\n" + "\n---\n".join(dep_docs)
+        )
+    return p
+
+
+def _stronger_host(current: DetectedHost, hosts: list[DetectedHost]) -> DetectedHost | None:
+    """The cheapest installed host strictly more capable than ``current`` — the
+    escalation target for a failed node."""
+    stronger = [
+        h for h in hosts
+        if h.installed and tier_rank(h.capability_tier) > tier_rank(current.capability_tier)
+    ]
+    if not stronger:
+        return None
+    return sorted(stronger, key=lambda h: (h.price.output, h.price.input, h.name))[0]
+
+
+def run_route(
     ws,
-    plan: OrchestrationPlan,
+    plan: RoutePlan,
+    cfg,
     *,
     exe: str | None = None,
-    timeout: float = 900.0,
     launch=_launch_host,
-) -> OrchestrationResult:
-    """Execute the priced plan phase by phase, handing off checkpoints through
-    the store. ``launch`` is injectable so tests exercise the handoff without a
-    real CLI. Fail-open: a phase failure is recorded and the run continues."""
+    coordinate=None,
+    max_workers: int = 4,
+) -> RouteResult:
+    """Coordinate the DAG closed-loop. Ready nodes (deps satisfied) run in
+    parallel; each sees its deps' checkpoints; a failed node escalates once to a
+    stronger harness; between waves the coordinator may patch the plan with
+    follow-up nodes. Bounded by cfg.max_waves / max_replans / budget_usd. Every
+    step is fail-open."""
     from ctx.installer import _ctx_executable
     from ctx.store import Store
 
     resolved_exe = exe or _ctx_executable()
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    outcomes: list[PhaseOutcome] = []
-    prior_checkpoint: str | None = None
-    prior_doc: str | None = None
+    nodes: list[AssignedNode] = list(plan.assigned)
+    state: dict[str, str] = {a.node.id: "pending" for a in nodes}
+    cp: dict[str, str] = {}
+    docs: dict[str, str] = {}
+    outcomes: dict[str, NodeOutcome] = {}
+    hosts = list(plan.hosts)
+    max_waves = int(getattr(cfg, "max_waves", 4) or 4)
+    replans_left = int(getattr(cfg, "max_replans", 2) or 0)
+    budget = float(getattr(cfg, "budget_usd", 0.0) or 0.0)
+    timeout = float(getattr(cfg, "node_timeout", 900.0) or 900.0)
+    spent_est = 0.0
+    waves_run = 0
+    replans_done = 0
 
-    for a in plan.assignments:
-        phase, host = a.phase, a.host
-        if not host.installed:
-            outcomes.append(
-                PhaseOutcome(phase, host.name, "skipped", None, "host not on PATH")
-            )
+    def run_one(a: AssignedNode) -> NodeOutcome:
+        dep_docs = [docs[d] for d in a.node.deps if d in docs]
+        prompt = _node_prompt(a.node, plan.task, dep_docs)
+        code, out, err = launch(a.host, ws.root, prompt, resolved_exe, timeout=timeout)
+        escalated = None
+        if code != 0:
+            target = _stronger_host(a.host, hosts)
+            if target is not None:
+                escalated = target.name
+                code, out, err = launch(target, ws.root, prompt, resolved_exe, timeout=timeout)
+        ref = _checkpoint_node(ws, a.node, plan.task, out, err)
+        tail = (out or err or "").strip().splitlines()
+        return NodeOutcome(
+            node_id=a.node.id,
+            host_name=escalated or a.host.name,
+            status="ok" if code == 0 else "failed",
+            checkpoint_ref=ref,
+            detail=(tail[-1][:200] if tail else "(no output)"),
+            escalated_to=escalated,
+            exit_code=code,
+        )
+
+    while waves_run < max_waves:
+        # Skip nodes whose dependency failed — they can never become ready.
+        for a in nodes:
+            if state[a.node.id] == "pending" and any(
+                state.get(d) in ("failed", "skipped") for d in a.node.deps
+            ):
+                state[a.node.id] = "skipped"
+                outcomes[a.node.id] = NodeOutcome(
+                    a.node.id, a.host.name, "skipped", None, "dependency did not complete"
+                )
+        ready = [
+            a for a in nodes
+            if state[a.node.id] == "pending"
+            and all(state.get(d) == "ok" for d in a.node.deps)
+        ]
+        if not ready:
+            # Nothing runnable. Try a bounded re-plan if failures occurred.
+            failed = [nid for nid, s in state.items() if s == "failed"]
+            if coordinate and replans_left > 0 and failed:
+                replans_left -= 1
+                patch = coordinate(_replan_context(plan.task, outcomes))
+                added = _merge_patch(nodes, state, patch, hosts, cfg)
+                if added:
+                    replans_done += 1
+                    continue
+            break
+        waves_run += 1
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(ready))) as pool:
+            results = list(pool.map(run_one, ready))
+        for a, o in zip(ready, results):
+            state[a.node.id] = o.status
+            outcomes[a.node.id] = o
+            if o.checkpoint_ref:
+                cp[a.node.id] = o.checkpoint_ref
+                with contextlib.suppress(Exception):
+                    from ctx.checkpoint import show_checkpoint
+
+                    docs[a.node.id] = show_checkpoint(store, ws, o.checkpoint_ref)
+            spent_est += a.est_cost_usd
+        if budget > 0 and spent_est >= budget:
+            break
+
+    # Any never-run node is recorded skipped for a complete ledger.
+    for a in nodes:
+        outcomes.setdefault(
+            a.node.id,
+            NodeOutcome(a.node.id, a.host.name, "skipped", None, "not reached (bounds)"),
+        )
+    ordered = [outcomes[a.node.id] for a in nodes]
+    return RouteResult(plan=plan, outcomes=ordered, waves_run=waves_run, replans=replans_done)
+
+
+def _replan_context(task: str, outcomes: dict[str, NodeOutcome]) -> str:
+    lines = ["Some nodes failed. Emit ctx.route/v1 with ONLY follow-up nodes to "
+             "recover (new ids; deps may reference completed nodes)."]
+    for o in outcomes.values():
+        lines.append(f"  {o.node_id}: {o.status} — {o.detail}")
+    return "\n".join(lines)
+
+
+def _merge_patch(nodes, state, patch, hosts, cfg) -> int:
+    """Merge coordinator-supplied follow-up nodes into the live node set,
+    respecting the node bound. Returns how many were added."""
+    if not isinstance(patch, dict):
+        return 0
+    raw = patch.get("nodes")
+    if not isinstance(raw, list):
+        return 0
+    max_nodes = int(getattr(cfg, "max_nodes", 12) or 12)
+    existing = {a.node.id for a in nodes}
+    added = 0
+    for i, r in enumerate(raw):
+        if not isinstance(r, dict) or len(nodes) >= max_nodes:
+            break
+        n = _coerce_node(r, len(nodes) + i)
+        if n.id in existing:
             continue
-        prompt = _phase_prompt(phase, plan.task, prior_doc)
-        code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout)
-        status = "ok" if code == 0 else "failed"
-        cp = _checkpoint_phase(ws, store, phase, plan.task, out, err)
-        detail = (out or err or "").strip().splitlines()
-        summary = detail[-1][:200] if detail else "(no output captured)"
-        outcomes.append(
-            PhaseOutcome(phase, host.name, status, cp, summary, exit_code=code)
-        )
-        if cp:
-            prior_checkpoint = cp
-            with contextlib.suppress(Exception):
-                from ctx.checkpoint import show_checkpoint
-
-                prior_doc = show_checkpoint(store, ws, cp)
-        _ = prior_checkpoint  # threaded for future multi-hop policies
-    return OrchestrationResult(plan=plan, outcomes=outcomes)
+        with contextlib.suppress(RouteError):
+            nodes.append(_assign_host(n, hosts))
+            state[n.id] = "pending"
+            existing.add(n.id)
+            added += 1
+    return added
 
 
-def render_result(result: OrchestrationResult) -> str:
+def render_result(result: RouteResult) -> str:
     lines = ["[ctx orchestrate] run complete"]
-    for i, o in enumerate(result.outcomes, 1):
+    for o in result.outcomes:
         ref = f" {o.checkpoint_ref}" if o.checkpoint_ref else ""
-        lines.append(
-            f"  {i}. {o.phase.name:10} → {o.host_name:11} [{o.status}]{ref}"
-        )
+        esc = f" (escalated→{o.escalated_to})" if o.escalated_to else ""
+        lines.append(f"  {o.node_id:10} → {o.host_name:11} [{o.status}]{esc}{ref}")
         if o.detail:
-            lines.append(f"       {o.detail}")
-    ran = [o for o in result.outcomes if o.status == "ok"]
+            lines.append(f"     {o.detail}")
+    ok = sum(1 for o in result.outcomes if o.status == "ok")
     lines.append(
-        f"phases ok: {len(ran)}/{len(result.outcomes)} · "
-        "resolve any cited handle with `ctx get`"
+        f"nodes ok: {ok}/{len(result.outcomes)} · waves {result.waves_run} · "
+        f"replans {result.replans} · resolve handles with `ctx get`"
     )
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Top-level entry
+# ---------------------------------------------------------------------------
 def orchestrate(
     ws,
     task: str,
@@ -362,46 +679,74 @@ def orchestrate(
     dry_run: bool = False,
     force_run: bool = False,
     exe: str | None = None,
+    launch=_launch_host,
 ) -> tuple[int, str]:
-    """Top-level entry: detect harnesses, price the plan, show it, then run it
-    (unless dry_run or [orchestrate] confirm is set). ``force_run`` overrides a
-    configured confirm gate (the ``--run`` flag). Returns (exit_code, text)."""
+    """Detect harnesses → coordinate a route (cheap model, or deterministic
+    fallback) → price & show it → run the closed loop. Returns (exit_code, text)."""
+    from ctx.installer import _ctx_executable
+
     cfg = ws.config.orchestrate
+    resolved_exe = exe or _ctx_executable()
     hosts = installed_harnessable(workspace_root=ws.root)
-    try:
-        plan = plan_orchestration(task, hosts, cfg)
-    except ValueError as e:
+    if not any(h.installed for h in hosts):
         return 1, (
-            f"ctx orchestrate: {e}.\n"
-            "Install a supported CLI (claude, codex, antigravity) then re-run; "
-            "see `ctx wrap detect`."
+            "ctx orchestrate: no installed harnessable CLI to orchestrate across.\n"
+            "Install a supported CLI (claude, codex, antigravity); see `ctx wrap detect`."
         )
-    out = [render_plan(plan)]
-    if dry_run or (cfg.confirm and not force_run):
-        note = (
-            "dry run — no harness launched."
-            if dry_run
-            else "[orchestrate] confirm=true — re-run without it, or `--run`, to execute."
-        )
+
+    coordinator = pick_coordinator(hosts)
+    raw = None
+    if not getattr(cfg, "fallback_only", False):
+        raw = invoke_coordinator(ws, task, hosts, cfg, exe=resolved_exe, launch=launch)
+
+    note = ""
+    plan: RoutePlan
+    if raw is not None:
+        try:
+            plan = build_route_plan(task, raw, hosts, cfg, coordinator=coordinator)
+        except RouteError as e:
+            note = f"coordinator plan rejected ({e}); using deterministic route"
+            plan = fallback_route(task, hosts, cfg)
+    else:
+        plan = fallback_route(task, hosts, cfg)
+
+    out = [render_route_plan(plan)]
+    if note:
         out.append(note)
+    if dry_run or (getattr(cfg, "confirm", False) and not force_run):
+        out.append(
+            "dry run — no harness launched." if dry_run
+            else "[orchestrate] confirm=true — re-run with --run to execute."
+        )
         return 0, "\n".join(out)
-    result = run_orchestration(ws, plan, exe=exe)
+
+    def coordinate(extra: str) -> dict | None:
+        return invoke_coordinator(
+            ws, task, hosts, cfg, exe=resolved_exe, extra=extra, launch=launch
+        )
+
+    result = run_route(ws, plan, cfg, exe=resolved_exe, launch=launch, coordinate=coordinate)
     out.append("")
     out.append(render_result(result))
     return 0, "\n".join(out)
 
 
 __all__ = [
-    "Phase",
-    "Assignment",
-    "OrchestrationPlan",
-    "PhaseOutcome",
-    "OrchestrationResult",
-    "default_phases",
+    "ROUTE_SCHEMA",
+    "ROUTING_CONTRACT",
+    "RouteNode",
+    "AssignedNode",
+    "RoutePlan",
+    "RouteError",
+    "RouteResult",
+    "NodeOutcome",
     "cost_ladder",
-    "plan_orchestration",
-    "render_plan",
-    "run_orchestration",
+    "build_menu",
+    "build_route_plan",
+    "fallback_route",
+    "render_route_plan",
+    "invoke_coordinator",
+    "run_route",
     "render_result",
     "orchestrate",
 ]

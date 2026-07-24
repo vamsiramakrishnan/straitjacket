@@ -23,26 +23,42 @@ routing work across the harnesses it finds by what their models cost.
   **`ctx wrap all`** forces every supported host (the old behaviour). The
   low-level `setup_hosts` primitive is unchanged.
 - **M-M · Harness collaboration orchestrator** (`src/ctx/orchestrator.py`,
-  `ctx orchestrate "<task>"`): ranks installed harnesses cheapest→premium by
-  their model's list price and routes the default explore→implement→review
-  pipeline by cost — lean phases to the cheapest harness, the capable phase to
-  the premium one. It **prices the plan up front, shows it, then runs it**
-  (the rewrite-not-ask posture; a `[orchestrate] confirm` gate or `--dry-run`
-  stops before spend). The cross-harness handoff is `ctx.checkpoint/v1`: each
-  phase deposits its output as a `blob:` and freezes a checkpoint the next
-  phase reads — addressed evidence, never raw bytes. Fail-open throughout; a
-  single installed harness degrades to that harness with zero claimed saving.
-- **`[orchestrate]` config block** (`ctx.config.OrchestratePolicy`): host pins
-  for the lean/capable roles, per-phase token estimates, and the `confirm`
-  gate.
+  `ctx orchestrate "<task>"`): **task coordination, not open-loop calling.** A
+  cheap coordinator — the cheapest installed harness priced by its *coordinator
+  model* (Antigravity on Gemini-flash-lite), guided by the routing skill —
+  splits the task into a `ctx.route/v1` DAG. Each node is routed by **capability
+  × price**: the cheapest installed harness that clears the node's `min_tier`
+  and covers its capability tags (`hosts.pick_worker`) — economy work
+  (search/triage/verify) to the economy harness, frontier work (synthesis/edit)
+  to the frontier one. The DAG is validated (acyclic, bounded, budgeted) and
+  **priced up front, shown, then run in a closed loop**: ready nodes run in
+  parallel waves; each dependent sees only its upstreams' `ctx.checkpoint/v1`
+  digests (addressed evidence, never raw bytes); a failed node escalates once to
+  a stronger harness; between waves the coordinator may patch the plan with
+  follow-up nodes. When no coordinator can run, a deterministic capability-routed
+  fallback DAG (explore→implement→verify) is used, so orchestration works
+  offline. Bounded by `max_waves` / `max_replans` / `budget_usd`; fail-open
+  throughout; a single installed harness degrades with zero claimed saving.
+- **Capability × price on the registry**: `HostSpec` gains `capability_tier`
+  (frontier > standard > economy), `strengths` tags, and `coordinator_model`
+  (the cheap model each host runs when planning). New `gemini-3.5-flash-lite`
+  economy price row.
+- **Routing skill** (`references/harness-collaboration.md`): the `ctx.route/v1`
+  contract and capability×price routing rules, kept in lockstep with
+  `ROUTING_CONTRACT` so the coordinator behaves the same from the skill or the
+  inlined prompt.
+- **`[orchestrate]` config block** (`ctx.config.OrchestratePolicy`): closed-loop
+  bounds (`max_nodes`/`max_waves`/`max_replans`/`budget_usd`/`node_timeout`),
+  `fallback_only`, `confirm` gate, and per-node token estimates.
 - **Receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
-  deterministic cost model, offline-reproducible from the shipped price table —
-  ~36% cheaper than a single-premium run when an economy harness is present,
-  4% for two standard harnesses, 0% (honest degrade) for one. The live billed
-  A/B is a declared TO-BUILD.
-- Tests: `tests/test_hosts.py`, `tests/test_orchestrator.py` (registry
-  detection, cost-ladder ordering, cost/pin routing, deterministic priced plan,
-  checkpoint handoff threading, fail-open execution).
+  deterministic cost model, offline-reproducible — ~36% cheaper than a
+  single-premium run with an economy harness, 4% for two standard harnesses, 0%
+  (honest degrade) for one. Live billed A/B is a declared TO-BUILD.
+- Tests: `tests/test_hosts.py` (capability tiers, `pick_worker` gating,
+  cheapest-coordinator), `tests/test_orchestrator.py` (route-IR validation —
+  cycles/unknown-deps/budget/node-cap, topological waves, deterministic priced
+  plan, coordinator JSON parse, and the closed loop — parallel handoff, failure
+  escalation, dependent-skip, bounded re-plan).
 
 ## [0.30.0] - 2026-07-21
 

@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,100 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,115 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -102,12 +102,15 @@ Plain-language highlights from recent releases; full detail in
 - **One-command, three-host setup.** `ctx wrap setup` harnesses Antigravity,
   Claude Code, *and Codex* (with real enforcement, not just advice) in a
   single idempotent command.
-- **Harness collaboration by cost.** `ctx wrap detect` finds every coding-agent
-  CLI on PATH and prices it by its model; `ctx orchestrate "<task>"` then routes
-  a task's phases across those harnesses — cheap explore → premium implement →
-  cheap review — handing off addressed evidence (not bytes) through the shared
-  store, ~36% cheaper than a single-premium run when an economy harness is
-  present ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)).
+- **Harness collaboration by capability × price.** `ctx wrap detect` finds every
+  coding-agent CLI on PATH and prices it by its model; `ctx orchestrate "<task>"`
+  then has a cheap coordinator (Gemini-flash-lite) split the task into a
+  `ctx.route/v1` DAG — economy work (search/triage/verify) to the cheap harness,
+  frontier work (synthesis/edit) to the strong one — and a **closed loop** runs
+  it: parallel waves, addressed-evidence handoff (not bytes), failure escalation
+  to a stronger harness, bounded re-planning. ~36% cheaper than a single-premium
+  run when an economy harness is present
+  ([receipt](evals/orchestrator-cost-routing-2026-07-24.md)).
 - **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
   — measured 6 rounds → 1 ([receipt](evals/plan-collapse-2026-07-19.md)).
@@ -506,7 +509,7 @@ Full flags and when-to-use detail:
 | `debt` | declared-omission ledger for deferred engineering decisions (`add`/`list`/`resolve`) |
 | `policy` | compiled steering policy from telemetry (`compile`/`show`) |
 | `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages; `wrap detect` lists installed CLIs priced by model, `wrap setup` harnesses the ones it finds |
-| `orchestrate` | harness collaboration: route a task's phases across installed harnesses by model cost (cheap explore → premium implement → cheap review), handing off `checkpoint:` evidence — not bytes — through the shared store; prices the plan, then runs it |
+| `orchestrate` | harness collaboration: a cheap coordinator (Gemini-flash-lite) splits a task across installed harnesses by **capability × price** into a `ctx.route/v1` DAG, then a closed loop runs it — parallel waves, `checkpoint:` handoff (evidence, not bytes), failure escalation to a stronger harness, bounded re-planning; prices the plan, then runs it |
 | `init` / `doctor` | write `ctx.toml` + `.ctxignore` · validate hooks, manifests, store, classifier |
 
 Examples:
