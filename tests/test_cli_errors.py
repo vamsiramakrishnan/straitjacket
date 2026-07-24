@@ -224,3 +224,30 @@ def test_unknown_job_id_still_reports_a_ctx_failure(ws_root, capsys):
     rc = _run(ws_root, "job", "0123456789ab")
     assert rc != 3
     assert "ctx job:" in capsys.readouterr().err
+
+
+# ------------------------------------------- 5. the contract is documented
+def _cli_doc() -> str:
+    import pathlib
+
+    return (
+        pathlib.Path(__file__).resolve().parent.parent / "docs" / "CLI.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_every_exit_code_the_cli_uses_is_documented():
+    """0/1/2/3/124/127 are all used deliberately and `ctx` is called from
+    hooks and scripts, but docs/CLI.md never mentioned exit codes at all."""
+    doc = _cli_doc()
+    assert "## Exit codes" in doc
+    for code in ("`0`", "`1`", "`2`", "`3`", "`124`", "`127`"):
+        assert code in doc, f"exit code {code} is used but undocumented"
+
+
+def test_exit_code_doc_draws_the_line_that_matters():
+    """1 vs 2 vs 3 is the distinction a calling script acts on; a table that
+    lists the numbers without it would not be worth writing."""
+    doc = _cli_doc().lower()
+    assert "gc" in doc and "retention" in doc  # why a well-formed handle can 2
+    assert "timed out" in doc and "127" in doc
+    assert "stderr" in doc and "stdout" in doc
