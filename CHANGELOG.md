@@ -6,6 +6,38 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+### Routing gains dimensions beyond price — and a provenance rule
+
+Routing chose between models on capability tier and price alone. Both are
+coarse: they cannot express that one model greps instead of dumping, or that
+the cheapest model per token was the most expensive arm in a real build.
+
+- **New `ctx/data/model-catalog.json` + `ctx.catalog`** carry specialities,
+  anti-specialities, latency class, measured throughput, benchmark slots and
+  this repo's own observed-behaviour receipts, overridable per repo with a
+  `.ctx-catalog.json` (merged per model, so tuning one does not restate the
+  table).
+- **Every quantitative claim carries a `source`**, enforced by
+  `lint_catalog()` and `tests/test_model_catalog.py`. Benchmarks ship *empty*
+  rather than invented: public scores for these model versions are not in this
+  repo's evidence base, and a fabricated number is indistinguishable from a real
+  one at the point of use while silently steering every routing decision.
+  `declared-heuristic` is a legitimate source value and means exactly that.
+- **Absent data reads as UNKNOWN, never as bad.** An unmeasured model scores
+  neutral rather than being deprioritised, and unknown latency sorts as
+  `moderate` rather than optimistically as `fast`.
+- Measured throughput ships for `gemini-3.6-flash` (91.3 output tok/s) and
+  `gemini-3.5-flash-lite` (58.8), both n=8 from isolated single-agent runs. The
+  Claude models are deliberately absent: the only wall-clock data here mixes
+  model time with Playwright grading, and publishing that as throughput would be
+  false precision.
+
+**Prompt-cache impact: `PREFIX_VERSION` 6 -> 7.** `SKILL.md` gained a surface
+section (skill vs CLI vs allowed MCP servers) and a progressive-disclosure index
+so a reference is loaded only when the task needs it. That rewrites the injected
+prefix once for every user — taken deliberately, because the index is what stops
+the new `references/model-catalog.md` from being read on every task.
+
 Breaking, taken deliberately while the user count is zero: two command names
 were wrong, so they were fixed at the source rather than described around.
 
