@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from ctx.installer import _ctx_executable
+from ctx.proxywindow import PROXY_SUBDIR
 from ctx.sessiondir import session_reads_path
 
 _AGENT_FILENAME = "ctx-explorer.md"
@@ -177,7 +178,7 @@ def _start_proxy(
     not come up within 5s, the session runs unproxied."""
     port = _free_port()
     upstream = os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
-    state_dir = session_reads_path(workspace_root, "proxy")
+    state_dir = session_reads_path(workspace_root, PROXY_SUBDIR)
     argv = [
         *shlex.split(ctx_exe),
         "proxy",
@@ -219,7 +220,7 @@ def _emit_scorecard(workspace_root: Path) -> None:
             summary_line,
         )
 
-        sc = compute_scorecard(session_reads_path(workspace_root, "proxy"))
+        sc = compute_scorecard(session_reads_path(workspace_root, PROXY_SUBDIR))
         if sc is None:
             return
         attach_deliverable(sc, workspace_root)

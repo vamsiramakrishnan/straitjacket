@@ -44,6 +44,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from ctx.proxywindow import read_window_doc
 from ctx.sessiondir import session_reads_path
 
 # --------------------------------------------------------------------------
@@ -185,27 +186,25 @@ class DeliveryPlan:
 
 # --------------------------------------------------------- signal readers
 def read_window(ws_root: Path | str | None) -> tuple[float | None, str | None]:
-    """Tiny fail-open reader of the Tier-0 proxy's ground truth at
-    ``<workspace>/.ctx-session-reads/proxy/window.json`` → (window_pct,
-    model_id). Deliberately replicated from (never imported out of)
-    ctx.hook: the hook is the safety plane and this module must not create
-    an import edge into it. Any missing/corrupt telemetry → (None, None)."""
-    if ws_root is None:
-        return None, None
-    try:
-        path = session_reads_path(ws_root, "proxy", "window.json")
-        doc = json.loads(path.read_text(encoding="utf-8"))
-        pct_raw = doc.get("window_pct")
-        pct = (
-            float(pct_raw)
-            if isinstance(pct_raw, (int, float)) and not isinstance(pct_raw, bool)
-            else None
-        )
-        model_raw = doc.get("model")
-        model = str(model_raw) if isinstance(model_raw, str) and model_raw else None
-        return pct, model
-    except Exception:
-        return None, None
+    """The Tier-0 proxy's ground truth as (window_pct, model_id).
+
+    The read itself is :func:`ctx.proxywindow.read_window_doc` — one
+    fail-open reader shared with the guard, the emission governor, the
+    engagement profile and the status line. This module still must not
+    create an import edge into ctx.hook (the hook is the safety plane), and
+    it does not: ctx.proxywindow is neutral and depends on neither.
+
+    Any missing/corrupt telemetry → (None, None)."""
+    doc = read_window_doc(ws_root)
+    pct_raw = doc.get("window_pct")
+    pct = (
+        float(pct_raw)
+        if isinstance(pct_raw, (int, float)) and not isinstance(pct_raw, bool)
+        else None
+    )
+    model_raw = doc.get("model")
+    model = str(model_raw) if isinstance(model_raw, str) and model_raw else None
+    return pct, model
 
 
 def environment_signals(ws_root: Path | str | None) -> EnvironmentSignals:

@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ctx.proxywindow import PROXY_SUBDIR
 from ctx.sessiondir import session_reads_path
 from ctx.textutil import estimate_tokens
 
@@ -358,7 +359,7 @@ def observed_tool_counts(ws_root: Path | str) -> dict[str, int]:
     """Per-tool invocation counts observed by the proxy wire log across this
     workspace's sessions. Fail-open to empty."""
     counts: dict[str, int] = {}
-    proxy = session_reads_path(ws_root, "proxy")
+    proxy = session_reads_path(ws_root, PROXY_SUBDIR)
     if not proxy.is_dir():
         return counts
     for wire in proxy.glob("**/wire.jsonl"):

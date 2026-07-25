@@ -135,6 +135,7 @@ from ctx.engagement import EMISSION_NUDGE_TOKENS_DEFAULT
 
 # The house ledger directory, named and joined in exactly one place
 # (ctx.sessiondir). That module imports `os` only, for this contract.
+from ctx.proxywindow import read_window_doc
 from ctx.sessiondir import LEDGER_DIR_NAME as _LEDGER_DIR_NAME
 from ctx.sessiondir import session_reads_dir
 
@@ -472,18 +473,10 @@ def _window_pct(workspace_root: str | None) -> float | None:
     ``<workspace>/.ctx-session-reads/proxy/window.json``. Fail-open by
     contract: any missing file, IO error, or malformed document → None
     (no pressure is ever applied because of broken telemetry)."""
-    if not workspace_root:
+    pct = read_window_doc(workspace_root).get("window_pct")
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)):
         return None
-    try:
-        path = session_reads_dir(workspace_root, "proxy", "window.json")
-        with open(path, "r", encoding="utf-8") as fh:
-            doc = json.load(fh)
-        pct = doc.get("window_pct")
-        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
-            return None
-        return float(pct)
-    except Exception:
-        return None
+    return float(pct)
 
 
 def _apply_window_pressure(
@@ -1409,15 +1402,12 @@ def _price_note(size_bytes: int, workspace_root: str | None) -> str:
         from ctx.textutil import fmt_tokens_coarse
 
         note = f"{fmt_tokens_coarse(tok)} tok"
-        if workspace_root:
-            try:
-                path = session_reads_dir(workspace_root, "proxy", "window.json")
-                with open(path, "r", encoding="utf-8") as fh:
-                    limit = json.load(fh).get("context_limit")
-                if isinstance(limit, int) and limit > 0:
-                    note += f" ≈ {max(1, round(100 * tok / limit))}% of window"
-            except Exception:
-                pass
+        # NB: no `isinstance(limit, bool)` guard — the original had none, and
+        # a wide mechanical edit is not the place to change what a nonsense
+        # `"context_limit": true` renders as.
+        limit = read_window_doc(workspace_root).get("context_limit")
+        if isinstance(limit, int) and limit > 0:
+            note += f" ≈ {max(1, round(100 * tok / limit))}% of window"
         return f" ({note})"
     except Exception:
         return ""
@@ -1875,9 +1865,7 @@ def _emission_nudge(payload: dict[str, Any]) -> str | None:
         workspace_root = _resolve_workspace_root(payload)
         if not workspace_root:
             return None
-        path = session_reads_dir(workspace_root, "proxy", "window.json")
-        with open(path, "r", encoding="utf-8") as fh:
-            doc = json.load(fh)
+        doc = read_window_doc(workspace_root)
         cum_output = int(doc.get("cum_output") or 0)
         requests = int(doc.get("requests") or 0)
         if requests <= 0 or cum_output <= 0:

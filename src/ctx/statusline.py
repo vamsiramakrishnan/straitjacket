@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ctx import pricing
+from ctx.proxywindow import read_window_doc
 from ctx.sessiondir import session_reads_path
 from ctx.textutil import fmt_tokens_compact
 
@@ -218,15 +219,10 @@ def _harness_saved(workspace_root: Path | str | None) -> str | None:
     if workspace_root is None:
         return None
     root = Path(workspace_root)
-    try:
-        doc = json.loads(
-            session_reads_path(root, "proxy", "window.json").read_text(encoding="utf-8")
-        )
-        saved = doc.get("contained_tokens") or doc.get("saved_tokens")
-        if isinstance(saved, (int, float)) and not isinstance(saved, bool) and saved > 0:
-            return f"{_fmt_tokens(int(saved))} kept out"
-    except Exception:
-        pass
+    doc = read_window_doc(root)
+    saved = doc.get("contained_tokens") or doc.get("saved_tokens")
+    if isinstance(saved, (int, float)) and not isinstance(saved, bool) and saved > 0:
+        return f"{_fmt_tokens(int(saved))} kept out"
     contained = _contained_tokens_from_telemetry(root)
     if contained and contained > 0:
         return f"{_fmt_tokens(contained)} kept out"

@@ -43,7 +43,9 @@ import json
 import os
 import re
 
-# ctx.sessiondir imports `os` only, for exactly this reason.
+# ctx.sessiondir imports `os` only, and ctx.proxywindow adds `json` (already
+# loaded here) on top of it — for exactly this reason.
+from ctx.proxywindow import read_window_doc
 from ctx.sessiondir import session_reads_dir
 
 # Hot path: `note_call` runs on every intercepted tool call, so this module is
@@ -134,18 +136,8 @@ def read_state(workspace_root: Path | str) -> dict[str, Any]:
         return {}
 
 
-def _proxy_doc(workspace_root: Path | str) -> dict[str, Any]:
-    try:
-        path = session_reads_dir(workspace_root, "proxy", "window.json")
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
-        return doc if isinstance(doc, dict) else {}
-    except Exception:
-        return {}
-
-
 def session_model(workspace_root: Path | str) -> str:
-    return str(_proxy_doc(workspace_root).get("model") or "")
+    return str(read_window_doc(workspace_root).get("model") or "")
 
 
 def model_matches_lean(model: str, lean_models=DEFAULT_LEAN_MODELS) -> bool:
@@ -183,7 +175,7 @@ def note_call(
     if mode == "passive":
         return "passive"
 
-    window_doc = _proxy_doc(workspace_root)
+    window_doc = read_window_doc(workspace_root)
     pct = window_doc.get("window_pct")
     window_hot = isinstance(pct, (int, float)) and not isinstance(pct, bool) and (
         float(pct) >= window_pressure_pct / 2

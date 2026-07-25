@@ -35,6 +35,7 @@ import sys as _sys
 
 _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 from ctx.scorecard import PRICES as _SC_PRICES  # noqa: E402
+from ctx.proxywindow import PROXY_SUBDIR  # noqa: E402
 from ctx.sessiondir import session_reads_path  # noqa: E402
 from ctx.scorecard import _price_key  # noqa: E402
 
@@ -81,7 +82,7 @@ def read_result(path: pathlib.Path) -> dict | None:
 
 
 def read_wire(fixture: pathlib.Path) -> dict | None:
-    wire = session_reads_path(fixture, "proxy", "wire.jsonl")
+    wire = session_reads_path(fixture, PROXY_SUBDIR, "wire.jsonl")
     if not wire.is_file():
         return None
     msgs, invalidations, cold_prefix = 0, 0, 0

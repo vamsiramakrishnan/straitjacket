@@ -95,10 +95,11 @@ def cmd_stats(ws, ns) -> int:
     """`ctx stats [--session]` — bounded shape statistics, or the session's
     wire scorecard when the proxy recorded one."""
     if getattr(ns, "session", False):
+        from ctx.proxywindow import PROXY_SUBDIR
         from ctx.scorecard import compute_scorecard, render_scorecard
         from ctx.sessiondir import session_reads_path
 
-        sc = compute_scorecard(session_reads_path(ws.root, "proxy"))
+        sc = compute_scorecard(session_reads_path(ws.root, PROXY_SUBDIR))
         if sc is None:
             print(
                 "no wire observations for this workspace "
