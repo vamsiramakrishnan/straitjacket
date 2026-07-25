@@ -101,7 +101,13 @@ def _claude(model: str, prompt: str, cwd: Path, timeout: float, tools: bool) -> 
     if doc is None:
         return proc.returncode or 1, proc.stdout
     u = doc.get("usage", {})
+    # input_tokens alone is a vast undercount of the context this call carried:
+    # the CLI bills cache creation and cache reads as separate categories, and
+    # for an agentic build they are the bulk of it. Record all three so token
+    # volume is comparable, not just the uncached sliver.
     USAGE.append({"engine": f"claude/{model}", "input": u.get("input_tokens", 0),
+                  "cache_write": u.get("cache_creation_input_tokens", 0),
+                  "cache_read": u.get("cache_read_input_tokens", 0),
                   "output": u.get("output_tokens", 0), "cost_usd": doc.get("total_cost_usd")})
     return (0 if not doc.get("is_error") else 1), doc.get("result", "")
 
