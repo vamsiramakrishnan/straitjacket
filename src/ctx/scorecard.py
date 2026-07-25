@@ -33,6 +33,7 @@ import json
 from pathlib import Path
 
 from ctx import pricing
+from ctx.gitstatus import changed_paths
 
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "write_to_file", "replace_file_content"}
 
@@ -699,11 +700,16 @@ def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
                         dels += int(parts[1])
         status = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=workspace_root, capture_output=True, text=True, timeout=20,
+            cwd=workspace_root, capture_output=True, timeout=20,
         )
-        untracked_paths = [
-            ln[3:] for ln in status.stdout.splitlines() if ln.startswith("??")
-        ] if status.returncode == 0 else []
+        # One parser (ctx.gitstatus): git quotes any path with a space or a
+        # non-ASCII byte, so the old `ln[3:]` counted such files as new but
+        # then failed to open them — their lines never reached lines_new.
+        untracked_paths = (
+            changed_paths(status.stdout, untracked_only=True)
+            if status.returncode == 0
+            else []
+        )
         # Creation tasks do all their work in untracked files; count their
         # lines too (bounded: text-decodable, first 200 files).
         lines_new = 0

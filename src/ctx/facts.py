@@ -68,6 +68,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from ctx.gitstatus import changed_paths
 from ctx.store import Store, canonical_json
 from ctx.workspace import Workspace
 
@@ -206,8 +207,9 @@ def _connect(store: Store) -> sqlite3.Connection | None:
     return None
 
 
-def _short(h: Any) -> str | None:
-    """House short id: strip ``sha256:``, keep 12 hex chars. Tolerates
+def _short_id(h: Any) -> str | None:
+    """House short id (a content HASH, not a path — see
+    ``ctx.textutil.short_path``, which used to share this name): strip ``sha256:``, keep 12 hex chars. Tolerates
     already-short input; returns None for empty/None."""
     s = str(h or "").removeprefix("sha256:").strip()
     return s[:SHORT_ID] or None
@@ -232,10 +234,10 @@ def _meta_put(conn: sqlite3.Connection, key: str, fingerprint: str) -> None:
 # ------------------------------------------------------- generation snapshot
 def changed_files_snapshot(ws: Workspace) -> list[str]:
     """Repo-relative files that differ from HEAD right now: a ``git status
-    --porcelain`` parse (the execution.generation_hash pattern — renames
-    take the new side, untracked directories are walked, the session
-    ledger dir is excluded, quoted paths unquoted). Sorted, bounded,
-    fail-open to []."""
+    --porcelain`` parse via :mod:`ctx.gitstatus` (renames take the new side,
+    untracked directories are walked, the session ledger dir is excluded,
+    quoted paths are C-unescaped). Deleted paths stay in the set — a
+    deletion is a change. Sorted, bounded, fail-open to []."""
     try:
         out = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -246,16 +248,7 @@ def changed_files_snapshot(ws: Workspace) -> list[str]:
         if out.returncode != 0:
             return []
         files: set[str] = set()
-        for line in out.stdout.decode("utf-8", "replace").splitlines():
-            if len(line) < 4:
-                continue
-            rel = line[3:]
-            if " -> " in rel:  # rename/copy: the new path is the changed one
-                rel = rel.split(" -> ", 1)[1]
-            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
-                rel = rel[1:-1]
-            if rel.rstrip("/").split("/")[0] == _SNAPSHOT_EXCLUDE_DIR:
-                continue
+        for rel in changed_paths(out.stdout, exclude_top=_SNAPSHOT_EXCLUDE_DIR):
             p = Path(ws.root) / rel
             if rel.endswith("/") or p.is_dir():
                 # Porcelain lists an untracked directory as one entry.
@@ -277,7 +270,7 @@ def current_generation(ws: Workspace) -> str | None:
     try:
         from ctx.execution import generation_hash
 
-        return _short(generation_hash(ws.root))
+        return _short_id(generation_hash(ws.root))
     except Exception as e:
         _note_error("facts.current_generation", e)
         return None
@@ -510,7 +503,7 @@ def derive_generation(
     conn = None
     try:
         store = store or Store(ws.workspace_id)
-        gen = _short(gen_hash) if gen_hash else current_generation(ws)
+        gen = _short_id(gen_hash) if gen_hash else current_generation(ws)
         if gen is None:
             return result  # non-git workspace / git unavailable: no generation plane
         result["generation"] = gen
@@ -564,14 +557,14 @@ def fact_counts(store: Store) -> dict[str, int]:
 # ------------------------------------------------------- Angle-lite queries
 def _resolve_gen(conn: sqlite3.Connection, generation: str | None) -> str | None:
     if generation:
-        return _short(str(generation).removeprefix("gen:"))
+        return _short_id(str(generation).removeprefix("gen:"))
     return _meta_get(conn, "latest_generation")
 
 
 def _run_filter(run: str | None) -> tuple[str, tuple]:
     if not run:
         return "", ()
-    return " AND f.run_id = ?", (_short(str(run).removeprefix("run:")),)
+    return " AND f.run_id = ?", (_short_id(str(run).removeprefix("run:")),)
 
 
 def _innermost(decls: list[tuple]) -> tuple:
@@ -846,7 +839,7 @@ def fails_sites(
         if conn is None:
             return []
         try:
-            run_id = _short(str(run).removeprefix("run:")) if run else _meta_get(
+            run_id = _short_id(str(run).removeprefix("run:")) if run else _meta_get(
                 conn, "latest_run"
             )
         finally:

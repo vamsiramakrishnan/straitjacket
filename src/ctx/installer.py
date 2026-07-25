@@ -555,24 +555,32 @@ def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
 
 
 # The harness is built for Antigravity and works with Claude Code and Codex.
-_HOST_INSTALLERS = {
-    "antigravity": install_antigravity,
-    "claude": install_claude,
-    "codex": install_codex,
-}
-SETUP_HOSTS = ("antigravity", "claude", "codex")
+# Both of these are DERIVED from the host registry (ctx.hosts): the wired set
+# and the name→installer mapping used to be hand-maintained here as well, a
+# second copy of what every HostSpec already declares via `installer`.
+def _setup_hosts_tuple() -> tuple[str, ...]:
+    from ctx.hosts import harnessable_hosts
+
+    return tuple(s.name for s in harnessable_hosts())
+
+
+SETUP_HOSTS = _setup_hosts_tuple()
 
 
 def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
     """Single-command multi-host setup. Configures the harness for each named
-    host (default: all three) and returns a combined per-host report."""
+    host (default: every host the registry declares an installer for) and
+    returns a combined per-host report."""
+    from ctx.hosts import host_by_name, installer_for
+
     selected = hosts or list(SETUP_HOSTS)
     out: list[str] = [
         "ctx harness setup — built for Antigravity, works with Claude Code and Codex",
         "",
     ]
     for host in selected:
-        installer = _HOST_INSTALLERS.get(host)
+        spec = host_by_name(host)
+        installer = installer_for(spec) if spec else None
         out.append(f"── {host} ──")
         if installer is None:
             out.append(f"unknown host {host!r} (choose from {', '.join(SETUP_HOSTS)})")

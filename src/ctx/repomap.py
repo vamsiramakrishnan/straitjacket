@@ -26,7 +26,7 @@ from pathlib import Path
 
 from ctx.store import Store, _atomic_write
 from ctx.textutil import fmt_int
-from ctx.workspace import Workspace
+from ctx.workspace import Workspace, stat_fingerprint
 
 _FORMAT = "ctx.map/v3"  # v3: priced survivors (~tok · defs on each entry)
 _ENGINE_BUILTIN = "builtin"
@@ -423,7 +423,7 @@ def _render(
 
 
 # -------------------------------------------------------------------- cache
-def _cache_key(
+def _map_cache_key(
     ws: Workspace,
     rels: list[str],
     budget: int,
@@ -432,6 +432,9 @@ def _cache_key(
     ctags: bool,
     engine: str,
 ) -> str:
+    """Key for the rendered map. Invalidation basis: the render parameters
+    plus ``ctx.workspace.stat_fingerprint`` over the listed files (shared
+    with ``callgraph`` — they used to carry two hand-copied stat loops)."""
     h = hashlib.sha256()
     h.update(
         f"{_FORMAT}\nbudget={budget}\nfocus={focus}\nctags={int(ctags)}\n"
@@ -439,12 +442,7 @@ def _cache_key(
     )
     for mid in run_ids:
         h.update(f"run={mid}\n".encode("utf-8"))
-    for rel in rels:
-        try:
-            st = (ws.root / rel).stat()
-        except OSError:
-            continue
-        h.update(f"{rel}|{st.st_mtime_ns}|{st.st_size}\n".encode("utf-8"))
+    stat_fingerprint(ws.root, rels, h)
     return h.hexdigest()
 
 
@@ -460,7 +458,7 @@ def repo_map(
     ctags = _ctags_enabled()
     engine = _select_engine()
 
-    key = _cache_key(ws, rels, budget, focus_norm, run_ids, ctags, engine)
+    key = _map_cache_key(ws, rels, budget, focus_norm, run_ids, ctags, engine)
     cache_path = store.root / "indexes" / "maps" / key
     if cache_path.is_file():
         try:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ctx.callgraph import _Node, _Graph, _cache_key, _from_json, _to_json
+from ctx.callgraph import _Node, _Graph, _graph_cache_key, _from_json, _to_json
 from ctx.checkpoint import create_checkpoint
 from ctx.debt import add, resolve, outstanding, render
 from ctx.engagement import note_call, note_truncation, claim_emission_tier, note_symbol_grep
@@ -216,18 +216,16 @@ class TestCallgraphModernization:
         assert g2.out_edges["foo"] == ["bar"]
 
     def test_cache_key_is_deterministic(self):
-        """_cache_key() produces stable hashes for file lists."""
-        from ctx.workspace import Workspace
+        """_graph_cache_key() produces stable hashes for file lists."""
+        from ctx.workspace import resolve_workspace
 
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
-            # Create a minimal workspace
+            (ws_root / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
             (ws_root / "test.py").write_text("# test", encoding="utf-8")
-            # We can't easily create a full Workspace here, so just test that
-            # the function is deterministic in principle
+            ws = resolve_workspace(str(ws_root))
             rels = ["test.py"]
-            # Just ensure the function exists and doesn't crash
-            # (full test requires real workspace which is integration-level)
+            assert _graph_cache_key(ws, rels) == _graph_cache_key(ws, rels)
 
 
 class TestCheckpointModernization:

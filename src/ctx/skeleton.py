@@ -71,7 +71,7 @@ def language_for(rel_path: str) -> str | None:
 # --------------------------------------------------------------------------
 # derived-blob cache (in-catalog manifest, keyed by source blob hash + path)
 # --------------------------------------------------------------------------
-def _cache_key(source_hash: str, rel: str) -> str:
+def _skeleton_cache_key(source_hash: str, rel: str) -> str:
     """Deterministic catalog id for the skeleton of (source bytes, path).
 
     The key manifest is a pure function of the source blob hash plus the
@@ -112,7 +112,7 @@ def skeleton_for(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
     snap = snapshot_file(store, ws, rel_path)
     rel = str(snap["path"])
     src_hash = str(snap["blob"]).removeprefix("sha256:")
-    key = _cache_key(src_hash, rel)
+    key = _skeleton_cache_key(src_hash, rel)
     cached = _cached_skeleton(store, key)
     if cached is not None:
         return cached

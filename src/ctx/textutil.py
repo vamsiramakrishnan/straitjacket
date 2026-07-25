@@ -72,6 +72,70 @@ def loads_fast(text: str | bytes):
     return _json.loads(text)
 
 
+def short_path(path: str) -> str:
+    """A path narrowed to its last two components for a census line
+    (``src/ctx/digest/lintprof.py`` → ``digest/lintprof.py``).
+
+    One definition. This was two byte-identical nested functions in
+    ``digest.lintprof`` and ``digest.searchprof``, both named ``_short`` —
+    a name that in ``ctx.facts`` means "shorten a content HASH". Same name,
+    unrelated jobs, and neither is substitutable for the other.
+    """
+    parts = path.replace("\\", "/").split("/")
+    return "/".join(parts[-2:]) if len(parts) > 2 else path
+
+
+class JsonPointerError(Exception):
+    """A pointer that is malformed or does not resolve against the document."""
+
+
+def json_pointer(doc, pointer: str):
+    """Evaluate an RFC 6901 JSON pointer. One definition for the whole
+    harness (``ctx q records --pointer`` and ``ctx get --json-pointer``).
+
+    The edge case implementations get wrong, and this one previously got
+    wrong in one of its two copies: ``""`` is the WHOLE DOCUMENT, and
+    ``"/"`` is the member whose key is the empty string (RFC 6901 §5).
+    They are different pointers. Consequently only the *first* slash is the
+    root marker — ``"//"`` is two empty-string keys deep, so leading
+    slashes must never be stripped in bulk.
+
+    Escapes decode ``~1`` → ``/`` before ``~0`` → ``~`` (§4), so ``~01``
+    means the literal ``~1`` and not ``/``.
+
+    Array indices are the ABNF ``0 / [1-9][0-9]*`` — no leading zeros, no
+    sign. ``-`` names the element after the last, which by §4 has no value:
+    an evaluation error here, not an append.
+    """
+    if pointer == "":
+        return doc
+    if not pointer.startswith("/"):
+        raise JsonPointerError(
+            f"pointer must be empty or start with '/': {pointer!r}"
+        )
+    node = doc
+    for token in pointer[1:].split("/"):
+        key = token.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, list):
+            if not (key.isdigit() and (key == "0" or not key.startswith("0"))):
+                raise JsonPointerError(
+                    f"not an array index: {token!r} in {pointer!r}"
+                )
+            idx = int(key)
+            if idx >= len(node):
+                raise JsonPointerError(f"index out of range: {token!r} in {pointer!r}")
+            node = node[idx]
+        elif isinstance(node, dict):
+            if key not in node:
+                raise JsonPointerError(f"no member {key!r} in {pointer!r}")
+            node = node[key]
+        else:
+            raise JsonPointerError(
+                f"cannot descend into a scalar at {token!r} in {pointer!r}"
+            )
+    return node
+
+
 def estimate_tokens(n_bytes: int) -> int:
     """Cheap deterministic token estimate: ~4 bytes per token."""
     return max(1, n_bytes // 4) if n_bytes else 0

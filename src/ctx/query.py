@@ -553,16 +553,10 @@ def _stage_corpus(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 
 
 def _json_pointer(doc, pointer: str):
-    cur = doc
-    for seg in pointer.split("/")[1:]:
-        seg = seg.replace("~1", "/").replace("~0", "~")
-        if isinstance(cur, list):
-            cur = cur[int(seg)]
-        elif isinstance(cur, dict):
-            cur = cur[seg]
-        else:
-            raise KeyError(seg)
-    return cur
+    """RFC 6901, via the one implementation in :mod:`ctx.textutil`."""
+    from ctx.textutil import json_pointer
+
+    return json_pointer(doc, pointer)
 
 
 def _records_rows(text: str, *, jsonl: bool, pointer: str | None) -> list[dict]:
@@ -605,9 +599,11 @@ def _records_rows(text: str, *, jsonl: bool, pointer: str | None) -> list[dict]:
                 "Lines; for line-delimited streams pass --jsonl"
             ) from None
     if pointer:
+        from ctx.textutil import JsonPointerError
+
         try:
             doc = _json_pointer(doc, pointer)
-        except (KeyError, IndexError, ValueError) as e:
+        except (JsonPointerError, KeyError, IndexError, ValueError) as e:
             raise QueryError(
                 f"ctx q: records --pointer {pointer!r} does not resolve ({e})"
             ) from e

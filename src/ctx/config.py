@@ -10,6 +10,9 @@ from typing import Any
 # module, no import cycle) so the config default never drifts from the
 # engagement mechanism's own default.
 from ctx.engagement import DEFAULT_LEAN_MODELS as _DEFAULT_LEAN_MODELS
+from ctx.engagement import (
+    EMISSION_NUDGE_TOKENS_DEFAULT as _EMISSION_NUDGE_TOKENS_DEFAULT,
+)
 
 CONFIG_FILENAME = "ctx.toml"
 IGNORE_FILENAME = ".ctxignore"
@@ -90,7 +93,7 @@ class Engagement:
     lean_models: tuple[str, ...] = _DEFAULT_LEAN_MODELS
     # Emission-gate nudge budget (read on the hot path by ctx.hook); pinned to
     # the guard reader by tests/test_config_hook_parity.py.
-    emission_nudge_tokens: int = 20000
+    emission_nudge_tokens: int = _EMISSION_NUDGE_TOKENS_DEFAULT
 
 
 @dataclass(frozen=True)

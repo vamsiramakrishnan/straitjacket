@@ -85,17 +85,16 @@ _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
 def _collapse_enabled(workspace_root: Path) -> bool:
     """The replacement surface is the default posture — search is forced onto
     the doors the harness controls unless a workspace breaks glass with
-    ``[guard] collapse = false`` in ctx.toml. Absent config → enabled."""
-    path = workspace_root / "ctx.toml"
-    if not path.is_file():
-        return True
-    try:
-        import tomllib
+    ``[guard] collapse = false`` in ctx.toml. Absent config → enabled.
 
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-        return bool((raw.get("guard") or {}).get("collapse", True))
-    except Exception:
-        return True
+    This was a third independent ``tomllib`` parse of ctx.toml, alongside
+    the typed loader and the guard hot path. It now defers to the typed
+    loader — which is already fail-open on a malformed file, and which
+    ``tests/test_config_hook_parity.py`` pins against the hot path — so the
+    only two readers left are the two with a reason to exist."""
+    from ctx.config import load_config
+
+    return bool(load_config(workspace_root).guard.collapse)
 
 
 def _with_collapse_tool_removal(agent_args: list[str], workspace_root: Path) -> list[str]:

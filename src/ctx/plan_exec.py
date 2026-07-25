@@ -33,8 +33,9 @@ import hashlib
 import time
 from typing import Any
 
+from ctx.gitstatus import changed_paths
 from ctx.store import Store, canonical_json
-from ctx.workspace import Workspace
+from ctx.workspace import Workspace, stat_fingerprint
 
 NODE_SCHEMA = "ctx.plan-node/v1"
 INVESTIGATION_SCHEMA = "ctx.investigation/v1"
@@ -76,10 +77,12 @@ def _workspace_fingerprint(ws: Workspace) -> str | None:
     The facts *generation* (porcelain + untracked triples) is operational
     identity and deliberately blind to content edits of already-modified
     TRACKED files — correct for rerun classification, too weak for a
-    result cache. This fingerprint adds HEAD plus (path, size, mtime_ns)
-    for every porcelain-listed path, so any edit that touches a listed
-    file invalidates. None (non-git / git error) disables caching — an
-    unknown state must never serve a cached result."""
+    result cache. This fingerprint adds HEAD plus the shared stat basis
+    (:func:`ctx.workspace.stat_fingerprint`: size, mtime_ns, ctime_ns) for
+    every porcelain-listed path, so any edit that touches a listed file
+    invalidates — including one that restores the old mtime. None (non-git
+    / git error) disables caching — an unknown state must never serve a
+    cached result."""
     import subprocess
 
     if ws.git is None:
@@ -99,34 +102,23 @@ def _workspace_fingerprint(ws: Workspace) -> str | None:
 
         root = Path(ws.root)
         listed: list[Path] = []
-        for line in out.stdout.decode("utf-8", "replace").splitlines():
-            if len(line) < 4:
-                continue
-            rel = line[3:]
-            if " -> " in rel:
-                rel = rel.split(" -> ", 1)[1]
-            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
-                rel = rel[1:-1]
-            if rel.rstrip("/").split("/")[0] == ".ctx-session-reads":
-                continue
+        for rel in changed_paths(out.stdout, exclude_top=".ctx-session-reads"):
             p = root / rel
             if rel.endswith("/") or p.is_dir():
                 listed.extend(s for s in sorted(p.rglob("*"))[:1024] if s.is_file())
             elif p.is_file():
                 listed.append(p)
-        for p in sorted(listed)[:2048]:
-            try:
-                st = p.stat()
-                h.update(f"\x00{p}\x00{st.st_size}\x00{st.st_mtime_ns}".encode())
-            except OSError:
-                h.update(f"\x00{p}\x00gone".encode())
+        stat_fingerprint(root, sorted(listed)[:2048], h)
         return h.hexdigest()
     except Exception:
         return None
 
 
-def _cache_key(op: str, args: dict, input_blob: str | None, fingerprint: str,
-               engine: str) -> str:
+def _node_cache_key(op: str, args: dict, input_blob: str | None,
+                    fingerprint: str, engine: str) -> str:
+    """Key for one executed plan node. Invalidation basis: the node itself
+    (op/args/input) plus ``_workspace_fingerprint`` — HEAD, raw porcelain
+    bytes, and the shared stat basis over every listed path."""
     seed = canonical_json(
         {"op": op, "args": args, "input": input_blob, "ws": fingerprint, "engine": engine}
     )
@@ -358,7 +350,7 @@ def execute_plan(
 
         cache_key = None
         if spec.cacheable and spec.klass == "observe" and ws_fingerprint is not None:
-            cache_key = _cache_key(step.op, dict(step.args), input_blob, ws_fingerprint, engine)
+            cache_key = _node_cache_key(step.op, dict(step.args), input_blob, ws_fingerprint, engine)
             hit = _cache_get(store, cache_key)
             if hit is not None:
                 try:
