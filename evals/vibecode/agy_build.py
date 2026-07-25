@@ -36,6 +36,9 @@ def main() -> int:
     ap.add_argument("--model", default="gemini-3.5-flash")
     ap.add_argument("--prompt-file", required=True)
     ap.add_argument("--timeout", type=float, default=600.0)
+    ap.add_argument("--contain", action="store_true",
+                    help="route shell output through `ctx run` (straitjacket) and "
+                         "expose a `ctx_query` tool for retrieval by address")
     ns = ap.parse_args()
     root = pathlib.Path(ns.dir).resolve()
     task = pathlib.Path(ns.prompt_file).read_text()
@@ -45,12 +48,30 @@ def main() -> int:
         p = subprocess.run(command, shell=True, capture_output=True, text=True, cwd=str(root))
         return (p.stdout + p.stderr)[:6000]
 
+    def contained_shell(command: str) -> str:
+        """Execute a shell command in the workspace; returns stdout+stderr."""
+        p = subprocess.run(["ctx", "run", "--", "bash", "-lc", command],
+                           capture_output=True, text=True, cwd=str(root))
+        return (p.stdout + p.stderr)[:6000]
+
+    def ctx_query(args: str) -> str:
+        """Run a bounded `ctx` retrieval command (e.g. 'get run:<id>#stdout
+        --lines 100:140' or 'search run:<id> Error'). Use the run id and address
+        printed by the `shell` digest to pull the exact omitted lines."""
+        p = subprocess.run(["ctx", *args.split()], capture_output=True, text=True,
+                           cwd=str(root))
+        return (p.stdout + p.stderr)[:6000]
+
+    tools = [contained_shell, ctx_query] if ns.contain else [shell]
+    if ns.contain:
+        contained_shell.__name__ = "shell"
+
     async def run() -> dict:
         cfg = LocalAgentConfig(
             model=ns.model,
             api_key=os.environ["GEMINI_API_KEY"],
             workspaces=[str(root)],
-            tools=[shell],
+            tools=tools,
             capabilities=CapabilitiesConfig(disabled_tools=[BuiltinTools.RUN_COMMAND]),
             policies=[policy.allow_all()],
             system_instructions=SYSTEM,

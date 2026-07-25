@@ -64,11 +64,12 @@ from ctx.store import Store  # noqa: E402
 from ctx.workspace import resolve_workspace  # noqa: E402
 
 TASKS_DIR = ROOT / "tasks"
-ARMS = ("solo", "orchestrated", "cross")
+ARMS = ("solo", "orchestrated", "cross", "cross-sj")
+_SKIP = (".git", ".agdata", ".build_prompt")
 
 
 # ------------------------------------------------------------------- grading
-def _grade(build_dir: Path, task: str, port: int, fn: str) -> list[tuple[str, bool]]:
+def _one_grade(build_dir: Path, task: str, port: int, fn: str) -> list[tuple[str, bool]]:
     """Start the app, drive it with the named grader, stop it."""
     from playwright.sync_api import sync_playwright
 
@@ -93,6 +94,52 @@ def _grade(build_dir: Path, task: str, port: int, fn: str) -> list[tuple[str, bo
         return [("app starts and serves on $PORT", True), *steps]
     finally:
         H._kill(proc)
+
+
+def _grade(build_dir: Path, task: str, port: int, fns) -> list[tuple[str, bool]]:
+    """Run one or more graders in sequence. Each gets a freshly started server,
+    which is how the phase-3 restart grader sees a genuine process restart."""
+    names = [fns] if isinstance(fns, str) else list(fns)
+    steps: list[tuple[str, bool]] = []
+    for i, fn in enumerate(names):
+        got = _one_grade(build_dir, task, port, fn)
+        # only the first grader's "app starts" line is interesting
+        steps += got if i == 0 else [s for s in got if s[0] != "app starts and serves on $PORT"]
+    return steps
+
+
+def _snapshot(build_dir: Path) -> dict[str, bytes]:
+    """Byte snapshot of the built tree, taken after a build and before grading."""
+    snap = {}
+    for p in build_dir.rglob("*"):
+        rel = p.relative_to(build_dir)
+        if p.is_dir() or any(part.startswith(_SKIP) for part in rel.parts):
+            continue
+        try:
+            snap[str(rel)] = p.read_bytes()
+        except OSError:
+            pass
+    return snap
+
+
+def _restore(build_dir: Path, snap: dict[str, bytes]) -> None:
+    """Undo anything grading left behind — the phase-3 app persists triage
+    decisions to disk on purpose, so a re-grade has to start from the built
+    state, not from the previous grader's mutations."""
+    for rel, data in snap.items():
+        p = build_dir / rel
+        try:
+            if not p.is_file() or p.read_bytes() != data:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(data)
+        except OSError:
+            pass
+    for p in list(build_dir.rglob("*")):
+        rel = p.relative_to(build_dir)
+        if p.is_dir() or any(part.startswith(_SKIP) for part in rel.parts):
+            continue
+        if str(rel) not in snap:
+            p.unlink(missing_ok=True)
 
 
 def _bar(steps):
@@ -152,6 +199,7 @@ def _build(arm: str, ws, plan, prompt: str, build_dir: Path, timeout: float,
         H._claude("opus", prompt, build_dir, timeout, tools=True)
         H._chmod_start(build_dir)
         return
+    contain = arm == "cross-sj"
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     plan_asn = next(a for a in plan.assigned if a.node.id == "plan")
@@ -162,8 +210,8 @@ def _build(arm: str, ws, plan, prompt: str, build_dir: Path, timeout: float,
     plan_doc = show_checkpoint(store, ws, f"checkpoint:{cp_id[:12]}")
     full = prompt + "\n\n--- plan from the upstream checkpoint ---\n" + plan_doc
 
-    if arm == "cross":
-        H._agy_build(build_asn.model.launch_id, full, build_dir, timeout)
+    if arm.startswith("cross"):
+        H._agy_build(build_asn.model.launch_id, full, build_dir, timeout, contain=contain)
     else:
         H._claude(build_asn.model.launch_id, full, build_dir, timeout, tools=True)
     H._chmod_start(build_dir)
@@ -179,8 +227,8 @@ def _fix(arm: str, failures: list[str], spec: str, build_dir: Path, timeout: flo
     )
     if arm == "solo":
         H._claude("opus", prompt, build_dir, timeout, tools=True)
-    elif arm == "cross":
-        H._agy_build(builder_model, prompt, build_dir, timeout)
+    elif arm.startswith("cross"):
+        H._agy_build(builder_model, prompt, build_dir, timeout, contain=arm == "cross-sj")
     else:
         H._claude("sonnet", prompt, build_dir, timeout, tools=True)
     H._chmod_start(build_dir)
@@ -188,7 +236,7 @@ def _fix(arm: str, failures: list[str], spec: str, build_dir: Path, timeout: flo
 
 # ---------------------------------------------------------------- phase driver
 def _phase(arm: str, ws, build_dir: Path, task: str, port: int, label: str,
-           prompt: str, plan_prompt: str | None, grader: str, spec_ref: str,
+           prompt: str, plan_prompt: str | None, grader, spec_ref: str,
            fix_rounds: int, timeout: float, builder_model: str) -> dict:
     plan = _route(f"{task}: {label}", arm, ws, builder_model)
     print(render_route_plan(plan))
@@ -196,15 +244,19 @@ def _phase(arm: str, ws, build_dir: Path, task: str, port: int, label: str,
     print(f"--- {arm}/{label}: building in {build_dir} ---", flush=True)
     _build(arm, ws, plan, prompt, build_dir, timeout, builder_model, plan_prompt)
 
+    snap = _snapshot(build_dir)
     steps = _grade(build_dir, task, port, grader)
     rounds = 0
     while fix_rounds > 0 and any(not ok for _, ok in steps):
         fails = [lab for lab, ok in steps if not ok]
         print(f"    fix round {rounds + 1}: {len(fails)} failing → re-building", flush=True)
+        _restore(build_dir, snap)
         _fix(arm, fails, spec_ref, build_dir, timeout, builder_model)
+        snap = _snapshot(build_dir)
         steps = _grade(build_dir, task, port, grader)
         rounds += 1
         fix_rounds -= 1
+    _restore(build_dir, snap)
     passed = sum(1 for _, ok in steps if ok)
     print(f"    {label}: {passed}/{len(steps)} [{_bar(steps)}] "
           f"fix={rounds} {time.monotonic() - t0:.0f}s", flush=True)
@@ -260,15 +312,44 @@ def run_arm(arm: str, task: str, fix_rounds: int, timeout: float,
         grader="check_phase2", spec_ref=spec + "\n\n" + amend, fix_rounds=fix_rounds,
         timeout=timeout, builder_model=builder_model)
 
+    amend2 = (TASKS_DIR / task / "amend2.md").read_text()
+    reshape2 = (
+        "The app in the CURRENT directory is your phase-2 build. A SECOND design "
+        "review has reshaped it again. Apply the amendment below to the existing "
+        "app: it supersedes more of what you built, and leaving the old thing in "
+        "place beside the new one fails. Everything from phases 1-2 that the "
+        "amendment does not contradict must keep working.\n\n"
+        "--- phase-1 spec ---\n" + spec
+        + "\n\n--- first amendment (phase 2, already applied) ---\n" + amend
+        + "\n\n--- second amendment (phase 3) ---\n" + amend2
+        + "\n\n" + H._APP_CONTRACT
+    )
+    p3 = _phase(
+        arm, ws, build_dir, task, port, "phase3",
+        prompt=reshape2,
+        plan_prompt=("You are the PLANNER. The app already exists; here is its file "
+                     "inventory:\n" + _inventory(build_dir) + "\n\nA second design "
+                     "review has reshaped it again. Produce a terse change plan: which "
+                     "files change, what is removed outright (superseded), what is "
+                     "added, and how each phase-3 Acceptance bullet will be satisfied — "
+                     "including the earlier behaviours that must survive. Output the "
+                     "plan only; write no files.\n\n--- phase-1 spec ---\n" + spec
+                     + "\n\n--- first amendment ---\n" + amend
+                     + "\n\n--- second amendment ---\n" + amend2),
+        grader=["check_phase3", "check_phase3_restart"],
+        spec_ref=spec + "\n\n" + amend + "\n\n" + amend2, fix_rounds=fix_rounds,
+        timeout=timeout, builder_model=builder_model)
+
     cost = H._cost()
     usage = [dict(u) for u in H.USAGE]
     if keep:
         print(f"  build dir kept: {build_dir}")
     else:
         shutil.rmtree(build_dir, ignore_errors=True)
-    return {"arm": arm, "task": task, "phases": [p1, p2], "cost_usd": round(cost, 4),
+    phases = [p1, p2, p3]
+    return {"arm": arm, "task": task, "phases": phases, "cost_usd": round(cost, 4),
             "usage": usage,
-            "score": (p1["score"] + p2["score"]) / 2}
+            "score": sum(p["score"] for p in phases) / len(phases)}
 
 
 # ------------------------------------------------------------------- report
@@ -277,22 +358,24 @@ def render(results: list[dict]) -> str:
         "# Iterative vibe-code — solo frontier model vs the routing orchestrator",
         "",
         "Task `tasks/triage`: an incident triage console built from a spec, then "
-        "**reshaped mid-build** by a design review that reverses part of what was "
-        "already built (table → status board, single-select → multi-select chips, "
-        "side panel → modal dialog) while the untouched phase-1 behaviours must "
+        "**reshaped twice mid-build** by design reviews that reverse parts of what "
+        "was already built (table → status board, single-select → multi-select "
+        "chips, side panel → modal, then browser-only → server-persisted with "
+        "keyboard triage and undo) while the untouched earlier behaviours must "
         "survive. Graded by headless Chromium; score = fraction of substeps that pass.",
         "",
-        "| arm | routing | phase 1 | phase 2 (reshape) | mean | fix rounds | billed |",
-        "|---|---|--:|--:|--:|--:|--:|",
+        "| arm | routing | phase 1 | phase 2 (reshape) | phase 3 (reshape) | mean "
+        "| fix rounds | billed |",
+        "|---|---|--:|--:|--:|--:|--:|--:|",
     ]
     for r in results:
-        p1, p2 = r["phases"]
-        route = "<br>".join(p2["route"])
+        ps = r["phases"]
+        route = "<br>".join(ps[-1]["route"])
+        cells = " | ".join(f"{p['passed']}/{p['total']} ({p['score']*100:.0f}%)" for p in ps)
+        fixes = "+".join(str(p["fix_rounds"]) for p in ps)
         lines.append(
-            f"| `{r['arm']}` | {route} | {p1['passed']}/{p1['total']} "
-            f"({p1['score']*100:.0f}%) | {p2['passed']}/{p2['total']} "
-            f"({p2['score']*100:.0f}%) | {r['score']*100:.0f}% | "
-            f"{p1['fix_rounds']}+{p2['fix_rounds']} | ${r['cost_usd']:.3f} |"
+            f"| `{r['arm']}` | {route} | {cells} | {r['score']*100:.0f}% | "
+            f"{fixes} | ${r['cost_usd']:.3f} |"
         )
     lines.append("")
     for r in results:

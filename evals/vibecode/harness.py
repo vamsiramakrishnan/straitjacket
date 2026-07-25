@@ -123,9 +123,12 @@ def _agy_python() -> str | None:
     return None
 
 
-def _agy_build(model: str, prompt: str, build_dir: Path, timeout: float) -> bool:
+def _agy_build(model: str, prompt: str, build_dir: Path, timeout: float,
+               contain: bool = False) -> bool:
     """Build via the Antigravity SDK agent (real file+shell tools) in build_dir.
-    Runs agy_build.py in the SDK venv; records billed Gemini tokens."""
+    Runs agy_build.py in the SDK venv; records billed Gemini tokens. With
+    ``contain``, the agent's shell output is routed through `ctx run` and it
+    gets a `ctx_query` retrieval tool — straitjacket at the tool boundary."""
     py = _agy_python()
     if py is None:
         print("  [antigravity] no SDK venv found (set CTX_AGY_PYTHON); build skipped")
@@ -135,7 +138,8 @@ def _agy_build(model: str, prompt: str, build_dir: Path, timeout: float) -> bool
     try:
         proc = subprocess.run(
             [py, str(ROOT / "agy_build.py"), "--dir", str(build_dir),
-             "--model", model, "--prompt-file", str(pf), "--timeout", str(timeout)],
+             "--model", model, "--prompt-file", str(pf), "--timeout", str(timeout)]
+            + (["--contain"] if contain else []),
             capture_output=True, text=True, timeout=timeout + 60,
         )
     except (OSError, subprocess.SubprocessError) as e:
