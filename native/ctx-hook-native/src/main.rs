@@ -204,19 +204,30 @@ fn emission_nudge(payload: &Value) -> Option<String> {
     ))
 }
 
+/// Mirror of ctx.engagement.EMISSION_NUDGE_TOKENS_DEFAULT. Rust cannot
+/// import the Python constant, so this is the one place the value is named
+/// on this side; tests/test_cross_language_constants.py reads both sources
+/// and fails if they drift.
+const EMISSION_NUDGE_TOKENS_DEFAULT: i64 = 20_000;
+
 fn emission_step(ws: &Path) -> i64 {
-    // ctx.toml [engagement] emission_nudge_tokens, default 20000. Fail-open.
-    let default = 20_000;
+    // ctx.toml [engagement] emission_nudge_tokens. Fail-open at every step,
+    // matching ctx.hook._load_guard_policy: an unreadable or unparseable
+    // ctx.toml yields OUR default, never an empty/zero budget. (The Python
+    // side additionally records `_guard_config = "failed"` so the guard can
+    // tell "config says allow" from "we could not find out"; that provenance
+    // exists for safety-class decisions, and this binary makes none — it is
+    // the post-tool-use nudge path only.)
     let Ok(text) = std::fs::read_to_string(ws.join("ctx.toml")) else {
-        return default;
+        return EMISSION_NUDGE_TOKENS_DEFAULT;
     };
     let Ok(doc) = text.parse::<toml::Table>() else {
-        return default;
+        return EMISSION_NUDGE_TOKENS_DEFAULT;
     };
     doc.get("engagement")
         .and_then(|e| e.get("emission_nudge_tokens"))
         .and_then(|v| v.as_integer())
-        .unwrap_or(default)
+        .unwrap_or(EMISSION_NUDGE_TOKENS_DEFAULT)
 }
 
 fn claim_emission_tier(ws: &Path, tier: i64) -> bool {

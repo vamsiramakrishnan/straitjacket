@@ -126,6 +126,13 @@ import re
 import shlex
 import sys
 
+# Emission-governor tier size, imported rather than re-typed. ctx.engagement
+# is stdlib-only and is already a per-call hot-path module (see
+# tests/test_hook_hot_path.py::_HOT_MODULES), so the single source of truth
+# costs nothing here. The Rust shim names it again in its own language; the
+# two are pinned equal by tests/test_cross_language_constants.py.
+from ctx.engagement import EMISSION_NUDGE_TOKENS_DEFAULT
+
 # `pathlib` (~4.2 ms) and `typing` (~2.3 ms) are deliberately NOT imported at
 # module scope — see the latency contract above. Every path expression on the
 # per-call path uses `os.path`, which is already loaded; the one `Path` this
@@ -343,7 +350,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "demoted_commands": [],
         "engagement_mode": "auto",
         "engagement_activate_after": 8,
-        "emission_nudge_tokens": 20000,
+        "emission_nudge_tokens": EMISSION_NUDGE_TOKENS_DEFAULT,
         # Provenance of the guard section, NOT a setting: "default" (no
         # ctx.toml), "ok" (parsed), "failed" (present but unreadable /
         # unparseable). The internal-error policy needs to tell "the config
@@ -1859,7 +1866,7 @@ def _emission_nudge(payload: dict[str, Any]) -> str | None:
         if requests <= 0 or cum_output <= 0:
             return None
         policy = _load_guard_policy(workspace_root)
-        step = max(1, int(policy.get("emission_nudge_tokens", 20000)))
+        step = max(1, int(policy.get("emission_nudge_tokens", EMISSION_NUDGE_TOKENS_DEFAULT)))
         tier = cum_output // step
         if tier < 1:
             return None

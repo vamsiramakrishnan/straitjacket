@@ -73,6 +73,14 @@ DEFAULT_ACTIVATE_AFTER_CALLS = 8
 DEFAULT_LEAN_MODELS = ("haiku", "flash", "mini", "nano", "lite", "small")
 DEFAULT_SUGGESTIONS = 3
 LEAN_SUGGESTIONS = 1
+# Emission governor (mechanism B): cumulative output tokens per pressure
+# tier, each tier nudging once. The one source of truth in Python — the
+# typed config default, the guard hot path's default and the hot path's
+# `policy.get(...)` fallback all read it from here (it used to be a bare
+# literal in all three). The Rust shim (native/ctx-hook-native) necessarily
+# names it again in its own language; the two are pinned equal by
+# tests/test_cross_language_constants.py.
+EMISSION_NUDGE_TOKENS_DEFAULT = 20_000
 
 
 def _state_path(workspace_root: Path | str) -> str:
