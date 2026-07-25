@@ -59,7 +59,12 @@ fn main() {
                     "additionalContext": text,
                 }})
             } else {
-                json!({"decision": "allow", "reason": text})
+                // Antigravity's published PostToolUse contract permits exactly
+                // one output, `{}` — no replacement and no nudge, so the
+                // governor line has nowhere legal to go on that host.
+                // https://antigravity.google/docs/hooks
+                let _ = text;
+                json!({})
             }
         }
     };
