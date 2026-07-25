@@ -77,19 +77,25 @@ def main() -> int:
             system_instructions=SYSTEM,
             app_data_dir=str(root / ".agdata"),
         )
-        text, timed_out = "", False
+        text, timed_out, error = "", False, ""
         async with Agent(cfg) as agent:
             try:
                 resp = await asyncio.wait_for(agent.chat(task), timeout=ns.timeout)
                 text = await resp.text()
             except asyncio.TimeoutError:
                 timed_out = True
+            except Exception as e:  # noqa: BLE001
+                # An SDK/API error mid-run still leaves the agent's file edits on
+                # disk and its tokens billed. Report the usage anyway — losing it
+                # silently under-counts the arm and makes the cost incomparable.
+                error = f"{type(e).__name__}: {e}"[:300]
             u = agent.conversation.total_usage
         return {
             "input": u.prompt_token_count or 0,
             "output": u.candidates_token_count or 0,
             "total": u.total_token_count or 0,
             "timed_out": timed_out,
+            "error": error,
             "final_text": text[:400],
         }
 

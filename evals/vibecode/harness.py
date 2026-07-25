@@ -146,6 +146,8 @@ def _agy_build(model: str, prompt: str, build_dir: Path, timeout: float,
         print(f"  [antigravity] SDK error: {e}")
         return False
     doc = _try(proc.stdout.strip().splitlines()[-1]) if proc.stdout.strip() else None
+    if doc is not None and doc.get("error"):
+        print(f"  [antigravity] run errored but usage recorded: {doc['error'][:160]}")
     if doc is None:
         print(f"  [antigravity] no usage returned; stderr: {proc.stderr[-300:]}")
         return proc.returncode == 0
