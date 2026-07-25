@@ -364,3 +364,23 @@ def test_statusline_still_prefers_the_number_and_never_raises(tmp_path):
         "antigravity", {"model": {"display_name": "x"}}
     )
     assert statusline._harness_segment(object()) is None  # fail-open
+
+
+# --------------------------- 8. the message names the file it actually wrote
+def test_append_ledger_names_the_file_it_wrote(ws_root, capsys, tmp_path):
+    """It wrote evidence-followups.jsonl and printed evidence-outcomes.jsonl,
+    so a user who followed the message found nothing there."""
+    from ctx.cli import main
+
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    rc = main([
+        "--workspace", str(ws_root),
+        "replay", "--outcomes", "--append-ledger", str(transcript),
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    ledger = ws_root / ".ctx-session-reads" / "evidence-followups.jsonl"
+    assert ledger.is_file()  # this is the file that exists...
+    assert str(ledger) in out  # ...and this is the file the message names
+    assert "evidence-outcomes.jsonl" not in out
