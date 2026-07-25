@@ -10,15 +10,11 @@ from __future__ import annotations
 def cmd_wrap(ns) -> int:
     """`ctx wrap <host>` — hook the harness into a coding agent. Resolves its
     own workspace, because `--print-config` must work outside one."""
+    import sys
+
+    from ctx.hosts import harnessable_hosts, host_by_name, wrapper_for
     from ctx.workspace import resolve_workspace
-    from ctx.wrap import (
-        print_config,
-        wrap_antigravity,
-        wrap_claude,
-        wrap_codex,
-        wrap_detect,
-        wrap_setup,
-    )
+    from ctx.wrap import print_config, wrap_detect, wrap_setup
 
     agent_args = list(ns.agent_args)
     # REMAINDER swallows options placed after the host positional;
@@ -66,21 +62,34 @@ def cmd_wrap(ns) -> int:
         return wrap_detect(ws.root, probe_version="--versions" in agent_args)
     if agent_args and agent_args[0] == "--":
         agent_args = agent_args[1:]
+
+    wired = tuple(s.name for s in harnessable_hosts())
+    spec = host_by_name(ns.host) if ns.host not in ("setup", "all") else None
+    wrapper = wrapper_for(spec) if spec else None
+    if ns.host not in ("setup", "all") and wrapper is None:
+        # Registry-driven: a host that names no wrapper is not wrappable, and
+        # saying so beats the old behaviour, where every unmatched name fell
+        # through to `wrap_antigravity` — so `ctx wrap gemini` silently
+        # harnessed a different agent.
+        print(
+            f"ctx wrap: {ns.host!r} is not a wrappable host "
+            f"(wired: {', '.join(wired)}; `ctx wrap detect` shows the board)",
+            file=sys.stderr,
+        )
+        return 2
+
     # --gateway: set up the host(s) AND wire the progressive-disclosure
     # gateway, so unrevealed MCP tool schemas never enter context.
     if use_gateway:
         from ctx.installer import install_claude, install_gateway
 
-        hosts = (("claude", "codex", "antigravity")
-                 if ns.host in ("setup", "all") else (ns.host,))
+        hosts = wired if ns.host in ("setup", "all") else (ns.host,)
         if ns.host in ("setup", "all"):
             wrap_setup(ws.root)
-        elif ns.host == "codex":
-            wrap_codex(ws.root)
-        elif ns.host == "antigravity":
-            wrap_antigravity(ws.root)
         elif ns.host == "claude":
             print(install_claude(resolve_workspace(str(ws.root))))
+        else:
+            wrapper(ws.root)
         print()
         for h in hosts:
             print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
@@ -90,14 +99,13 @@ def cmd_wrap(ns) -> int:
     # and harnesses those; `all` forces every supported host.
     if ns.host in ("setup", "all"):
         return wrap_setup(ws.root, force_all=(ns.host == "all"))
-    if ns.host == "codex":
-        return wrap_codex(ws.root)
-    if ns.host == "antigravity":
-        return wrap_antigravity(ws.root)
-    # claude: launch ephemerally when given agent args, else persist.
+    # The one genuine per-host asymmetry, and it is about capability rather
+    # than dispatch: only Claude Code supports an ephemeral, zero-residue
+    # launch, so agent args mean "run it" there and the other hosts are
+    # persistent installs whose wrapper takes the workspace alone.
     if ns.host == "claude":
         if agent_args:
-            return wrap_claude(
+            return wrapper(
                 ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct,
                 orchestrate=use_orchestrate,
             )
@@ -109,7 +117,7 @@ def cmd_wrap(ns) -> int:
               "For an ephemeral, zero-residue run instead: "
               "ctx wrap claude -- -p \"...\"")
         return 0
-    return wrap_antigravity(ws.root)
+    return wrapper(ws.root)
 
 
 def cmd_orchestrate(ws, ns) -> int:

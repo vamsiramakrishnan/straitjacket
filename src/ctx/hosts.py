@@ -275,6 +275,34 @@ def harnessable_hosts() -> tuple[HostSpec, ...]:
     return tuple(s for s in _REGISTRY if s.harnessable)
 
 
+def installer_for(spec: HostSpec) -> Callable | None:
+    """Resolve ``spec.installer`` to the function in :mod:`ctx.installer`.
+
+    The by-string indirection exists to keep this module free of an import
+    cycle with ``ctx.installer``; the resolution therefore happens at call
+    time, which is also what lets tests patch the target. None means the
+    host names no installer (or names one that no longer exists) — the
+    caller must say so rather than substituting a different host's.
+    """
+    if not spec.installer:
+        return None
+    from ctx import installer as _installer
+
+    fn = getattr(_installer, spec.installer, None)
+    return fn if callable(fn) else None
+
+
+def wrapper_for(spec: HostSpec) -> Callable | None:
+    """Resolve ``spec.wrapper`` to the function in :mod:`ctx.wrap`. Same
+    contract as :func:`installer_for`."""
+    if not spec.wrapper:
+        return None
+    from ctx import wrap as _wrap
+
+    fn = getattr(_wrap, spec.wrapper, None)
+    return fn if callable(fn) else None
+
+
 def model_for(spec: HostSpec, env: dict[str, str] | None = None) -> str:
     """The model id we expect this host to use: first env override that is set,
     else the host default. An estimate — real spend is read from wire truth."""
@@ -519,6 +547,8 @@ __all__ = [
     "all_hosts",
     "host_by_name",
     "harnessable_hosts",
+    "installer_for",
+    "wrapper_for",
     "model_for",
     "detect",
     "detect_all",
