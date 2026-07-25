@@ -33,6 +33,7 @@ import hashlib
 import time
 from typing import Any
 
+from ctx.gitstatus import changed_paths
 from ctx.store import Store, canonical_json
 from ctx.workspace import Workspace
 
@@ -99,16 +100,7 @@ def _workspace_fingerprint(ws: Workspace) -> str | None:
 
         root = Path(ws.root)
         listed: list[Path] = []
-        for line in out.stdout.decode("utf-8", "replace").splitlines():
-            if len(line) < 4:
-                continue
-            rel = line[3:]
-            if " -> " in rel:
-                rel = rel.split(" -> ", 1)[1]
-            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
-                rel = rel[1:-1]
-            if rel.rstrip("/").split("/")[0] == ".ctx-session-reads":
-                continue
+        for rel in changed_paths(out.stdout, exclude_top=".ctx-session-reads"):
             p = root / rel
             if rel.endswith("/") or p.is_dir():
                 listed.extend(s for s in sorted(p.rglob("*"))[:1024] if s.is_file())

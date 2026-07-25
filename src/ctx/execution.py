@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ctx.gitstatus import changed_paths
 from ctx.store import Store
 from ctx.textutil import decode_stream
 from ctx.workspace import Workspace
@@ -218,8 +219,9 @@ def generation_hash(ws_root: Any) -> str | None:
     the worktree at a scoring moment.
 
     ``sha256`` over the raw ``git status --porcelain`` bytes PLUS, for every
-    untracked file (each ``?? `` entry, recursed through untracked
-    directories), its ``(relative path, size, mtime_ns)`` triple in sorted
+    untracked file (each ``?? `` entry per :mod:`ctx.gitstatus`, recursed
+    through untracked directories), its ``(relative path, size, mtime_ns)``
+    triple in sorted
     path order. The untracked triples are the §8.2 fix for the
     untracked-content trap: porcelain lists ``?? file`` regardless of
     content, so edits to just-created unstaged files (the dominant
@@ -249,14 +251,10 @@ def generation_hash(ws_root: Any) -> str | None:
             return None
         h = hashlib.sha256(out.stdout)
         untracked: list[Path] = []
-        for line in out.stdout.decode("utf-8", "replace").splitlines():
-            if not line.startswith("?? "):
-                continue
-            rel = line[3:]
-            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
-                rel = rel[1:-1]  # git quotes unusual paths
-            if rel.rstrip("/").split("/")[0] == _GENERATION_EXCLUDE_DIR:
-                continue
+        rels = changed_paths(
+            out.stdout, untracked_only=True, exclude_top=_GENERATION_EXCLUDE_DIR
+        )
+        for rel in rels:
             p = root / rel
             if rel.endswith("/") or p.is_dir():
                 # Porcelain lists an untracked directory as ONE entry; walk

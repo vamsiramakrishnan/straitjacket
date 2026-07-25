@@ -68,6 +68,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from ctx.gitstatus import changed_paths
 from ctx.store import Store, canonical_json
 from ctx.workspace import Workspace
 
@@ -232,10 +233,10 @@ def _meta_put(conn: sqlite3.Connection, key: str, fingerprint: str) -> None:
 # ------------------------------------------------------- generation snapshot
 def changed_files_snapshot(ws: Workspace) -> list[str]:
     """Repo-relative files that differ from HEAD right now: a ``git status
-    --porcelain`` parse (the execution.generation_hash pattern — renames
-    take the new side, untracked directories are walked, the session
-    ledger dir is excluded, quoted paths unquoted). Sorted, bounded,
-    fail-open to []."""
+    --porcelain`` parse via :mod:`ctx.gitstatus` (renames take the new side,
+    untracked directories are walked, the session ledger dir is excluded,
+    quoted paths are C-unescaped). Deleted paths stay in the set — a
+    deletion is a change. Sorted, bounded, fail-open to []."""
     try:
         out = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -246,16 +247,7 @@ def changed_files_snapshot(ws: Workspace) -> list[str]:
         if out.returncode != 0:
             return []
         files: set[str] = set()
-        for line in out.stdout.decode("utf-8", "replace").splitlines():
-            if len(line) < 4:
-                continue
-            rel = line[3:]
-            if " -> " in rel:  # rename/copy: the new path is the changed one
-                rel = rel.split(" -> ", 1)[1]
-            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
-                rel = rel[1:-1]
-            if rel.rstrip("/").split("/")[0] == _SNAPSHOT_EXCLUDE_DIR:
-                continue
+        for rel in changed_paths(out.stdout, exclude_top=_SNAPSHOT_EXCLUDE_DIR):
             p = Path(ws.root) / rel
             if rel.endswith("/") or p.is_dir():
                 # Porcelain lists an untracked directory as one entry.
