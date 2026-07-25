@@ -22,7 +22,11 @@ import pytest
 from ctx.hook import DIALECT_CAPS, can_substitute_input, can_substitute_output
 from ctx.hosts import all_hosts
 
-HARNESSABLE = [h for h in all_hosts() if h.harnessable]
+# Only hosts harnessed *through hooks* need a dialect entry. `antigravity-sdk`
+# is harnessable without one: it is ctx's own agent, and its containment lives
+# in the tool implementations rather than in a hook contract, so there is no
+# wire dialect to conform to.
+HARNESSABLE = [h for h in all_hosts() if h.harnessable and h.supports_hooks]
 
 
 def test_every_harnessable_host_has_a_dialect_entry():

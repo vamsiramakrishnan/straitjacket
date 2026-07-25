@@ -654,7 +654,8 @@ def _build_parser():
     )
     p_wrap.add_argument(
         "host",
-        choices=["setup", "all", "detect", "claude", "antigravity", "codex"],
+        choices=["setup", "all", "detect", "claude", "antigravity",
+                 "antigravity-sdk", "codex"],
         help="'setup' detects & harnesses installed CLIs; 'all' forces every "
         "supported host; 'detect' lists installed CLIs priced by model",
     )

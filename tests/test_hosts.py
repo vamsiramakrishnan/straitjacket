@@ -15,9 +15,12 @@ def _which_of(*installed):
     return lambda b: f"/usr/bin/{b}" if b in installed else None
 
 
-def test_registry_has_three_harnessable_hosts():
+def test_registry_harnessable_hosts():
     names = {s.name for s in hosts.harnessable_hosts()}
-    assert names == {"antigravity", "claude", "codex"}
+    # antigravity-sdk is ctx's own agent on the google-antigravity SDK; it is a
+    # separate host from the vendor's `agy` CLI on purpose (see
+    # tests/test_agy_sdk_host.py), so it is harnessable in its own right.
+    assert names == {"antigravity", "antigravity-sdk", "claude", "codex"}
     # Every harnessable host names a wrapper and installer function.
     for s in hosts.harnessable_hosts():
         assert s.wrapper and s.installer

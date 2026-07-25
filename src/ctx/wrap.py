@@ -345,6 +345,43 @@ def wrap_antigravity(workspace_root: Path, ctx_exe: str | None = None) -> int:
     return 0
 
 
+def wrap_agy_sdk(workspace_root: Path, ctx_exe: str | None = None) -> int:
+    """Create and own the Antigravity SDK environment, then report honestly.
+
+    Unlike the other wrappers this installs no hooks into anyone's config:
+    there is no config to install into. The harnessing *is* the agent — its
+    tools return bounded output by construction — so `ctx wrap antigravity-sdk`
+    builds the venv, installs the SDK, and writes the `ctx-agy` launcher that
+    :mod:`ctx.hosts` detects.
+    """
+    from ctx.agysdk import ensure_venv, launcher_path, venv_dir
+
+    ok, msg = ensure_venv()
+    print(msg)
+    if not ok:
+        print(
+            "\nthe Antigravity SDK environment could not be built, so this host "
+            "stays unavailable (the others are unaffected).\n"
+            "  needs: network access and a working `python -m venv`\n"
+            "  retry: ctx wrap antigravity-sdk",
+            file=sys.stderr,
+        )
+        return 1
+    print()
+    print(f"launcher: {launcher_path()}")
+    print(f"venv:     {venv_dir()}")
+    print()
+    print("This host is ctx's own Antigravity agent, not Google's `agy` CLI.")
+    print("  why:  `agy` is OAuth-only (nothing can script it) and its hook")
+    print("        contract can substitute neither tool input nor tool output,")
+    print("        so it has no output-side gate — see spec/adr/005.")
+    print("  here: containment lives in the tool implementations, so output is")
+    print("        bounded before the model ever sees it. Needs GEMINI_API_KEY.")
+    print()
+    print("Your `agy` install is untouched; `ctx wrap antigravity` still harnesses it.")
+    return 0
+
+
 def wrap_codex(workspace_root: Path, ctx_exe: str | None = None) -> int:
     """Persistent install: Codex discovers .codex/ config layers + AGENTS.md
     from the workspace tree."""

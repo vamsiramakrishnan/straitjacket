@@ -40,10 +40,21 @@ def test_unwired_hosts_resolve_to_none():
 
 
 def test_setup_hosts_is_derived_from_the_registry():
-    """It used to be a hand-written tuple that could drift from the registry."""
+    """It used to be a hand-written tuple that could drift from the registry.
+
+    Self-hosted hosts are excluded deliberately: `ctx wrap setup` writes config
+    into agents you already have, and building a venv plus pulling a vendor SDK
+    off the network should be an explicit `ctx wrap <host>`, never a side effect
+    of setup.
+    """
     from ctx.installer import SETUP_HOSTS
 
-    assert tuple(SETUP_HOSTS) == tuple(s.name for s in hosts.harnessable_hosts())
+    assert tuple(SETUP_HOSTS) == tuple(
+        s.name for s in hosts.harnessable_hosts() if not s.self_hosted
+    )
+    assert any(s.self_hosted for s in hosts.harnessable_hosts()), (
+        "no self-hosted host in the registry — this test would pass vacuously"
+    )
 
 
 def test_no_second_installer_table_exists():
