@@ -78,9 +78,26 @@ def estimate_tokens(n_bytes: int) -> int:
 
 
 def fmt_tokens_coarse(tok: int) -> str:
-    """Price-tag formatting (docs/PRICED-CONTEXT.md, P3): precision only
-    needs to cross decision thresholds, so buckets get coarser with size.
-    Deterministic; never emits false precision like '8,432'."""
+    """FORECAST formatting (docs/PRICED-CONTEXT.md, P3) — the price tag on
+    something not yet read: guard reasons, repo-map entries, stats estimates.
+    A forecast only needs precision enough to cross a decision threshold, so
+    buckets get coarser with size. Deterministic; never emits false precision
+    like '8,432' *for a forecast*.
+
+    This is one of three deliberate token renderings; they do different jobs
+    and the docstring used to claim a rule that only covers this one:
+
+    * ``fmt_tokens_coarse`` — a forecast (``~8k``). Bucketed, because the
+      number is an estimate of something that has not happened.
+    * ``fmt_int(estimate_tokens(n))`` — a MEASUREMENT of an artifact already
+      captured (the digest header's ``est 4,072 tokens``). Exact by design:
+      it is a pure function of an exact byte count, sits beside the
+      ``15.9 KiB`` it must reconcile with, and belongs to a
+      content-addressed digest that two runs of the same bytes must render
+      identically. Bucketing it would break both properties.
+    * ``fmt_tokens_compact`` — a WIDTH-CONSTRAINED glance (``2K``, ``1.5M``)
+      for the status line, where the whole session must fit in one segment.
+    """
     if tok < 1000:
         return f"~{max(1, round(tok / 50) * 50)}"
     if tok < 10_000:
@@ -88,6 +105,24 @@ def fmt_tokens_coarse(tok: int) -> str:
     if tok < 100_000:
         return f"~{5 * max(2, round(tok / 5000))}k"
     return f"~{25 * round(tok / 25_000)}k"
+
+
+def fmt_tokens_compact(n: int) -> str:
+    """Width-constrained token magnitude for a status line: ``2K``, ``1.5M``.
+
+    Lifted out of ctx.statusline, where it was a private third rendering of
+    the same quantity. It stays a distinct formatter rather than folding into
+    ``fmt_tokens_coarse`` because the jobs differ at the top end: a whole
+    session is millions of tokens, and coarse's largest bucket would render
+    that as ``~1500k`` — wider and harder to read in the one segment a status
+    line gets. Named and shared here so there are two documented renderings,
+    not three ad-hoc ones."""
+    n = int(n)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
 
 
 def strip_control(text: str) -> str:

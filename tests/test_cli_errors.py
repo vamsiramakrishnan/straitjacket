@@ -410,3 +410,44 @@ def test_ambiguous_id_short_list_is_unchanged_in_substance(ws_root):
     msg = str(AmbiguousIdError("ab", ["a" * 64, "b" * 64]))
     assert "a" * 64 in msg and "b" * 64 in msg
     assert "more" not in msg
+
+
+# --------------------------------- 10. one home for each rendered quantity
+def test_statusline_uses_the_shared_token_formatter():
+    """statusline had a private third rendering of the same quantity."""
+    from ctx import statusline
+    from ctx.textutil import fmt_tokens_compact
+
+    assert statusline._fmt_tokens is fmt_tokens_compact
+    assert fmt_tokens_compact(2_104) == "2K"
+    assert fmt_tokens_compact(1_500_000) == "1.5M"
+
+
+def test_gain_renders_bytes_with_the_shared_byte_formatter(ws_root, capsys):
+    """`ctx gain` hand-rolled `{n:,} bytes` while every digest header used
+    fmt_bytes."""
+    from ctx.retrieval import record_telemetry
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+
+    ws = resolve_workspace(str(ws_root))
+    record_telemetry(Store(ws.workspace_id), "run", 1_500_000, 2_000)
+    assert _run(ws_root, "gain") == 0
+    out = capsys.readouterr().out
+    assert "1.4 MiB" in out
+    assert "bytes raw" not in out
+    assert "1,500,000" not in out
+
+
+def test_coarse_docstring_no_longer_overclaims():
+    """`est 4,072 tokens` in the digest header IS deliberate — a measurement
+    of an exact byte count next to the `15.9 KiB` it reconciles with, inside
+    a content-addressed digest. The docstring, not the digest, was wrong."""
+    from ctx.textutil import fmt_tokens_coarse
+
+    doc = fmt_tokens_coarse.__doc__ or ""
+    assert "forecast" in doc.lower()
+    assert "fmt_tokens_compact" in doc
+    assert "estimate_tokens" in doc  # names the exact-measurement counterpart
+    # ...and the forecast rendering itself is unchanged.
+    assert fmt_tokens_coarse(8_432) == "~8k"

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ctx import pricing
+from ctx.textutil import fmt_tokens_compact
 
 _SEP = "  ·  "
 
@@ -55,13 +56,9 @@ def _short_model(model: str) -> str:
     return "-".join(parts)
 
 
-def _fmt_tokens(n: int) -> str:
-    n = int(n)
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n / 1_000:.0f}K"
-    return str(n)
+# Shared with ctx.textutil rather than re-implemented here; that module
+# documents which of the token renderings does which job.
+_fmt_tokens = fmt_tokens_compact
 
 
 def _fmt_usd(x: float) -> str:
