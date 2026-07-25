@@ -1,4 +1,4 @@
-"""Constants that exist in both Python and Rust (R8).
+"""Constants and strings that exist in both Python and Rust (R8, R9).
 
 The native post-tool-use shim (``native/ctx-hook-native``) reimplements
 ``ctx.hook.main_post_tool_use`` in Rust for the ~29 ms CPython startup it
@@ -7,11 +7,17 @@ duplicate that can drift, and ``tests/test_native_hook.py`` — the only thing
 that would catch it — SKIPS whenever the binary has not been built. These
 tests read the sources instead, so they run on every machine, built or not.
 
+Two duplicates are pinned:
+
 * ``emission_nudge_tokens``'s default (R8). It appeared as a bare literal in
   four places across the two languages. Each language now names it once
   (``ctx.engagement.EMISSION_NUDGE_TOKENS_DEFAULT`` and
   ``EMISSION_NUDGE_TOKENS_DEFAULT`` in ``main.rs``); this test is what keeps
   the two names equal.
+* The emission-governor nudge text (R9). The Rust hook and the Python hook
+  are asserted byte-identical by ``test_native_hook.py``; any drift in the
+  template is a parity failure that only shows up when the binary happens to
+  be built. Compared here at the source level.
 """
 
 from __future__ import annotations
@@ -96,3 +102,42 @@ def test_wrap_collapse_matches_the_typed_loader(tmp_path):
         assert _collapse_enabled(root) is expected
         if body is not None:
             assert load_config(root).guard.collapse is expected
+
+
+# ------------------------------------------------------------------ R9
+def _python_nudge_template() -> str:
+    from ctx.hook import EMISSION_NUDGE_TEMPLATE
+
+    return EMISSION_NUDGE_TEMPLATE
+
+
+def _rust_nudge_template() -> str:
+    """Recover the format string Rust passes to format!(), undoing Rust's
+    line-continuation escapes (a trailing ``\\`` eats the newline and the
+    following indentation)."""
+    m = re.search(
+        r"macro_rules! emission_nudge_template \{\s*\(\) => \{\s*\"(.*?)\"\s*\};",
+        _rs(),
+        re.S,
+    )
+    assert m, "main.rs must name the nudge text as emission_nudge_template!"
+    return re.sub(r"\\\s*\n\s*", "", m.group(1))
+
+
+def test_nudge_text_is_byte_identical_across_languages():
+    py = _python_nudge_template()
+    rs = _rust_nudge_template()
+    # Python uses str.format fields, Rust uses positional {} — normalize the
+    # placeholders, then the prose must match byte for byte.
+    py_norm = re.sub(r"\{[^{}]*\}", "{}", py)
+    rs_norm = re.sub(r"\{[^{}]*\}", "{}", rs)
+    assert py_norm == rs_norm, f"nudge text drifted\npython: {py_norm!r}\nrust:   {rs_norm!r}"
+
+
+def test_nudge_text_is_not_a_denial_string():
+    """Rule 7: this refactor may only touch advisory text. The emission
+    governor is a PostToolUse nudge — it never carries a safety-class
+    decision, and nothing here may become one."""
+    py = _python_nudge_template()
+    assert py.startswith("CTX_EMISSION_GOVERNOR:")
+    assert "deny" not in py.lower() and "blocked" not in py.lower()

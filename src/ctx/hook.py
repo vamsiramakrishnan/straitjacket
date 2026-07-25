@@ -1847,6 +1847,21 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in decision.items() if k != "rewrite" and not k.startswith("_")}
 
 
+#: The emission-governor nudge, verbatim. Named because the Rust shim
+#: (native/ctx-hook-native) has to carry the same prose and the two must stay
+#: byte-identical — tests/test_native_hook.py compares rendered output only
+#: when the binary happens to be built, so
+#: tests/test_cross_language_constants.py compares this template against the
+#: Rust source directly. ADVISORY text: this is a PostToolUse nudge, never a
+#: safety-class decision string (Rule 7).
+EMISSION_NUDGE_TEMPLATE = (
+    "CTX_EMISSION_GOVERNOR: session output ~{tokens} tokens "
+    "(avg {per_turn}/turn). Output volume is the dominant "
+    "cost+latency driver. Keep narration terse; cite coordinates "
+    "(file:line, run:/span handles) instead of restating content."
+)
+
+
 def _emission_nudge(payload: dict[str, Any]) -> str | None:
     """Emission governor (mechanism B): the symmetric partner of the read
     budget. The proxy measures cumulative output tokens; when the session
@@ -1877,11 +1892,8 @@ def _emission_nudge(payload: dict[str, Any]) -> str | None:
 
         if not claim_emission_tier(workspace_root, tier):
             return None
-        return (
-            f"CTX_EMISSION_GOVERNOR: session output ~{cum_output:,} tokens "
-            f"(avg {per_request:.0f}/turn). Output volume is the dominant "
-            "cost+latency driver. Keep narration terse; cite coordinates "
-            "(file:line, run:/span handles) instead of restating content."
+        return EMISSION_NUDGE_TEMPLATE.format(
+            tokens=f"{cum_output:,}", per_turn=f"{per_request:.0f}"
         )
     except Exception:
         return None

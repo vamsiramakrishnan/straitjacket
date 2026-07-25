@@ -19,6 +19,23 @@ use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// The emission-governor nudge text, verbatim — the mirror of
+/// ctx.hook.EMISSION_NUDGE_TEMPLATE. A macro rather than a `const` because
+/// `format!` needs a literal in the format-string position, so this is the
+/// single place the prose is written on the Rust side.
+/// tests/test_cross_language_constants.py reads this body and the Python
+/// template out of the two sources and fails if the prose drifts — the
+/// rendered-output parity in tests/test_native_hook.py only runs when the
+/// binary has been built.
+macro_rules! emission_nudge_template {
+    () => {
+        "CTX_EMISSION_GOVERNOR: session output ~{} tokens (avg {:.0}/turn). \
+         Output volume is the dominant cost+latency driver. Keep narration \
+         terse; cite coordinates (file:line, run:/span handles) instead of \
+         restating content."
+    };
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let flavor = args.get(2).map(String::as_str).unwrap_or("antigravity");
@@ -195,10 +212,7 @@ fn emission_nudge(payload: &Value) -> Option<String> {
         return None;
     }
     Some(format!(
-        "CTX_EMISSION_GOVERNOR: session output ~{} tokens (avg {:.0}/turn). \
-         Output volume is the dominant cost+latency driver. Keep narration \
-         terse; cite coordinates (file:line, run:/span handles) instead of \
-         restating content.",
+        emission_nudge_template!(),
         thousands(cum_output),
         per_request
     ))
