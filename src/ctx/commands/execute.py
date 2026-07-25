@@ -15,6 +15,7 @@ def cmd_run(ws, ns) -> int:
     from ctx.digest import render_run_digest
     from ctx.execution import ExecutionError, run_capture
     from ctx.store import Store
+    from ctx.textutil import short_id
 
     command = list(ns.command)
     if command and command[0] == "--":
@@ -97,7 +98,7 @@ def cmd_run(ws, ns) -> int:
             from ctx import reflex
 
             if reflex.has_omissions(digest):
-                short = str(manifest.get("id", "")).removeprefix("sha256:")[:12]
+                short = short_id(manifest.get("id", ""))
                 reflex.note_intervention(
                     ws.root, sig, short, hints=reflex.count_hints(digest)
                 )
@@ -156,13 +157,14 @@ def cmd_job(ws, ns) -> int:
         wait_for_done,
     )
     from ctx.store import Store
+    from ctx.textutil import short_id
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
         job_id = resolve_job_id(store, ns.job_id)
         if ns.kill:
             digest, manifest = kill_job(ws, store, job_id)
-            short = manifest["id"].removeprefix("sha256:")[:12]
+            short = short_id(manifest["id"])
             print(f"[ctx job:{job_id} killed · finalized → run:{short}]")
             _emit_run_digest(ws, digest, manifest, store=store)
             return 0
@@ -171,13 +173,13 @@ def cmd_job(ws, ns) -> int:
                 print(job_status(store, job_id, tail=ns.tail))
                 return 124
             digest, manifest = finalize_job(ws, store, job_id)
-            short = manifest["id"].removeprefix("sha256:")[:12]
+            short = short_id(manifest["id"])
             print(f"[ctx job:{job_id} finalized → run:{short}]")
             return _emit_run_digest(ws, digest, manifest, store=store)
         state = job_state(store, job_id)
         if state in ("done", "finalized"):
             digest, manifest = finalize_job(ws, store, job_id)
-            short = manifest["id"].removeprefix("sha256:")[:12]
+            short = short_id(manifest["id"])
             print(f"[ctx job:{job_id} finalized → run:{short}]")
             _emit_run_digest(ws, digest, manifest, store=store)
             return 0

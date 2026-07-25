@@ -32,13 +32,13 @@ import subprocess
 from functools import lru_cache
 from typing import Any
 
+from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
+from ctx.textutil import EVIDENCE_LINE_CHARS
 from ctx.workspace import Workspace
 
-_LINE_CAP = 160
 _PROBE_TIMEOUT = 10.0
 _RUN_TIMEOUT = 120.0
-_LEDGER_DIR = ".ctx-session-reads"
 
 
 class EngineMissing(Exception):
@@ -146,7 +146,7 @@ def _lib_lang(rel: str) -> str | None:
 
 # ------------------------------------------------------------------ search
 def _ledger_path(rel: str) -> bool:
-    return _LEDGER_DIR in rel.replace("\\", "/").split("/")
+    return LEDGER_DIR_NAME in rel.replace("\\", "/").split("/")
 
 
 def _parse_stream(raw: bytes) -> list[dict[str, Any]]:
@@ -184,7 +184,7 @@ def _match_row(doc: dict[str, Any]) -> dict[str, Any] | None:
     line = int(start.get("line", 0)) + 1  # ast-grep lines are 0-based
     col = int(start.get("column", 0))
     text = str(doc.get("lines") or doc.get("text") or "").splitlines()
-    first = text[0].strip()[:_LINE_CAP] if text else ""
+    first = text[0].strip()[:EVIDENCE_LINE_CHARS] if text else ""
     return {"file": rel.replace("\\", "/"), "line": line, "col": col, "text": first}
 
 
@@ -275,7 +275,7 @@ def ast_search(
             continue
         for i, ln in enumerate(t.text.splitlines(), start=1):
             if rx.search(ln):
-                rows.append({"file": rel, "line": i, "col": 0, "text": ln.strip()[:_LINE_CAP]})
+                rows.append({"file": rel, "line": i, "col": 0, "text": ln.strip()[:EVIDENCE_LINE_CHARS]})
     rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
     meta = {
         "engine": "regex-fallback",
@@ -326,7 +326,7 @@ def _lib_search(
             line = int(start.line) + 1  # ast_grep_py ranges are 0-based lines
             col = int(start.column)
             text = node.text().splitlines()
-            first = text[0].strip()[:_LINE_CAP] if text else ""
+            first = text[0].strip()[:EVIDENCE_LINE_CHARS] if text else ""
             rows.append({"file": rel, "line": line, "col": col, "text": first})
     rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
     meta = {"engine": engine_id(), "precision": "structural", "matched": len(rows)}

@@ -532,6 +532,7 @@ def _checkpoint_node(ws, node: RouteNode, task: str, stdout: str, stderr: str) -
     try:
         from ctx.checkpoint import create_checkpoint
         from ctx.store import Store
+        from ctx.textutil import short_id
 
         payload = (stdout or stderr or "").encode("utf-8", "replace")
         state = (stdout or stderr or "").strip()[:600] or f"node {node.id}: no output"
@@ -549,7 +550,7 @@ def _checkpoint_node(ws, node: RouteNode, task: str, stdout: str, stderr: str) -
                 evidence=evidence,
             )
             store.close()
-        return f"checkpoint:{cp_id[:12]}"
+        return f"checkpoint:{short_id(cp_id)}"
     except Exception:
         return None
 

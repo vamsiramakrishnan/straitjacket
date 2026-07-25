@@ -95,6 +95,7 @@ def _run_investigation(ws, ns) -> int:
 
     from ctx import plan_ir
     from ctx.plan_exec import execute_plan
+    from ctx.sessiondir import session_reads_path
     from ctx.store import Store
 
     text = _read_plan_text(ws, ns.plan_file)
@@ -110,7 +111,7 @@ def _run_investigation(ws, ns) -> int:
     objective_key = _hashlib.sha256(
         " ".join(plan.question.lower().split()).encode("utf-8")
     ).hexdigest()[:12]
-    ledger_dir = ws.root / ".ctx-session-reads"
+    ledger_dir = session_reads_path(ws.root)
     ledger = ledger_dir / "investigations.jsonl"
     prior = 0
     try:
@@ -226,6 +227,7 @@ def _investigate_advice(ws, plan, node_rows=None) -> str:
 
         from ctx import plan_ops
         from ctx import plan_value as pv
+        from ctx.sessiondir import session_reads_path
 
         floors = pv.required_floors(plan.objective_kind, plan.requires)
         coverage = pv.realized_coverage(plan.steps, node_rows or {})
@@ -256,7 +258,7 @@ def _investigate_advice(ws, plan, node_rows=None) -> str:
         )
         # Shadow ledger: the paired referee's input. Operational ts only.
         try:
-            ldir = ws.root / ".ctx-session-reads"
+            ldir = session_reads_path(ws.root)
             ldir.mkdir(parents=True, exist_ok=True)
             with (ldir / "shadow-rank.jsonl").open("a", encoding="utf-8") as fh:
                 fh.write(

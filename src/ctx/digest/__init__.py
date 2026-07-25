@@ -30,7 +30,7 @@ from ctx.digest.tableprof import TableProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
-from ctx.textutil import decode_stream, sanitize_for_model
+from ctx.textutil import decode_stream, sanitize_for_model, short_id
 from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
@@ -183,7 +183,7 @@ def render_run_digest(
         "bytesHash": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
     }
     final_id, final_manifest = update_manifest_digest(store, manifest, digest_meta)
-    short = final_id[:12]
+    short = short_id(final_id)
 
     header = f"[ctx run:{short} profile={profile_version}]"
     digest = header + "\n" + body.replace("run:PENDING", f"run:{short}")
@@ -272,7 +272,7 @@ def digest_output(
     }
 
     digest, final = render_run_digest(store, ws, manifest, focus=None)
-    short = str(final.get("id", "")).removeprefix("sha256:")[:12]
+    short = short_id(final.get("id", ""))
 
     from ctx.engagement import filter_digest, suggestion_cap
     from ctx.textutil import bounded

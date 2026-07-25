@@ -85,6 +85,64 @@ def short_path(path: str) -> str:
     return "/".join(parts[-2:]) if len(parts) > 2 else path
 
 
+#: How wide ONE line of quoted foreign text may be inside a bounded row.
+#:
+#: Every digest profile, census renderer and match-listing verb quotes lines
+#: it did not write — a captured stdout line, a matched source line, a
+#: linter's message, a mined log template, a test node id — one per output
+#: row. This is the width at which such a line is cut so the row stays a row.
+#: It was the bare literal ``160`` at 24 sites plus four private
+#: ``_LINE_CAP = 160`` constants (``ctx.query``, ``ctx.codeverbs``,
+#: ``ctx.astgrep``, ``ctx.semgrep_engine``).
+#:
+#: It is NOT the only clip width in the harness, and the others are not the
+#: same decision — do not fold them in here:
+#:
+#: * ``_retrieval.search._LINE_CHARS`` (200) — a search HIT line. A search
+#:   result is the thing the user asked to see, so it gets more room than a
+#:   line a digest volunteered; and the search renderer extracts it bounded
+#:   rather than slicing a materialized line (giant-line cost).
+#: * ``jobs._CLIP_COLS`` (200) — a live spool line, and it appends ``…``
+#:   rather than cutting silently. Different mechanism, not just a width.
+#: * ``facts._LINE_CAP`` (200) — a bound on a whole assembled census ROW,
+#:   not on one quoted line inside it.
+#: * The scattered ``[:120]`` / ``[:180]`` clips — a one-line summary field
+#:   and a raw occurrence line respectively, each local to one renderer.
+EVIDENCE_LINE_CHARS = 160
+
+#: Width of the house short id. Twelve hex characters of a sha256 is the
+#: display and addressing form for every content-addressed handle the model
+#: sees (``run:``, ``blob:``, ``snapshot:``, ``checkpoint:``, ``plan:``), and
+#: the width ``ctx.store``'s prefix resolver is tuned against.
+SHORT_ID_CHARS = 12
+
+
+def short_id(h: object) -> str:
+    """The house short id for a content HASH: drop a ``sha256:`` prefix, keep
+    the first :data:`SHORT_ID_CHARS` hex characters.
+
+    One definition for an idiom that was retyped at ~20 call sites, in two
+    spellings (``str(x).removeprefix("sha256:")[:12]`` where the value came
+    from a manifest, bare ``x[:12]`` where it came from the store already
+    stripped). Tolerates either form and already-short input; empty in,
+    empty out.
+
+    NOT the same job as :func:`short_path`, which shortens a filesystem path
+    — the two shared the name ``_short`` until R13 split them.
+
+    Deliberately NOT used for two look-alikes at the same width:
+
+    * **Minting** an id (``hashlib.sha256(...).hexdigest()[:12]`` in
+      ``ctx.reflex``'s intervention id, ``ctx.resolver``'s plan id,
+      ``ctx.policy``'s epoch id). Those widths are part of a stored
+      identity's collision budget; the display width is a readability
+      choice. Someone widening one must not silently widen the other.
+    * **Git** object names (``ws.git.head[:12]``). A different namespace with
+      its own conventions (git's own abbreviation length is adaptive).
+    """
+    return str(h or "").removeprefix("sha256:")[:SHORT_ID_CHARS]
+
+
 class JsonPointerError(Exception):
     """A pointer that is malformed or does not resolve against the document."""
 

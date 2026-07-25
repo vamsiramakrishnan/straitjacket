@@ -10,7 +10,7 @@ from typing import Any
 
 from ctx.execution import snapshot_file
 from ctx.store import Store
-from ctx.textutil import fmt_int
+from ctx.textutil import fmt_int, short_id
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit, _parse, _peek_blob, _read_bytes_range, _route_workspace
@@ -59,7 +59,7 @@ def get(
 
     if ref.kind == "run":
         manifest = store.get_manifest(ref.id or "")
-        short = str(manifest["id"]).removeprefix("sha256:")[:12]
+        short = short_id(manifest["id"])
         stream = ref.stream or "stdout"
         meta = manifest["streams"].get(stream)
         if meta is None:
@@ -87,7 +87,7 @@ def get(
         if ref.kind == "snapshot":
             manifest = store.get_manifest(ref.id or "")
             data = store.get_blob(str(manifest["blob"]).removeprefix("sha256:"))
-            label = f"snapshot:{str(manifest['id']).removeprefix('sha256:')[:12]} ({manifest.get('path', '?')})"
+            label = f"snapshot:{short_id(manifest['id'])} ({manifest.get('path', '?')})"
             # Label divergence when the current worktree differs (SPEC §15).
             # (Needs the full blob either way, to diff byte-for-byte against
             # the live file — no fast path applies here.)
@@ -99,7 +99,7 @@ def get(
                 divergence = "file no longer present in worktree"
         else:
             blob_id = store.resolve_id(ref.id or "", kinds=("blob",))
-            label = f"blob:{blob_id[:12]}"
+            label = f"blob:{short_id(blob_id)}"
             if selector.span is not None:
                 data = b""
             elif not needs_full_scan and selector.bytes is not None:
@@ -121,7 +121,7 @@ def get(
             raise RetrievalError("get repo: requires a file path (repo:<path>)")
         snap = snapshot_file(store, ws, ref.path)
         data = store.get_blob(str(snap["blob"]).removeprefix("sha256:"))
-        label = f"repo:{ref.path} (snapshot:{str(snap['id']).removeprefix('sha256:')[:12]})"
+        label = f"repo:{ref.path} (snapshot:{short_id(snap['id'])})"
     else:
         raise RetrievalError(f"cannot get reference kind {ref.kind!r}")
 
