@@ -107,9 +107,13 @@ def test_sessionstart_codex_injects_advisory(ws):
     assert "CTX_SURFACE_GUARD" in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_sessionstart_antigravity_shape(ws):
+def test_preinvocation_antigravity_shape(ws):
+    # Antigravity has no SessionStart event; the advisory rides PreInvocation's
+    # injectSteps as an ephemeral message so it does not accumulate in the
+    # transcript on every invocation.
     over = _hook("antigravity", ws, 100)
-    assert "CTX_SURFACE_GUARD" in over["additionalContext"]
+    assert "CTX_SURFACE_GUARD" in over["injectSteps"][0]["ephemeralMessage"]
+    assert "additionalContext" not in over
     under = _hook("antigravity", ws, 1_000_000)
     assert under == {}
 

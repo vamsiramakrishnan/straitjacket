@@ -42,22 +42,34 @@ Per host, what setup writes:
 
 | Host | Files | Enforcement |
 |---|---|---|
-| Antigravity | `.agents/plugins/ctx-harness/` (MCP tool + hooks) | birth-gate enforced; output-side nudge-only |
+| Antigravity | `.agents/plugins/ctx-harness/` (MCP tool + hooks) | birth-gate enforced by deny; no output-side gate |
 | Claude Code | `.claude/settings.json` hooks + explorer agent | fully enforced (birth + output) |
 | Codex | `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` block | fully enforced (birth + output) |
 
-There's one honest per-host difference. All three contain floods at the
-**birth gate** (a flooding command is rewritten through `ctx run`; native and
-semantic search are steered to bounded `ctx` ops) — that's the primary
-mechanism and it's the same everywhere. But the **output-side safety net**
-(the PostToolUse gate that replaces an oversized tool result with a digest)
-needs a host API that can substitute a tool's output. Claude Code
-(`updatedToolOutput`) and Codex (`decision:block`) have one; **Antigravity does
-not (yet) upstream**, so there the harness stays *nudge-only* — it can't shrink
-an already-produced result, only nudge the model to retrieve boundedly next
-time. Practically: a verbose **MCP/connector result** can still reach the
-transcript on Antigravity. Mitigation: use the bounded `ctx` MCP tool
-(`ctx search`/`get`/`stats`) for retrieval, which is capped by construction.
+There are two honest per-host differences, both traceable to what each host's
+published hook contract actually permits.
+
+**The birth gate fires everywhere, but not the same way.** All three contain
+floods before they happen. Claude Code (`updatedInput`) and Codex rewrite the
+command *transparently* — `pytest -q` silently becomes `ctx run -- pytest -q`
+and the agent never sees a refusal. [Antigravity's PreToolUse
+schema](https://antigravity.google/docs/hooks) has no field for modified
+arguments (`decision`, `reason`, `permissionOverrides` and nothing else), so
+there the same decision is emitted as a **deny whose reason names the contained
+command**. The flood is still prevented — that's the load-bearing part — but it
+costs one extra turn while the agent re-issues the command itself.
+
+**The output-side safety net does not exist on Antigravity.** The PostToolUse
+gate that replaces an oversized tool result with a digest needs a host API that
+can substitute a tool's output: Claude Code (`updatedToolOutput`) and Codex
+(`decision:block`) have one. Antigravity's published PostToolUse contract
+permits exactly one output — `{}` — so the hook there can neither replace a
+result nor attach a nudge. It stays **observational**: the bytes are still
+captured into the store (so `ctx get` resolves them later), but nothing shrinks
+what already reached the transcript. Practically: a verbose **MCP/connector
+result** lands in full on Antigravity. Mitigation: use the bounded `ctx` MCP
+tool (`ctx search`/`get`/`stats`) for retrieval, which is capped by
+construction.
 
 Prefer a single host? `ctx wrap antigravity`, `ctx wrap claude`, or
 `ctx wrap codex` do exactly one. (For Antigravity, `ctx wrap antigravity` renders

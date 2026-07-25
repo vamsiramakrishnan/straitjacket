@@ -1525,6 +1525,10 @@ def _apply_rewrite(
     else:
         updated.update(hint.get("fields", {}))
     decision["rewrite"] = {"updatedInput": updated, "reason": hint["reason"]}
+    if "command" in hint:
+        # Carried for hosts that cannot substitute input and have to name the
+        # contained command in a deny reason instead (see _to_antigravity_schema).
+        decision["rewrite"]["command"] = hint["command"]
     return decision
 
 
@@ -1819,24 +1823,45 @@ def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# The published Antigravity PreToolUse output contract
+# (https://antigravity.google/docs/hooks) is exactly:
+#     {"decision": "allow"|"deny"|"ask"|"force_ask",
+#      "reason": str?, "permissionOverrides": [str]?}
+# There is no field for modified arguments, so this host cannot do input
+# substitution at all. Emitting anything else is out of contract.
+_AGY_PRE_DECISIONS = ("allow", "deny", "ask", "force_ask")
+_AGY_PRE_KEYS = ("decision", "reason", "permissionOverrides")
+
+
 def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
-    """Layer 2 for the antigravity dialect. A decision carrying a ``rewrite``
-    becomes the canonical substitution form; everything else passes through
-    unchanged (byte-identical to the pure deny contract).
+    """Layer 2 for the antigravity dialect, per the published hook contract.
 
-    Assumed Antigravity input-substitution contract (mirrors the decision
-    schema; not yet published upstream):
+    Unlike Claude Code and Codex, Antigravity's PreToolUse schema carries no
+    ``updatedInput``: a hook can gate a call but cannot rewrite its arguments.
+    So a decision carrying a ``rewrite`` cannot be applied transparently here.
+    It degrades to a **deny whose reason names the contained command**, which
+    keeps the birth gate intact — the flood never happens — at the cost of one
+    extra turn, because the agent has to re-issue the command itself.
 
-        {"decision": "allow", "updatedInput": {...}, "reason": "..."}
+    This is the whole containment story on this host: with no output
+    substitution either (PostToolUse's only legal output is ``{}``), the
+    pre-gate is the only enforcement point.
     """
     rewrite = decision.get("rewrite")
     if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
-        return {
-            "decision": "allow",
-            "updatedInput": rewrite["updatedInput"],
-            "reason": str(rewrite.get("reason", "")),
-        }
-    return {k: v for k, v in decision.items() if k != "rewrite" and not k.startswith("_")}
+        reason = str(rewrite.get("reason", "")).strip()
+        cmd = str(rewrite.get("command", "")).strip()
+        if cmd:
+            reason = f"{reason} Re-run it as: {cmd}".strip()
+        return {"decision": "deny", "reason": reason or "run this through ctx"}
+    raw = decision.get("decision", "allow")
+    out: dict[str, Any] = {
+        "decision": raw if raw in _AGY_PRE_DECISIONS else "allow",
+    }
+    for key in ("reason", "permissionOverrides"):
+        if decision.get(key):
+            out[key] = decision[key]
+    return {k: v for k, v in out.items() if k in _AGY_PRE_KEYS}
 
 
 #: The emission-governor nudge, verbatim. Named because the Rust shim
@@ -2222,8 +2247,16 @@ def main_session_start(flavor: str = "antigravity") -> int:
                                     "additionalContext": advisory}}
             if advisory else {"continue": True}
         )
-    else:  # antigravity dialect
-        emitted = {"additionalContext": advisory} if advisory else {}
+    else:
+        # Antigravity has no SessionStart event. The nearest published hook is
+        # PreInvocation ("fires before the model is called"), whose output
+        # injects steps rather than attaching context:
+        #   {"injectSteps": [{"ephemeralMessage": "..."}]}
+        # ephemeral, so the advisory does not accumulate in the transcript on
+        # every invocation (https://antigravity.google/docs/hooks).
+        emitted = (
+            {"injectSteps": [{"ephemeralMessage": advisory}]} if advisory else {}
+        )
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
     sys.stdout.flush()
@@ -2284,9 +2317,13 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
             chso["additionalContext"] = nudge
         if len(chso) > 1:
             emitted["hookSpecificOutput"] = chso
-    elif nudge is not None:  # antigravity dialect: nudge-only (no replacement)
-        emitted = {"decision": "allow", "reason": nudge}
     else:
+        # Antigravity's published PostToolUse contract has exactly one legal
+        # output: {}. It can neither replace the result nor attach a nudge, so
+        # this hook is observational here — the bytes are still captured into
+        # the store above (that is what keeps `ctx get` able to resolve them
+        # later), but the transcript is left exactly as the host wrote it.
+        # Containment on this host happens at PreToolUse or not at all.
         emitted = {}
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")

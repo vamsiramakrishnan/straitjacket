@@ -95,6 +95,12 @@ class HostSpec:
     installer: str = ""            # ctx.installer.<installer>(ws, ...)
     wrapper: str = ""              # ctx.wrap.<wrapper>(...)
     output_substitution: bool = False  # PostToolUse can replace a result (enforced) vs nudge-only
+    # PreToolUse can rewrite the tool's arguments before it runs. Claude Code
+    # and Codex both expose `updatedInput`; Antigravity's published PreToolUse
+    # schema has no field for modified arguments, so the birth gate there has
+    # to deny and name the contained command rather than substitute it
+    # transparently (https://antigravity.google/docs/hooks).
+    input_substitution: bool = False
     supports_mcp: bool = False
     supports_hooks: bool = False
     print_flag: tuple[str, ...] = ("-p",)   # one-shot / non-interactive run
@@ -152,8 +158,12 @@ _REGISTRY: tuple[HostSpec, ...] = (
         model_env=("ANTIGRAVITY_MODEL", "GEMINI_MODEL"),
         installer="install_antigravity",
         wrapper="wrap_antigravity",
-        # No upstream output-substitution field yet -> nudge-only (see README).
-        output_substitution=False,
+        # Neither gate can alter the transcript on this host: the published
+        # PostToolUse output schema is `{}` and PreToolUse carries no
+        # `updatedInput`. Containment is a PreToolUse deny that names the
+        # contained command (https://antigravity.google/docs/hooks).
+        output_substitution=False,  # PostToolUse output schema is {} only
+        input_substitution=False,   # no updatedInput in the PreToolUse schema
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="google",
@@ -181,6 +191,7 @@ _REGISTRY: tuple[HostSpec, ...] = (
         installer="install_claude",
         wrapper="wrap_claude",
         output_substitution=True,   # updatedToolOutput
+        input_substitution=True,    # updatedInput
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="anthropic",
@@ -203,6 +214,7 @@ _REGISTRY: tuple[HostSpec, ...] = (
         installer="install_codex",
         wrapper="wrap_codex",
         output_substitution=True,   # decision:block substitution
+        input_substitution=True,    # updatedInput (Claude Code contract verbatim)
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="openai",

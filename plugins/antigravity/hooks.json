@@ -25,12 +25,12 @@
         ]
       }
     ],
-    "SessionStart": [
+    "PreInvocation": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "{{CTX_EXECUTABLE}} hook antigravity session-start",
+            "command": "{{CTX_EXECUTABLE}} hook antigravity pre-invocation",
             "timeout": 15
           }
         ]

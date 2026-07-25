@@ -214,13 +214,13 @@ def test_post_tool_use_stage_emits_dialects(ws, monkeypatch, capsys):
     assert main(["hook", "claude-code", "post-tool-use"]) == 0
     assert json.loads(capsys.readouterr().out) == {}
 
-    # Antigravity dialect on a fresh tier crossing.
+    # Antigravity dialect on a fresh tier crossing. Its published PostToolUse
+    # contract allows exactly one output, `{}` — the governor nudge has nowhere
+    # legal to go on this host, so the hook stays observational.
     _write_window(ws, cum_output=45_000, requests=11)
     monkeypatch.setattr("sys.stdin", io.StringIO(payload))
     assert main(["hook", "antigravity", "post-tool-use"]) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["decision"] == "allow"
-    assert "CTX_EMISSION_GOVERNOR" in out["reason"]
+    assert json.loads(capsys.readouterr().out) == {}
 
 
 def test_post_tool_use_fails_open_on_garbage(monkeypatch, capsys):

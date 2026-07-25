@@ -104,9 +104,10 @@ def test_ctx_tools_are_never_digested(ws):
 
 
 def test_antigravity_flavor_never_replaces(ws):
-    # Over-threshold, antigravity flavor → no updatedToolOutput (nudge-only).
+    # Antigravity's published PostToolUse contract permits exactly one output,
+    # `{}` — no replacement and no nudge. Over-threshold must still emit it.
     d = _run_post(_mcp_payload(ws, _big_json(), tool="grep_search"), flavor="antigravity")
-    assert "updatedToolOutput" not in json.dumps(d)
+    assert d == {}
 
 
 def test_error_result_gets_larger_budget(ws):
