@@ -29,10 +29,11 @@ def cmd_replay(ns) -> int:
 
         events = [e for p in paths for e in session_outcomes(p)]
         if ns.replay_append_ledger:
+            from ctx.sessiondir import session_reads_path
             from ctx.workspace import resolve_workspace as _rw
 
             _ws = _rw(ns.workspace)
-            ldir = _ws.root / ".ctx-session-reads"
+            ldir = session_reads_path(_ws.root)
             ldir.mkdir(parents=True, exist_ok=True)
             # One name, used twice: the message used to report
             # evidence-outcomes.jsonl while the write went to

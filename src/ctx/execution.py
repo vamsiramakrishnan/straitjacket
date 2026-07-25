@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ctx.gitstatus import changed_paths
+from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
 from ctx.textutil import decode_stream
 from ctx.workspace import Workspace
@@ -206,7 +207,6 @@ def _worktree_hash(ws: Workspace) -> str | None:
 # Bookkeeping directory excluded from the generation walk: the reflex/session
 # ledgers mutate on every scored command, so including them would bump the
 # generation on our own writes and confirm nothing, ever.
-_GENERATION_EXCLUDE_DIR = ".ctx-session-reads"
 # Bound on the untracked-file walk. Ignored trees (node_modules, venvs) never
 # appear in porcelain, so real workspaces sit far below this; the cap only
 # guards pathological unignored trees. Deterministic: the walk is sorted, and
@@ -252,7 +252,7 @@ def generation_hash(ws_root: Any) -> str | None:
         h = hashlib.sha256(out.stdout)
         untracked: list[Path] = []
         rels = changed_paths(
-            out.stdout, untracked_only=True, exclude_top=_GENERATION_EXCLUDE_DIR
+            out.stdout, untracked_only=True, exclude_top=LEDGER_DIR_NAME
         )
         for rel in rels:
             p = root / rel

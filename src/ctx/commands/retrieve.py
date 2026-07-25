@@ -96,8 +96,9 @@ def cmd_stats(ws, ns) -> int:
     wire scorecard when the proxy recorded one."""
     if getattr(ns, "session", False):
         from ctx.scorecard import compute_scorecard, render_scorecard
+        from ctx.sessiondir import session_reads_path
 
-        sc = compute_scorecard(ws.root / ".ctx-session-reads" / "proxy")
+        sc = compute_scorecard(session_reads_path(ws.root, "proxy"))
         if sc is None:
             print(
                 "no wire observations for this workspace "

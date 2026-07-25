@@ -7,6 +7,7 @@ import fnmatch
 from dataclasses import dataclass
 
 from ctx.refs import Ref
+from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
 from ctx.workspace import Workspace
 
@@ -129,7 +130,9 @@ def _resolve_repo_targets(
     # q search stage and generation hashing exclude it likewise). It also
     # grows as the harness runs, so including it makes repo search observe
     # its own state — the byte-stability failure mode, engine-independent.
-    rels = [r for r in rels if r.replace("\\", "/").split("/")[0] != ".ctx-session-reads"]
+    rels = [
+        r for r in rels if r.replace("\\", "/").split("/")[0] != LEDGER_DIR_NAME
+    ]
     if glob:
         rels = [r for r in rels if _glob_match(r, glob)]
     rels = rels[:max_files]

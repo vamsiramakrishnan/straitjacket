@@ -170,6 +170,9 @@ import re
 import shlex
 import time
 
+# ctx.sessiondir imports `os` only, for exactly this reason.
+from ctx.sessiondir import session_reads_dir
+
 # Hot path: hook.py imports this module on every intercepted command, so
 # `pathlib` (~4.7 ms) and `typing` (~4.3 ms) are kept out of module scope.
 # Path handling here is joins plus existence checks, which `os.path` does
@@ -183,7 +186,6 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Any
 
-_LEDGER_DIR = ".ctx-session-reads"
 _STATE_NAME = "reflex.json"
 _OUTCOMES_NAME = "reflex-outcomes.jsonl"
 _INTERVENTIONS_NAME = "interventions.jsonl"  # v2 ledger (EDC §9, shadow wave)
@@ -560,7 +562,7 @@ def landing_ref(command: str) -> str | None:
 
 
 def _state_path(ws_root: Path | str) -> str:
-    return os.path.join(ws_root, _LEDGER_DIR, _STATE_NAME)
+    return session_reads_dir(ws_root, _STATE_NAME)
 
 
 def read_state(ws_root: Path | str | None) -> dict[str, Any]:
@@ -633,7 +635,7 @@ def _append_outcome(
 ) -> None:
     """Append one FROZEN-schema line to the outcome ledger. Raises to the
     caller (every caller is fail-open). ``ts`` is operational only."""
-    path = os.path.join(ws_root, _LEDGER_DIR, _OUTCOMES_NAME)
+    path = session_reads_dir(ws_root, _OUTCOMES_NAME)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     line = json.dumps(
         {
@@ -655,7 +657,7 @@ def _append_outcome(
 def _append_jsonl(ws_root: Path | str, name: str, doc: dict[str, Any]) -> None:
     """Append one sorted-keys JSON line to a session ledger. Raises to the
     caller (every caller is fail-open)."""
-    path = os.path.join(ws_root, _LEDGER_DIR, name)
+    path = session_reads_dir(ws_root, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(doc, sort_keys=True) + "\n")
@@ -1540,7 +1542,7 @@ def sync_query_outcomes(ws_root: Path | str | None) -> None:
     if ws_root is None:
         return
     try:
-        led = os.path.join(ws_root, _LEDGER_DIR)
+        led = session_reads_dir(ws_root)
         ops_path = os.path.join(led, _Q_DRY_OPS_NAME)
         json_path = os.path.join(led, _Q_DRY_STATE_NAME)
         has_ops, has_json = os.path.isfile(ops_path), os.path.isfile(json_path)

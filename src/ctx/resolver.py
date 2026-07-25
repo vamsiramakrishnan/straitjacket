@@ -44,6 +44,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from ctx.sessiondir import session_reads_path
+
 # --------------------------------------------------------------------------
 # Frozen interfaces from the evidence layer (src/ctx/evidence.py). Imported
 # defensively: until that module ships, the Protocol stubs below carry the
@@ -68,7 +70,6 @@ except Exception:  # pragma: no cover - stub path is the current reality
         ...
 
 
-_LEDGER_DIR = ".ctx-session-reads"
 _READER_STATE_NAME = "reader.json"
 
 # ----------------------------------------------------------- plan literals
@@ -192,7 +193,7 @@ def read_window(ws_root: Path | str | None) -> tuple[float | None, str | None]:
     if ws_root is None:
         return None, None
     try:
-        path = Path(ws_root) / _LEDGER_DIR / "proxy" / "window.json"
+        path = session_reads_path(ws_root, "proxy", "window.json")
         doc = json.loads(path.read_text(encoding="utf-8"))
         pct_raw = doc.get("window_pct")
         pct = (
@@ -214,7 +215,7 @@ def environment_signals(ws_root: Path | str | None) -> EnvironmentSignals:
 
 
 def _reader_state_path(ws_root: Path | str) -> Path:
-    return Path(ws_root) / _LEDGER_DIR / _READER_STATE_NAME
+    return session_reads_path(ws_root, _READER_STATE_NAME)
 
 
 def _read_reader_state(ws_root: Path | str | None) -> dict[str, Any]:

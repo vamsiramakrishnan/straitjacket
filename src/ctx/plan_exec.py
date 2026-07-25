@@ -34,6 +34,7 @@ import time
 from typing import Any
 
 from ctx.gitstatus import changed_paths
+from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
 from ctx.workspace import Workspace, stat_fingerprint
 
@@ -102,7 +103,7 @@ def _workspace_fingerprint(ws: Workspace) -> str | None:
 
         root = Path(ws.root)
         listed: list[Path] = []
-        for rel in changed_paths(out.stdout, exclude_top=".ctx-session-reads"):
+        for rel in changed_paths(out.stdout, exclude_top=LEDGER_DIR_NAME):
             p = root / rel
             if rel.endswith("/") or p.is_dir():
                 listed.extend(s for s in sorted(p.rglob("*"))[:1024] if s.is_file())
@@ -267,7 +268,7 @@ def execute_plan(
     # and break replan byte-determinism. Fail-open: an unwritable root just
     # skips emissions; in ignored/committed setups this is a no-op.
     try:
-        ledger_dir = ws.root / ".ctx-session-reads"
+        ledger_dir = session_reads_path(ws.root)
         ledger_dir.mkdir(parents=True, exist_ok=True)
         (ledger_dir / "plan-emissions.jsonl").touch(exist_ok=True)
     except OSError:
@@ -501,7 +502,7 @@ def _append_plan_emissions(
 
     from ctx.textutil import estimate_tokens
 
-    ledger_dir = ws.root / ".ctx-session-reads"
+    ledger_dir = session_reads_path(ws.root)
     ledger_dir.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     for nid, res in results.items():

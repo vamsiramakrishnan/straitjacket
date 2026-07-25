@@ -37,6 +37,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from ctx.sessiondir import LEDGER_DIR_NAME
+
 DEFAULT_KEEP_RECENT = 6  # most recent tool_results never elided
 DEFAULT_MIN_BLOCK_BYTES = 1024  # small blocks are not worth a stub
 _LOCK = threading.Lock()
@@ -58,7 +60,7 @@ def _stub_prefix(state_dir: Path) -> str:
     absolute path — a stub whose address cannot be followed would make the
     'lossless' claim a lie (found by PR review)."""
     parent = Path(state_dir).parent
-    if parent.name == ".ctx-session-reads":
+    if parent.name == LEDGER_DIR_NAME:
         return f"{parent.name}/{Path(state_dir).name}"
     return str(state_dir)
 

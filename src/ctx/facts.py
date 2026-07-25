@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ctx.gitstatus import changed_paths
+from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store, canonical_json
 from ctx.workspace import Workspace
 
@@ -90,7 +91,6 @@ _MAX_CHANGED = 4096
 
 #: Ledger dir excluded from porcelain snapshots (mirrors execution.py:
 #: including it would mark a generation changed on our own bookkeeping).
-_SNAPSHOT_EXCLUDE_DIR = ".ctx-session-reads"
 
 #: Last swallowed error, for diagnostics only. Never raised to callers.
 LAST_ERROR: str | None = None
@@ -248,7 +248,7 @@ def changed_files_snapshot(ws: Workspace) -> list[str]:
         if out.returncode != 0:
             return []
         files: set[str] = set()
-        for rel in changed_paths(out.stdout, exclude_top=_SNAPSHOT_EXCLUDE_DIR):
+        for rel in changed_paths(out.stdout, exclude_top=LEDGER_DIR_NAME):
             p = Path(ws.root) / rel
             if rel.endswith("/") or p.is_dir():
                 # Porcelain lists an untracked directory as one entry.

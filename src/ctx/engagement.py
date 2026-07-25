@@ -43,6 +43,9 @@ import json
 import os
 import re
 
+# ctx.sessiondir imports `os` only, for exactly this reason.
+from ctx.sessiondir import session_reads_dir
+
 # Hot path: `note_call` runs on every intercepted tool call, so this module is
 # imported by hook.py on every one of them. `pathlib` (~4.7 ms) and `typing`
 # (~4.3 ms) are therefore not imported at module scope — `os.path` covers the
@@ -57,7 +60,6 @@ if TYPE_CHECKING:
     from typing import Any
 
 _STATE_NAME = "engagement.json"
-_LEDGER_DIR = ".ctx-session-reads"
 
 DEFAULT_MODE = "auto"  # auto | active | passive
 DEFAULT_ACTIVATE_AFTER_CALLS = 8
@@ -84,7 +86,7 @@ EMISSION_NUDGE_TOKENS_DEFAULT = 20_000
 
 
 def _state_path(workspace_root: Path | str) -> str:
-    return os.path.join(workspace_root, _LEDGER_DIR, _STATE_NAME)
+    return session_reads_dir(workspace_root, _STATE_NAME)
 
 
 def _mutate_state(workspace_root: Path | str, fn) -> dict[str, Any]:
@@ -134,7 +136,7 @@ def read_state(workspace_root: Path | str) -> dict[str, Any]:
 
 def _proxy_doc(workspace_root: Path | str) -> dict[str, Any]:
     try:
-        path = os.path.join(workspace_root, _LEDGER_DIR, "proxy", "window.json")
+        path = session_reads_dir(workspace_root, "proxy", "window.json")
         with open(path, encoding="utf-8") as fh:
             doc = json.load(fh)
         return doc if isinstance(doc, dict) else {}

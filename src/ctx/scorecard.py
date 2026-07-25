@@ -34,6 +34,7 @@ from pathlib import Path
 
 from ctx import pricing
 from ctx.gitstatus import changed_paths
+from ctx.sessiondir import session_reads_path
 
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "write_to_file", "replace_file_content"}
 
@@ -737,7 +738,7 @@ def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
 def append_history(workspace_root: Path, sc: dict) -> None:
     """Accumulate scorecards for the policy-epoch learner. Fail-open."""
     try:
-        path = Path(workspace_root) / ".ctx-session-reads" / "scorecards.jsonl"
+        path = session_reads_path(workspace_root, "scorecards.jsonl")
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(sc, sort_keys=True) + "\n")

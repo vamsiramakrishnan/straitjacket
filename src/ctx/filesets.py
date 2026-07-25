@@ -32,10 +32,10 @@ import shutil
 import subprocess
 from typing import Any
 
+from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.workspace import Workspace
 
 _FD_TIMEOUT = 30
-_LEDGER_DIR = ".ctx-session-reads"  # bookkeeping, never evidence (hook.py rule)
 
 
 def _fd_binary() -> str | None:
@@ -117,7 +117,7 @@ def select(
     silent). Multiple globs are OR; multiple excludes each subtract."""
     rels, engine = enumerate_files(ws)
     coverage: dict[str, Any] = {"engine": engine, "considered": len(rels)}
-    rels = [r for r in rels if r.split("/")[0] != _LEDGER_DIR]
+    rels = [r for r in rels if r.split("/")[0] != LEDGER_DIR_NAME]
 
     if exts:
         want = {str(e).lower().lstrip(".") for e in exts if str(e).strip()}

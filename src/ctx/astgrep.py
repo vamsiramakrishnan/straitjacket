@@ -32,13 +32,13 @@ import subprocess
 from functools import lru_cache
 from typing import Any
 
+from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
 from ctx.workspace import Workspace
 
 _LINE_CAP = 160
 _PROBE_TIMEOUT = 10.0
 _RUN_TIMEOUT = 120.0
-_LEDGER_DIR = ".ctx-session-reads"
 
 
 class EngineMissing(Exception):
@@ -146,7 +146,7 @@ def _lib_lang(rel: str) -> str | None:
 
 # ------------------------------------------------------------------ search
 def _ledger_path(rel: str) -> bool:
-    return _LEDGER_DIR in rel.replace("\\", "/").split("/")
+    return LEDGER_DIR_NAME in rel.replace("\\", "/").split("/")
 
 
 def _parse_stream(raw: bytes) -> list[dict[str, Any]]:

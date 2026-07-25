@@ -133,6 +133,11 @@ import sys
 # two are pinned equal by tests/test_cross_language_constants.py.
 from ctx.engagement import EMISSION_NUDGE_TOKENS_DEFAULT
 
+# The house ledger directory, named and joined in exactly one place
+# (ctx.sessiondir). That module imports `os` only, for this contract.
+from ctx.sessiondir import LEDGER_DIR_NAME as _LEDGER_DIR_NAME
+from ctx.sessiondir import session_reads_dir
+
 # `pathlib` (~4.2 ms) and `typing` (~2.3 ms) are deliberately NOT imported at
 # module scope — see the latency contract above. Every path expression on the
 # per-call path uses `os.path`, which is already loaded; the one `Path` this
@@ -198,7 +203,6 @@ _WINDOW_PRESSURE_PCT_DEFAULT = 70  # window fullness (%) at which budgets tighte
 # Universal emission gate: a PostToolUse tool result larger than this many
 # bytes is replaced by a bounded digest. Keep in sync with config.Budgets.
 _MAX_TOOL_OUTPUT_BYTES_DEFAULT = 16384
-_LEDGER_DIR_NAME = ".ctx-session-reads"
 _POLICY_FILENAME = "ctx-policy.toml"  # compiled learned-policy epoch
 # Internal-error telemetry + the emission gate's fail-closed spill area.
 _GUARD_FAILURE_LEDGER = "guard-failures.jsonl"
@@ -367,7 +371,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     ppath_is_file = os.path.isfile(ppath)
     if not path_is_file and not ppath_is_file:
         return policy
-    cache_path = os.path.join(workspace_root, _LEDGER_DIR_NAME, _POLICY_CACHE_NAME)
+    cache_path = session_reads_dir(workspace_root, _POLICY_CACHE_NAME)
     key = _policy_cache_key([path, ppath])
     try:
         with open(cache_path, encoding="utf-8") as fh:
@@ -471,7 +475,7 @@ def _window_pct(workspace_root: str | None) -> float | None:
     if not workspace_root:
         return None
     try:
-        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json")
+        path = session_reads_dir(workspace_root, "proxy", "window.json")
         with open(path, "r", encoding="utf-8") as fh:
             doc = json.load(fh)
         pct = doc.get("window_pct")
@@ -656,7 +660,7 @@ def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
     try:
         import time
 
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         path = os.path.join(ledger_dir, "eval-adoption.jsonl")
         line = json.dumps(
@@ -703,7 +707,7 @@ def _note_records_opportunity(workspace_root: str | None, taught: bool) -> None:
     try:
         import time
 
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         path = os.path.join(ledger_dir, "records-adoption.jsonl")
         line = json.dumps(
@@ -743,7 +747,7 @@ def _failure_available(workspace_root: str | None) -> bool:
     every failure degrades to the plain full scan or to False."""
     if not workspace_root:
         return False
-    ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+    ledger_dir = session_reads_dir(workspace_root)
     path = os.path.join(ledger_dir, "interventions.jsonl")
     try:
         st = os.stat(path)
@@ -874,7 +878,7 @@ def _note_collapse(workspace_root: str | None, shape: str, rung: str) -> None:
     try:
         import time
 
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         with open(os.path.join(ledger_dir, "collapse.jsonl"), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(
@@ -903,7 +907,7 @@ def _note_guard_failure(
     try:
         import time
 
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         line = json.dumps(
             {
@@ -1363,7 +1367,7 @@ def _ledger_charge(workspace_root: str | None, session_id: str, nbytes: int) -> 
         return 0
     try:
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id)[:80] or "unknown"
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         path = os.path.join(ledger_dir, safe + ".count")
         # Parallel tool calls fire hooks concurrently; an advisory flock
@@ -1407,9 +1411,7 @@ def _price_note(size_bytes: int, workspace_root: str | None) -> str:
         note = f"{fmt_tokens_coarse(tok)} tok"
         if workspace_root:
             try:
-                path = os.path.join(
-                    workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json"
-                )
+                path = session_reads_dir(workspace_root, "proxy", "window.json")
                 with open(path, "r", encoding="utf-8") as fh:
                     limit = json.load(fh).get("context_limit")
                 if isinstance(limit, int) and limit > 0:
@@ -1873,7 +1875,7 @@ def _emission_nudge(payload: dict[str, Any]) -> str | None:
         workspace_root = _resolve_workspace_root(payload)
         if not workspace_root:
             return None
-        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json")
+        path = session_reads_dir(workspace_root, "proxy", "window.json")
         with open(path, "r", encoding="utf-8") as fh:
             doc = json.load(fh)
         cum_output = int(doc.get("cum_output") or 0)

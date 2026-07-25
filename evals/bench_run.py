@@ -37,6 +37,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from bench.dataset import BY_ID, SCENARIOS  # noqa: E402
+from ctx.sessiondir import session_reads_path  # noqa: E402
 
 MODELS = {"haiku": "claude-haiku-4-5-20251001", "sonnet": None}
 WRAPPED = {"sj"}  # sj IS the collapsed product — ctx wrap removes native search by default
@@ -184,7 +185,7 @@ def _collapse_fires(workdir):
     """How many loop-shapes the replacement surface actually collapsed, by
     shape, from the fixture's collapse.jsonl ledger."""
     out = {}
-    led = pathlib.Path(workdir) / ".ctx-session-reads" / "collapse.jsonl"
+    led = session_reads_path(workdir, "collapse.jsonl")
     try:
         for line in led.read_text(encoding="utf-8").splitlines():
             try:

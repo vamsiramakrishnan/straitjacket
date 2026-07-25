@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+from ctx.sessiondir import session_reads_path
 from ctx.store import Store
 from ctx.workspace import Workspace
 
@@ -462,7 +463,7 @@ def _note_rewrite_decline(pc: PlanContext, args: dict, reason: str) -> None:
         import json
         import time
 
-        d = pc.ws.root / ".ctx-session-reads"
+        d = session_reads_path(pc.ws.root)
         d.mkdir(parents=True, exist_ok=True)
         line = json.dumps(
             {

@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.textutil import fmt_bytes, fmt_int
 from ctx.workspace import Workspace
 
@@ -70,7 +71,7 @@ def _rg_repo_search(
     # The session ledger is bookkeeping, never evidence (hook.py rule; the
     # q search stage excludes it for the same reason) — and since it grows
     # as the harness runs, scanning it makes search observe its own state.
-    argv += ["--glob", "!.ctx-session-reads/**"]
+    argv += ["--glob", f"!{LEDGER_DIR_NAME}/**"]
     for deny in ws.ignore_globs:
         argv += ["--glob", f"!{deny}"]
     for p in patterns:
