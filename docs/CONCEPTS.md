@@ -202,7 +202,7 @@ native read → run → shell → seq → eval
 - **`ctx run`** for one potentially noisy command.
 - **`ctx run --shell`** for shell syntax and pipelines.
 - **`ctx seq`** for a declared sequence of steps.
-- **`ctx eval`** for genuinely computed branching, looping, and aggregation.
+- **`ctx py`** for genuinely computed branching, looping, and aggregation.
 - **`ctx q`** for bounded composition over typed repository and runtime facts.
 
 The ladder is an economic and safety choice. More expressive operations cost more model-authored intent and have wider trust envelopes.
@@ -238,7 +238,7 @@ That restriction buys:
 - safe exposure through constrained tool surfaces;
 - compact model-authored intent.
 
-Use `ctx eval` when the work truly needs general computation. Use `ctx q` when the work is evidence composition.
+Use `ctx py` when the work truly needs general computation. Use `ctx q` when the work is evidence composition.
 
 ## Reflex and policy epoch
 

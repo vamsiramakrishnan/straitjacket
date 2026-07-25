@@ -26,7 +26,7 @@ from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
 from ctx.evidence import EvidenceGraph, EvidenceItem, EvidenceRef
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
 
 # Word-anchored pytest invocation: the name as a program basename or a
 # module target, never as an interior path component. A raw substring
@@ -276,11 +276,11 @@ def _entry_semantics(
     if summary:
         summary = summary[:120]
 
-    evidence = tuple(el[:160] for el in e_lines[:4])
+    evidence = tuple(el[:EVIDENCE_LINE_CHARS] for el in e_lines[:4])
     if not evidence:
         fallback = msg or summary
         if fallback:
-            evidence = (fallback[:160],)
+            evidence = (fallback[:EVIDENCE_LINE_CHARS],)
     return failure_class, location, summary, evidence
 
 
@@ -323,7 +323,7 @@ def extract_pytest(ctx: DigestContext) -> EvidenceGraph:
                 for raw in out_lines[ent["a"] - 1 : min(ent["b"], ent["a"] + 12)]:
                     if _is_banner(raw):
                         break
-                    head.append(raw[:160])
+                    head.append(raw[:EVIDENCE_LINE_CHARS])
                 attributes["detail_head"] = tuple(head)
                 root_seen = True
         else:
@@ -511,7 +511,7 @@ class PytestProfile(Profile):
             spent = 0
             shown_entries = 0
             for ent in entries:
-                row = "    " + _short_nodeid(ent["id"])[:160]
+                row = "    " + _short_nodeid(ent["id"])[:EVIDENCE_LINE_CHARS]
                 if ent["b"] is not None:
                     sid = ctx.mint_span(ctx.stdout, "region", a=ent["a"], b=ent["b"])
                     row += f"  stdout:L{ent['a']}-L{ent['b']}"
@@ -523,7 +523,7 @@ class PytestProfile(Profile):
                 if dense:
                     err = self._error_line(ent, out_lines)
                     if err:
-                        chunk.append("      " + err[:160])
+                        chunk.append("      " + err[:EVIDENCE_LINE_CHARS])
                 cost = sum(len(c.encode("utf-8")) + 1 for c in chunk)
                 if shown_entries and spent + cost > census_budget:
                     break
@@ -566,7 +566,7 @@ class PytestProfile(Profile):
                     # elapsed-time noise and belong to other regions.
                     if _is_banner(raw):
                         break
-                    summary.append(f"    | {raw[:160]}")
+                    summary.append(f"    | {raw[:EVIDENCE_LINE_CHARS]}")
         elif failed_tests:
             summary.append(f"  first failure: {failed_tests[0][1]} - {failed_tests[0][2][:120]}")
             shown += 1

@@ -18,6 +18,7 @@ exit code is the first failure's exit code, else 0.
 from __future__ import annotations
 
 from ctx.store import Store
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 
@@ -52,7 +53,7 @@ def run_seq(
         digest, manifest = render_run_digest(
             store, ws, capture.manifest, focus=focus
         )
-        rid = str(manifest["id"]).removeprefix("sha256:")[:12]
+        rid = short_id(manifest["id"])
         result = manifest["result"]
         exit_code = result["exitCode"]
         # exitCode None means signal death — failure, not success (S6 finding).

@@ -169,7 +169,7 @@ ladders (left = preferred, `→` = labeled degradation), and status:
 | `file_select` | `corpus` (q source) · `repo.files` (plan op) | git ls-files → **fd** → os.walk; `--changed` from generation facts | **Shipped** v0.26.0 (M-K2) |
 | `site_search` | `search`/`refs` (q) · `code.search` (plan) · MCP `search` | rg --json → Python regex | **Shipped** incl. span capture + result blobs, v0.26.0 (M-K1) |
 | `symbol_extract` | `decls`/`outline` (q) · `ast.outline` (plan) · `def/refs` | **SCIP (exact)** → jedi/ast-grep → tree-sitter (grammar wheels) → ctags --json → heuristic | **Shipped** incl. SCIP (v0.30.0) + tree-sitter grammar-wheel backend |
-| `record_transform` | `records` source + `where/group/top/count/distinct/histogram` (q) · `evidence.*` (plan) | native stages → **jq/jaq compile target** → `ctx eval` escape hatch | **Shipped** native, v0.26.0 (M-K3); jq engine + opportunity ledger open |
+| `record_transform` | `records` source + `where/group/top/count/distinct/histogram` (q) · `evidence.*` (plan) | native stages → **jq/jaq compile target** → `ctx py` escape hatch | **Shipped** native, v0.26.0 (M-K3); jq engine + opportunity ledger open |
 | `structural_rewrite` | `ast.rewrite.preview/apply` (plan, execute-class, CLI-only) | ast-grep → **comby** → **decline** (never textual) | **Shipped** (1 rung); → M-K5 |
 | `incremental_trigger` | none (generation checks at use time) | content-keyed laziness → broker-era watcher tenant | lazy form **Shipped**; watcher **Deferred** → M-K6 |
 
@@ -280,7 +280,7 @@ records-arm referee runs once the ledger shows real demand.
   construction (parity-tested), kill-switchable, absent-cost-nothing.
   Model-authored jq text is **never** accepted on the bounded tier.
 - The escape hatch stays where it is: arbitrary jq inside `ctx run`
-  / `ctx eval` under the CLI trust envelope. New instrument: the
+  / `ctx py` under the CLI trust envelope. New instrument: the
   adoption-ledger pattern counts record-transform shapes appearing in
   `run --shell` pipelines and `eval` scripts (`jq`, `sort | uniq -c`,
   `awk '{print $N}'`) as `records_opportunity` events — the observed

@@ -20,7 +20,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int, short_path
 
 _COLON_RE = re.compile(
     r"^\s*(?P<file>[^\s:][^:]*\.\w{1,12}):(?P<line>\d+):(?:\d+:?)?\s*"
@@ -122,10 +122,6 @@ class LintProfile(Profile):
                 "  by rule (exact): "
                 + " · ".join(f"{r}×{n}" for r, n in sorted(by_rule.most_common(8)))
             )
-        def _short(path: str) -> str:
-            parts = path.replace("\\", "/").split("/")
-            return "/".join(parts[-2:]) if len(parts) > 2 else path
-
         # Repair-mode affordance (measured: in the live lint-fix benchmark
         # the census alone LOST to naive — for bulk repair the full list is
         # the work queue). Each file's diagnostic block gets its own span,
@@ -141,7 +137,7 @@ class LintProfile(Profile):
                 views[stream_name], "region", a=min(span_lines), b=max(span_lines)
             )
             tag = f" span {fsid}" if fsid else ""
-            file_bits.append(f"{_short(f)}×{n}{tag}")
+            file_bits.append(f"{short_path(f)}×{n}{tag}")
         body.append("  by file (exact): " + " · ".join(file_bits))
         first_stream, first_line = diags[0][0], diags[0][1]
         first_view = views[first_stream]
@@ -151,7 +147,7 @@ class LintProfile(Profile):
         tag = f" · span {sid}" if sid else ""
         body.append(f"  first diagnostic {first_stream}:L{first_line}-L{end}:{tag}")
         for raw in first_view.text_lines[first_line - 1 : end]:
-            body.append(f"    | {raw[:160]}")
+            body.append(f"    | {raw[:EVIDENCE_LINE_CHARS]}")
 
         rid = "run:PENDING"
         top_rule = by_rule.most_common(1)[0][0] if by_rule else "error"

@@ -136,7 +136,7 @@ ontology, unscoped new verbs) matters as much as what it builds.
 
 ### 5. [EVIDENCE-PLANS — compile the investigation](EVIDENCE-PLANS.md)
 
-The model compiles its exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx investigate`); the harness validates, prices, and executes it locally, and one causally organized digest returns. ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). Shipped v0.25.0; measured in [`evals/plan-collapse-2026-07-19.md`](../evals/plan-collapse-2026-07-19.md).
+The model compiles its exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx plan run`); the harness validates, prices, and executes it locally, and one causally organized digest returns. ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). Shipped v0.25.0; measured in [`evals/plan-collapse-2026-07-19.md`](../evals/plan-collapse-2026-07-19.md).
 
 ---
 

@@ -1,4 +1,4 @@
-# Programmable capture (`ctx eval`): eval set + first measurements
+# Programmable capture (`ctx py`): eval set + first measurements
 
 **Date:** 2026-07-18 · v0.19.0 · mechanism shipped this wave (the Maki
 absorption), measured the same day. Two layers: a deterministic mechanical
@@ -73,7 +73,7 @@ not re-execution** — the store is what makes the blind bet cheap to lose.
 
 Both arms: real `claude -p`, identical fixture/task/tools/turn-cap, `ctx`
 installed, one appended doctrine line. Only difference: the line forbids
-vs recommends `ctx eval`. Grading mechanical against independent ground
+vs recommends `ctx py`. Grading mechanical against independent ground
 truth (`SLOWEST: catalog p95=865`).
 
 | run | arm | turns | duration | cost | out tok | cache-write tok | strict format | content |
@@ -105,7 +105,7 @@ Three findings, none of them the one we expected:
 
 ### Layer 2b — the same task under `ctx wrap` (hooks active, n=1)
 
-| condition | turns | duration | cost | strict format | used `ctx eval` |
+| condition | turns | duration | cost | strict format | used `ctx py` |
 |---|---|---|---|---|---|
 | wrapped (`ctx wrap claude`) | **3** | 17.3s | $0.0289 | ✅ | ❌ (script file + python) |
 
@@ -113,7 +113,7 @@ The wrapped session matched the eval-arm's economy (3 turns, $0.029),
 produced the **only fully strict-correct cheap run of the five**, and
 *still* did not adopt the verb: it wrote `analyze_p95.py` to its scratch
 dir and ran python on it (both hook stages fired; nothing steered a
-python invocation toward `ctx eval`). Three conditions, one conclusion:
+python invocation toward `ctx py`). Three conditions, one conclusion:
 **the one-script move is model-natural; the verb is not yet
 discoverable.** The mechanism's gate/provenance benefits are real
 (layer 1) but currently unclaimed in live sessions — a teaching-surface
@@ -121,7 +121,7 @@ problem, not a mechanism problem.
 
 ### Layer 2c — post-fix re-measurement (v0.20.0, run 3 + wrapped run 2)
 
-| run | arm | turns | cost | strict format | used `ctx eval` |
+| run | arm | turns | cost | strict format | used `ctx py` |
 |---|---|---|---|---|---|
 | 3 | no-eval | 4 | $0.0298 | ✅ | — |
 | 3 | eval | 3 | $0.0257 | ❌ | ❌ |
@@ -164,7 +164,7 @@ receipt comes from wrapped runs.)
 
 Wrapped session, extended detector live: the agent opened with a
 `python3 << 'EOF'` heredoc chain, the hook detected it, delivered the
-`ctx eval` teaching at the friction point, and the adoption ledger
+`ctx py` teaching at the friction point, and the adoption ledger
 recorded its first live entry — `{"op": "eval_opportunity", "taught":
 true}`. Session completed 5 turns / $0.039, **strict format ✅**.
 
@@ -184,7 +184,7 @@ stays at zero.
   chain-collapse move in the hook's remediation for denied
   `python -c`/heredoc floods, and scope the terse-output rule to scripts.
 - **S-B's pipeline control belongs in the doctrine**: stream-shaped →
-  `ctx run --shell` pipeline; structured/branching → `ctx eval`; declared
+  `ctx run --shell` pipeline; structured/branching → `ctx py`; declared
   N-step → `ctx seq`.
 
 ## Caveats (read before citing)

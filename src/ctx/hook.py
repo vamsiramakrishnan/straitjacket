@@ -1,13 +1,63 @@
 """PreToolUse context guard (SPEC §10.2, §11).
 
 Latency contract: this module is on the hot path of every intercepted tool
-call. It imports only stdlib modules that are already loaded by the CLI fast
-path (json, os, re, sys, shlex, pathlib, tomllib) and never touches the
-artifact store, git, or the network.
+call, in a fresh interpreter each time, so its import graph is paid thousands
+of times a session. It never touches the artifact store, git, or the network.
+
+Nothing here is "already loaded" and therefore free — `ctx.cli`'s fast path
+imports only `sys`, so this module pays for its entire graph on every call.
+(This contract used to assert the opposite, which is how the graph came to be
+the dominant term in per-call latency: it costs an order of magnitude more
+than classification itself, which is a few hundred microseconds.) Measured
+end-to-end (median wall clock of the real
+`ctx hook claude-code pre-tool-use` subprocess, n=51 interleaved, CPython
+3.11, warm page cache; bare `python -c pass` on the same box is 10.3 ms, so
+that is the floor):
+
+    payload            before     after
+    Bash (command)     41.5 ms    23.9 ms
+    Read               34.9 ms    27.2 ms
+    Grep (search)      29.9 ms    22.2 ms
+
+The budget this module actually holds itself to, and what enforces it:
+
+* Module scope imports **json, os, re, shlex, sys only** — nothing that
+  transitively pulls `typing` (~4.3 ms), `pathlib` (~4.7 ms), `dataclasses`
+  (~9.8 ms via `inspect` → `ast`/`dis`/`tokenize`/`linecache`), `tempfile`,
+  `subprocess`, `argparse`, or any third-party module. Those figures are the
+  marginal cost each one adds back to *this* graph, measured the same way.
+  `os.path` does the path work; `Path` is for globbing and `.parts`, neither
+  of which happens per call.
+* Annotations only ever need `Any`, and `from __future__ import annotations`
+  makes annotations strings, so `typing` is imported nowhere at runtime.
+* `tomllib` (~4 ms) is imported lazily inside `_load_guard_policy` and only
+  when a policy TOML is actually present *and* the parsed-policy cache is
+  stale — the steady state never pays it.
+* The same discipline binds `ctx.engagement`, `ctx.reflex` and
+  `ctx.substitute`, because this module imports them per call; a heavy import
+  added to any of them lands on this hot path.
+* Per-call work is incremental or bounded, never proportional to session
+  history: see `_failure_available` (cursor over an append-only ledger, not a
+  rescan) and `_symbols_resolvable` (bounded level-order scan, not `os.walk`).
 
 Output contract: exactly one JSON object on stdout for every code path.
-Internal errors follow the configured policy — fail-open (`allow`) in the
-default guarded mode, because a broken guard must not brick the workspace.
+
+Internal errors never silently become permission. On the INPUT side
+(PreToolUse) an internal error follows ``[guard] internal_error``: ``allow``
+by default (a broken guard must not brick the workspace, SPEC §10.2),
+``deny`` when configured — and that ``deny`` is honoured even if the failure
+happened while loading the policy itself. When the configured value cannot be
+determined at all (a ctx.toml that is present but unreadable), the guard
+answers ``force_ask`` rather than guessing in either direction. Every internal
+error is recorded as one line in ``.ctx-session-reads/guard-failures.jsonl``
+with the stage that broke.
+
+On the OUTPUT side the emission gate (``_emission_gate``) fails CLOSED: once a
+tool result is known to be over budget, no bug in gate code may release it raw.
+Failures there degrade to a bounded digest carrying a retrieval handle
+(``ctx get blob:<id>``, or a spill file under
+``.ctx-session-reads/gate-fallback/`` if the store is what broke) — bounded and
+retrievable, never "everything" and never "nothing".
 
 Two-layer steering design ("rewrite, don't reject"):
 
@@ -75,8 +125,32 @@ import os
 import re
 import shlex
 import sys
-from pathlib import Path
-from typing import Any
+
+# Emission-governor tier size, imported rather than re-typed. ctx.engagement
+# is stdlib-only and is already a per-call hot-path module (see
+# tests/test_hook_hot_path.py::_HOT_MODULES), so the single source of truth
+# costs nothing here. The Rust shim names it again in its own language; the
+# two are pinned equal by tests/test_cross_language_constants.py.
+from ctx.engagement import EMISSION_NUDGE_TOKENS_DEFAULT
+
+# The house ledger directory, named and joined in exactly one place
+# (ctx.sessiondir). That module imports `os` only, for this contract.
+from ctx.proxywindow import read_window_doc
+from ctx.sessiondir import LEDGER_DIR_NAME as _LEDGER_DIR_NAME
+from ctx.sessiondir import session_reads_dir
+
+# `pathlib` (~4.2 ms) and `typing` (~2.3 ms) are deliberately NOT imported at
+# module scope — see the latency contract above. Every path expression on the
+# per-call path uses `os.path`, which is already loaded; the one `Path` this
+# module still needs is in `main_session_start`, which runs once per session
+# next to far heavier imports and takes it lazily. `Any` is only ever an
+# annotation, and `from __future__ import annotations` makes annotations
+# strings, so it is never needed at runtime. The guard below is spelled with a
+# local constant rather than `from typing import TYPE_CHECKING`, because that
+# import would pull in the very module the hot path is avoiding.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import Any
 
 DECISION_ALLOW = {"decision": "allow"}
 
@@ -130,8 +204,11 @@ _WINDOW_PRESSURE_PCT_DEFAULT = 70  # window fullness (%) at which budgets tighte
 # Universal emission gate: a PostToolUse tool result larger than this many
 # bytes is replaced by a bounded digest. Keep in sync with config.Budgets.
 _MAX_TOOL_OUTPUT_BYTES_DEFAULT = 16384
-_LEDGER_DIR_NAME = ".ctx-session-reads"
 _POLICY_FILENAME = "ctx-policy.toml"  # compiled learned-policy epoch
+# Internal-error telemetry + the emission gate's fail-closed spill area.
+_GUARD_FAILURE_LEDGER = "guard-failures.jsonl"
+_GATE_FALLBACK_DIR = "gate-fallback"
+_GATE_FAILURE_HEAD_BYTES = 2048  # bounded excerpt inside a gate-failure digest
 _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
 
 _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
@@ -193,20 +270,62 @@ def _tool_kind(tool_name: str) -> str | None:
 # `ctx run` capture would hang or change semantics, so they stay plain deny.
 _NO_REWRITE_PROGS = {"less", "more", "vi", "vim", "nano", "emacs", "top", "htop", "watch", "ssh", "xargs"}
 
+# A follow flag means the command never exits. `head`/`tail` already refuse to
+# be rewritten for this reason, but the same shape rides on journalctl, docker
+# logs, kubectl logs and friends — and those were being rewritten into a
+# *blocking* `ctx run`, which waits out the full 600s timeout. Steering the
+# model into a hang is worse than not steering it at all. These get `--bg`,
+# which returns a job handle immediately and is what the skill already teaches.
+#
+# `-f` is badly overloaded — it is *file* in `grep -f`, `make -f`,
+# `docker build -f`, and *force* in `rm -f`/`cp -f`. Treating every `-f` as
+# follow backgrounds builds and searches, which is its own bug. So the short
+# form counts only for the programs where it genuinely means follow (matched
+# with the log-reading subcommand where one exists); the long `--follow` is
+# unambiguous and counts anywhere.
+_FOLLOW_PROGS = {"tail", "head", "journalctl"}
+_FOLLOW_SUBCOMMANDS = {"docker": "logs", "podman": "logs", "kubectl": "logs",
+                       "oc": "logs", "nerdctl": "logs", "heroku": "logs"}
+
+
+def _follows_forever(argv: list[str]) -> bool:
+    """Does this invocation follow a stream, so that it never terminates?
+
+    A foreground capture of such a command blocks until the timeout, so the
+    caller steers it to `--bg` instead. Conservative by construction: a false
+    negative just means the old behaviour, while a false positive would
+    background a build the model needed to read inline."""
+    if not argv:
+        return False
+    prog = os.path.basename(argv[0])
+    rest = argv[1:]
+    if any(a == "--follow" or a.startswith("--follow=") for a in rest):
+        return True
+    short_means_follow = prog in _FOLLOW_PROGS or (
+        prog in _FOLLOW_SUBCOMMANDS
+        and any(a == _FOLLOW_SUBCOMMANDS[prog] for a in rest)
+    )
+    if not short_means_follow:
+        return False
+    return any(
+        a == "-f" or (len(a) > 1 and a[0] == "-" and a[1] != "-" and "f" in a[1:])
+        for a in rest
+    )
+
 
 _POLICY_CACHE_NAME = "guard-policy-cache.json"
 
 
-def _policy_cache_key(paths: list[Path]) -> list[list[Any]]:
+def _policy_cache_key(paths: list[str]) -> list[list[Any]]:
     """(path, mtime_ns, size) triples for every policy source file; a missing
     file contributes a zero row so appearing/disappearing invalidates too."""
     key: list[list[Any]] = []
     for p in paths:
         try:
-            st = p.stat()
-            key.append([str(p), st.st_mtime_ns, st.st_size])
+            st = os.stat(p)
+            key.append([p, st.st_mtime_ns, st.st_size])
         except OSError:
-            key.append([str(p), 0, 0])
+            key.append([p, 0, 0])
     return key
 
 
@@ -236,18 +355,28 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "demoted_commands": [],
         "engagement_mode": "auto",
         "engagement_activate_after": 8,
-        "emission_nudge_tokens": 20000,
+        "emission_nudge_tokens": EMISSION_NUDGE_TOKENS_DEFAULT,
+        # Provenance of the guard section, NOT a setting: "default" (no
+        # ctx.toml), "ok" (parsed), "failed" (present but unreadable /
+        # unparseable). The internal-error policy needs to tell "the config
+        # says allow" apart from "we could not find out what it says" — with
+        # only the values above, a broken ctx.toml is indistinguishable from
+        # an absent one, and the deny knob inverts silently.
+        "_guard_config": "default",
     }
     if not workspace_root:
         return policy
-    path = Path(workspace_root) / "ctx.toml"
-    ppath = Path(workspace_root) / _POLICY_FILENAME
-    if not path.is_file() and not ppath.is_file():
+    path = os.path.join(workspace_root, "ctx.toml")
+    ppath = os.path.join(workspace_root, _POLICY_FILENAME)
+    path_is_file = os.path.isfile(path)
+    ppath_is_file = os.path.isfile(ppath)
+    if not path_is_file and not ppath_is_file:
         return policy
-    cache_path = Path(workspace_root) / _LEDGER_DIR_NAME / _POLICY_CACHE_NAME
+    cache_path = session_reads_dir(workspace_root, _POLICY_CACHE_NAME)
     key = _policy_cache_key([path, ppath])
     try:
-        doc = json.loads(cache_path.read_text(encoding="utf-8"))
+        with open(cache_path, encoding="utf-8") as fh:
+            doc = json.load(fh)
         if doc.get("key") == key and isinstance(doc.get("policy"), dict):
             # Fresh defaults first so keys added in a newer ctx win over a
             # cache written by an older one.
@@ -255,11 +384,12 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             return policy
     except Exception:
         pass
-    if path.is_file():
+    if path_is_file:
         try:
             import tomllib
 
-            raw = tomllib.loads(path.read_text(encoding="utf-8"))
+            with open(path, encoding="utf-8") as fh:
+                raw = tomllib.loads(fh.read())
             guard = raw.get("guard") or {}
             budgets = raw.get("budgets") or {}
             policy["mode"] = str(guard.get("mode", policy["mode"]))
@@ -293,17 +423,22 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             policy["emission_nudge_tokens"] = int(
                 eng.get("emission_nudge_tokens", policy["emission_nudge_tokens"])
             )
+            policy["_guard_config"] = "ok"
         except Exception:
-            pass
+            # Still fail-open for every ordinary budget/mode key (a typo in
+            # ctx.toml must not brick the workspace), but record that the
+            # values below are OUR defaults and not the user's choices.
+            policy["_guard_config"] = "failed"
     # Learned policy epoch (compiled, committed ctx-policy.toml): promoted
     # signatures act like allow_commands prefixes; demoted never do. Read in
     # its own fail-open block so a corrupt epoch cannot poison ctx.toml
     # settings (and vice versa).
-    if ppath.is_file():
+    if ppath_is_file:
         try:
             import tomllib
 
-            praw = tomllib.loads(ppath.read_text(encoding="utf-8"))
+            with open(ppath, encoding="utf-8") as fh:
+                praw = tomllib.loads(fh.read())
             if str(praw.get("schema", "")) == "ctx.policy/v1":
                 promoted: list[str] = []
                 for item in praw.get("promoted") or []:
@@ -320,11 +455,13 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         except Exception:
             pass
     try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = cache_path.with_name(
-            f"{_POLICY_CACHE_NAME}.{os.getpid()}.{os.urandom(4).hex()}"
+        cache_dir = os.path.dirname(cache_path)
+        os.makedirs(cache_dir, exist_ok=True)
+        tmp = os.path.join(
+            cache_dir, f"{_POLICY_CACHE_NAME}.{os.getpid()}.{os.urandom(4).hex()}"
         )
-        tmp.write_text(json.dumps({"key": key, "policy": policy}), encoding="utf-8")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"key": key, "policy": policy}))
         os.replace(tmp, cache_path)
     except Exception:
         pass
@@ -336,18 +473,10 @@ def _window_pct(workspace_root: str | None) -> float | None:
     ``<workspace>/.ctx-session-reads/proxy/window.json``. Fail-open by
     contract: any missing file, IO error, or malformed document → None
     (no pressure is ever applied because of broken telemetry)."""
-    if not workspace_root:
+    pct = read_window_doc(workspace_root).get("window_pct")
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)):
         return None
-    try:
-        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json")
-        with open(path, "r", encoding="utf-8") as fh:
-            doc = json.load(fh)
-        pct = doc.get("window_pct")
-        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
-            return None
-        return float(pct)
-    except Exception:
-        return None
+    return float(pct)
 
 
 def _apply_window_pressure(
@@ -459,13 +588,13 @@ def _steering_allows(policy: dict[str, Any]) -> bool:
 
 # ------------------------------------------------- eval teaching surface
 # Measured gap (evals/eval-collapse-2026-07-18.md, finding 2): agents write
-# raw `python3 << 'EOF'` heredocs / `python -c` chains instead of `ctx eval`
+# raw `python3 << 'EOF'` heredocs / `python -c` chains instead of `ctx py`
 # — 0/3 live adoption, because the verb has no teaching surface on this
 # host. When such a command hits the guard, the remediation additionally
 # teaches the collapse move. Teaching-only this wave: heredocs are NEVER
-# auto-rewritten into `ctx eval` (quoting hazards).
+# auto-rewritten into `ctx py` (quoting hazards).
 _EVAL_TEACH = (
-    "Or collapse the chain: ctx eval '<python script>' — the script becomes "
+    "Or collapse the chain: ctx py '<python script>' — the script becomes "
     "an addressable blob and only a bounded digest returns."
 )
 
@@ -481,7 +610,7 @@ _PY_PROG_RE = re.compile(r"^python(3(\.\d+)?)?$")
 def _eval_opportunity(command: str) -> bool:
     """True when ``command`` is a raw python invocation carrying inline code
     — a heredoc/herestring (``<<``) or a ``-c`` flag — i.e. the chain shape
-    ``ctx eval`` collapses. Conservative by construction: the program must
+    ``ctx py`` collapses. Conservative by construction: the program must
     be python/python3/python3.N after unwrapping, and ``-c`` counts only
     among python's own leading options (before ``-m``, ``--``, or a script
     path), so ``python3 -m pytest`` and ``python3 script.py`` never match."""
@@ -516,7 +645,7 @@ def _eval_opportunity(command: str) -> bool:
 def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
     """Adoption telemetry for the eval teaching surface: append one JSON
     line to ``<workspace>/.ctx-session-reads/eval-adoption.jsonl``. This is
-    the denominator of the measurement loop (actual ``ctx eval`` use is
+    the denominator of the measurement loop (actual ``ctx py`` use is
     counted in store telemetry as op="eval"). Fail-open by contract: any IO
     error counts nothing and never blocks a decision."""
     if not workspace_root:
@@ -524,7 +653,7 @@ def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
     try:
         import time
 
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         path = os.path.join(ledger_dir, "eval-adoption.jsonl")
         line = json.dumps(
@@ -571,7 +700,7 @@ def _note_records_opportunity(workspace_root: str | None, taught: bool) -> None:
     try:
         import time
 
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         path = os.path.join(ledger_dir, "records-adoption.jsonl")
         line = json.dumps(
@@ -584,44 +713,149 @@ def _note_records_opportunity(workspace_root: str | None, taught: bool) -> None:
         pass
 
 
+_FAILURE_CURSOR_NAME = "failure-available.json"
+# Matched against raw ledger bytes: both markers must appear on the SAME line,
+# exactly as the original text scan required. ASCII-only, so byte matching is
+# equivalent to text matching and cannot raise on a malformed UTF-8 ledger.
+_PYTEST_FAMILY_MARK = b'"family": "pytest"'
+_EMITTED_MARK = b"intervention_emitted"
+
+
 def _failure_available(workspace_root: str | None) -> bool:
     """True when a test run has been captured this session, so the
-    ``fails last | in-changed`` slice has data to return. Cheap ledger scan;
-    False on any doubt, so the pytest collapse never fires blind."""
+    ``fails last | in-changed`` slice has data to return. False on any doubt,
+    so the pytest collapse never fires blind.
+
+    Incremental, not O(file). ``interventions.jsonl`` is strictly append-only
+    and grows for the whole session; the original re-scanned it end to end on
+    every call, which is O(N) per call and O(N²) over a session (measured: a
+    50k-line / 5 MiB ledger with no pytest line cost 4.81 ms *per call*, and
+    the miss case never short-circuits). Instead a cursor sidecar records how
+    many bytes have been scanned and what was found, so each call reads only
+    the bytes appended since the last one — linear over the session.
+
+    The cursor is a pure derivation of the ledger and is used only when the
+    ledger has evolved by pure append (size and mtime both non-decreasing);
+    anything else falls back to a full scan. Deleting it is always safe, and
+    every failure degrades to the plain full scan or to False."""
     if not workspace_root:
         return False
+    ledger_dir = session_reads_dir(workspace_root)
+    path = os.path.join(ledger_dir, "interventions.jsonl")
     try:
-        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "interventions.jsonl")
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                if '"family": "pytest"' in line and "intervention_emitted" in line:
-                    return True
+        st = os.stat(path)
     except OSError:
         return False
-    return False
+
+    cursor_path = os.path.join(ledger_dir, _FAILURE_CURSOR_NAME)
+    start = 0
+    found = False
+    try:
+        with open(cursor_path, "rb") as fh:
+            doc = json.loads(fh.read())
+        prev_scanned = int(doc["scanned"])
+        # Trust the cursor only under pure-append evolution.
+        if (int(doc["size"]) <= st.st_size and int(doc["mtime_ns"]) <= st.st_mtime_ns
+                and 0 <= prev_scanned <= st.st_size):
+            start = prev_scanned
+            found = bool(doc["found"])
+    except Exception:
+        start, found = 0, False
+
+    if found:
+        return True  # a captured failure is on record and cannot un-record
+
+    scanned = start
+    try:
+        with open(path, "rb") as fh:
+            if start:
+                fh.seek(start)
+            chunk = fh.read()
+    except OSError:
+        return False
+    # Only whole lines are consumed; a partial trailing line (a concurrent
+    # append caught mid-write) is left for the next call rather than split
+    # across two scans, which could hide a match.
+    cut = chunk.rfind(b"\n")
+    if cut >= 0:
+        for line in chunk[: cut + 1].splitlines():
+            if _PYTEST_FAMILY_MARK in line and _EMITTED_MARK in line:
+                found = True
+                break
+        scanned = start + cut + 1
+
+    if scanned != start or found:
+        try:
+            tmp = os.path.join(
+                ledger_dir,
+                f"{_FAILURE_CURSOR_NAME}.{os.getpid()}.{os.urandom(4).hex()}",
+            )
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "size": st.st_size, "mtime_ns": st.st_mtime_ns,
+                    "scanned": scanned, "found": found,
+                }, sort_keys=True))
+            os.replace(tmp, cursor_path)
+        except Exception:
+            pass
+    return found
+
+
+_SKIP_DIRS = ("node_modules", "venv", "__pycache__", "dist", "build")
+_SYMBOLS_SCAN_ENTRIES = 2000   # file budget, as before
+_SYMBOLS_SCAN_DIRS = 500       # NEW: directory budget — os.walk had none
 
 
 def _symbols_resolvable(workspace_root: str | None) -> bool:
     """Cheap check: can `ctx q refs` resolve symbols in this repo? True when a
     SCIP index is present or the tree has Python sources (ast/jedi handle
     those). Bounded scan; on a miss a symbol grep degrades to bounded content
-    search, never to nothing. False on any doubt."""
+    search, never to nothing. False on any doubt.
+
+    Breadth-first, not ``os.walk``. The question is only "is there a ``.py``
+    anywhere in this tree", and real repos answer it at depth 0-1 (``setup.py``
+    at the root, ``src/``, ``tests/``). ``os.walk`` is depth-first: it descends
+    fully into whichever subdirectory comes first and can spend the entire file
+    budget inside one unrelated subtree — slower, and on a repo with a large
+    non-Python subtree it could exhaust the budget and answer False for a repo
+    that plainly has Python. A level-order scan reaches the shallow, decisive
+    entries first, so it is both cheaper and more accurate.
+
+    The old walk was also unbounded in *directories*: the 2000 budget counted
+    only files, so a wide tree of near-empty directories was never cut off.
+    A directory budget is enforced alongside the file budget now.
+    """
     if not workspace_root:
         return False
     try:
-        root = Path(workspace_root)
-        if (root / "index.scip").is_file() or (root / ".ctx" / "index.scip").is_file():
+        if (os.path.isfile(os.path.join(workspace_root, "index.scip"))
+                or os.path.isfile(os.path.join(workspace_root, ".ctx", "index.scip"))):
             return True
-        seen = 0
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames
-                           if not d.startswith(".") and d not in
-                           ("node_modules", "venv", "__pycache__", "dist", "build")]
-            for fn in filenames:
-                if fn.endswith(".py"):
+        queue = [workspace_root]
+        head = 0  # index cursor gives FIFO (level) order without an O(n) pop(0)
+        files_seen = 0
+        while head < len(queue):
+            if head >= _SYMBOLS_SCAN_DIRS:
+                return False
+            directory = queue[head]
+            head += 1
+            try:
+                entries = list(os.scandir(directory))
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if is_dir:
+                    if not entry.name.startswith(".") and entry.name not in _SKIP_DIRS:
+                        queue.append(entry.path)
+                    continue
+                if entry.name.endswith(".py"):
                     return True
-                seen += 1
-                if seen > 2000:  # bounded — don't walk a huge non-Python tree
+                files_seen += 1
+                if files_seen > _SYMBOLS_SCAN_ENTRIES:
                     return False
     except Exception:
         return False
@@ -637,12 +871,51 @@ def _note_collapse(workspace_root: str | None, shape: str, rung: str) -> None:
     try:
         import time
 
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         with open(os.path.join(ledger_dir, "collapse.jsonl"), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(
                 {"op": "collapse", "shape": shape, "rung": rung, "ts": time.time()},
                 sort_keys=True) + "\n")
+    except Exception:
+        pass
+
+
+def _note_guard_failure(
+    workspace_root: str | None, *, op: str, stage: str, exc: BaseException
+) -> None:
+    """Signal for an INTERNAL guard/gate error: one JSON line to
+    ``<workspace>/.ctx-session-reads/guard-failures.jsonl``.
+
+    Internal errors used to be indistinguishable from a clean allow — the
+    whole point of the fail-closed work is that a broken gate is now both
+    bounded AND visible. ``stage`` names which part broke (input / policy /
+    classify / normalize / digest / fallback-*), so a blanket "the guard
+    failed" is never all an operator gets.
+
+    Fail-open by contract (a telemetry write must never be the thing that
+    blocks a tool call) and bounded (the detail is truncated)."""
+    if not workspace_root:
+        return
+    try:
+        import time
+
+        ledger_dir = session_reads_dir(workspace_root)
+        os.makedirs(ledger_dir, exist_ok=True)
+        line = json.dumps(
+            {
+                "op": op,
+                "stage": stage,
+                "error": type(exc).__name__,
+                "detail": str(exc)[:200],
+                "ts": time.time(),
+            },
+            sort_keys=True,
+        )
+        with open(
+            os.path.join(ledger_dir, _GUARD_FAILURE_LEDGER), "a", encoding="utf-8"
+        ) as fh:
+            fh.write(line + "\n")
     except Exception:
         pass
 
@@ -664,11 +937,21 @@ def _deny_cmd(
     prog = os.path.basename(argv[0]) if argv else ""
     if prog in _NO_REWRITE_PROGS:
         return decision
+    # A never-terminating command must not be steered into a blocking capture.
+    bg = " --bg" if _follows_forever(argv) else ""
     if has_meta and original:
-        cmd = "ctx run --shell -- " + shlex.quote(original)
+        cmd = f"ctx run{bg} --shell -- " + shlex.quote(original)
     else:
-        cmd = "ctx run -- " + " ".join(shlex.quote(a) for a in argv)
-    decision["_rewrite"] = {"command": cmd, "reason": _REWRITE_REASON}
+        cmd = f"ctx run{bg} -- " + " ".join(shlex.quote(a) for a in argv)
+    reason = _REWRITE_REASON
+    if bg:
+        reason = (
+            "CTX_CONTEXT_GUARD: this follows output and never exits, so a "
+            "foreground capture would block until the timeout. Backgrounded "
+            "instead — it returns a job handle immediately; read a bounded "
+            "tail with `ctx job <id>`, or collect it with `ctx job <id> --wait`."
+        )
+    decision["_rewrite"] = {"command": cmd, "reason": reason}
     return decision
 
 
@@ -793,6 +1076,59 @@ def _path_outside(path_str: str, workspace_root: str | None) -> bool:
 def classify_command(
     command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
 ) -> dict[str, str]:
+    """Classify a command, then abbreviate any lesson already taught.
+
+    The guard has ~20 places that build remediation prose, and each one used to
+    re-send its full explanation every time. Replaying this repo's own
+    transcripts found sessions the harness made *worse* (128 -> 439 tokens,
+    -243%) purely from repeated advice. Decay is applied here, once, so every
+    builder inherits it instead of 20 of them each remembering to."""
+    return _classify_command_inner(command, policy, _depth, cwd=cwd)
+
+
+def _lesson_key(reason: str) -> str:
+    """A stable name for the lesson a reason teaches: its headline, not the
+    command it happened to be about."""
+    head = reason.strip().splitlines()[0] if reason.strip() else ""
+    head = head.replace("CTX_CONTEXT_GUARD:", "").strip()
+    return " ".join(head.split()[:6]).rstrip(".,")
+
+
+def _decay_taught_reason(decision: dict[str, Any], workspace_root: str | None) -> None:
+    """Drop teaching prose already sent this session, keeping the verdict line.
+
+    Scope is deliberately narrow: only a decision that *allows* the call while
+    rewriting it. That is transparent usability steering — the command runs,
+    just in bounded form. Safety-class outcomes (secret paths, workspace
+    escape, committed deny_commands) are deny/force_ask and are therefore
+    untouched by construction, which is what the rule-7 invariant in
+    tests/test_safety_invariant.py requires: no adaptive state may reword a
+    safety denial, however many times it fires."""
+    if workspace_root is None or not isinstance(decision, dict):
+        return
+    if decision.get("_safety") or not decision.get("_rewrite"):
+        return
+    try:
+        from ctx.engagement import note_taught
+    except Exception:
+        return
+    for holder in (decision, decision.get("_rewrite")):
+        if not isinstance(holder, dict):
+            continue
+        reason = holder.get("reason")
+        if not isinstance(reason, str) or "\n" not in reason:
+            continue  # already one line: nothing to save
+        try:
+            if note_taught(workspace_root, _lesson_key(reason)):
+                continue  # first time: teach it in full
+            holder["reason"] = reason.splitlines()[0].strip()
+        except Exception:
+            continue
+
+
+def _classify_command_inner(
+    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
+) -> dict[str, str]:
     """Classify a shell command string. Conservative and config-driven; not a
     shell-security parser (SPEC §11)."""
     stripped = command.strip()
@@ -846,7 +1182,12 @@ def classify_command(
     canonical = " ".join(argv)
     for prefix in policy.get("deny_commands", []):
         if canonical.startswith(prefix):
-            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+            # Safety class: a rule the repo committed on purpose. Its wording is
+            # frozen by the rule-7 invariant (tests/test_safety_invariant.py) —
+            # no adaptive state may reword it, so mark it and never decay it.
+            d = _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+            d["_safety"] = "1"
+            return d
     # A prefix allow/promotion applies to a single command only. When shell
     # metacharacters survived the chain/redirect handling above (e.g.
     # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary
@@ -1019,7 +1360,7 @@ def _ledger_charge(workspace_root: str | None, session_id: str, nbytes: int) -> 
         return 0
     try:
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id)[:80] or "unknown"
-        ledger_dir = os.path.join(workspace_root, _LEDGER_DIR_NAME)
+        ledger_dir = session_reads_dir(workspace_root)
         os.makedirs(ledger_dir, exist_ok=True)
         path = os.path.join(ledger_dir, safe + ".count")
         # Parallel tool calls fire hooks concurrently; an advisory flock
@@ -1061,17 +1402,12 @@ def _price_note(size_bytes: int, workspace_root: str | None) -> str:
         from ctx.textutil import fmt_tokens_coarse
 
         note = f"{fmt_tokens_coarse(tok)} tok"
-        if workspace_root:
-            try:
-                path = os.path.join(
-                    workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json"
-                )
-                with open(path, "r", encoding="utf-8") as fh:
-                    limit = json.load(fh).get("context_limit")
-                if isinstance(limit, int) and limit > 0:
-                    note += f" ≈ {max(1, round(100 * tok / limit))}% of window"
-            except Exception:
-                pass
+        # NB: no `isinstance(limit, bool)` guard — the original had none, and
+        # a wide mechanical edit is not the place to change what a nonsense
+        # `"context_limit": true` renders as.
+        limit = read_window_doc(workspace_root).get("context_limit")
+        if isinstance(limit, int) and limit > 0:
+            note += f" ≈ {max(1, round(100 * tok / limit))}% of window"
         return f" ({note})"
     except Exception:
         return ""
@@ -1162,6 +1498,12 @@ def classify_read(
     return dict(DECISION_ALLOW)
 
 
+# The workspace root for the decision currently being built. classify() is the
+# only writer and runs once per hook invocation, so this is a hand-off between
+# two functions in one call, not shared mutable state across calls.
+_APPLY_ROOT: dict[str, Any] = {}
+
+
 def _apply_rewrite(
     decision: dict[str, Any],
     tool_input: dict[str, Any],
@@ -1170,6 +1512,8 @@ def _apply_rewrite(
     """Convert the layer-1 ``_rewrite`` hint into the public ``rewrite``
     field, preserving the original tool_input key names and every unrelated
     field (description, timeout, …) untouched in ``updatedInput``."""
+    _decay_taught_reason(decision, _APPLY_ROOT.get("root"))
+    decision.pop("_safety", None)
     hint = decision.pop("_rewrite", None)
     if not hint:
         return decision
@@ -1184,14 +1528,29 @@ def _apply_rewrite(
     return decision
 
 
-def classify(payload: dict[str, Any]) -> dict[str, str]:
+def classify(
+    payload: dict[str, Any], policy: dict[str, Any] | None = None
+) -> dict[str, str]:
+    """Classify one intercepted tool call.
+
+    ``policy`` may be supplied by a caller that has already loaded it (the
+    hook entry point does, so ``_load_guard_policy`` runs once per hook call
+    instead of twice); omitted, it is loaded here exactly as before. The
+    decision is a pure function of (payload, policy) either way.
+    """
     tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
     tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
 
     workspace_root = _resolve_workspace_root(payload)
-    policy = _load_guard_policy(workspace_root)
+    if policy is None:
+        policy = _load_guard_policy(workspace_root)
+    # The policy dict already carries computed extras (_window_note); the root
+    # rides along so remediation can tell a first lesson from a repeat. Set on
+    # every path, not just the load path — a caller-supplied policy needs it too.
+    policy["_ws_root"] = workspace_root
+    _APPLY_ROOT["root"] = workspace_root
 
     if policy.get("mode") == "advisory":
         return dict(DECISION_ALLOW)
@@ -1259,9 +1618,14 @@ def classify(payload: dict[str, Any]) -> dict[str, str]:
             try:
                 from ctx import substitute
 
+                # Both probes do I/O (a ledger scan and a repo scan) but are
+                # consulted by only two of the recogniser's branches, so they
+                # are handed over as thunks and evaluated only if the branch
+                # that needs them is reached. Same answers, paid far less often.
                 sub = substitute.collapse(
-                    command, failure_available=_failure_available(workspace_root),
-                    symbols_resolvable=_symbols_resolvable(workspace_root))
+                    command,
+                    failure_available=lambda: _failure_available(workspace_root),
+                    symbols_resolvable=lambda: _symbols_resolvable(workspace_root))
                 if sub is not None:
                     decision = dict(DECISION_ALLOW)
                     decision["_rewrite"] = {"command": sub.command, "reason": sub.reason}
@@ -1475,6 +1839,21 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in decision.items() if k != "rewrite" and not k.startswith("_")}
 
 
+#: The emission-governor nudge, verbatim. Named because the Rust shim
+#: (native/ctx-hook-native) has to carry the same prose and the two must stay
+#: byte-identical — tests/test_native_hook.py compares rendered output only
+#: when the binary happens to be built, so
+#: tests/test_cross_language_constants.py compares this template against the
+#: Rust source directly. ADVISORY text: this is a PostToolUse nudge, never a
+#: safety-class decision string (Rule 7).
+EMISSION_NUDGE_TEMPLATE = (
+    "CTX_EMISSION_GOVERNOR: session output ~{tokens} tokens "
+    "(avg {per_turn}/turn). Output volume is the dominant "
+    "cost+latency driver. Keep narration terse; cite coordinates "
+    "(file:line, run:/span handles) instead of restating content."
+)
+
+
 def _emission_nudge(payload: dict[str, Any]) -> str | None:
     """Emission governor (mechanism B): the symmetric partner of the read
     budget. The proxy measures cumulative output tokens; when the session
@@ -1486,15 +1865,13 @@ def _emission_nudge(payload: dict[str, Any]) -> str | None:
         workspace_root = _resolve_workspace_root(payload)
         if not workspace_root:
             return None
-        path = os.path.join(workspace_root, _LEDGER_DIR_NAME, "proxy", "window.json")
-        with open(path, "r", encoding="utf-8") as fh:
-            doc = json.load(fh)
+        doc = read_window_doc(workspace_root)
         cum_output = int(doc.get("cum_output") or 0)
         requests = int(doc.get("requests") or 0)
         if requests <= 0 or cum_output <= 0:
             return None
         policy = _load_guard_policy(workspace_root)
-        step = max(1, int(policy.get("emission_nudge_tokens", 20000)))
+        step = max(1, int(policy.get("emission_nudge_tokens", EMISSION_NUDGE_TOKENS_DEFAULT)))
         tier = cum_output // step
         if tier < 1:
             return None
@@ -1505,11 +1882,8 @@ def _emission_nudge(payload: dict[str, Any]) -> str | None:
 
         if not claim_emission_tier(workspace_root, tier):
             return None
-        return (
-            f"CTX_EMISSION_GOVERNOR: session output ~{cum_output:,} tokens "
-            f"(avg {per_request:.0f}/turn). Output volume is the dominant "
-            "cost+latency driver. Keep narration terse; cite coordinates "
-            "(file:line, run:/span handles) instead of restating content."
+        return EMISSION_NUDGE_TEMPLATE.format(
+            tokens=f"{cum_output:,}", per_turn=f"{per_request:.0f}"
         )
     except Exception:
         return None
@@ -1612,12 +1986,113 @@ def _normalize_tool_response(tr: Any) -> tuple[str, str]:
     return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
 
 
+def _coerce_text(value: Any) -> str:
+    """Last-resort text for a tool_response shape ``_normalize_tool_response``
+    could not handle. Never raises; returns "" only if even ``repr`` fails."""
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=repr)
+    except Exception:
+        pass
+    try:
+        return repr(value)
+    except Exception:
+        return ""
+
+
+def _gate_failure_digest(
+    ws_root: str | None,
+    tool_name: str,
+    stdout: str,
+    stderr: str,
+    exc: BaseException,
+) -> str:
+    """The bounded stand-in emitted when the emission gate itself breaks.
+
+    Fail-CLOSED contract: over-budget raw bytes never reach the model just
+    because gate code has a bug. The content is not discarded either — it is
+    retained and named by a handle, in descending order of fidelity:
+
+    1. the artifact store (``ctx get blob:<id>`` — the normal retrieval path);
+    2. a spill file under ``<ws>/.ctx-session-reads/gate-fallback/`` when the
+       store itself is the thing that broke;
+    3. nothing retained — then the excerpt below is all that survives, and the
+       digest says so plainly rather than implying a handle that does not work.
+
+    Every step is individually guarded: this function is the net, so it must
+    not add a new way to fail. Cost is bounded (one hash, one write).
+    """
+    raw = stdout if not stderr else (stdout + ("\n" if stdout else "") + stderr)
+    data = raw.encode("utf-8", "replace")
+    nbytes = len(data)
+    handle: str | None = None
+
+    try:
+        from ctx.store import Store
+        from ctx.workspace import resolve_workspace
+
+        ws = resolve_workspace(ws_root or ".")
+        blob = Store(
+            ws.workspace_id, retention_days=ws.config.store.retention_days
+        ).put_blob(data)
+        handle = f"ctx get blob:{blob[:12]}"
+    except Exception as inner:
+        _note_guard_failure(ws_root, op="emission_gate", stage="fallback-store", exc=inner)
+
+    if handle is None and ws_root:
+        try:
+            import hashlib
+
+            rel = os.path.join(_LEDGER_DIR_NAME, _GATE_FALLBACK_DIR)
+            spill_dir = os.path.join(ws_root, rel)
+            os.makedirs(spill_dir, exist_ok=True)
+            name = hashlib.sha256(data).hexdigest()[:12] + ".txt"
+            path = os.path.join(spill_dir, name)
+            if not os.path.exists(path):
+                tmp = path + f".{os.getpid()}.tmp"
+                with open(tmp, "wb") as fh:
+                    fh.write(data)
+                os.replace(tmp, path)
+            handle = "read " + os.path.join(rel, name)
+        except Exception as inner:
+            _note_guard_failure(ws_root, op="emission_gate", stage="fallback-spill", exc=inner)
+
+    head = data[:_GATE_FAILURE_HEAD_BYTES].decode("utf-8", "replace")
+    lines = [
+        f"[ctx gate-failed tool={tool_name or '?'} bytes={nbytes} "
+        f"error={type(exc).__name__}]",
+        "CTX_EMISSION_GATE: the output gate failed internally, so this result "
+        "was NOT emitted raw (fail-closed): an unbounded tool result must "
+        "never reach the context because gate code broke.",
+    ]
+    if handle:
+        lines.append(f"Full output retained — retrieve on demand with:  {handle}")
+    else:
+        lines.append(
+            "Full output could NOT be retained; only the excerpt below survives."
+        )
+    lines.append("")
+    lines.append(f"head ({min(nbytes, _GATE_FAILURE_HEAD_BYTES)} of {nbytes} bytes):")
+    lines.append(head)
+    return "\n".join(lines)
+
+
 def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     """The universal output-side gate. When a tool result exceeds the byte
     budget, persist it losslessly and return a bounded digest (with a working
     ``ctx get`` ref) to substitute for the raw output via ``updatedToolOutput``.
-    Returns None to pass the result through untouched. Fail-open: any error →
-    None (the raw output is never lost, only un-digested).
+    Returns None to pass the result through untouched.
+
+    Fail-CLOSED (this used to be fail-open, which meant a bug in gate code
+    silently released unbounded raw output with no telemetry): once the result
+    is known to be over budget, no internal error may return None. Failures
+    below that point degrade to a bounded digest carrying a retrieval handle —
+    "bounded + retrievable", never "everything" and never "nothing".
+
+    Returning None stays legal only for the cases that are genuinely *not*
+    gate failures: a flavor with no substitution field, no tool result present,
+    a ctx-authored result (recursion guard), advisory mode, and under-budget
+    output. A broken *policy* read does not open the gate — the built-in
+    default budget is used instead.
 
     Claude Code (``updatedToolOutput``) and Codex (``decision:block`` + reason,
     https://learn.chatgpt.com/docs/hooks) both have a verified substitution
@@ -1625,6 +2100,9 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     """
     if flavor not in ("claude-code", "codex"):
         return None
+
+    # -- phase 1: is there anything to gate at all? Pure and cheap; a failure
+    # here means we never saw a tool result, so there is nothing to bound.
     try:
         tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
         tr = None
@@ -1634,24 +2112,55 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
                 break
         if tr is None:
             return None
-        stdout, stderr = _normalize_tool_response(tr)
+    except Exception:
+        return None
 
-        # Never digest our own digests or ctx's own tool results (recursion /
-        # double-wrap guard). "[ctx " covers every ctx header — run: (digest),
-        # get / search / stats (retrieval) — so a large `ctx get` slice run via
-        # Bash is not itself re-digested. "densified:" is the reflex arc's
-        # declared-densification header prepended above the "[ctx run:" line.
-        if stdout.lstrip().startswith(("[ctx ", "densified:")) or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
-            return None
-
+    # Resolved early (pure, cheap) so every failure below has a ledger to
+    # report into instead of vanishing.
+    ws_root: str | None = None
+    try:
         ws_root = _resolve_workspace_root(payload)
+    except Exception as exc:
+        _note_guard_failure(None, op="emission_gate", stage="workspace", exc=exc)
+
+    try:
+        stdout, stderr = _normalize_tool_response(tr)
+    except Exception as exc:
+        # We hold bytes we cannot interpret — coerce rather than pass through.
+        _note_guard_failure(ws_root, op="emission_gate", stage="normalize", exc=exc)
+        stdout, stderr = _coerce_text(tr), ""
+
+    # Never digest our own digests or ctx's own tool results (recursion /
+    # double-wrap guard). "[ctx " covers every ctx header — run: (digest),
+    # get / search / stats (retrieval) — so a large `ctx get` slice run via
+    # Bash is not itself re-digested. "densified:" is the reflex arc's
+    # declared-densification header prepended above the "[ctx run:" line.
+    if stdout.lstrip().startswith(("[ctx ", "densified:")) or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
+        return None
+
+    # -- phase 2: budget. A broken policy read degrades to the built-in
+    # default threshold; it must not skip the gate.
+    threshold = _MAX_TOOL_OUTPUT_BYTES_DEFAULT
+    try:
         policy = _apply_window_pressure(_load_guard_policy(ws_root), ws_root)
         if str(policy.get("mode")) == "advisory":
             return None
-        threshold = int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT))
-        if len(stdout.encode("utf-8")) + len(stderr.encode("utf-8")) <= threshold:
-            return None  # under budget → byte-identical pass-through
+        threshold = int(
+            policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT)
+        )
+    except Exception as exc:
+        _note_guard_failure(ws_root, op="emission_gate", stage="policy", exc=exc)
 
+    try:
+        size = len(stdout.encode("utf-8")) + len(stderr.encode("utf-8"))
+    except Exception:
+        size = threshold + 1  # cannot measure → treat as over budget
+    if size <= threshold:
+        return None  # under budget → byte-identical pass-through
+
+    # -- phase 3: over budget. From here None would mean "emit everything
+    # raw", so every failure degrades to the bounded fallback instead.
+    try:
         is_error = bool(
             payload.get("is_error")
             or payload.get("isError")
@@ -1665,9 +2174,19 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         ws = resolve_workspace(ws_root or ".")
         store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
         text, _short = digest_output(store, ws, tool_name, stdout, stderr, is_error=is_error)
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("digest produced no text")
         return text
-    except Exception:
-        return None
+    except Exception as exc:
+        _note_guard_failure(ws_root, op="emission_gate", stage="digest", exc=exc)
+        try:
+            return _gate_failure_digest(ws_root, tool_name, stdout, stderr, exc)
+        except Exception:
+            # The net itself tore. Still bounded, still explicit.
+            return (
+                "[ctx gate-failed]\nCTX_EMISSION_GATE: the output gate failed and "
+                "the result could not be bounded safely, so it was withheld."
+            )
 
 
 def main_session_start(flavor: str = "antigravity") -> int:
@@ -1686,6 +2205,8 @@ def main_session_start(flavor: str = "antigravity") -> int:
         if ws:
             from ctx.config import load_config
             from ctx.surface import preflight
+
+            from pathlib import Path
 
             sp = load_config(Path(ws)).surface
             if sp.gate != "off":
@@ -1714,19 +2235,35 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     payload on stdin, writes exactly one JSON object on stdout: either a
     no-op ``{}`` or a governor nudge (emission or navigation) in the host
     dialect."""
-    replacement = None
+    replacement: str | None = None
+    nudge: str | None = None
+    payload: dict[str, Any] = {}
     try:
         raw = sys.stdin.read()
-        payload = json.loads(raw) if raw.strip() else {}
-        if not isinstance(payload, dict):
-            payload = {}
+        parsed = json.loads(raw) if raw.strip() else {}
+        payload = parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        payload = {}
+    # Each stage gets its own block. The nudges are advisory; the emission
+    # gate is the safety net, and a failure in an advisory governor must not
+    # skip it (in the old single-try form it did — which is exactly the
+    # fail-open the gate exists to prevent).
+    try:
         # Navigation first: it targets a specific, high-cost wrong pattern;
         # emission is the ambient volume backstop.
         nudge = _navigation_nudge(payload) or _emission_nudge(payload)
+    except Exception:
+        nudge = None
+    try:
         # Universal emission gate: replace over-budget output with a digest.
         replacement = _emission_gate(payload, flavor)
     except Exception:
-        nudge = None
+        # _emission_gate is written not to raise; if it somehow does, the
+        # result is still not released un-gated.
+        replacement = (
+            "[ctx gate-failed]\nCTX_EMISSION_GATE: the output gate raised; the "
+            "raw result was withheld rather than emitted unbounded."
+        )
     if flavor == "claude-code":
         hso: dict[str, Any] = {"hookEventName": "PostToolUse"}
         if replacement is not None:
@@ -1757,27 +2294,111 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     return 0
 
 
+def _internal_error_setting(
+    ws_root: str | None, policy: dict[str, Any] | None
+) -> str:
+    """What ``[guard] internal_error`` says: ``"deny"``, ``"allow"``, or
+    ``"unknown"`` when we could not find out what the user asked for.
+
+    ``deny`` is checked first and unconditionally: an explicit fail-closed
+    choice must never be downgraded by a later error in reading the rest of
+    the file. ``unknown`` covers a ctx.toml that is present but unreadable or
+    unparseable, an unrecognised value, and a policy load that raised — cases
+    where the old code silently answered "allow", i.e. inverted the knob under
+    exactly the condition it exists for.
+    """
+    if policy is None:
+        try:
+            policy = _load_guard_policy(ws_root)
+        except Exception:
+            return "unknown"
+    try:
+        value = str(policy.get("internal_error", "allow"))
+        source = str(policy.get("_guard_config", "default"))
+    except Exception:
+        return "unknown"
+    if value == "deny":
+        return "deny"
+    if source == "failed":
+        return "unknown"  # the file exists but we cannot read their choice
+    if value == "allow":
+        return "allow"
+    return "unknown"  # a value we do not model is not a licence to allow
+
+
+def _internal_error_decision(
+    ws_root: str | None,
+    policy: dict[str, Any] | None,
+    stage: str,
+    exc: BaseException,
+) -> dict[str, str]:
+    """Turn an internal guard error into a decision, with a signal.
+
+    Three answers, never a blanket allow:
+
+    * ``deny``    — configured fail-closed; honoured even if the failure was
+      in loading the policy itself.
+    * ``allow``   — configured (or defaulted, i.e. no ctx.toml at all)
+      availability-safe; SPEC §10.2.
+    * ``force_ask`` — we could not determine what was configured. Neither
+      silently allowing nor hard-denying is honest here, so the unknown is
+      handed to the human, which is this guard's existing idiom for
+      "unknown bound" (``unknown_command = "force_ask"``).
+    """
+    _note_guard_failure(ws_root, op="pre_tool_use", stage=stage, exc=exc)
+    setting = _internal_error_setting(ws_root, policy)
+    if setting == "deny":
+        return _deny("CTX_CONTEXT_GUARD: internal guard error (fail-closed policy)")
+    if setting == "unknown":
+        return _force_ask(
+            "CTX_CONTEXT_GUARD: internal guard error and the configured "
+            "[guard] internal_error policy could not be read, so the guard "
+            "cannot tell whether you asked to fail open or closed. Fix or "
+            "remove ctx.toml, or re-run to confirm this call."
+        )
+    return dict(DECISION_ALLOW)
+
+
 def main_pre_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> pre-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON decision on stdout.
 
     Flavors: ``antigravity`` (spec schema) and ``claude-code``
     (hookSpecificOutput schema). Classification logic is identical.
+
+    Each stage (read input, load policy, classify) is its own narrow ``try``
+    so an error is attributable instead of collapsing into one blanket allow,
+    and so the configured internal-error policy is loaded on a path that
+    cannot be skipped by an earlier failure.
     """
-    internal_error_policy = "allow"
+    payload: dict[str, Any] = {}
+    ws_root: str | None = None
+    policy: dict[str, Any] | None = None
+    decision: dict[str, Any] | None = None
+
     try:
         raw = sys.stdin.read()
-        payload = json.loads(raw) if raw.strip() else {}
-        if not isinstance(payload, dict):
-            payload = {}
-        ws_root = _resolve_workspace_root(payload)
-        internal_error_policy = _load_guard_policy(ws_root).get("internal_error", "allow")
-        decision = classify(payload)
-    except Exception:
-        if internal_error_policy == "deny":
-            decision = _deny("CTX_CONTEXT_GUARD: internal guard error (fail-closed policy)")
-        else:
-            decision = dict(DECISION_ALLOW)
+        parsed = json.loads(raw) if raw.strip() else {}
+        payload = parsed if isinstance(parsed, dict) else {}
+    except Exception as exc:
+        # A payload we cannot read is still an internal error: route it
+        # through the policy rather than assuming it was harmless.
+        decision = _internal_error_decision(None, None, "input", exc)
+
+    if decision is None:
+        try:
+            ws_root = _resolve_workspace_root(payload)
+            # Loaded ONCE per hook call and threaded into classify(), which
+            # used to load it a second time from the same cache.
+            policy = _load_guard_policy(ws_root)
+        except Exception as exc:
+            decision = _internal_error_decision(ws_root, None, "policy", exc)
+
+    if decision is None:
+        try:
+            decision = classify(payload, policy)
+        except Exception as exc:
+            decision = _internal_error_decision(ws_root, policy, "classify", exc)
     # Codex uses Claude Code's PreToolUse contract verbatim
     # (hookSpecificOutput.permissionDecision + updatedInput), per
     # https://learn.chatgpt.com/docs/hooks.

@@ -148,7 +148,7 @@ ctx plan run investigation.json            # run a compiled multi-step investiga
 
 `ctx ask` answers a repository question through a typed **intent** (seven ship:
 `locate`, `impact`, `diagnose`, `trace`, `compare`, `verify`, `review`) and
-`ctx plan`/`ctx investigate` collapse a multi-round investigation into a single
+`ctx plan`/`ctx plan run` collapse a multi-round investigation into a single
 local pass. Full detail is in the [CLI guide](CLI.md).
 
 ## Choose the right capture verb
@@ -160,7 +160,7 @@ Use the least powerful operation that can express the work:
 | one command | `ctx run -- <command>` |
 | shell syntax or a pipeline | `ctx run --shell '<pipeline>'` |
 | a known sequence of operations | `ctx seq` |
-| computed branching, loops, or aggregation | `ctx eval` |
+| computed branching, loops, or aggregation | `ctx py` |
 | bounded composition over typed evidence | `ctx q` |
 | work that may outlive the turn | `--bg-after` and `ctx job` |
 

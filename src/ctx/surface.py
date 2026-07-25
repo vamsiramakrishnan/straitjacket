@@ -35,7 +35,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ctx.textutil import estimate_tokens
+from ctx.proxywindow import PROXY_SUBDIR
+from ctx.sessiondir import session_reads_path
+from ctx.textutil import EVIDENCE_LINE_CHARS, estimate_tokens
 
 _PROBE_CACHE = ".ctx-surface/probe-cache.json"
 
@@ -303,7 +305,7 @@ def _collect_files(root: Path, globs, kind: str, provider_of, records: list[Capa
                 id=cid, kind=kind, provider=provider_of(rel),
                 source=rel, tokens=tokens, authority="n/a", activation="always",
                 invocations=-1, sensitive_terms=terms, leakage=leakage,
-                detail=(text.strip().splitlines() or [""])[0][:160],
+                detail=(text.strip().splitlines() or [""])[0][:EVIDENCE_LINE_CHARS],
             ))
 
 
@@ -318,7 +320,7 @@ def _collect_repo_instructions(root: Path, records: list[Capability]) -> None:
             id=f"repo.{name}", kind="repo_instructions", provider="repo",
             source=name, tokens=_tokens_of(text), authority="n/a",
             activation="always", invocations=-1, sensitive_terms=terms, leakage=leakage,
-            detail=(text.strip().splitlines() or [""])[0][:160],
+            detail=(text.strip().splitlines() or [""])[0][:EVIDENCE_LINE_CHARS],
         ))
 
 
@@ -357,7 +359,7 @@ def observed_tool_counts(ws_root: Path | str) -> dict[str, int]:
     """Per-tool invocation counts observed by the proxy wire log across this
     workspace's sessions. Fail-open to empty."""
     counts: dict[str, int] = {}
-    proxy = Path(ws_root) / ".ctx-session-reads" / "proxy"
+    proxy = session_reads_path(ws_root, PROXY_SUBDIR)
     if not proxy.is_dir():
         return counts
     for wire in proxy.glob("**/wire.jsonl"):

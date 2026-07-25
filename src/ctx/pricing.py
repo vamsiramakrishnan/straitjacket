@@ -18,10 +18,14 @@ Two rules keep it honest and host-neutral:
    the engagement lean-model matcher uses. Entry order is specific->general;
    the first tier token that matches wins.
 
-Overridable per repo: a ``.ctx-prices.json`` at the workspace root (same
-schema) or a ``[pricing]`` block in ctx.toml replaces or extends rows. Every
-entry point fails open to the vendor-neutral fallback so a cost estimate can
-never crash a session.
+Overridable per repo: a ``.ctx-prices.json`` at the workspace root, on the
+same schema, replaces or extends rows — published prices go stale, and a
+repo on negotiated rates should be able to say so. That file is the *only*
+override seam. ``ctx.toml`` deliberately has no ``[pricing]`` block: it
+carries repository policy (budgets, guard, scopes), while a price table is
+vendor data on a versioned schema, and one override mechanism beats two
+with a precedence rule between them. Every entry point fails open to the
+vendor-neutral fallback so a cost estimate can never crash a session.
 """
 
 from __future__ import annotations

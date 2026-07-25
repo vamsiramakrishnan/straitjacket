@@ -23,9 +23,9 @@ import subprocess
 from functools import lru_cache
 from typing import Any
 
+from ctx.textutil import EVIDENCE_LINE_CHARS
 from ctx.workspace import Workspace
 
-_LINE_CAP = 160
 _PROBE_TIMEOUT = 15.0
 _RUN_TIMEOUT = 180.0
 
@@ -149,7 +149,7 @@ def scan(
             "rule": str(res.get("check_id") or ""),
             "file": path,
             "line": int(start.get("line", 0) or 0),
-            "message": str(extra.get("message") or "").strip()[:_LINE_CAP],
+            "message": str(extra.get("message") or "").strip()[:EVIDENCE_LINE_CHARS],
         }
         frames = _trace_frames(extra) if isinstance(extra, dict) else []
         if frames:

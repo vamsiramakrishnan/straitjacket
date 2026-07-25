@@ -11,6 +11,9 @@ Backend chain (absence degrades, never errors — the jedi/ripgrep pattern):
     tree-sitter (optional ``[code]`` extra) → universal-ctags on PATH
         → stdlib ast (python only) → none
 
+``CTX_NO_CTAGS`` removes the ctags rung exactly as an absent binary does
+(the same variable also silences the map's ctags pass in ``repomap``).
+
 The frozen schema (``ctx.skeleton/v1``) is the seam the fact store (M-G)
 builds against — treat it as an interchange format, not an implementation
 detail. Absolute paths never enter skeleton bytes or rendered outlines;
@@ -68,7 +71,7 @@ def language_for(rel_path: str) -> str | None:
 # --------------------------------------------------------------------------
 # derived-blob cache (in-catalog manifest, keyed by source blob hash + path)
 # --------------------------------------------------------------------------
-def _cache_key(source_hash: str, rel: str) -> str:
+def _skeleton_cache_key(source_hash: str, rel: str) -> str:
     """Deterministic catalog id for the skeleton of (source bytes, path).
 
     The key manifest is a pure function of the source blob hash plus the
@@ -109,7 +112,7 @@ def skeleton_for(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
     snap = snapshot_file(store, ws, rel_path)
     rel = str(snap["path"])
     src_hash = str(snap["blob"]).removeprefix("sha256:")
-    key = _cache_key(src_hash, rel)
+    key = _skeleton_cache_key(src_hash, rel)
     cached = _cached_skeleton(store, key)
     if cached is not None:
         return cached
@@ -332,7 +335,15 @@ def _ast_extract(source: str) -> tuple[list[dict[str, Any]], list[str]]:
 
 # ------------------------------------------------------------------ ctags
 def _ctags_path() -> str | None:
-    """Seam for tests: universal-ctags binary on PATH, or None."""
+    """Seam for tests: universal-ctags binary on PATH, or None.
+
+    ``CTX_NO_CTAGS`` is the escape hatch for a ctags install that is broken,
+    pathologically slow, or simply unwanted; it must hold for *every* path
+    that would shell out to ctags, this one and ``repomap._ctags_enabled``.
+    Returning None here disables the backend the same way an absent binary
+    does, so the chain degrades to ast/none instead of erroring."""
+    if os.environ.get("CTX_NO_CTAGS"):
+        return None
     return shutil.which("ctags")
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ctx.digest.base import DigestContext, Profile, StreamView
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
 
 # Deterministic salience: error-ish lines first, then head/tail anchors.
 _ERROR_RE = re.compile(
@@ -36,10 +36,22 @@ class TextProfile(Profile):
             )
             if r["timedOut"]:
                 status += " · timed out"
-            slim = [
-                f"command: {ctx.command_line()}",
-                f"{status} · output (complete):",
-            ]
+            # Provenance must pay for itself. The command echo is the model's
+            # own input coming back — free when it annotates a large capture,
+            # pure overhead when the output is a line or two. Measured before
+            # this rule: an 11-byte output rendered as a 140-byte digest
+            # (12.7x), which is why replaying our own sessions showed the
+            # harness *costing* tokens on short calls. Dropped when it is not
+            # smaller than the content it describes; the run handle on the
+            # header line still addresses the capture either way.
+            command_line = f"command: {ctx.command_line()}"
+            content_bytes = sum(
+                v.bytes for v in (ctx.stdout, ctx.stderr) if v.bytes
+            )
+            slim = []
+            if len(command_line.encode("utf-8")) < content_bytes:
+                slim.append(command_line)
+            slim.append(f"{status} · output (complete):")
             for view in (ctx.stdout, ctx.stderr):
                 if view.bytes:
                     if view is ctx.stderr and ctx.stdout.bytes:
@@ -72,11 +84,11 @@ class TextProfile(Profile):
                 ]
                 if hits:
                     i, ln = hits[0]
-                    summary.append(f"  first signal {view.name}:L{i}: {ln[:160]}")
+                    summary.append(f"  first signal {view.name}:L{i}: {ln[:EVIDENCE_LINE_CHARS]}")
                     shown += 1
                     if len(hits) > 1:
                         j, lj = hits[-1]
-                        summary.append(f"  terminal signal {view.name}:L{j}: {lj[:160]}")
+                        summary.append(f"  terminal signal {view.name}:L{j}: {lj[:EVIDENCE_LINE_CHARS]}")
                         shown += 1
                     break
         rid = "run:PENDING"
@@ -148,7 +160,7 @@ class TextProfile(Profile):
         h = min(head_n, n)
         t_start = max(h + 1, n - tail_n + 1) if tail_n > 0 else end_total + 1
         out = [
-            f"  head {view.name}:L{i}: {text_lines[i - 1].strip()[:160]}"
+            f"  head {view.name}:L{i}: {text_lines[i - 1].strip()[:EVIDENCE_LINE_CHARS]}"
             for i in range(1, h + 1)
         ]
         shown = h
@@ -162,6 +174,6 @@ class TextProfile(Profile):
                 marker += f" · span {sid}"
             out.append(marker)
         for i in range(t_start, n + 1):
-            out.append(f"  tail {view.name}:L{i}: {text_lines[i - 1].strip()[:160]}")
+            out.append(f"  tail {view.name}:L{i}: {text_lines[i - 1].strip()[:EVIDENCE_LINE_CHARS]}")
             shown += 1
         return out, shown, mid

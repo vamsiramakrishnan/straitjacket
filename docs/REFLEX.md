@@ -200,7 +200,7 @@ normalized command signatures with the per-family scope tables,
 validated_after_edit / retrieved / equivalent_requery / redundant /
 reversed / abandoned) with deterministic attribution reasons and
 confidences. `ctx policy compile --plan-value` aggregates them into the
-committed `[plan_value]` priors that `ctx investigate --advise` reads —
+committed `[plan_value]` priors that `ctx plan run --advise` reads —
 the same telemetry-→-epoch pattern as `[digest_density]`, applied to
 action selection instead of digest shape (docs/EVIDENCE-PLANS.md
 §plan-value). One vocabulary rule carried over unchanged: censored

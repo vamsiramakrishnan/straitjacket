@@ -33,6 +33,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ctx.sessiondir import session_reads_path
 from ctx.store import Store, canonical_json
 from ctx.workspace import Workspace
 
@@ -181,7 +182,7 @@ def compile_plan_value(ws: Workspace) -> dict[str, Any]:
     content-derived event_id, so re-appending the same replay is
     idempotent. A ``*`` row aggregates everything (the global fallback).
     """
-    events = _followup_events(ws.root / ".ctx-session-reads")
+    events = _followup_events(session_reads_path(ws.root))
     seen: set[str] = set()
     per: dict[str, dict[str, int]] = {}
     costs: dict[str, dict[str, list[int]]] = {}  # op -> field -> observed values
@@ -314,7 +315,7 @@ def compile_policy(
     #   - starvations strictly greater than landings — a signature whose
     #     landings keep pace is following addresses and keeps lean digests.
     digest_density: dict[str, str] = {}
-    tallies = _reflex_tallies(ws.root / ".ctx-session-reads")
+    tallies = _reflex_tallies(session_reads_path(ws.root))
     for sig in sorted(tallies):
         t = tallies[sig]
         if (

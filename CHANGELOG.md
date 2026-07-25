@@ -4,6 +4,119 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [Unreleased]
+
+Breaking, taken deliberately while the user count is zero: two command names
+were wrong, so they were fixed at the source rather than described around.
+
+- **`ctx eval` is now `ctx py`.** It runs a Python script; `eval` reads as
+  shell-eval and taught the wrong thing every time an agent saw it. The hook's
+  teaching string, the skill, and all docs move with it.
+- **`ctx investigate` is gone; use `ctx plan run`.** Its own docstring said it
+  was "Same execution as `ctx plan run`, plus the epochal-control ledger" — one
+  behaviour behind two names. `plan run` absorbed the ledger and the
+  `--replans` / `--advise` flags; `investigate` survives where it is still the
+  right word: the artifact family and the `investigate/v1` digest an
+  investigation *produces*.
+- **Prompt-cache impact:** both names appear in cache-keyed prefix assets, so
+  `PREFIX_VERSION` goes 4 → 5 and every model's prompt prefix is rewritten once
+  on first use. Cost is one cold prefix per model; taken now precisely because
+  it is free today and would not be later.
+- `ctx --help` no longer lists 34 commands as a wall (see the CLI front-door
+  entry below); the count is now 33.
+
+## [0.31.0] - 2026-07-24
+
+Harness collaboration: `ctx wrap` stops knowing three hosts by name, and starts
+routing work across the harnesses it finds by what their models cost.
+
+- **M-M · Data-driven host registry** (`src/ctx/hosts.py`): one `HostSpec` per
+  coding-agent CLI states how to detect it on PATH, how to resolve its model,
+  which installer/wrapper wires it, and whether its output side can substitute
+  (enforced) or only nudge. Adding a host is a data edit. Each detected CLI is
+  joined to `ctx.pricing` so it carries a model→price tier. The three shipped
+  hosts move in verbatim; extra CLIs (Gemini, Cursor, aider, opencode) are
+  detected and priced but marked not-yet-harnessable rather than silently
+  dropped.
+- **`ctx wrap detect`** prints an installed/model/price table across every
+  registered CLI; **`ctx wrap setup` is now detection-driven** — it configures
+  the harnessable CLIs it finds and names the ones it skipped, while
+  **`ctx wrap all`** forces every supported host (the old behaviour). The
+  low-level `setup_hosts` primitive is unchanged.
+- **M-M · Harness collaboration orchestrator** (`src/ctx/orchestrator.py`,
+  `ctx orchestrate "<task>"`): **task coordination, not open-loop calling.** A
+  cheap coordinator — the cheapest installed harness priced by its *coordinator
+  model* (Antigravity on Gemini-flash-lite), guided by the routing skill —
+  splits the task into a `ctx.route/v1` DAG. Each node is routed by **capability
+  × price** at the *(harness, model)* level (`hosts.pick_model`) — the model that
+  clears the node's `min_tier` and covers its roles: explore/verify to an economy
+  model, implementation to a standard model, and the plan node to the frontier
+  flagship. The DAG is validated (acyclic, bounded, budgeted) and
+  **priced up front, shown, then run in a closed loop**: ready nodes run in
+  parallel waves; each dependent sees only its upstreams' `ctx.checkpoint/v1`
+  digests (addressed evidence, never raw bytes); a failed node escalates once to
+  a stronger harness; between waves the coordinator may patch the plan with
+  follow-up nodes. When no coordinator can run, a deterministic model-routed
+  fallback DAG (explore→plan→implement→verify) is used, so orchestration works
+  offline. Bounded by `max_waves` / `max_replans` / `budget_usd`; fail-open
+  throughout; a single installed harness degrades with zero claimed saving.
+- **Routing is by model, not just harness.** `HostSpec` carries a `models`
+  catalog — each harness runs several models spanning tiers (Claude:
+  opus-4.8/sonnet-4.6/haiku-4.5; Codex: gpt-5.6 sol/terra/luna; Antigravity:
+  gemini-3.1-pro/3.6-flash/3.5-flash-lite), researched from each CLI's model
+  list. `hosts.pick_model` chooses the `(harness, model)` that clears a node's
+  tier and covers its roles, with a `prefer` knob: **planning takes the frontier
+  flagship (Opus) via `prefer:"strong"`**, while **implementation is
+  complexity-adaptive** — `standard` (Gemini 3.6 Flash) for real work, `economy`
+  (Gemini 3.5 Flash-lite) for a simple edit (`[orchestrate] implement_tier`, or
+  the coordinator's per-task judgment). Routes deliberately per model even within
+  one harness (Claude-only: explore→Haiku, plan→Opus, implement→Sonnet). Coverage
+  scores on model roles (not host strengths, which had pulled work onto
+  broadly-tagged hosts). Nodes can pin `"host"`/`"model"`/`"prefer"`; escalation
+  bumps to a stronger model; the catalog is in the routing skill. New
+  gemini-3.6-flash / gemini-3.5-flash-lite price rows.
+- **Routing skill** (`references/harness-collaboration.md`): the `ctx.route/v1`
+  contract and capability×price routing rules, kept in lockstep with
+  `ROUTING_CONTRACT` so the coordinator behaves the same from the skill or the
+  inlined prompt.
+- **`[orchestrate]` config block** (`ctx.config.OrchestratePolicy`): closed-loop
+  bounds (`max_nodes`/`max_waves`/`max_replans`/`budget_usd`/`node_timeout`),
+  `fallback_only`, `confirm` gate, and per-node token estimates.
+- **Live cross-vendor collaboration on a real task, proven**
+  (`evals/live-collab-antigravity-claude-2026-07-24.md`): Gemini (Antigravity's
+  model, via the API) plans, Claude — running as-is with its own Edit/Bash tools,
+  no `ANTHROPIC_API_KEY` — implements from the plan's `checkpoint:` and runs the
+  test itself; a failing test goes **green**, verified outside the model. Real
+  tokens billed (~$0.11), both providers exercised, through the actual
+  `run_route` loop. Also fired the **failure-escalation** path on a real failure
+  (`--dangerously-skip-permissions` refused under root → node re-routed).
+  Surfaced and fixed a real gap: launch-time model ids differ from
+  display/pricing ids — Claude wants `haiku`, the Gemini API serves
+  `gemini-3.5-flash-lite`. Added `ModelChoice.cli_id` (`launch_id`), threaded
+  through `run_route`; Codex corrected to `codex exec` (flag order still
+  unverified — Codex absent).
+- **Offline receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
+  deterministic cost model, stated against multiple baselines honestly — routing
+  is ~79% under running the whole task on Opus, but **≈break-even vs a flat
+  Sonnet run** (the Opus plan node cancels the bulk savings). The mechanism is a
+  quality allocator (flagship money only on planning), not a dollar-saver against
+  a sane baseline. The full live billed A/B remains TO-BUILD.
+- Tests: `tests/test_hosts.py` (capability tiers, `pick_model` gating + prefer,
+  cheapest-coordinator), `tests/test_orchestrator.py` (route-IR validation —
+  cycles/unknown-deps/budget/node-cap, topological waves, deterministic priced
+  plan, coordinator JSON parse, and the closed loop — parallel handoff, failure
+  escalation, dependent-skip, bounded re-plan).
+- **MCP tool description now documents all 14 ops** (`mcp.py`): the `op` enum
+  declared 14 operations while the prose catalogue in the tool description
+  listed 9 — `callers`, `callees`, `impact`, `diff` and `investigate` were
+  callable but undiscoverable to a model reading the tool definition. Each now
+  carries a gloss alongside the existing nine, and
+  `test_tool_description_documents_every_enum_op` asserts every enum member is
+  described, so the catalogue cannot drift from the enum again.
+  **Cache impact:** the tool description is a prefix-resident asset, so
+  `PREFIX_VERSION` moves 5 → 6 and every user pays one cold prompt-cache write
+  per model on first use after upgrading.
+
 ## [0.30.0] - 2026-07-21
 
 Building the toolchains that were "not available" — tree-sitter and SCIP.
@@ -82,7 +195,7 @@ The skill catches up to the engines, plus a measured three-arm receipt.
   Codex `AGENTS.md` block): `SKILL.md` and `references/verbs.md` stopped at
   the pre-M-J `run/search/get/stats` vocabulary. They now teach `ctx ask`
   (intents locate/impact/diagnose), `ctx q` (the composition algebra incl.
-  `corpus`/`records`/`distinct`/`histogram`), and `ctx investigate`/`plan`.
+  `corpus`/`records`/`distinct`/`histogram`), and `ctx plan run`/`plan`.
   **PREFIX_VERSION 3 → 4**: the skill body/frontmatter are prefix-resident,
   so this is a one-time full-prefix cache rewrite per user (the injected-
   prefix stability contract; `prefixassets.py` manifest regenerated).
@@ -258,7 +371,7 @@ executes it locally; one causally organized digest returns.
 - **EvidenceGraph v2 relations** (additive): typed `(from, relation, to)`
   triples from a closed vocabulary; a graph without relations serializes
   byte-identically to v1, so every pinned golden and cache key holds.
-- **CLI + MCP**: `ctx plan validate|price|run|ops`, `ctx investigate`
+- **CLI + MCP**: `ctx plan validate|price|run|ops`, `ctx plan run`
   (epochal control: replans beyond the `[plan]` allowance get a declared
   banner + reflex-plane ledger event, never a block). MCP op
   `investigate` accepts observe-class plans only; execute-class ops are
@@ -494,7 +607,7 @@ keeping what a raw interpreter sandbox drops: provenance. Maki's script and
 its intermediates vanish into the chat log with no address; here every
 piece keeps one.
 
-- **`ctx eval`** (`ctx.pyeval`): a Python script runs under birth-gate
+- **`ctx py`** (`ctx.pyeval`): a Python script runs under birth-gate
   capture and only its bounded digest returns. The script is stored first
   as a content-addressed blob, cited in the digest header
   (`script blob:<id>`) and in the final manifest (`eval.script`) —

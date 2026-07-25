@@ -31,7 +31,11 @@ TOOL_SCHEMA: dict[str, Any] = {
         "stats (schema and repository shape), map (ranked budget-fitted codebase map), "
         "def (symbol definition site with snapshot + span), refs (reference sites for "
         "a symbol), diag (deterministic lint/syntax digest), "
-        "repo (workspace summary), doctor (health)."
+        "callers (direct call-graph callers of a symbol), callees (direct call-graph "
+        "callees of a symbol), impact (transitive callers of a symbol — blast radius, "
+        "bounded depth), diff (regression delta between two captured run: refs), "
+        "repo (workspace summary), doctor (health), investigate (one observe-class "
+        "ctx.plan/v1 evidence plan executed as a single bounded digest)."
     ),
     "inputSchema": {
         "type": "object",
@@ -267,7 +271,18 @@ def _tool_call(params: dict[str, Any]) -> dict[str, Any]:
         text = _dispatch(args)
         return {"content": [{"type": "text", "text": text}], "isError": False}
     except Exception as e:
-        return {"content": [{"type": "text", "text": f"ctx error: {e}"}], "isError": True}
+        # Same handler, same prefix as the CLI (`ctx:`, not `ctx error:`) and
+        # the same exception-type attribution. No CTX_DEBUG hint in the text:
+        # the traceback still goes to this server's stderr, and a hint line
+        # here would be model context spent on advice the model cannot take.
+        from ctx.cli import debug_enabled, format_error
+
+        if debug_enabled():
+            import traceback
+
+            traceback.print_exception(type(e), e, e.__traceback__, file=sys.stderr)
+        text = format_error(args.get("op") if isinstance(args, dict) else None, e, hint=False)
+        return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
 def serve(bounded_only: bool = True) -> int:

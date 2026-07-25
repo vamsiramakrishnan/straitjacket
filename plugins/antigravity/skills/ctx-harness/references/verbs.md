@@ -35,7 +35,7 @@ index entry is not enough; each verb's output is bounded and deterministic.
   [--buckets N]`. Materializers (terminal): `get [--context N]`, `outline`.
   The root-cause one-liner: `ctx q 'fails last | in-changed'` — failing
   tests inside symbols changed this generation. Prefer `ctx q` over piping
-  raw output through grep/awk/jq/sort/uniq; reach for `ctx eval` only when
+  raw output through grep/awk/jq/sort/uniq; reach for `ctx py` only when
   the control flow is genuinely computational.
 
 ## Capture and retrieval
@@ -62,7 +62,7 @@ index entry is not enough; each verb's output is bounded and deterministic.
   step's digest rides in full, a green tree stays terse. Use for
   mechanical chains you can declare upfront (test → build → lint):
   measured, 65–70% of repair/creation rounds were such chains.
-- `ctx eval '<python script>' | --file <path> | -` (stdin/heredoc) —
+- `ctx py '<python script>' | --file <path> | -` (stdin/heredoc) —
   programmable capture: when the chain needs computed control flow
   (branch on a result, loop over files, aggregate before emitting), write
   a short Python script instead of N rounds of tool calls. It runs under
@@ -125,7 +125,7 @@ index entry is not enough; each verb's output is bounded and deterministic.
   test.run, evidence.join, ast.search, semantic.taint, …) locally; ONE
   ranked investigation digest returns: conclusion candidates with plane
   attribution, counterevidence, coverage, per-node `blob:` addresses.
-- `ctx investigate <plan.json|->` — the epochal loop: same execution plus
+- `ctx plan run <plan.json|->` — the epochal loop: same execution plus
   the replan allowance (default 1; exceeding it is declared, recorded, and
   argues for patch/verify instead of another sweep).
 - Use a plan when you would otherwise run 3+ exploration commands whose

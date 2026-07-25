@@ -7,7 +7,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
 
 _GO_FAIL_RE = re.compile(r"^--- FAIL: (\S+)", re.MULTILINE)
 _GO_PKG_RE = re.compile(r"^(ok|FAIL|---)\s", re.MULTILINE)
@@ -67,7 +67,7 @@ class GoTestProfile(Profile):
             for j in range(first_fail_i, min(first_fail_i + 8, len(lines))):
                 if re.match(r"^\s+\S", lines[j]):
                     summary.append(
-                        f"  first failure stdout:L{j + 1}: {lines[j].strip()[:160]}"
+                        f"  first failure stdout:L{j + 1}: {lines[j].strip()[:EVIDENCE_LINE_CHARS]}"
                     )
                     shown += 1
                     break
@@ -272,12 +272,12 @@ class UnittestProfile(Profile):
                             break
                     if frame_j is not None:
                         summary.append(
-                            f"  innermost frame {view.name}:L{frame_j + 1}: {lines[frame_j].strip()[:160]}"
+                            f"  innermost frame {view.name}:L{frame_j + 1}: {lines[frame_j].strip()[:EVIDENCE_LINE_CHARS]}"
                         )
                         shown += 1
                     if exc_j is not None:
                         summary.append(
-                            f"  first failure {view.name}:L{exc_j + 1}: {lines[exc_j].strip()[:160]}"
+                            f"  first failure {view.name}:L{exc_j + 1}: {lines[exc_j].strip()[:EVIDENCE_LINE_CHARS]}"
                         )
                         shown += 1
                     break
@@ -383,7 +383,7 @@ class BuildProfile(Profile):
             for i, ln in enumerate(view.text_lines, start=1):
                 dm = _DIAG_RE.match(ln)
                 if dm and dm.group("sev").lower() == "error":
-                    summary.append(f"  first error {view.name}:L{i}: {ln.strip()[:160]}")
+                    summary.append(f"  first error {view.name}:L{i}: {ln.strip()[:EVIDENCE_LINE_CHARS]}")
                     shown += 1
                     break
             else:

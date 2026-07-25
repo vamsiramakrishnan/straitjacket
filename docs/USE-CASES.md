@@ -13,7 +13,7 @@ model’s context.
 | You are doing | The usual failure | Start with |
 |---|---|---|
 | Running a noisy test suite | The first failure crowds out the failure census | `ctx run -- pytest -q` |
-| Inspecting many files | Every intermediate read becomes permanent transcript history | `ctx seq` or `ctx eval` |
+| Inspecting many files | Every intermediate read becomes permanent transcript history | `ctx seq` or `ctx py` |
 | Following a long build | The agent idles, polls, and repeatedly absorbs partial logs | `ctx run --bg-after …` + `ctx job` |
 | Searching a large repository | Text matches create a low-precision wall of bytes | `ctx q`, `ctx map`, `ctx search` |
 | Comparing verification runs | The model rereads two complete outputs to infer a delta | `ctx diff run:A run:B` |
@@ -78,10 +78,10 @@ ctx seq \
   --step 'pytest -q tests/test_token_bucket.py'
 ```
 
-Use `ctx eval` when later operations depend on structured results from earlier ones:
+Use `ctx py` when later operations depend on structured results from earlier ones:
 
 ```bash
-ctx eval investigation.py
+ctx py investigation.py
 ```
 
 Use `ctx q` when the intent is expressible as a total pipeline over typed records:

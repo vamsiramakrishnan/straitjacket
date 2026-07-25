@@ -5,7 +5,13 @@ from __future__ import annotations
 
 from ctx.execution import snapshot_file
 from ctx.store import Store
-from ctx.textutil import estimate_tokens, fmt_bytes, fmt_int, fmt_tokens_coarse
+from ctx.textutil import (
+    estimate_tokens,
+    fmt_bytes,
+    fmt_int,
+    fmt_tokens_coarse,
+    short_id,
+)
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit, _parse, _route_workspace
@@ -113,7 +119,7 @@ def stats(store: Store, ws: Workspace, ref_text: str, *, scope: str | None = Non
 
     if ref.kind == "run":
         manifest = store.get_manifest(ref.id or "")
-        short = str(manifest["id"]).removeprefix("sha256:")[:12]
+        short = short_id(manifest["id"])
         out.append(f"[ctx stats run:{short}]")
         out.append(f"cwd: {manifest['cwd']}")
         out.append(f"command: {' '.join(manifest['argv'])}")

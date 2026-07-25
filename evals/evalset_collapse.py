@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic eval set for `ctx eval` (programmable capture, v0.19.0).
+"""Deterministic eval set for `ctx py` (programmable capture, v0.19.0).
 
 Measures the mechanism's three claimed benefit streams on REAL executions
 (real fixtures, real subprocesses, the real digest pipeline — nothing
@@ -8,7 +8,7 @@ mocked), with the agent's routing scripted as a *best-case* baseline:
   naive  — raw outputs enter context (no harness), fewest possible rounds
   rounds — best-case agent on existing verbs (`ctx run`/`search`/`get`),
            batched wherever the verbs allow batching
-  eval   — one `ctx eval` script; only script + digest enter context
+  eval   — one `ctx py` script; only script + digest enter context
 
 Scripting the baseline agent perfectly is deliberately UNFAIR TO EVAL: a
 live agent wastes turns the scripted arm doesn't. Mechanical numbers here

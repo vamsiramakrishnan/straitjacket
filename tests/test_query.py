@@ -4,7 +4,7 @@ THE MECHANICAL REFEREE: the eval-collapse scenarios (S-B data-dependent
 branch, S-A fan-out aggregate — lite) re-expressed as one-line q queries.
 For each: (a) the answer is correct against independently seeded ground
 truth, (b) the authored-query token count (len//4) is ≤ 1/4 of the
-equivalent ``ctx eval`` script's token count (scripts embedded verbatim
+equivalent ``ctx py`` script's token count (scripts embedded verbatim
 from evals/evalset_collapse.py as comparison constants), (c) the output
 is bounded. Plus totality (9 stages rejected, unknown stage teaches,
 kind mismatch teaches), registry late-binding, determinism (byte-identical

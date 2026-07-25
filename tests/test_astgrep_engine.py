@@ -301,7 +301,8 @@ def test_ctx_rewrite_verb_previews_then_applies(git_ws, tmp_path, monkeypatch):
     default (worktree untouched), --apply writes transactionally."""
     from argparse import Namespace
 
-    from ctx import astgrep, cli
+    from ctx import astgrep
+    from ctx.commands.rewrite import cmd_rewrite
 
     _fake_astgrep(tmp_path, monkeypatch, _FAKE_REWRITE)
     try:
@@ -309,11 +310,11 @@ def test_ctx_rewrite_verb_previews_then_applies(git_ws, tmp_path, monkeypatch):
         ns = Namespace(pattern="old_client.fetch($X)",
                        replacement="new_client.fetch(resource=$X)",
                        lang=None, glob=None, apply=False)
-        assert cli._cmd_rewrite(ws, ns) == 0
+        assert cmd_rewrite(ws, ns) == 0
         assert "old_client" in (git_ws / "m.py").read_text(encoding="utf-8")  # preview only
 
         ns.apply = True
-        assert cli._cmd_rewrite(ws, ns) == 0
+        assert cmd_rewrite(ws, ns) == 0
         assert "new_client.fetch(resource=x)" in (git_ws / "m.py").read_text(encoding="utf-8")
     finally:
         astgrep.binary.cache_clear()

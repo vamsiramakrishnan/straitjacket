@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.30.0 (pre-1.0, minor bump per mechanism) · 1,074 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,159 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -102,7 +102,25 @@ Plain-language highlights from recent releases; full detail in
 - **One-command, three-host setup.** `ctx wrap setup` harnesses Antigravity,
   Claude Code, *and Codex* (with real enforcement, not just advice) in a
   single idempotent command.
-- **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
+- **Harness collaboration by capability × price, per model.** `ctx wrap detect`
+  finds every coding-agent CLI on PATH and prices it by its model;
+  `ctx orchestrate "<task>"` then has a cheap coordinator (Gemini-flash-lite)
+  split the task into a `ctx.route/v1` DAG and route each node to the right
+  *(harness, model)*: **planning → the flagship (Opus)**, **implementation →
+  complexity-adaptive** (Gemini 3.6 Flash for real work, 3.5 Flash-lite for a
+  simple edit), explore/verify → an economy model — even within one harness. A
+  **closed loop** runs it: parallel waves, addressed-evidence handoff (not
+  bytes), failure escalation to a stronger model, bounded re-planning. The point
+  is **allocation, not raw savings**: it spends the flagship (Opus) only on the
+  plan step and keeps every other phase cheap — about the cost of running the
+  whole task on Sonnet, and far under running it all on Opus. The
+  [receipt](evals/orchestrator-cost-routing-2026-07-24.md) shows the honest
+  per-baseline math (it is *not* cheaper than a flat Sonnet run). Separately, a
+  **live real-task** run had the cheap Gemini node plan and Claude implement with
+  its own tools (no API key) until a failing test went green — a cross-vendor
+  handoff through the loop, not a cost demo
+  ([receipt](evals/live-collab-antigravity-claude-2026-07-24.md)).
+- **Compiled investigations.** `ctx plan` / `ctx plan run` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
   — measured 6 rounds → 1 ([receipt](evals/plan-collapse-2026-07-19.md)).
 - **The harness now measures itself.** `ctx replay --regret` scores each
@@ -201,7 +219,7 @@ The most common question — which verb do I use — as a flowchart:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ladder.svg">
-  <img src="assets/readme/diagrams/ladder-light.svg" width="100%" alt="The capture ladder: native read for small bounded output; ctx run for one noisy command; ctx run --shell for pipe chains; ctx seq for N declared steps; ctx eval for computed control flow. Long work backgrounds into a job handle.">
+  <img src="assets/readme/diagrams/ladder-light.svg" width="100%" alt="The capture ladder: native read for small bounded output; ctx run for one noisy command; ctx run --shell for pipe chains; ctx seq for N declared steps; ctx py for computed control flow. Long work backgrounds into a job handle.">
 </picture>
 
 </div>
@@ -212,7 +230,7 @@ backgrounds into a `job:` handle instead of idling the session.
 The measured differences
 ([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)):
 a bash pipeline under `ctx run --shell` already collapses stream-shaped
-chains (266 tok, one round). `ctx eval` wins on round count only when the
+chains (266 tok, one round). `ctx py` wins on round count only when the
 intermediate results are *structured*: the 30-file aggregate is 146 tok in
 one round vs 96k naive, and a bounded-slice baseline cannot finish that task
 at all. When a script fails mid-corpus, debugging is retrieval, not
@@ -348,7 +366,7 @@ Concretely:
   full cold cache rewrite per model (~56k tokens).
 - A measured A/B is the bar for shipping a steering change: the solution
   ladder shipped only after −28% turns / −33% time / −17% cost; backward
-  planning after −17% cost / −16% turns. The `ctx eval` adoption ledger
+  planning after −17% cost / −16% turns. The `ctx py` adoption ledger
   exists because a live A/B showed the discipline winning while the verb went
   unadopted — recorded as debt, then instrumented.
 
@@ -378,7 +396,7 @@ each tile below is the idea the harness kept — losslessly.
 | **rtk** (bash-hook filter binary) | filter floods at the source | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` |
 | **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
 | **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
-| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx eval`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
 
 What each still does better than us, by design: Headroom's zero-integration
 generality, rtk's 15-host reach and <10ms single binary, Ponytail's 20-host
@@ -464,7 +482,8 @@ fail-open on internal error is the default, fail-closed is one config line.
 straitjacket/
 ├── src/ctx/           # cli, hook (stdlib-only hot path), mcp, store (CAS+SQLite),
 │                      # execution, refs, retrieval, repomap, rundiff, jobs, pyeval,
-│                      # rescue, proxy, wrap, scorecard, digest/ (profiles)
+│                      # rescue, proxy, wrap, hosts (registry), orchestrator,
+│                      # pricing, scorecard, digest/ (profiles)
 ├── native/ctx-hook-native/  # optional Rust post-hook shim (~3 ms), parity-tested
 ├── plugins/antigravity/     # plugin template: hooks, MCP config, skill, ctx-explorer agent
 ├── plugins/codex/           # Codex template: config.toml (MCP+hooks), hooks.json, AGENTS.md
@@ -498,7 +517,8 @@ Full flags and when-to-use detail:
 | `checkpoint` / `pin` / `gc` | cache epochs · retention leases · mark-and-sweep |
 | `debt` | declared-omission ledger for deferred engineering decisions (`add`/`list`/`resolve`) |
 | `policy` | compiled steering policy from telemetry (`compile`/`show`) |
-| `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages |
+| `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages; `wrap detect` lists installed CLIs priced by model, `wrap setup` harnesses the ones it finds |
+| `orchestrate` | harness collaboration: a cheap coordinator (Gemini-flash-lite) splits a task into a `ctx.route/v1` DAG and routes each node to the cheapest **(harness, model)** that clears its tier — implement on a cheap standard model, plan on a frontier one — then a closed loop runs it: parallel waves, `checkpoint:` handoff (evidence, not bytes), failure escalation to a stronger model, bounded re-planning; prices the plan, then runs it |
 | `init` / `doctor` | write `ctx.toml` + `.ctxignore` · validate hooks, manifests, store, classifier |
 
 Examples:
@@ -507,7 +527,7 @@ Examples:
 ctx run --focus "find test failures" --cwd services/payments -- pytest -q
 ctx run --bg-after 30 -- npm run build          # backgrounds if it outlives 30s
 ctx seq 'pytest -q' 'ruff check .' 'npm run build'
-ctx eval - <<'EOF'                              # computed control flow, one round
+ctx py - <<'EOF'                              # computed control flow, one round
 import json, glob, statistics
 lat = [json.loads(l)["ms"] for f in glob.glob("runs/*.jsonl") for l in open(f)]
 print(f"p95: {statistics.quantiles(lat, n=20)[18]:.0f}ms over {len(lat)} records")

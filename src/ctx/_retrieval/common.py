@@ -18,11 +18,27 @@ class RetrievalError(Exception):
     pass
 
 
-def _emit(ws: Workspace, text: str, budget_tokens: int, continuation: str | None = None) -> str:
+def _emit(
+    ws: Workspace,
+    text: str,
+    budget_tokens: int,
+    continuation: str | None = None,
+    *,
+    handle: str | None = None,
+) -> str:
+    """Bound a retrieval result, keeping a way back to the rest of it.
+
+    ``continuation`` is set when the *caller* decided to cut (a line span it
+    clipped itself). ``handle`` covers the other cut: ``bounded`` trimming on
+    the token budget, which the caller cannot predict. Without it a
+    budget-truncated result ends at the bare truncation note, with no address
+    — the same defect fixed on the digest side, and it lives here too.
+    """
     text, redactions = sanitize_for_model(text, ws.config.redaction.patterns)
     if redactions:
         text += "\nredaction: applied [" + ", ".join(redactions) + "]"
-    return bounded(text, budget_tokens, continuation)
+    fallback = f"ctx get {handle}" if handle else None
+    return bounded(text, budget_tokens, continuation, truncation_continuation=fallback)
 
 
 def _parse(ref_text: str) -> Ref:

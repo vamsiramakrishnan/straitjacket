@@ -25,6 +25,9 @@ from pathlib import Path
 from typing import Any
 
 from ctx import pricing
+from ctx.proxywindow import read_window_doc
+from ctx.sessiondir import session_reads_path
+from ctx.textutil import fmt_tokens_compact
 
 _SEP = "  ·  "
 
@@ -55,13 +58,9 @@ def _short_model(model: str) -> str:
     return "-".join(parts)
 
 
-def _fmt_tokens(n: int) -> str:
-    n = int(n)
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n / 1_000:.0f}K"
-    return str(n)
+# Shared with ctx.textutil rather than re-implemented here; that module
+# documents which of the token renderings does which job.
+_fmt_tokens = fmt_tokens_compact
 
 
 def _fmt_usd(x: float) -> str:
@@ -144,30 +143,141 @@ def render(host: str, payload: dict[str, Any],
             segs.append(f"⎇ {branch}{dirty}")
 
         # Harness signature segment: what ctx has contained this session, read
-        # cheaply from the session ledger. Absent = nothing shown (fail-open).
-        saved = _harness_saved(workspace_root)
-        if saved:
-            segs.append(f"ctx◇ {saved}")
+        # cheaply from the session ledger.
+        seg = _harness_segment(workspace_root)
+        if seg:
+            segs.append(seg)
 
         return _SEP.join(str(s) for s in segs if s)
     except Exception:
         return ""
 
 
-def _harness_saved(workspace_root: Path | str | None) -> str | None:
-    """Tokens kept out of context so far this session, if the proxy left a
-    cheap counter. Never raises; absent counter → None."""
+# Host config files whose presence-with-a-ctx-hook means "this repo is
+# harnessed". Matched as plain substrings so the check costs one small read
+# and no JSON parse — a status line re-renders on every REPL turn.
+_HOOK_MARKERS: tuple[tuple[str, str], ...] = (
+    (".claude/settings.json", "hook claude-code"),
+    (".claude/settings.local.json", "hook claude-code"),
+    (".codex/hooks.json", "hook codex"),
+)
+_PLUGIN_REL = ".agents/plugins/ctx-harness"
+
+
+def _harness_installed(root: Path) -> bool:
+    """Whether any agent in this repo is actually hooked into ctx.
+
+    Cheap and fail-open: a status line must never raise, and must never make
+    the host's REPL wait. Mirrors doctor's "an agent is wrapped" check."""
+    try:
+        for rel, marker in _HOOK_MARKERS:
+            try:
+                if marker in (root / rel).read_text(encoding="utf-8", errors="replace"):
+                    return True
+            except OSError:
+                continue
+        return (root / _PLUGIN_REL).is_dir()
+    except Exception:
+        return False
+
+
+def _harness_segment(workspace_root: Path | str | None) -> str | None:
+    """The status line's one statement about ctx.
+
+    Before, this segment was simply omitted whenever there was nothing to
+    report — so "ctx is off" and "ctx is on and idle" rendered identically,
+    and the failure mode the status line exists to surface (nothing is
+    hooked, so nothing is being contained) was the one it could not show.
+    Three distinguishable states now:
+
+        ctx◇ 12K kept out   the harness is working, here is the number
+        ctx◇ idle           hooked, nothing contained yet this session
+        ctx◇ off            nothing is hooked — run `ctx wrap setup`
+
+    None only when there is no workspace to speak about at all."""
     if workspace_root is None:
         return None
     try:
-        path = Path(workspace_root) / ".ctx-session-reads" / "proxy" / "window.json"
-        doc = json.loads(path.read_text(encoding="utf-8"))
-        saved = doc.get("contained_tokens") or doc.get("saved_tokens")
-        if isinstance(saved, (int, float)) and not isinstance(saved, bool) and saved > 0:
-            return f"{_fmt_tokens(int(saved))} kept out"
+        root = Path(workspace_root)
+        saved = _harness_saved(root)
+        if saved:
+            return f"ctx◇ {saved}"
+        return "ctx◇ idle" if _harness_installed(root) else "ctx◇ off"
     except Exception:
         return None
+
+
+def _harness_saved(workspace_root: Path | str | None) -> str | None:
+    """Tokens kept out of context, for the status line.
+
+    This is the one number that tells a user the harness is doing anything, so
+    it must appear on the ordinary `ctx wrap` path — not only when someone
+    opted into `--proxy`. Order: the proxy's exact counter if present, else the
+    same capture telemetry `ctx gain` reads.
+
+    Never raises; nothing to report → None."""
+    if workspace_root is None:
+        return None
+    root = Path(workspace_root)
+    doc = read_window_doc(root)
+    saved = doc.get("contained_tokens") or doc.get("saved_tokens")
+    if isinstance(saved, (int, float)) and not isinstance(saved, bool) and saved > 0:
+        return f"{_fmt_tokens(int(saved))} kept out"
+    contained = _contained_tokens_from_telemetry(root)
+    if contained and contained > 0:
+        return f"{_fmt_tokens(contained)} kept out"
     return None
+
+
+def _contained_tokens_from_telemetry(root: Path) -> int | None:
+    """Bytes contained so far, as tokens, from the capture telemetry.
+
+    A status line re-renders on every REPL turn, and telemetry.jsonl only
+    grows — a full re-read costs ~15 ms at 10k events and ~76 ms at 50k, which
+    would show as lag. So keep a tiny sidecar of (offset, raw, emitted) and read
+    only the bytes appended since last time. Truncation or rotation (size <
+    offset) falls back to a full recount. Fail-open at every step."""
+    try:
+        from ctx.workspace import resolve_workspace
+
+        from ctx.store import Store
+
+        ws = resolve_workspace(str(root))
+        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+        path = store.audit_dir / "telemetry.jsonl"
+        size = path.stat().st_size
+    except Exception:
+        return None
+
+    cache_path = session_reads_path(root, "gain-cache.json")
+    offset = raw = emitted = 0
+    try:
+        c = json.loads(cache_path.read_text(encoding="utf-8"))
+        if int(c.get("size", 0)) <= size:
+            offset, raw, emitted = int(c["size"]), int(c["raw"]), int(c["emitted"])
+    except Exception:
+        pass
+
+    if size > offset:
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(offset)
+                for line in fh:
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    raw += int(ev.get("raw_bytes") or 0)
+                    emitted += int(ev.get("emitted_bytes") or 0)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"size": size, "raw": raw, "emitted": emitted}), encoding="utf-8"
+            )
+        except Exception:
+            return None
+
+    kept = raw - emitted
+    return kept // 4 if kept > 0 else None  # ~4 bytes/token, as `ctx gain` estimates
 
 
 # --------------------------------------------------------------- Codex rollout

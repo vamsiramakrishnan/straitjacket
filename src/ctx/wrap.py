@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 
 from ctx.installer import _ctx_executable
+from ctx.proxywindow import PROXY_SUBDIR
+from ctx.sessiondir import session_reads_path
 
 _AGENT_FILENAME = "ctx-explorer.md"
 
@@ -46,7 +48,26 @@ _OUTPUT_DISCIPLINE = (
 )
 
 
-def _with_output_discipline(agent_args: list[str]) -> list[str]:
+# Orchestration belongs in the session, not in a command a human types.
+# `ctx orchestrate "<task>"` makes routing something you invoke; nobody wants to
+# stop and hand-route their own work. Wrapping with --orchestrate turns it into
+# a *mode*: the session itself splits multi-step work across the installed
+# models by cost, and the person just keeps working.
+_ORCHESTRATION_MODE = (
+    "Model routing is ON for this session. You have more than one model "
+    "available; spend the cheapest one that can do each part. Before a "
+    "multi-step task, split it: exploration, search, triage and verification "
+    "go to an economy model; ordinary edits to a standard model; only "
+    "architecture, planning and hard reasoning go to the flagship. Run "
+    "`ctx wrap detect` to see which harnesses and models are installed with "
+    "their prices, and `ctx orchestrate \"<task>\" --dry-run` to have the "
+    "routing planned and priced for you. Hand work between steps as ctx "
+    "handles (a checkpoint: or run:/blob:), never by pasting output. Do not "
+    "ask the user to route work — routing is your job now."
+)
+
+
+def _with_output_discipline(agent_args: list[str], *, orchestrate: bool = False) -> list[str]:
     """Prepend the emission-discipline system prompt for print-mode runs."""
     if os.environ.get("CTX_WRAP_NO_DISCIPLINE"):
         return agent_args
@@ -54,7 +75,10 @@ def _with_output_discipline(agent_args: list[str]) -> list[str]:
         return agent_args  # the user's own instruction wins
     if "-p" not in agent_args and "--print" not in agent_args:
         return agent_args  # interactive session: leave the human in charge
-    return ["--append-system-prompt", _OUTPUT_DISCIPLINE, *agent_args]
+    prompt = _OUTPUT_DISCIPLINE
+    if orchestrate:
+        prompt = prompt + " " + _ORCHESTRATION_MODE
+    return ["--append-system-prompt", prompt, *agent_args]
 
 
 _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
@@ -63,17 +87,16 @@ _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
 def _collapse_enabled(workspace_root: Path) -> bool:
     """The replacement surface is the default posture — search is forced onto
     the doors the harness controls unless a workspace breaks glass with
-    ``[guard] collapse = false`` in ctx.toml. Absent config → enabled."""
-    path = workspace_root / "ctx.toml"
-    if not path.is_file():
-        return True
-    try:
-        import tomllib
+    ``[guard] collapse = false`` in ctx.toml. Absent config → enabled.
 
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-        return bool((raw.get("guard") or {}).get("collapse", True))
-    except Exception:
-        return True
+    This was a third independent ``tomllib`` parse of ctx.toml, alongside
+    the typed loader and the guard hot path. It now defers to the typed
+    loader — which is already fail-open on a malformed file, and which
+    ``tests/test_config_hook_parity.py`` pins against the hot path — so the
+    only two readers left are the two with a reason to exist."""
+    from ctx.config import load_config
+
+    return bool(load_config(workspace_root).guard.collapse)
 
 
 def _with_collapse_tool_removal(agent_args: list[str], workspace_root: Path) -> list[str]:
@@ -155,7 +178,7 @@ def _start_proxy(
     not come up within 5s, the session runs unproxied."""
     port = _free_port()
     upstream = os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
-    state_dir = workspace_root / ".ctx-session-reads" / "proxy"
+    state_dir = session_reads_path(workspace_root, PROXY_SUBDIR)
     argv = [
         *shlex.split(ctx_exe),
         "proxy",
@@ -197,7 +220,7 @@ def _emit_scorecard(workspace_root: Path) -> None:
             summary_line,
         )
 
-        sc = compute_scorecard(workspace_root / ".ctx-session-reads" / "proxy")
+        sc = compute_scorecard(session_reads_path(workspace_root, PROXY_SUBDIR))
         if sc is None:
             return
         attach_deliverable(sc, workspace_root)
@@ -221,6 +244,7 @@ def wrap_claude(
     ctx_exe: str | None = None,
     use_proxy: bool = False,
     rescue_pct: float = 0.0,
+    orchestrate: bool = False,
 ) -> int:
     """Launch `claude` with harness hooks injected; leave zero residue."""
     claude = shutil.which("claude")
@@ -234,7 +258,7 @@ def wrap_claude(
         return 127
 
     exe = ctx_exe or _ctx_executable()
-    agent_args = _with_output_discipline(agent_args)
+    agent_args = _with_output_discipline(agent_args, orchestrate=orchestrate)
     agent_args = _with_collapse_tool_removal(agent_args, workspace_root)
     settings = prepare_claude(workspace_root, exe)
     # The explorer agent lives alongside the hooks for the session's lifetime.
@@ -335,13 +359,106 @@ def wrap_codex(workspace_root: Path, ctx_exe: str | None = None) -> int:
     return 0
 
 
-def wrap_setup(workspace_root: Path, hosts: list[str] | None = None) -> int:
-    """Single-command multi-host setup: `ctx wrap setup` harnesses Antigravity,
-    Claude Code, and Codex in this workspace in one shot."""
-    from ctx.installer import setup_hosts
+def _fmt_price(dollars_per_mtok: float) -> str:
+    """Compact per-1M-token dollar price for the detect table."""
+    return f"${dollars_per_mtok:g}"
+
+
+def render_detect_table(detected: list) -> str:
+    """Deterministic table of every registered host: installed?, resolved
+    model, price tier, and whether the harness can wrap it. Prices come from
+    ctx.pricing so the same rows feed the cost-routing orchestrator."""
+    from ctx.hosts import DetectedHost  # noqa: F401 (type reference only)
+
+    rows: list[tuple[str, ...]] = []
+    header = ("host", "installed", "model", "tier", "$in/$out per 1M", "wrap")
+    for d in detected:
+        installed = "yes" if d.installed else "no"
+        wrap = "yes" if d.harnessable else "todo"
+        price = f"{_fmt_price(d.price.input)}/{_fmt_price(d.price.output)}"
+        rows.append(
+            (d.name, installed, d.model, d.price.tier, price, wrap)
+        )
+    widths = [
+        max(len(header[i]), *(len(r[i]) for r in rows)) if rows else len(header[i])
+        for i in range(len(header))
+    ]
+
+    def line(cells: tuple[str, ...]) -> str:
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells)).rstrip()
+
+    out = ["ctx wrap detect — installed coding-agent CLIs, priced by model", ""]
+    out.append(line(header))
+    out.append(line(tuple("-" * w for w in widths)))
+    out.extend(line(r) for r in rows)
+    installed_wrappable = [d for d in detected if d.installed and d.harnessable]
+    out.append("")
+    if installed_wrappable:
+        names = ", ".join(d.name for d in installed_wrappable)
+        out.append(f"harnessable now: {names}")
+        out.append("  ctx wrap setup           # configure the installed hosts")
+        out.append("  ctx orchestrate \"<task>\"  # route work across them by cost")
+    else:
+        out.append(
+            "no harnessable CLI detected on PATH — install one of: claude, "
+            "codex, antigravity"
+        )
+    return "\n".join(out)
+
+
+def wrap_detect(workspace_root: Path, *, probe_version: bool = False) -> int:
+    """`ctx wrap detect`: probe PATH for every registered coding-agent CLI and
+    print an installed/model/price table. This is the input to detection-driven
+    setup and to the cost-routing orchestrator."""
+    from ctx.hosts import detect_all
+
+    detected = detect_all(workspace_root=workspace_root, probe_version=probe_version)
+    print(render_detect_table(detected))
+    return 0
+
+
+def wrap_setup(
+    workspace_root: Path, hosts: list[str] | None = None, *, force_all: bool = False
+) -> int:
+    """Single-command multi-host setup. By default this now *detects* which
+    coding-agent CLIs are installed and configures exactly those (reporting the
+    ones it skipped), instead of unconditionally writing config for all three.
+
+    ``force_all`` (``ctx wrap all``/``--all``) restores the configure-everything
+    behaviour; an explicit ``hosts`` list overrides detection entirely. When no
+    harnessable CLI is found on PATH, setup falls back to configuring all
+    supported hosts (config is inert until a CLI reads it) with a note."""
+    from ctx.installer import SETUP_HOSTS, setup_hosts
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(str(workspace_root))
+
+    if hosts is None and not force_all:
+        from ctx.hosts import detect_all
+
+        detected = detect_all(workspace_root=ws.root)
+        installed = [d.name for d in detected if d.installed and d.harnessable]
+        skipped = [
+            d.name for d in detected if d.harnessable and not d.installed
+        ]
+        if installed:
+            report = setup_hosts(ws, installed)
+            print(report)
+            if skipped:
+                print()
+                print(
+                    "not on PATH, skipped: "
+                    + ", ".join(skipped)
+                    + "  (use `ctx wrap all` to configure them anyway)"
+                )
+            return 0
+        # Nothing detected: configure all supported hosts so the workspace is
+        # ready the moment a CLI is installed. Idempotent and non-destructive.
+        print(
+            "no coding-agent CLI detected on PATH; configuring all supported "
+            f"hosts ({', '.join(SETUP_HOSTS)}) — config is inert until a CLI reads it.\n"
+        )
+
     print(setup_hosts(ws, hosts))
     return 0
 

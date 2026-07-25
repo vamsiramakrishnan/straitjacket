@@ -48,7 +48,7 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     re-planning. Mechanical chains you can declare upfront run as one
     round via `ctx seq`; chains that need computed control flow (branch
     on a result, loop over files, aggregate before emitting) run as one
-    round via `ctx eval` — print only what the transcript needs.
+    round via `ctx py` — print only what the transcript needs.
 15. Never idle on a long-running command: `ctx run --bg-after 30 -- <cmd>`
     backgrounds it if it outlives the wait, returning `job:<id>` while the
     output spools to an artifact. Keep working; `ctx job <id>` shows a
@@ -64,7 +64,7 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     CLI-only). The receipt discloses its interpretation; pass
     `--symbol`/`--run` to pin a slot.
     For a multi-step investigation you can name yourself, compile a
-    `ctx.plan/v1` and run `ctx investigate <plan>` — one model round in,
+    `ctx.plan/v1` and run `ctx plan run <plan>` — one model round in,
     one causally-organized digest out (see `references/evidence-plans.md`).
 17. Compose typed facts with `ctx q` instead of piping raw output through
     grep/awk/jq. It is a total pipeline algebra over typed record streams
@@ -75,7 +75,7 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     `ctx q 'records run:<id>#stdout --jsonl | group level | count'`
     (query captured JSON/JSONL where it already lives — no re-parsing);
     `distinct <field>` and `histogram <field>` summarize any stream.
-    Reach for `ctx eval` only when the control flow is genuinely
+    Reach for `ctx py` only when the control flow is genuinely
     computational; `ctx q` covers bounded evidence composition.
 
 ## Verb index
@@ -85,11 +85,11 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 `locate`/`impact`/`diagnose`) · `q` (total pipeline algebra over typed
 streams: `refs`/`search`/`fails`/`corpus`/`records` sources; `where`
 `group` `top` `count` `distinct` `histogram` combinators; `get`/`outline`
-materializers) · `investigate`/`plan` (a self-authored `ctx.plan/v1` DAG —
-O(hypothesis epochs), not O(operations)).
+materializers) · `plan` (author a `ctx.plan/v1` DAG, then `plan run` — one
+round per hypothesis, not one per operation).
 
 **Capture:** `run` · `seq` (declared command tree — N mechanical steps, one
-round, per-step provenance) · `eval` (programmable capture — a Python
+round, per-step provenance) · `py` (programmable capture — a Python
 script chains N ops with computed control flow; only its digest returns,
 the script itself is an addressable blob) · `run --bg`/`job`/`jobs`
 (long-runner backgrounding — live tail, wait, kill; finalized jobs are
@@ -102,11 +102,11 @@ priced symbol outline) · `map` (ranked codebase map) · `def`/`refs`/`diag`
 direct/transitive, one query replaces a recursive grep trace) ·
 `diff run:A run:B` (regression delta).
 
-**Economics / ledger:** `stats --session` / `gain` · `checkpoint` (cache
-epoch) · `debt` (deferral ledger).
+**Economics / ledger:** `stats --session` / `gain` · `checkpoint` (resume
+point) · `debt` (deferral ledger).
 
 Full flags and when-to-use detail: read `references/verbs.md`. For
-compiled evidence plans (`ctx ask`/`ctx plan`/`ctx investigate`), read
+compiled evidence plans (`ctx ask`/`ctx plan`/`ctx plan run`), read
 `references/evidence-plans.md`.
 
 ## Repository references

@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from ctx.proxywindow import WINDOW_FILENAME
+
 _CHUNK = 8192  # relay granularity: small enough to preserve SSE latency
 _OBSERVE_CAP = 8 * 1024 * 1024  # stop accumulating response bytes for observation
 _POOL_MAX = 4  # idle upstream connections kept warm (TLS handshake amortization)
@@ -268,9 +270,11 @@ class _Observer:
             "cum_output": self._cum["output"],
             "workspace_id": self._workspace_id,
         }
-        tmp = self._dir / "window.json.tmp"
+        # The one name for this file lives in ctx.proxywindow, where its
+        # five readers take it from; this is the sole writer.
+        tmp = self._dir / (WINDOW_FILENAME + ".tmp")
         tmp.write_text(json.dumps(doc, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self._dir / "window.json")
+        os.replace(tmp, self._dir / WINDOW_FILENAME)
 
 
 # -------------------------------------------------------------------- relay

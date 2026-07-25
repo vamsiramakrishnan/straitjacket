@@ -141,14 +141,12 @@ def install_antigravity_statusline(exe: str, *, settings_path: Path | None = Non
     ctx.pricing. Returns a one-line status. Fail-open."""
     path = settings_path or antigravity_settings_path()
     try:
-        existing: dict = {}
-        if path.is_file():
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(existing, dict):
-                    existing = {}
-            except json.JSONDecodeError:
-                existing = {}
+        try:
+            existing = _read_settings_object(path)
+        except SettingsUnreadable as e:
+            # This file is global: clobbering it costs the user every project,
+            # not just this one. A status line is never worth that.
+            return _refusal(path, e, what="the Antigravity status line")
         if existing.get("statusLine"):
             return f"statusLine already set in {path}; left unchanged"
         merged = dict(existing)
@@ -319,6 +317,49 @@ def claude_statusline_setting(ctx_exe: str) -> dict:
     }
 
 
+class SettingsUnreadable(Exception):
+    """A host settings file exists but does not parse.
+
+    Raised instead of defaulting to ``{}``: every caller merges into the parsed
+    object and writes the whole thing back, so an empty default is not a
+    lenient fallback — it silently deletes whatever the user had configured.
+    """
+
+
+def _read_settings_object(path: Path) -> dict:
+    """Parse a settings file that is about to be merged into and rewritten.
+
+    Missing file → ``{}`` (nothing to lose). Present but unparseable → raise,
+    because the caller's next move is a full overwrite.
+    """
+    if not path.is_file():
+        return {}
+    raw = path.read_text(encoding="utf-8")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SettingsUnreadable(
+            f"{path.name} is not valid JSON (line {e.lineno}, column {e.colno}: {e.msg})"
+        ) from e
+    if not isinstance(parsed, dict):
+        raise SettingsUnreadable(
+            f"{path.name} contains a JSON {type(parsed).__name__}, not an object"
+        )
+    return parsed
+
+
+def _refusal(path: Path, err: Exception, *, what: str) -> str:
+    """What we say instead of destroying someone's configuration."""
+    return "\n".join(
+        [
+            f"cannot set up {what}: {err}",
+            f"ctx did not modify {path} — merging into it means writing the whole",
+            "file back, which would have discarded everything already in it.",
+            "fix the JSON (or move the file aside) and re-run: ctx wrap setup",
+        ]
+    )
+
+
 def _hook_command_present(settings: dict, ctx_exe: str) -> bool:
     """True if a ctx-harness hook command is already registered."""
     for stage in settings.get("hooks", {}).values():
@@ -339,12 +380,10 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     lines: list[str] = []
 
     settings_path = root / ".claude" / "settings.json"
-    existing: dict = {}
-    if settings_path.is_file():
-        try:
-            existing = json.loads(settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            existing = {}
+    try:
+        existing = _read_settings_object(settings_path)
+    except SettingsUnreadable as e:
+        return _refusal(settings_path, e, what="Claude Code")
     merged = dict(existing)
     changed = False
     if _hook_command_present(existing, exe):
@@ -480,10 +519,15 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
         lines.append("wrote .codex/hooks.json")
     else:
         try:
-            cur = json.loads(hooks_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            cur = {}
-        if _hook_command_present_codex(cur, exe):
+            cur = _read_settings_object(hooks_path)
+        except SettingsUnreadable as e:
+            # Not an early return: config.toml above may already have been
+            # written, and claiming otherwise would be its own small lie.
+            cur = None
+            lines.append(_refusal(hooks_path, e, what="Codex hooks"))
+        if cur is None:
+            pass
+        elif _hook_command_present_codex(cur, exe):
             lines.append(".codex/hooks.json already harnessed; left unchanged")
         else:
             ours = json.loads(hooks_rendered)
@@ -511,24 +555,32 @@ def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
 
 
 # The harness is built for Antigravity and works with Claude Code and Codex.
-_HOST_INSTALLERS = {
-    "antigravity": install_antigravity,
-    "claude": install_claude,
-    "codex": install_codex,
-}
-SETUP_HOSTS = ("antigravity", "claude", "codex")
+# Both of these are DERIVED from the host registry (ctx.hosts): the wired set
+# and the name→installer mapping used to be hand-maintained here as well, a
+# second copy of what every HostSpec already declares via `installer`.
+def _setup_hosts_tuple() -> tuple[str, ...]:
+    from ctx.hosts import harnessable_hosts
+
+    return tuple(s.name for s in harnessable_hosts())
+
+
+SETUP_HOSTS = _setup_hosts_tuple()
 
 
 def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
     """Single-command multi-host setup. Configures the harness for each named
-    host (default: all three) and returns a combined per-host report."""
+    host (default: every host the registry declares an installer for) and
+    returns a combined per-host report."""
+    from ctx.hosts import host_by_name, installer_for
+
     selected = hosts or list(SETUP_HOSTS)
     out: list[str] = [
         "ctx harness setup — built for Antigravity, works with Claude Code and Codex",
         "",
     ]
     for host in selected:
-        installer = _HOST_INSTALLERS.get(host)
+        spec = host_by_name(host)
+        installer = installer_for(spec) if spec else None
         out.append(f"── {host} ──")
         if installer is None:
             out.append(f"unknown host {host!r} (choose from {', '.join(SETUP_HOSTS)})")
@@ -604,6 +656,39 @@ def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
             not dup,
             "plugin and standalone skill are both installed — remove one (SPEC §4.3)" if dup else "",
         )
+
+    # What `ctx wrap setup` actually wrote. Until now doctor never opened
+    # these files, so it happily printed OK for a workspace where the hooks
+    # had never been installed, or had been clobbered — the one question the
+    # command exists to answer.
+    wrapped: list[str] = []
+    for label, rel, present_fn in (
+        ("claude hooks", ".claude/settings.json", _hook_command_present),
+        ("codex hooks", ".codex/hooks.json", _hook_command_present_codex),
+    ):
+        path = ws.root / rel
+        if not path.is_file():
+            continue
+        try:
+            data = _read_settings_object(path)
+        except SettingsUnreadable as e:
+            check(label, False, f"{e} — fix the file, then re-run: ctx wrap setup")
+            continue
+        hooked = present_fn(data, exe or "")
+        check(
+            label,
+            hooked,
+            rel if hooked else f"{rel} has no ctx hook entry — run: ctx wrap setup",
+        )
+        if hooked:
+            wrapped.append(label.split()[0])
+    if plugin_dir.is_dir():
+        wrapped.append("antigravity")
+    check(
+        "an agent is wrapped",
+        bool(wrapped),
+        " + ".join(wrapped) if wrapped else "nothing is hooked yet — run: ctx wrap setup",
+    )
 
     rg = shutil.which("rg")
     check(

@@ -72,15 +72,154 @@ def loads_fast(text: str | bytes):
     return _json.loads(text)
 
 
+def short_path(path: str) -> str:
+    """A path narrowed to its last two components for a census line
+    (``src/ctx/digest/lintprof.py`` → ``digest/lintprof.py``).
+
+    One definition. This was two byte-identical nested functions in
+    ``digest.lintprof`` and ``digest.searchprof``, both named ``_short`` —
+    a name that in ``ctx.facts`` means "shorten a content HASH". Same name,
+    unrelated jobs, and neither is substitutable for the other.
+    """
+    parts = path.replace("\\", "/").split("/")
+    return "/".join(parts[-2:]) if len(parts) > 2 else path
+
+
+#: How wide ONE line of quoted foreign text may be inside a bounded row.
+#:
+#: Every digest profile, census renderer and match-listing verb quotes lines
+#: it did not write — a captured stdout line, a matched source line, a
+#: linter's message, a mined log template, a test node id — one per output
+#: row. This is the width at which such a line is cut so the row stays a row.
+#: It was the bare literal ``160`` at 24 sites plus four private
+#: ``_LINE_CAP = 160`` constants (``ctx.query``, ``ctx.codeverbs``,
+#: ``ctx.astgrep``, ``ctx.semgrep_engine``).
+#:
+#: It is NOT the only clip width in the harness, and the others are not the
+#: same decision — do not fold them in here:
+#:
+#: * ``_retrieval.search._LINE_CHARS`` (200) — a search HIT line. A search
+#:   result is the thing the user asked to see, so it gets more room than a
+#:   line a digest volunteered; and the search renderer extracts it bounded
+#:   rather than slicing a materialized line (giant-line cost).
+#: * ``jobs._CLIP_COLS`` (200) — a live spool line, and it appends ``…``
+#:   rather than cutting silently. Different mechanism, not just a width.
+#: * ``facts._LINE_CAP`` (200) — a bound on a whole assembled census ROW,
+#:   not on one quoted line inside it.
+#: * The scattered ``[:120]`` / ``[:180]`` clips — a one-line summary field
+#:   and a raw occurrence line respectively, each local to one renderer.
+EVIDENCE_LINE_CHARS = 160
+
+#: Width of the house short id. Twelve hex characters of a sha256 is the
+#: display and addressing form for every content-addressed handle the model
+#: sees (``run:``, ``blob:``, ``snapshot:``, ``checkpoint:``, ``plan:``), and
+#: the width ``ctx.store``'s prefix resolver is tuned against.
+SHORT_ID_CHARS = 12
+
+
+def short_id(h: object) -> str:
+    """The house short id for a content HASH: drop a ``sha256:`` prefix, keep
+    the first :data:`SHORT_ID_CHARS` hex characters.
+
+    One definition for an idiom that was retyped at ~20 call sites, in two
+    spellings (``str(x).removeprefix("sha256:")[:12]`` where the value came
+    from a manifest, bare ``x[:12]`` where it came from the store already
+    stripped). Tolerates either form and already-short input; empty in,
+    empty out.
+
+    NOT the same job as :func:`short_path`, which shortens a filesystem path
+    — the two shared the name ``_short`` until R13 split them.
+
+    Deliberately NOT used for two look-alikes at the same width:
+
+    * **Minting** an id (``hashlib.sha256(...).hexdigest()[:12]`` in
+      ``ctx.reflex``'s intervention id, ``ctx.resolver``'s plan id,
+      ``ctx.policy``'s epoch id). Those widths are part of a stored
+      identity's collision budget; the display width is a readability
+      choice. Someone widening one must not silently widen the other.
+    * **Git** object names (``ws.git.head[:12]``). A different namespace with
+      its own conventions (git's own abbreviation length is adaptive).
+    """
+    return str(h or "").removeprefix("sha256:")[:SHORT_ID_CHARS]
+
+
+class JsonPointerError(Exception):
+    """A pointer that is malformed or does not resolve against the document."""
+
+
+def json_pointer(doc, pointer: str):
+    """Evaluate an RFC 6901 JSON pointer. One definition for the whole
+    harness (``ctx q records --pointer`` and ``ctx get --json-pointer``).
+
+    The edge case implementations get wrong, and this one previously got
+    wrong in one of its two copies: ``""`` is the WHOLE DOCUMENT, and
+    ``"/"`` is the member whose key is the empty string (RFC 6901 §5).
+    They are different pointers. Consequently only the *first* slash is the
+    root marker — ``"//"`` is two empty-string keys deep, so leading
+    slashes must never be stripped in bulk.
+
+    Escapes decode ``~1`` → ``/`` before ``~0`` → ``~`` (§4), so ``~01``
+    means the literal ``~1`` and not ``/``.
+
+    Array indices are the ABNF ``0 / [1-9][0-9]*`` — no leading zeros, no
+    sign. ``-`` names the element after the last, which by §4 has no value:
+    an evaluation error here, not an append.
+    """
+    if pointer == "":
+        return doc
+    if not pointer.startswith("/"):
+        raise JsonPointerError(
+            f"pointer must be empty or start with '/': {pointer!r}"
+        )
+    node = doc
+    for token in pointer[1:].split("/"):
+        key = token.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, list):
+            if not (key.isdigit() and (key == "0" or not key.startswith("0"))):
+                raise JsonPointerError(
+                    f"not an array index: {token!r} in {pointer!r}"
+                )
+            idx = int(key)
+            if idx >= len(node):
+                raise JsonPointerError(f"index out of range: {token!r} in {pointer!r}")
+            node = node[idx]
+        elif isinstance(node, dict):
+            if key not in node:
+                raise JsonPointerError(f"no member {key!r} in {pointer!r}")
+            node = node[key]
+        else:
+            raise JsonPointerError(
+                f"cannot descend into a scalar at {token!r} in {pointer!r}"
+            )
+    return node
+
+
 def estimate_tokens(n_bytes: int) -> int:
     """Cheap deterministic token estimate: ~4 bytes per token."""
     return max(1, n_bytes // 4) if n_bytes else 0
 
 
 def fmt_tokens_coarse(tok: int) -> str:
-    """Price-tag formatting (docs/PRICED-CONTEXT.md, P3): precision only
-    needs to cross decision thresholds, so buckets get coarser with size.
-    Deterministic; never emits false precision like '8,432'."""
+    """FORECAST formatting (docs/PRICED-CONTEXT.md, P3) — the price tag on
+    something not yet read: guard reasons, repo-map entries, stats estimates.
+    A forecast only needs precision enough to cross a decision threshold, so
+    buckets get coarser with size. Deterministic; never emits false precision
+    like '8,432' *for a forecast*.
+
+    This is one of three deliberate token renderings; they do different jobs
+    and the docstring used to claim a rule that only covers this one:
+
+    * ``fmt_tokens_coarse`` — a forecast (``~8k``). Bucketed, because the
+      number is an estimate of something that has not happened.
+    * ``fmt_int(estimate_tokens(n))`` — a MEASUREMENT of an artifact already
+      captured (the digest header's ``est 4,072 tokens``). Exact by design:
+      it is a pure function of an exact byte count, sits beside the
+      ``15.9 KiB`` it must reconcile with, and belongs to a
+      content-addressed digest that two runs of the same bytes must render
+      identically. Bucketing it would break both properties.
+    * ``fmt_tokens_compact`` — a WIDTH-CONSTRAINED glance (``2K``, ``1.5M``)
+      for the status line, where the whole session must fit in one segment.
+    """
     if tok < 1000:
         return f"~{max(1, round(tok / 50) * 50)}"
     if tok < 10_000:
@@ -88,6 +227,24 @@ def fmt_tokens_coarse(tok: int) -> str:
     if tok < 100_000:
         return f"~{5 * max(2, round(tok / 5000))}k"
     return f"~{25 * round(tok / 25_000)}k"
+
+
+def fmt_tokens_compact(n: int) -> str:
+    """Width-constrained token magnitude for a status line: ``2K``, ``1.5M``.
+
+    Lifted out of ctx.statusline, where it was a private third rendering of
+    the same quantity. It stays a distinct formatter rather than folding into
+    ``fmt_tokens_coarse`` because the jobs differ at the top end: a whole
+    session is millions of tokens, and coarse's largest bucket would render
+    that as ``~1500k`` — wider and harder to read in the one segment a status
+    line gets. Named and shared here so there are two documented renderings,
+    not three ad-hoc ones."""
+    n = int(n)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
 
 
 def strip_control(text: str) -> str:
@@ -150,9 +307,24 @@ def decode_stream(data: bytes) -> tuple[str, str | None, str]:
         return data.decode("utf-8", "replace"), "utf-8", "text/plain; lossy"
 
 
-def bounded(text: str, budget_tokens: int, continuation: str | None = None) -> str:
+def bounded(
+    text: str,
+    budget_tokens: int,
+    continuation: str | None = None,
+    *,
+    truncation_continuation: str | None = None,
+) -> str:
     """Enforce an output token budget. Oversized text is cut at a line
-    boundary with explicit truncation metadata (never silent flooding)."""
+    boundary with explicit truncation metadata (never silent flooding).
+
+    ``continuation`` is the caller's own "here is the rest" address and is
+    appended whether or not anything was cut. ``truncation_continuation`` is
+    the fallback handle appended ONLY when this function actually cut
+    something: the clamp cuts from the bottom, and the ``next:`` affordance
+    block is last in every digest profile, so the one moment a reader most
+    needs a retrieval address is the moment the clamp deletes it. Callers
+    that can name a handle pass it here; nothing is added to an untruncated
+    digest, so an emission that fits stays byte-identical."""
     budget_bytes = budget_tokens * 4
     raw = text.encode("utf-8")
     if len(raw) <= budget_bytes:
@@ -165,6 +337,7 @@ def bounded(text: str, budget_tokens: int, continuation: str | None = None) -> s
         cut = cut[:nl]
     total_est = estimate_tokens(len(raw))
     note = f"\n[ctx:truncated shown≈{budget_tokens} of ≈{total_est} est tokens]"
-    if continuation:
-        note += f"\nnext: {continuation}"
+    tail = continuation or truncation_continuation
+    if tail:
+        note += f"\nnext: {tail}"
     return cut + note

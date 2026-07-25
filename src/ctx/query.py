@@ -4,7 +4,7 @@ A TOTAL pipeline language over typed record streams: stages joined by
 ``|``, no loops, no recursion, hard cap of 8 stages. Totality is by
 construction — every query terminates and its cost is statically
 boundable, which is exactly WHY this algebra is safe for the bounded MCP
-tier later, where arbitrary-code ``ctx eval`` can never live. This wave
+tier later, where arbitrary-code ``ctx py`` can never live. This wave
 deliberately ships NO MCP wiring (prefix-asset churn); the CLI verb is
 the only entry point.
 
@@ -68,11 +68,11 @@ import shlex
 import tempfile
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable
 
+from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
-from ctx.textutil import bounded, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, bounded, fmt_int, short_id
 from ctx.workspace import Workspace
 
 # ------------------------------------------------------------------ model
@@ -91,8 +91,6 @@ DEFAULT_ROW_CAP = 200
 GET_SITE_CAP = 24  # ``get`` fans out one bounded slice per site
 OUTLINE_FILE_CAP = 12  # ``outline`` fans out one outline per file
 RENDER_CAP = 100  # rows rendered inline; remainder declared + addressable
-_LINE_CAP = 160
-_LEDGER_DIR = ".ctx-session-reads"  # house ledger dir: bookkeeping, never evidence
 
 
 class QueryError(Exception):
@@ -417,7 +415,7 @@ def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     for rel, line, text in sites:
         uniq.setdefault((rel, line), text)
     rows = [
-        {"file": rel, "line": line, "text": text.strip()[:_LINE_CAP], "symbol": symbol}
+        {"file": rel, "line": line, "text": text.strip()[:EVIDENCE_LINE_CHARS], "symbol": symbol}
         for (rel, line), text in sorted(uniq.items())
     ]
     out = Stream("sites", rows)
@@ -509,7 +507,7 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         # execution.py excludes it from generation hashing likewise) — and
         # since the q dry-run guard rail records pipeline texts there, a
         # ledger-scanning search would match its own guard state.
-        if _LEDGER_DIR in str(t.label).replace("\\", "/").split("/"):
+        if LEDGER_DIR_NAME in str(t.label).replace("\\", "/").split("/"):
             continue
         for i, ln in enumerate(t.text.splitlines(), start=1):
             m = rx.search(ln)
@@ -522,7 +520,7 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
                         "line": i,
                         "col_a": m.start() + 1,
                         "col_b": m.end() + 1,
-                        "text": ln.strip()[:_LINE_CAP],
+                        "text": ln.strip()[:EVIDENCE_LINE_CHARS],
                     }
                 )
     return Stream("sites", rows)
@@ -553,16 +551,10 @@ def _stage_corpus(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 
 
 def _json_pointer(doc, pointer: str):
-    cur = doc
-    for seg in pointer.split("/")[1:]:
-        seg = seg.replace("~1", "/").replace("~0", "~")
-        if isinstance(cur, list):
-            cur = cur[int(seg)]
-        elif isinstance(cur, dict):
-            cur = cur[seg]
-        else:
-            raise KeyError(seg)
-    return cur
+    """RFC 6901, via the one implementation in :mod:`ctx.textutil`."""
+    from ctx.textutil import json_pointer
+
+    return json_pointer(doc, pointer)
 
 
 def _records_rows(text: str, *, jsonl: bool, pointer: str | None) -> list[dict]:
@@ -605,9 +597,11 @@ def _records_rows(text: str, *, jsonl: bool, pointer: str | None) -> list[dict]:
                 "Lines; for line-delimited streams pass --jsonl"
             ) from None
     if pointer:
+        from ctx.textutil import JsonPointerError
+
         try:
             doc = _json_pointer(doc, pointer)
-        except (KeyError, IndexError, ValueError) as e:
+        except (JsonPointerError, KeyError, IndexError, ValueError) as e:
             raise QueryError(
                 f"ctx q: records --pointer {pointer!r} does not resolve ({e})"
             ) from e
@@ -943,7 +937,7 @@ def _qdry_read(root) -> list[str]:
     problem (the guard rail degrades to silence, never to an error)."""
     try:
         doc = json.loads(
-            (Path(root) / _LEDGER_DIR / _QDRY_STATE).read_text(encoding="utf-8")
+            session_reads_path(root, _QDRY_STATE).read_text(encoding="utf-8")
         )
         dry = doc.get("dry") if isinstance(doc, dict) else None
         if isinstance(dry, list):
@@ -957,7 +951,7 @@ def _qdry_write(root, dry: list[str]) -> None:
     """Atomic temp+rename write of the dry-pipeline state (house pattern:
     reflex.json). Fail-open — never raises."""
     try:
-        d = Path(root) / _LEDGER_DIR
+        d = session_reads_path(root)
         d.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"dry": dry[-Q_DRY_REMEMBER:]}, sort_keys=True)
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".q-dry-")
@@ -975,7 +969,7 @@ def _qdry_ledger_append(root, pipeline: str) -> None:
     operational-only (house rule: the ledger minus ts is a pure function
     of the session's query sequence). Fail-open — never raises."""
     try:
-        d = Path(root) / _LEDGER_DIR
+        d = session_reads_path(root)
         d.mkdir(parents=True, exist_ok=True)
         line = json.dumps(
             {"op": "q_dry_rerun", "pipeline": pipeline, "ts": time.time()},
@@ -1057,7 +1051,7 @@ def _render(
     if out.coverage:
         payload["coverage"] = out.coverage
     blob_id = store.put_blob(canonical_json(payload))
-    short = blob_id[:12]
+    short = short_id(blob_id)
 
     lines = [f"[ctx q · {n_stages} stages · {out.kind} · blob:{short}]"]
     total = len(out.rows)

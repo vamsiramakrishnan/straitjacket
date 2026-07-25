@@ -30,7 +30,7 @@ inherits that plane's invariants, and ships with a test.
 |---|---|
 | add a digest profile (pytest-like) for a new tool | `src/ctx/digest/<family>prof.py` + `src/ctx/contracts/<family>.toml` — see [Writing a profile](WRITING-A-PROFILE.md) |
 | change how a command is classified/steered | `src/ctx/hook.py` (the PreToolUse guard — stdlib-only hot path) |
-| add or change a CLI verb | `src/ctx/cli.py` (dispatch) + the verb's own module |
+| add or change a CLI verb | `src/ctx/cli.py` (its parser block + one row in `_COMMANDS`) + a handler in `src/ctx/commands/` + its one-liner in `src/ctx/cliux.py` |
 | add a `ctx q` stage | `src/ctx/query.py` |
 | add an evidence-plan operator | `src/ctx/plan_ops.py` (+ `plan_ir.py`, `plan_exec.py`) |
 | change how a digest is selected/sized | `src/ctx/resolver.py` (the Delivery Policy Resolver) |
@@ -61,13 +61,14 @@ No behavioural signal may weaken anything here.
 | `store.py` | The content-addressed artifact store and quota enforcement (SPEC §12). |
 | `jobs.py` | Long-runner backgrounding: `ctx run --bg`, `ctx job(s)`. |
 | `seq.py` | `ctx seq` — declared command trees (round economy without losing gates). |
-| `pyeval.py` | `ctx eval` — programmable capture; a Python script runs under the birth gate, only its digest returns. |
+| `pyeval.py` | `ctx py` — programmable capture; a Python script runs under the birth gate, only its digest returns. |
 | `wrap.py` | `ctx wrap <host>` — run an agent under the harness, ephemerally. |
 | `installer.py` | Plugin rendering, installation, and health checks; `ctx doctor`, `ctx antigravity install` (SPEC §4, §18). |
 | `proxy.py` | The Tier-0 observer proxy: byte-exact relay for API traffic that measures wire ground truth. |
 | `rescue.py` | Lossless mid-session rescue: epoch-latched transcript elision (Tier-1). |
 | `mcp.py` | The bounded MCP retrieval server — one tool schema with an `op` discriminator. |
-| `cli.py`, `__main__.py` | CLI entry and verb dispatch (the `hook` subcommand is dispatched before argparse, for latency). |
+| `cli.py`, `__main__.py` | CLI entry, the front door, argument parsing, and the `_COMMANDS` dispatch table (the `hook` subcommand is dispatched before argparse, for latency). |
+| `commands/` | One module per verb family holding the command bodies. The table maps a command to a module *name*, so an invocation imports only the family it needs — and every dependency stays inside the function that uses it, for the same reason. |
 | `config.py` | Repository policy: committed `ctx.toml` plus hard defaults (SPEC §13). See [Configuration](CONFIGURATION.md). |
 | `statusline.py` | Host-neutral status-line rendering. |
 

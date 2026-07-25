@@ -13,7 +13,7 @@ import functools
 import re
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
 
 _LEVEL_RE = re.compile(r"\b(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|FATAL)\b")
 _TS_PREFIX_RE = re.compile(r"^\[?(?:\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}:\d{2})")
@@ -103,7 +103,7 @@ class LogTemplateProfile(Profile):
             f"{fmt_int(covered)}/{fmt_int(len(mined))} lines"
         ]
         for tpl, (count, first) in top:
-            line = f"  {fmt_int(count)}× L{first}: {tpl[:160]}"
+            line = f"  {fmt_int(count)}× L{first}: {tpl[:EVIDENCE_LINE_CHARS]}"
             if count > 1:
                 # Point-attached retrieval affordance: a deterministic span
                 # token minted exactly at the omission site (SPEC §6.4).

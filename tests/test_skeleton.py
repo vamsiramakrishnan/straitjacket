@@ -343,6 +343,70 @@ def test_fallback_chain_ctags_absent(env, monkeypatch):
     assert ts["language"] == "typescript"
 
 
+def test_ctx_no_ctags_silences_every_ctags_call_site(
+    state_home, workspace_dir, monkeypatch
+):
+    """R11: ``CTX_NO_CTAGS`` must hold at *both* places that shell out to
+    ctags — the skeleton backend (``skeleton._ctags_path``) and the map's
+    opportunistic pass (``repomap._ctags_enabled``).
+
+    Regression: only the map path checked the variable, so a user who set it
+    to work around a broken or pathologically slow ctags still had one
+    subprocess forked per non-python file skeletonised.
+
+    ``shutil.which`` is stubbed to report ctags present in both modules so
+    the assertions are real on a machine without universal-ctags installed;
+    ``subprocess.run`` is wrapped (recording, not raising — the backend chain
+    swallows exceptions by design) to catch an invocation from either side.
+    """
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    import ctx.repomap as repomap
+    import ctx.skeleton as skel
+
+    monkeypatch.setenv("CTX_NO_CTAGS", "1")
+    monkeypatch.setenv("CTX_MAP_ENGINE", "builtin")
+
+    real_which = _shutil.which
+    monkeypatch.setattr(
+        _shutil,
+        "which",
+        lambda name, *a, **k: "/usr/bin/ctags" if name == "ctags" else real_which(name, *a, **k),
+    )
+
+    invoked: list[object] = []
+    real_run = _subprocess.run
+
+    def recording_run(argv, *a, **k):
+        head = argv[0] if isinstance(argv, (list, tuple)) and argv else argv
+        if "ctags" in str(head):
+            invoked.append(argv)
+        return real_run(argv, *a, **k)
+
+    monkeypatch.setattr(_subprocess, "run", recording_run)
+
+    # Both probes must report the binary as unavailable.
+    assert skel._ctags_path() is None
+    assert repomap._ctags_enabled() is False
+
+    _no_tree_sitter(monkeypatch)  # force the chain down to the ctags rung
+    (workspace_dir / "greeter.ts").write_text(TS_SOURCE, encoding="utf-8")
+    (workspace_dir / "web.js").write_text(
+        "function init(a, b) { return a + b; }\n", encoding="utf-8"
+    )
+    (workspace_dir / "sample.py").write_text(PY_SOURCE, encoding="utf-8")
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+
+    ts = skel.skeleton_for(store, ws, "greeter.ts")
+    m = repomap.repo_map(store, ws, budget=1200)
+
+    assert not invoked, f"ctags invoked despite CTX_NO_CTAGS: {invoked!r}"
+    assert ts["parser"] == "none"  # degrades down the chain, never errors
+    assert "web.js" not in m  # map omits non-python files rather than erroring
+
+
 def test_unknown_language_is_none_parser(env, monkeypatch, workspace_dir):
     from ctx.skeleton import skeleton_for
 

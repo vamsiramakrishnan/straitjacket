@@ -191,6 +191,39 @@ class Workspace:
         return rels
 
 
+# ------------------------------------------------------- cache invalidation
+def stat_fingerprint(root: Path | str, rels, h) -> None:
+    """Fold the on-disk state of ``rels`` (repo-relative) into ``h``.
+
+    The one stat-based cache-invalidation basis in the harness. Three caches
+    (``repomap``, ``callgraph``, ``plan_exec``'s node cache) key on file
+    metadata rather than content because hashing every file on every lookup
+    is the thing they exist to avoid; ``skeleton`` keys on the source blob
+    hash and deliberately does not use this — content is the stronger basis
+    and it already has the hash in hand.
+
+    The basis is ``(rel, size, mtime_ns, ctime_ns)``. ``ctime_ns`` is not
+    redundant: mtime is settable from userspace, so a same-length edit whose
+    mtime is put back (``os.utime``, ``rsync -t``, ``tar -p``, editors that
+    save-and-restore timestamps) is invisible to size+mtime alone and used
+    to serve a stale map/graph/node result. ctime is bumped by the write and
+    by the utime call itself and cannot be moved backwards.
+
+    Unstattable paths are skipped (a deleted file leaves the listing that
+    produced ``rels`` anyway); the traversal order is the caller's, so the
+    caller owns determinism.
+    """
+    base = Path(root)
+    for rel in rels:
+        try:
+            st = (base / rel).stat()
+        except OSError:
+            continue
+        h.update(
+            f"{rel}|{st.st_size}|{st.st_mtime_ns}|{st.st_ctime_ns}\n".encode("utf-8")
+        )
+
+
 # ------------------------------------------------------------------ identity
 def _git_toplevel(path: Path) -> Path | None:
     try:

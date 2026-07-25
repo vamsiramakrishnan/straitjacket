@@ -42,11 +42,26 @@ from __future__ import annotations
 import json
 import os
 import re
-from pathlib import Path
-from typing import Any
+
+# ctx.sessiondir imports `os` only, and ctx.proxywindow adds `json` (already
+# loaded here) on top of it — for exactly this reason.
+from ctx.proxywindow import read_window_doc
+from ctx.sessiondir import session_reads_dir
+
+# Hot path: `note_call` runs on every intercepted tool call, so this module is
+# imported by hook.py on every one of them. `pathlib` (~4.7 ms) and `typing`
+# (~4.3 ms) are therefore not imported at module scope — `os.path` covers the
+# joins and existence checks here (and accepts the `Path` arguments callers
+# still pass, via the os.PathLike protocol), and `from __future__ import
+# annotations` makes `Any` a string that is never evaluated at runtime. The
+# guard below deliberately does not use `from typing import TYPE_CHECKING`,
+# which would import the very module being avoided.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from pathlib import Path
+    from typing import Any
 
 _STATE_NAME = "engagement.json"
-_LEDGER_DIR = ".ctx-session-reads"
 
 DEFAULT_MODE = "auto"  # auto | active | passive
 DEFAULT_ACTIVATE_AFTER_CALLS = 8
@@ -62,10 +77,18 @@ DEFAULT_ACTIVATE_AFTER_CALLS = 8
 DEFAULT_LEAN_MODELS = ("haiku", "flash", "mini", "nano", "lite", "small")
 DEFAULT_SUGGESTIONS = 3
 LEAN_SUGGESTIONS = 1
+# Emission governor (mechanism B): cumulative output tokens per pressure
+# tier, each tier nudging once. The one source of truth in Python — the
+# typed config default, the guard hot path's default and the hot path's
+# `policy.get(...)` fallback all read it from here (it used to be a bare
+# literal in all three). The Rust shim (native/ctx-hook-native) necessarily
+# names it again in its own language; the two are pinned equal by
+# tests/test_cross_language_constants.py.
+EMISSION_NUDGE_TOKENS_DEFAULT = 20_000
 
 
-def _state_path(workspace_root: Path | str) -> Path:
-    return Path(workspace_root) / _LEDGER_DIR / _STATE_NAME
+def _state_path(workspace_root: Path | str) -> str:
+    return session_reads_dir(workspace_root, _STATE_NAME)
 
 
 def _mutate_state(workspace_root: Path | str, fn) -> dict[str, Any]:
@@ -73,7 +96,7 @@ def _mutate_state(workspace_root: Path | str, fn) -> dict[str, Any]:
     Fail-open: any problem returns whatever ``fn`` produces from {}."""
     try:
         path = _state_path(workspace_root)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
         try:
             try:
@@ -106,24 +129,15 @@ def _mutate_state(workspace_root: Path | str, fn) -> dict[str, Any]:
 
 def read_state(workspace_root: Path | str) -> dict[str, Any]:
     try:
-        raw = _state_path(workspace_root).read_text(encoding="utf-8")
-        state = json.loads(raw)
+        with open(_state_path(workspace_root), encoding="utf-8") as fh:
+            state = json.load(fh)
         return state if isinstance(state, dict) else {}
     except Exception:
         return {}
 
 
-def _proxy_doc(workspace_root: Path | str) -> dict[str, Any]:
-    try:
-        path = Path(workspace_root) / _LEDGER_DIR / "proxy" / "window.json"
-        doc = json.loads(path.read_text(encoding="utf-8"))
-        return doc if isinstance(doc, dict) else {}
-    except Exception:
-        return {}
-
-
 def session_model(workspace_root: Path | str) -> str:
-    return str(_proxy_doc(workspace_root).get("model") or "")
+    return str(read_window_doc(workspace_root).get("model") or "")
 
 
 def model_matches_lean(model: str, lean_models=DEFAULT_LEAN_MODELS) -> bool:
@@ -161,7 +175,7 @@ def note_call(
     if mode == "passive":
         return "passive"
 
-    window_doc = _proxy_doc(workspace_root)
+    window_doc = read_window_doc(workspace_root)
     pct = window_doc.get("window_pct")
     window_hot = isinstance(pct, (int, float)) and not isinstance(pct, bool) and (
         float(pct) >= window_pressure_pct / 2
@@ -286,3 +300,35 @@ def suggestion_cap(
     if is_lean_model(workspace_root, lean_models):
         return LEAN_SUGGESTIONS
     return DEFAULT_SUGGESTIONS
+
+
+def note_taught(workspace_root: Path | str | None, lesson: str) -> bool:
+    """Record that ``lesson`` has been taught this session; True the first time.
+
+    The guard's remediation text is itself context. Replaying this repo's own
+    transcripts showed sessions where the harness *cost* tokens rather than
+    saving them (worst: 128 -> 439, -243%), because six denials each re-emitted
+    the same ~50-token explanation of a lesson the model had already taken on
+    call one. So a lesson is spelled out once and then referred to.
+
+    Fail-open: any problem returns True (teach in full), because an unexplained
+    denial is worse than a repeated one."""
+    if workspace_root is None or not lesson:
+        return True
+    try:
+        seen: list[str] = []
+
+        def _fn(state: dict[str, Any]) -> dict[str, Any]:
+            taught = state.get("taught")
+            if not isinstance(taught, list):
+                taught = []
+            seen.append(lesson if lesson in taught else "")
+            if lesson not in taught:
+                taught = [*taught, lesson][-32:]  # bounded: a session's lessons
+            state["taught"] = taught
+            return state
+
+        _mutate_state(workspace_root, _fn)
+        return not (seen and seen[0])
+    except Exception:
+        return True

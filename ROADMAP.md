@@ -115,7 +115,7 @@ verdicts over recorded commands, recorded-vs-simulated wire residency,
 and evidence sufficiency (facts the model provably used downstream,
 scored inline-in-digest vs one-hop). `--gaps` aggregates the empirical
 coverage priority list: raw tokens by claiming profile, slicer-heavy
-programs, `ctx eval` opportunities. Read results are counted under the
+programs, `ctx py` opportunities. Read results are counted under the
 read path, never shape-digested (a file containing test markers is not a
 test run).
 
@@ -134,7 +134,7 @@ test run).
 zero writes outside the throwaway store; redaction applied to every
 printed fragment.
 
-## M-J · Compiled evidence plans (`ctx plan` / `ctx investigate`)
+## M-J · Compiled evidence plans (`ctx plan` / `ctx plan run`)
 
 **Shipped v0.25.0** (P0–P3 + P5 surface; P4 cost-table epoch = debt e319eef641; live four-arm referee open).
 
@@ -224,6 +224,52 @@ entity/relation/operation ontology, and speculative `view:` projections.
 over presets, role projections, shadow prefetch — each behind the per-
 intent A/B/C referee (retrieval turns ≤ 50% of `ctx q`/`get` at no
 recall loss).
+
+## M-M · Harness collaboration orchestrator (cost-tied routing)
+
+*The cross-harness generalization of M-A: a cheap harness explores, an
+expensive harness synthesizes, and the handoff is addressed evidence.*
+
+`ctx wrap` used to know exactly three hosts by name. This mechanism makes the
+set **data** and adds a router that spends the cheapest harness that can do each
+phase.
+
+**Deliverables (shipped)**
+- `src/ctx/hosts.py` — a declarative host registry: one `HostSpec` per
+  coding-agent CLI (detect on PATH, resolve model, name installer/wrapper,
+  declare output-substitution capability, plus **capability tier + strengths +
+  coordinator model** for routing). Adding a host is a data edit; the model tie
+  joins each CLI to `ctx.pricing`.
+- `ctx wrap detect` — probe PATH for every registered CLI and print an
+  installed/model/**price** table; `ctx wrap setup` becomes detection-driven
+  (configure the CLIs it finds; `ctx wrap all` forces every supported host).
+- `src/ctx/orchestrator.py` + `ctx orchestrate "<task>"` — **task coordination,
+  not open-loop calling.** A cheap coordinator (the cheapest harness, priced by
+  its coordinator model — Antigravity on Gemini-flash-lite — guided by the
+  routing skill) splits the task into a `ctx.route/v1` DAG; each node is routed
+  by **capability × price** (cheapest harness that clears `min_tier` and covers
+  the tags). The DAG is validated (acyclic, bounded, budgeted), **priced up
+  front, shown, then run in a closed loop**: parallel waves, `ctx.checkpoint/v1`
+  handoff (addressed evidence, never raw bytes — the M-A contract generalized
+  across hosts), failure escalation to a stronger harness, bounded re-planning.
+  A deterministic capability-routed fallback DAG runs when no coordinator can.
+  Fail-open; a single installed harness degrades with zero claimed saving.
+- Routing skill `references/harness-collaboration.md` (lockstep with the
+  inlined `ROUTING_CONTRACT`); `[orchestrate]` config block (closed-loop bounds
+  `max_nodes`/`max_waves`/`max_replans`/`budget_usd`, `confirm`, per-node
+  estimates); receipt in
+  [`evals/orchestrator-cost-routing-2026-07-24.md`](evals/orchestrator-cost-routing-2026-07-24.md).
+
+**Acceptance**: capability routing and the priced DAG are byte-deterministic
+for a fixed install set and price table; economy nodes verifiably pick the
+economy harness and frontier nodes the frontier one; independent nodes run in
+one wave, dependents in the next; the handoff carries only checkpoints + handles
+(no raw payload); a failed node escalates and a bounded re-plan can add recovery
+nodes; estimate is shown before spend and reconciled against wire truth after.
+
+**TO-BUILD**: the live billed A/B (two live harnesses, real tokens) — same
+blocker as the Antigravity receipt (headless dual-host access), recorded as debt
+in the receipt.
 
 ## Sequencing
 

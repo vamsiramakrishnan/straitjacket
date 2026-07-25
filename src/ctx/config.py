@@ -10,6 +10,9 @@ from typing import Any
 # module, no import cycle) so the config default never drifts from the
 # engagement mechanism's own default.
 from ctx.engagement import DEFAULT_LEAN_MODELS as _DEFAULT_LEAN_MODELS
+from ctx.engagement import (
+    EMISSION_NUDGE_TOKENS_DEFAULT as _EMISSION_NUDGE_TOKENS_DEFAULT,
+)
 
 CONFIG_FILENAME = "ctx.toml"
 IGNORE_FILENAME = ".ctxignore"
@@ -90,7 +93,38 @@ class Engagement:
     lean_models: tuple[str, ...] = _DEFAULT_LEAN_MODELS
     # Emission-gate nudge budget (read on the hot path by ctx.hook); pinned to
     # the guard reader by tests/test_config_hook_parity.py.
-    emission_nudge_tokens: int = 20000
+    emission_nudge_tokens: int = _EMISSION_NUDGE_TOKENS_DEFAULT
+
+
+@dataclass(frozen=True)
+class OrchestratePolicy:
+    """Harness collaboration (ctx.orchestrator): a cheap coordinator splits a
+    task across the installed harnesses by capability x price and a closed loop
+    coordinates it. The coordinator emits a ``ctx.route/v1`` DAG; when none can
+    run, a deterministic capability-routed fallback is used. ``confirm`` is off
+    by default — the plan is priced, shown, then run (rewrite-not-ask)."""
+
+    confirm: bool = False       # print the priced plan and stop before running
+    fallback_only: bool = False  # skip the coordinator model; always use the fallback route
+    # Closed-loop totality bounds (mirrors PlanPolicy). The loop stops at the
+    # first bound it hits; a single installed harness degrades gracefully.
+    max_nodes: int = 12
+    max_waves: int = 4
+    max_replans: int = 2
+    budget_usd: float = 0.0     # 0 = unbounded (still bounded by nodes/waves)
+    node_timeout: float = 900.0
+    # Complexity-adaptive implementation tier for the deterministic fallback:
+    # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
+    # simple edits. A live coordinator overrides this per task.
+    implement_tier: str = "standard"
+    # Coarse per-node token estimates for the deterministic fallback route and
+    # for pricing the plan up front; real spend is reconciled from wire truth.
+    explore_input_tokens: int = 24000
+    explore_output_tokens: int = 3000
+    implement_input_tokens: int = 48000
+    implement_output_tokens: int = 9000
+    review_input_tokens: int = 20000
+    review_output_tokens: int = 2500
 
 
 @dataclass(frozen=True)
@@ -154,6 +188,7 @@ class Config:
     budgets: Budgets = field(default_factory=Budgets)
     guard: Guard = field(default_factory=Guard)
     engagement: Engagement = field(default_factory=Engagement)
+    orchestrate: OrchestratePolicy = field(default_factory=OrchestratePolicy)
     store: StorePolicy = field(default_factory=StorePolicy)
     plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
@@ -209,6 +244,7 @@ def load_config(workspace_root: Path | None) -> Config:
         allow_commands=tuple(str(x) for x in guard_raw.get("allow_commands", ())),
         deny_commands=tuple(str(x) for x in guard_raw.get("deny_commands", ())),
     )
+    orchestrate = _pick(raw.get("orchestrate") or {}, OrchestratePolicy)
     store = _pick(raw.get("store") or {}, StorePolicy)
     plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
@@ -252,6 +288,7 @@ def load_config(workspace_root: Path | None) -> Config:
         budgets=budgets,
         guard=guard,
         engagement=engagement,
+        orchestrate=orchestrate,
         store=store,
         plan=plan,
         redaction=redaction,

@@ -7,6 +7,7 @@ fall back to ``text/v1``.
 
 from __future__ import annotations
 
+import re
 import hashlib
 from typing import Any
 
@@ -29,7 +30,7 @@ from ctx.digest.tableprof import TableProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
-from ctx.textutil import decode_stream, sanitize_for_model
+from ctx.textutil import decode_stream, sanitize_for_model, short_id
 from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
@@ -61,6 +62,72 @@ def detect_profile(ctx: DigestContext) -> tuple[Profile, str]:
         if reason:
             return profile, reason
     return _PROFILES[-1], "fallback"  # pragma: no cover - text always matches
+
+
+# Lines a profile emits that are pure bookkeeping: provenance, byte counts, and
+# accounting about what it chose to omit. Anything NOT matching is evidence the
+# profile derived — a failure census, a span, a schema, a heavy-hitter table —
+# and evidence is worth its bytes however small the output was.
+_ACCOUNTING_LINE = re.compile(
+    r"""^\s*(
+        cwd: | command: | exit[: ] | signal[: ] | timed\ out
+      | stdout: | stderr: | summary: | coverage:
+      | parsed: | shown: | tests: | omitted
+      | next: | ctx\             # retrieval affordances, not findings
+      | ---\ stderr\ ---
+    )""",
+    re.VERBOSE,
+)
+
+
+def _only_accounting(body: str) -> bool:
+    """True when the profile added no evidence — only bookkeeping."""
+    for line in body.splitlines():
+        if line.strip() and not _ACCOUNTING_LINE.match(line):
+            return False
+    return True
+
+
+def _pass_through_if_digest_earned_nothing(ctx: Any, body: str, ws: Workspace) -> str:
+    """Emit the output plainly when the digest around it earned no bytes.
+
+    A profile's scaffolding pays for itself on a flood and not at all on two
+    lines. Measured: a passing 98-byte pytest run rendered a 248-byte digest
+    (2.5x) whose `coverage:` block spent five lines accounting for the omission
+    of one line out of two — and the actual result line ("1 passed") was the
+    thing omitted. Replaying this repo's own sessions showed short ones coming
+    out worse under the harness than without it.
+
+    The test is *evidence*, not size. An earlier attempt compared byte counts
+    and suppressed pytest failure spans and JSON schema summaries, which are
+    worth far more than their length. So pass through only when every line the
+    profile produced is bookkeeping (:data:`_ACCOUNTING_LINE`) — any derived
+    finding blocks it — and only when the whole output fits inline anyway. The
+    run handle still addresses the stored capture, so nothing becomes
+    unretrievable. Fail-open: any problem keeps the profile's rendering."""
+    try:
+        content = sum(v.bytes for v in (ctx.stdout, ctx.stderr) if v.bytes)
+        if not content or content > ws.config.budgets.max_inline_bytes:
+            return body  # large enough that the digest is doing real work
+        if not _only_accounting(body):
+            return body  # the profile found something; keep it
+        r = ctx.manifest["result"]
+        status = (
+            f"exit {r['exitCode']}" if r.get("exitCode") is not None
+            else f"signal {r.get('signal')}"
+        )
+        if r.get("timedOut"):
+            status += " · timed out"
+        out = [f"{status} · output (complete):"]
+        for view in (ctx.stdout, ctx.stderr):
+            if view.bytes:
+                if view is ctx.stderr and ctx.stdout.bytes:
+                    out.append("--- stderr ---")
+                out.extend(view.text_lines)
+        plain = "\n".join(out)
+        return plain if len(plain.encode("utf-8")) < len(body.encode("utf-8")) else body
+    except Exception:
+        return body
 
 
 def render_run_digest(
@@ -99,6 +166,7 @@ def render_run_digest(
     profile, reason = detect_profile(ctx)
 
     body = profile.render(ctx)
+    body = _pass_through_if_digest_earned_nothing(ctx, body, ws)
     body, redactions = sanitize_for_model(body, ws.config.redaction.patterns)
     if redactions:
         body += "\nredaction: applied [" + ", ".join(redactions) + "]"
@@ -115,7 +183,7 @@ def render_run_digest(
         "bytesHash": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
     }
     final_id, final_manifest = update_manifest_digest(store, manifest, digest_meta)
-    short = final_id[:12]
+    short = short_id(final_id)
 
     header = f"[ctx run:{short} profile={profile_version}]"
     digest = header + "\n" + body.replace("run:PENDING", f"run:{short}")
@@ -204,7 +272,7 @@ def digest_output(
     }
 
     digest, final = render_run_digest(store, ws, manifest, focus=None)
-    short = str(final.get("id", "")).removeprefix("sha256:")[:12]
+    short = short_id(final.get("id", ""))
 
     from ctx.engagement import filter_digest, suggestion_cap
     from ctx.textutil import bounded

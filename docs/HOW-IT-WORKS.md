@@ -111,7 +111,7 @@ mechanical.
   repo maps). The agent explores without `cat`-ing files into context.
 - **`ctx q`** — small pipelines over typed evidence
   (`refs Foo | group file | top 3 | get`), executed locally in one step.
-- **`ctx plan` / `ctx investigate`** — the agent writes a short JSON plan
+- **`ctx plan` / `ctx plan run`** — the agent writes a short JSON plan
   (a bounded DAG of evidence operations); the harness validates, prices,
   executes it locally, and returns **one** digest instead of N rounds of
   tool calls. Measured: a 6-round investigation collapsed to 1.
