@@ -159,8 +159,12 @@ def _route(goal: str, arm: str, ws, builder_model: str):
             "prefer": "strong", "est_input_tokens": 9000, "est_output_tokens": 14000,
         }]}
         return build_route_plan(goal, raw, hosts, ws.config.orchestrate)
+    # NB: every arm test on the build node must agree with _build/_fix, which
+    # dispatch on `arm.startswith("cross")`. An `arm == "cross"` here silently
+    # routed cross-sj to Sonnet and then launched the Antigravity SDK with the
+    # model id "sonnet", which 404s.
     build_node = ({"host": "antigravity", "model": builder_model, "min_tier": "standard"}
-                  if arm == "cross"
+                  if arm.startswith("cross")
                   else {"host": "claude", "model": "claude-sonnet-4.6", "min_tier": "standard"})
     raw = {"nodes": [
         {"id": "plan", "goal": "design the reshape", "role": "plan", "deps": [],
@@ -211,9 +215,16 @@ def _build(arm: str, ws, plan, prompt: str, build_dir: Path, timeout: float,
     full = prompt + "\n\n--- plan from the upstream checkpoint ---\n" + plan_doc
 
     if arm.startswith("cross"):
-        H._agy_build(build_asn.model.launch_id, full, build_dir, timeout, contain=contain)
+        ok = H._agy_build(build_asn.model.launch_id, full, build_dir, timeout,
+                          contain=contain)
     else:
-        H._claude(build_asn.model.launch_id, full, build_dir, timeout, tools=True)
+        ok = H._claude(build_asn.model.launch_id, full, build_dir, timeout,
+                       tools=True)[0] == 0
+    if not ok:
+        # A build that produced nothing gets quietly rescued by the fix round,
+        # which makes a broken arm look merely slow. Say so.
+        print(f"    !! {arm} build node reported failure — the fix round is doing "
+              f"the build, not repairing it", flush=True)
     H._chmod_start(build_dir)
 
 
