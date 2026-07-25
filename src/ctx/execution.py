@@ -7,14 +7,13 @@ memory and never reaches the model before it is content-addressed.
 from __future__ import annotations
 
 import hashlib
-import os
-import signal as signal_mod
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ctx._proc import exit_status, wait_or_kill
 from ctx.gitstatus import changed_paths
 from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
@@ -42,6 +41,84 @@ def _count_lines(path: Path) -> int:
     if last not in (b"\n", b""):
         lines += 1
     return lines
+
+
+def stream_entries(store: Store, paths: dict[str, Path]) -> dict[str, dict[str, Any]]:
+    """Spool files → the manifest's ``streams`` block (R7).
+
+    Content-addresses each spool and describes it: blob ref, byte and line
+    counts, and the media type / encoding sniffed from its first 8 KiB. Both
+    the foreground runner and the background finalizer produce this block,
+    and it has to agree byte for byte or the same captured output would get
+    two different manifest ids.
+
+    An empty stream is reported as ``text/plain`` + ``utf-8`` rather than
+    whatever :func:`ctx.textutil.decode_stream` says about zero bytes, so a
+    command that wrote nothing to stderr does not acquire a media type.
+    """
+    streams: dict[str, dict[str, Any]] = {}
+    for name, path in paths.items():
+        blob_hash, size = store.put_blob_from_file(path)
+        with path.open("rb") as fh:
+            head = fh.read(8192)
+        _, encoding, media_type = decode_stream(head if size else b"")
+        streams[name] = {
+            "blob": f"sha256:{blob_hash}",
+            "bytes": size,
+            "lines": _count_lines(path),
+            "mediaType": media_type if size else "text/plain",
+            "encoding": encoding if size else "utf-8",
+        }
+    return streams
+
+
+def invocation_manifest(
+    ws: Workspace,
+    *,
+    cwd: str,
+    argv: list[str],
+    shell: bool,
+    exit_code: int | None,
+    signal: str | None,
+    timed_out: bool,
+    streams: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """An unpublished ``ctx.invocation/v1`` manifest (R7).
+
+    One definition of the shape. ``ctx.jobs.finalize_job`` used to carry its
+    own copy with a comment promising it was "exactly the shape
+    run_capture produces" — which is the promise this function keeps by
+    construction. It matters: manifest identity is the sha256 of these fields,
+    so a background run and an identical foreground run must land on the same
+    id, and the digest layer must find the same keys either way.
+
+    The ``digest`` block is a PLACEHOLDER. It keeps the schema shape stable
+    for the intermediate publish; :func:`update_manifest_digest` replaces it
+    with the real profile/policy/focus/bytes identity before the final one.
+    """
+    return {
+        "schema": "ctx.invocation/v1",
+        "workspaceId": ws.workspace_id,
+        "cwd": cwd,
+        "argv": list(argv),
+        "shell": bool(shell),
+        "result": {
+            "exitCode": exit_code,
+            "signal": signal,
+            "timedOut": timed_out,
+        },
+        "streams": streams,
+        "source": {
+            "gitHead": ws.git.head if ws.git else None,
+            "worktreeHash": _worktree_hash(ws),
+        },
+        "digest": {
+            "profile": "text/v1",
+            "policy": "default/v1",
+            "focusHash": focus_hash(None),
+            "bytesHash": "sha256:" + "0" * 64,
+        },
+    }
 
 
 def _normalize_focus(focus: str | None) -> str:
@@ -114,37 +191,10 @@ def run_capture(
             finally:
                 if in_fh is not None:
                     in_fh.close()
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                try:
-                    os.killpg(proc.pid, signal_mod.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    proc.kill()
-                proc.wait()
+            timed_out = wait_or_kill(proc, timeout)
 
-        exit_code: int | None = proc.returncode
-        sig_name: str | None = None
-        if exit_code is not None and exit_code < 0:
-            try:
-                sig_name = signal_mod.Signals(-exit_code).name
-            except ValueError:
-                sig_name = f"SIG{-exit_code}"
-            exit_code = None
-
-        streams: dict[str, dict[str, Any]] = {}
-        for name, path in (("stdout", out_path), ("stderr", err_path)):
-            blob_hash, size = store.put_blob_from_file(path)
-            head = path.open("rb").read(8192)
-            _, encoding, media_type = decode_stream(head if size else b"")
-            streams[name] = {
-                "blob": f"sha256:{blob_hash}",
-                "bytes": size,
-                "lines": _count_lines(path),
-                "mediaType": media_type if size else "text/plain",
-                "encoding": encoding if size else "utf-8",
-            }
+        exit_code, sig_name = exit_status(proc.returncode)
+        streams = stream_entries(store, {"stdout": out_path, "stderr": err_path})
     finally:
         for p in (out_path, err_path) + ((in_path,) if in_path is not None else ()):
             try:
@@ -156,31 +206,16 @@ def run_capture(
         except OSError:
             pass
 
-    manifest: dict[str, Any] = {
-        "schema": "ctx.invocation/v1",
-        "workspaceId": ws.workspace_id,
-        "cwd": rel_cwd,
-        "argv": list(record_argv if record_argv is not None else argv),
-        "shell": shell,
-        "result": {
-            "exitCode": exit_code,
-            "signal": sig_name,
-            "timedOut": timed_out,
-        },
-        "streams": streams,
-        "source": {
-            "gitHead": ws.git.head if ws.git else None,
-            "worktreeHash": _worktree_hash(ws),
-        },
-        # digest fields are filled by the digest layer after profile
-        # selection; placeholders keep the schema shape stable.
-        "digest": {
-            "profile": "text/v1",
-            "policy": "default/v1",
-            "focusHash": focus_hash(None),
-            "bytesHash": "sha256:" + "0" * 64,
-        },
-    }
+    manifest = invocation_manifest(
+        ws,
+        cwd=rel_cwd,
+        argv=list(record_argv if record_argv is not None else argv),
+        shell=shell,
+        exit_code=exit_code,
+        signal=sig_name,
+        timed_out=timed_out,
+        streams=streams,
+    )
     manifest_id = store.put_manifest(manifest, kind="run")
     manifest["id"] = f"sha256:{manifest_id}"
     return CaptureResult(manifest_id=manifest_id, manifest=manifest)
