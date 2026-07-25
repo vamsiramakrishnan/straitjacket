@@ -42,12 +42,18 @@ def cmd_gc(ws, ns) -> int:
 
 
 def cmd_pin(ws, ns) -> int:
+    from ctx.commands.retrieve import _bad_input_errors, _fail
     from ctx.refs import parse_ref
     from ctx.store import Store
 
-    ref = parse_ref(ns.ref)
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    store.pin(ref.id or "")
+    try:
+        ref = parse_ref(ns.ref)
+        store.pin(ref.id or "")
+    except _bad_input_errors() as e:
+        # `pin` takes the same handles as `get`; it owes the same attributed
+        # message and the same exit code (docs/CLI.md, "Exit codes").
+        return _fail("pin", e)
     print(f"pinned {ref.display()}")
     return 0
 
@@ -117,14 +123,31 @@ def cmd_gain(ws, ns=None) -> int:
             slot["raw"] += int(ev.get("raw_bytes", 0))
             slot["emitted"] += int(ev.get("emitted_bytes", 0))
     if not per_op:
-        print("no telemetry yet — run some commands under the harness first")
+        # Two failures in one line, before: it went to stdout while every
+        # other error goes to stderr, and it blamed the user for not having
+        # run anything — when the usual cause is that nothing is hooked, so
+        # commands ran and were never intercepted. `ctx doctor` answers
+        # exactly that question ("an agent is wrapped"), so send them there.
+        print(
+            "ctx gain: no telemetry for this workspace yet.\n"
+            "  Most often this means no agent is hooked, not that nothing ran —\n"
+            "  commands went straight to the shell and ctx never saw them.\n"
+            "  Check:  ctx doctor        (look for 'an agent is wrapped')\n"
+            "  Fix:    ctx wrap setup    (hook the agents you have installed)",
+            file=sys.stderr,
+        )
         return 1
     total_raw = sum(s["raw"] for s in per_op.values())
     total_emitted = sum(s["emitted"] for s in per_op.values())
     saved_tok = max(0, (total_raw - total_emitted) // 4)
+    # Byte sizes go through the one shared formatter (`1.4 MiB`), the same
+    # one every digest header uses — this was the last place rendering raw
+    # `{n:,} bytes` by hand.
+    from ctx.textutil import fmt_bytes
+
     print(f"[ctx gain · workspace {ws.workspace_id[:12]}]")
     print(
-        f"contained: {total_raw:,} bytes raw -> {total_emitted:,} bytes emitted "
+        f"contained: {fmt_bytes(total_raw)} raw -> {fmt_bytes(total_emitted)} emitted "
         f"({total_raw / max(1, total_emitted):.1f}x)"
     )
     print(f"est tokens kept out of context: {saved_tok:,}")
@@ -157,8 +180,8 @@ def cmd_gain(ws, ns=None) -> int:
     for op, s in sorted(per_op.items(), key=lambda kv: -kv[1]["raw"]):
         ratio = s["raw"] / max(1, s["emitted"])
         print(
-            f"  {op:7s} {s['events']:>5,} events · {s['raw']:>12,} B -> "
-            f"{s['emitted']:>10,} B ({ratio:.1f}x)"
+            f"  {op:7s} {s['events']:>5,} events · {fmt_bytes(s['raw']):>12} -> "
+            f"{fmt_bytes(s['emitted']):>10} ({ratio:.1f}x)"
         )
     return 0
 

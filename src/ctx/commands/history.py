@@ -34,12 +34,15 @@ def cmd_replay(ns) -> int:
             _ws = _rw(ns.workspace)
             ldir = _ws.root / ".ctx-session-reads"
             ldir.mkdir(parents=True, exist_ok=True)
-            with (ldir / "evidence-followups.jsonl").open(
-                "a", encoding="utf-8"
-            ) as fh:
+            # One name, used twice: the message used to report
+            # evidence-outcomes.jsonl while the write went to
+            # evidence-followups.jsonl, so a user who followed the message
+            # found nothing there.
+            ledger = ldir / "evidence-followups.jsonl"
+            with ledger.open("a", encoding="utf-8") as fh:
                 for e in events:
                     fh.write(_json.dumps(e.payload(), sort_keys=True) + "\n")
-            print(f"appended {len(events)} events to {ldir / 'evidence-outcomes.jsonl'}")
+            print(f"appended {len(events)} events to {ledger}")
         if ns.replay_json:
             print(_json.dumps([e.payload() for e in events], indent=2))
         else:

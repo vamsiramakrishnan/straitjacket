@@ -289,6 +289,40 @@ straitjacket distinguishes safety from optional intelligence:
 - degraded precision is disclosed in the digest;
 - omission is declared and addressed, never silent.
 
+## Exit codes
+
+`ctx` is invoked from hooks, wrappers, CI steps, and — most often — by an agent
+deciding what to do next, so its exit status is part of the interface. Six codes are
+used, and they answer three different questions.
+
+| Code | Meaning | What the caller should do |
+|---|---|---|
+| `0` | Success | Continue |
+| `1` | **ctx** failed | Not your invocation's fault: an internal error, an unreadable store, an engine that would not start. Retry or run `ctx doctor` |
+| `2` | ctx **rejected the invocation** | Fix the arguments. Unknown command or flag, a malformed selector (`--lines nope`), an ungrammatical reference (`zzz:xyz`), a missing required argument, a workspace that will not resolve, or a handle that no longer resolves because `ctx gc` or the retention window collected it |
+| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output |
+| `124` | Timed out | The child exceeded `--timeout` (or `ctx job --wait` gave up). Matches `timeout(1)` |
+| `127` | Not found | The program ctx was asked to launch or wrap is not on `PATH`. Matches the shell's convention |
+
+The important line is between `1`, `2`, and `3`. A script that treats every nonzero
+status as "the command failed" will re-run work that already produced its evidence
+(`3`), and retry invocations that will never succeed as typed (`2`).
+
+Human-readable errors go to **stderr**; digests, reports, and status output go to
+**stdout**. An error message names the verb that produced it (`ctx get: …`), so a
+failure in a pipeline is attributable without a traceback.
+
+### When the message is not enough
+
+```bash
+CTX_DEBUG=1 ctx <command> …
+```
+
+`CTX_DEBUG` prints the real traceback for an unhandled error, on the CLI and on the
+MCP server alike. Without it, an exception that escapes a handler is summarized as
+`ctx <command>: <ExceptionType>: <message>` — enough to attribute the failure, not
+enough to fix it.
+
 ## Output discipline
 
 A good command result answers five questions:

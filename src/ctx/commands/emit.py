@@ -23,10 +23,50 @@ def _delivery_plan(ws, *, outcome: str, family: str, base_tokens: int, signature
     )
 
 
-def _emit_bounded_digest(ws, store, text: str, plan) -> None:
+_HANDLE_RE = None
+
+
+def _truncation_handle(text: str) -> str | None:
+    """The retrieval address a truncated digest must still end with.
+
+    Two ways a digest loses its handle: ``bounded()`` cuts from the bottom
+    and the ``next:`` block is last in every profile, and ``filter_digest``
+    drops that block outright at cap 0 (the default for passive and
+    lean-model sessions) — so the sessions most likely to need the handle
+    were guaranteed not to get it.
+
+    Read from the UNFILTERED digest, so cap 0 does not hide the answer:
+    first the digest's own first suggestion (it already names the best next
+    address), else a bare `ctx get <handle>` built from the first artifact
+    handle in the text. None when the digest names no artifact at all."""
+    global _HANDLE_RE
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line == "next:":
+            for cand in lines[i + 1:]:
+                if cand.startswith("  ") and cand.strip():
+                    return cand.strip()
+                break
+            break
+    if _HANDLE_RE is None:
+        import re
+
+        _HANDLE_RE = re.compile(r"\b(run|blob|snapshot|checkpoint):([0-9a-f]{6,64})\b")
+    m = _HANDLE_RE.search(text)
+    return f"ctx get {m.group(1)}:{m.group(2)}" if m else None
+
+
+def _emit_bounded_digest(ws, store, text: str, plan, continuation=None) -> None:
     """Shared emission boundary: engagement filtering (teaching prose obeys
     both the plan and the graduated-engagement cap), the plan's token
-    budget as the bounded() backstop, and the plan receipt telemetry."""
+    budget as the bounded() backstop, and the plan receipt telemetry.
+
+    A digest the backstop had to cut always ends with a usable retrieval
+    handle — see ``_truncation_handle``. That is not an affordance the
+    engagement cap governs: a truncated digest is precisely the signal
+    ``engagement.note_truncation`` treats as proof the session outgrew
+    'small', so withholding the address there is the one case where
+    mechanism C would cost a round trip rather than save one."""
     from ctx import resolver
     from ctx.engagement import filter_digest, suggestion_cap
     from ctx.textutil import bounded
@@ -36,7 +76,14 @@ def _emit_bounded_digest(ws, store, text: str, plan) -> None:
     if not plan.include_teaching:
         cap = 0  # include_teaching=False maps to suggestion cap 0
     resolver.record_plan_receipt(store.audit_dir if store is not None else None, plan)
-    print(bounded(filter_digest(text, cap), plan.token_budget))
+    print(
+        bounded(
+            filter_digest(text, cap),
+            plan.token_budget,
+            continuation,
+            truncation_continuation=_truncation_handle(text),
+        )
+    )
 
 
 def _emit_run_digest(ws, digest: str, manifest: dict, store=None, signature=None) -> int:

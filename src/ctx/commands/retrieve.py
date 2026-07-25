@@ -12,8 +12,42 @@ from ctx.commands.emit import (
 )
 
 
+def _bad_input_errors() -> tuple[type[BaseException], ...]:
+    """The exception classes a retrieval verb must answer for itself.
+
+    ``RetrievalError`` alone was not enough: ``UnknownIdError`` (and its
+    sibling ``AmbiguousIdError``) subclass ``StoreError``, and ``parse_ref``
+    raises ``RefError`` — so the single most common agent-facing mistake,
+    `ctx get run:<id>` after a `ctx gc` or a retention expiry, fell through
+    to cli.py's blanket handler and printed a bare ``ctx: …`` with no verb
+    attribution."""
+    from ctx.refs import RefError
+    from ctx.retrieval import RetrievalError
+    from ctx.store import StoreError
+
+    return (RetrievalError, RefError, StoreError)
+
+
+def _fail(verb: str, e: BaseException) -> int:
+    """One error tail for every retrieval verb: attribute the failure to the
+    verb the user typed, and return the documented exit code (docs/CLI.md,
+    "Exit codes").
+
+    Exit 2, not 1. All three of these classes mean the same thing to a
+    calling script — *ctx rejected the invocation* — whether the argument was
+    malformed (`--lines nope`), ungrammatical (`zzz:xyz`), or simply no
+    longer resolves (a handle `ctx gc` collected). They used to split 1/2
+    purely by which verb family caught them: `ctx get` said 1 for a bad
+    selector while `ctx q` and argparse said 2 for the same class of
+    mistake. 2 is the argparse convention and already the majority of this
+    codebase's own usage errors, so 1 is left to mean only "ctx itself
+    failed" — the blanket handler in cli.py."""
+    print(f"ctx {verb}: {e}", file=sys.stderr)
+    return 2
+
+
 def _retrieval(ws, ns, verb: str) -> int:
-    from ctx.retrieval import RetrievalError, Selector, _span, get, search, stats
+    from ctx.retrieval import Selector, _span, get, search, stats
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
@@ -43,9 +77,8 @@ def _retrieval(ws, ns, verb: str) -> int:
             out = get(store, ws, ns.ref, selector)
         else:
             out = stats(store, ws, ns.ref, scope=ns.scope)
-    except RetrievalError as e:
-        print(f"ctx {verb}: {e}", file=sys.stderr)
-        return 1
+    except _bad_input_errors() as e:
+        return _fail(verb, e)
 
     return _emit_retrieval(ws, store, out)
 
@@ -77,16 +110,14 @@ def cmd_stats(ws, ns) -> int:
 
 
 def cmd_diff(ws, ns) -> int:
-    from ctx.retrieval import RetrievalError
     from ctx.rundiff import run_diff
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
         out = run_diff(store, ws, ns.ref_a, ns.ref_b)
-    except RetrievalError as e:
-        print(f"ctx diff: {e}", file=sys.stderr)
-        return 1
+    except _bad_input_errors() as e:
+        return _fail("diff", e)
     return _emit_retrieval(ws, store, out)
 
 
@@ -111,7 +142,6 @@ def _code(ws, ns) -> int:
     from ctx.codeverbs import cmd_def as _def
     from ctx.codeverbs import cmd_diag as _diag
     from ctx.codeverbs import cmd_refs as _refs
-    from ctx.retrieval import RetrievalError
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
@@ -122,9 +152,8 @@ def _code(ws, ns) -> int:
             out = _refs(store, ws, ns.symbol, ns.path)
         else:
             out = _diag(store, ws, ns.path)
-    except RetrievalError as e:
-        print(f"ctx {ns.cmd}: {e}", file=sys.stderr)
-        return 1
+    except _bad_input_errors() as e:
+        return _fail(ns.cmd, e)
     return _emit_retrieval(ws, store, out)
 
 

@@ -183,7 +183,11 @@ def cmd_job(ws, ns) -> int:
             return 0
         status = job_status(store, job_id, tail=ns.tail)
         print(status)
-        return 1 if state == "failed" else 0
+        # 3, not 1: "the thing you asked about failed" is not "ctx failed".
+        # run/py/seq already draw that line (see _emit_run_digest), and the
+        # 1 here collided with this function's own JobError handler on the
+        # next line — a caller could not tell a failed job from a bad job id.
+        return 3 if state == "failed" else 0
     except JobError as e:
         print(f"ctx job: {e}", file=sys.stderr)
         return 1

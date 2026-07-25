@@ -364,6 +364,24 @@ def _legacy_emitted(ws, text: str, exit_code: int) -> str:
     return bounded(filter_digest(text, cap), budget) + "\n"
 
 
+def _with_truncation_handle(expected: str, digest: str) -> str:
+    """The ONE documented delta from ``_legacy_emitted``.
+
+    A digest the bounded() backstop had to CUT now ends with a retrieval
+    handle: the clamp cuts from the bottom and the ``next:`` block is last in
+    every profile, so it was deleting the retrieval affordance exactly when a
+    reader needed it (and ``filter_digest`` at cap 0 dropped it outright).
+    Untruncated emissions are unchanged — which is what this golden exists to
+    prove, and why the delta is applied here rather than inside the legacy
+    reference implementation."""
+    from ctx.commands.emit import _truncation_handle
+
+    if "[ctx:truncated" not in expected:
+        return expected
+    handle = _truncation_handle(digest)
+    return expected if handle is None else expected.rstrip("\n") + f"\nnext: {handle}\n"
+
+
 @pytest.mark.parametrize("fail", [False, True])
 def test_golden_run_digest_byte_identical_to_legacy(ws_store, capsys, fail):
     from ctx.cli import main
@@ -380,7 +398,9 @@ def test_golden_run_digest_byte_identical_to_legacy(ws_store, capsys, fail):
     # Independent legacy computation: replay mints the identical digest.
     cap2 = run_capture(ws, [sys.executable, "-c", code], store=store)
     digest, _ = render_run_digest(store, ws, cap2.manifest)
-    assert emitted == _legacy_emitted(ws, digest, 3 if fail else 0)
+    assert emitted == _with_truncation_handle(
+        _legacy_emitted(ws, digest, 3 if fail else 0), digest
+    )
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -398,7 +418,7 @@ def test_golden_eval_digest_byte_identical_to_legacy(ws_store, capsys, fail):
 
     text, code = run_eval(ws, store, script)
     assert code == (2 if fail else 0)
-    assert emitted == _legacy_emitted(ws, text, code)
+    assert emitted == _with_truncation_handle(_legacy_emitted(ws, text, code), text)
 
 
 @pytest.mark.parametrize("fail", [False, True])

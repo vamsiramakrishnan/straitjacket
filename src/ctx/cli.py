@@ -213,8 +213,52 @@ def _main_slow(args: list[str]) -> int:
         print(f"ctx: workspace error: {e}", file=sys.stderr)
         return 2
     except Exception as e:
-        print(f"ctx: {e}", file=sys.stderr)
-        return 1
+        return unhandled(getattr(ns, "cmd", None), e)
+
+
+# Escape hatch for the blanket handler below. Follows the CTX_* convention
+# (CTX_NO_CTAGS, CTX_EMISSION_GATE, …): set to anything truthy.
+DEBUG_ENV = "CTX_DEBUG"
+
+
+def debug_enabled() -> bool:
+    import os
+
+    return bool(os.environ.get(DEBUG_ENV))
+
+
+def format_error(cmd: str | None, e: BaseException, *, hint: bool = True) -> str:
+    """The one message an unhandled exception produces, wherever it escapes.
+
+    `str(e)` alone is frequently unactionable AND unattributable: a KeyError
+    escaping a handler used to render as
+
+        ctx: 'focus'
+
+    which names neither the command that failed nor the kind of failure. So
+    the message always carries the command and the exception type, and
+    ``CTX_DEBUG=1`` promotes it to the real traceback (there was previously
+    no way anywhere in the tool to ask for one).
+
+    One prefix, not two: the CLI said ``ctx:`` and the MCP server said
+    ``ctx error:`` for the same handler. ``ctx:`` wins — it is what every
+    verb-attributed message already uses (``ctx get: …``), and over MCP the
+    ``isError`` flag already carries the "this is an error" bit."""
+    head = f"ctx {cmd}:" if cmd else "ctx:"
+    detail = str(e) or repr(e)
+    tail = "" if (debug_enabled() or not hint) else f"\n  (set {DEBUG_ENV}=1 for the traceback)"
+    return f"{head} {type(e).__name__}: {detail}{tail}"
+
+
+def unhandled(cmd: str | None, e: BaseException) -> int:
+    """Print ``format_error`` (plus the traceback under CTX_DEBUG) and return
+    the documented "ctx itself failed" code."""
+    if debug_enabled():
+        import traceback
+
+        traceback.print_exception(type(e), e, e.__traceback__, file=sys.stderr)
+    print(format_error(cmd, e), file=sys.stderr)
+    return 1
 
 
 def _handler_for(cmd: str):
