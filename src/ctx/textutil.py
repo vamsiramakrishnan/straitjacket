@@ -85,6 +85,39 @@ def short_path(path: str) -> str:
     return "/".join(parts[-2:]) if len(parts) > 2 else path
 
 
+#: Width of the house short id. Twelve hex characters of a sha256 is the
+#: display and addressing form for every content-addressed handle the model
+#: sees (``run:``, ``blob:``, ``snapshot:``, ``checkpoint:``, ``plan:``), and
+#: the width ``ctx.store``'s prefix resolver is tuned against.
+SHORT_ID_CHARS = 12
+
+
+def short_id(h: object) -> str:
+    """The house short id for a content HASH: drop a ``sha256:`` prefix, keep
+    the first :data:`SHORT_ID_CHARS` hex characters.
+
+    One definition for an idiom that was retyped at ~20 call sites, in two
+    spellings (``str(x).removeprefix("sha256:")[:12]`` where the value came
+    from a manifest, bare ``x[:12]`` where it came from the store already
+    stripped). Tolerates either form and already-short input; empty in,
+    empty out.
+
+    NOT the same job as :func:`short_path`, which shortens a filesystem path
+    — the two shared the name ``_short`` until R13 split them.
+
+    Deliberately NOT used for two look-alikes at the same width:
+
+    * **Minting** an id (``hashlib.sha256(...).hexdigest()[:12]`` in
+      ``ctx.reflex``'s intervention id, ``ctx.resolver``'s plan id,
+      ``ctx.policy``'s epoch id). Those widths are part of a stored
+      identity's collision budget; the display width is a readability
+      choice. Someone widening one must not silently widen the other.
+    * **Git** object names (``ws.git.head[:12]``). A different namespace with
+      its own conventions (git's own abbreviation length is adaptive).
+    """
+    return str(h or "").removeprefix("sha256:")[:SHORT_ID_CHARS]
+
+
 class JsonPointerError(Exception):
     """A pointer that is malformed or does not resolve against the document."""
 

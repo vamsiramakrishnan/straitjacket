@@ -13,7 +13,7 @@ from typing import Any
 
 from ctx.refs import RefError, parse_ref
 from ctx.store import Store
-from ctx.textutil import sanitize_for_model
+from ctx.textutil import sanitize_for_model, short_id
 from ctx.workspace import Workspace
 
 
@@ -66,7 +66,7 @@ def create_checkpoint(
 
 
 def render_checkpoint(ws: Workspace, cp_id: str, manifest: dict[str, Any]) -> str:
-    lines = [f"[ctx checkpoint:{cp_id[:12]}]"]
+    lines = [f"[ctx checkpoint:{short_id(cp_id)}]"]
     lines.append(f"goal: {manifest['goal']}")
     if manifest.get("state"):
         lines.append(f"state: {manifest['state']}")

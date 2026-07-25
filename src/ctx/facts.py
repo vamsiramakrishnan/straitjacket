@@ -23,7 +23,7 @@ Derivation discipline:
   fingerprint in the ``derived`` ledger table; re-deriving unchanged
   content is a no-op (row counts stable, byte-identical query results).
 - **Short ids, house style**: run ids and generation ids are stored as
-  12-hex short ids (``removeprefix("sha256:")[:12]``), the same
+  12-hex short ids (:func:`ctx.textutil.short_id`), the same
   shortening the reflex/intervention plane and run digests use.
 - **Generation tiers, honestly labeled**: ``changed(file, gen)`` rows are
   keyed by ``ctx.execution.generation_hash`` (EDC §8 operational
@@ -71,14 +71,17 @@ from typing import Any, Callable
 from ctx.gitstatus import changed_paths
 from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store, canonical_json
+from ctx.textutil import SHORT_ID_CHARS, short_id
 from ctx.workspace import Workspace
 
 FACTS_SCHEMA_VERSION = "ctx.facts/v1"
 FACTS_DB_NAME = "facts.sqlite"
 
-#: House short-id length — matches run short ids (`sha256:`-stripped
-#: 12-hex) and the reflex plane's 12-hex intervention ids.
-SHORT_ID = 12
+#: House short-id length. Re-exported from ctx.textutil, which owns the
+#: number — the fact store's stored run/generation ids MUST be the same
+#: width as the handles the model is shown, or a `--run` argument copied
+#: from a digest would not match a stored row.
+SHORT_ID = SHORT_ID_CHARS
 
 #: Default declared cap for join results (bounded by construction).
 DEFAULT_ROW_CAP = 50
@@ -208,11 +211,15 @@ def _connect(store: Store) -> sqlite3.Connection | None:
 
 
 def _short_id(h: Any) -> str | None:
-    """House short id (a content HASH, not a path — see
-    ``ctx.textutil.short_path``, which used to share this name): strip ``sha256:``, keep 12 hex chars. Tolerates
-    already-short input; returns None for empty/None."""
-    s = str(h or "").removeprefix("sha256:").strip()
-    return s[:SHORT_ID] or None
+    """House short id (:func:`ctx.textutil.short_id`) in the fact store's
+    dialect: ``None`` rather than ``""`` for an absent id, and tolerant of
+    surrounding whitespace because these values reach us from CLI arguments
+    (``--run 'run: abc '``) and DB rows, not only from manifests.
+
+    The strip happens BEFORE the shared helper and AFTER the prefix, exactly
+    as it always did — order matters for input like ``"sha256:  abc"``.
+    """
+    return short_id(str(h or "").removeprefix("sha256:").strip()) or None
 
 
 def _posix(p: str) -> str:

@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from ctx.sessiondir import LEDGER_DIR_NAME
+from ctx.textutil import short_id
 
 DEFAULT_KEEP_RECENT = 6  # most recent tool_results never elided
 DEFAULT_MIN_BLOCK_BYTES = 1024  # small blocks are not worth a stub
@@ -69,7 +70,7 @@ def stub_for(text: str, sha: str, prefix: str) -> str:
     """The replacement content — pure function of the elided bytes."""
     nbytes = len(text.encode("utf-8"))
     return (
-        f"[ctx rescue: tool_result elided ({nbytes} bytes, sha256:{sha[:12]}) — "
+        f"[ctx rescue: tool_result elided ({nbytes} bytes, sha256:{short_id(sha)}) — "
         f"full content preserved verbatim at "
         f"{prefix}/elided/{sha}.txt; read that file for any detail]"
     )

@@ -50,7 +50,7 @@ from ctx.evidence import (
     graph_id,
 )
 from ctx.store import canonical_json
-from ctx.textutil import fmt_bytes, fmt_int
+from ctx.textutil import fmt_bytes, fmt_int, short_id
 
 CENSUS_BLOB_SCHEMA = "ctx.pytest-census/v1"
 
@@ -409,7 +409,7 @@ def _render_flood(
     census as a content-addressed canonical-JSON blob reference."""
     items = graph.items
     denom = _denominator(graph)
-    blob12 = flood_census_blob_id(graph)[:12]
+    blob12 = short_id(flood_census_blob_id(graph))
 
     hist_class: dict[str, int] = {}
     hist_file: dict[str, int] = {}

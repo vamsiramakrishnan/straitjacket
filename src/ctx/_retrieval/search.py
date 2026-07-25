@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from ctx.execution import snapshot_file
 from ctx.refs import Ref
 from ctx.store import Store, canonical_json
-from ctx.textutil import fmt_int
+from ctx.textutil import fmt_int, short_id
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit, _parse, _route_workspace
@@ -99,7 +99,7 @@ def _mint_search_blob(
         "total": int(total),
         "sites": sites,
     }
-    return store.put_blob(canonical_json(payload))[:12]
+    return short_id(store.put_blob(canonical_json(payload)))
 
 
 def search(
@@ -165,7 +165,11 @@ def search(
         considered = len(targets) + skipped_binary
     elif ref.kind == "blob":
         blob_id = store.resolve_id(ref.id or "", kinds=("blob",))
-        targets = [SearchTarget(label=f"blob:{blob_id[:12]}", text=_stream_text(store, blob_id))]
+        targets = [
+            SearchTarget(
+                label=f"blob:{short_id(blob_id)}", text=_stream_text(store, blob_id)
+            )
+        ]
         considered = 1
     elif ref.kind == "repo":
         targets, considered, skipped_binary = _resolve_repo_targets(
@@ -226,7 +230,7 @@ def search(
             try:
                 snap = snapshot_file(store, ws, label)
                 snapshot_note.append(
-                    f"  {label} → snapshot:{str(snap['id']).removeprefix('sha256:')[:12]}"
+                    f"  {label} → snapshot:{short_id(snap['id'])}"
                 )
             except Exception:
                 pass
@@ -382,7 +386,7 @@ def _render_rg_search(
         try:
             snap = snapshot_file(store, ws, label)
             snapshot_note.append(
-                f"  {label} → snapshot:{str(snap['id']).removeprefix('sha256:')[:12]}"
+                f"  {label} → snapshot:{short_id(snap['id'])}"
             )
         except Exception:
             pass

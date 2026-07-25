@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any
 
 from ctx.store import Store, _atomic_write
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 
@@ -572,7 +573,7 @@ def list_jobs(store: Store) -> str:
         fin = jobdir / "finalized.json"
         if fin.is_file():
             try:
-                short = json.loads(fin.read_text(encoding="utf-8"))["manifestId"][:12]
+                short = short_id(json.loads(fin.read_text(encoding="utf-8"))["manifestId"])
             except (OSError, json.JSONDecodeError, KeyError):  # pragma: no cover
                 short = "?"
             desc = f"finalized → run:{short}"

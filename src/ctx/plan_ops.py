@@ -31,6 +31,7 @@ from typing import Any, Callable, Mapping
 
 from ctx.sessiondir import session_reads_path
 from ctx.store import Store
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 DEFAULT_ROW_CAP = 200
@@ -437,7 +438,7 @@ def _op_test_run(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     timeout = float(args.get("timeout", pc.timeout) or pc.timeout)
     capture = run_capture(pc.ws, [command], shell=True, timeout=timeout, store=pc.store)
     _digest, manifest = render_run_digest(pc.store, pc.ws, capture.manifest, focus=None)
-    short = str(manifest.get("id", "")).removeprefix("sha256:")[:12]
+    short = short_id(manifest.get("id", ""))
     facts.derive_generation(pc.ws, store=pc.store)
     derived = facts.derive_run(pc.store, pc.ws, manifest)
     run_id = str(derived.get("run") or short)

@@ -16,7 +16,7 @@ from ctx.digest.logprof import mine_templates
 from ctx.refs import RefError, parse_ref
 from ctx.retrieval import RetrievalError, _emit, record_telemetry
 from ctx.store import Store, StoreError
-from ctx.textutil import fmt_bytes, fmt_int
+from ctx.textutil import fmt_bytes, fmt_int, short_id
 from ctx.workspace import Workspace
 
 _MINE_CAP = 200_000  # lines template-mined per side
@@ -91,8 +91,8 @@ def _block_start(blocks: list[tuple[str, int]], nodeid: str) -> int | None:
 def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> str:
     man_a = _manifest(store, ref_a_text)
     man_b = _manifest(store, ref_b_text)
-    a12 = str(man_a["id"]).removeprefix("sha256:")[:12]
-    b12 = str(man_b["id"]).removeprefix("sha256:")[:12]
+    a12 = short_id(man_a["id"])
+    b12 = short_id(man_b["id"])
     budget = ws.config.budgets
 
     streams_a: dict[str, Any] = man_a["streams"]

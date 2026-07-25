@@ -72,7 +72,7 @@ from typing import Callable
 
 from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
-from ctx.textutil import bounded, fmt_int
+from ctx.textutil import bounded, fmt_int, short_id
 from ctx.workspace import Workspace
 
 # ------------------------------------------------------------------ model
@@ -1052,7 +1052,7 @@ def _render(
     if out.coverage:
         payload["coverage"] = out.coverage
     blob_id = store.put_blob(canonical_json(payload))
-    short = blob_id[:12]
+    short = short_id(blob_id)
 
     lines = [f"[ctx q · {n_stages} stages · {out.kind} · blob:{short}]"]
     total = len(out.rows)

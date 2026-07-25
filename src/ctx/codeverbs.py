@@ -23,7 +23,7 @@ from ctx.retrieval import (
     record_telemetry,
 )
 from ctx.store import Store
-from ctx.textutil import fmt_bytes, fmt_int
+from ctx.textutil import fmt_bytes, fmt_int, short_id
 from ctx.workspace import Workspace
 
 _ENGINE_JEDI = "jedi"
@@ -153,7 +153,7 @@ def cmd_def(store: Store, ws: Workspace, target: str) -> str:
         def_rel, a, b, kind = _ast_def(ws, rel, symbol)
 
     snap = snapshot_file(store, ws, def_rel)
-    snap_short = str(snap["id"]).removeprefix("sha256:")[:12]
+    snap_short = short_id(snap["id"])
     blob = str(snap["blob"]).removeprefix("sha256:")
     sid = store.register_span(blob, "region", a=a, b=b, note=f"def {symbol}")
 
@@ -305,7 +305,7 @@ def cmd_refs(
         try:
             snap = snapshot_file(store, ws, rel)
             snapshot_note.append(
-                f"  {rel} → snapshot:{str(snap['id']).removeprefix('sha256:')[:12]}"
+                f"  {rel} → snapshot:{short_id(snap['id'])}"
             )
         except Exception:
             pass

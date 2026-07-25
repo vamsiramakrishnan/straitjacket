@@ -26,6 +26,7 @@ import sys
 
 from ctx.execution import ExecutionError, run_capture
 from ctx.store import Store
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 # Model-visible argv: reproduce with `ctx get blob:<script> | python3 -I -`.
@@ -71,7 +72,7 @@ def run_eval(
     digest, manifest = render_run_digest(store, ws, capture.manifest, focus=focus, op="eval")
 
     unit = "line" if lines == 1 else "lines"
-    header = f"[ctx py · script blob:{script_blob[:12]} · {lines} {unit}]"
+    header = f"[ctx py · script blob:{short_id(script_blob)} · {lines} {unit}]"
     result = manifest["result"]
     if result["timedOut"]:
         code = 124

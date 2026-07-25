@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from ctx.refs import Ref
 from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _peek_blob
@@ -84,7 +85,7 @@ def _resolve_run_targets(store: Store, ref: Ref) -> tuple[list[SearchTarget], in
     files.
     """
     manifest = store.get_manifest(ref.id or "")
-    short = str(manifest["id"]).removeprefix("sha256:")[:12]
+    short = short_id(manifest["id"])
     names = [ref.stream] if ref.stream else ["stdout", "stderr"]
     targets: list[SearchTarget] = []
     skipped_binary = 0
