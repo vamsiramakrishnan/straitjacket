@@ -384,3 +384,29 @@ def test_append_ledger_names_the_file_it_wrote(ws_root, capsys, tmp_path):
     assert ledger.is_file()  # this is the file that exists...
     assert str(ledger) in out  # ...and this is the file the message names
     assert "evidence-outcomes.jsonl" not in out
+
+
+# ------------------------------ 9. bounded output, in the bounding tool
+def test_ambiguous_id_message_is_capped(ws_root):
+    """Every candidate is 64 hex characters and the list was uncapped, in a
+    message an agent reads — an unbounded flood emitted by the flood guard."""
+    from ctx.store import MAX_AMBIGUOUS_CANDIDATES, AmbiguousIdError
+
+    candidates = [f"abc{i:061d}" for i in range(200)]
+    e = AmbiguousIdError("abc", candidates)
+    msg = str(e)
+    named = [c for c in candidates if c in msg]
+    assert len(named) == MAX_AMBIGUOUS_CANDIDATES
+    assert len(msg) < 1000  # bounded, not proportional to the catalog
+    assert "200 candidates" in msg  # the true count is still stated
+    assert f"and {200 - MAX_AMBIGUOUS_CANDIDATES} more" in msg
+    assert "use a longer prefix" in msg  # the remediation survives the cap
+    assert e.candidates == candidates  # callers still see everything
+
+
+def test_ambiguous_id_short_list_is_unchanged_in_substance(ws_root):
+    from ctx.store import AmbiguousIdError
+
+    msg = str(AmbiguousIdError("ab", ["a" * 64, "b" * 64]))
+    assert "a" * 64 in msg and "b" * 64 in msg
+    assert "more" not in msg

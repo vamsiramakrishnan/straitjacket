@@ -36,12 +36,24 @@ class StoreError(Exception):
     pass
 
 
+# How many candidate ids an ambiguity message may name. This message is read
+# by an agent, in a tool whose entire purpose is bounding what a model reads:
+# every candidate is 64 hex characters, and a 6-character prefix over a large
+# catalog can match hundreds, so the uncapped version was an unbounded flood
+# emitted BY the flood guard. Enough to disambiguate by eye, never a page.
+MAX_AMBIGUOUS_CANDIDATES = 8
+
+
 class AmbiguousIdError(StoreError):
     def __init__(self, short: str, candidates: list[str]):
-        self.candidates = candidates
-        joined = "\n  ".join(candidates)
+        self.candidates = candidates  # full list stays available to callers
+        shown = candidates[:MAX_AMBIGUOUS_CANDIDATES]
+        joined = "\n  ".join(shown)
+        if len(candidates) > len(shown):
+            joined += f"\n  … and {len(candidates) - len(shown)} more"
         super().__init__(
-            f"ambiguous short id {short!r}; candidates:\n  {joined}\nuse a longer prefix"
+            f"ambiguous short id {short!r}; {len(candidates)} candidates:\n  "
+            f"{joined}\nuse a longer prefix"
         )
 
 
