@@ -127,3 +127,24 @@ def test_unknown_host_is_refused_rather_than_silently_wrapped(
     assert cmd_wrap(_ns("gemini", workspace=str(workspace_dir))) != 0
     err = capsys.readouterr().err
     assert "gemini" in err and "antigravity" in err  # names the wired hosts
+
+
+def test_antigravity_detects_the_agy_binary():
+    """The Antigravity CLI installs as `agy`, not `antigravity`. Probing only
+    the latter reported the host as missing on machines that had it, so
+    `ctx wrap setup` silently skipped harnessing it."""
+    from ctx.hosts import detect, host_by_name
+
+    spec = host_by_name("antigravity")
+    assert "agy" in spec.cli_bins
+
+    seen = []
+
+    def which(binary):
+        seen.append(binary)
+        return "/home/u/.local/bin/agy" if binary == "agy" else None
+
+    host = detect(spec, which=which)
+    assert host.installed is True
+    assert host.path == "/home/u/.local/bin/agy"
+    assert seen[0] == "agy"  # the real binary is probed first

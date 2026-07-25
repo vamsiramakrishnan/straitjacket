@@ -152,7 +152,11 @@ class HostSpec:
 _REGISTRY: tuple[HostSpec, ...] = (
     HostSpec(
         name="antigravity",
-        cli_bins=("antigravity",),
+        # The CLI installs as `agy` (https://antigravity.google/cli/install.sh
+        # writes $HOME/.local/bin/agy); `antigravity` is kept as a fallback for
+        # a user-made symlink. Probing only "antigravity" reported the host as
+        # not installed on machines that had it, so setup skipped harnessing it.
+        cli_bins=("agy", "antigravity"),
         # Antigravity is BYO-model; its worker default is a Gemini flash tier.
         default_model="gemini-3.6-flash",
         model_env=("ANTIGRAVITY_MODEL", "GEMINI_MODEL"),
