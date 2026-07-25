@@ -101,6 +101,12 @@ class HostSpec:
     # to deny and name the contained command rather than substitute it
     # transparently (https://antigravity.google/docs/hooks).
     input_substitution: bool = False
+    # The dialect name this host's hooks are invoked with
+    # (`ctx hook <flavor> pre-tool-use`). Usually the host name; Claude Code's
+    # is historically "claude-code". Declared so the capability flags above can
+    # be joined to ctx.hook.DIALECT_CAPS by a conformance test rather than by a
+    # hand-maintained guess.
+    hook_flavor: str = ""
     supports_mcp: bool = False
     supports_hooks: bool = False
     print_flag: tuple[str, ...] = ("-p",)   # one-shot / non-interactive run
@@ -116,6 +122,11 @@ class HostSpec:
     # routing), pinned via model_flag. Defaults to the worker model.
     coordinator_model: str = ""
     notes: str = ""
+
+    @property
+    def flavor(self) -> str:
+        """The dialect name `ctx hook <flavor> ...` is invoked with."""
+        return self.hook_flavor or self.name
 
     @property
     def harnessable(self) -> bool:
@@ -185,7 +196,8 @@ _REGISTRY: tuple[HostSpec, ...] = (
         ),
         strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
         coordinator_model="gemini-3.5-flash-lite",
-        notes="built-for host; Gemini flash implements cheaply; output gate nudge-only",
+        notes="built-for host; Gemini flash implements cheaply; no output gate "
+              "(PostToolUse can only emit {}), birth gate denies rather than rewrites",
     ),
     HostSpec(
         name="claude",
@@ -196,6 +208,7 @@ _REGISTRY: tuple[HostSpec, ...] = (
         wrapper="wrap_claude",
         output_substitution=True,   # updatedToolOutput
         input_substitution=True,    # updatedInput
+        hook_flavor="claude-code",
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="anthropic",

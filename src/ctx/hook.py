@@ -148,6 +148,35 @@ from ctx.sessiondir import session_reads_dir
 # strings, so it is never needed at runtime. The guard below is spelled with a
 # local constant rather than `from typing import TYPE_CHECKING`, because that
 # import would pull in the very module the hot path is avoiding.
+# What each host dialect's hook contract can actually do. This mirrors
+# HostSpec.input_substitution / output_substitution in ctx.hosts, and is kept
+# as a local literal rather than imported because this module has a latency
+# contract (above) that forbids pulling ctx.hosts — and with it the price
+# table — onto the per-call path. The two are pinned together by
+# tests/test_dialect_conformance.py, which fails if they ever disagree: the
+# duplicated-knowledge bug this project already shipped once (an assumed
+# Antigravity contract that hosts.py and hook.py each described differently)
+# is exactly what that test exists to catch.
+#
+#   input_substitution  — PreToolUse can rewrite the tool's arguments
+#   output_substitution — PostToolUse can replace the tool's result
+DIALECT_CAPS: dict[str, dict[str, bool]] = {
+    "claude-code": {"input_substitution": True, "output_substitution": True},
+    "codex": {"input_substitution": True, "output_substitution": True},
+    "antigravity": {"input_substitution": False, "output_substitution": False},
+}
+
+
+def can_substitute_output(flavor: str) -> bool:
+    """True when this dialect's PostToolUse can replace a tool result."""
+    return DIALECT_CAPS.get(flavor, {}).get("output_substitution", False)
+
+
+def can_substitute_input(flavor: str) -> bool:
+    """True when this dialect's PreToolUse can rewrite tool arguments."""
+    return DIALECT_CAPS.get(flavor, {}).get("input_substitution", False)
+
+
 TYPE_CHECKING = False
 if TYPE_CHECKING:
     from typing import Any
@@ -2130,7 +2159,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     resolve it afterwards. Capture is worth having even where substitution is
     impossible; the alternative is bytes that flood *and* vanish.
     """
-    can_substitute = flavor in ("claude-code", "codex")
+    can_substitute = can_substitute_output(flavor)
 
     # -- phase 1: is there anything to gate at all? Pure and cheap; a failure
     # here means we never saw a tool result, so there is nothing to bound.
