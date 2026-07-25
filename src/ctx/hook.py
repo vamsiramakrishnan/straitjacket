@@ -1852,7 +1852,8 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
         reason = str(rewrite.get("reason", "")).strip()
         cmd = str(rewrite.get("command", "")).strip()
         if cmd:
-            reason = f"{reason} Re-run it as: {cmd}".strip()
+            sep = "" if (not reason or reason[-1] in ".!?;:") else "."
+            reason = f"{reason}{sep} Re-run it as: {cmd}".strip()
         return {"decision": "deny", "reason": reason or "run this through ctx"}
     raw = decision.get("decision", "allow")
     out: dict[str, Any] = {
@@ -2120,11 +2121,16 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     default budget is used instead.
 
     Claude Code (``updatedToolOutput``) and Codex (``decision:block`` + reason,
-    https://learn.chatgpt.com/docs/hooks) both have a verified substitution
-    field; Antigravity's is unverified upstream, so there we stay nudge-only.
+    https://learn.chatgpt.com/docs/hooks) both have a substitution field.
+    Antigravity's published PostToolUse contract has none — its only legal
+    output is ``{}`` (https://antigravity.google/docs/hooks) — so there the gate
+    **still persists** the over-budget result and then returns None. The raw
+    bytes reach the transcript on that host (nothing can stop them), but they
+    also reach the store, so the result keeps an address and ``ctx get`` can
+    resolve it afterwards. Capture is worth having even where substitution is
+    impossible; the alternative is bytes that flood *and* vanish.
     """
-    if flavor not in ("claude-code", "codex"):
-        return None
+    can_substitute = flavor in ("claude-code", "codex")
 
     # -- phase 1: is there anything to gate at all? Pure and cheap; a failure
     # here means we never saw a tool result, so there is nothing to bound.
@@ -2198,12 +2204,21 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
 
         ws = resolve_workspace(ws_root or ".")
         store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-        text, _short = digest_output(store, ws, tool_name, stdout, stderr, is_error=is_error)
+        text, _short = digest_output(store, ws, tool_name, stdout, stderr,
+                                     is_error=is_error, contained=can_substitute)
         if not isinstance(text, str) or not text.strip():
             raise ValueError("digest produced no text")
-        return text
+        # digest_output has now persisted the raw bytes. A host that cannot
+        # substitute gets None — the transcript keeps the raw result, but the
+        # artifact exists and is addressable.
+        return text if can_substitute else None
     except Exception as exc:
         _note_guard_failure(ws_root, op="emission_gate", stage="digest", exc=exc)
+        if not can_substitute:
+            # Nothing to fail closed *to*: this host has no substitution field,
+            # so the raw result was always going to reach the transcript. The
+            # failure is recorded above rather than dressed up as containment.
+            return None
         try:
             return _gate_failure_digest(ws_root, tool_name, stdout, stderr, exc)
         except Exception:

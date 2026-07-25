@@ -139,6 +139,7 @@ def render_run_digest(
     op: str = "run",
     dense: bool = False,
     plan: Any = None,
+    contained: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Produce the bounded deterministic digest for a captured invocation and
     republish the manifest with its final digest identity.
@@ -191,7 +192,13 @@ def render_run_digest(
     from ctx.retrieval import record_telemetry
 
     raw = sum(int(s["bytes"]) for s in manifest["streams"].values())
-    record_telemetry(store, op, raw, len(digest.encode("utf-8")))
+    # `contained=False` means the host had no way to substitute this digest for
+    # the raw result, so the raw bytes reached the transcript anyway. The
+    # artifact is still stored and addressable, but claiming the digest's size
+    # as "emitted" would book a saving that never happened — so the event is
+    # recorded at raw->raw, a real event with an honest zero gain.
+    emitted = len(digest.encode("utf-8")) if contained else raw
+    record_telemetry(store, op, raw, emitted)
 
     # Graduated engagement (mechanism C): an output too large to inline is
     # the measured proof the task outgrew "small" — graduate the session.
@@ -211,8 +218,14 @@ def digest_output(
     *,
     is_error: bool = False,
     argv: list[str] | None = None,
+    contained: bool = True,
 ) -> tuple[str, str]:
     """Digest an already-produced tool result (not a shell capture).
+
+    ``contained`` is False when the calling host has no output-substitution
+    field, so this digest is stored and addressable but never replaces the raw
+    result in the transcript. It only affects telemetry honesty (see
+    :func:`render_run_digest`), never the digest bytes.
 
     The universal emission gate (``ctx.hook._emission_gate``) calls this when a
     PostToolUse tool result exceeds the byte budget: it persists the raw bytes
@@ -271,7 +284,8 @@ def digest_output(
         },
     }
 
-    digest, final = render_run_digest(store, ws, manifest, focus=None)
+    digest, final = render_run_digest(store, ws, manifest, focus=None,
+                                      contained=contained)
     short = short_id(final.get("id", ""))
 
     from ctx.engagement import filter_digest, suggestion_cap
