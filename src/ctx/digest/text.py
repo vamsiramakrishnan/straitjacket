@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ctx.digest.base import DigestContext, Profile, StreamView
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
 
 # Deterministic salience: error-ish lines first, then head/tail anchors.
 _ERROR_RE = re.compile(
@@ -84,11 +84,11 @@ class TextProfile(Profile):
                 ]
                 if hits:
                     i, ln = hits[0]
-                    summary.append(f"  first signal {view.name}:L{i}: {ln[:160]}")
+                    summary.append(f"  first signal {view.name}:L{i}: {ln[:EVIDENCE_LINE_CHARS]}")
                     shown += 1
                     if len(hits) > 1:
                         j, lj = hits[-1]
-                        summary.append(f"  terminal signal {view.name}:L{j}: {lj[:160]}")
+                        summary.append(f"  terminal signal {view.name}:L{j}: {lj[:EVIDENCE_LINE_CHARS]}")
                         shown += 1
                     break
         rid = "run:PENDING"
@@ -160,7 +160,7 @@ class TextProfile(Profile):
         h = min(head_n, n)
         t_start = max(h + 1, n - tail_n + 1) if tail_n > 0 else end_total + 1
         out = [
-            f"  head {view.name}:L{i}: {text_lines[i - 1].strip()[:160]}"
+            f"  head {view.name}:L{i}: {text_lines[i - 1].strip()[:EVIDENCE_LINE_CHARS]}"
             for i in range(1, h + 1)
         ]
         shown = h
@@ -174,6 +174,6 @@ class TextProfile(Profile):
                 marker += f" · span {sid}"
             out.append(marker)
         for i in range(t_start, n + 1):
-            out.append(f"  tail {view.name}:L{i}: {text_lines[i - 1].strip()[:160]}")
+            out.append(f"  tail {view.name}:L{i}: {text_lines[i - 1].strip()[:EVIDENCE_LINE_CHARS]}")
             shown += 1
         return out, shown, mid

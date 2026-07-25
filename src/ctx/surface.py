@@ -37,7 +37,7 @@ from typing import Any
 
 from ctx.proxywindow import PROXY_SUBDIR
 from ctx.sessiondir import session_reads_path
-from ctx.textutil import estimate_tokens
+from ctx.textutil import EVIDENCE_LINE_CHARS, estimate_tokens
 
 _PROBE_CACHE = ".ctx-surface/probe-cache.json"
 
@@ -305,7 +305,7 @@ def _collect_files(root: Path, globs, kind: str, provider_of, records: list[Capa
                 id=cid, kind=kind, provider=provider_of(rel),
                 source=rel, tokens=tokens, authority="n/a", activation="always",
                 invocations=-1, sensitive_terms=terms, leakage=leakage,
-                detail=(text.strip().splitlines() or [""])[0][:160],
+                detail=(text.strip().splitlines() or [""])[0][:EVIDENCE_LINE_CHARS],
             ))
 
 
@@ -320,7 +320,7 @@ def _collect_repo_instructions(root: Path, records: list[Capability]) -> None:
             id=f"repo.{name}", kind="repo_instructions", provider="repo",
             source=name, tokens=_tokens_of(text), authority="n/a",
             activation="always", invocations=-1, sensitive_terms=terms, leakage=leakage,
-            detail=(text.strip().splitlines() or [""])[0][:160],
+            detail=(text.strip().splitlines() or [""])[0][:EVIDENCE_LINE_CHARS],
         ))
 
 

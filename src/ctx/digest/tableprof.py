@@ -20,7 +20,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
 
 # A header cell: starts with a capital letter or %, continues in caps,
 # digits, and light punctuation; single spaces allowed inside a cell
@@ -126,7 +126,7 @@ class TableProfile(Profile):
                         if lineno not in seen_lines:
                             seen_lines.add(lineno)
                             evidence.append(
-                                (value, f"  first {value} stdout:L{lineno}: {ln.strip()[:160]}")
+                                (value, f"  first {value} stdout:L{lineno}: {ln.strip()[:EVIDENCE_LINE_CHARS]}")
                             )
                         break
                 if len(evidence) >= evidence_cap:

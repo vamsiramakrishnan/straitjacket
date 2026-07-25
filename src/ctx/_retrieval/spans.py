@@ -11,7 +11,7 @@ omission and hands out coordinates.
 from __future__ import annotations
 
 from ctx.store import Store
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit
@@ -46,7 +46,7 @@ def _resolve_span(store: Store, ws: Workspace, ref_text: str, label: str, span_i
             if raw.strip() and mask_line(raw) == template
         ]
         cap = 20
-        out.append(f"template: {template[:160]}")
+        out.append(f"template: {template[:EVIDENCE_LINE_CHARS]}")
         out.append(f"occurrences (exact): {fmt_int(len(occurrences))} · shown: {min(cap, len(occurrences))}")
         for i, raw in occurrences[:cap]:
             out.append(f"L{i}: {raw[:180]}")

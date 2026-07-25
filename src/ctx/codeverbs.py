@@ -23,13 +23,12 @@ from ctx.retrieval import (
     record_telemetry,
 )
 from ctx.store import Store
-from ctx.textutil import fmt_bytes, fmt_int, short_id
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_bytes, fmt_int, short_id
 from ctx.workspace import Workspace
 
 _ENGINE_JEDI = "jedi"
 _ENGINE_AST = "ast"
 _DIAG_MAX_FILES = 200
-_LINE_CAP = 160
 
 
 # ----------------------------------------------------------------- engine
@@ -293,7 +292,7 @@ def cmd_refs(
     scope_note = f" · path {scope_path}" if scope_path else ""
     out = [f"[ctx refs {symbol}{scope_note} · engine {label}]"]
     for (rel, line), text in shown:
-        out.append(f"repo:{rel}:L{line}: {text[:_LINE_CAP]}")
+        out.append(f"repo:{rel}:L{line}: {text[:EVIDENCE_LINE_CHARS]}")
     out.append("coverage:")
     out.append(
         f"  sites: {fmt_int(len(ordered))} · shown: {fmt_int(len(shown))}"
@@ -420,7 +419,7 @@ def cmd_diag(store: Store, ws: Workspace, path: str | None = None) -> str:
         counts = " · ".join(f"{sev} {fmt_int(by_sev[sev])}" for sev in sorted(by_sev))
         out.append(f"diagnostics (exact): {fmt_int(len(diags))} · {counts}")
         for rel, line, _, msg in diags[:10]:
-            out.append(f"repo:{rel}:L{line}: {msg[:_LINE_CAP]}")
+            out.append(f"repo:{rel}:L{line}: {msg[:EVIDENCE_LINE_CHARS]}")
         if len(diags) > 10:
             out.append(f"… +{fmt_int(len(diags) - 10)} more diagnostics")
     else:

@@ -72,7 +72,7 @@ from typing import Callable
 
 from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
-from ctx.textutil import bounded, fmt_int, short_id
+from ctx.textutil import EVIDENCE_LINE_CHARS, bounded, fmt_int, short_id
 from ctx.workspace import Workspace
 
 # ------------------------------------------------------------------ model
@@ -91,7 +91,6 @@ DEFAULT_ROW_CAP = 200
 GET_SITE_CAP = 24  # ``get`` fans out one bounded slice per site
 OUTLINE_FILE_CAP = 12  # ``outline`` fans out one outline per file
 RENDER_CAP = 100  # rows rendered inline; remainder declared + addressable
-_LINE_CAP = 160
 
 
 class QueryError(Exception):
@@ -416,7 +415,7 @@ def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     for rel, line, text in sites:
         uniq.setdefault((rel, line), text)
     rows = [
-        {"file": rel, "line": line, "text": text.strip()[:_LINE_CAP], "symbol": symbol}
+        {"file": rel, "line": line, "text": text.strip()[:EVIDENCE_LINE_CHARS], "symbol": symbol}
         for (rel, line), text in sorted(uniq.items())
     ]
     out = Stream("sites", rows)
@@ -521,7 +520,7 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
                         "line": i,
                         "col_a": m.start() + 1,
                         "col_b": m.end() + 1,
-                        "text": ln.strip()[:_LINE_CAP],
+                        "text": ln.strip()[:EVIDENCE_LINE_CHARS],
                     }
                 )
     return Stream("sites", rows)
