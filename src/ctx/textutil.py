@@ -72,6 +72,19 @@ def loads_fast(text: str | bytes):
     return _json.loads(text)
 
 
+def short_path(path: str) -> str:
+    """A path narrowed to its last two components for a census line
+    (``src/ctx/digest/lintprof.py`` → ``digest/lintprof.py``).
+
+    One definition. This was two byte-identical nested functions in
+    ``digest.lintprof`` and ``digest.searchprof``, both named ``_short`` —
+    a name that in ``ctx.facts`` means "shorten a content HASH". Same name,
+    unrelated jobs, and neither is substitutable for the other.
+    """
+    parts = path.replace("\\", "/").split("/")
+    return "/".join(parts[-2:]) if len(parts) > 2 else path
+
+
 class JsonPointerError(Exception):
     """A pointer that is malformed or does not resolve against the document."""
 

@@ -207,8 +207,9 @@ def _connect(store: Store) -> sqlite3.Connection | None:
     return None
 
 
-def _short(h: Any) -> str | None:
-    """House short id: strip ``sha256:``, keep 12 hex chars. Tolerates
+def _short_id(h: Any) -> str | None:
+    """House short id (a content HASH, not a path — see
+    ``ctx.textutil.short_path``, which used to share this name): strip ``sha256:``, keep 12 hex chars. Tolerates
     already-short input; returns None for empty/None."""
     s = str(h or "").removeprefix("sha256:").strip()
     return s[:SHORT_ID] or None
@@ -269,7 +270,7 @@ def current_generation(ws: Workspace) -> str | None:
     try:
         from ctx.execution import generation_hash
 
-        return _short(generation_hash(ws.root))
+        return _short_id(generation_hash(ws.root))
     except Exception as e:
         _note_error("facts.current_generation", e)
         return None
@@ -502,7 +503,7 @@ def derive_generation(
     conn = None
     try:
         store = store or Store(ws.workspace_id)
-        gen = _short(gen_hash) if gen_hash else current_generation(ws)
+        gen = _short_id(gen_hash) if gen_hash else current_generation(ws)
         if gen is None:
             return result  # non-git workspace / git unavailable: no generation plane
         result["generation"] = gen
@@ -556,14 +557,14 @@ def fact_counts(store: Store) -> dict[str, int]:
 # ------------------------------------------------------- Angle-lite queries
 def _resolve_gen(conn: sqlite3.Connection, generation: str | None) -> str | None:
     if generation:
-        return _short(str(generation).removeprefix("gen:"))
+        return _short_id(str(generation).removeprefix("gen:"))
     return _meta_get(conn, "latest_generation")
 
 
 def _run_filter(run: str | None) -> tuple[str, tuple]:
     if not run:
         return "", ()
-    return " AND f.run_id = ?", (_short(str(run).removeprefix("run:")),)
+    return " AND f.run_id = ?", (_short_id(str(run).removeprefix("run:")),)
 
 
 def _innermost(decls: list[tuple]) -> tuple:
@@ -838,7 +839,7 @@ def fails_sites(
         if conn is None:
             return []
         try:
-            run_id = _short(str(run).removeprefix("run:")) if run else _meta_get(
+            run_id = _short_id(str(run).removeprefix("run:")) if run else _meta_get(
                 conn, "latest_run"
             )
         finally:

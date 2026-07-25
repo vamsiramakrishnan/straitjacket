@@ -21,11 +21,10 @@ import ast
 import hashlib
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from ctx.store import Store
 from ctx.textutil import fmt_int
-from ctx.workspace import Workspace
+from ctx.workspace import Workspace, stat_fingerprint
 
 _FORMAT = "ctx.callgraph/v1"
 _MAX_FILES = 5000
@@ -127,21 +126,19 @@ def _build(ws: Workspace) -> _Graph:
     return g
 
 
-def _cache_key(ws: Workspace, rels: list[str]) -> str:
+def _graph_cache_key(ws: Workspace, rels: list[str]) -> str:
+    """Key for the serialized call graph. Invalidation basis: the format
+    version plus ``ctx.workspace.stat_fingerprint`` over the Python files
+    that were parsed — the same one basis ``repomap`` uses."""
     h = hashlib.sha256()
     h.update((_FORMAT + "\n").encode("utf-8"))
-    for rel in rels:
-        try:
-            st = (ws.root / rel).stat()
-        except OSError:
-            continue
-        h.update(f"{rel}|{st.st_mtime_ns}|{st.st_size}\n".encode("utf-8"))
+    stat_fingerprint(ws.root, rels, h)
     return h.hexdigest()
 
 
 def _load_graph(store: Store, ws: Workspace) -> _Graph:
     rels = sorted(r for r in ws.list_files()[:_MAX_FILES] if r.endswith(".py"))
-    key = _cache_key(ws, rels)
+    key = _graph_cache_key(ws, rels)
     cache_path = store.root / "indexes" / "callgraph" / key
     if cache_path.is_file():
         try:
