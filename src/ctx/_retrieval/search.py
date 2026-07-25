@@ -295,7 +295,7 @@ def search(
     continuation = None
     if len(matches) > len(shown):
         continuation = f"ctx search {ref_text} … --max-matches {min(len(matches), cap * 2)}"
-    result = _emit(ws, "\n".join(out), budget.result_tokens, continuation)
+    result = _emit(ws, "\n".join(out), budget.result_tokens, continuation, handle=ref_text)
     record_telemetry(
         store, "search", sum(len(t.text) for t in targets), len(result.encode("utf-8"))
     )
@@ -393,6 +393,6 @@ def _render_rg_search(
     continuation = None
     if len(matches) > len(shown):
         continuation = f"ctx search {ref_text} … --max-matches {min(len(matches), cap * 2)}"
-    result = _emit(ws, "\n".join(out), budget.result_tokens, continuation)
+    result = _emit(ws, "\n".join(out), budget.result_tokens, continuation, handle=ref_text)
     record_telemetry(store, "search", bytes_searched, len(result.encode("utf-8")))
     return result

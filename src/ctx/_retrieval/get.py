@@ -226,7 +226,8 @@ def get(
 
     if divergence:
         header.append(f"divergence: {divergence}")
-    result = _emit(ws, "\n".join(header) + "\n" + body, budget.result_tokens, continuation)
+    result = _emit(ws, "\n".join(header) + "\n" + body, budget.result_tokens, continuation,
+                   handle=ref_text)
     if fast_lines is not None:
         raw_len = fast_lines_raw
     elif fast_bytes is not None:
