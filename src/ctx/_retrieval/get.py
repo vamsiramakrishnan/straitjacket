@@ -157,20 +157,17 @@ def get(
             doc = loads_fast(data.decode("utf-8", "replace"))
         except json.JSONDecodeError as e:
             raise RetrievalError(f"content is not JSON: {e}") from e
-        node: Any = doc
+        # RFC 6901 via the one implementation (ctx.textutil.json_pointer).
+        # This used to short-circuit `pointer in ("", "/")` to the whole
+        # document — but "/" is the member with the EMPTY-STRING key, not
+        # the root — and `lstrip("/")` collapsed "//a" to "/a".
+        from ctx.textutil import JsonPointerError, json_pointer
+
         pointer = selector.json_pointer
-        if pointer not in ("", "/"):
-            for token in pointer.lstrip("/").split("/"):
-                token = token.replace("~1", "/").replace("~0", "~")
-                if isinstance(node, list):
-                    try:
-                        node = node[int(token)]
-                    except (ValueError, IndexError):
-                        raise RetrievalError(f"json-pointer not found: {pointer}") from None
-                elif isinstance(node, dict) and token in node:
-                    node = node[token]
-                else:
-                    raise RetrievalError(f"json-pointer not found: {pointer}")
+        try:
+            node: Any = json_pointer(doc, pointer)
+        except JsonPointerError as e:
+            raise RetrievalError(f"json-pointer not found: {pointer} ({e})") from None
         header.append(f"selector: --json-pointer {pointer or '/'}")
         body = json.dumps(node, indent=2, sort_keys=True, ensure_ascii=False)
     elif selector.records is not None:
