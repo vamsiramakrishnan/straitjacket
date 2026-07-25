@@ -192,22 +192,27 @@ def test_failed_job_exits_3_not_1(ws_root, capsys, monkeypatch):
     failed job from a bad job id. run/py/seq already reserve 1 for ctx's own
     failure and report an inner failure as 3."""
     import subprocess
+    import time
 
     subprocess.run(["git", "init", "-q", "."], cwd=ws_root, check=True)
-    from ctx.jobs import _job_dir, _write_meta, jobs_root, start_job
+    from ctx.jobs import _job_dir, _read_meta, jobs_root, start_job
     from ctx.store import Store
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(str(ws_root))
     store = Store(ws.workspace_id)
-    job_id = start_job(ws, store, ["sleep", "30"])
-    # Park the job in the terminal 'failed' state the supervisor writes when a
-    # launch dies (jobs.py: command not found / spawn failed).
+    # Let the job fail for real. Starting a live `sleep` and hand-writing
+    # state="failed" into meta.json races the supervisor, which owns that file
+    # and rewrites it — CI lost that race and read back "running".
+    job_id = start_job(ws, store, ["ctx-no-such-cmd-xyz"])
     jobdir = _job_dir(store, job_id)
-    meta = __import__("json").loads((jobdir / "meta.json").read_text(encoding="utf-8"))
-    meta.update(state="failed", error="command not found: ctx-no-such-cmd-xyz", pid=None)
-    _write_meta(jobdir, meta)
     assert jobs_root(store).is_dir()
+
+    deadline = time.monotonic() + 30
+    while _read_meta(jobdir).get("state") not in ("failed", "done", "finalized"):
+        assert time.monotonic() < deadline, f"job never reached a terminal state: {_read_meta(jobdir)}"
+        time.sleep(0.05)
+    assert _read_meta(jobdir)["state"] == "failed", _read_meta(jobdir)
 
     rc = _run(ws_root, "job", job_id)
     out = capsys.readouterr().out
