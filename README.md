@@ -64,6 +64,22 @@ config, never clobbers it, and re-running is a no-op. From the next agent
 session on, flooding tool output is captured into a local store and your
 agent sees a small digest with exact retrieval addresses instead.
 
+It also walks you through it rather than dumping paths — four steps, about five
+seconds:
+
+1. **What you have** — which agent CLIs were found, which will be harnessed,
+   which were skipped and why, and which are optional (never configured behind
+   your back).
+2. **Harnessing** — every file written, named, so the undo note is true.
+3. **Verifying** — re-runs `ctx doctor`'s own checks, so setup and the doctor
+   cannot disagree about what "healthy" means.
+4. **What now** — the one command to try immediately, and how to see what it
+   saved.
+
+If a check fails it says which one, what to do, and exits non-zero — it never
+reports success while broken. Scripts that want just the installer report can
+set `CTX_SETUP_PLAIN=1`.
+
 **See it work** (no agent needed):
 
 ```bash

@@ -599,9 +599,13 @@ def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
-    """Health checks per SPEC §18: discovery, JSON validity, duplication,
-    store access, workspace resolution, hook self-test."""
+def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str, bool, str]]:
+    """The health checks themselves, as (name, ok, detail) rows.
+
+    Split out from :func:`doctor_report` so the guided setup can *verify with
+    the same checks the doctor runs* rather than keeping a second opinion about
+    what "healthy" means — the duplicate-source-of-truth pattern this codebase
+    has been bitten by more than once."""
     checks: list[tuple[str, bool, str]] = []
 
     def check(name: str, ok: bool, detail: str = "") -> None:
@@ -763,6 +767,12 @@ def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
     except Exception:
         pass
 
+    return checks
+
+
+def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
+    """Render :func:`doctor_checks` as the `ctx doctor` report."""
+    checks = doctor_checks(ws, antigravity=antigravity)
     ok_all = all(ok for _, ok, _ in checks)
     lines = [f"[ctx doctor v{__version__}] {'OK' if ok_all else 'PROBLEMS FOUND'}"]
     for name, ok, detail in checks:

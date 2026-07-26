@@ -454,6 +454,118 @@ def wrap_detect(workspace_root: Path, *, probe_version: bool = False) -> int:
     return 0
 
 
+def _guided_survey(ws) -> tuple[list, list, list]:
+    """(will harness, skipped-not-installed, optional-not-installed).
+
+    `optional` are hosts ctx would have to *build* rather than detect — they are
+    never configured implicitly, so they are offered rather than done.
+    """
+    from ctx.hosts import detect_all
+
+    detected = [d for d in detect_all(workspace_root=ws.root) if d.harnessable]
+    will = [d for d in detected if d.installed]
+    skipped = [d for d in detected if not d.installed and not d.spec.self_hosted]
+    optional = [d for d in detected if not d.installed and d.spec.self_hosted]
+    return will, skipped, optional
+
+
+def _short_path(path: str | None, width: int = 34) -> str:
+    """Keep the survey table aligned: a long managed-venv path is elided in the
+    middle, where the uninformative part lives."""
+    p = path or ""
+    if len(p) <= width:
+        return p
+    keep = (width - 1) // 2
+    return p[:keep] + "…" + p[-(width - keep - 1):]
+
+
+def _guided_step(n: int, total: int, title: str) -> None:
+    print(f"\n[{n}/{total}] {title}")
+    print("─" * (len(title) + 6))
+
+
+def guided_setup(ws, hosts: list[str] | None = None, *, force_all: bool = False) -> int:
+    """`ctx wrap setup`, narrated: survey → harness → verify → what next.
+
+    The old flow printed each installer's output and stopped, which left a
+    developer with a wall of paths and no answer to "did that work, and what do
+    I do now?". Every step here is the same machinery as before; what is new is
+    that the run says what it is about to do, checks its own work with the
+    doctor's checks, and ends with one concrete next action — including when
+    something failed.
+    """
+    from ctx.installer import SETUP_HOSTS, doctor_checks, setup_hosts
+
+    will, skipped, optional = _guided_survey(ws)
+    explicit = hosts is not None or force_all
+
+    # ---------------------------------------------------------------- survey
+    _guided_step(1, 4, "What you have")
+    if explicit:
+        names = list(hosts) if hosts else list(SETUP_HOSTS)
+        print(f"  configuring on request: {', '.join(names)}")
+        print("  (config is inert until a CLI reads it, so this is safe to do early)")
+    elif will:
+        for d in will:
+            print(f"  ✓ {d.name:<16} {_short_path(d.path):<34} will harness")
+        for d in skipped:
+            print(f"  ✗ {d.name:<16} {'not on PATH':<34} skipped")
+        for d in optional:
+            print(f"  ○ {d.name:<16} {'not installed':<34} optional — "
+                  f"`ctx wrap {d.name}`")
+    else:
+        print("  no coding-agent CLI found on PATH.")
+        print(f"  configuring all supported hosts anyway ({', '.join(SETUP_HOSTS)}) —")
+        print("  the config is inert until a CLI reads it, so installing one later")
+        print("  needs no second setup.")
+
+    # --------------------------------------------------------------- harness
+    _guided_step(2, 4, "Harnessing")
+    target = (list(hosts) if hosts is not None
+              else ([d.name for d in will] if (will and not force_all) else None))
+    # Indented so the per-host detail reads as evidence *under* this step
+    # rather than as the whole output. It is kept in full on purpose: these
+    # lines name every file written, which is what makes the undo note true.
+    for line in setup_hosts(ws, target).splitlines():
+        print(f"  {line}" if line.strip() else "")
+
+    # ---------------------------------------------------------------- verify
+    _guided_step(3, 4, "Verifying")
+    checks = doctor_checks(ws)
+    failed = [(n, d) for n, ok, d in checks if not ok]
+    for name, ok, detail in checks:
+        if not ok:
+            print(f"  ✗ {name}" + (f" — {detail}" if detail else ""))
+    if failed:
+        print(f"  {len(checks) - len(failed)}/{len(checks)} checks passed.")
+        print("  the failures above are the whole story; `ctx doctor` re-runs them.")
+    else:
+        print(f"  ✓ all {len(checks)} checks passed  (same checks as `ctx doctor`)")
+
+    # ------------------------------------------------------------- next step
+    _guided_step(4, 4, "What now")
+    if failed:
+        print("  fix the checks above first — until then containment is partial.")
+        print("  most common cause: `ctx` not on PATH for the agent's environment.")
+    else:
+        print("  Nothing else to do. Your agent is harnessed from its next session.")
+    print()
+    print("  see it work now (no agent needed):")
+    print("      ctx run -- <any noisy command, e.g. your test suite>")
+    print("  then, at any point:")
+    print("      ctx gain      what it kept out of your context, and what that saved")
+    print("      ctx doctor    re-check the install")
+    if optional and not explicit:
+        print()
+        print("  optional, only if you want it:")
+        for d in optional:
+            print(f"      ctx wrap {d.name}   headless Gemini agent, ctx builds its venv (~40s)")
+    print()
+    print("  undo: the per-host lines above name every file written; removing the")
+    print("        ctx entries from them fully uninstalls. Nothing else was touched.")
+    return 1 if failed else 0
+
+
 def wrap_setup(
     workspace_root: Path, hosts: list[str] | None = None, *, force_all: bool = False
 ) -> int:
@@ -464,11 +576,18 @@ def wrap_setup(
     ``force_all`` (``ctx wrap all``/``--all``) restores the configure-everything
     behaviour; an explicit ``hosts`` list overrides detection entirely. When no
     harnessable CLI is found on PATH, setup falls back to configuring all
-    supported hosts (config is inert until a CLI reads it) with a note."""
+    supported hosts (config is inert until a CLI reads it) with a note.
+
+    Output is guided by default (survey → harness → verify → next step); set
+    ``CTX_SETUP_PLAIN=1`` for the bare installer report, which is what scripts
+    that parse this output want."""
     from ctx.installer import SETUP_HOSTS, setup_hosts
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(str(workspace_root))
+
+    if os.environ.get("CTX_SETUP_PLAIN") != "1":
+        return guided_setup(ws, hosts, force_all=force_all)
 
     if hosts is None and not force_all:
         from ctx.hosts import detect_all
