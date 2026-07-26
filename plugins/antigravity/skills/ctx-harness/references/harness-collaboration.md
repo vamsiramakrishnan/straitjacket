@@ -43,6 +43,30 @@ data edit in `ctx/hosts.py` (`HostSpec.models`); prices live in
 | **claude** (Claude Code) | claude-opus-4.8 | claude-sonnet-4.6 | claude-haiku-4.5 |
 | **codex** (Codex CLI) | gpt-5.6-sol | gpt-5.6-terra | gpt-5.6-luna |
 | **antigravity** (Gemini) | gemini-3.1-pro | gemini-3.6-flash | gemini-3.5-flash-lite |
+| **antigravity-sdk** (ctx's own agent) | gemini-3.1-pro | gemini-3.6-flash | gemini-3.5-flash-lite |
+
+`antigravity-sdk` is the same vendor and models reached a different way: ctx's
+own agent on the Antigravity SDK, headless via `GEMINI_API_KEY`, with
+containment inside the tools. It is a separate host from `antigravity` (Google's
+`agy` CLI) because their guarantees differ — see `ctx wrap detect`.
+
+**Tier is a gate, not a score.** Once two candidates clear the bar, price is the
+default tie-break — but specialities, latency, measured throughput and this
+repo's own observed-behaviour receipts are all available and often more
+decisive. When the choice is close, read `references/model-catalog.md`; it also
+states the rule that keeps that data trustworthy (every quantitative claim
+carries a source, absent data means unknown rather than bad).
+
+Three findings from this repo's receipts that change routing more than any tier
+label:
+
+- `gemini-3.5-flash-lite` has **low flood discipline** — route flood-prone work
+  there only behind containment.
+- **Cheapest per token is not the cheapest arm**: an agentic build on
+  `gemini-3.6-flash` re-sent 4.25M input tokens for 63k of output. Weigh context
+  growth, not unit price.
+- **Splitting plan from build lost nothing measurable** (98% either way) and
+  cost 1.43× less.
 
 (Antigravity is BYO-model and can also run Claude/GPT; only its Gemini tiers are
 modeled here.) `ctx orchestrate` passes the *installed* subset of this catalog to

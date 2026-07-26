@@ -121,6 +121,44 @@ compiled evidence plans (`ctx ask`/`ctx plan`/`ctx plan run`), read
 
 Use native Antigravity reads only when the result is statically bounded and small. Otherwise use CTX. Typical CTX operations include tests, builds, linters, type-checkers, logs, traces, recursive listings, broad searches, API/CLI dumps, large JSON/CSV, Git history, and large diffs. Borderline cases: read `references/routing-policy.md`.
 
+## Surface — what this skill brings with it
+
+Three things, and they are not interchangeable. Reach for the narrowest one
+that answers the question.
+
+**Skill (this file + `references/`).** Instructions and contracts only. Free to
+read, but not free to read *all of* — see progressive disclosure below.
+
+**CLI (`ctx`).** The execution surface. `run` · `search` · `get` · `stats` · `map` ·
+`def`/`refs`/`diag` · `callers`/`callees`/`impact` · `diff` · `q` · `ask` ·
+`plan` · `checkpoint` · `gain` · `debt` · `doctor` · `orchestrate` · `wrap`.
+Every one is bounded by construction.
+
+**MCP servers.** Allowed: **`ctx-harness`** only (`ctx mcp --bounded-only`) —
+its tools are capped by construction, which is why retrieval through it is safe
+on a host with no output-side gate. Any *other* MCP/connector result is
+unbounded and is exactly the traffic this harness exists to contain: route it
+through `ctx` or expect it in full. On Antigravity specifically there is no
+output-side rescue (its PostToolUse contract permits only `{}`), so a verbose
+connector result lands whole — prefer the bounded `ctx` tools there.
+
+## Progressive disclosure — read only what the task needs
+
+This file is the whole contract for ordinary work. The references are loaded
+**on demand**, each answering one question:
+
+| read when you need to… | reference |
+|---|---|
+| decide native-vs-`ctx` on a borderline command | `references/routing-policy.md` |
+| know a verb's flags and when it applies | `references/verbs.md` |
+| address files, subtrees, multi-workspace roots | `references/repository-addressing.md` |
+| compile an evidence plan (`ctx ask` / `ctx plan`) | `references/evidence-plans.md` |
+| split a task across harnesses/models | `references/harness-collaboration.md` |
+| choose between two models that both clear the tier | `references/model-catalog.md` |
+
+Loading a reference you do not need costs the context this skill exists to
+protect. If two would answer the question, read the more specific one.
+
 ## Degraded mode
 
 When `ctx` is unavailable, state that context protection is degraded. Use explicit native limits such as exact line ranges or small `head`/`tail` counts. Do not silently emit an unbounded result.

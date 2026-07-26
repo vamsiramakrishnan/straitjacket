@@ -559,9 +559,16 @@ def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
 # and the name→installer mapping used to be hand-maintained here as well, a
 # second copy of what every HostSpec already declares via `installer`.
 def _setup_hosts_tuple() -> tuple[str, ...]:
+    """The hosts `ctx wrap setup` configures by default.
+
+    Self-hosted hosts are excluded on purpose. Setup harnesses the agents you
+    already have by writing config into them; building a virtualenv and pulling
+    a vendor SDK off the network is a different kind of act, and it should be an
+    explicit `ctx wrap antigravity-sdk`, never a side effect of `ctx wrap setup`.
+    """
     from ctx.hosts import harnessable_hosts
 
-    return tuple(s.name for s in harnessable_hosts())
+    return tuple(s.name for s in harnessable_hosts() if not s.self_hosted)
 
 
 SETUP_HOSTS = _setup_hosts_tuple()
@@ -592,9 +599,13 @@ def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
-    """Health checks per SPEC §18: discovery, JSON validity, duplication,
-    store access, workspace resolution, hook self-test."""
+def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str, bool, str]]:
+    """The health checks themselves, as (name, ok, detail) rows.
+
+    Split out from :func:`doctor_report` so the guided setup can *verify with
+    the same checks the doctor runs* rather than keeping a second opinion about
+    what "healthy" means — the duplicate-source-of-truth pattern this codebase
+    has been bitten by more than once."""
     checks: list[tuple[str, bool, str]] = []
 
     def check(name: str, ok: bool, detail: str = "") -> None:
@@ -756,9 +767,29 @@ def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
     except Exception:
         pass
 
+    return checks
+
+
+def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:
+    """Render :func:`doctor_checks` as the `ctx doctor` report."""
+    checks = doctor_checks(ws, antigravity=antigravity)
     ok_all = all(ok for _, ok, _ in checks)
     lines = [f"[ctx doctor v{__version__}] {'OK' if ok_all else 'PROBLEMS FOUND'}"]
     for name, ok, detail in checks:
         mark = "✓" if ok else "✗"
         lines.append(f"  {mark} {name}" + (f" — {detail}" if detail else ""))
     return "\n".join(lines)
+
+
+def install_agy_sdk(ws, ctx_exe: str | None = None, **_kw) -> str:
+    """Install the ctx-owned Antigravity SDK environment.
+
+    There is nothing workspace-scoped to write: this host has no hooks, no
+    plugin and no config file — its containment is compiled into the agent's
+    tools. The whole install is the managed venv plus the launcher, which is
+    machine-scoped, so this is idempotent across workspaces.
+    """
+    from ctx.agysdk import ensure_venv, launcher_path
+
+    ok, msg = ensure_venv()
+    return f"{msg}\nlauncher: {launcher_path()}" if ok else f"not installed: {msg}"

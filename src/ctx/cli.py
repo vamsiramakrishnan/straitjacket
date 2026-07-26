@@ -23,7 +23,9 @@ def main(argv: list[str] | None = None) -> int:
             from ctx.hook import main_post_tool_use
 
             return main_post_tool_use(flavor=args[1])
-        if args[2] == "session-start":
+        # Antigravity has no SessionStart event; its pre-invocation hook is the
+        # equivalent slot and shares the pre-flight body.
+        if args[2] in ("session-start", "pre-invocation"):
             from ctx.hook import main_session_start
 
             return main_session_start(flavor=args[1])
@@ -652,7 +654,8 @@ def _build_parser():
     )
     p_wrap.add_argument(
         "host",
-        choices=["setup", "all", "detect", "claude", "antigravity", "codex"],
+        choices=["setup", "all", "detect", "claude", "antigravity",
+                 "antigravity-sdk", "codex"],
         help="'setup' detects & harnesses installed CLIs; 'all' forces every "
         "supported host; 'detect' lists installed CLIs priced by model",
     )

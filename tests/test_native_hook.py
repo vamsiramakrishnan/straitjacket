@@ -91,14 +91,22 @@ def test_silence_paths_identical(tmp_path):
 
 
 def test_nudge_byte_identical_both_dialects(tmp_path):
+    """Parity is byte-for-byte per dialect — including where the dialect's
+    published contract forbids the nudge. Claude Code carries the governor line
+    in additionalContext; Antigravity's PostToolUse permits only `{}`, so both
+    implementations must withhold it there rather than one inventing a field
+    (https://antigravity.google/docs/hooks)."""
     ws = _ws(tmp_path, cum_output=25_000, requests=10)
     payload = json.dumps({"cwd": str(ws)})
-    for flavor in ("claude-code", "antigravity"):
+    for flavor, carries_nudge in (("claude-code", True), ("antigravity", False)):
         _reset(ws)
         py = _python(flavor, payload)
         _reset(ws)
         rs = _native(flavor, payload)
-        assert "CTX_EMISSION_GOVERNOR" in py
+        if carries_nudge:
+            assert "CTX_EMISSION_GOVERNOR" in py
+        else:
+            assert py == "{}\n"
         assert py == rs, f"dialect {flavor} diverged:\npy: {py}\nrs: {rs}"
 
 

@@ -141,7 +141,11 @@ exceed.
 
 ## `[surface]` — the input side (MCP tool schemas)
 
-Governs the discretionary-context budget and the SessionStart pre-flight gate.
+Governs the discretionary-context budget and the pre-flight gate. That gate runs
+on `SessionStart` for Claude Code and Codex; Antigravity has no such event, so
+there it runs on `PreInvocation` and injects the advisory as an *ephemeral*
+message (that hook fires before every model call, so a persistent one would
+re-accumulate context on each).
 
 | Key | Default | Meaning |
 |---|---|---|

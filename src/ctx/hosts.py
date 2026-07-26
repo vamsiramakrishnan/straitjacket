@@ -95,6 +95,23 @@ class HostSpec:
     installer: str = ""            # ctx.installer.<installer>(ws, ...)
     wrapper: str = ""              # ctx.wrap.<wrapper>(...)
     output_substitution: bool = False  # PostToolUse can replace a result (enforced) vs nudge-only
+    # PreToolUse can rewrite the tool's arguments before it runs. Claude Code
+    # and Codex both expose `updatedInput`; Antigravity's published PreToolUse
+    # schema has no field for modified arguments, so the birth gate there has
+    # to deny and name the contained command rather than substitute it
+    # transparently (https://antigravity.google/docs/hooks).
+    input_substitution: bool = False
+    # The dialect name this host's hooks are invoked with
+    # (`ctx hook <flavor> pre-tool-use`). Usually the host name; Claude Code's
+    # is historically "claude-code". Declared so the capability flags above can
+    # be joined to ctx.hook.DIALECT_CAPS by a conformance test rather than by a
+    # hand-maintained guess.
+    hook_flavor: str = ""
+    # True when ctx installs and owns this host itself rather than detecting a
+    # vendor CLI on PATH (see ctx.agysdk). Such a host is located in the state
+    # root, and its capabilities are ours to state accurately because we wrote
+    # the implementation.
+    self_hosted: bool = False
     supports_mcp: bool = False
     supports_hooks: bool = False
     print_flag: tuple[str, ...] = ("-p",)   # one-shot / non-interactive run
@@ -110,6 +127,11 @@ class HostSpec:
     # routing), pinned via model_flag. Defaults to the worker model.
     coordinator_model: str = ""
     notes: str = ""
+
+    @property
+    def flavor(self) -> str:
+        """The dialect name `ctx hook <flavor> ...` is invoked with."""
+        return self.hook_flavor or self.name
 
     @property
     def harnessable(self) -> bool:
@@ -146,14 +168,22 @@ class HostSpec:
 _REGISTRY: tuple[HostSpec, ...] = (
     HostSpec(
         name="antigravity",
-        cli_bins=("antigravity",),
+        # The CLI installs as `agy` (https://antigravity.google/cli/install.sh
+        # writes $HOME/.local/bin/agy); `antigravity` is kept as a fallback for
+        # a user-made symlink. Probing only "antigravity" reported the host as
+        # not installed on machines that had it, so setup skipped harnessing it.
+        cli_bins=("agy", "antigravity"),
         # Antigravity is BYO-model; its worker default is a Gemini flash tier.
         default_model="gemini-3.6-flash",
         model_env=("ANTIGRAVITY_MODEL", "GEMINI_MODEL"),
         installer="install_antigravity",
         wrapper="wrap_antigravity",
-        # No upstream output-substitution field yet -> nudge-only (see README).
-        output_substitution=False,
+        # Neither gate can alter the transcript on this host: the published
+        # PostToolUse output schema is `{}` and PreToolUse carries no
+        # `updatedInput`. Containment is a PreToolUse deny that names the
+        # contained command (https://antigravity.google/docs/hooks).
+        output_substitution=False,  # PostToolUse output schema is {} only
+        input_substitution=False,   # no updatedInput in the PreToolUse schema
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="google",
@@ -171,7 +201,51 @@ _REGISTRY: tuple[HostSpec, ...] = (
         ),
         strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
         coordinator_model="gemini-3.5-flash-lite",
-        notes="built-for host; Gemini flash implements cheaply; output gate nudge-only",
+        notes="built-for host; Gemini flash implements cheaply; no output gate "
+              "(PostToolUse can only emit {}), birth gate denies rather than rewrites",
+    ),
+    HostSpec(
+        # The same vendor and models as `antigravity`, reached a different way:
+        # ctx's own agent built on the google-antigravity SDK rather than the
+        # `agy` CLI. It is a SEPARATE host on purpose. `agy` is Google's program
+        # and we only hook it; this one is ours, so conflating them would let a
+        # single "antigravity" row report two different capability sets and
+        # would silently substitute our implementation for the vendor's.
+        #
+        # It exists because `agy` cannot be harnessed: OAuth-only auth means
+        # nothing can script it, and its hook contract can substitute neither
+        # input nor output. Here containment lives in the tool implementations,
+        # so both gates hold — which is why the substitution flags below are
+        # True while the `antigravity` row above has them False.
+        name="antigravity-sdk",
+        cli_bins=("ctx-agy",),
+        default_model="gemini-3.6-flash",
+        model_env=("ANTIGRAVITY_MODEL", "GEMINI_MODEL"),
+        installer="install_agy_sdk",
+        wrapper="wrap_agy_sdk",
+        # Ours to state accurately: the tools return bounded output by
+        # construction, which is strictly stronger than a substitution hook.
+        output_substitution=True,
+        input_substitution=True,
+        self_hosted=True,
+        # No hook wiring at all — containment is inside the tools, so there is
+        # no dialect and nothing for `ctx wrap` to install into a config file.
+        supports_mcp=False,
+        supports_hooks=False,
+        print_flag=("-p",),
+        model_flag="--model",
+        vendor_hint="google",
+        models=(
+            ModelChoice("gemini-3.1-pro", "frontier", ("plan", "reason", "review", "architect"),
+                        cli_id="gemini-3.1-pro-preview"),
+            ModelChoice("gemini-3.6-flash", "standard", ("implement", "edit", "code", "summarize")),
+            ModelChoice("gemini-3.5-flash-lite", "economy",
+                        ("explore", "search", "triage", "verify", "implement", "edit")),
+        ),
+        strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
+        coordinator_model="gemini-3.5-flash-lite",
+        notes="ctx-owned Antigravity agent (SDK); headless via GEMINI_API_KEY; "
+              "both gates hold because the tools are ours",
     ),
     HostSpec(
         name="claude",
@@ -181,6 +255,8 @@ _REGISTRY: tuple[HostSpec, ...] = (
         installer="install_claude",
         wrapper="wrap_claude",
         output_substitution=True,   # updatedToolOutput
+        input_substitution=True,    # updatedInput
+        hook_flavor="claude-code",
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="anthropic",
@@ -203,6 +279,7 @@ _REGISTRY: tuple[HostSpec, ...] = (
         installer="install_codex",
         wrapper="wrap_codex",
         output_substitution=True,   # decision:block substitution
+        input_substitution=True,    # updatedInput (Claude Code contract verbatim)
         supports_mcp=True,
         supports_hooks=True,
         vendor_hint="openai",
@@ -386,6 +463,19 @@ def _probe_version(path: str, argv: tuple[str, ...], *, timeout: float = 4.0) ->
     return out.splitlines()[0].strip()[:80]
 
 
+def _self_hosted_path(spec: HostSpec) -> str | None:
+    """Locate a host ctx installed itself. Fail-open: any import or filesystem
+    problem degrades to "not installed", never an exception."""
+    if spec.name != "antigravity-sdk":
+        return None
+    try:
+        from ctx.agysdk import is_installed, launcher_path
+
+        return str(launcher_path()) if is_installed() else None
+    except Exception:
+        return None
+
+
 def detect(
     spec: HostSpec,
     *,
@@ -404,6 +494,17 @@ def detect(
         path = which(cand)
         if path:
             break
+    if path is None and spec.self_hosted and which is shutil.which:
+        # A host ctx installs itself (the Antigravity SDK environment) lives in
+        # the state root, not on PATH — probing PATH alone would report it
+        # missing on the very machine that just installed it.
+        #
+        # Only when `which` is the real one. Injecting `which` is this module's
+        # documented way of saying "this is the whole world" (so tests need no
+        # real binaries); a filesystem probe that ignored it would let the
+        # developer's own installed SDK leak into every test that builds a
+        # synthetic host list.
+        path = _self_hosted_path(spec)
     installed = path is not None
     model = model_for(spec, env)
     price = price_for(model, workspace_root=workspace_root)

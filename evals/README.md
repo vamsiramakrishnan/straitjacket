@@ -59,6 +59,24 @@ python evals/ab_eval_live.py ...
 needs `GEMINI_API_KEY`. Because temperature and seed aren't controllable through
 these hosts, live determinism comes from paired tasks × repeats × median with
 frozen-constant checksums — see [`BENCHMARK.md`](BENCHMARK.md).
+`agy_ab_matrix.py` collapses a set of its run directories into one priced
+model × scenario matrix.
+
+Two live runners drive from-scratch web builds graded by headless Chromium
+(needs `playwright` and the Chromium under `/opt/pw-browsers`) — see
+[`vibecode/README.md`](vibecode/README.md):
+
+```bash
+python evals/vibecode/harness.py --task todo          # single-shot build
+python evals/vibecode/iterative_harness.py --arm solo --arm orchestrated
+```
+
+`iterative_harness.py` is the **iterative** one: it builds an app, then reshapes
+it twice mid-build with design-review amendments that reverse part of what was
+already built, and grades each phase against the earlier behaviours that must
+survive. Its arms are the routing comparison — one frontier model doing
+everything, against the orchestrator splitting plan from build across models and
+vendors.
 
 ## The four instruments
 

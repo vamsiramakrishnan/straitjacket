@@ -101,7 +101,13 @@ def _claude(model: str, prompt: str, cwd: Path, timeout: float, tools: bool) -> 
     if doc is None:
         return proc.returncode or 1, proc.stdout
     u = doc.get("usage", {})
+    # input_tokens alone is a vast undercount of the context this call carried:
+    # the CLI bills cache creation and cache reads as separate categories, and
+    # for an agentic build they are the bulk of it. Record all three so token
+    # volume is comparable, not just the uncached sliver.
     USAGE.append({"engine": f"claude/{model}", "input": u.get("input_tokens", 0),
+                  "cache_write": u.get("cache_creation_input_tokens", 0),
+                  "cache_read": u.get("cache_read_input_tokens", 0),
                   "output": u.get("output_tokens", 0), "cost_usd": doc.get("total_cost_usd")})
     return (0 if not doc.get("is_error") else 1), doc.get("result", "")
 
@@ -123,9 +129,12 @@ def _agy_python() -> str | None:
     return None
 
 
-def _agy_build(model: str, prompt: str, build_dir: Path, timeout: float) -> bool:
+def _agy_build(model: str, prompt: str, build_dir: Path, timeout: float,
+               contain: bool = False) -> bool:
     """Build via the Antigravity SDK agent (real file+shell tools) in build_dir.
-    Runs agy_build.py in the SDK venv; records billed Gemini tokens."""
+    Runs agy_build.py in the SDK venv; records billed Gemini tokens. With
+    ``contain``, the agent's shell output is routed through `ctx run` and it
+    gets a `ctx_query` retrieval tool — straitjacket at the tool boundary."""
     py = _agy_python()
     if py is None:
         print("  [antigravity] no SDK venv found (set CTX_AGY_PYTHON); build skipped")
@@ -135,13 +144,16 @@ def _agy_build(model: str, prompt: str, build_dir: Path, timeout: float) -> bool
     try:
         proc = subprocess.run(
             [py, str(ROOT / "agy_build.py"), "--dir", str(build_dir),
-             "--model", model, "--prompt-file", str(pf), "--timeout", str(timeout)],
+             "--model", model, "--prompt-file", str(pf), "--timeout", str(timeout)]
+            + (["--contain"] if contain else []),
             capture_output=True, text=True, timeout=timeout + 60,
         )
     except (OSError, subprocess.SubprocessError) as e:
         print(f"  [antigravity] SDK error: {e}")
         return False
     doc = _try(proc.stdout.strip().splitlines()[-1]) if proc.stdout.strip() else None
+    if doc is not None and doc.get("error"):
+        print(f"  [antigravity] run errored but usage recorded: {doc['error'][:160]}")
     if doc is None:
         print(f"  [antigravity] no usage returned; stderr: {proc.stderr[-300:]}")
         return proc.returncode == 0

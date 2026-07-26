@@ -104,9 +104,10 @@ def test_ctx_tools_are_never_digested(ws):
 
 
 def test_antigravity_flavor_never_replaces(ws):
-    # Over-threshold, antigravity flavor → no updatedToolOutput (nudge-only).
+    # Antigravity's published PostToolUse contract permits exactly one output,
+    # `{}` — no replacement and no nudge. Over-threshold must still emit it.
     d = _run_post(_mcp_payload(ws, _big_json(), tool="grep_search"), flavor="antigravity")
-    assert "updatedToolOutput" not in json.dumps(d)
+    assert d == {}
 
 
 def test_error_result_gets_larger_budget(ws):
@@ -150,3 +151,30 @@ def test_fail_open_on_garbage(ws):
     # Missing tool_response, non-dict, unresolvable — all yield {} not a crash.
     assert _run_post({"tool_name": "Bash", "cwd": str(ws)}) == {}
     assert _run_post({"cwd": str(ws), "tool_response": None}) == {}
+
+
+def test_antigravity_captures_even_though_it_cannot_substitute(ws):
+    """Antigravity's PostToolUse cannot replace a result, but the bytes are
+    still worth storing: the flood reaches the transcript either way, and a
+    stored artifact at least keeps an address so `ctx get` can resolve it
+    afterwards. Telemetry must stay honest about that — no saving is booked,
+    because none happened."""
+    from ctx.retrieval import telemetry_summary
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+
+    big = "NEEDLE-XYZ\n" + ("filler\n" * 20000)
+    d = _run_post({"tool_name": "run_command", "cwd": str(ws),
+                   "tool_response": {"stdout": big, "stderr": ""}},
+                  flavor="antigravity")
+    assert d == {}  # the only legal output on this host
+
+    w = resolve_workspace(str(ws))
+    store = Store(w.workspace_id, retention_days=w.config.store.retention_days)
+    totals = telemetry_summary(store)
+    assert totals["events"] >= 1
+    assert totals["raw_bytes"] > 0
+    # raw == emitted: the digest never replaced anything, so the ledger books
+    # zero tokens avoided rather than crediting a containment that didn't occur.
+    assert totals["emitted_bytes"] == totals["raw_bytes"]
+    assert totals["est_tokens_avoided"] == 0

@@ -40,10 +40,21 @@ def test_unwired_hosts_resolve_to_none():
 
 
 def test_setup_hosts_is_derived_from_the_registry():
-    """It used to be a hand-written tuple that could drift from the registry."""
+    """It used to be a hand-written tuple that could drift from the registry.
+
+    Self-hosted hosts are excluded deliberately: `ctx wrap setup` writes config
+    into agents you already have, and building a venv plus pulling a vendor SDK
+    off the network should be an explicit `ctx wrap <host>`, never a side effect
+    of setup.
+    """
     from ctx.installer import SETUP_HOSTS
 
-    assert tuple(SETUP_HOSTS) == tuple(s.name for s in hosts.harnessable_hosts())
+    assert tuple(SETUP_HOSTS) == tuple(
+        s.name for s in hosts.harnessable_hosts() if not s.self_hosted
+    )
+    assert any(s.self_hosted for s in hosts.harnessable_hosts()), (
+        "no self-hosted host in the registry — this test would pass vacuously"
+    )
 
 
 def test_no_second_installer_table_exists():
@@ -127,3 +138,24 @@ def test_unknown_host_is_refused_rather_than_silently_wrapped(
     assert cmd_wrap(_ns("gemini", workspace=str(workspace_dir))) != 0
     err = capsys.readouterr().err
     assert "gemini" in err and "antigravity" in err  # names the wired hosts
+
+
+def test_antigravity_detects_the_agy_binary():
+    """The Antigravity CLI installs as `agy`, not `antigravity`. Probing only
+    the latter reported the host as missing on machines that had it, so
+    `ctx wrap setup` silently skipped harnessing it."""
+    from ctx.hosts import detect, host_by_name
+
+    spec = host_by_name("antigravity")
+    assert "agy" in spec.cli_bins
+
+    seen = []
+
+    def which(binary):
+        seen.append(binary)
+        return "/home/u/.local/bin/agy" if binary == "agy" else None
+
+    host = detect(spec, which=which)
+    assert host.installed is True
+    assert host.path == "/home/u/.local/bin/agy"
+    assert seen[0] == "agy"  # the real binary is probed first

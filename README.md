@@ -64,6 +64,22 @@ config, never clobbers it, and re-running is a no-op. From the next agent
 session on, flooding tool output is captured into a local store and your
 agent sees a small digest with exact retrieval addresses instead.
 
+It also walks you through it rather than dumping paths — four steps, about five
+seconds:
+
+1. **What you have** — which agent CLIs were found, which will be harnessed,
+   which were skipped and why, and which are optional (never configured behind
+   your back).
+2. **Harnessing** — every file written, named, so the undo note is true.
+3. **Verifying** — re-runs `ctx doctor`'s own checks, so setup and the doctor
+   cannot disagree about what "healthy" means.
+4. **What now** — the one command to try immediately, and how to see what it
+   saved.
+
+If a check fails it says which one, what to do, and exits non-zero — it never
+reports success while broken. Scripts that want just the installer report can
+set `CTX_SETUP_PLAIN=1`.
+
 **See it work** (no agent needed):
 
 ```bash
@@ -434,14 +450,24 @@ canonical hook decision, translated to each host's dialect: Antigravity's plugin
 (`hookSpecificOutput` PreToolUse + `decision:block` PostToolUse substitution).
 One classifier, three emitters — `ctx wrap setup` wires all three at once.
 
-The **birth-gate** decision (PreToolUse: rewrite flooding commands, steer native
-and semantic search to bounded `ctx` ops) is identical on all three. The
-**output-side** gate (PostToolUse: replace an oversized tool result with a
+The **birth-gate** decision (PreToolUse: contain flooding commands, steer native
+and semantic search to bounded `ctx` ops) fires on all three, but it is applied
+differently. Claude Code (`updatedInput`) and Codex rewrite the command
+*transparently* — the agent never sees a refusal. Antigravity's [published
+PreToolUse schema](https://antigravity.google/docs/hooks) carries no field for
+modified arguments, so there the same decision lands as a **deny whose reason
+names the contained command**: the flood is still prevented, but the agent
+spends a turn re-issuing it itself.
+
+The **output-side** gate (PostToolUse: replace an oversized tool result with a
 digest) needs a host field that can substitute output — Claude Code
-(`updatedToolOutput`) and Codex (`decision:block`) have one; Antigravity does not
-upstream yet, so there the output gate is **nudge-only**. A verbose MCP/connector
-result can still reach the transcript on Antigravity; retrieve through the
-bounded `ctx` MCP tool to stay capped.
+(`updatedToolOutput`) and Codex (`decision:block`) have one. Antigravity's
+published PostToolUse contract permits exactly one output, `{}`: it can neither
+replace a result nor attach a nudge, so on that host the PostToolUse hook is
+**observational** — it still captures the bytes into the store so `ctx get` can
+resolve them later, but it cannot shrink what already reached the transcript. A
+verbose MCP/connector result therefore lands in full on Antigravity; retrieve
+through the bounded `ctx` MCP tool to stay capped.
 
 ### Steering policy (the hooks)
 

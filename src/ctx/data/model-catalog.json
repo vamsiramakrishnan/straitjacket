@@ -1,0 +1,110 @@
+{
+  "schema": "ctx.model-catalog/v1",
+  "updated": "2026-07-25",
+  "note": "Routing dimensions beyond price. Prices live in model-prices.json; capability tiers and role coverage live in ctx/hosts.py (HostSpec.models). This file carries the *additional* signals a coordinator may weigh — specialities, latency class, measured throughput, benchmark proxies — and is overridable per repo with a .ctx-catalog.json at the workspace root.",
+  "provenance_rule": "Every quantitative claim carries a `source`. A number without one is not shipped: a routing decision made on an invented benchmark is worse than one made on price alone, because it looks informed. `declared-heuristic` is a legitimate source value and means exactly what it says - a human judgement call, overridable, not a measurement. Absent data means UNKNOWN, never 'bad': a model with no throughput row must not be deprioritised for lacking one.",
+  "latency_classes": {
+    "note": "Time-to-first-token feel, not a measurement. Declared heuristic in the same spirit as capability tiers - the costly error is assuming a slow model is fast, so unknown sorts as `moderate` rather than `fast`.",
+    "values": ["fast", "moderate", "deliberate"]
+  },
+  "models": [
+    {
+      "match": "gemini-3.5-flash-lite",
+      "specialities": ["explore", "search", "triage", "verify", "summarize", "classify", "simple-edit"],
+      "anti_specialities": ["architecture", "multi-file-refactor", "ambiguous-spec"],
+      "latency_class": "fast",
+      "latency_source": "declared-heuristic",
+      "throughput_output_tok_s": {
+        "median": 58.8,
+        "min": 30.0,
+        "max": 77.5,
+        "n": 8,
+        "source": "evals/antigravity-3.6-flash-vs-3.5-flash-lite-2026-07-25.md (agy-3.5-flash-lite-* run dirs; billed output+thoughts tokens over agent wall time, single-agent runs)"
+      },
+      "observed_behaviour": {
+        "flood_discipline": "low",
+        "detail": "On a greppable needle task it re-ran a 4,000-line log dump 27 times: 7.8 MB of shell output, 1.5M tool-output tokens. Route flood-prone work here only behind containment.",
+        "source": "evals/antigravity-3.6-flash-vs-3.5-flash-lite-2026-07-25.md"
+      },
+      "benchmarks": {}
+    },
+    {
+      "match": "gemini-3.6-flash",
+      "specialities": ["implement", "edit", "code", "summarize", "test-fix", "ui-build"],
+      "anti_specialities": ["architecture", "cross-system-design"],
+      "latency_class": "fast",
+      "latency_source": "declared-heuristic",
+      "throughput_output_tok_s": {
+        "median": 91.3,
+        "min": 82.4,
+        "max": 102.3,
+        "n": 8,
+        "source": "evals/antigravity-3.6-flash-vs-3.5-flash-lite-2026-07-25.md (agy-3.6-flash-* run dirs)"
+      },
+      "observed_behaviour": {
+        "flood_discipline": "high",
+        "detail": "On a greppable needle task it chose to grep rather than dump, emitting 812 bytes of shell output for the whole task; containment bought it nothing there. On a non-greppable task it floods like any model.",
+        "source": "evals/antigravity-3.6-flash-vs-3.5-flash-lite-2026-07-25.md"
+      },
+      "observed_cost_risk": {
+        "detail": "As an agentic builder it re-sent 4.25M input tokens to produce 63k output on a 3-phase web build - the cheapest model per token was not the cheapest arm. Weigh context growth, not just unit price.",
+        "source": "evals/iterative-orchestrator-2026-07-25.md"
+      },
+      "benchmarks": {}
+    },
+    {
+      "match": "gemini-3.1-pro",
+      "specialities": ["plan", "reason", "review", "architect"],
+      "latency_class": "deliberate",
+      "latency_source": "declared-heuristic",
+      "benchmarks": {}
+    },
+    {
+      "match": "claude-opus",
+      "specialities": ["plan", "reason", "synthesize", "decide", "review", "architect", "spec-reshape"],
+      "latency_class": "deliberate",
+      "latency_source": "declared-heuristic",
+      "observed_behaviour": {
+        "detail": "Solo Opus and Opus-plans/Sonnet-builds scored identically (98%) on a 3-phase reshape task; the split cost $7.04 against $9.59. Routing planning here and implementation to a standard model lost nothing measurable.",
+        "source": "evals/iterative-orchestrator-2026-07-25.md"
+      },
+      "benchmarks": {}
+    },
+    {
+      "match": "claude-sonnet",
+      "specialities": ["implement", "edit", "code", "review", "test-fix"],
+      "latency_class": "moderate",
+      "latency_source": "declared-heuristic",
+      "benchmarks": {}
+    },
+    {
+      "match": "claude-haiku",
+      "specialities": ["explore", "search", "triage", "verify", "summarize"],
+      "latency_class": "fast",
+      "latency_source": "declared-heuristic",
+      "benchmarks": {}
+    },
+    {
+      "match": "gpt-5.6-sol",
+      "specialities": ["plan", "reason", "review", "architect"],
+      "latency_class": "deliberate",
+      "latency_source": "declared-heuristic",
+      "benchmarks": {}
+    },
+    {
+      "match": "gpt-5.6-terra",
+      "specialities": ["implement", "edit", "code"],
+      "latency_class": "moderate",
+      "latency_source": "declared-heuristic",
+      "benchmarks": {}
+    },
+    {
+      "match": "gpt-5.6-luna",
+      "specialities": ["explore", "search", "triage", "verify"],
+      "latency_class": "fast",
+      "latency_source": "declared-heuristic",
+      "benchmarks": {}
+    }
+  ],
+  "benchmarks_note": "Every `benchmarks` map ships EMPTY on purpose. Public scores for these model versions are not in this repo's evidence base, and a fabricated SWE-bench number would be indistinguishable from a real one at the point of use while silently steering every routing decision. Populate a row only with {\"suite\": {\"score\": <n>, \"source\": \"<url or receipt>\", \"date\": \"<YYYY-MM>\"}}; tests/test_model_catalog.py rejects a score without a source. Treat benchmarks as weak proxies regardless: they measure a suite, not your repository, and the project's own posture is receipts before doctrine."
+}

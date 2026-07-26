@@ -71,12 +71,15 @@ def test_small_reads_accumulate_and_flip_past_default_budget(tmp_path):
     assert "ctx search repo:" in reason
     assert "ctx get repo:" in reason
 
-    # Emitters turn the pressured decision into allow+updatedInput.
+    # Emitters: Claude Code turns the pressured decision into allow+updatedInput.
+    # Antigravity has no updatedInput field, so the same decision becomes a deny
+    # carrying the reason — the bound is enforced either way, but only one host
+    # can apply it without spending a turn.
     from ctx.hook import _to_antigravity_schema, _to_claude_code_schema
 
     wire = _to_antigravity_schema(dict(d))
-    assert wire["decision"] == "allow"
-    assert wire["updatedInput"]["limit"] == PRESSURE_LIMIT
+    assert wire["decision"] == "deny"
+    assert "updatedInput" not in wire
     hso = _to_claude_code_schema(dict(d))["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert hso["updatedInput"]["limit"] == PRESSURE_LIMIT

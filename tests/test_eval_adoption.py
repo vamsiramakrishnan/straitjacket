@@ -211,9 +211,11 @@ def test_hook_end_to_end_antigravity_heredoc(tmp_path):
     out = _invoke_hook(
         _payload({"CommandLine": HEREDOC_CMD, "Cwd": str(tmp_path)}, tmp_path)
     )
-    # Default steering: rewrite wire form, teach line in the reason.
-    assert out["decision"] == "allow"
-    assert out["updatedInput"]["CommandLine"].startswith("ctx run --shell -- ")
+    # Default steering, Antigravity dialect: no updatedInput exists in the
+    # published PreToolUse schema, so the rewrite lands as a deny that names
+    # the contained command; the teach line still rides along in the reason.
+    assert out["decision"] == "deny"
+    assert "ctx run --shell -- " in out["reason"]
     assert "ctx py" in out["reason"]
 
 

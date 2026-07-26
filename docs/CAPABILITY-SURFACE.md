@@ -36,9 +36,11 @@ The point was never to measure bloat already in context — it was to stop it
 entering. Two mechanisms make the audit preventive, mirroring the output side's
 "capture before flood":
 
-- **SessionStart gate.** A hook on all three hosts (Claude `SessionStart`,
-  Codex `SessionStart`, Antigravity `on_session_start`) runs the audit *once,
-  before the first turn*, with a cached MCP probe so it sees the real tool-
+- **Pre-flight gate.** A hook on all three hosts (Claude `SessionStart`, Codex
+  `SessionStart`, Antigravity `PreInvocation` — that host has no SessionStart
+  event, so the advisory rides `injectSteps` as an `ephemeralMessage` and does
+  not accumulate across invocations) runs the audit *before the first turn*,
+  with a cached MCP probe so it sees the real tool-
   schema cost. If the discretionary surface exceeds `[surface]
   max_static_tokens` in `ctx.toml`, it injects a bounded advisory naming the
   heaviest kinds, unused high-authority tools, broken dependencies, and the
