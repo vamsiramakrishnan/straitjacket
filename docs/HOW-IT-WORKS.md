@@ -99,10 +99,18 @@ the harness with your agent host:
   search/get/stats over the store and the repo — retrieval that *cannot*
   flood, because every operation is capped.
 
-All three hosts (Antigravity, Claude Code, Codex) get the same three
-pieces, translated to each host's native config format. Nothing here
-requires trusting the model to follow instructions — the hooks are
-mechanical.
+Every host gets these pieces, translated to its native config format.
+Nothing here requires trusting the model to follow instructions — the hooks
+are mechanical.
+
+They are not, however, equally enforceable everywhere. Claude Code and Codex
+can both rewrite a command *and* replace an oversized result. Antigravity's
+published hook contract can do neither: its birth gate has to **deny** and
+name the contained command rather than substitute it silently, and it has
+**no output-side safety net** at all, so a verbose MCP/connector result
+reaches the transcript in full. If you use Antigravity, read
+[Host capabilities](HOST-CAPABILITIES.md) — it is short, and it changes what
+you should route through `ctx`.
 
 ## What else is in the box (each optional, each measured)
 

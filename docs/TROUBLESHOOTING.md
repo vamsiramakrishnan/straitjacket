@@ -198,8 +198,11 @@ fallback with the same output contract. `ctx doctor` shows which engine is
 active.
 
 **How do I set up just one host?**
-`ctx wrap antigravity`, `ctx wrap claude`, or `ctx wrap codex` each set up
-exactly one. `ctx wrap setup` does all three.
+`ctx wrap antigravity`, `ctx wrap claude`, `ctx wrap codex`, or
+`ctx wrap antigravity-sdk` each set up exactly one. `ctx wrap setup` detects
+which agent CLIs you have and configures those, then verifies the result and
+tells you what to run next; hosts it would have to *build* rather than detect
+(`antigravity-sdk`) are offered, never configured implicitly.
 
 **How do I preview what setup will write without touching anything?**
 `ctx wrap <host> --print-config`.

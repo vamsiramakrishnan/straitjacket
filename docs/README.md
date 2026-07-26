@@ -30,11 +30,14 @@ Start with **[How it works](HOW-IT-WORKS.md)** (a ten-minute plain-language walk
 
 You will learn how to:
 
-- set up all three hosts (Antigravity, Claude Code, Codex) in one command;
+- set up every agent CLI you have in one guided command;
+- see what each host can actually enforce ([Host capabilities](HOST-CAPABILITIES.md)) —
+  they do not all protect you equally;
 - run one harnessed or ephemeral agent session;
 - capture, inspect, search, and retrieve evidence;
 - choose between `run`, `seq`, `eval`, `q`, and background jobs;
 - interpret the session scorecard;
+- split a task across models by cost and capability ([Routing](ROUTING.md));
 - understand the current trust boundary.
 
 ### Understand the mental model
