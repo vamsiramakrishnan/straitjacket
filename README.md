@@ -565,6 +565,9 @@ ctx get repo:svc/retry.py --symbol Handler.process
 ctx stats repo:src/ctx/hook.py     # priced symbol outline: 12.8–54.5× cheaper than the file
 ctx map --budget 500 --focus payments
 ctx impact register_span --depth 4
+ctx callers Handler.process       # scoped: the caller's file defines or imports it
+ctx callers Handler.process --unscoped   # + repo-wide name matches, labelled
+ctx impls Profile                 # what implements or extends this type
 ctx diff run:7bd91f2a4c3d run:9ae02c17b5ff
 ```
 

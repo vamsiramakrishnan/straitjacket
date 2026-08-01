@@ -65,12 +65,15 @@ def test_repomap_and_callgraph_share_one_stat_basis(workspace_dir, state_home):
     ws = make_ws(workspace_dir)
 
     k1 = repomap._map_cache_key(ws, ["a.py"], 600, "", [], False, "ast")
-    c1 = callgraph._graph_cache_key(ws, ["a.py"])
+    c1 = callgraph._unit_key(ws, "a.py")
 
     _same_size_edit_restoring_mtime(workspace_dir / "a.py", "def f():\n    h()\n")
 
     assert repomap._map_cache_key(ws, ["a.py"], 600, "", [], False, "ast") != k1
-    assert callgraph._graph_cache_key(ws, ["a.py"]) != c1
+    # The callgraph key is now per file (v2) rather than per corpus, but the
+    # basis is still the one shared stat_fingerprint — an mtime-restoring,
+    # same-length edit must still invalidate it.
+    assert callgraph._unit_key(ws, "a.py") != c1
 
 
 def test_plan_node_fingerprint_survives_an_mtime_restoring_edit(git_workspace):

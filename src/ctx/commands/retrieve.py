@@ -176,7 +176,7 @@ def cmd_callers(ws, ns) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    print(_callers(store, ws, ns.symbol))
+    print(_callers(store, ws, ns.symbol, unscoped=getattr(ns, "unscoped", False)))
     return 0
 
 
@@ -185,7 +185,7 @@ def cmd_callees(ws, ns) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    print(_callees(store, ws, ns.symbol))
+    print(_callees(store, ws, ns.symbol, unscoped=getattr(ns, "unscoped", False)))
     return 0
 
 
@@ -194,7 +194,20 @@ def cmd_impact(ws, ns) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    print(_impact(store, ws, ns.symbol, depth=ns.depth))
+    print(
+        _impact(
+            store, ws, ns.symbol, depth=ns.depth, unscoped=getattr(ns, "unscoped", False)
+        )
+    )
+    return 0
+
+
+def cmd_impls(ws, ns) -> int:
+    from ctx.callgraph import cmd_impls as _impls
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(_impls(store, ws, ns.symbol, depth=ns.depth))
     return 0
 
 

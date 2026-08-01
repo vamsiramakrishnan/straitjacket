@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ctx.callgraph import _Node, _Graph, _graph_cache_key, _from_json, _to_json
+from ctx.callgraph import _Def, _Graph, _unit_key, _graph_from_json, _graph_to_json
 from ctx.checkpoint import create_checkpoint
 from ctx.debt import add, resolve, outstanding, render
 from ctx.engagement import note_call, note_truncation, claim_emission_tier, note_symbol_grep
@@ -192,40 +192,51 @@ FAILED tests/test_foo.py::test_baz - ValueError
 class TestCallgraphModernization:
     """Verify callgraph behavior (dataclass without frozen, dict with setdefault)."""
 
-    def test_node_dataclass_is_usable(self):
-        """_Node dataclass maintains expected behavior."""
-        n = _Node(qual="foo.bar", rel="src/foo.py", lineno=10, end=20)
+    def test_def_dataclass_is_usable(self):
+        """_Def dataclass maintains expected behavior."""
+        n = _Def(qual="foo.bar", rel="src/foo.py", lineno=10, end=20)
         assert n.qual == "foo.bar"
         assert n.lineno == 10
         assert n.rel == "src/foo.py"
         assert n.end == 20
+        assert n.kind == "function" and n.bases == [] and n.lang == "python"
 
     def test_graph_json_roundtrip(self):
-        """_to_json/_from_json maintain graph structure correctly."""
+        """_graph_to_json/_graph_from_json keep edges, tiers and hierarchy."""
         g = _Graph()
-        g.nodes = {"foo": _Node("foo", "test.py", 1, 10)}
-        g.defs_by_name = {"foo": [g.nodes["foo"]]}
-        g.out_edges = {"foo": ["bar"]}
-        g.in_edges = {"bar": ["foo"]}
+        g.nodes = {
+            "foo": _Def("foo", "test.py", 1, 10),
+            "Base": _Def("Base", "test.py", 20, 30, "class"),
+            "Sub": _Def("Sub", "test.py", 40, 50, "class", ["Base"]),
+        }
+        g.defs_by_name = {"foo": ["foo"], "Base": ["Base"], "Sub": ["Sub"]}
+        g.out_edges = {"foo": [("bar", 3, ["bar"], "local")]}
+        g.in_edges = {"bar": [("foo", 3, "local")]}
+        g.subclasses = {"Base": ["Sub"]}
+        g.engines = {"nodes": "ast", "scoping": "imports"}
 
-        # Roundtrip
-        serialized = _to_json(g)
-        g2 = _from_json(serialized)
+        g2 = _graph_from_json(_graph_to_json(g))
         assert g2.nodes["foo"].qual == "foo"
-        assert len(g2.defs_by_name["foo"]) == 1
-        assert g2.out_edges["foo"] == ["bar"]
+        assert g2.nodes["Sub"].bases == ["Base"]
+        assert g2.defs_by_name["foo"] == ["foo"]
+        assert g2.out_edges["foo"] == [("bar", 3, ["bar"], "local")]
+        assert g2.in_edges["bar"] == [("foo", 3, "local")]
+        assert g2.subclasses["Base"] == ["Sub"]
+        assert g2.engines["scoping"] == "imports"
 
-    def test_cache_key_is_deterministic(self):
-        """_graph_cache_key() produces stable hashes for file lists."""
+    def test_unit_key_is_deterministic_and_per_file(self):
+        """v2 keys the cache per file, so two files never share a key and one
+        file's key is stable across calls."""
         from ctx.workspace import resolve_workspace
 
         with tempfile.TemporaryDirectory() as tmp:
             ws_root = Path(tmp)
             (ws_root / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
             (ws_root / "test.py").write_text("# test", encoding="utf-8")
+            (ws_root / "other.py").write_text("# test", encoding="utf-8")
             ws = resolve_workspace(str(ws_root))
-            rels = ["test.py"]
-            assert _graph_cache_key(ws, rels) == _graph_cache_key(ws, rels)
+            assert _unit_key(ws, "test.py") == _unit_key(ws, "test.py")
+            assert _unit_key(ws, "test.py") != _unit_key(ws, "other.py")
 
 
 class TestCheckpointModernization:
