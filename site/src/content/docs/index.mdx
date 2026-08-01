@@ -26,7 +26,65 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## The tax you're already paying
+<div class="sj-stats">
+  <div>
+    <span class="sj-stat-n">304,113 → 210</span>
+    <span class="sj-stat-l">tokens a full test log costs your transcript</span>
+  </div>
+  <div>
+    <span class="sj-stat-n">−28%</span>
+    <span class="sj-stat-l">turns to finish the same task</span>
+  </div>
+  <div>
+    <span class="sj-stat-n">96.5–98.1%</span>
+    <span class="sj-stat-l">prompt-cache hit rate held</span>
+  </div>
+  <div>
+    <span class="sj-stat-n">zero</span>
+    <span class="sj-stat-l">evidence dropped without an address</span>
+  </div>
+</div>
+
+## What you get
+
+<ul class="sj-wins">
+  <li>
+    <b>Your agent stops going blind halfway through</b>
+    It can run the noisy suite, tail the long build and sweep the big
+    repository without spending its whole window on the output. The room it
+    needs to reason is still there on turn twenty.
+  </li>
+  <li>
+    <b>You stop re-paying for the same bytes every turn</b>
+    A 304,113-token log costs about <strong>210 tokens</strong> in your
+    transcript, and stays that size however loud the command was. Charged
+    once — not on every round for the rest of the session.
+  </li>
+  <li>
+    <b>Nothing you needed vanishes quietly</b>
+    Every byte left out of the summary keeps an exact address. The failing
+    assertion, the one anomalous line, the stack frame three screens down —
+    all still retrievable long after compaction would have dropped them.
+  </li>
+  <li>
+    <b>You can check what the agent tells you</b>
+    It can show you where an answer came from, and the same address returns
+    the same bytes tomorrow, next week, on another machine. No "I recall
+    seeing", no rerunning the suite to confirm.
+  </li>
+  <li>
+    <b>Your sessions finish sooner, not just cheaper</b>
+    A small window keeps the cache warm and the plan intact. Measured on the
+    same tasks: <strong>−28% turns, −33% wall-clock time, −17% cost</strong>.
+  </li>
+  <li>
+    <b>It works with the agent you already use</b>
+    Antigravity, Claude Code and Codex. One command, merged into your existing
+    config, never clobbering it. You don't change how you work.
+  </li>
+</ul>
+
+## What it costs you today
 
 One `pytest -q` can put **300,000 tokens** into your agent's transcript. You
 don't pay for that once — every turn afterwards re-sends it. A routine
@@ -36,43 +94,10 @@ Then the window fills, compaction runs, and it silently deletes the one failing
 line you needed. No warning. No trace it was ever there. You find out when the
 agent confidently tells you something it can no longer check.
 
-That is the tax: **you pay more, the agent gets dumber, and the evidence you
+That's the tax: **you pay more, the agent gets dumber, and the evidence you
 needed is the first thing thrown overboard.**
 
-## What straitjacket does for you
-
-<CardGrid>
-  <Card title="Your agent stops going blind" icon="rocket">
-    It can run the noisy suite, tail the long build, and sweep the big
-    repository without spending its whole window on the output. The room it
-    needs for reasoning is still there on turn twenty.
-  </Card>
-  <Card title="You stop re-paying for the same bytes" icon="seti:clock">
-    A 304,113-token log costs about **210 tokens** in your transcript — and
-    stays that size no matter how loud the command was. It's charged once, not
-    on every round for the rest of the session.
-  </Card>
-  <Card title="Nothing you needed vanishes quietly" icon="approve-check">
-    Every byte left out of the summary keeps an exact address. The failing
-    assertion, the one anomalous line, the stack frame three screens down —
-    all still retrievable long after compaction would have dropped them.
-  </Card>
-  <Card title="Answers you can check" icon="magnifier">
-    When the agent tells you something, it can show you where it came from —
-    the same address returns the same bytes tomorrow, next week, on another
-    machine. No "I recall seeing", no rerunning the suite to confirm.
-  </Card>
-  <Card title="It works with the agent you already use" icon="puzzle">
-    Antigravity, Claude Code, and Codex. One command, merged into your existing
-    config, never clobbering it. You don't change how you work.
-  </Card>
-  <Card title="Longer sessions actually stay coherent" icon="random">
-    Because the window stays small, your agent keeps its cache warm and its
-    plan intact. The difference shows up as fewer turns, not just fewer tokens.
-  </Card>
-</CardGrid>
-
-## Why that's worth caring about
+## Why the window is the whole game
 
 <div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow); margin-bottom: 1rem;">
   <img className="sj-dark" src="/straitjacket/diagrams/econ.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
@@ -83,9 +108,8 @@ Context is not just a cost line — it's the agent's working memory. A window
 full of last hour's log is a window that can't hold your problem. Every token
 you spend re-reading `pytest` output is a token not spent on the bug.
 
-The gains compound in the direction you want: adopting the solution ladder
-measured **−28% turns, −33% wall-clock time, −17% cost** on the same tasks.
-Fewer tokens is the mechanism. Finishing sooner is the result.
+That's why the numbers above move together. Fewer tokens is the mechanism;
+finishing sooner is the result.
 
 Nothing here is claimed without a receipt. Every steering change ships only
 after a measured A/B or head-to-head, and all of it is published in
