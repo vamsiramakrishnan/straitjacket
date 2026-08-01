@@ -38,6 +38,7 @@ different safety contracts. The mental model can stay small.
 | Who uses a symbol | `ctx refs <symbol>` | Reference sites, bounded |
 | Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
 | Blast radius of a change | `ctx impact <symbol> --depth N` | Transitive callers (`--depth ≤ 6`) |
+| What implements a type | `ctx impls <Type> --depth N` | Subtypes with coordinates, plus what the type itself extends |
 | Lint/syntax digest | `ctx diag <path>` | Deterministic diagnostics without running a full linter into context |
 | A compiled investigation | `ctx plan …` / `ctx plan run …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
 
@@ -170,6 +171,47 @@ ctx search 'authorization failed' --run run:<id>
 
 Searching an artifact is cheaper and more trustworthy than rerunning a command merely
 to recover text the harness already captured.
+
+## Walk the call graph: `ctx callers` / `callees` / `impact` / `impls`
+
+```bash
+ctx callers Store.put_blob            # who calls it, with the call-site line
+ctx callees digest_output             # what it calls, in-repo only
+ctx impact Store.put_blob --depth 4   # transitive callers (blast radius)
+ctx impls Profile                     # what implements or extends this type
+```
+
+Edges come from the languages the skeleton tier parses — Python, plus
+JavaScript, TypeScript, Go and Rust with the `[code]` extra. The engines in
+force are printed in the header of every answer.
+
+### Scoped by default, and the rest is one flag away
+
+A call to `render` could name any `render` in the repo. Rather than guess, each
+call site is resolved in tiers and the first non-empty one wins:
+
+| tier | the call binds to | stated as |
+|---|---|---|
+| `local` | a definition in the calling file | fact |
+| `import` | a definition in a file the caller **directly** imports | fact |
+| `repo` | any definition with that name, anywhere | candidate |
+
+Only the first two are reported by default. Repo-wide matches are held back
+with their count and the flag that resolves them, so the default answer is one
+you can act on and the wider net is never silently mixed in:
+
+```
+callers: 1
+    detect_profile  src/ctx/digest/__init__.py:61
+  omitted: 35 UNSCOPED callers (name matched repo-wide; the caller's file
+    neither defines nor imports the target)
+    resolve: ctx callers LogTemplateProfile.detect --unscoped
+```
+
+`--unscoped` widens `callers`, `callees` and `impact`; the widened rows stay
+marked `[unscoped]` so a candidate never reads as a fact. When several
+definitions answer to one name, every one of them is listed before the results
+— an ambiguous question gets an ambiguous answer, out loud.
 
 ## Answer a question: `ctx ask`
 

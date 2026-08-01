@@ -255,11 +255,33 @@ _INTENT_HINTS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: Question shapes no intent answers, but a single verb does. `ctx ask` is a
+#: preset over evidence *plans*; "what implements X" is one graph lookup, so
+#: inventing an intent for it would be a plan with one node. Without this the
+#: teaching error for those questions was the bare menu — every other shape
+#: got a suggestion, and this one got nothing to try next.
+#: Stems, not inflections — "extend" has to cover "extends" and "extending",
+#: and enumerating forms is how a table like this silently stops matching.
+_VERB_HINTS: tuple[tuple[str, str], ...] = (
+    ("implement", "impls"), ("subclass", "impls"), ("subtype", "impls"),
+    ("extend", "impls"), ("inherit", "impls"), ("derive", "impls"),
+)
+
+
 def suggest_intent(question: str) -> str | None:
     q = (question or "").lower()
     for word, intent in _INTENT_HINTS:
         if word in q:
             return intent
+    return None
+
+
+def suggest_verb(question: str) -> str | None:
+    """A `ctx` verb that answers this question outright, or None."""
+    q = (question or "").lower()
+    for word, verb in _VERB_HINTS:
+        if word in q:
+            return verb
     return None
 
 
@@ -284,6 +306,13 @@ def compile_ask(
     resolve to the same slots."""
     menu = " | ".join(sorted(INTENTS))
     if not intent_name:
+        verb = suggest_verb(question)
+        if verb:
+            raise AskError(
+                f"ctx ask needs --intent ({menu}); but this question is "
+                f"answered outright by `ctx {verb} <Type>` — no plan needed "
+                "(advisory — nothing was run)"
+            )
         hint = suggest_intent(question)
         raise AskError(
             f"ctx ask needs --intent ({menu})"
