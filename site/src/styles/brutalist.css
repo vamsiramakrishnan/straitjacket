@@ -197,24 +197,54 @@ nav.sidebar .top-level a,
   color: var(--sl-color-gray-2);
 }
 
+/* Benefit cards. A full-width stack left half the desktop viewport empty and
+   read as one long column of prose; a two-up grid of framed cards is
+   scannable, and the border + hard shadow is the same device the stat strip
+   and the diagrams already use, so the page holds one visual language. */
 .sj-wins {
   list-style: none;
   padding: 0;
   margin: 0 0 1rem;
+  counter-reset: sj-win;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.75rem;
 }
 
 .sj-wins li {
-  border-left: 4px solid var(--sl-color-accent);
-  padding: 0.15rem 0 0.15rem 1rem;
-  margin: 0 0 1.5rem;
+  /* Reset Starlight's sibling margin: on a grid child it sits inside the
+     track and pushes the frame off its own cell. */
+  margin: 0;
+  padding: 1.4rem 1.35rem 1.5rem;
+  border: 2px solid var(--sl-color-white);
+  box-shadow: var(--sj-shadow-sm);
+  background: var(--sl-color-bg, var(--sl-color-black));
+  display: flex;
+  flex-direction: column;
+}
+
+/* An amber index gives the grid rhythm without repeating the numbers the
+   stat strip already carries. */
+.sj-wins li::before {
+  counter-increment: sj-win;
+  content: counter(sj-win, decimal-leading-zero);
+  font-family: var(--sl-font-mono);
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  color: var(--sl-color-accent);
+  margin-bottom: 0.85rem;
 }
 
 .sj-wins b {
   display: block;
   font-family: var(--sl-font);
   font-weight: 700;
-  font-size: clamp(1.1rem, 2.2vw, 1.35rem);
+  font-size: clamp(1.05rem, 1.7vw, 1.22rem);
   line-height: 1.25;
   letter-spacing: -0.01em;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.5rem;
+  color: var(--sl-color-white);
 }
+
+.sj-wins li > :last-child { margin-bottom: 0; }
