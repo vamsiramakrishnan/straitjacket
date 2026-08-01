@@ -21,15 +21,37 @@ round — a routine `mcp__github__list_commits` alone is ~19.8k tokens per
 round. Then compaction deletes the one line you needed, with no trace it
 ever existed.
 
-straitjacket stops that at the source. The raw bytes go into an immutable
-local store, and the transcript gets a small, deterministic digest instead.
-The digest is a fixed size no matter how much output the command produced.
-Every byte it leaves out keeps an address, so you can pull the exact
-original bytes back at any later turn.
+**straitjacket stops that at the source.**
 
-You run coding agents daily and pay per token per turn. This keeps the
-window small, keeps the cost down, and keeps the failing test line
-retrievable after compaction would have dropped it.
+| | |
+|---|---|
+| **304,113 → ~210** | tokens a full test log costs your transcript |
+| **−28% · −33% · −17%** | turns · wall-clock time · cost, on the same tasks |
+| **96.5–98.1%** | prompt-cache hit rate held — Headroom measured 80.6–84.2% |
+| **zero** | evidence dropped without a retrievable address |
+
+What that buys you:
+
+- **Your agent stops going blind halfway through.** It can run the noisy
+  suite, tail the long build and sweep the big repository without spending
+  its whole window on the output.
+- **You stop re-paying for the same bytes every turn.** A 304,113-token log
+  costs ~210 tokens in your transcript, and stays that size however loud the
+  command was. Charged once, not on every round for the rest of the session.
+- **Nothing you needed vanishes quietly.** Every byte left out keeps an exact
+  address — still retrievable long after compaction would have dropped it.
+- **You can check what the agent tells you.** The same address returns the
+  same bytes tomorrow, next week, on another machine.
+- **Sessions finish sooner, not just cheaper.** A small window keeps the cache
+  warm and the plan intact; fewer tokens is the mechanism, finishing sooner is
+  the result.
+- **It works with the agent you already use.** Antigravity, Claude Code and
+  Codex — one command, merged into your existing config, never clobbering it.
+
+Every number above has a receipt in [`evals/`](evals/); the house rule is
+*receipts before doctrine*.
+
+### Then, how it works
 
 <div align="center">
 
@@ -40,8 +62,10 @@ retrievable after compaction would have dropped it.
 
 </div>
 
-Raw bytes stop at the gate. The transcript carries the digest and its
-addresses. Any address resolves back to the exact original bytes later.
+Raw bytes stop at the gate: they go into an immutable local store, and the
+transcript gets a small, deterministic digest instead — a fixed size no matter
+how much output the command produced. The digest carries addresses, and any
+address resolves back to the exact original bytes at any later turn.
 
 > **New here?** The CLI is `ctx`, installed from a clone (no PyPI release yet).
 > The gentlest introduction is **[How it works](docs/HOW-IT-WORKS.md)** — one
