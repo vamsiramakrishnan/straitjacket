@@ -89,6 +89,32 @@ printed in the header of every answer.
   as "references". A degradation that turns a more precise question into a less
   precise answer is worse than an error.
 
+#### Engine selection follows its own documentation again
+
+`ctx.skeleton._TS_GRAMMAR_MODULES` documents the individual grammar wheels as
+"the maintained, offline path", and the bundles (`tree_sitter_language_pack`,
+`tree_sitter_languages`) as lagging the core API and fetching parsers at
+runtime — a network 403 in a sandbox. Selection then tried the bundles
+**first**, so a stale bundle that merely imported outranked a current wheel.
+The order now matches the note; the bundles stay as the fallback for languages
+no wheel is declared for. Both directions are pinned in
+`tests/test_treesitter_backend.py`.
+
+Dependency floors now track the versions CI actually exercises rather than the
+oldest release that once worked: `tree-sitter>=0.25` (was `0.22`, against 0.26
+current), `ast-grep-py>=0.45` (was `0.37`), `jedi>=0.20`, `grimp>=3.15`,
+`networkx>=3.4`, and the grammar wheels to their current majors. The old floors
+permitted resolving an install two API generations behind anything under test.
+
+*Considered and declined, with a receipt:* `griffe` resolves class bases to
+canonical paths and would have been the obvious library for `ctx impls`. A
+differential run over every base in this repo found **zero disagreements** with
+the tier resolver already in place, while griffe costs 0.79 s of load, a new
+dependency, and Python-only coverage — the tier resolver answers for Rust, Go
+and TypeScript through the same path. `PyCG` was also evaluated and is
+unusable: 0.0.8 ships a `PyCG/` package directory whose own modules import
+`pycg`, so it fails at import.
+
 ### Routing gains dimensions beyond price — and a provenance rule
 
 Routing chose between models on capability tier and price alone. Both are
