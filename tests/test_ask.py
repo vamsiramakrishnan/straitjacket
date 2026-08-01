@@ -142,6 +142,38 @@ def test_missing_intent_suggests_but_does_not_run():
     assert "--intent diagnose" in msg and "advisory" in msg
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "what implements Profile",
+        "what subclasses Profile",
+        "which classes extend Profile",
+        "show me the implementations of Profile",
+    ],
+)
+def test_verb_shaped_questions_name_the_verb_not_an_intent(question):
+    """An implements-shaped question is one graph lookup, not an evidence
+    plan. Every other question shape got a suggestion; this one used to get
+    the bare menu and nothing to try next."""
+    from ctx import ask
+
+    with pytest.raises(ask.AskError) as e:
+        ask.compile_ask(None, question)
+    msg = str(e.value)
+    assert "ctx impls" in msg, msg
+    assert "advisory" in msg
+    assert "looks like --intent" not in msg, "a verb answer must not pose as an intent"
+
+
+def test_intent_suggestion_still_wins_for_plan_shaped_questions():
+    """The verb table must not shadow the intent table."""
+    from ctx import ask
+
+    with pytest.raises(ask.AskError) as e:
+        ask.compile_ask(None, "what could break if Store changes")
+    assert "--intent impact" in str(e.value)
+
+
 def test_unknown_intent_teaches_close_match():
     from ctx import ask
 

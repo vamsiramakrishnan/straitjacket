@@ -1,9 +1,16 @@
 # Why straitjacket
 
+**Short version.** A 304,113-token log costs ~210 tokens in your transcript. The same
+tasks finish in 28% fewer turns, 33% less wall-clock time, and 17% less cost. The
+prompt-cache hit rate holds at 96.5–98.1%. Nothing is dropped that you cannot retrieve
+by address. This page is the argument for *why those move together* rather than trading
+off against each other — and it is the one place the cost model, the cache behaviour and
+the quality effect are derived rather than asserted.
+
 Coding agents do not just consume context once. They carry prior tool output through a
 probabilistic control loop, turn after turn. That makes context management a
 cumulative-cost problem across tokens, cache behavior, turns, latency, and decision
-quality.
+quality — which is why the four numbers above are one result, not four.
 
 straitjacket changes how the interaction is stored: the complete evidence goes into an
 immutable, addressable store, and the transcript keeps only a bounded index into it.

@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,159 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,339 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -21,15 +21,37 @@ round — a routine `mcp__github__list_commits` alone is ~19.8k tokens per
 round. Then compaction deletes the one line you needed, with no trace it
 ever existed.
 
-straitjacket stops that at the source. The raw bytes go into an immutable
-local store, and the transcript gets a small, deterministic digest instead.
-The digest is a fixed size no matter how much output the command produced.
-Every byte it leaves out keeps an address, so you can pull the exact
-original bytes back at any later turn.
+**straitjacket stops that at the source.**
 
-You run coding agents daily and pay per token per turn. This keeps the
-window small, keeps the cost down, and keeps the failing test line
-retrievable after compaction would have dropped it.
+| | |
+|---|---|
+| **304,113 → ~210** | tokens a full test log costs your transcript |
+| **−28% · −33% · −17%** | turns · wall-clock time · cost, on the same tasks |
+| **96.5–98.1%** | prompt-cache hit rate held — Headroom measured 80.6–84.2% |
+| **zero** | evidence dropped without a retrievable address |
+
+What that buys you:
+
+- **Your agent stops going blind halfway through.** It can run the noisy
+  suite, tail the long build and sweep the big repository without spending
+  its whole window on the output.
+- **You stop re-paying for the same bytes every turn.** A 304,113-token log
+  costs ~210 tokens in your transcript, and stays that size however loud the
+  command was. Charged once, not on every round for the rest of the session.
+- **Nothing you needed vanishes quietly.** Every byte left out keeps an exact
+  address — still retrievable long after compaction would have dropped it.
+- **You can check what the agent tells you.** The same address returns the
+  same bytes tomorrow, next week, on another machine.
+- **Sessions finish sooner, not just cheaper.** A small window keeps the cache
+  warm and the plan intact; fewer tokens is the mechanism, finishing sooner is
+  the result.
+- **It works with the agent you already use.** Antigravity, Claude Code and
+  Codex — one command, merged into your existing config, never clobbering it.
+
+Every number above has a receipt in [`evals/`](evals/); the house rule is
+*receipts before doctrine*.
+
+### Then, how it works
 
 <div align="center">
 
@@ -40,8 +62,10 @@ retrievable after compaction would have dropped it.
 
 </div>
 
-Raw bytes stop at the gate. The transcript carries the digest and its
-addresses. Any address resolves back to the exact original bytes later.
+Raw bytes stop at the gate: they go into an immutable local store, and the
+transcript gets a small, deterministic digest instead — a fixed size no matter
+how much output the command produced. The digest carries addresses, and any
+address resolves back to the exact original bytes at any later turn.
 
 > **New here?** The CLI is `ctx`, installed from a clone (no PyPI release yet).
 > The gentlest introduction is **[How it works](docs/HOW-IT-WORKS.md)** — one
@@ -517,7 +541,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,074 acceptance-oriented determinism & security tests
+└── tests/             # 1,339 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -565,6 +589,9 @@ ctx get repo:svc/retry.py --symbol Handler.process
 ctx stats repo:src/ctx/hook.py     # priced symbol outline: 12.8–54.5× cheaper than the file
 ctx map --budget 500 --focus payments
 ctx impact register_span --depth 4
+ctx callers Handler.process       # scoped: the caller's file defines or imports it
+ctx callers Handler.process --unscoped   # + repo-wide name matches, labelled
+ctx impls Profile                 # what implements or extends this type
 ctx diff run:7bd91f2a4c3d run:9ae02c17b5ff
 ```
 
@@ -668,7 +695,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 1,074 tests: determinism, budgets, hook contract, escapes
+pytest        # 1,339 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

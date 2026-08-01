@@ -39,13 +39,53 @@ def test_grammar_wheel_parser_builds():
 
 
 @pytest.mark.skipif(not HAS_TS_PY, reason="tree-sitter-python grammar wheel absent")
-def test_ts_parser_falls_through_to_grammar_wheel():
-    """_ts_parser tries the bundles first (absent here) then grammar
-    wheels — it must return a working parser, not raise."""
+def test_ts_parser_returns_a_working_parser():
     from ctx.skeleton import _ts_parser
 
     parser = _ts_parser("python")
     assert parser.parse(b"x = 1\n").root_node.type == "module"
+
+
+@pytest.mark.skipif(not HAS_TS_PY, reason="tree-sitter-python grammar wheel absent")
+def test_grammar_wheel_is_preferred_over_the_bundles(monkeypatch):
+    """The maintained grammar wheel wins over a bundle that merely imports.
+
+    _TS_GRAMMAR_MODULES documents the wheels as "the maintained, offline
+    path" and the bundles as lagging the core API and fetching parsers at
+    runtime — but selection tried the bundles FIRST, so a stale bundle
+    present in the environment silently outranked a current wheel. This
+    injects a fake bundle that would win under the old order.
+    """
+    import sys
+    import types
+
+    sentinel = object()
+    fake = types.ModuleType("tree_sitter_language_pack")
+    fake.get_parser = lambda _name: sentinel  # noqa: ARG005
+    monkeypatch.setitem(sys.modules, "tree_sitter_language_pack", fake)
+
+    from ctx.skeleton import _ts_parser
+
+    parser = _ts_parser("python")
+    assert parser is not sentinel, "a lagging bundle outranked the grammar wheel"
+    assert parser.parse(b"x = 1\n").root_node.type == "module"
+
+
+def test_bundles_remain_a_fallback_for_undeclared_languages(monkeypatch):
+    """Reordering must not remove the bundles: a language with no declared
+    wheel still resolves through them."""
+    import sys
+    import types
+
+    sentinel = object()
+    fake = types.ModuleType("tree_sitter_language_pack")
+    fake.get_parser = lambda _name: sentinel  # noqa: ARG005
+    monkeypatch.setitem(sys.modules, "tree_sitter_language_pack", fake)
+
+    from ctx import skeleton
+
+    monkeypatch.setitem(skeleton._TS_PACK_NAMES, "ruby", "ruby")
+    assert skeleton._ts_parser("ruby") is sentinel
 
 
 @pytest.mark.skipif(not HAS_TS_JS, reason="tree-sitter-javascript grammar wheel absent")

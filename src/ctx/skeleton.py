@@ -482,17 +482,23 @@ def _ts_parser(language: str):
     name = _TS_PACK_NAMES.get(language)
     if name is None:
         raise BackendUnavailable(f"tree-sitter: no query set for {language!r}")
-    # Preferred: the bundle packages (one import, many languages) when they
-    # work; then individual grammar wheels (the maintained, offline path).
+    # Preferred: the individual grammar wheels — this file's own
+    # _TS_GRAMMAR_MODULES note already calls them "the maintained, offline
+    # path", and says the bundles lag the core API and that language_pack
+    # fetches parsers at runtime (a network 403 in a sandbox). The selection
+    # order contradicted that note and tried the lagging, network-dependent
+    # bundles first; a stale bundle that imports cleanly would win over a
+    # current wheel. The bundles remain a fallback for languages no wheel is
+    # declared for.
+    parser = _ts_grammar_parser(language)
+    if parser is not None:
+        return parser
     for mod_name in ("tree_sitter_language_pack", "tree_sitter_languages"):
         try:
             mod = __import__(mod_name)
             return mod.get_parser(name)
         except Exception:
             continue
-    parser = _ts_grammar_parser(language)
-    if parser is not None:
-        return parser
     raise BackendUnavailable("tree-sitter bindings not importable ([code] extra)")
 
 

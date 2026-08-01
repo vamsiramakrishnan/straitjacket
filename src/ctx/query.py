@@ -430,15 +430,18 @@ def _callgraph(qc: _Ctx):
 
 
 def _stage_callers(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """Rows carry the CALL-SITE line, not the caller's definition line: a
+    site stream whose coordinates point at a `def` cannot be zoomed to the
+    call it claims to have found. Unscoped edges are excluded — a query
+    algebra row is consumed as a fact by later stages."""
     symbol = _need_arg(args, "callers", "a <Symbol>")
     cg, g = _callgraph(qc)
-    name, targets = cg._resolve(g, symbol)
     rows = []
-    if targets:
-        for qual in g.in_edges.get(name, []):
+    for t in cg._resolve_target(g, symbol):
+        for qual, line, tier in g.in_edges.get(t, []):
             n = g.nodes.get(qual)
-            if n is not None:
-                rows.append({"file": n.rel, "line": n.lineno, "symbol": qual})
+            if n is not None and tier != cg._TIER_REPO:
+                rows.append({"file": n.rel, "line": line, "symbol": qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
     return Stream("sites", rows)
 
@@ -446,15 +449,17 @@ def _stage_callers(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "callees", "a <Symbol>")
     cg, g = _callgraph(qc)
-    _, targets = cg._resolve(g, symbol)
     rows = []
     seen: set[str] = set()
-    for t in targets:
-        for callee in g.out_edges.get(t.qual, []):
-            for n in g.defs_by_name.get(callee, []):
-                if n.qual not in seen:
-                    seen.add(n.qual)
-                    rows.append({"file": n.rel, "line": n.lineno, "symbol": n.qual})
+    for t in cg._resolve_target(g, symbol):
+        for _name, _line, quals, tier in g.out_edges.get(t, []):
+            if tier == cg._TIER_REPO:
+                continue
+            for qual in quals:
+                n = g.nodes.get(qual)
+                if n is not None and qual not in seen:
+                    seen.add(qual)
+                    rows.append({"file": n.rel, "line": n.lineno, "symbol": qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
     return Stream("sites", rows)
 
@@ -463,27 +468,12 @@ def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "impact", "a <Symbol>")
     depth = max(1, min(_flag(args, "--depth", 6, int), 6))
     cg, g = _callgraph(qc)
-    name, targets = cg._resolve(g, symbol)
     rows: list[dict] = []
-    if targets:
-        reached: dict[str, int] = {}
-        frontier = {name}
-        for d in range(1, depth + 1):
-            nxt: set[str] = set()
-            for nm in frontier:
-                for caller in g.in_edges.get(nm, []):
-                    if caller not in reached:
-                        reached[caller] = d
-                        nxt.add(caller.split(".")[-1])
-            frontier = nxt
-            if not frontier:
-                break
-        for qual, d in reached.items():
-            n = g.nodes.get(qual)
-            if n is not None:
-                rows.append(
-                    {"file": n.rel, "line": n.lineno, "symbol": qual, "depth": d}
-                )
+    targets = cg._resolve_target(g, symbol)
+    for qual, d in cg._reachable(g, targets, depth, False).items():
+        n = g.nodes.get(qual)
+        if n is not None:
+            rows.append({"file": n.rel, "line": n.lineno, "symbol": qual, "depth": d})
     rows.sort(key=lambda r: (r["depth"], r["file"], r["line"], r["symbol"]))
     return Stream("sites", rows)
 

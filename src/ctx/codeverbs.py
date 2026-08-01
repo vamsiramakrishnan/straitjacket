@@ -268,11 +268,34 @@ def resolve_refs(
     return sites, "ast (textual)"
 
 
+def _check_refs_symbol(symbol: str) -> None:
+    """``refs`` takes a NAME (``foo`` or ``Class.method``), not a selector.
+
+    Given ``repo:<path>:<Symbol>`` — which is ``ctx def``'s grammar, and a
+    natural thing to try — the ladder found nothing at the SCIP or jedi rungs
+    and fell through to the word-boundary regex, which matched the symbol's
+    own name inside the argument and returned string literals as references.
+    A degradation that turns a more precise question into a less precise
+    answer is worse than an error, so this is an error.
+    """
+    t = (symbol or "").strip()
+    if t and all(p.isidentifier() for p in t.split(".")):
+        return
+    hint = "symbol grammar: <name> or <Class.method>"
+    if t.startswith("repo:") or "/" in t:
+        hint += (
+            f"; for a file-scoped lookup use 'ctx def {t}', "
+            f"or 'ctx refs <name> --path <subtree>' to narrow references"
+        )
+    raise RetrievalError(f"unparseable symbol {symbol!r}; {hint}")
+
+
 def cmd_refs(
     store: Store, ws: Workspace, symbol: str, scope_path: str | None = None
 ) -> str:
     """Reference sites as coordinates: deterministic (path, line) order,
     budget-capped with continuation, snapshot-on-first-cite per file."""
+    _check_refs_symbol(symbol)
     budget = ws.config.budgets
     cap = budget.max_matches
 

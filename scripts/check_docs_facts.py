@@ -10,6 +10,12 @@ asserts the prose agrees — so a number can only be wrong if the code is too.
 Authoritative sources:
   - product version   -> pyproject.toml  [project].version
   - ctx ask intents   -> src/ctx/ask.py  INTENTS dict (counted via AST)
+  - test total        -> tests/**/*.py   test functions (counted via AST)
+
+The test total was named above as one of the three drifting facts but was
+never actually asserted, so it drifted furthest: the README said 1,159 while
+the tree held 1,573. Counting is by AST rather than by running pytest, so the
+check stays pure-stdlib and costs milliseconds.
 
 Pure stdlib, no third-party imports, so it runs anywhere the hook does.
 """
@@ -49,6 +55,49 @@ def intent_count(root: Path) -> int:
     raise RuntimeError("could not find the INTENTS dict in src/ctx/ask.py")
 
 
+def test_count(root: Path) -> int:
+    """Count test functions across tests/ via AST.
+
+    Counts module-level `def test_*` plus methods named `test_*` inside
+    `class Test*`, which is what pytest collects by default. Parametrised
+    cases expand at run time and are deliberately NOT multiplied out — the
+    figure the README states is "tests written", and a stable definition
+    matters more than matching a pytest tally that moves with every id.
+    """
+    total = 0
+    for path in sorted((root / "tests").rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name.startswith("test_"):
+                    total += 1
+            elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                for sub in node.body:
+                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        if sub.name.startswith("test_"):
+                            total += 1
+    return total
+
+
+_TEST_CLAIM = re.compile(r"(\d[\d,]*)\s+(test functions|tests)\b", re.IGNORECASE)
+
+
+def _stated_test_counts(text: str) -> list[tuple[str, str]]:
+    """Every '<number> test functions' / '<number> tests' claim, as (n, noun).
+
+    Anchored on a leading digit: a bare `[\\d,]*` also matches a lone comma
+    (as in "…, tests…"), which reduces to an empty string once separators are
+    stripped.
+
+    Both nouns are matched, but only "test functions" is a claim this checker
+    can honour — see the note in main() on why the bare noun is rejected.
+    """
+    return _TEST_CLAIM.findall(text)
+
+
 def main() -> int:
     root = Path.cwd().resolve()
     failures: list[str] = []
@@ -79,6 +128,29 @@ def main() -> int:
                         f"{count} ({word}). Update the count."
                     )
 
+    # 3. Any stated test total must match what the tree actually holds.
+    #
+    # The docs must say "N test functions", not "N tests". Those are different
+    # numbers — parametrised cases expand at collection, so pytest reports
+    # more than the tree defines — and the bare noun invites whichever figure
+    # was on screen that day. This is exactly how the README ended up carrying
+    # two different stale counts (1,159 and 1,074) in three places. Only the
+    # AST-countable claim is checkable without running pytest, so only the
+    # AST-countable claim is allowed.
+    tests = test_count(root)
+    for stated, noun in _stated_test_counts(readme):
+        if noun.lower() != "test functions":
+            failures.append(
+                f"README.md: says '{stated} {noun}', which nothing can verify "
+                f"cheaply (pytest expands parametrised cases). Write "
+                f"'{tests:,} test functions' — that figure is checked."
+            )
+        elif int(stated.replace(",", "")) != tests:
+            failures.append(
+                f"README.md: claims '{stated} test functions' but tests/ "
+                f"defines {tests:,}. Update it."
+            )
+
     if failures:
         print("Documentation fact-check failures:", file=sys.stderr)
         for f in failures:
@@ -86,7 +158,8 @@ def main() -> int:
         return 1
 
     print(
-        f"Documentation facts: PASS (version v{version}, {count} ctx ask intents)"
+        f"Documentation facts: PASS (version v{version}, "
+        f"{count} ctx ask intents, {tests:,} test functions)"
     )
     return 0
 

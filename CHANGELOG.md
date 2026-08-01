@@ -6,6 +6,126 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+### The call graph gets scope, a second language, and its disclosure back
+
+`ctx callers/callees/impact` were the only code verbs that did not ride the
+resolution ladder the rest of the harness already uses. They built a private
+index that bound a call to `foo` to *every* in-repo `def foo`, and the cost was
+measured on this repo: 152 of 2,964 definition names collide, putting **501 of
+3,313 definitions (15%) behind an ambiguous name**.
+
+Three defects fell out of that, all reproduced as regression tests in
+`tests/test_callgraph.py`:
+
+- **`callees` merged same-named definitions silently.** `ctx callees render`
+  unioned the callees of 22 unrelated `render` methods into one 31-call answer
+  — `statusline`'s `_fmt_usd` beside `jsonprof`'s `_dominant_array` — with no
+  note. `cmd_callers` emitted the ambiguity note; `cmd_callees` never did.
+- **A qualified query silently answered the unqualified question.**
+  `in_edges` was keyed by *unqualified* callee name, so
+  `ctx callers LogTemplateProfile.detect` returned 32 rows labelled "exact by
+  name", including `hosts.detect_all` — which calls the unrelated module-level
+  `hosts.detect`. Worse, narrowing the target to one definition is what
+  suppressed the ambiguity note, so disambiguating successfully hid the warning.
+- **`impact` disclosed nothing at all** and walked an unqualified frontier, so
+  one collision at depth 1 pulled its whole cone in: `ctx impact put_blob`
+  reported 1,902 reached out of 3,313 definitions.
+
+**Resolution is now tiered and its confidence is on every edge.** A call site
+binds to a definition in the calling file (`local`), else in a file the caller
+*directly* imports (`import`), else repo-wide (`repo`). Only the first two are
+stated as fact; `repo` edges are held back by default with their count and the
+`--unscoped` flag that resolves them (CONTRIBUTING §4). Direct, not transitive,
+is what discriminates: `ctx.hosts` *does* transitively reach
+`ctx.digest.logprof` through installer→hook→digest.
+
+Measured on this repo, `ctx callers LogTemplateProfile.detect`:
+
+| | v1 | v2 |
+|---|---|---|
+| rows | 32, labelled "exact by name" | 1 |
+| answer | incl. `hosts.detect_all` (wrong) | `detect_profile` `digest/__init__.py:61` |
+| ambiguity note | none | omission count + `--unscoped` |
+
+That single row is the same site `ctx refs LogTemplateProfile.detect` finds via
+jedi — the precise answer was already in the tree, and the call-graph verbs
+were the only ones not asking for it.
+
+**Nothing here is hand-rolled that a declared dependency already does.** Nodes
+outside Python come from `ctx.skeleton` (tree-sitter, 20 extensions,
+content-cached); call sites come from one ast-grep pattern (`$F($$$A)`) over
+the 16 languages `ctx.astgrep` already maps; the import graph is the one
+`ctx.repomap._grimp_edges` already resolves; traversal uses networkx when
+importable. Every rung is an existing optional extra with the stdlib `ast` path
+as the always-available fallback (CONTRIBUTING §1), and the rung in force is
+printed in the header of every answer.
+
+- **Polyglot edges** — the v0.15.0 note deferred tree-sitter breadth "pending a
+  measured win"; the win is that `ctx stats` on `native/ctx-hook-native/src/main.rs`
+  returned 13 symbols and spans while `ctx callers lexical_normalize` answered
+  *"no definition ... in workspace Python sources"*. It now returns both call
+  sites. Rust/Go/TypeScript covered by `tests/test_callgraph_polyglot.py`;
+  `CTX_CALLGRAPH_ENGINE=ast` pins the Python-only corpus.
+- **New `ctx impls`** — type hierarchy, the question `ctx q 'refs Profile |
+  group file'` could only approximate (30 rows mixing import lines with class
+  declarations and test files). `ctx impls Profile` returns the 14 subtypes
+  with coordinates, plus the inverse `extends:` direction.
+- **New `ctx cycles`** — circular imports between files, or mutual recursion
+  with `--calls`. Operational, not aesthetic: a circular import is why the
+  module fails to load. On this repo it finds 5 import cycles, including
+  `query → filesets → facts → query` (the last two lazy, inside functions, so
+  no single file reads as circular). Components come from Tarjan via networkx
+  when importable, else an **iterative** stdlib implementation — recursion
+  depth in Tarjan is the longest path, so the textbook recursive form turns a
+  5,000-file import chain from a diagnostic into a `RecursionError`. Both
+  engines are asserted to return identical output.
+  Call cycles use scoped edges only: an unscoped edge does not merely add a
+  row to a cycle search, it fuses unrelated components into one phantom cycle.
+- **Call-site lines on every caller row.** v1 printed the caller's *definition*
+  range, so seeing the actual call cost another read; two calls from one
+  function collapsed to one row. `digest_output` now shows both
+  `digest/__init__.py:249` and `:250`.
+- **First-party and test callers are grouped**, not interleaved: 26 of 37
+  `callers put_blob` rows were tests, sorted in among the 11 production callers
+  that were the answer.
+- **Per-file caching.** The cache key was one `stat_fingerprint` over the whole
+  corpus, so any edit rebuilt everything — 170 ms warm against **1,754 ms**
+  after a single-file touch, on the hot path of an agent that edits constantly.
+  Units are keyed per file: the same edit now costs **446 ms**, a 3.9× cut,
+  while covering 259 files instead of 95.
+- **`ctx refs` rejects an out-of-grammar target** instead of degrading to a
+  textual scan. Given `repo:<path>:<Symbol>` (which is `ctx def`'s grammar) the
+  ladder fell past SCIP and jedi to a word-boundary regex that matched the
+  symbol's own name inside the argument and returned argparse string literals
+  as "references". A degradation that turns a more precise question into a less
+  precise answer is worse than an error.
+
+#### Engine selection follows its own documentation again
+
+`ctx.skeleton._TS_GRAMMAR_MODULES` documents the individual grammar wheels as
+"the maintained, offline path", and the bundles (`tree_sitter_language_pack`,
+`tree_sitter_languages`) as lagging the core API and fetching parsers at
+runtime — a network 403 in a sandbox. Selection then tried the bundles
+**first**, so a stale bundle that merely imported outranked a current wheel.
+The order now matches the note; the bundles stay as the fallback for languages
+no wheel is declared for. Both directions are pinned in
+`tests/test_treesitter_backend.py`.
+
+Dependency floors now track the versions CI actually exercises rather than the
+oldest release that once worked: `tree-sitter>=0.25` (was `0.22`, against 0.26
+current), `ast-grep-py>=0.45` (was `0.37`), `jedi>=0.20`, `grimp>=3.15`,
+`networkx>=3.4`, and the grammar wheels to their current majors. The old floors
+permitted resolving an install two API generations behind anything under test.
+
+*Considered and declined, with a receipt:* `griffe` resolves class bases to
+canonical paths and would have been the obvious library for `ctx impls`. A
+differential run over every base in this repo found **zero disagreements** with
+the tier resolver already in place, while griffe costs 0.79 s of load, a new
+dependency, and Python-only coverage — the tier resolver answers for Rust, Go
+and TypeScript through the same path. `PyCG` was also evaluated and is
+unusable: 0.0.8 ships a `PyCG/` package directory whose own modules import
+`pycg`, so it fails at import.
+
 ### Routing gains dimensions beyond price — and a provenance rule
 
 Routing chose between models on capability tier and price alone. Both are

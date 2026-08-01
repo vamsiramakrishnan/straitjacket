@@ -169,6 +169,8 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "callers": ("retrieve", "cmd_callers", True),
     "callees": ("retrieve", "cmd_callees", True),
     "impact": ("retrieve", "cmd_impact", True),
+    "impls": ("retrieve", "cmd_impls", True),
+    "cycles": ("retrieve", "cmd_cycles", True),
     "q": ("retrieve", "cmd_q", True),
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
@@ -505,13 +507,28 @@ def _build_parser():
     p_diag = sub.add_parser("diag", help="deterministic lint/syntax digest")
     p_diag.add_argument("path", nargs="?", help="restrict to a subtree")
 
+    _UNSCOPED_HELP = (
+        "also include edges resolved only by repo-wide name match (the "
+        "caller's file neither defines nor imports the target) — candidates, "
+        "not facts"
+    )
     p_callers = sub.add_parser("callers", help="who calls this symbol (call graph)")
     p_callers.add_argument("symbol", help="name or Class.method dotted name")
+    p_callers.add_argument("--unscoped", action="store_true", help=_UNSCOPED_HELP)
     p_callees = sub.add_parser("callees", help="what this symbol calls (call graph)")
     p_callees.add_argument("symbol", help="name or Class.method dotted name")
+    p_callees.add_argument("--unscoped", action="store_true", help=_UNSCOPED_HELP)
     p_impact = sub.add_parser("impact", help="transitive callers / blast radius")
     p_impact.add_argument("symbol", help="name or Class.method dotted name")
     p_impact.add_argument("--depth", type=int, default=6, help="max hops (≤6)")
+    p_impact.add_argument("--unscoped", action="store_true", help=_UNSCOPED_HELP)
+    p_cycles = sub.add_parser("cycles", help="circular imports, or mutual recursion")
+    p_cycles.add_argument("--calls", action="store_true",
+                          help="cycles in the call graph instead of the import graph")
+    p_cycles.add_argument("--unscoped", action="store_true", help=_UNSCOPED_HELP)
+    p_impls = sub.add_parser("impls", help="what implements/extends this type (hierarchy)")
+    p_impls.add_argument("symbol", help="type name or dotted qualified name")
+    p_impls.add_argument("--depth", type=int, default=6, help="max subtype hops (≤6)")
 
     p_q = sub.add_parser(
         "q", help="total pipeline algebra: '<stage> | <stage> | …' over typed streams"
