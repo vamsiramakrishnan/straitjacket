@@ -290,6 +290,132 @@ def test_test_callers_are_grouped_not_interleaved(ws_store):
     assert prod_idx < test_idx, "production callers come first"
 
 
+# --------------------------------------------------------------- cycles
+def test_cycles_finds_a_real_import_cycle(ws_store):
+    """`ring_a` and `ring_b` import each other; nothing else in the corpus does."""
+    from ctx.callgraph import cmd_cycles
+
+    ws, store = ws_store
+    (ws.root / "pkg/ring_a.py").write_text(
+        "from pkg.ring_b import bee\n\n\ndef ay():\n    return bee()\n", encoding="utf-8"
+    )
+    (ws.root / "pkg/ring_b.py").write_text(
+        "from pkg.ring_a import ay\n\n\ndef bee():\n    return 1\n", encoding="utf-8"
+    )
+    out = cmd_cycles(store, ws)
+    assert "import cycles: 1" in out
+    assert "repo:pkg/ring_a.py" in out and "repo:pkg/ring_b.py" in out
+
+
+def test_cycles_reports_acyclic_plainly(ws_store):
+    from ctx.callgraph import cmd_cycles
+
+    ws, store = ws_store
+    out = cmd_cycles(store, ws)
+    assert "import cycles: 0" in out
+    assert "acyclic" in out
+
+
+def test_call_cycles_find_mutual_recursion(ws_store):
+    from ctx.callgraph import cmd_cycles
+
+    ws, store = ws_store
+    (ws.root / "pkg/recur.py").write_text(
+        "def ping(n):\n    return pong(n - 1)\n\n\ndef pong(n):\n    return ping(n - 1)\n",
+        encoding="utf-8",
+    )
+    out = cmd_cycles(store, ws, calls=True)
+    assert "call cycles: 1" in out
+    assert "ping" in out and "pong" in out
+
+
+def test_call_cycles_exclude_unscoped_edges_by_default(ws_store):
+    """An unscoped edge does not merely add a row to a cycle search — it fuses
+    unrelated components into one phantom cycle. `pkg/loose.py` calls `leaf`
+    without importing it, so that edge must not create a cycle."""
+    from ctx.callgraph import _TIER_REPO, _load_graph, cmd_cycles
+
+    ws, store = ws_store
+    # Make the loose (unscoped) call mutual, so including it WOULD form a cycle.
+    (ws.root / "pkg/core.py").write_text(
+        (ws.root / "pkg/core.py").read_text(encoding="utf-8") + "\n\ndef back():\n    return use()\n",
+        encoding="utf-8",
+    )
+    g = _load_graph(store, ws)
+    assert any(t == _TIER_REPO for cs in g.in_edges.values() for _, _, t in cs)
+
+    assert "call cycles: 0" in cmd_cycles(store, ws, calls=True)
+
+
+def test_cycles_are_deterministic(ws_store):
+    from ctx.callgraph import cmd_cycles
+
+    ws, store = ws_store
+    assert cmd_cycles(store, ws) == cmd_cycles(store, ws)
+    assert cmd_cycles(store, ws, calls=True) == cmd_cycles(store, ws, calls=True)
+
+
+def test_scc_engine_agrees_with_and_without_networkx(monkeypatch):
+    """The stdlib iterative Tarjan must return exactly what networkx does —
+    the engine is a speed choice, not a semantic one."""
+    import builtins
+
+    from ctx.callgraph import _sccs
+
+    adj = {
+        "a": ["b"], "b": ["c"], "c": ["a"],       # 3-cycle
+        "d": ["e"], "e": ["d"],                    # 2-cycle
+        "f": ["g"], "g": [],                       # acyclic
+        "h": ["h"],                                # self-loop
+    }
+    with_nx = _sccs(adj)
+
+    real_import = builtins.__import__
+
+    def no_networkx(name, *a, **kw):
+        if name == "networkx":
+            raise ImportError("blocked for this test")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_networkx)
+    without_nx = _sccs(adj)
+
+    assert with_nx == without_nx
+    assert with_nx == [["a", "b", "c"], ["d", "e"], ["h"]]
+
+
+def test_scc_iterative_survives_a_deep_chain(monkeypatch):
+    """Recursion depth in Tarjan is the longest path, so the recursive form
+    would blow the stack on a long import chain. 5,000 nodes is under the
+    module's _MAX_FILES bound and well over Python's recursion limit."""
+    import builtins
+
+    from ctx.callgraph import _sccs
+
+    n = 5000
+    adj = {f"n{i}": [f"n{i + 1}"] for i in range(n - 1)}
+    adj[f"n{n - 1}"] = ["n0"]  # close it into one big cycle
+
+    real_import = builtins.__import__
+
+    def no_networkx(name, *a, **kw):
+        if name == "networkx":
+            raise ImportError("blocked for this test")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_networkx)
+    comps = _sccs(adj)
+    assert len(comps) == 1 and len(comps[0]) == n
+
+
+def test_cli_wiring_cycles(ws_store, capsys):
+    from ctx.cli import main
+
+    ws, _ = ws_store
+    assert main(["--workspace", str(ws.root), "cycles"]) == 0
+    assert "import cycles" in capsys.readouterr().out
+
+
 # ------------------------------------------------------ caching / determinism
 def test_determinism_and_cache(ws_store):
     from ctx.callgraph import cmd_impact

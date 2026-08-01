@@ -39,6 +39,7 @@ different safety contracts. The mental model can stay small.
 | Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
 | Blast radius of a change | `ctx impact <symbol> --depth N` | Transitive callers (`--depth ≤ 6`) |
 | What implements a type | `ctx impls <Type> --depth N` | Subtypes with coordinates, plus what the type itself extends |
+| Why the import fails | `ctx cycles` / `ctx cycles --calls` | Circular imports between files, or mutual recursion between functions |
 | Lint/syntax digest | `ctx diag <path>` | Deterministic diagnostics without running a full linter into context |
 | A compiled investigation | `ctx plan …` / `ctx plan run …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
 
@@ -179,7 +180,15 @@ ctx callers Store.put_blob            # who calls it, with the call-site line
 ctx callees digest_output             # what it calls, in-repo only
 ctx impact Store.put_blob --depth 4   # transitive callers (blast radius)
 ctx impls Profile                     # what implements or extends this type
+ctx cycles                            # circular imports between files
+ctx cycles --calls                    # mutual recursion between functions
 ```
+
+`ctx cycles` answers an operational question, not an aesthetic one: a circular
+import is *why the module fails to load*, and a recursion cycle is *why the
+stack blew*. Components are found with Tarjan's algorithm (networkx when it is
+importable, an iterative stdlib implementation otherwise — identical output,
+verified by test) and printed largest first.
 
 Edges come from the languages the skeleton tier parses — Python, plus
 JavaScript, TypeScript, Go and Rust with the `[code]` extra. The engines in

@@ -202,6 +202,22 @@ def cmd_impact(ws, ns) -> int:
     return 0
 
 
+def cmd_cycles(ws, ns) -> int:
+    from ctx.callgraph import cmd_cycles as _cycles
+    from ctx.store import Store
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    print(
+        _cycles(
+            store,
+            ws,
+            calls=getattr(ns, "calls", False),
+            unscoped=getattr(ns, "unscoped", False),
+        )
+    )
+    return 0
+
+
 def cmd_impls(ws, ns) -> int:
     from ctx.callgraph import cmd_impls as _impls
     from ctx.store import Store

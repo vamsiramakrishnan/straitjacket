@@ -170,6 +170,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "callees": ("retrieve", "cmd_callees", True),
     "impact": ("retrieve", "cmd_impact", True),
     "impls": ("retrieve", "cmd_impls", True),
+    "cycles": ("retrieve", "cmd_cycles", True),
     "q": ("retrieve", "cmd_q", True),
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
@@ -521,6 +522,10 @@ def _build_parser():
     p_impact.add_argument("symbol", help="name or Class.method dotted name")
     p_impact.add_argument("--depth", type=int, default=6, help="max hops (≤6)")
     p_impact.add_argument("--unscoped", action="store_true", help=_UNSCOPED_HELP)
+    p_cycles = sub.add_parser("cycles", help="circular imports, or mutual recursion")
+    p_cycles.add_argument("--calls", action="store_true",
+                          help="cycles in the call graph instead of the import graph")
+    p_cycles.add_argument("--unscoped", action="store_true", help=_UNSCOPED_HELP)
     p_impls = sub.add_parser("impls", help="what implements/extends this type (hierarchy)")
     p_impls.add_argument("symbol", help="type name or dotted qualified name")
     p_impls.add_argument("--depth", type=int, default=6, help="max subtype hops (≤6)")

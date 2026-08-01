@@ -70,6 +70,17 @@ printed in the header of every answer.
   group file'` could only approximate (30 rows mixing import lines with class
   declarations and test files). `ctx impls Profile` returns the 14 subtypes
   with coordinates, plus the inverse `extends:` direction.
+- **New `ctx cycles`** — circular imports between files, or mutual recursion
+  with `--calls`. Operational, not aesthetic: a circular import is why the
+  module fails to load. On this repo it finds 5 import cycles, including
+  `query → filesets → facts → query` (the last two lazy, inside functions, so
+  no single file reads as circular). Components come from Tarjan via networkx
+  when importable, else an **iterative** stdlib implementation — recursion
+  depth in Tarjan is the longest path, so the textbook recursive form turns a
+  5,000-file import chain from a diagnostic into a `RecursionError`. Both
+  engines are asserted to return identical output.
+  Call cycles use scoped edges only: an unscoped edge does not merely add a
+  row to a cycle search, it fuses unrelated components into one phantom cycle.
 - **Call-site lines on every caller row.** v1 printed the caller's *definition*
   range, so seeing the actual call cost another read; two calls from one
   function collapsed to one row. `digest_output` now shows both

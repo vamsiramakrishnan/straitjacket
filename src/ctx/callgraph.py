@@ -62,7 +62,12 @@ from ctx.store import Store
 from ctx.textutil import fmt_int
 from ctx.workspace import Workspace, stat_fingerprint
 
-_FORMAT = "ctx.callgraph/v2"
+#: v2.1 adds the resolved import edges to the serialized graph so `ctx cycles`
+#: reads them from cache instead of re-deriving them. The suffix is part of
+#: every cache key, so graphs written by v2 are simply not found — a stale
+#: graph missing the new field would otherwise report "no cycles", and a
+#: wrong answer from a cache is worse than a rebuild.
+_FORMAT = "ctx.callgraph/v2.1"
 _MAX_FILES = 5000
 _MAX_DEPTH = 6  # hard bound on impact/reachability recursion
 _MAX_ROWS = 20  # per-section row cap; the remainder is declared, never dropped
@@ -121,6 +126,8 @@ class _Graph:
     out_edges: dict[str, list[tuple[str, int, list[str], str]]] = field(default_factory=dict)
     # base qual -> [subclass quals]
     subclasses: dict[str, list[str]] = field(default_factory=dict)
+    # file -> files it directly imports (the scoping relation, kept for cycles)
+    imports: dict[str, list[str]] = field(default_factory=dict)
     engines: dict[str, str] = field(default_factory=dict)  # stage -> engine label
 
 
@@ -397,6 +404,7 @@ def _link(ws: Workspace, units: dict[str, _Unit]) -> _Graph:
 
     imports_of, engine = _import_edges(ws, set(units), units)
     g.engines["scoping"] = engine
+    g.imports = {k: sorted(v) for k, v in sorted(imports_of.items())}
     engines = {u.engine.split("/")[0] for u in units.values()}
     g.engines["nodes"] = "+".join(sorted(engines)) if engines else "none"
 
@@ -518,6 +526,7 @@ def _graph_to_json(g: _Graph) -> dict[str, Any]:
         "in_edges": {k: [list(e) for e in v] for k, v in g.in_edges.items()},
         "out_edges": {k: [[a, b, list(c), d] for a, b, c, d in v] for k, v in g.out_edges.items()},
         "subclasses": g.subclasses,
+        "imports": g.imports,
         "engines": g.engines,
     }
 
@@ -533,6 +542,7 @@ def _graph_from_json(d: dict[str, Any]) -> _Graph:
         k: [(e[0], int(e[1]), list(e[2]), e[3]) for e in v] for k, v in d["out_edges"].items()
     }
     g.subclasses = {k: list(v) for k, v in d["subclasses"].items()}
+    g.imports = {k: list(v) for k, v in (d.get("imports") or {}).items()}
     g.engines = dict(d.get("engines") or {})
     return g
 
@@ -570,7 +580,9 @@ def _is_production(rel: str) -> bool:
 def _header(g: _Graph, verb: str, symbol: str, extra: str = "") -> list[str]:
     eng = f"nodes {g.engines.get('nodes', '?')} · scoping {g.engines.get('scoping', '?')}"
     tail = f" · {extra}" if extra else ""
-    return [f"[ctx {verb} {symbol} · {eng}{tail}]"]
+    # `cycles` takes no symbol; without this the header carries a double space.
+    head = f"ctx {verb} {symbol}".rstrip()
+    return [f"[{head} · {eng}{tail}]"]
 
 
 def _ambiguity_note(g: _Graph, symbol: str, targets: list[str]) -> list[str]:
@@ -777,6 +789,127 @@ def cmd_impact(
         )
     out.append("next:")
     out.append(f"  ctx callers {symbol}   (direct only)")
+    return "\n".join(out)
+
+
+def _sccs(adj: dict[str, list[str]]) -> list[list[str]]:
+    """Strongly connected components, largest first, members sorted.
+
+    networkx when importable — the same optional rung ``repomap`` already
+    ranks with — else an ITERATIVE Tarjan. Iterative, not the textbook
+    recursive form, because the recursion depth is the length of the longest
+    path in the graph: a 5,000-file import chain would hit Python's recursion
+    limit and turn a diagnostic into a crash.
+
+    Output order is fully determined (size, then members) so the answer is
+    byte-identical across runs and engines.
+    """
+    nodes = sorted(set(adj) | {t for v in adj.values() for t in v})
+    try:
+        import networkx as nx
+
+        dg = nx.DiGraph()
+        dg.add_nodes_from(nodes)
+        for src in sorted(adj):
+            for dst in sorted(adj[src]):
+                dg.add_edge(src, dst)
+        comps = [sorted(c) for c in nx.strongly_connected_components(dg)]
+    except Exception:
+        index: dict[str, int] = {}
+        low: dict[str, int] = {}
+        on_stack: set[str] = set()
+        stack: list[str] = []
+        comps = []
+        counter = 0
+        for root in nodes:
+            if root in index:
+                continue
+            # (node, iterator over its successors) — an explicit call stack.
+            work: list[tuple[str, list[str]]] = [(root, sorted(adj.get(root, [])))]
+            index[root] = low[root] = counter
+            counter += 1
+            stack.append(root)
+            on_stack.add(root)
+            while work:
+                node, succ = work[-1]
+                if succ:
+                    nxt = succ.pop(0)
+                    if nxt not in index:
+                        index[nxt] = low[nxt] = counter
+                        counter += 1
+                        stack.append(nxt)
+                        on_stack.add(nxt)
+                        work.append((nxt, sorted(adj.get(nxt, []))))
+                    elif nxt in on_stack:
+                        low[node] = min(low[node], index[nxt])
+                else:
+                    work.pop()
+                    if work:
+                        low[work[-1][0]] = min(low[work[-1][0]], low[node])
+                    if low[node] == index[node]:
+                        comp: list[str] = []
+                        while True:
+                            m = stack.pop()
+                            on_stack.discard(m)
+                            comp.append(m)
+                            if m == node:
+                                break
+                        comps.append(sorted(comp))
+    # A single node is a cycle only if it points at itself.
+    cyclic = [c for c in comps if len(c) > 1 or (c and c[0] in adj.get(c[0], []))]
+    return sorted(cyclic, key=lambda c: (-len(c), c))
+
+
+def cmd_cycles(
+    store: Store, ws: Workspace, calls: bool = False, unscoped: bool = False
+) -> str:
+    """Import cycles between files, or mutual recursion in the call graph.
+
+    The question behind it is operational, not aesthetic: a circular import is
+    why the module fails to load, and a recursion cycle is why the stack blew.
+    Both are one graph query the agent otherwise answers by reading files.
+
+    Call cycles use SCOPED edges only. A repo-wide name match invents edges
+    between unrelated modules, and in a cycle search invented edges do not
+    merely add a row — they fuse real components into one enormous phantom
+    cycle, which is worse than no answer.
+    """
+    g = _load_graph(store, ws)
+    if calls:
+        adj: dict[str, list[str]] = {}
+        for caller, rows in g.out_edges.items():
+            for _name, _line, targets, tier in rows:
+                if unscoped or tier != _TIER_REPO:
+                    adj.setdefault(caller, []).extend(targets)
+        adj = {k: sorted(set(v)) for k, v in adj.items()}
+        noun, unit = "call cycles", "functions"
+    else:
+        adj = {k: list(v) for k, v in g.imports.items()}
+        noun, unit = "import cycles", "files"
+
+    kind = "calls" if calls else "imports"
+    out = _header(g, "cycles", f"--{kind}" if calls else "", f"over {unit}")
+    found = _sccs(adj)
+    if not found:
+        out.append(f"{noun}: 0 — the {unit} graph is acyclic")
+        return "\n".join(out)
+
+    out.append(f"{noun}: {fmt_int(len(found))}")
+    for i, comp in enumerate(found[:_MAX_ROWS], start=1):
+        out.append(f"  cycle {i} · {fmt_int(len(comp))} {unit}:")
+        for member in comp[:_MAX_ROWS]:
+            if calls:
+                out.append(f"    {_fmt_def(g, member)}")
+            else:
+                out.append(f"    repo:{member}")
+        if len(comp) > _MAX_ROWS:
+            out.append(f"    … +{fmt_int(len(comp) - _MAX_ROWS)} more in this cycle")
+    if len(found) > _MAX_ROWS:
+        out.append(f"  … +{fmt_int(len(found) - _MAX_ROWS)} more cycles")
+    out.append("next:")
+    out.append(
+        f"  ctx callers <symbol>   ·   ctx cycles {'' if calls else '--calls'}".rstrip()
+    )
     return "\n".join(out)
 
 

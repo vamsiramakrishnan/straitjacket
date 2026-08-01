@@ -89,6 +89,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("callees", "what this symbol calls"),
             ("impact", "what breaks if this symbol changes"),
             ("impls", "what implements or extends this type"),
+            ("cycles", "circular imports, or mutual recursion"),
             ("diag", "lint and type errors as a short digest"),
         ),
     ),
