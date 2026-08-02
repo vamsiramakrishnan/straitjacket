@@ -6,13 +6,13 @@ search results always use repo-relative POSIX paths.
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from ctx import pathglob
 from ctx.config import CONFIG_FILENAME, Config, load_config, load_ctxignore
 
 
@@ -137,12 +137,20 @@ class Workspace:
         return spec
 
     def _is_ignored_fnmatch(self, rel: str) -> bool:
+        """Fallback for a broken pathspec install -- same dialect, one engine.
+
+        Named for the stdlib module it used to call directly. It no longer
+        does: raw fnmatch lets ``*`` cross ``/``, so this fallback disagreed
+        with the pathspec path above it about what an ignore glob covers,
+        and the retrieval-side matcher was a third opinion again. All three
+        now go through ctx.pathglob.
+        """
         for glob in self.ignore_globs:
-            if fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch("/" + rel, "/" + glob):
+            if pathglob.matches(rel, glob):
                 return True
             # Directory patterns like `**/secrets/**` should also match the
             # directory itself and paths under a bare-name pattern.
-            if glob.endswith("/**") and fnmatch.fnmatch(rel, glob[: -len("/**")]):
+            if glob.endswith("/**") and pathglob.matches(rel, glob[: -len("/**")]):
                 return True
         return False
 

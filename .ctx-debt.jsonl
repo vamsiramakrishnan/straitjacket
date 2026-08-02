@@ -49,3 +49,4 @@
 {"id": "9dfd20f769", "note": "text/v1 landing diagnosis: 0% landing is an attribution false negative on the inline-complete path (12/12 inline, model used content ~11/12) \u2014 add used_surfaced_content (conf ~0.55, unique+length-gated) and verify-then-edit-elsewhere\u2192discriminated reasons; profile fixes unproven by this sample", "op": "add", "ref": "src/ctx/evidence_outcomes.py"}
 {"id": "e03586e148", "op": "resolve"}
 {"id": "684f340b10", "note": "follow-up promotion gate: the paired shadow referee (declared vs shadow ordering on paired tasks at equal success, controlling for task phase and operator preconditions) is PENDING \u2014 until it passes, the ranking stays report-only and no online tie-break ships", "op": "add", "ref": "src/ctx/plan_value.py"}
+{"id": "7884ed9a7d", "op": "resolve"}
