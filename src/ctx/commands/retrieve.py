@@ -13,37 +13,23 @@ from ctx.commands.emit import (
 
 
 def _bad_input_errors() -> tuple[type[BaseException], ...]:
-    """The exception classes a retrieval verb must answer for itself.
+    """Delegates to the shared classification (commands/_errors.py).
 
-    ``RetrievalError`` alone was not enough: ``UnknownIdError`` (and its
-    sibling ``AmbiguousIdError``) subclass ``StoreError``, and ``parse_ref``
-    raises ``RefError`` — so the single most common agent-facing mistake,
-    `ctx get run:<id>` after a `ctx gc` or a retention expiry, fell through
-    to cli.py's blanket handler and printed a bare ``ctx: …`` with no verb
-    attribution."""
-    from ctx.refs import RefError
-    from ctx.retrieval import RetrievalError
-    from ctx.store import StoreError
+    Kept as a lazy wrapper rather than a module-scope import: command
+    modules keep their dependencies inside their functions so the hook's
+    import graph stays off the hot path -- an invariant
+    tests/test_cli_dispatch.py enforces, and which caught the first cut of
+    this refactor.
+    """
+    from ctx.commands._errors import bad_input_errors
 
-    return (RetrievalError, RefError, StoreError)
+    return bad_input_errors()
 
 
 def _fail(verb: str, e: BaseException) -> int:
-    """One error tail for every retrieval verb: attribute the failure to the
-    verb the user typed, and return the documented exit code (docs/CLI.md,
-    "Exit codes").
+    from ctx.commands._errors import fail
 
-    Exit 2, not 1. All three of these classes mean the same thing to a
-    calling script — *ctx rejected the invocation* — whether the argument was
-    malformed (`--lines nope`), ungrammatical (`zzz:xyz`), or simply no
-    longer resolves (a handle `ctx gc` collected). They used to split 1/2
-    purely by which verb family caught them: `ctx get` said 1 for a bad
-    selector while `ctx q` and argparse said 2 for the same class of
-    mistake. 2 is the argparse convention and already the majority of this
-    codebase's own usage errors, so 1 is left to mean only "ctx itself
-    failed" — the blanket handler in cli.py."""
-    print(f"ctx {verb}: {e}", file=sys.stderr)
-    return 2
+    return fail(verb, e)
 
 
 def _retrieval(ws, ns, verb: str) -> int:

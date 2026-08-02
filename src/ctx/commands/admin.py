@@ -65,11 +65,21 @@ def cmd_pin(ws, ns) -> int:
 
 def cmd_checkpoint(ws, ns) -> int:
     from ctx.checkpoint import create_checkpoint, show_checkpoint
+    from ctx.commands._errors import bad_input_errors, fail
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     if ns.show:
-        print(show_checkpoint(store, ws, ns.show))
+        # `--show` takes the same handles as `get`, so it owes the same
+        # attributed message and the same exit code. Without this an
+        # unresolvable checkpoint fell through to cli.py's blanket handler
+        # and exited 1 -- indistinguishable, to a calling script, from ctx
+        # itself failing -- while the identical mistake through `ctx get`
+        # exited 2 as documented.
+        try:
+            print(show_checkpoint(store, ws, ns.show))
+        except bad_input_errors() as e:
+            return fail("checkpoint", e)
         return 0
     if not ns.goal:
         print("ctx checkpoint: --goal is required (or --show <checkpoint:id>)", file=sys.stderr)
