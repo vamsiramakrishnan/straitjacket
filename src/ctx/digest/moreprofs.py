@@ -222,6 +222,77 @@ class UnittestProfile(Profile):
             return None
         return "unittest 'Ran N tests' + OK/FAILED verdict shape"
 
+    def extract(self, ctx: DigestContext):
+        """Fact-tier extraction (see Profile.extract).
+
+        The render path already finds every failing test and its innermost
+        traceback frame; the fact tier needs the same two things in typed
+        form -- an identity and a `file:line` the JOIN can land on. This
+        reuses the render path's own regexes so the census and the digest
+        cannot disagree about what failed.
+        """
+        from ctx.evidence import EvidenceGraph, EvidenceItem
+
+        items: list[EvidenceItem] = []
+        for view in (ctx.stdout, ctx.stderr):
+            lines = view.text_lines
+            for i, ln in enumerate(lines, start=1):
+                fm = _UNITTEST_FAIL_RE.match(ln)
+                if not fm:
+                    continue
+                kind_word, test, cls = fm.group(1), fm.group(2), fm.group(3)
+                # Python 3.11+ prints `FAIL: test_x (mod.Class.test_x)` --
+                # the method is already in the parens -- while older versions
+                # print `(mod.Class)`. Appending unconditionally gave
+                # `mod.Class.test_x.test_x` as the identity.
+                node = cls if cls.split(".")[-1] == test else f"{cls}.{test}"
+                # The INNERMOST frame is the file a fix lands in -- the same
+                # choice the renderer makes, and the same one the pytest
+                # extractor makes with its deepest locus.
+                location = exc = None
+                for j in range(i, min(i + 60, len(lines))):
+                    fr = re.match(r'^\s+File "(?P<file>[^"]+)", line (?P<line>\d+)', lines[j])
+                    if fr:
+                        # A traceback carries the ABSOLUTE path; every other
+                        # row in the fact table is repo-relative, and a JOIN
+                        # against the corpus only lands if this one is too.
+                        rel = fr.group("file")
+                        try:
+                            rel = ctx.ws.relativize_as_asked(rel)
+                        except Exception:
+                            pass
+                        location = f"{rel}:{fr.group('line')}"
+                    em = re.match(r"^(?P<cls>\w+(?:\.\w+)*(?:Error|Exception))\b", lines[j])
+                    if em:
+                        exc = em.group("cls")
+                        break
+                items.append(
+                    EvidenceItem(
+                        id=node,
+                        kind="failing_test",
+                        severity="error",
+                        summary=f"{kind_word.lower()}: {node}",
+                        failure_class=exc or kind_word.title(),
+                        location=location,
+                        causal_rank=len(items),
+                        attributes={"stream": view.name, "line": i},
+                    )
+                )
+        # The EvidenceGraph vocabulary is ("pass","fail","error","warning",
+        # "unknown") -- not the run-outcome words used elsewhere. Getting it
+        # wrong raised inside a fail-open caller, which reported the census
+        # as merely EMPTY: a broken extractor and a clean run looked
+        # identical from outside.
+        outcome = "fail" if items else "pass"
+        return EvidenceGraph(
+            family="unittest",
+            profile_version=self.version,
+            outcome=outcome,
+            aggregate={"failing": len(items)},
+            items=tuple(items),
+            artifacts={},
+        )
+
     def render(self, ctx: DigestContext) -> str:
         combined = ctx.stdout.text + "\n" + ctx.stderr.text
         ran = sum(int(m.group(1)) for m in _UNITTEST_RAN_RE.finditer(combined))

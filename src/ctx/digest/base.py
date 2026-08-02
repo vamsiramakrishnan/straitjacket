@@ -161,6 +161,24 @@ class Profile:
     def render(self, ctx: DigestContext) -> str:
         raise NotImplementedError
 
+    def extract(self, ctx: DigestContext):
+        """Typed extraction for the FACT tier, or None when this profile
+        has none. Returns an ``EvidenceGraph``.
+
+        The digest tier has always known several runners; the fact tier
+        called ``extract_pytest`` directly and therefore knew exactly one.
+        A captured `python -m unittest` run rendered as ``unittest/v1``
+        with real failures and inserted ZERO rows, so `ctx q 'fails last'`
+        answered "no captured test run" about a run captured seconds
+        earlier -- the census that is supposed to be the work queue,
+        silently empty.
+
+        Profiles that can extract override this. A profile that cannot
+        returns None and the fact tier records nothing for it, which is a
+        gap it can at least see.
+        """
+        return None
+
     # Shared closing sections -------------------------------------------------
     def coverage_lines(self, ctx: DigestContext, shown_spans: int, omitted: int | None = None) -> list[str]:
         total = ctx.stdout.lines + ctx.stderr.lines

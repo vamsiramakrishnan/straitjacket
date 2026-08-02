@@ -404,6 +404,10 @@ class PytestProfile(Profile):
     version = "pytest/v1"
     failure_version = "pytest/v2"
 
+    def extract(self, ctx: DigestContext):
+        """This profile's fact extraction (see Profile.extract)."""
+        return extract_pytest(ctx)
+
     def detect(self, ctx: DigestContext) -> str | None:
         argv = ctx.manifest["argv"]
         if argv_invokes_pytest(argv):

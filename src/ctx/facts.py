@@ -441,11 +441,35 @@ def derive_run(
             result["ok"] = True
             return result
 
+        from ctx.digest import detect_profile
         from ctx.digest.base import DigestContext
         from ctx.digest.pytestprof import extract_pytest
 
         dctx = DigestContext.load(store, ws, manifest, focus=None)
-        graph = extract_pytest(dctx)
+        # The SAME profile the digest renders with. This called
+        # extract_pytest unconditionally, so the fact tier knew exactly one
+        # runner while the digest tier knew several: a captured
+        # `python -m unittest` run rendered as unittest/v1 with real
+        # failures and inserted ZERO fail rows, and `ctx q 'fails last'`
+        # then answered "no captured test run" about a run captured seconds
+        # earlier. Selecting here means a new runner profile feeds the
+        # census the day it can extract, instead of becoming the next silent
+        # blind spot.
+        profile, _reason = detect_profile(dctx)
+        try:
+            graph = profile.extract(dctx)
+        except Exception as e:
+            # Never let a broken extractor read as "this run had no
+            # failures" -- that is the same silence this whole fix is about.
+            _note_error(f"facts.extract.{profile.version}", e)
+            graph = None
+            result["extractor_error"] = f"{type(e).__name__}: {e}"
+        if graph is None:
+            # A profile with no extractor yet: fall back to the pytest
+            # extractor rather than recording nothing, since many runners
+            # emit pytest-shaped summary lines even when they are not pytest.
+            graph = extract_pytest(dctx)
+        result["profile"] = profile.version
         result["outcome"] = graph.outcome
         generation = current_generation(ws)
         rows: list[tuple] = []
