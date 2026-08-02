@@ -10,7 +10,9 @@ commands: set it up, check it works, see what it saved. Everything else is
 agent tooling, kept behind `ctx help --all` for the times a human wants to
 drive it by hand.
 
-`ctx` has 34 commands. A handful are the product; the rest are machinery a
+`ctx` has three dozen commands (``len(all_commands())`` is the only count
+that cannot go stale -- the hardcoded "34" here was two behind the dispatch
+table, while the --help footer computed its own and printed 36). A handful are the product; the rest are machinery a
 user grows into. Argparse showed all of them at equal weight in source order,
 which reads as a wall and hides the one path that actually works. This module
 holds the curated surface: what is shown first, in what groups, in what words.

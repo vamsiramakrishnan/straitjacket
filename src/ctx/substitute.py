@@ -247,8 +247,31 @@ def _scope_hint(paths: list[str]) -> str | None:
     return p if re.search(r"\.\w+$", p) else f"{p}/**"
 
 
+#: grep flags that change what a match MEANS, rather than how much is
+#: printed. `ctx q search` has no equivalent for these, so a command
+#: carrying one cannot be collapsed -- substituting anyway answers a
+#: different question. `-v` is the sharp one: it inverts the match, so the
+#: collapse returned the files that DO contain the pattern when the caller
+#: asked for the ones that do not.
+_SEMANTIC_GREP_FLAGS = frozenset({
+    "-v", "--invert-match", "-L", "--files-without-match",
+    "-c", "--count", "-x", "--line-regexp",
+})
+#: NOT in that set: `-w`. Word-boundary matching is exactly what
+#: `ctx q refs` does, so `grep -rnw <symbol>` is the one semantic flag the
+#: substitution PRESERVES rather than contradicts.
+
+
 def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution | None:
     prog = toks[0].rsplit("/", 1)[-1]
+    for t in toks[1:]:
+        if t in _SEMANTIC_GREP_FLAGS:
+            return None
+        # Bundled short flags (`-rvn`): a semantic flag hides inside them.
+        if re.fullmatch(r"-[A-Za-z]{2,}", t) and any(
+            c in t[1:] for c in ("v", "L", "c", "x")
+        ):
+            return None
     git_grep = prog == "git" and len(toks) > 1 and toks[1] == "grep"
     if git_grep:
         toks = ["grep", *toks[2:]]  # normalise `git grep …` (recursive by default)

@@ -410,7 +410,12 @@ def command_signature(command: str, _depth: int = 0) -> str | None:
             if sub != "run":
                 return None
             rest = list(argv[2:])
-            shell = "--shell" in rest
+            # Only the tokens BEFORE the `--` separator are ctx's own flags;
+            # everything after it is the wrapped command's argv. Testing the
+            # whole list meant a wrapped command that merely mentions the
+            # literal token `--shell` was read as `ctx run --shell` and
+            # signed with the wrong shape.
+            shell = "--shell" in (rest[: rest.index("--")] if "--" in rest else rest)
             if "--" in rest:
                 rest = rest[rest.index("--") + 1 :]
             else:

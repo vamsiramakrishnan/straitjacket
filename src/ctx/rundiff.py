@@ -83,8 +83,16 @@ def _block_start(blocks: list[tuple[str, int]], nodeid: str) -> int | None:
     """First traceback block whose header names this nodeid (headers carry
     the bare test name; summary lines carry the full path::name)."""
     tail = nodeid.split("::")[-1]
+    # pytest writes a class-scoped failure header in DOTTED form
+    # ("TestFoo.test_bar") while the summary line is "::"-qualified
+    # ("tests/t.py::TestFoo::test_bar"), so a "::"-only comparison never
+    # matched for ANY class-based test and every one of them silently lost
+    # its traceback block.
+    dotted = ".".join(nodeid.split("::")[1:]) if "::" in nodeid else nodeid
     for name, line_no in blocks:
-        if name == nodeid or name == tail or name.endswith("::" + tail):
+        if name in (nodeid, tail, dotted):
+            return line_no
+        if name.endswith("::" + tail) or name.endswith("." + tail):
             return line_no
     return None
 

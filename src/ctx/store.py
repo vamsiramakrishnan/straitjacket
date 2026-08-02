@@ -338,9 +338,21 @@ class Store:
         if window is None:
             return b""
         start, end = window
-        with self.blob_path(self.resolve_id(blob_hash, kinds=("blob",))).open("rb") as fh:
-            fh.seek(idx[start - 1])
-            return fh.read(idx[end] - idx[start - 1])
+        try:
+            path = self.blob_path(self.resolve_id(blob_hash, kinds=("blob",)))
+            with path.open("rb") as fh:
+                fh.seek(idx[start - 1])
+                return fh.read(idx[end] - idx[start - 1])
+        except FileNotFoundError:
+            # gc sweeps blobs but not their indexes/lines/*.idx sidecars, so a
+            # collected blob can still HAVE a line index -- line_index()
+            # succeeds, the open() then does not, and the caller saw a raw
+            # FileNotFoundError where every other missing-object path raises
+            # the documented UnknownIdError (which the CLI maps to exit 2).
+            raise UnknownIdError(
+                f"blob {blob_hash[:MIN_ID_DISPLAY]} not found "
+                "(collected by gc or retention); re-capture it"
+            ) from None
 
     # ------------------------------------------------------------- lookups
     def resolve_id(self, short: str, kinds: tuple[str, ...] | None = None) -> str:

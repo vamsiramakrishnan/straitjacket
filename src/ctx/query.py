@@ -446,9 +446,14 @@ def _multi_flag(args: list[str], name: str) -> list[str]:
     out: list[str] = []
     for i, a in enumerate(args):
         if a == name:
-            if i + 1 >= len(args):
+            # A following FLAG is a missing value, not a value. _flag has
+            # always refused this for singular flags; _multi_flag swallowed
+            # the next token whatever it was, so `--glob --ext py` silently
+            # globbed for the literal string "--ext".
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt is None or nxt.startswith("--"):
                 raise QueryError(f"ctx q: {name} needs a value")
-            out.append(args[i + 1])
+            out.append(nxt)
     return out
 
 

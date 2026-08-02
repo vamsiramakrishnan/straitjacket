@@ -292,7 +292,7 @@ def _op_ast_search(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
         str(args.get("pattern") or ""),
         language=args.get("language"),
         glob=args.get("glob"),
-        cap=int(args.get("cap", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP),
+        cap=bounds.count(bounds.explicit(args.get("cap"), DEFAULT_ROW_CAP)),
     )
     omitted = max(0, int(meta.pop("matched", len(rows))) - len(rows))
     return payload("sites", rows, omitted=omitted, meta=meta)
@@ -363,7 +363,7 @@ def _op_ast_outline(pc: PlanContext, args: dict, inp: dict | None) -> dict[str, 
         f = str(r.get("file") or "")
         if f and f not in files:
             files.append(f)
-    cap = int(args.get("cap", OUTLINE_FILE_CAP) or OUTLINE_FILE_CAP)
+    cap = bounds.count(bounds.explicit(args.get("cap"), OUTLINE_FILE_CAP))
     take, omitted = files[:cap], max(0, len(files) - cap)
     rows: list[dict[str, Any]] = []
     parsers: list[str] = []
@@ -543,7 +543,7 @@ def _op_semantic(mode: str):
             pc.ws,
             str(args.get("rules") or ""),
             paths=paths,
-            cap=int(args.get("cap", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP),
+            cap=bounds.count(bounds.explicit(args.get("cap"), DEFAULT_ROW_CAP)),
         )
         # The cap's overflow, declared -- exactly as ast.search already does
         # with the same meta key. Without this the coverage line attested a
@@ -574,7 +574,7 @@ def _op_evidence_failures(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     from ctx import facts
 
     run = args.get("run")
-    limit = int(args.get("limit", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP)
+    limit = bounds.count(bounds.explicit(args.get("limit"), DEFAULT_ROW_CAP))
     rows = facts.fails_sites(pc.ws, pc.store, run=run, limit=limit)
     run_id: str | None = None
     gen: str | None = None
@@ -661,7 +661,7 @@ def _op_code_symbols(pc: PlanContext, args: dict, inp: dict | None) -> dict[str,
                 derived += 1
         except Exception:
             pass
-    limit = int(args.get("limit", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP)
+    limit = bounds.count(bounds.explicit(args.get("limit"), DEFAULT_ROW_CAP))
     sym = str(args.get("symbol") or "")
     pre_limit = 2000 if (files or sym) else limit
     rows = facts.decls_rows(pc.ws, pc.store, kind=args.get("kind"), limit=pre_limit)

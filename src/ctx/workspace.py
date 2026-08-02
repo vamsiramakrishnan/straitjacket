@@ -215,8 +215,19 @@ class Workspace:
                     check=True,
                 )
                 prefix = "" if base == self.root else self.relativize(base) + "/"
+                follow = self.config.workspace.follow_symlinks
                 for name in out.stdout.decode("utf-8", "replace").split("\0"):
-                    if name and (base / name).is_file():
+                    if not name:
+                        continue
+                    entry = base / name
+                    # `is_file()` FOLLOWS the link, so this rung listed
+                    # tracked symlinks regardless of the documented
+                    # `follow_symlinks = false` -- the walk rung honours it
+                    # and this one did not, so the file set depended on
+                    # whether git happened to be available.
+                    if not follow and entry.is_symlink():
+                        continue
+                    if entry.is_file():
                         rels.append(prefix + Path(name).as_posix())
             except (OSError, subprocess.SubprocessError):
                 rels = self._walk(base)

@@ -65,13 +65,23 @@ def find_index(ws: Workspace) -> Path | None:
     return p if p.is_file() else None
 
 
+#: SCIP's local-symbol convention: `local <id>`. The word "local" matches
+#: the identifier regex, so a local symbol returned the literal name
+#: "local" -- a plausible-looking descriptor for something the docstring
+#: promises is None.
+_SCIP_LOCAL_RE = re.compile(r"^local\s")
+
+
 def descriptor_name(scip_symbol: str) -> str | None:
     """The local identifier a SCIP symbol names — the last identifier token
     in the whole symbol string (robust across the scheme/package/descriptor
     grammar; the package name and version precede the descriptors, so the
     final token is always the symbol's own name). ``None`` for a
     local/anonymous symbol carrying no identifier."""
-    toks = _IDENT_RE.findall(scip_symbol or "")
+    sym = scip_symbol or ""
+    if _SCIP_LOCAL_RE.match(sym):
+        return None  # `local 3` -- the word "local" is the scheme, not a name
+    toks = _IDENT_RE.findall(sym)
     return toks[-1] if toks else None
 
 

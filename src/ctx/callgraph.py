@@ -89,6 +89,8 @@ _TIERS = (_TIER_LOCAL, _TIER_IMPORT, _TIER_REPO)
 # interleaved alphabetically with the 11 production callers that were the
 # actual answer.
 _NON_PRODUCTION = ("tests/", "test/", "evals/", "benchmarks/", "examples/")
+#: The same names as path SEGMENTS -- what the check above actually means.
+_NON_PRODUCTION_SEGMENTS = frozenset(s.strip("/") for s in _NON_PRODUCTION)
 
 
 class CallGraphError(Exception):
@@ -700,7 +702,16 @@ def _fmt_def(g: _Graph, nid: str) -> str:
 
 
 def _is_production(rel: str) -> bool:
-    return not any(seg in rel for seg in _NON_PRODUCTION)
+    """Is this a first-party path rather than exercise?
+
+    Matched on path SEGMENTS. `"test/" in rel` is a substring test, so
+    `latest/releases.py` and `contests/leaderboard.py` were filed as test
+    code and dropped out of the first-party group in every callers/callees
+    answer. Same boundary class as path globs, intent keywords, MCP provider
+    names and the guard's command prefixes -- the fifth on this branch.
+    """
+    parts = set(rel.replace("\\", "/").split("/"))
+    return not (parts & _NON_PRODUCTION_SEGMENTS)
 
 
 def _header(g: _Graph, verb: str, symbol: str, extra: str = "") -> list[str]:
