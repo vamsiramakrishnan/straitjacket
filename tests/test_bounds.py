@@ -129,3 +129,31 @@ def test_timeout_signal_is_not_the_childs_exit_code():
     for fn in (run_eval, run_seq):
         doc = inspect.getdoc(fn) or ""
         assert "timed_out" in doc, f"{fn.__name__} must document the flag"
+
+
+def test_callgraph_resolves_src_layout_and_relative_imports():
+    """Two confirmed defects in one resolver (evals/devex/):
+
+    * a src-layout file registered only its PATH-derived name, so
+      `src/ctx/foo.py` was never reachable as `ctx.foo` -- the name it is
+      actually imported by -- and no import in this repository resolved
+      through the stem rung at all.
+    * `from . import X` was dropped outright (node.module is None for a bare
+      relative import), silently unscoping real intra-package callers.
+    """
+    import ast as _ast
+
+    from ctx.callgraph import _PyVisitor
+
+    # Relative imports must resolve against the file's own package.
+    tree = _ast.parse("from . import sibling\nfrom .mod import thing\n")
+    holder = type("U", (), {"rel": "src/ctx/foo.py", "imports": [],
+                            "defs": []})()
+    v = _PyVisitor.__new__(_PyVisitor)
+    v.unit = holder
+    v.stack = []
+    for node in tree.body:
+        v.visit_ImportFrom(node)
+    assert any(i.startswith("src.ctx") for i in holder.imports), holder.imports
+    assert "src.ctx.sibling" in holder.imports
+    assert "src.ctx.mod" in holder.imports

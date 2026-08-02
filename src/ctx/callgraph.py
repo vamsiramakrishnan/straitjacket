@@ -160,12 +160,27 @@ class _PyVisitor(ast.NodeVisitor):
             self.unit.imports.append(a.name)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if node.module:
-            self.unit.imports.append(node.module)
+        base = node.module or ""
+        level = int(getattr(node, "level", 0) or 0)
+        if level:
+            # Relative imports resolve against the importing file's own
+            # package. The previous `if node.module:` guard dropped bare
+            # `from . import X` outright -- node.module is None there -- so a
+            # real, direct, intra-package caller was silently unscoped. `from
+            # .mod import Y` was mis-scoped for the same reason: its module
+            # is "mod", which names nothing at the repository root.
+            pkg = self.unit.rel.rsplit("/", 1)[0] if "/" in self.unit.rel else ""
+            parts = [x for x in pkg.split("/") if x]
+            if level > 1:  # `..` and beyond walk up from the file's package
+                parts = parts[: -(level - 1)]
+            prefix = ".".join(parts)
+            base = f"{prefix}.{base}" if (prefix and base) else (prefix or base)
+        if base:
+            self.unit.imports.append(base)
             # `from pkg.mod import name` also binds `name`; record the dotted
             # form so the link phase can match either spelling.
             for a in node.names:
-                self.unit.imports.append(f"{node.module}.{a.name}")
+                self.unit.imports.append(f"{base}.{a.name}")
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.stack.append(node.name)
@@ -347,9 +362,26 @@ def _import_edges(ws: Workspace, rels: set[str], units: dict[str, _Unit]) -> tup
     # Map each recorded import string onto a known file by dotted stem,
     # walking the dotted name leftwards so `pkg.mod.name` finds `pkg/mod.py`.
     by_stem: dict[str, str] = {}
-    for rel in rels:
+    # Directories that are importable packages, used to find where a file's
+    # IMPORTABLE name starts. Under a src-layout the path-derived name and the
+    # imported name differ -- "src/ctx/foo.py" is imported as "ctx.foo", never
+    # as "src.ctx.foo" -- so registering only the path-derived stem meant no
+    # import in this repository ever resolved through this rung.
+    pkg_dirs = {
+        r[: -len("/__init__.py")] for r in rels if r.endswith("/__init__.py")
+    }
+    for rel in sorted(rels):  # sorted: a set's order is not a contract
         stem = rel.removesuffix(".py").removesuffix("/__init__")
         by_stem.setdefault(stem.replace("/", "."), rel)
+        # Also register under the name the file is actually imported by:
+        # walk down to the first component that IS a package root and key
+        # from there. Nothing is registered when no prefix is a package, so
+        # loose scripts and test trees keep exactly their old behaviour.
+        parts = stem.split("/")
+        for i in range(len(parts)):
+            if "/".join(parts[: i + 1]) in pkg_dirs:
+                by_stem.setdefault(".".join(parts[i:]), rel)
+                break
     for rel, unit in units.items():
         for imp in unit.imports:
             dotted = imp.replace("::", ".").strip()
