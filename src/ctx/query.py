@@ -823,6 +823,13 @@ def _stage_histogram(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     (-count, value), capped at the bucket count with declared omission."""
     fld = _need_arg(args, "histogram", "a <field>")
     n_buckets = bounds.count(_flag(args, "--buckets", _HISTOGRAM_BUCKETS, int))
+    if n_buckets == 0:
+        # Zero buckets is an empty census, not one bucket and not a crash.
+        # `max(1, ...)` used to hide this: it floored the request to a single
+        # bucket, which silently widened it. Routing through bounds.count made
+        # the zero real and exposed that the arithmetic below divides by this
+        # value -- a defensive floor doing load-bearing work by accident.
+        return Stream("records", [], omitted=stream.omitted)
     raw = [str(r.get(fld, "")) for r in stream.rows]
     nums: list[float] | None
     try:

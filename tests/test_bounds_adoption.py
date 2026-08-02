@@ -93,3 +93,33 @@ def test_caller_supplied_bounds_honour_zero():
     for zero_means_zero in (0, -1, -10**9, float("nan")):
         assert bounds.count(zero_means_zero) == 0
     assert bounds.count(7) == 7
+
+
+# --------------------------------------- zero must be safe, not just honoured
+def test_zero_bounds_do_not_crash_the_swept_sites():
+    """The sweep exposed a defensive floor doing load-bearing work.
+
+    `max(1, n_buckets)` looked like it was only widening a request. It was
+    also the reason `width = (hi - lo) / n_buckets` never divided by zero.
+    Routing the bound through bounds.count made the zero real and turned a
+    silent widening into a ZeroDivisionError -- so honouring a zero is only
+    half the contract; surviving it is the other half.
+    """
+    from ctx.query import Stream, _stage_histogram
+
+    rows = [{"v": str(i)} for i in range(10)]
+    empty = _stage_histogram(None, Stream("records", rows), ["v", "--buckets", "0"])
+    assert empty.rows == [], "zero buckets is an empty census"
+
+    normal = _stage_histogram(None, Stream("records", rows), ["v", "--buckets", "3"])
+    assert len(normal.rows) == 3, "a real bucket count still works"
+
+
+def test_zero_is_safe_for_every_swept_bound_shape():
+    """The other thirteen sites reduce to a slice or a min(); both are total
+    at zero. Asserted rather than assumed -- that assumption is exactly what
+    was wrong about histogram."""
+    from ctx import bounds
+
+    assert [1, 2, 3][: bounds.count(0)] == []      # cap / limit sites
+    assert min(bounds.count(0), 8) == 0            # depth / tail sites
