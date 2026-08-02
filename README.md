@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,454 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,459 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -541,7 +541,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,454 acceptance-oriented determinism & security test functions
+└── tests/             # 1,459 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -695,7 +695,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 1,454 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,459 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

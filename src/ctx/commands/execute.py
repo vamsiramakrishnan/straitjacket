@@ -39,8 +39,13 @@ def cmd_run(ws, ns) -> int:
             store=store,
         )
     except ExecutionError as e:
+        # 127, the documented "command not found" code (docs/CLI.md's
+        # exit-code table) and the shell convention. `ctx seq` already mapped
+        # the identical ExecutionError to 127; `ctx run` returned a bare 1,
+        # so the same failure reported differently depending on which verb
+        # you reached it through. One behaviour, two doors, again.
         print(f"ctx run: {e}", file=sys.stderr)
-        return 1
+        return 127
 
     # Reflex arc (docs/REFLEX.md layer 3): a signature already intervened on
     # this session re-arriving here IS the starvation loop — check_command

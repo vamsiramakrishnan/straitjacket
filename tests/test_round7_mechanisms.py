@@ -173,17 +173,35 @@ def test_fmt_bytes_promotes_on_the_displayed_value():
         assert "1024." not in fmt_bytes(n), f"{n} -> {fmt_bytes(n)}"
 
 
-def test_bounded_cuts_at_a_line_boundary_at_index_zero():
-    """`if nl > 0` skipped the trim when the only newline inside the budget
-    was the first character -- so the documented hard backstop kept a
-    mid-line fragment, the one thing it exists to prevent, because a falsy
-    index read as "no newline found"."""
+def test_bounded_trims_to_a_line_boundary_when_that_costs_a_line():
+    """The nicety, when it is cheap: a partial trailing line is trimmed away
+    so the preview ends where a line does."""
     from ctx.textutil import bounded
 
-    text = "\n" + "x" * 400
-    out = bounded(text, 5)  # 20 bytes: the cut lands mid-x-run
+    text = "aaaa\nbbbb\ncccc\ndddd\neeee\n" * 40
+    out = bounded(text, 4)  # 16 bytes: lands one char into the fourth line
     body = out.split("\n[ctx:truncated")[0]
-    assert body == "", f"must cut back to the boundary, got {body!r}"
+    assert body == "aaaa\nbbbb\ncccc", f"trim back a partial line: {body!r}"
+
+
+def test_bounded_never_trims_away_the_whole_payload():
+    """The correction round 8 forced, on the test as much as on the code.
+
+    The first version of THIS test asserted `body == ""` -- it encoded the
+    defect as the contract. On newline-sparse content (one long line, or the
+    exact-bytes body `--bytes` exists to serve) the last newline inside the
+    budget is the HEADER's own, so trimming to it deleted every byte the
+    caller asked for while still exiting 0 under a header claiming the full
+    range. A line-boundary trim is a readability nicety; it may never be the
+    reason a bounded preview previews nothing.
+    """
+    from ctx.textutil import bounded
+
+    header_then_payload = "[ctx get run:abc#stdout]\nselector: --bytes 1:9999\n" + "x" * 9000
+    out = bounded(header_then_payload, 200)
+    body = out.split("\n[ctx:truncated")[0]
+    assert "x" in body, "the payload must survive its own truncation"
+    assert body.count("x") > 100, f"a preview must preview something: {len(body)}"
 
 
 # ------------------------------------- a cap declares its own overflow
@@ -221,3 +239,32 @@ def test_impact_depth_zero_survives_the_plan_op():
     assert 'args.get("depth") is not None' in src, (
         "a depth of 0 must be distinguishable from no depth at all"
     )
+
+
+# ------------------------------------------------ round 8: the same doors
+def test_backslash_is_literal_inside_single_quotes():
+    """sh has no escapes inside single quotes. Treating a backslash as one
+    desynchronized the quote tracking on `grep 'a\\' | wc -l`, which then read
+    as a bare invocation and had its pipeline stage substituted away -- a
+    defect introduced BY the round-7 fix for glued operators, and found by
+    round 8 running against it."""
+    import shlex
+
+    from ctx.substitute import _is_compound, _unquoted
+
+    raw = "grep -rn 'a\\' src|wc -l"
+    assert _is_compound(shlex.split(raw), raw) is True
+    assert "|" in _unquoted(raw), "the pipe is outside the quotes"
+    assert _unquoted("echo 'a|b'") == "echo "
+
+
+def test_run_reports_a_missing_program_as_127(state_home, workspace_dir, capsys):
+    """docs/CLI.md's exit-code table documents 127 for a program not on PATH,
+    and `ctx seq` already mapped the identical ExecutionError to it -- so the
+    same failure reported differently depending on which verb you reached it
+    through."""
+    from ctx.cli import main as cli_main
+
+    rc = cli_main(["--workspace", str(workspace_dir), "run", "--",
+                   "ctx-definitely-not-a-real-program-xyz"])
+    assert rc == 127, capsys.readouterr().err

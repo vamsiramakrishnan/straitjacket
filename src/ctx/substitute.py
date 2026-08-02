@@ -106,7 +106,11 @@ def _unquoted(raw: str) -> str:
         if escaped:
             escaped = False
             continue
-        if ch == "\\":
+        # A backslash is LITERAL inside single quotes -- sh has no escapes
+        # there at all. Treating it as one desynchronized the quote tracking
+        # on `grep 'a\' | wc -l`, which then read as a bare invocation and
+        # got its pipeline stage silently substituted away.
+        if ch == "\\" and quote != "'":
             escaped = True
             continue
         if quote:

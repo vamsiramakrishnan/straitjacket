@@ -424,11 +424,22 @@ def bounded(
     # whatever is there, and the cut is declared either way.
     cut = decode_exact(raw[:budget_bytes])
     nl = cut.rfind("\n")
-    # >= 0, not > 0: index 0 IS a line boundary. When the only newline inside
-    # the budget was the first character, the trim was skipped entirely and
-    # this "hard backstop" kept a mid-line fragment -- the one thing it exists
-    # to prevent -- because a falsy index read as "no newline found".
-    if nl >= 0:
+    # Trim back to a line boundary only when that costs a LINE.
+    #
+    # Two bug bashes shaped this. The first found `if nl > 0`, where a
+    # boundary at index 0 read as "no newline found" and the trim was skipped
+    # exactly when the only newline in budget was the first character. The
+    # second found the real damage: on newline-sparse content -- one long
+    # line, or the exact-bytes body `--bytes` exists to serve -- the last
+    # newline inside the budget is the HEADER's own, so trimming to it
+    # deleted every byte the caller asked for while still exiting 0 under a
+    # header claiming the full range.
+    #
+    # The half-of-budget test is the operative rule and it subsumes the
+    # index-0 case (0 is never at least half of a non-empty cut). Trimming to
+    # a line boundary is a readability nicety; it may never be the reason a
+    # bounded preview previews nothing.
+    if nl >= 0 and nl * 2 >= len(cut):
         cut = cut[:nl]
     total_est = estimate_tokens(len(raw))
     note = f"\n[ctx:truncated shown≈{budget_tokens} of ≈{total_est} est tokens]"

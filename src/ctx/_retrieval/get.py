@@ -54,6 +54,42 @@ def _window(flag: str, a: int, b: int, total: int, unit: str) -> tuple[int, int]
     return window
 
 
+#: Room left for the two header lines so the body is what the header claims.
+_HEADER_RESERVE = 256
+
+
+def _byte_window(ref_text, a: int, b: int, total: int, budget):
+    """Clamp a byte range to the inline budget and address the remainder.
+
+    `--lines` has always clamped to max_inline_lines and pointed at the next
+    window; `--bytes` did not, so an oversized request went to the generic
+    result-budget backstop instead -- which cuts at a line boundary, and on
+    the newline-sparse content --bytes exists to serve that cut landed on the
+    HEADER's own newline and deleted the whole payload. Worse, the fallback
+    address dropped the selector, so the continuation offering to reach the
+    rest re-read the stream as lines.
+
+    Clamping here means the cut is the SELECTOR's, so the continuation can
+    name the next window and actually advance.
+    """
+    # The TIGHTER of the two budgets that apply. max_inline_bytes bounds the
+    # selector; the result-token budget bounds the emission, and it is
+    # usually smaller. Clamping to only the first left the header saying
+    # "--bytes 1:16384" over a body that bounded() had since cut to ~4.7 KB
+    # -- the header describing a range the body does not contain, which is
+    # the same lie in a smaller font.
+    room = bounds.budget_bytes(getattr(budget, "result_tokens", 0)) - _HEADER_RESERVE
+    cap = min(
+        bounds.count(getattr(budget, "max_inline_bytes", 0)) or (b - a + 1),
+        room if room > 0 else (b - a + 1),
+    )
+    if b - a + 1 <= cap:
+        nxt = f"ctx get {ref_text} --bytes {b + 1}:{min(total, b + (b - a + 1))}"
+        return a, b, (nxt if b < total else None)
+    b = a + cap - 1
+    return a, b, f"ctx get {ref_text} --bytes {b + 1}:{min(total, b + cap)}"
+
+
 def get(
     store: Store,
     ws: Workspace,
@@ -212,6 +248,7 @@ def get(
         if fast_bytes is not None:
             blob_hash_b, total_b = fast_bytes
             a, b = _window("bytes", a, b, total_b, "bytes")
+            a, b, continuation = _byte_window(ref_text, a, b, total_b, budget)
             chunk = _read_bytes_range(store, blob_hash_b, a, b)
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(total_b)}")
             # decode_exact, not errors="replace": --bytes is THE exact-bytes
@@ -220,15 +257,12 @@ def get(
             # into a 3-byte U+FFFD -- neither the same bytes nor even the same
             # LENGTH, through the tool's own exactness interface.
             body = decode_exact(chunk)
-            if b < total_b:
-                continuation = f"ctx get {ref_text} --bytes {b + 1}:{min(total_b, b + (b - a + 1))}"
         else:
             a, b = _window("bytes", a, b, len(data), "bytes")
+            a, b, continuation = _byte_window(ref_text, a, b, len(data), budget)
             chunk = data[a - 1 : b]
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(len(data))}")
             body = decode_exact(chunk)  # second door onto the same contract
-            if b < len(data):
-                continuation = f"ctx get {ref_text} --bytes {b + 1}:{min(len(data), b + (b - a + 1))}"
     else:
         if fast_lines is not None:
             blob_hash, total = fast_lines
@@ -268,8 +302,18 @@ def get(
 
     if divergence:
         header.append(f"divergence: {divergence}")
+    # The budget-truncation fallback address must carry the SELECTOR, not
+    # just the ref. Without it an over-budget `--bytes A:B` emitted
+    # "next: ctx get run:<id>#stdout" -- an address that re-reads the whole
+    # stream as lines, so the bytes the caller asked for became unreachable
+    # through the very continuation offering to reach them.
+    handle = ref_text
+    if selector.bytes is not None:
+        handle = f"{ref_text} --bytes {selector.bytes[0]}:{selector.bytes[1]}"
+    elif selector.records is not None:
+        handle = f"{ref_text} --records {selector.records[0]}:{selector.records[1]}"
     result = _emit(ws, "\n".join(header) + "\n" + body, budget.result_tokens, continuation,
-                   handle=ref_text, exact=selector.bytes is not None)
+                   handle=handle, exact=selector.bytes is not None)
     if fast_lines is not None:
         raw_len = fast_lines_raw
     elif fast_bytes is not None:

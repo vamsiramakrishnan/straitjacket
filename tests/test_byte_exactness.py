@@ -193,3 +193,56 @@ def _cli_env(tmp_path):
     import os
 
     return {**os.environ, "CTX_STATE_HOME": str(tmp_path / "state")}
+
+
+# ------------------------- the header, the body and the address all agree
+def test_oversized_bytes_request_clamps_the_selector_not_the_emission(
+    state_home, workspace_dir
+):
+    """`--lines` has always clamped to max_inline_lines and pointed at the
+    next window; `--bytes` did not, so an oversized request fell through to
+    the generic result-budget backstop -- which cuts at a line boundary, and
+    on newline-sparse content that cut landed on the HEADER's own newline and
+    deleted the whole payload. The header still claimed the full range.
+    """
+    import re
+
+    from ctx.retrieval import Selector, get
+    from ctx.textutil import encode_exact
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    ref = f"blob:{_blob(store, b'x' * 40000)[:12]}"
+
+    out = get(store, ws, ref, Selector(bytes=(1, 40000)))
+    header, _, rest = out.partition("\n")
+    sel, _, body = rest.partition("\n")
+
+    m = re.search(r"--bytes (\d+):(\d+) of ", sel)
+    assert m, sel
+    a, b = int(m.group(1)), int(m.group(2))
+    assert b < 40000, "the selector itself must record the clamp"
+
+    payload = body.split("\nnext:")[0]
+    assert encode_exact(payload) == b"x" * (b - a + 1), (
+        "the body must be exactly what the header says it is"
+    )
+
+
+def test_the_continuation_advances_and_keeps_the_selector(state_home, workspace_dir):
+    """The fallback address dropped `--bytes` entirely, so the continuation
+    offering to reach the rest re-read the stream as lines -- and it named the
+    SAME range, so following it changed nothing."""
+    import re
+
+    from ctx.retrieval import Selector, get
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    ref = f"blob:{_blob(store, b'x' * 40000)[:12]}"
+
+    out = get(store, ws, ref, Selector(bytes=(1, 40000)))
+    shown = re.search(r"--bytes (\d+):(\d+) of ", out)
+    nxt = re.search(r"next: ctx get \S+ --bytes (\d+):(\d+)", out)
+    assert nxt, f"the continuation must carry the selector:\n{out[:400]}"
+    assert int(nxt.group(1)) == int(shown.group(2)) + 1, "it must advance"
