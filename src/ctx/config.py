@@ -200,9 +200,47 @@ class Config:
     deny_globs: tuple[str, ...] = BUILTIN_DENY_GLOBS
 
 
+def _coerce_like(default: Any, value: Any) -> Any:
+    """``value`` as the same TYPE as ``default``, or ``default`` if it cannot.
+
+    ctx.toml is foreign input: a user hand-edits it, and TOML happily parses
+    `max_inline_bytes = "lots"` as a perfectly valid string. Config declares
+    a fail-open contract for malformed files (SPEC 15) and it only covered
+    SYNTAX errors -- a well-formed file with a wrong-typed value flowed
+    straight through to consumers, where it surfaced as an uncaught
+    ValueError from `int()` or a TypeError from `n <= budget`. Three
+    separate commands crashed that way, each looking like its own bug.
+
+    Coercing at LOAD time means no consumer can meet an un-numeric number,
+    which is one guard instead of one per arithmetic site.
+    """
+    if isinstance(default, bool):  # before int: bool IS an int
+        return value if isinstance(value, bool) else default
+    if isinstance(default, int):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(default, float):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(default, str):
+        return value if isinstance(value, str) else default
+    if isinstance(default, tuple):
+        return tuple(value) if isinstance(value, (list, tuple)) else default
+    return value
+
+
 def _pick(data: dict[str, Any], cls: type, **overrides: Any) -> Any:
     names = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-    kwargs = {k: v for k, v in data.items() if k in names}
+    proto = cls()  # every config section is fully defaulted
+    kwargs = {
+        k: _coerce_like(getattr(proto, k), v)
+        for k, v in data.items()
+        if k in names
+    }
     kwargs.update(overrides)
     return cls(**kwargs)
 
@@ -254,11 +292,14 @@ def load_config(workspace_root: Path | None) -> Config:
     ed = Engagement()
     engagement = Engagement(
         mode=str(eng_raw.get("mode", ed.mode)),
-        activate_after_calls=int(eng_raw.get("activate_after_calls", ed.activate_after_calls)),
+        activate_after_calls=_coerce_like(
+            ed.activate_after_calls, eng_raw.get("activate_after_calls", ed.activate_after_calls)
+        ),
         lean_models=tuple(
             str(m) for m in eng_raw.get("lean_models", ed.lean_models)
         ),
-        emission_nudge_tokens=int(
+        emission_nudge_tokens=_coerce_like(
+            ed.emission_nudge_tokens,
             eng_raw.get("emission_nudge_tokens", ed.emission_nudge_tokens)
         ),
     )
@@ -282,7 +323,7 @@ def load_config(workspace_root: Path | None) -> Config:
     }
 
     return Config(
-        version=int(raw.get("version", 1)),
+        version=_coerce_like(1, raw.get("version", 1)),
         repo_key=raw.get("repo_key"),
         workspace=ws,
         budgets=budgets,

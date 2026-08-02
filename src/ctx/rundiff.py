@@ -27,6 +27,12 @@ _SPAN_LINES = 12  # display budget for a quoted traceback
 _SESSION_RE = re.compile(r"=+ test session starts =+")
 _FAILED_LINE_RE = re.compile(r"^(?:FAILED|ERROR) (?P<nodeid>\S+)(?: - (?P<msg>.*))?$")
 _FAIL_HEADER_RE = re.compile(r"^_{3,} (?P<nodeid>.+?) _{3,}$")
+#: Any `==== banner ====` line -- the short-summary separator among them.
+#: _span_end anchored only on traceback headers and FAILED/ERROR lines, so
+#: the span for the LAST failure in a run ran one line into the
+#: "short test summary info" separator: evidence attributed to a failure
+#: that belongs to the report, not to it.
+_BANNER_RE = re.compile(r"^=+ .* =+$")
 
 
 def _manifest(store: Store, ref_text: str) -> dict[str, Any]:
@@ -218,7 +224,14 @@ def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> s
         if new:
             out.append(f"  new failures: {fmt_int(len(new))}")
             blocks = _fail_blocks(text_b)
-            anchors = sorted({ln for _n, ln in blocks} | set((fails_b or {}).values()))
+            anchors = sorted(
+                {ln for _n, ln in blocks}
+                | set((fails_b or {}).values())
+                | {
+                    i for i, ln in enumerate(text_b.splitlines(), start=1)
+                    if _BANNER_RE.match(ln.strip())
+                }
+            )
             for nodeid in new[:_TOP]:
                 start = _block_start(blocks, nodeid) or (fails_b or {}).get(nodeid) or 1
                 end = _span_end(start, anchors, lines_b_total)

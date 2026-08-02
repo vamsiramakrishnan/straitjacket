@@ -872,9 +872,20 @@ def fails_sites(
         if conn is None:
             return []
         try:
-            run_id = _short_id(str(run).removeprefix("run:")) if run else _meta_get(
-                conn, "latest_run"
-            )
+            if run:
+                run_id = _short_id(str(run).removeprefix("run:"))
+            else:
+                # "last" means the last CAPTURED run, not the last DERIVED
+                # one. `latest_run` is a pointer written when derivation
+                # happens, and nothing re-derives on a fresh `ctx run` -- so
+                # once `ctx ask --intent diagnose` had been asked once, it
+                # answered about that same run forever, while the user kept
+                # capturing new failures and getting the old census.
+                #
+                # The derived pointer is a CACHE. The newest capture is the
+                # answer, and it is only fallen back on when there are no
+                # captures at all.
+                run_id = _newest_captured(store) or _meta_get(conn, "latest_run")
         finally:
             conn.close()
         if run_id is not None:
@@ -911,6 +922,19 @@ def _fails_for(store: Store, run_id: str) -> list[dict[str, Any]]:
         ]
     finally:
         conn.close()
+
+
+def _newest_captured(store: Store) -> str | None:
+    """Id of the newest captured run, or None. created_at is operational
+    metadata -- it selects WHICH run, never enters fact content."""
+    try:
+        row = store.db.execute(
+            "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC, id LIMIT 1"
+        ).fetchone()
+        return str(row[0]) if row else None
+    except Exception as e:
+        _note_error("facts._newest_captured", e)
+        return None
 
 
 def _derive_newest(store: Store, ws: Workspace) -> dict[str, Any]:

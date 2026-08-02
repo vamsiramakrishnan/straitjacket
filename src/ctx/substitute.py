@@ -220,6 +220,15 @@ def _grep_pattern_and_globs(toks: list[str]) -> tuple[str | None, list[str]]:
     return pattern, positionals
 
 
+def _shell_safe(query: str) -> bool:
+    """Can this query survive being quoted ONCE as a single shell argument?
+
+    Checked on the assembled string rather than on each part, so a new
+    interpolated field inherits the guard instead of needing its own.
+    """
+    return "'" not in query and '"' not in query
+
+
 def _scope_hint(paths: list[str]) -> str | None:
     """A ``--glob`` that preserves the SCOPE the caller wrote.
 
@@ -313,14 +322,19 @@ def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution |
     # directory-scoped grep. `search` is the stage that reads --glob.
     # No inner shlex.quote: the whole query is quoted once as a single
     # argument below, and quoting twice produced a valid but unreadable
-    # '"'"' nest. A scope containing a quote character cannot survive that
-    # single layer, so it declines rather than emitting something malformed.
-    if scope and ("'" in scope or '"' in scope):
-        return None
+    # '"'"' nest. Nothing embedded in it may carry a quote character.
+    #
+    # The first cut guarded only the SCOPE. The PATTERN goes into the same
+    # string and needed the same guard -- `grep -rn "TODO's" src` collapsed
+    # to a query with an unbalanced quote, which is the identical
+    # "collapsed command does not parse" defect one commit later, through
+    # the other half of the same expression.
     scoped_query = (
         f"search {pattern} --glob {scope} | files" if scope
         else f"search {pattern} | files"
     )
+    if not _shell_safe(scoped_query):
+        return None
     return Substitution(
         command=f"ctx q {shlex.quote(scoped_query)}",
         reason=("CTX_CONTEXT_GUARD: recursive content search floods the next "

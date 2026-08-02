@@ -669,11 +669,21 @@ def _op_code_symbols(pc: PlanContext, args: dict, inp: dict | None) -> dict[str,
         keep = set(files)
         rows = [r for r in rows if r.get("file") in keep]
     if sym:
+        # Symmetric on BOTH sides. The three original clauses all assumed the
+        # STORED symbol was the dotted one, so a dotted query
+        # (`Store.put_blob`) against a bare stored symbol found nothing and
+        # `ctx ask --intent locate` reported zero definitions for a symbol
+        # that is right there.
+        sym_tail = sym.rsplit(".", 1)[-1]
         rows = [
             r for r in rows
-            if r.get("symbol") == sym
-            or str(r.get("symbol", "")).rsplit(".", 1)[-1] == sym
-            or str(r.get("symbol", "")).startswith(sym + ".")
+            if (lambda stored: (
+                stored == sym
+                or stored.rsplit(".", 1)[-1] == sym
+                or stored.startswith(sym + ".")
+                or stored == sym_tail
+                or stored.endswith("." + sym_tail)
+            ))(str(r.get("symbol", "")))
         ]
     rows = rows[:limit]
     meta: dict[str, Any] = {
