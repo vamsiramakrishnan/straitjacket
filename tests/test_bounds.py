@@ -105,3 +105,27 @@ def test_pricing_tier_tokens_match_on_letter_boundaries():
     assert _token_matches("mini", "gpt-4o-mini-2024") is True
     assert _token_matches("mini", "gemini-3-pro") is False
     assert _token_matches("mini", "gemini-3.6-flash") is False
+
+
+def test_explicit_zero_is_an_answer_not_an_absence():
+    """`raw or default` reads an explicit 0 as unset. Two confirmed defects:
+    `ctx gc --retention-days 0` (collect everything already expired) fell back
+    to the configured retention, and `ctx ask --depth 0` became depth 3."""
+    assert bounds.explicit(0, 3) == 0
+    assert bounds.explicit(None, 3) == 3
+    assert bounds.explicit("", "x") == ""
+    assert bounds.explicit(False, True) is False
+
+
+def test_timeout_signal_is_not_the_childs_exit_code():
+    """124 is the documented timeout code, but a script may legitimately
+    return it. run_eval/run_seq now carry a timed_out flag beside the code so
+    `sys.exit(124)` and a real kill stay distinguishable."""
+    import inspect
+
+    from ctx.pyeval import run_eval
+    from ctx.seq import run_seq
+
+    for fn in (run_eval, run_seq):
+        doc = inspect.getdoc(fn) or ""
+        assert "timed_out" in doc, f"{fn.__name__} must document the flag"

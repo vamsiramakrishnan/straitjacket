@@ -31,13 +31,20 @@ def run_seq(
     timeout: float | None = None,
     focus: str | None = None,
 ) -> tuple[str, int]:
-    """Execute a declared step list; return (composite digest, exit code)."""
+    """Execute a declared step list; return (composite digest, exit code,
+    timed_out).
+
+    ``timed_out`` travels beside the exit code rather than inside it. A step
+    that the runner killed on timeout and a step that chose to return 124 are
+    different events, and the child's exit code cannot tell them apart -- the
+    same overload that made ``ctx py`` misreport ``sys.exit(124)``."""
     from ctx.digest import render_run_digest
     from ctx.execution import ExecutionError, run_capture
 
     lines_out: list[str] = []
     step_digests: list[tuple[int, str, str, int]] = []  # (idx, cmd, digest, exit)
     final_exit = 0
+    any_timed_out = False
     halted_at: int | None = None
 
     for idx, cmd in enumerate(steps, start=1):
@@ -65,7 +72,17 @@ def run_seq(
         lines_out.append(f"step {idx} {mark} {status} · run:{rid} · {cmd}")
         step_digests.append((idx, cmd, digest, exit_code if exit_code is not None else 1))
         if failed:
-            final_exit = final_exit or (exit_code if exit_code not in (0, None) else 124)
+            # A timeout the RUNNER observed outranks whatever the child
+            # returned: previously a killed step fell through to the child's
+            # code, so `ctx seq` reported 3 for a timeout the manifest
+            # recorded, against the 124 in the docs/CLI.md exit-code table.
+            if result["timedOut"]:
+                any_timed_out = True
+                final_exit = final_exit or 124
+            else:
+                final_exit = final_exit or (
+                    exit_code if exit_code not in (0, None) else 124
+                )
             if halt_on_fail:
                 halted_at = idx
                 break
@@ -91,4 +108,4 @@ def run_seq(
         idx, _, digest, _ = detail
         body.append(f"--- step {idx} digest ---")
         body.append(digest)
-    return "\n".join(body), final_exit
+    return "\n".join(body), final_exit, any_timed_out

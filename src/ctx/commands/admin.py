@@ -32,7 +32,12 @@ def cmd_gc(ws, ns) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    days = ns.retention_days or ws.config.store.retention_days
+    from ctx import bounds
+
+    # bounds.explicit, not `or`: --retention-days 0 means collect everything
+    # already expired. `or` made the one spelling that means 'now' the one
+    # spelling that silently did nothing.
+    days = int(bounds.explicit(ns.retention_days, ws.config.store.retention_days))
     result = store.gc(days)
     print(
         f"gc: removed {result['blobs_removed']} blobs, "

@@ -230,7 +230,7 @@ def cmd_py(ws, ns) -> int:
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
-        text, code = run_eval(
+        text, code, timed_out = run_eval(
             ws, store, script, timeout=ns.timeout, cwd=ns.cwd, focus=ns.focus
         )
     except ExecutionError as e:
@@ -253,7 +253,11 @@ def cmd_py(ws, ns) -> int:
         base_tokens=base,
     )
     _emit_bounded_digest(ws, store, text, plan)
-    if code == 124:
+    # 124 is the documented TIMEOUT code, so it may only be returned when the
+    # runner actually timed the child out. A script that returns 124 itself is
+    # a plain failure -- reading the child's exit code as a timeout signal was
+    # the defect (a script cannot be trusted to describe why it stopped).
+    if timed_out:
         return 124
     return 0 if code == 0 else 3
 
@@ -264,7 +268,7 @@ def cmd_seq(ws, ns) -> int:
     from ctx.store import Store as _Store
 
     store = _Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    text, code = run_seq(
+    text, code, timed_out = run_seq(
         ws, store, ns.steps,
         halt_on_fail=not ns.keep_going,
         timeout=ns.timeout, focus=ns.focus,
@@ -281,4 +285,8 @@ def cmd_seq(ws, ns) -> int:
         base_tokens=ws.config.budgets.result_tokens,
     )
     _emit_bounded_digest(ws, store, text, plan)
+    # Same contract as `ctx py`: 124 means the RUNNER timed a step out,
+    # which only the timed_out flag can say (docs/CLI.md exit codes).
+    if timed_out:
+        return 124
     return 0 if code == 0 else 3

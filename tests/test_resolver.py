@@ -416,7 +416,7 @@ def test_golden_eval_digest_byte_identical_to_legacy(ws_store, capsys, fail):
     assert rc == (3 if fail else 0)
     emitted = capsys.readouterr().out
 
-    text, code = run_eval(ws, store, script)
+    text, code, _timed_out = run_eval(ws, store, script)
     assert code == (2 if fail else 0)
     assert emitted == _with_truncation_handle(_legacy_emitted(ws, text, code), text)
 
@@ -432,7 +432,7 @@ def test_golden_seq_digest_byte_identical_to_legacy(ws_store, capsys, fail):
     assert rc == (3 if fail else 0)
     emitted = capsys.readouterr().out
 
-    text, code = run_seq(ws, store, steps, halt_on_fail=True, timeout=None, focus=None)
+    text, code, _timed_out = run_seq(ws, store, steps, halt_on_fail=True, timeout=None, focus=None)
     assert code == (1 if fail else 0)
     # seq always emits against the result budget (pre-change behavior).
     from ctx.engagement import filter_digest, suggestion_cap

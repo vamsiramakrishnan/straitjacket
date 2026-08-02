@@ -39,7 +39,7 @@ most likely to produce. Every coercion below catches OverflowError too.
 
 from __future__ import annotations
 
-__all__ = ["count", "budget_bytes", "span"]
+__all__ = ["count", "budget_bytes", "span", "explicit"]
 
 
 def count(raw: object, *, default: int = 0) -> int:
@@ -88,3 +88,22 @@ def span(start: object, end: object, total: int) -> tuple[int, int] | None:
     if hi < 0 or lo > total or hi < lo:
         return None
     return lo, min(hi, total)
+
+
+def explicit(raw: object, default: object) -> object:
+    """A caller-supplied value, honouring an explicit zero.
+
+    ``raw or default`` is the idiom that breaks this, and it is everywhere:
+    ``0`` is falsy, so an explicit "none of it" is indistinguishable from
+    "unset" and silently becomes the default. A bug bash confirmed two
+    instances on the same day the sibling defect (``max(1, n)`` flooring a
+    ``top 0`` to one row) was fixed:
+
+    * ``ctx gc --retention-days 0`` -- collect everything already expired --
+      fell back to the configured retention instead, so the one spelling that
+      means "now" was the one spelling that did nothing.
+    * ``ctx ask --depth 0`` became depth 3.
+
+    Only ``None`` means unset. Zero, empty string and empty list are answers.
+    """
+    return default if raw is None else raw
