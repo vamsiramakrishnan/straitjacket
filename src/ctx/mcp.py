@@ -22,6 +22,12 @@ from ctx import __version__
 
 PROTOCOL_VERSION = "2025-06-18"
 
+#: Declared bounds for the MCP tool's ``maxTokens`` argument. Referenced by
+#: BOTH the published schema and the runtime clamp: an advertised bound that
+#: nothing enforces is worse than no bound at all.
+_MAX_TOKENS_MIN = 64
+_MAX_TOKENS_MAX = 4000
+
 TOOL_SCHEMA: dict[str, Any] = {
     "name": "ctx",
     "description": (
@@ -75,7 +81,11 @@ TOOL_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path} · callers/callees/impact options: {symbol,depth} · diff options: {refA,refB}",
             },
-            "maxTokens": {"type": "integer", "minimum": 64, "maximum": 4000},
+            "maxTokens": {
+                "type": "integer",
+                "minimum": _MAX_TOKENS_MIN,
+                "maximum": _MAX_TOKENS_MAX,
+            },
         },
         "additionalProperties": False,
     },
@@ -143,6 +153,11 @@ def _dispatch(args: dict[str, Any]) -> str:
 
     max_tokens = args.get("maxTokens")
     if isinstance(max_tokens, int):
+        # Enforce the range the schema DECLARES. It was advertised and never
+        # checked, so a negative cap flowed into the budgets below and out to
+        # textutil.bounded as a negative slice (ctx.bounds). Schema and check
+        # read the same constants so they cannot drift apart again.
+        max_tokens = max(_MAX_TOKENS_MIN, min(_MAX_TOKENS_MAX, max_tokens))
         # Tighten budgets to the caller's cap (never loosen beyond policy),
         # on a per-call copy so the cached workspace stays pristine.
         from dataclasses import replace

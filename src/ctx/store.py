@@ -15,6 +15,8 @@ catalog and never participates in content identity.
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import array
 import hashlib
 import json
@@ -301,10 +303,13 @@ class Store:
         blob_hash = blob_hash.removeprefix("sha256:")
         idx = self.line_index(blob_hash)
         n_lines = max(0, len(idx) - 1)
-        if n_lines == 0 or start > n_lines:
+        # bounds.span, not min(end, n_lines): a negative `end` survived that
+        # clamp and idx[end] wrapped around to dump most of the blob
+        # (ctx.bounds). An empty span is empty, never a suffix.
+        window = bounds.span(start, end, n_lines)
+        if window is None:
             return b""
-        start = max(1, start)
-        end = min(end, n_lines)
+        start, end = window
         with self.blob_path(self.resolve_id(blob_hash, kinds=("blob",))).open("rb") as fh:
             fh.seek(idx[start - 1])
             return fh.read(idx[end] - idx[start - 1])

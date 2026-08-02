@@ -3,6 +3,8 @@ secret redaction, and bounded emission (SPEC §8, §12.4, §16)."""
 
 from __future__ import annotations
 
+from ctx import bounds as _bounds
+
 import hashlib
 import re
 
@@ -325,7 +327,10 @@ def bounded(
     needs a retrieval address is the moment the clamp deletes it. Callers
     that can name a handle pass it here; nothing is added to an untruncated
     digest, so an emission that fits stays byte-identical."""
-    budget_bytes = budget_tokens * 4
+    # ctx.bounds, not `budget_tokens * 4`: a negative budget made this
+    # `raw[:-4]` -- almost the whole input -- from the one function documented
+    # as the hard backstop. The failure direction must be toward less output.
+    budget_bytes = _bounds.budget_bytes(budget_tokens)
     raw = text.encode("utf-8")
     if len(raw) <= budget_bytes:
         if continuation:

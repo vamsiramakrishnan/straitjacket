@@ -60,6 +60,8 @@ orderings everywhere; content-addressed provenance only).
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import difflib
 import json
 import os
@@ -730,7 +732,9 @@ def _stage_group(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 def _stage_top(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     raw = _need_arg(args, "top", "an <N>")
     try:
-        n = max(1, int(raw))
+        # bounds.count, not max(1, ...): `top 0` must yield zero rows. Flooring
+        # at 1 turned an explicit request for nothing into one row (ctx.bounds).
+        n = bounds.count(int(raw))
     except ValueError as e:
         raise QueryError(f"ctx q: top needs an integer, got {raw!r}") from e
     if stream.groups is not None:
