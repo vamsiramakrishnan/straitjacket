@@ -506,7 +506,7 @@ def _stage_callers(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
             if tier == cg._TIER_REPO:
                 hidden += 1  # declared below, never silently dropped
                 continue
-            rows.append({"file": n.rel, "line": line, "symbol": qual})
+            rows.append({"file": n.rel, "line": line, "symbol": n.qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
     return Stream("sites", rows, omitted=hidden,
                   omitted_reason=_UNSCOPED_REASON if hidden else None)
@@ -526,8 +526,8 @@ def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
             for qual in quals:
                 n = g.nodes.get(qual)
                 if n is not None and qual not in seen:
-                    seen.add(qual)
-                    rows.append({"file": n.rel, "line": n.lineno, "symbol": qual})
+                    seen.add(qual)  # node id: two files' same-named defs are two rows
+                    rows.append({"file": n.rel, "line": n.lineno, "symbol": n.qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
     return Stream("sites", rows, omitted=hidden,
                   omitted_reason=_UNSCOPED_REASON if hidden else None)
@@ -543,7 +543,7 @@ def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     for qual, d in scoped.items():
         n = g.nodes.get(qual)
         if n is not None:
-            rows.append({"file": n.rel, "line": n.lineno, "symbol": qual, "depth": d})
+            rows.append({"file": n.rel, "line": n.lineno, "symbol": n.qual, "depth": d})
     rows.sort(key=lambda r: (r["depth"], r["file"], r["line"], r["symbol"]))
     # Reachability COMPOUNDS the omission: one dropped edge at depth 1 hides
     # its whole cone, so the honest count is the difference between the two

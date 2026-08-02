@@ -65,11 +65,13 @@ from ctx.textutil import fmt_int
 from ctx.workspace import Workspace, stat_fingerprint
 
 #: v2.1 adds the resolved import edges to the serialized graph so `ctx cycles`
-#: reads them from cache instead of re-deriving them. The suffix is part of
-#: every cache key, so graphs written by v2 are simply not found — a stale
-#: graph missing the new field would otherwise report "no cycles", and a
-#: wrong answer from a cache is worse than a rebuild.
-_FORMAT = "ctx.callgraph/v2.1"
+#: reads them from cache instead of re-deriving them. v2.2 makes node keys
+#: file-scoped ("rel::qual") and stores each definition's qual explicitly
+#: rather than deriving it from the key. The suffix is part of every cache
+#: key, so graphs written by an older version are simply not found — a stale
+#: graph read under the new key shape would answer confidently and wrongly,
+#: and a wrong answer from a cache is worse than a rebuild.
+_FORMAT = "ctx.callgraph/v2.2"
 _MAX_FILES = 5000
 _MAX_DEPTH = 6  # hard bound on impact/reachability recursion
 _MAX_ROWS = 20  # per-section row cap; the remainder is declared, never dropped
@@ -120,17 +122,38 @@ class _Unit:
 
 @dataclass
 class _Graph:
-    nodes: dict[str, _Def] = field(default_factory=dict)  # qual -> def
-    defs_by_name: dict[str, list[str]] = field(default_factory=dict)  # name -> quals
-    # resolved callee qual -> [(caller qual, call-site line, tier)]
+    # Keys throughout are FILE-SCOPED node ids ("rel::qual"), never bare
+    # quals -- see _nid. Values still carry the bare qual for display.
+    nodes: dict[str, _Def] = field(default_factory=dict)  # node id -> def
+    defs_by_name: dict[str, list[str]] = field(default_factory=dict)  # name -> ids
+    # callee node id -> [(caller node id, call-site line, tier)]
     in_edges: dict[str, list[tuple[str, int, str]]] = field(default_factory=dict)
-    # caller qual -> [(callee name, line, resolved target quals, tier)]
+    # caller node id -> [(callee name, line, resolved target ids, tier)]
     out_edges: dict[str, list[tuple[str, int, list[str], str]]] = field(default_factory=dict)
-    # base qual -> [subclass quals]
+    # base node id -> [subclass node ids]
     subclasses: dict[str, list[str]] = field(default_factory=dict)
     # file -> files it directly imports (the scoping relation, kept for cycles)
     imports: dict[str, list[str]] = field(default_factory=dict)
     engines: dict[str, str] = field(default_factory=dict)  # stage -> engine label
+
+
+#: Node ids are FILE-SCOPED. The v2 graph keyed nodes by bare qualified name
+#: ("shared", "Base", "Class.method"), so two files defining the same name
+#: collapsed into one node -- `nodes.setdefault` kept the first and dropped the
+#: rest. A bug bash proved both halves of the damage: `ctx callers shared`
+#: reported ZERO callers for a caller sitting two lines below its target in the
+#: same file (the second file's definition was never in the graph), and
+#: `ctx impls Base` merged two unrelated hierarchies into one answer with no
+#: ambiguity note -- the exact regression this module's docstring says v2
+#: exists to prevent, an ambiguous name answered silently instead of out loud.
+#:
+#: A definition is identified by where it is defined. The separator cannot
+#: occur in a path or a dotted qual, so the id splits back apart unambiguously.
+_NID_SEP = "::"
+
+
+def _nid(rel: str, qual: str) -> str:
+    return f"{rel}{_NID_SEP}{qual}"
 
 
 # --------------------------------------------------------------- extraction
@@ -208,15 +231,59 @@ class _PyVisitor(ast.NodeVisitor):
         # Calls lexically inside this function only — nested defs get their own
         # node and own edges. Every call site keeps its line: v1 reported the
         # caller's definition range, so seeing the actual call cost another read.
-        for child in ast.walk(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child is not node:
-                continue
-            if isinstance(child, ast.Call):
-                name = _callee_name(child.func)
-                if name:
-                    self.unit.calls.append((qual, name, int(child.lineno)))
+        #
+        # _own_calls, not ast.walk: walk flattens EVERY descendant and offers no
+        # pruning, so `continue`-ing past a nested FunctionDef skipped only that
+        # node -- which is never a Call anyway, making the guard a no-op while
+        # reading as if it worked. Its descendants were already queued, so every
+        # call inside a closure was attributed to the enclosing function TOO,
+        # as a duplicate edge that no ctx callers/callees output could explain.
+        for name, lineno in _own_calls(node):
+            self.unit.calls.append((qual, name, lineno))
         self.generic_visit(node)
         self.stack.pop()
+
+
+def _own_calls(node) -> list[tuple[str, int]]:  # noqa: ANN001
+    """Call sites lexically owned by ``node``, not by a def nested inside it.
+
+    A real pruned traversal. ``ast.walk`` cannot express this: it is a
+    flattening generator that has already enqueued a node's children before
+    yielding the node, so declining to descend is not something a caller can
+    say.
+
+    The boundary is exactly "things that get their own node in the graph" --
+    nested ``def``s. Not lambdas and not class bodies, and for opposite
+    reasons: a lambda body gets no node of its own, so pruning it would DROP
+    those call sites rather than re-home them; a class body genuinely executes
+    in the enclosing scope at definition time, so its calls belong here (its
+    methods are FunctionDefs and prune normally). A decorator or default
+    argument on a nested def also evaluates in this scope, so those descend.
+    """
+    out: list[tuple[str, int]] = []
+    # The BODY, not every child: a def's own decorators, argument defaults and
+    # annotations are written here but EVALUATED in the scope that contains it,
+    # which is the branch below. Starting from iter_child_nodes gave a
+    # `@deco(1)` on a nested def to the nested def as well as its parent --
+    # the same double-attribution this function exists to remove.
+    body = getattr(node, "body", None)
+    stack = list(body) if isinstance(body, list) else list(ast.iter_child_nodes(node))
+    while stack:
+        child = stack.pop()
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            stack.extend(child.decorator_list)
+            args = child.args
+            stack.extend(
+                d for d in [*args.defaults, *(args.kw_defaults or [])] if d is not None
+            )
+            continue
+        if isinstance(child, ast.Call):
+            name = _callee_name(child.func)
+            if name:
+                out.append((name, int(child.lineno)))
+        stack.extend(ast.iter_child_nodes(child))
+    out.sort(key=lambda p: (p[1], p[0]))
+    return out
 
 
 def _callee_name(func: ast.expr) -> str | None:
@@ -415,7 +482,7 @@ def _resolve_name(
     g: _Graph,
     imports_of: dict[str, set[str]],
 ) -> tuple[list[str], str]:
-    """(target quals, tier) for a name referenced from ``caller_rel``.
+    """(target node ids, tier) for a name referenced from ``caller_rel``.
 
     The first tier with any candidate wins. Every candidate in that tier is
     returned — narrowing a tie invisibly is the failure mode SPEC §8 forbids.
@@ -440,9 +507,9 @@ def _link(ws: Workspace, units: dict[str, _Unit]) -> _Graph:
         for d in units[rel].defs:
             # Later definitions of the same qual in one file (conditional defs)
             # keep the first: deterministic and matches the ast reading order.
-            g.nodes.setdefault(d.qual, d)
-    for qual, d in g.nodes.items():
-        g.defs_by_name.setdefault(qual.split(".")[-1], []).append(qual)
+            g.nodes.setdefault(_nid(rel, d.qual), d)
+    for nid, d in g.nodes.items():
+        g.defs_by_name.setdefault(d.qual.split(".")[-1], []).append(nid)
     for name in g.defs_by_name:
         g.defs_by_name[name].sort()
 
@@ -457,18 +524,20 @@ def _link(ws: Workspace, units: dict[str, _Unit]) -> _Graph:
             targets, tier = _resolve_name(callee, rel, g, imports_of)
             if not targets:
                 continue  # not an in-repo definition (builtin, third party)
-            g.out_edges.setdefault(caller_qual, []).append((callee, line, targets, tier))
+            caller = _nid(rel, caller_qual)
+            g.out_edges.setdefault(caller, []).append((callee, line, targets, tier))
             for t in targets:
-                g.in_edges.setdefault(t, []).append((caller_qual, line, tier))
+                g.in_edges.setdefault(t, []).append((caller, line, tier))
 
     # Inheritance: a base name resolves through the same ladder.
     for rel in sorted(units):
         for d in units[rel].defs:
             for base in d.bases:
                 targets, _tier = _resolve_name(base, rel, g, imports_of)
+                sub = _nid(rel, d.qual)
                 for t in targets:
-                    if t != d.qual:
-                        g.subclasses.setdefault(t, []).append(d.qual)
+                    if t != sub:
+                        g.subclasses.setdefault(t, []).append(sub)
     for k in g.in_edges:
         g.in_edges[k] = sorted(set(g.in_edges[k]))
     for k in g.subclasses:
@@ -563,8 +632,15 @@ def _load_graph(store: Store, ws: Workspace) -> _Graph:
 
 def _graph_to_json(g: _Graph) -> dict[str, Any]:
     return {
+        # The qual is stored, not re-derived from the key. It USED to be the
+        # key, so _graph_from_json rebuilt _Def(q, ...) and got it right by
+        # accident; once node ids became file-scoped that reconstruction
+        # handed back qual="pkg/core.py::Widget.render" and the cached path
+        # rendered differently from the cold one. The determinism test caught
+        # it -- a cache must return what it stored, not something derivable.
         "nodes": {
-            q: [d.rel, d.lineno, d.end, d.kind, d.bases, d.lang] for q, d in g.nodes.items()
+            n: [d.qual, d.rel, d.lineno, d.end, d.kind, d.bases, d.lang]
+            for n, d in g.nodes.items()
         },
         "defs_by_name": g.defs_by_name,
         "in_edges": {k: [list(e) for e in v] for k, v in g.in_edges.items()},
@@ -578,7 +654,8 @@ def _graph_to_json(g: _Graph) -> dict[str, Any]:
 def _graph_from_json(d: dict[str, Any]) -> _Graph:
     g = _Graph()
     g.nodes = {
-        q: _Def(q, v[0], v[1], v[2], v[3], list(v[4]), v[5]) for q, v in d["nodes"].items()
+        n: _Def(v[0], v[1], v[2], v[3], v[4], list(v[5]), v[6])
+        for n, v in d["nodes"].items()
     }
     g.defs_by_name = {k: list(v) for k, v in d["defs_by_name"].items()}
     g.in_edges = {k: [(e[0], int(e[1]), e[2]) for e in v] for k, v in d["in_edges"].items()}
@@ -603,18 +680,23 @@ def _resolve_target(g: _Graph, symbol: str) -> list[str]:
     this guard; losing it silently narrowed `render` to one of two).
     """
     if "." in symbol:
-        if symbol in g.nodes:
-            return [symbol]
+        # Every file whose qual is exactly this -- not the first one found.
+        # Node ids are file-scoped now, so a dotted name that two files both
+        # define is ambiguous, and saying so is the point.
+        exact = sorted(n for n, d in g.nodes.items() if d.qual == symbol)
+        if exact:
+            return exact
         # `Class.method` spelled against a nested qual (`Mod.Class.method`).
-        hits = sorted(q for q in g.nodes if q.endswith("." + symbol))
+        hits = sorted(n for n, d in g.nodes.items() if d.qual.endswith("." + symbol))
         if hits:
             return hits
     return list(g.defs_by_name.get(symbol.split(".")[-1], []))
 
 
-def _fmt_def(g: _Graph, qual: str) -> str:
-    d = g.nodes.get(qual)
-    return f"{qual}  {d.rel}:{d.lineno}-{d.end}" if d else qual
+def _fmt_def(g: _Graph, nid: str) -> str:
+    """A node id is internal; what a reader wants is the qual and where it is."""
+    d = g.nodes.get(nid)
+    return f"{d.qual}  {d.rel}:{d.lineno}-{d.end}" if d else nid
 
 
 def _is_production(rel: str) -> bool:
@@ -687,11 +769,11 @@ def _rows(g: _Graph, entries: list[tuple[str, int, str]]) -> list[str]:
             continue
         if both:
             out.append(f"  {label} ({fmt_int(len(group))}):")
-        for qual, line, tier in group[:_MAX_ROWS]:
-            d = g.nodes.get(qual)
+        for nid, line, tier in group[:_MAX_ROWS]:
+            d = g.nodes.get(nid)
             where = f"{d.rel}:{line}" if d else f"?:{line}"
             mark = "" if tier != _TIER_REPO else "  [unscoped]"
-            out.append(f"    {qual}  {where}{mark}")
+            out.append(f"    {d.qual if d else nid}  {where}{mark}")
         if len(group) > _MAX_ROWS:
             out.append(f"    … +{fmt_int(len(group) - _MAX_ROWS)} more")
     return out
