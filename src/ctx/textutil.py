@@ -196,6 +196,54 @@ def json_pointer(doc, pointer: str):
     return node
 
 
+#: How bytes that are not valid UTF-8 survive a str-typed pipeline.
+#:
+#: `ctx get --bytes A:B` is documented as the exact-bytes escape hatch -- the
+#: thing `ctx get` itself tells you to use for binary content -- and it
+#: decoded with errors="replace", turning every invalid byte into a 3-byte
+#: U+FFFD. The result was neither byte-exact nor even the same LENGTH as what
+#: was captured: silent, irreversible loss through the tool's own exactness
+#: interface, while the blob on disk stayed perfect.
+#:
+#: surrogateescape is the stdlib's answer: undecodable bytes become lone
+#: surrogates that encode back to exactly the original bytes. The pipeline
+#: stays str-typed and every string operation on the way out still works;
+#: only the two ends -- the decode and the final write -- have to agree, so
+#: they both go through here.
+BYTE_EXACT_ERRORS = "surrogateescape"
+
+
+def decode_exact(data: bytes) -> str:
+    """Decode bytes losslessly into a str that re-encodes to the same bytes."""
+    return data.decode("utf-8", BYTE_EXACT_ERRORS)
+
+
+def encode_exact(text: str) -> bytes:
+    """The inverse of decode_exact. Total: a str carrying no surrogates
+    encodes exactly as plain UTF-8 would."""
+    return text.encode("utf-8", BYTE_EXACT_ERRORS)
+
+
+def write_exact(text: str, stream=None) -> None:
+    """Write a possibly-byte-exact result to stdout without corrupting it.
+
+    print() encodes through the stream's own error handler, which is strict
+    by default -- a surrogate would raise there and turn a correct answer
+    into a crash. Writing the bytes ourselves is the only way to keep the
+    exactness the decode side just preserved.
+    """
+    import sys
+
+    stream = stream if stream is not None else sys.stdout
+    buf = getattr(stream, "buffer", None)
+    if buf is None:  # captured/text-only stream (pytest capsys): best effort
+        stream.write(text + "\n")
+        return
+    stream.flush()
+    buf.write(encode_exact(text) + b"\n")
+    buf.flush()
+
+
 def estimate_tokens(n_bytes: int) -> int:
     """Cheap deterministic token estimate: ~4 bytes per token."""
     return max(1, n_bytes // 4) if n_bytes else 0
