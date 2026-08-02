@@ -370,6 +370,16 @@ def _import_edges(ws: Workspace, rels: set[str], units: dict[str, _Unit]) -> tup
     pkg_dirs = {
         r[: -len("/__init__.py")] for r in rels if r.endswith("/__init__.py")
     }
+    # PEP 420 namespace packages have no __init__.py, so keying only on that
+    # file made every namespace package invisible to this rung -- the exact
+    # gap a later bug-bash round found in the previous fix. A directory that
+    # directly contains a module is importable whether or not it declares
+    # itself, so it counts as a root too. Directories that only contain other
+    # directories (a bare `src/`) still do not, which is what keeps
+    # "src/pkg/util.py" keyed as "pkg.util" rather than "src.pkg.util".
+    pkg_dirs |= {
+        r.rsplit("/", 1)[0] for r in rels if "/" in r and r.endswith(".py")
+    }
     for rel in sorted(rels):  # sorted: a set's order is not a contract
         stem = rel.removesuffix(".py").removesuffix("/__init__")
         by_stem.setdefault(stem.replace("/", "."), rel)
