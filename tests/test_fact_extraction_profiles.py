@@ -16,6 +16,11 @@ from __future__ import annotations
 import pytest
 
 
+#: NOTE the traceback path is a placeholder replaced per-test: a location is
+#: an ADDRESS, so it is only emitted when the file is genuinely inside the
+#: workspace. The first version of this file hard-coded `/repo/test_foo.py`
+#: -- outside any test workspace -- and asserted the basename fallback as
+#: correct, pinning a fabricated address as the contract.
 UNITTEST_OUTPUT = """\
 test_bad (test_foo.MyTest.test_bad) ... FAIL
 
@@ -23,7 +28,7 @@ test_bad (test_foo.MyTest.test_bad) ... FAIL
 FAIL: test_bad (test_foo.MyTest.test_bad)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/repo/test_foo.py", line 6, in test_bad
+  File "{TESTFILE}", line 6, in test_bad
     self.assertEqual(1, 2)
 AssertionError: 1 != 2
 
@@ -39,6 +44,7 @@ OLD_STYLE = UNITTEST_OUTPUT.replace(
 
 
 def _extract(text: str, workspace_dir):
+    text = text.replace("{TESTFILE}", str(workspace_dir / "test_foo.py"))
     from conftest import make_store, make_ws
     from ctx.digest import detect_profile
     from ctx.digest.base import DigestContext
@@ -70,7 +76,9 @@ def test_the_unittest_profile_extracts_failures(state_home, workspace_dir):
     item = graph.items[0]
     assert item.kind == "failing_test"
     assert item.failure_class == "AssertionError"
-    assert item.location and item.location.endswith(":6")
+    assert item.location == "test_foo.py:6", (
+        "an in-workspace traceback path becomes a repo-relative ADDRESS"
+    )
 
 
 def test_the_identity_is_not_doubled_on_modern_unittest(state_home, workspace_dir):
@@ -126,3 +134,26 @@ def test_the_pytest_profile_still_extracts(state_home, workspace_dir):
     profile, graph = _extract(pytest_output, workspace_dir)
     assert profile.version.startswith("pytest")
     assert graph is not None and len(graph.items) >= 1
+
+
+def test_an_out_of_workspace_path_gets_no_location(state_home, workspace_dir):
+    """`relativize` falls back to the BASENAME for a path outside the root --
+    fine for a display label, wrong for an address: `/elsewhere/test_foo.py`
+    came back as `test_foo.py`, which reads as repo-relative and resolves to
+    nothing. A test runner's traceback carries absolute paths and its files
+    are often outside the workspace, so the extractors hit this constantly.
+    No location beats a location that lies."""
+    outside = UNITTEST_OUTPUT.replace("{TESTFILE}", "/elsewhere/test_foo.py")
+    _, graph = _extract(outside, workspace_dir)
+    assert graph.items[0].location is None
+    assert graph.items[0].id == "test_foo.MyTest.test_bad", "still a real finding"
+
+
+def test_rel_if_inside_never_fabricates(state_home, workspace_dir):
+    from conftest import make_ws
+
+    ws = make_ws(workspace_dir)
+    assert ws.rel_if_inside(str(workspace_dir / "a" / "b.py")) == "a/b.py"
+    assert ws.rel_if_inside("/elsewhere/b.py") is None
+    # the display helpers keep their forgiving behaviour on purpose
+    assert ws.relativize_as_asked("/elsewhere/b.py") == "b.py"

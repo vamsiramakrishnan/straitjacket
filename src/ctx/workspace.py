@@ -127,6 +127,21 @@ class Workspace:
         Normalization is lexical (``..`` collapsed, no syscall), so the
         result is a repo-relative path that still names what was requested.
         """
+        inside = self.rel_if_inside(p)
+        return inside if inside is not None else self.relativize(p)
+
+    def rel_if_inside(self, p: str | Path) -> str | None:
+        """Repo-relative path, or None when it is not in this workspace.
+
+        ``relativize`` and ``relativize_as_asked`` both fall back to
+        ``Path(p).name`` for a path outside the root -- fine for a display
+        label, and wrong for an ADDRESS: `/somewhere/else/test_sample.py`
+        came back as `test_sample.py`, which reads as repo-relative and
+        resolves to nothing. A test runner's traceback carries absolute
+        paths and its files are often outside the workspace, so the fact
+        extractors reach this constantly. None is the honest answer, and it
+        lets the caller omit a location instead of inventing one.
+        """
         raw = Path(p)
         base = raw if raw.is_absolute() else self.root / raw
         lex = Path(os.path.normpath(base))
@@ -135,7 +150,7 @@ class Workspace:
                 return lex.relative_to(root).as_posix()
             except ValueError:
                 continue
-        return self.relativize(p)
+        return None
 
     def is_ignored(self, rel_path: str) -> bool:
         rel = rel_path.removeprefix("./")

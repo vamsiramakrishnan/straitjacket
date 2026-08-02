@@ -351,12 +351,17 @@ class UnittestProfile(Profile):
                         # A traceback carries the ABSOLUTE path; every other
                         # row in the fact table is repo-relative, and a JOIN
                         # against the corpus only lands if this one is too.
-                        rel = fr.group("file")
+                        # An address, not a label: a file outside the
+                        # workspace has no repo-relative form, and the
+                        # basename fallback would emit `repo:test_x.py` for
+                        # something that resolves to nothing. No location
+                        # beats a location that lies.
+                        rel = None
                         try:
-                            rel = ctx.ws.relativize_as_asked(rel)
+                            rel = ctx.ws.rel_if_inside(fr.group("file"))
                         except Exception:
-                            pass
-                        location = f"{rel}:{fr.group('line')}"
+                            rel = None
+                        location = f"{rel}:{fr.group('line')}" if rel else None
                     em = re.match(r"^(?P<cls>\w+(?:\.\w+)*(?:Error|Exception))\b", lines[j])
                     if em:
                         exc = em.group("cls")
