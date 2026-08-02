@@ -184,3 +184,40 @@ def test_bounded_cuts_at_a_line_boundary_at_index_zero():
     out = bounded(text, 5)  # 20 bytes: the cut lands mid-x-run
     body = out.split("\n[ctx:truncated")[0]
     assert body == "", f"must cut back to the boundary, got {body!r}"
+
+
+# ------------------------------------- a cap declares its own overflow
+def test_gateway_note_fits_inside_the_budget_it_announces():
+    """The note is part of the output, so it comes OUT of the budget rather
+    than being added on top of it. Appending it to a slice already at
+    max_bytes made the block announcing a 16,384-byte cap the thing that
+    exceeded it -- a bound broken by its own disclosure."""
+    from ctx.surface_gateway import _MAX_BACKEND_RESULT_BYTES, _bound_result
+
+    big = {"content": [{"type": "text", "text": "x" * 100_000}]}
+    out = _bound_result(big)
+    text = out["content"][0]["text"]
+    assert len(text.encode("utf-8")) <= _MAX_BACKEND_RESULT_BYTES
+    assert "gateway caps proxied floods" in text, "the cut is still declared"
+
+
+def test_gateway_leaves_a_small_result_untouched():
+    from ctx.surface_gateway import _bound_result
+
+    small = {"content": [{"type": "text", "text": "hello"}]}
+    assert _bound_result(small)["content"][0]["text"] == "hello"
+
+
+def test_impact_depth_zero_survives_the_plan_op():
+    """ask.py fixed `--depth 0` becoming 3 at ITS layer, and the 0 then
+    survived into the compiled plan's step args only to be dropped here,
+    where a falsy depth read as "no depth given". Two layers, one flag, the
+    second undoing the first."""
+    import inspect
+
+    from ctx import plan_ops
+
+    src = inspect.getsource(plan_ops._mk_callgraph_op)
+    assert 'args.get("depth") is not None' in src, (
+        "a depth of 0 must be distinguishable from no depth at all"
+    )

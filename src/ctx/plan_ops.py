@@ -267,8 +267,13 @@ def _op_code_refs(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
 def _mk_callgraph_op(stage: str):
     def op(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
         argv = [str(args.get("symbol") or "")]
-        if stage == "impact" and args.get("depth"):
-            argv += ["--depth", str(int(args["depth"]))]
+        # `is not None`, not truthiness: ask.py already fixed `--depth 0`
+        # becoming 3 at ITS layer, and the 0 then survived all the way into
+        # the compiled plan's step args only to be dropped here, where a
+        # falsy depth read as "no depth given". Two layers, one flag, and the
+        # second one undid the first.
+        if stage == "impact" and args.get("depth") is not None:
+            argv += ["--depth", str(bounds.count(args["depth"]))]
         out = _run_q_stage(pc, stage, argv)
         return payload(
             "sites", out.rows, omitted=out.omitted,
@@ -540,10 +545,21 @@ def _op_semantic(mode: str):
             paths=paths,
             cap=int(args.get("cap", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP),
         )
+        # The cap's overflow, declared -- exactly as ast.search already does
+        # with the same meta key. Without this the coverage line attested a
+        # complete census over a truncated one: six findings scanned, two
+        # rows shown, four gone with nothing saying so. plan_ir's docstring
+        # calls this out by name ("overflow executes as declared omission,
+        # never silently"); semantic.* was the op that did not.
+        omitted = max(0, int(meta.pop("matched", len(rows))) - len(rows))
         if mode == "taint":
-            rows = [r for r in rows if r.get("trace")] or rows
+            traced = [r for r in rows if r.get("trace")]
+            if traced:
+                # The filter is a second, narrower drop on the same stream.
+                omitted += len(rows) - len(traced)
+                rows = traced
         meta["mode"] = mode
-        return payload("records", rows, meta=meta)
+        return payload("records", rows, omitted=omitted, meta=meta)
 
     return op
 
