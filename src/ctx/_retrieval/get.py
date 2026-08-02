@@ -12,7 +12,7 @@ from typing import Any
 
 from ctx.execution import snapshot_file
 from ctx.store import Store
-from ctx.textutil import fmt_int, short_id
+from ctx.textutil import decode_exact, encode_exact, fmt_int, short_id
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit, _parse, _peek_blob, _read_bytes_range, _route_workspace
@@ -157,7 +157,7 @@ def get(
 
     if selector.span is not None:
         result = _resolve_span(store, ws, ref_text, label, selector.span)
-        record_telemetry(store, "get", len(data) if data else 0, len(result.encode("utf-8")))
+        record_telemetry(store, "get", len(data) if data else 0, len(encode_exact(result)))
         return result
 
     if selector.symbol is not None:
@@ -214,14 +214,19 @@ def get(
             a, b = _window("bytes", a, b, total_b, "bytes")
             chunk = _read_bytes_range(store, blob_hash_b, a, b)
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(total_b)}")
-            body = chunk.decode("utf-8", "replace")
+            # decode_exact, not errors="replace": --bytes is THE exact-bytes
+            # escape hatch (it is what this module tells callers to use for
+            # binary content), and "replace" turned every undecodable byte
+            # into a 3-byte U+FFFD -- neither the same bytes nor even the same
+            # LENGTH, through the tool's own exactness interface.
+            body = decode_exact(chunk)
             if b < total_b:
                 continuation = f"ctx get {ref_text} --bytes {b + 1}:{min(total_b, b + (b - a + 1))}"
         else:
             a, b = _window("bytes", a, b, len(data), "bytes")
             chunk = data[a - 1 : b]
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(len(data))}")
-            body = chunk.decode("utf-8", "replace")
+            body = decode_exact(chunk)  # second door onto the same contract
             if b < len(data):
                 continuation = f"ctx get {ref_text} --bytes {b + 1}:{min(len(data), b + (b - a + 1))}"
     else:
@@ -264,14 +269,14 @@ def get(
     if divergence:
         header.append(f"divergence: {divergence}")
     result = _emit(ws, "\n".join(header) + "\n" + body, budget.result_tokens, continuation,
-                   handle=ref_text)
+                   handle=ref_text, exact=selector.bytes is not None)
     if fast_lines is not None:
         raw_len = fast_lines_raw
     elif fast_bytes is not None:
         raw_len = fast_bytes[1]
     else:
         raw_len = len(data)
-    record_telemetry(store, "get", raw_len, len(result.encode("utf-8")))
+    record_telemetry(store, "get", raw_len, len(encode_exact(result)))
     return result
 
 

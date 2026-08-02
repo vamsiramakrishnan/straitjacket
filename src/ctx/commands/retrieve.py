@@ -51,6 +51,7 @@ def _retrieval(ws, ns, verb: str) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    exact = False  # only `get --bytes` promises the caller exact bytes
     try:
         if verb == "search":
             out = search(
@@ -75,12 +76,13 @@ def _retrieval(ws, ns, verb: str) -> int:
                 span=ns.span,
             )
             out = get(store, ws, ns.ref, selector)
+            exact = selector.bytes is not None
         else:
             out = stats(store, ws, ns.ref, scope=ns.scope)
     except _bad_input_errors() as e:
         return _fail(verb, e)
 
-    return _emit_retrieval(ws, store, out)
+    return _emit_retrieval(ws, store, out, exact=exact)
 
 
 def cmd_search(ws, ns) -> int:
@@ -116,6 +118,7 @@ def cmd_diff(ws, ns) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    exact = False  # only `get --bytes` promises the caller exact bytes
     try:
         out = run_diff(store, ws, ns.ref_a, ns.ref_b)
     except _bad_input_errors() as e:
@@ -147,6 +150,7 @@ def _code(ws, ns) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    exact = False  # only `get --bytes` promises the caller exact bytes
     try:
         if ns.cmd == "def":
             out = _def(store, ws, ns.target)

@@ -115,7 +115,7 @@ def _emit_run_digest(ws, digest: str, manifest: dict, store=None, signature=None
     return 0 if result["exitCode"] == 0 else 3
 
 
-def _emit_retrieval(ws, store, out: str) -> int:
+def _emit_retrieval(ws, store, out: str, *, exact: bool = False) -> int:
     """Shared emission tail for every retrieval-path verb (search/get/
     stats/diff/map/code): the ONE budget choke point (LADDERS edge 8).
     ``resolve_retrieval_budget`` returns exactly the configured
@@ -126,10 +126,21 @@ def _emit_retrieval(ws, store, out: str) -> int:
     from ctx.retrieval import charge_turn_budget
 
     resolver.resolve_retrieval_budget(ws.config, resolver.environment_signals(ws.root))
+    from ctx.textutil import write_exact
+
     warning = charge_turn_budget(store, ws, out)
     if warning:
         print(warning)
-    print(out)
+    # write_exact, not print: `ctx get --bytes` may carry surrogate-escaped
+    # bytes, and print() encodes through the stream's own STRICT handler --
+    # which would raise on exactly the results the exactness fix preserves.
+    #
+    # An exact answer also gets no trailing newline. Everywhere else that
+    # newline is the shell convention; here it is one byte the caller did not
+    # ask for, appended to a slice whose whole promise is that it is the bytes
+    # requested and nothing else -- and it cannot be stripped back off, since
+    # a payload may legitimately end in \n.
+    write_exact(out, newline=not exact)
     return 0
 
 

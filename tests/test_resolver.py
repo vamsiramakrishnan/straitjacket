@@ -485,7 +485,16 @@ def test_no_hand_rolled_budget_math_left_in_cli():
     cli_layer += sorted(Path(cli_mod.__file__).parent.joinpath("commands").glob("*.py"))
     src = "\n".join(p.read_text(encoding="utf-8") for p in cli_layer)
     assert "failure_budget_factor" not in src  # budget math lives in resolver.py
-    assert src.count("_emit_retrieval(ws, store, out)") == 4  # diff/map/code/retrieval
+    # Matched on the call PREFIX, not the full argument spelling: the
+    # invariant is "every retrieval verb funnels through the one choke
+    # point", and pinning the exact argument list made it fail the moment
+    # a keyword was added at a single site -- brittle about something the
+    # invariant does not actually care about. The definition line is excluded,
+    # since a prefix match otherwise counts it as a fifth call.
+    import re as _re
+
+    calls = _re.findall(r"(?<!def )_emit_retrieval\(ws, store, out", src)
+    assert len(calls) == 4  # diff/map/code/retrieval
     assert src.count("_delivery_plan(") >= 3  # run + eval + seq (+ render plan)
     assert "resolve_retrieval_budget" in src
 

@@ -10,7 +10,7 @@ import re
 
 from ctx.refs import Ref, parse_ref
 from ctx.store import Store
-from ctx.textutil import bounded, sanitize_for_model
+from ctx.textutil import bounded, redact, sanitize_for_model
 from ctx.workspace import Workspace
 
 
@@ -25,6 +25,7 @@ def _emit(
     continuation: str | None = None,
     *,
     handle: str | None = None,
+    exact: bool = False,
 ) -> str:
     """Bound a retrieval result, keeping a way back to the rest of it.
 
@@ -33,8 +34,18 @@ def _emit(
     the token budget, which the caller cannot predict. Without it a
     budget-truncated result ends at the bare truncation note, with no address
     — the same defect fixed on the digest side, and it lives here too.
+
+    ``exact`` marks an EXACT-BYTES answer (``ctx get --bytes``). Control
+    stripping is a display nicety everywhere else and the thing that makes
+    this answer wrong: it silently deletes every byte below 0x20 from a slice
+    the caller asked for verbatim. Redaction still runs -- it is a security
+    control, not a presentation one, and it announces itself when it fires,
+    so the one case where an exact answer is not byte-exact says so.
     """
-    text, redactions = sanitize_for_model(text, ws.config.redaction.patterns)
+    if exact:
+        text, redactions = redact(text, ws.config.redaction.patterns)
+    else:
+        text, redactions = sanitize_for_model(text, ws.config.redaction.patterns)
     if redactions:
         text += "\nredaction: applied [" + ", ".join(redactions) + "]"
     fallback = f"ctx get {handle}" if handle else None

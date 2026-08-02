@@ -224,7 +224,7 @@ def encode_exact(text: str) -> bytes:
     return text.encode("utf-8", BYTE_EXACT_ERRORS)
 
 
-def write_exact(text: str, stream=None) -> None:
+def write_exact(text: str, stream=None, *, newline: bool = True) -> None:
     """Write a possibly-byte-exact result to stdout without corrupting it.
 
     print() encodes through the stream's own error handler, which is strict
@@ -235,12 +235,13 @@ def write_exact(text: str, stream=None) -> None:
     import sys
 
     stream = stream if stream is not None else sys.stdout
+    eol = "\n" if newline else ""
     buf = getattr(stream, "buffer", None)
     if buf is None:  # captured/text-only stream (pytest capsys): best effort
-        stream.write(text + "\n")
+        stream.write(text + eol)
         return
     stream.flush()
-    buf.write(encode_exact(text) + b"\n")
+    buf.write(encode_exact(text) + eol.encode())
     buf.flush()
 
 
@@ -379,12 +380,19 @@ def bounded(
     # `raw[:-4]` -- almost the whole input -- from the one function documented
     # as the hard backstop. The failure direction must be toward less output.
     budget_bytes = _bounds.budget_bytes(budget_tokens)
-    raw = text.encode("utf-8")
+    # encode_exact, not a bare encode: this is the ONE backstop every emission
+    # passes through, so a byte-exact --bytes result reaches it carrying lone
+    # surrogates, and strict UTF-8 raised here -- the exactness fix turned a
+    # correct answer into a crash at the measuring step. The count is
+    # identical for text that has no surrogates.
+    raw = encode_exact(text)
     if len(raw) <= budget_bytes:
         if continuation:
             return text + f"\nnext: {continuation}"
         return text
-    cut = raw[:budget_bytes].decode("utf-8", "ignore")
+    # "ignore" would drop a partial character at the cut; decode_exact keeps
+    # whatever is there, and the cut is declared either way.
+    cut = decode_exact(raw[:budget_bytes])
     nl = cut.rfind("\n")
     if nl > 0:
         cut = cut[:nl]
