@@ -233,6 +233,20 @@ def _coerce_like(default: Any, value: Any) -> Any:
     return value
 
 
+def _str_tuple(value: Any) -> tuple[str, ...]:
+    """A tuple of strings from a TOML value, or () if it is not a list.
+
+    A bare `tuple(str(x) for x in value)` iterates whatever it is given: an
+    int raises TypeError out of load_config, which every command calls, so a
+    single typo in ctx.toml broke the entire tool rather than that one
+    setting. A string would be worse than a crash -- it would iterate into
+    per-character rules.
+    """
+    if isinstance(value, (list, tuple)):
+        return tuple(str(x) for x in value)
+    return ()
+
+
 def _pick(data: dict[str, Any], cls: type, **overrides: Any) -> Any:
     names = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
     proto = cls()  # every config section is fully defaulted
@@ -277,10 +291,15 @@ def load_config(workspace_root: Path | None) -> Config:
         mode=str(guard_raw.get("mode", gd.mode)),
         unknown_command=str(guard_raw.get("unknown_command", gd.unknown_command)),
         internal_error=str(guard_raw.get("internal_error", gd.internal_error)),
-        steering=str(guard_raw.get("steering", gd.steering)),
-        collapse=bool(guard_raw.get("collapse", gd.collapse)),
-        allow_commands=tuple(str(x) for x in guard_raw.get("allow_commands", ())),
-        deny_commands=tuple(str(x) for x in guard_raw.get("deny_commands", ())),
+        steering=_coerce_like(gd.steering, guard_raw.get("steering", gd.steering)),
+        # `bool()` on a non-bool is a SILENT reinterpretation, not a
+        # coercion: `collapse = "no"` is truthy and turns the flag ON.
+        collapse=_coerce_like(gd.collapse, guard_raw.get("collapse", gd.collapse)),
+        # _str_tuple, not a bare generator: `deny_commands = 42` iterated an
+        # int and crashed load_config -- and load_config is on the path of
+        # every command, so one typo in ctx.toml broke the whole tool.
+        allow_commands=_str_tuple(guard_raw.get("allow_commands", ())),
+        deny_commands=_str_tuple(guard_raw.get("deny_commands", ())),
     )
     orchestrate = _pick(raw.get("orchestrate") or {}, OrchestratePolicy)
     store = _pick(raw.get("store") or {}, StorePolicy)
@@ -312,7 +331,11 @@ def load_config(workspace_root: Path | None) -> Config:
     if not isinstance(red_patterns, list):
         red_patterns = list(Redaction().patterns)
     redaction = Redaction(
-        enabled=bool(red_raw.get("enabled", True)),
+        # NOT bool(): a non-bool value there silently DISABLED redaction in
+        # one direction and enabled it in the other, and this flag decides
+        # whether secrets are stripped from model-visible output. Fail open
+        # to the documented default instead.
+        enabled=_coerce_like(True, red_raw.get("enabled", True)),
         patterns=tuple(str(p) for p in red_patterns),
     )
 

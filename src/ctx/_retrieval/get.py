@@ -90,6 +90,37 @@ def _byte_window(ref_text, a: int, b: int, total: int, budget):
     return a, b, f"ctx get {ref_text} --bytes {b + 1}:{min(total, b + cap)}"
 
 
+def _fit_lines(ref_text, a: int, b: int, total: int, rendered: list[str], budget):
+    """Trim a line window to what the result budget can actually hold.
+
+    `--lines` clamped to max_inline_lines and stopped there, but 240 lines of
+    a wide file still exceed the token budget -- so bounded() cut it again,
+    and THAT cut belongs to nobody: the header still claimed A:B and the
+    fallback continuation re-issued the same range, sending the reader back
+    to a line already shown. `--bytes` learned this in round 12; `--lines`
+    is the same lesson, and the selector has to own the cut for the
+    continuation to advance.
+
+    Measured on the RENDERED body rather than estimated from a width, which
+    is the only way the header, the body and the address agree exactly.
+    """
+    room = bounds.budget_bytes(getattr(budget, "result_tokens", 0)) - _HEADER_RESERVE
+    if room <= 0:
+        return b, None
+    kept, used = 0, 0
+    for line in rendered:
+        used += len(encode_exact(line)) + 1
+        if used > room:
+            break
+        kept += 1
+    if kept >= len(rendered):
+        return b, None
+    kept = max(1, kept)
+    new_b = a + kept - 1
+    span = new_b - a + 1
+    return new_b, f"ctx get {ref_text} --lines {new_b + 1}:{min(total, new_b + span)}"
+
+
 def get(
     store: Store,
     ws: Workspace,
@@ -279,8 +310,13 @@ def get(
                 continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
             chunk = store.read_blob_lines(blob_hash, a, b)
             all_lines = chunk.decode("utf-8", "replace").splitlines()
+            rendered = [f"L{a + i}: {ln}" for i, ln in enumerate(all_lines)]
+            b, fit_next = _fit_lines(ref_text, a, b, total, rendered, budget)
+            if fit_next:
+                continuation = fit_next
+                rendered = rendered[: b - a + 1]
             header.append(f"selector: --lines {a}:{b} of {fmt_int(total)}")
-            body = "\n".join(f"L{a + i}: {ln}" for i, ln in enumerate(all_lines))
+            body = "\n".join(rendered)
         else:
             if b"\x00" in data[:8192]:
                 raise RetrievalError("binary content: use --bytes A:B for exact slices")
@@ -297,8 +333,15 @@ def get(
             if b - a + 1 > budget.max_inline_lines:
                 b = a + budget.max_inline_lines - 1
                 continuation = f"ctx get {ref_text} --lines {b + 1}:{min(len(all_lines), b + budget.max_inline_lines)}"
+            rendered = [f"L{n}: {all_lines[n - 1]}" for n in range(max(1, a), b + 1)]
+            b, fit_next = _fit_lines(
+                ref_text, a, b, len(all_lines), rendered, budget
+            )
+            if fit_next:
+                continuation = fit_next
+                rendered = rendered[: b - a + 1]
             header.append(f"selector: --lines {a}:{b} of {fmt_int(len(all_lines))}")
-            body = "\n".join(f"L{n}: {all_lines[n - 1]}" for n in range(max(1, a), b + 1))
+            body = "\n".join(rendered)
 
     if divergence:
         header.append(f"divergence: {divergence}")
@@ -312,6 +355,12 @@ def get(
         handle = f"{ref_text} --bytes {selector.bytes[0]}:{selector.bytes[1]}"
     elif selector.records is not None:
         handle = f"{ref_text} --records {selector.records[0]}:{selector.records[1]}"
+    elif selector.lines is not None:
+        # --lines was the one selector this fix skipped when it was written,
+        # so an over-budget `--lines A:B` emitted "next: ctx get <ref>" --
+        # an address that re-reads the stream from line 1. The continuation
+        # offering to reach the rest sent the reader back to the start.
+        handle = f"{ref_text} --lines {selector.lines[0]}:{selector.lines[1]}"
     result = _emit(ws, "\n".join(header) + "\n" + body, budget.result_tokens, continuation,
                    handle=handle, exact=selector.bytes is not None)
     if fast_lines is not None:

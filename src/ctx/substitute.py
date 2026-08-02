@@ -220,13 +220,28 @@ def _grep_pattern_and_globs(toks: list[str]) -> tuple[str | None, list[str]]:
     return pattern, positionals
 
 
-def _shell_safe(query: str) -> bool:
-    """Can this query survive being quoted ONCE as a single shell argument?
+#: Characters that mean something to a consumer of the assembled query --
+#: the SHELL (quotes) or `ctx q`'s own pipeline parser (`|`). A user's grep
+#: pattern is data; every one of these turns part of it into syntax.
+_QUERY_UNSAFE = ("'", '"', "|")
 
-    Checked on the assembled string rather than on each part, so a new
-    interpolated field inherits the guard instead of needing its own.
+
+def _shell_safe(*fields: str) -> bool:
+    """Can these untrusted fields ride inside a `ctx q` query safely?
+
+    Every one of them is interpolated into a string that is quoted once for
+    the shell and then parsed by `ctx q`'s own pipeline splitter, so a quote
+    or a `|` in any of them turns the user's DATA into syntax.
+
+    Validate the untrusted FIELDS, not the assembled string. Round 15 framed
+    the principle as "check the whole query so a new field inherits the
+    guard", which read well and was wrong: the assembled query legitimately
+    contains the `|` this function must reject, because that pipe is the
+    TEMPLATE's own stage separator. Checking the result made every collapse
+    decline. The template is ours and trusted; the pattern and the scope come
+    from the user's command line and are not.
     """
-    return "'" not in query and '"' not in query
+    return not any(ch in field for field in fields for ch in _QUERY_UNSAFE)
 
 
 def _scope_hint(paths: list[str]) -> str | None:
@@ -301,7 +316,7 @@ def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution |
         # index, unsupported language) we fall through to bounded content search
         # below — never to nothing, so the agent is never stranded.
         return Substitution(
-            command=f"ctx q {shlex.quote(f'refs {pattern} | group file')}",
+            command=f"ctx q {shlex.quote(f'refs {shlex.quote(pattern)} | group file')}",
             reason=("CTX_CONTEXT_GUARD: recursive search for the identifier "
                     f"`{pattern}` is a navigation loop — the grep dump is "
                     "re-ingested next turn. `ctx q 'refs … | group file'` "
@@ -329,12 +344,19 @@ def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution |
     # to a query with an unbalanced quote, which is the identical
     # "collapsed command does not parse" defect one commit later, through
     # the other half of the same expression.
+    # shlex.quote the untrusted fields INSIDE the query, then quote the whole
+    # query again for the shell. Nested quoting produces an ugly '"'"' nest,
+    # which is why round 14 removed it -- and that traded correctness for
+    # readability. `ctx q`'s parser is shlex-aware, so a quoted pipe or
+    # apostrophe survives as ONE token; without the inner quoting a pattern
+    # like `a | b` was split into two stages and a pattern like `TODO's` left
+    # the query unbalanced. Verified to round-trip for pipes, apostrophes and
+    # double quotes alike.
     scoped_query = (
-        f"search {pattern} --glob {scope} | files" if scope
-        else f"search {pattern} | files"
+        f"search {shlex.quote(pattern)} --glob {shlex.quote(scope)} | files" if scope
+        else f"search {shlex.quote(pattern)} | files"
     )
-    if not _shell_safe(scoped_query):
-        return None
+
     return Substitution(
         command=f"ctx q {shlex.quote(scoped_query)}",
         reason=("CTX_CONTEXT_GUARD: recursive content search floods the next "

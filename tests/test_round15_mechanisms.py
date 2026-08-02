@@ -87,15 +87,20 @@ def test_no_collapsed_command_carries_an_unbalanced_quote(cmd):
     _build_parser().parse_args(argv[1:])
 
 
-def test_the_quote_guard_checks_the_assembled_query():
-    """Checked on the whole string rather than per-field, so a new
-    interpolated field inherits the guard instead of needing its own -- the
-    scope had one and the pattern did not."""
+def test_the_quote_guard_checks_the_untrusted_FIELDS():
+    """Round 15 framed this as "check the whole assembled query so a new
+    field inherits the guard". That read well and was wrong: the assembled
+    query legitimately contains the `|` the guard must reject, because that
+    pipe is the TEMPLATE's own stage separator -- round 16 found every
+    collapse declining. The template is ours and trusted; the pattern and
+    the scope come from the user's command line and are not."""
     from ctx.substitute import _shell_safe
 
-    assert _shell_safe("search NEEDLE --glob tests/** | files") is True
-    assert _shell_safe("search TODO's | files") is False
-    assert _shell_safe('search say "hi" | files') is False
+    assert _shell_safe("NEEDLE", "tests/**") is True
+    assert _shell_safe("TODO's", "") is False
+    assert _shell_safe('say "hi"', "") is False
+    assert _shell_safe("a | b", "") is False, "a pipe in the DATA is unsafe"
+    assert _shell_safe("NEEDLE", "a'b/") is False
 
 
 # ------------------- foreign config is coerced ONCE, at the load boundary
@@ -200,3 +205,89 @@ def test_span_anchors_include_the_summary_banner():
     assert not _BANNER_RE.match("    assert compute() == 2")
     # the banner is an anchor like any other: the span stops before it
     assert _span_end(10, [10, 15], 100) == 14
+
+
+# ================================================= round 16 corrections
+def test_a_pattern_carrying_a_pipe_survives_as_one_token():
+    """`ctx q`'s parser is shlex-AWARE: it splits on the `|` TOKEN, so a
+    quoted pipe survives. Round 14 removed the inner shlex.quote because
+    nested quoting is ugly -- trading correctness for readability -- and a
+    grep for `a | b` then collapsed into a query that split into two stages
+    and searched for something else entirely."""
+    import shlex
+
+    from ctx.query import parse_query
+    from ctx.substitute import collapse
+
+    for pattern in ("a | b", "TODO's", 'say "hi"', "plain"):
+        sub = collapse(
+            f"grep -rn {shlex.quote(pattern)} src/",
+            failure_available=False, symbols_resolvable=False,
+        )
+        assert sub is not None, pattern
+        stages = parse_query(shlex.split(sub.command)[2])
+        assert stages[0][1][0] == pattern, (
+            f"{pattern!r} did not round-trip: {stages}"
+        )
+        assert [s[0] for s in stages] == ["search", "files"], (
+            f"{pattern!r} changed the pipeline shape: {stages}"
+        )
+
+
+def test_config_list_fields_survive_a_scalar():
+    """`tuple(str(x) for x in value)` iterates whatever it is given: an int
+    raised TypeError out of load_config, which EVERY command calls -- so one
+    typo in ctx.toml broke the whole tool rather than that one setting."""
+    from ctx.config import _str_tuple
+
+    assert _str_tuple(["a", "b"]) == ("a", "b")
+    assert _str_tuple(42) == ()
+    assert _str_tuple(None) == ()
+    assert _str_tuple("rm -rf") == (), "a string must not iterate per-character"
+
+
+def test_redaction_enabled_fails_SAFE_on_a_bad_value(tmp_path):
+    """`bool()` on a non-bool is a silent reinterpretation, and this flag
+    decides whether secrets are stripped from model-visible output."""
+    from ctx.config import load_config
+
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n[redaction]\nenabled = "off"\n', encoding="utf-8"
+    )
+    assert load_config(tmp_path).redaction.enabled is True, (
+        "an unreadable value must leave redaction ON"
+    )
+
+
+def test_guard_collapse_fails_to_its_default_on_a_bad_value(tmp_path):
+    from ctx.config import load_config
+
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n[guard]\ncollapse = "no"\n', encoding="utf-8"
+    )
+    assert load_config(tmp_path).guard.collapse is True
+
+
+def test_a_lines_continuation_advances(state_home, workspace_dir):
+    """`--lines` clamped to max_inline_lines and stopped, but 240 lines of a
+    wide file still exceed the token budget -- so bounded() cut it again and
+    THAT cut belonged to nobody: the header claimed A:B and the fallback
+    continuation re-issued the same range, sending the reader back to a line
+    already shown."""
+    import re
+
+    from conftest import make_store, make_ws
+    from ctx.retrieval import Selector, get
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    blob = store.put_blob(
+        b"".join(f"line {i} {'x' * 200}\n".encode() for i in range(1, 400))
+    )
+    out = get(store, ws, f"blob:{blob[:12]}", Selector(lines=(1, 399)))
+    shown = re.search(r"--lines (\d+):(\d+) of ", out)
+    nxt = re.search(r"next: ctx get \S+ --lines (\d+):(\d+)", out)
+    assert shown and nxt, out[:400]
+    assert int(nxt.group(1)) == int(shown.group(2)) + 1, (
+        f"continuation must advance: showed {shown.group(0)}, next {nxt.group(0)}"
+    )

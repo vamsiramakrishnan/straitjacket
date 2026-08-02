@@ -45,9 +45,17 @@ def test_the_scope_rides_inside_the_query():
     sub = collapse("grep -rn NEEDLE tests/", failure_available=False,
                    symbols_resolvable=False)
     assert sub is not None
-    assert "--glob tests/**" in sub.command
+    # Asserted through the PARSER, not by matching a spelling: the fields are
+    # shlex-quoted inside the query so a pattern carrying `|` or a quote
+    # survives as one token, which makes the literal text unstable but the
+    # parsed result exact.
+    from ctx.query import parse_query
+
     argv = shlex.split(sub.command)
     assert argv[1] == "q" and len(argv) == 3, "the query is ONE argument"
+    stages = parse_query(argv[2])
+    assert stages[0][0] == "search"
+    assert "tests/**" in stages[0][1], stages
     _assert_parses(sub.command)
 
 

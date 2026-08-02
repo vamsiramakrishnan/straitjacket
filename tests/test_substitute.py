@@ -130,8 +130,16 @@ def test_glob_hint_carried_through():
     # substituted command exit 2. This asserts the command PARSES, which is
     # the property that matters; the old assertion pinned the literal broken
     # spelling.
-    assert sub is not None and "--glob *.py" in sub.command
+    assert sub is not None
     _assert_runnable(sub.command)
+    # Through the parser: the glob is shlex-quoted inside the query, so the
+    # literal spelling varies while the parsed argument does not.
+    import shlex as _shlex
+
+    from ctx.query import parse_query
+
+    stages = parse_query(_shlex.split(sub.command)[2])
+    assert "*.py" in stages[0][1], stages
 
 
 # ── the hook honours the flag ───────────────────────────────────────────────
