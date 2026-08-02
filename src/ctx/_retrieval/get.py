@@ -4,6 +4,8 @@ silent flooding."""
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -198,7 +200,17 @@ def get(
             a, b = selector.lines if selector.lines is not None else (1, total)
             if selector.lines is None:
                 b = min(total, ws.config.budgets.max_inline_lines)
-            b = min(b, total)
+            # bounds.span, not a lone `min(b, total)`: only the END was
+            # clamped, so a START past EOF printed a self-contradictory
+            # header (start > total) over a silently empty body and still
+            # exited 0. An empty span is empty, and says so.
+            window = bounds.span(a, b, total)
+            if window is None:
+                raise RetrievalError(
+                    f"--lines {a}:{b} selects nothing: the blob has {total} "
+                    f"lines. Use --lines 1:{min(total, 200)} or omit --lines."
+                )
+            a, b = window
             if b - a + 1 > budget.max_inline_lines:
                 b = a + budget.max_inline_lines - 1
                 continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
@@ -214,7 +226,18 @@ def get(
                 a, b = 1, min(len(all_lines), ws.config.budgets.max_inline_lines)
             else:
                 a, b = selector.lines
-            b = min(b, len(all_lines))
+            # Second door onto the same contract: this path clamped only the
+            # END too, so `--lines 1000:5` on a 5-line file printed the header
+            # "--lines 1000:5 of 5" -- a range whose start exceeds its own
+            # total -- over an empty body, and exited 0.
+            _win = bounds.span(a, b, len(all_lines))
+            if _win is None:
+                raise RetrievalError(
+                    f"--lines {a}:{b} selects nothing: the content has "
+                    f"{len(all_lines)} lines. Use --lines 1:"
+                    f"{min(len(all_lines), 200)} or omit --lines."
+                )
+            a, b = _win
             if b - a + 1 > budget.max_inline_lines:
                 b = a + budget.max_inline_lines - 1
                 continuation = f"ctx get {ref_text} --lines {b + 1}:{min(len(all_lines), b + budget.max_inline_lines)}"

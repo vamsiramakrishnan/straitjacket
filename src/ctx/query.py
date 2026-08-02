@@ -60,6 +60,8 @@ orderings everywhere; content-addressed provenance only).
 
 from __future__ import annotations
 
+import math
+
 from ctx import bounds
 
 import difflib
@@ -826,6 +828,14 @@ def _stage_histogram(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     try:
         nums = [float(v) for v in raw] if raw else None
     except ValueError:
+        nums = None
+    # `float("inf")` and `float("nan")` parse without raising, then poison
+    # every downstream arithmetic step: (hi - lo) is inf or nan, the bucket
+    # width follows, and int() of the result raises OverflowError out of a
+    # stage documented as always producing a bounded census. A field holding
+    # a non-finite value is not a numeric distribution -- fall back to the
+    # categorical census, which is total by construction.
+    if nums is not None and not all(math.isfinite(v) for v in nums):
         nums = None
     if nums:
         lo, hi = min(nums), max(nums)
