@@ -28,6 +28,7 @@ from __future__ import annotations
 from ctx import bounds
 
 import difflib
+import hashlib
 import json
 import shutil
 import subprocess
@@ -36,7 +37,7 @@ from typing import Any
 
 from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
-from ctx.textutil import EVIDENCE_LINE_CHARS
+from ctx.textutil import EVIDENCE_LINE_CHARS, decode_exact, encode_exact
 from ctx.workspace import Workspace
 
 _PROBE_TIMEOUT = 10.0
@@ -358,8 +359,6 @@ def rewrite_preview(
     """Compute the full mechanical rewrite as a unified diff without touching
     the worktree. The patch is minted as an addressable ``blob:``; meta
     records the generation it was computed against (the apply guard)."""
-    from ctx.execution import generation_hash
-
     b = binary()
     if b is None:
         raise EngineMissing("ast.rewrite requires ast-grep (no lossy fallback by design)")
@@ -408,9 +407,16 @@ def rewrite_preview(
         new += original[pos:]
         if bytes(new) == original:
             continue
+        # decode_exact, not errors="replace". The edit itself is byte-exact
+        # (ast-grep gives byteOffset ranges), and then the DIFF was built from
+        # a lossy rendering -- so one stray non-UTF-8 byte anywhere in a
+        # context line produced a confident preview whose patch `git apply`
+        # then rejected, because the context did not match the file. This
+        # module's docstring promises no lossy fallback; that promise has to
+        # hold for the patch, not only for the range computation.
         diff = difflib.unified_diff(
-            original.decode("utf-8", "replace").splitlines(keepends=True),
-            bytes(new).decode("utf-8", "replace").splitlines(keepends=True),
+            decode_exact(original).splitlines(keepends=True),
+            decode_exact(bytes(new)).splitlines(keepends=True),
             fromfile=f"a/{rel}",
             tofile=f"b/{rel}",
         )
@@ -418,16 +424,64 @@ def rewrite_preview(
         rows.append({"file": rel, "edits": len(edits)})
 
     patch_text = "".join(diffs)
-    patch_blob = store.put_blob(patch_text.encode("utf-8")) if patch_text else None
-    gen = generation_hash(ws.root)
+    patch_blob = store.put_blob(encode_exact(patch_text)) if patch_text else None
     meta = {
         "engine": engine_id(),
         "precision": "structural",
         "patch_blob": patch_blob,
-        "generation": gen,
+        "generation": _guard_state(ws),
         "files": len(rows),
     }
     return rows[: bounds.count(cap)], meta
+
+
+def _guard_state(ws: Workspace) -> str:
+    """The value the apply guard compares. NEVER None.
+
+    ``generation_hash`` fail-opens to None on a non-git root -- correct for
+    its own callers (a reflex scoring moment, where unknown means "do not
+    score"), and wrong here, because the guard read
+    ``if expect_generation and ...`` so "unknown" became "fine". A bug bash
+    found both doors in: a non-git workspace, where generation_hash is always
+    None, and a plan step whose upstream op carried no generation key. Same
+    falsy value, same skipped guard.
+
+    The fallback keeps WORKTREE scope rather than narrowing to the patch's
+    own targets. Scoping to targets is tempting -- it is cheaper and it would
+    stop an unrelated edit invalidating a good patch -- but the documented
+    guarantee is "refuses if the source-state generation changed since
+    preview", and quietly making a safety guard accept more than it says it
+    accepts is the failure this whole fix is about. If that trade is worth
+    making it should be made in the docs first.
+    """
+    from ctx.execution import generation_hash
+
+    gen = generation_hash(ws.root)
+    if gen:
+        return f"gen:{gen}"
+    h = hashlib.sha256(b"ctx.rewrite.worktree/v1\n")
+    try:
+        rels = ws.list_files()
+    except Exception:
+        return "unknown"  # refuses on compare: two "unknown"s are not equal
+    for rel in rels:
+        try:
+            st = (ws.root / rel).stat()
+            h.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\n".encode())
+        except OSError:
+            h.update(f"{rel}\0missing\n".encode())
+    return f"worktree:{h.hexdigest()}"
+
+
+def _patch_targets(patch: bytes) -> list[str]:
+    """Files a unified diff will modify, read from its own +++ headers."""
+    return sorted(
+        {
+            line[6:].strip()
+            for line in decode_exact(patch).splitlines()
+            if line.startswith("+++ b/")
+        }
+    )
 
 
 def rewrite_apply(
@@ -439,19 +493,26 @@ def rewrite_apply(
     """Transactional apply of a previewed patch. Generation-guarded: refuses
     when the worktree changed since preview (``git apply`` then guarantees
     all-or-nothing on top)."""
-    from ctx.execution import generation_hash
-
     if not patch_blob:
         raise RewriteError("apply requires the preview's patch_blob")
-    gen_now = generation_hash(ws.root)
-    if expect_generation and gen_now != expect_generation:
+    patch = store.get_blob(str(patch_blob).removeprefix("blob:").removeprefix("sha256:"))
+    if not patch.strip():
+        return [], {"engine": engine_id(), "applied_files": 0, "note": "empty patch"}
+    # An unverifiable guard is a FAILED guard. `if expect_generation and ...`
+    # let a missing expectation skip the check entirely, so an op whose
+    # upstream carried no generation key applied a stale patch over
+    # intervening edits -- with the documented refusal never firing.
+    if not expect_generation:
+        raise RewriteError(
+            "apply requires the generation ast.rewrite.preview recorded "
+            "(refusing to apply a patch whose freshness cannot be checked)"
+        )
+    gen_now = _guard_state(ws)
+    if gen_now != expect_generation:
         raise RewriteError(
             "worktree generation changed since preview — re-run ast.rewrite.preview "
             "(refusing to apply a stale patch)"
         )
-    patch = store.get_blob(str(patch_blob).removeprefix("blob:").removeprefix("sha256:"))
-    if not patch.strip():
-        return [], {"engine": engine_id(), "applied_files": 0, "note": "empty patch"}
     try:
         out = subprocess.run(
             ["git", "apply", "--whitespace=nowarn", "-"],
@@ -465,13 +526,7 @@ def rewrite_apply(
     if out.returncode != 0:
         tail = out.stderr.decode("utf-8", "replace").strip().splitlines()
         raise RewriteError("git apply rejected the patch: " + (tail[-1] if tail else "?"))
-    files = sorted(
-        {
-            line[6:].strip()
-            for line in patch.decode("utf-8", "replace").splitlines()
-            if line.startswith("+++ b/")
-        }
-    )
+    files = _patch_targets(patch)
     return (
         [{"file": f, "applied": True} for f in files],
         {"engine": engine_id(), "applied_files": len(files)},
