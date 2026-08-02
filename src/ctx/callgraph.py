@@ -869,7 +869,19 @@ def _reachable(g: _Graph, seeds: list[str], depth: int, unscoped: bool) -> dict[
         nxt: set[str] = set()
         for q in frontier:
             for caller in edges_of(q):
-                if caller not in reached and caller not in seeds:
+                # No `caller not in seeds` exclusion. networkx has none, and
+                # this branch had one -- so when a symbol resolved to several
+                # definitions and one of them CALLED another, `ctx impact`
+                # returned a different blast radius depending on whether
+                # networkx happened to be importable. The docstring above
+                # promises "identical results, so the engine is a speed
+                # choice, not a semantic one"; it was not.
+                #
+                # Including it is also the correct answer: a seed that calls
+                # another seed is a genuine transitive caller of it, and
+                # dropping it understates the blast radius -- the direction
+                # that gets someone hurt.
+                if caller not in reached:
                     reached[caller] = d
                     nxt.add(caller)
         frontier = nxt

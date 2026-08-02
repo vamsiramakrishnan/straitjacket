@@ -412,21 +412,50 @@ class Store:
     def pin(self, obj_id: str) -> None:
         self.lease(self.resolve_id(obj_id), "pin", ttl_days=None)
 
-    def gc(self, retention_days: int) -> dict[str, int]:
+    def gc(self, retention_days: int, *, override_retention: bool = False) -> dict[str, int]:
         """Mark-and-sweep over leases and pins. Blobs referenced by any live
-        manifest survive. Never touches objects with a pin."""
+        manifest survive. Never touches objects with a pin.
+
+        ``override_retention`` marks a horizon the USER supplied explicitly
+        (``ctx gc --retention-days N``) rather than the workspace default.
+        It exists because those are different claims:
+
+        * By default a ``retention`` lease -- minted at write time from the
+          configured policy -- protects its object even past the recency
+          cutoff. That is deliberate and pinned by
+          tests/test_pr1_review_fixes.py.
+        * But it made the FLAG advisory. `ctx gc --retention-days 0`, which
+          admin.py documents as "collect everything already expired", left
+          every freshly-written manifest alive behind a 30-day lease it had
+          minted for itself moments earlier -- the user's explicit horizon
+          losing to the default it was written to override.
+
+        So an explicit horizon overrides retention leases and an implicit one
+        does not. Pins (NULL expiry) and checkpoint leases are never
+        overridden either way: those are protection someone asked for, not a
+        default policy being retuned.
+        """
         now = time.time()
         cutoff = now - retention_days * 86400
         live: set[str] = set()
         # Every unexpired lease keeps its object alive — pins (NULL expiry)
         # and time-bounded retention/checkpoint leases alike. Expired leases
         # no longer protect anything.
-        leased = {
-            r[0]
-            for r in self.db.execute(
-                "SELECT id FROM leases WHERE expires_at IS NULL OR expires_at > ?", (now,)
-            )
-        }
+        # `retention` leases are EXCLUDED here: they were minted at write
+        # time from the Store's configured retention_days, so honouring them
+        # made this argument advisory. `ctx gc --retention-days 0` -- which
+        # admin.py documents as "collect everything already expired" -- left
+        # every freshly-written manifest alive behind a 30-day lease it had
+        # minted for itself moments earlier. The horizon this call was GIVEN
+        # is the horizon it uses, and `recent` below applies it uniformly.
+        #
+        # Pins (NULL expiry) and checkpoint leases are untouched: those are
+        # explicit protection someone asked for, not a default policy the
+        # caller is overriding.
+        lease_sql = "SELECT id FROM leases WHERE (expires_at IS NULL OR expires_at > ?)"
+        if override_retention:
+            lease_sql += " AND reason != 'retention'"
+        leased = {r[0] for r in self.db.execute(lease_sql, (now,))}
         recent = {
             r[0]
             for r in self.db.execute("SELECT id FROM objects WHERE created_at >= ?", (cutoff,))

@@ -38,7 +38,9 @@ def cmd_gc(ws, ns) -> int:
     # already expired. `or` made the one spelling that means 'now' the one
     # spelling that silently did nothing.
     days = int(bounds.explicit(ns.retention_days, ws.config.store.retention_days))
-    result = store.gc(days)
+    # An explicitly supplied horizon is the user overriding the configured
+    # policy, so it outranks the retention leases that policy minted.
+    result = store.gc(days, override_retention=ns.retention_days is not None)
     print(
         f"gc: removed {result['blobs_removed']} blobs, "
         f"{result['manifests_removed']} manifests (retention {days}d)"

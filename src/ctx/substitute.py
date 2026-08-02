@@ -220,13 +220,31 @@ def _grep_pattern_and_globs(toks: list[str]) -> tuple[str | None, list[str]]:
     return pattern, positionals
 
 
-def _glob_hint(paths: list[str]) -> str:
-    """A single ``--glob`` hint if the paths clearly scope a file type."""
-    for p in paths:
-        m = re.search(r"\*\.\w+$", p)
-        if m:
-            return m.group(0)
-    return ""
+def _scope_hint(paths: list[str]) -> str | None:
+    """A ``--glob`` that preserves the SCOPE the caller wrote.
+
+    This only ever looked for a trailing ``*.ext``, so `grep -rn X tests/`
+    and `grep -rn X` collapsed to the identical whole-repo command: a
+    substitution that WIDENED what was asked. The replacement surface is
+    allowed to make a search cheaper; it is not allowed to make it bigger,
+    because the extra results are indistinguishable from real ones.
+
+    A directory becomes ``dir/**``, a single file becomes itself, and a
+    literal ``*.ext`` keeps working. Several paths that cannot be expressed
+    as one glob yield "" -- and the caller declines to substitute rather
+    than silently dropping the scope.
+    """
+    real = [p for p in paths if p not in (".", "./")]
+    if not real:
+        return ""
+    if len(real) > 1:
+        return None  # not expressible as one --glob; the caller must not widen
+    p = real[0].rstrip("/")
+    if re.search(r"\*\.\w+$", p):
+        return re.search(r"\*\.\w+$", p).group(0)
+    if any(ch in p for ch in "*?["):
+        return p  # already a glob the caller wrote
+    return p if re.search(r"\.\w+$", p) else f"{p}/**"
 
 
 def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution | None:
@@ -258,8 +276,13 @@ def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution |
                     "resolves it through the symbol index in one bounded, "
                     "addressable call (cite the file:line handles)."),
             rung="reuse-index", shape="grep_symbol")
-    glob = _glob_hint(paths)
-    tail = f" --glob {shlex.quote(glob)}" if glob else ""
+    scope = _scope_hint(paths)
+    if scope is None:
+        # The caller scoped this search somewhere we cannot express as one
+        # --glob. Substituting anyway would run it over the whole repo, so
+        # this shape is left alone (still bounded at the emission gate).
+        return None
+    tail = f" --glob {shlex.quote(scope)}" if scope else ""
     return Substitution(
         command=f"ctx q {shlex.quote(f'search {pattern} | files')}{tail}",
         reason=("CTX_CONTEXT_GUARD: recursive content search floods the next "
