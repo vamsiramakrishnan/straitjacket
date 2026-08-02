@@ -26,6 +26,8 @@ flow is visible.
 
 from __future__ import annotations
 
+from ctx import bounds
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -684,7 +686,7 @@ def _op_code_context(pc: PlanContext, args: dict, inp: dict | None) -> dict[str,
     rows_in = list((inp or {}).get("rows") or [])
     kind_in = str((inp or {}).get("kind") or "sites")
     context = max(0, int(args.get("context", 3) or 3))
-    cap = max(1, min(int(args.get("cap", 8) or 8), OUTLINE_FILE_CAP))
+    cap = min(bounds.count(args.get("cap", 8)), OUTLINE_FILE_CAP)
     take = rows_in[:cap]
     omitted = max(0, len(rows_in) - len(take))
     out_rows: list[dict[str, Any]] = []

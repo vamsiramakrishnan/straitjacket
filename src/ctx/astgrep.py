@@ -25,6 +25,8 @@ generation changed since preview.
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import difflib
 import json
 import shutil
@@ -252,7 +254,7 @@ def ast_search(
             rows.append(row)
         rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
         meta = {"engine": engine_id(), "precision": "structural"}
-        return rows[: max(1, cap)], {**meta, "matched": len(rows)}
+        return rows[: bounds.count(cap)], {**meta, "matched": len(rows)}
 
     if lib_available():
         return _lib_search(ws, store, pattern, language, glob, cap)
@@ -282,7 +284,7 @@ def ast_search(
         "precision": "textual (metavariable-anchored regex; ast-grep absent)",
         "matched": len(rows),
     }
-    return rows[: max(1, cap)], meta
+    return rows[: bounds.count(cap)], meta
 
 
 def _lib_search(
@@ -330,7 +332,7 @@ def _lib_search(
             rows.append({"file": rel, "line": line, "col": col, "text": first})
     rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
     meta = {"engine": engine_id(), "precision": "structural", "matched": len(rows)}
-    return rows[: max(1, cap)], meta
+    return rows[: bounds.count(cap)], meta
 
 
 def _language_matches(rel: str, language: str) -> bool:
@@ -425,7 +427,7 @@ def rewrite_preview(
         "generation": gen,
         "files": len(rows),
     }
-    return rows[: max(1, cap)], meta
+    return rows[: bounds.count(cap)], meta
 
 
 def rewrite_apply(

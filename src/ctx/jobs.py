@@ -38,6 +38,8 @@ Single-writer discipline (race containment):
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import json
 import os
 import re
@@ -488,7 +490,7 @@ def job_status(store: Store, job_id: str, *, tail: int | None = None) -> str:
         f"command: {_command_display(meta)}",
     ]
     if tail is not None:
-        tail = max(1, min(tail, _MAX_STATUS_LINES))
+        tail = min(bounds.count(tail), _MAX_STATUS_LINES)
         head_n, tail_n = 0, tail
     else:
         head_n, tail_n = 6, 18

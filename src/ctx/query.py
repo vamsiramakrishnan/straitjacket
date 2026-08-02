@@ -470,7 +470,7 @@ def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 
 def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "impact", "a <Symbol>")
-    depth = max(1, min(_flag(args, "--depth", 6, int), 6))
+    depth = min(bounds.count(_flag(args, "--depth", 6, int)), 6)
     cg, g = _callgraph(qc)
     rows: list[dict] = []
     targets = cg._resolve_target(g, symbol)
@@ -822,7 +822,7 @@ def _stage_histogram(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     equal-width buckets; otherwise a categorical census sorted by
     (-count, value), capped at the bucket count with declared omission."""
     fld = _need_arg(args, "histogram", "a <field>")
-    n_buckets = max(1, _flag(args, "--buckets", _HISTOGRAM_BUCKETS, int))
+    n_buckets = bounds.count(_flag(args, "--buckets", _HISTOGRAM_BUCKETS, int))
     raw = [str(r.get(fld, "")) for r in stream.rows]
     nums: list[float] | None
     try:

@@ -58,6 +58,8 @@ is unchanged and byte-identical. See :func:`_auto_capture_fails` and
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import contextlib
 import hashlib
 import os
@@ -643,7 +645,7 @@ def failing_in_changed(
                              "precision": "file-level (no skeleton facts)"}
                         )
             rows.sort(key=lambda r: (r["file"], r["line"], r["test"]))
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -681,7 +683,7 @@ def untouched_failures(
                 "WHERE NOT EXISTS (SELECT 1 FROM changed c "
                 "WHERE c.generation=? AND c.file=f.file)"
                 + run_sql + " ORDER BY f.file, f.line, f.test LIMIT ?",
-                (gen, *run_args, max(1, int(limit))),
+                (gen, *run_args, bounds.count(limit)),
             ).fetchall()
             return [
                 {"test": t, "failure_class": c, "file": f, "line": ln}
@@ -749,7 +751,7 @@ def shared_cause_groups(
                 key=lambda r: (-r["count"], r["group"], r["file"],
                                str(r.get("failure_class") or r.get("symbol") or ""))
             )
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -822,7 +824,7 @@ def symbol_neighbors(
                          "precision": "same file+scope (v1 structural heuristic)"}
                     )
             rows.extend(sibling_rows)
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -854,7 +856,7 @@ def fails_sites(
         if run_id is not None:
             rows = _fails_for(store, run_id)
             if rows:
-                return rows[: max(1, int(limit))]
+                return rows[: bounds.count(limit)]
         # Not derived yet: derive on demand (explicit ref, or newest capture).
         derived = derive_run(store, ws, f"run:{run_id}") if run_id else _derive_newest(
             store, ws
@@ -862,7 +864,7 @@ def fails_sites(
         if not derived.get("ok"):
             return []
         rows = _fails_for(store, str(derived.get("run") or run_id))
-        return rows[: max(1, int(limit))]
+        return rows[: bounds.count(limit)]
     except Exception as e:
         _note_error("facts.fails_sites", e)
         return []
@@ -979,7 +981,7 @@ def decls_rows(
             sql = ("SELECT symbol, kind, file, line_a, line_b, scope, span FROM decl "
                    + ("WHERE kind=? " if kind else "")
                    + "ORDER BY file, line_a, symbol LIMIT ?")
-            args: tuple = (kind, max(1, int(limit))) if kind else (max(1, int(limit)),)
+            args: tuple = (kind, bounds.count(limit)) if kind else (bounds.count(limit),)
             return [
                 {"symbol": s, "kind": k, "file": f, "line": a, "line_b": b,
                  "scope": sc, "span": sp}

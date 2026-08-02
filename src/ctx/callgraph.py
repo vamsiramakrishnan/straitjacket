@@ -51,6 +51,8 @@ after a single-file touch, on the hot path of an agent that edits constantly.
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import ast
 import hashlib
 import json
@@ -803,7 +805,7 @@ def cmd_impact(
 ) -> str:
     """Transitive callers (blast radius): everything that reaches ``symbol``."""
     g = _load_graph(store, ws)
-    depth = max(1, min(int(depth), _MAX_DEPTH))
+    depth = min(bounds.count(depth), _MAX_DEPTH)
     targets = _resolve_target(g, symbol)
     out = _header(g, "impact", symbol, f"transitive callers depth≤{depth}")
     if not targets:
@@ -964,7 +966,7 @@ def cmd_impls(store: Store, ws: Workspace, symbol: str, depth: int = _MAX_DEPTH)
     tier ladder as call sites, so an inherited name is scoped, not grepped.
     """
     g = _load_graph(store, ws)
-    depth = max(1, min(int(depth), _MAX_DEPTH))
+    depth = min(bounds.count(depth), _MAX_DEPTH)
     targets = _resolve_target(g, symbol)
     out = _header(g, "impls", symbol, f"subtypes depth≤{depth}")
     if not targets:
