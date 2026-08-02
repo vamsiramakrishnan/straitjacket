@@ -123,3 +123,27 @@ def test_secret_guard_does_not_fire_on_ordinary_words_or_outrank_deny():
     assert classify_command("echo secrets please", p)["decision"] == "deny"
     assert classify_command("echo hello", p)["decision"] == "allow"
     assert classify_command("head README.md", p)["decision"] == "allow"
+
+
+def test_install_claude_refuses_a_non_dict_hooks_value(tmp_path):
+    """Fourth door onto one guard. _iter_hook_commands hardened READING a
+    malformed settings.json, and wrap._wrap_claude_merged hardened the
+    ephemeral merge -- but install_claude's own merge still called
+    .setdefault on whatever was there, so a `hooks` list crashed it with a
+    raw AttributeError. Refusal, not an exception: raising would only have
+    swapped one unhandled error for another."""
+    from ctx.installer import install_claude
+    from ctx.workspace import resolve_workspace
+
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": ["wrong shape"]}), encoding="utf-8"
+    )
+    (tmp_path / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    out = install_claude(resolve_workspace(str(tmp_path)))
+    assert "cannot set up Claude Code" in out
+    assert "not an object" in out
+    # the file must be untouched
+    assert json.loads(
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    ) == {"hooks": ["wrong shape"]}

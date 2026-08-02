@@ -421,8 +421,27 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     if _hook_command_present(existing, exe):
         lines.append(".claude/settings.json hooks already harnessed; left unchanged")
     else:
+        bucket = merged.setdefault("hooks", {})
+        if not isinstance(bucket, dict):
+            # Refuse the same way an unparseable file is refused, a few lines
+            # above: a message and an untouched file. Raising here would have
+            # swapped one unhandled exception for another.
+            # Fourth door onto one guard. _iter_hook_commands was hardened so
+            # READING a malformed settings.json refuses gracefully, and
+            # wrap._wrap_claude_merged got the same treatment for the
+            # ephemeral path -- but this MERGE still called .setdefault on
+            # whatever was there, so a `hooks` list crashed install_claude
+            # with a raw AttributeError instead of the documented refusal.
+            return _refusal(
+                settings_path,
+                SettingsUnreadable(
+                    f"its 'hooks' value is a JSON {type(bucket).__name__}, "
+                    "not an object"
+                ),
+                what="Claude Code",
+            )
         for stage, entries in claude_hook_settings(exe)["hooks"].items():
-            merged.setdefault("hooks", {}).setdefault(stage, []).extend(entries)
+            bucket.setdefault(stage, []).extend(entries)
         lines.append("merged PreToolUse/PostToolUse hooks")
         changed = True
     # Status line, independently idempotent: add only when the user has none,

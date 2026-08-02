@@ -35,6 +35,10 @@ def cmd_plan(ws, ns) -> int:
         print(plan_ops.ops_census())
         return 0
 
+    # Read ONCE. stdin is a stream, not a file: this used to read here only
+    # to check the value was not None, then read again inside the `run`
+    # branch, where the second read of a pipe returns "" and every piped
+    # `ctx plan run -` failed. The text is threaded through instead.
     text = _read_plan_text(ws, ns.plan_file)
     if text is None:
         return 2
@@ -79,10 +83,12 @@ def cmd_plan(ws, ns) -> int:
         return 0
 
     # run — one implementation, shared with what used to be `ctx plan run`
-    return _run_investigation(ws, ns)
+    # Pass the already-read text through: stdin is a stream and a second
+    # read of a pipe returns "".
+    return _run_investigation(ws, ns, text)
 
 
-def _run_investigation(ws, ns) -> int:
+def _run_investigation(ws, ns, text: str | None = None) -> int:
     """`ctx plan run <plan.json>` — execute an evidence plan and return one
     digest, keeping a replan ledger: replans past the budget are declared with
     a banner and recorded, never blocked (warn and record, never stop someone
@@ -98,7 +104,11 @@ def _run_investigation(ws, ns) -> int:
     from ctx.sessiondir import session_reads_path
     from ctx.store import Store
 
-    text = _read_plan_text(ws, ns.plan_file)
+    # `text` is threaded in from cmd_plan, which already read it. Reading
+    # again here is what broke every piped `ctx plan run -`: stdin is a
+    # stream, the first read drains it, and the second returned "".
+    if text is None:
+        text = _read_plan_text(ws, ns.plan_file)
     if text is None:
         return 2
     try:
