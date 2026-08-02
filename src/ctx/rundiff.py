@@ -21,6 +21,7 @@ from ctx.workspace import Workspace
 
 _MINE_CAP = 200_000  # lines template-mined per side
 _TOP = 5
+_SPAN_LINES = 12  # display budget for a quoted traceback
 
 # pytest-style output signatures (mirrors digest/pytestprof).
 _SESSION_RE = re.compile(r"=+ test session starts =+")
@@ -86,6 +87,26 @@ def _block_start(blocks: list[tuple[str, int]], nodeid: str) -> int | None:
         if name == nodeid or name == tail or name.endswith("::" + tail):
             return line_no
     return None
+
+
+def _span_end(start: int, anchors: list[int], total: int) -> int:
+    """Where this claim's evidence stops -- whichever comes first.
+
+    ``start + _SPAN_LINES`` is a *display* budget: how much of a traceback is
+    worth quoting. The next anchor is a *truth* boundary: past it the lines
+    belong to a different failure, and a span minted for nodeid X that runs
+    into nodeid Y's traceback attributes Y's evidence to X. A bug bash found
+    the fixed window doing exactly that on adjacent failures.
+
+    Anchors are every other claim coordinate in this stream -- traceback
+    headers and summary lines alike -- because either kind starts evidence
+    that is not ours.
+    """
+    hi = start + _SPAN_LINES
+    nxt = min((a for a in anchors if a > start), default=None)
+    if nxt is not None:
+        hi = min(hi, nxt - 1)
+    return max(start, min(hi, max(total, start)))
 
 
 def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> str:
@@ -159,10 +180,22 @@ def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> s
     text_b = _stream_text(store, streams_b.get("stdout"))
     blob_b = str((streams_b.get("stdout") or {}).get("blob") or "").removeprefix("sha256:")
     lines_b_total = int((streams_b.get("stdout") or {}).get("lines", 0))
+    # A binary side is UNKNOWN, not empty. Substituting "" for it and carrying
+    # on made every signature and template on the text side read as "only in
+    # B" -- a delta manufactured from the absence of a comparison. "skipped"
+    # has to mean skipped, so one binary side skips both analyses and the
+    # notice names which side is unreadable.
     if text_a is None or text_b is None:
-        out.append("analysis: binary stdout — signature/template delta skipped")
-        text_a = text_a or ""
-        text_b = text_b or ""
+        binary_sides = [
+            name for name, txt in (("A", text_a), ("B", text_b)) if txt is None
+        ]
+        out.append(
+            f"analysis: binary stdout in {' and '.join(binary_sides)} — "
+            "signature/template delta skipped (no text side to compare against)"
+        )
+        result = _emit(ws, "\n".join(out), budget.result_tokens)
+        record_telemetry(store, "diff", raw_scanned, len(result.encode("utf-8")))
+        return result
 
     next_span: str | None = None  # most salient new-in-B evidence
 
@@ -177,9 +210,10 @@ def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> s
         if new:
             out.append(f"  new failures: {fmt_int(len(new))}")
             blocks = _fail_blocks(text_b)
+            anchors = sorted({ln for _n, ln in blocks} | set((fails_b or {}).values()))
             for nodeid in new[:_TOP]:
                 start = _block_start(blocks, nodeid) or (fails_b or {}).get(nodeid) or 1
-                end = min(start + 12, max(lines_b_total, start))
+                end = _span_end(start, anchors, lines_b_total)
                 tag = ""
                 if blob_b:
                     sid = store.register_span(blob_b, "region", a=start, b=end)
