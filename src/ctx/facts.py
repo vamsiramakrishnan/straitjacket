@@ -431,7 +431,17 @@ def derive_run(
         if conn is None:
             return result
         key = f"run:{run_id}"
-        if _meta_get(conn, key) == mid_full:
+        # The cached fingerprint is (manifest id, extractor epoch), not the
+        # manifest id alone. The manifest cannot move when this harness learns
+        # to extract facts from a runner it previously only rendered, so a
+        # store that had already derived such a run short-circuited here
+        # forever and kept serving the old pytest-only census. Deriving what
+        # the extraction depends on into the key is the difference between a
+        # cache and a trap.
+        from ctx.digest import extractor_epoch
+
+        cache_fingerprint = f"{mid_full}/{extractor_epoch()}"
+        if _meta_get(conn, key) == cache_fingerprint:
             with conn:
                 _meta_put(conn, "latest_run", run_id)
             result["skipped"] = True
@@ -504,7 +514,7 @@ def derive_run(
                 "VALUES (?,?,?,?,?,?)",
                 rows,
             )
-            _meta_put(conn, key, mid_full)
+            _meta_put(conn, key, cache_fingerprint)
             _meta_put(conn, "latest_run", run_id)
         result.update(ok=True, fail=len(rows))
         return result

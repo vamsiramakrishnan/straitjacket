@@ -90,8 +90,10 @@ def _byte_window(ref_text, a: int, b: int, total: int, budget):
     return a, b, f"ctx get {ref_text} --bytes {b + 1}:{min(total, b + cap)}"
 
 
-def _fit_lines(ref_text, a: int, b: int, total: int, rendered: list[str], budget):
-    """Trim a line window to what the result budget can actually hold.
+def _fit_window(
+    flag: str, ref_text, a: int, b: int, total: int, rendered: list[str], budget
+):
+    """Trim a 1-based item window to what the result budget can actually hold.
 
     `--lines` clamped to max_inline_lines and stopped there, but 240 lines of
     a wide file still exceed the token budget -- so bounded() cut it again,
@@ -100,6 +102,15 @@ def _fit_lines(ref_text, a: int, b: int, total: int, rendered: list[str], budget
     to a line already shown. `--bytes` learned this in round 12; `--lines`
     is the same lesson, and the selector has to own the cut for the
     continuation to advance.
+
+    `flag` rather than a hardcoded `--lines`, because `--records` was the
+    third door onto this same contract and was still open: a `--records A:B`
+    covering the final record with a body over budget had no selector-level
+    continuation at all, so bounded() fell back to the verbatim handle and
+    the emitted `next:` re-issued the identical range -- the same truncated
+    prefix, forever. One fitter for every item-window selector is what stops
+    a fourth one being written; `tests/test_selector_continuation.py`
+    enumerates them so a new selector fails until it is wired in here.
 
     Measured on the RENDERED body rather than estimated from a width, which
     is the only way the header, the body and the address agree exactly.
@@ -116,9 +127,14 @@ def _fit_lines(ref_text, a: int, b: int, total: int, rendered: list[str], budget
     if kept >= len(rendered):
         return b, None
     kept = max(1, kept)
+    # Reached only when the window was actually trimmed (`kept < len(rendered)`
+    # above), so `new_b < b <= total`: there is always a next item to address
+    # and the continuation strictly advances. That is the invariant the whole
+    # helper exists to hold, and it is why the trimming branch may never
+    # return None -- a cut with no forward address is the loop itself.
     new_b = a + kept - 1
     span = new_b - a + 1
-    return new_b, f"ctx get {ref_text} --lines {new_b + 1}:{min(total, new_b + span)}"
+    return new_b, f"ctx get {ref_text} {flag} {new_b + 1}:{min(total, new_b + span)}"
 
 
 def get(
@@ -270,10 +286,18 @@ def get(
         # record count returned an empty body under a header claiming the
         # range, and exited 0.
         a, b = _window("records", a, b, len(lines), "records")
-        header.append(f"selector: --records {a}:{b} of {fmt_int(len(lines))}")
-        body = "\n".join(lines[a - 1 : b])
-        if b < len(lines):
+        rendered = lines[a - 1 : b]
+        # Fit BEFORE the header is written, so the header reports the range
+        # actually shown. Writing it first is how `--lines` originally came
+        # to claim a range wider than its own body.
+        b, fit_next = _fit_window("--records", ref_text, a, b, len(lines), rendered, budget)
+        rendered = rendered[: b - a + 1]
+        if fit_next:
+            continuation = fit_next
+        elif b < len(lines):
             continuation = f"ctx get {ref_text} --records {b + 1}:{min(len(lines), b + (b - a + 1))}"
+        header.append(f"selector: --records {a}:{b} of {fmt_int(len(lines))}")
+        body = "\n".join(rendered)
     elif selector.bytes is not None:
         a, b = selector.bytes
         if fast_bytes is not None:
@@ -311,7 +335,7 @@ def get(
             chunk = store.read_blob_lines(blob_hash, a, b)
             all_lines = chunk.decode("utf-8", "replace").splitlines()
             rendered = [f"L{a + i}: {ln}" for i, ln in enumerate(all_lines)]
-            b, fit_next = _fit_lines(ref_text, a, b, total, rendered, budget)
+            b, fit_next = _fit_window("--lines", ref_text, a, b, total, rendered, budget)
             if fit_next:
                 continuation = fit_next
                 rendered = rendered[: b - a + 1]
@@ -334,8 +358,8 @@ def get(
                 b = a + budget.max_inline_lines - 1
                 continuation = f"ctx get {ref_text} --lines {b + 1}:{min(len(all_lines), b + budget.max_inline_lines)}"
             rendered = [f"L{n}: {all_lines[n - 1]}" for n in range(max(1, a), b + 1)]
-            b, fit_next = _fit_lines(
-                ref_text, a, b, len(all_lines), rendered, budget
+            b, fit_next = _fit_window(
+                "--lines", ref_text, a, b, len(all_lines), rendered, budget
             )
             if fit_next:
                 continuation = fit_next

@@ -48,7 +48,7 @@ def run_seq(
     # already printed beside it.
     step_digests: list[tuple[int, str, str, int, bool]] = []
     final_exit = 0
-    any_timed_out = False
+    first_failure_timed_out = False
     halted_at: int | None = None
 
     for idx, cmd in enumerate(steps, start=1):
@@ -78,17 +78,25 @@ def run_seq(
             (idx, cmd, digest, exit_code if exit_code is not None else 1, failed)
         )
         if failed:
-            # A timeout the RUNNER observed outranks whatever the child
+            # ONE latch, not two. The exit code was first-failure-wins
+            # (`final_exit or ...`) while the timeout flag was
+            # any-failure-wins, so under `--keep-going` an early exit-3
+            # followed by a later timeout latched code 3 -- and rendered
+            # step 1's digest to match -- while still returning 124 to the
+            # caller. The summary said one thing and the exit status said
+            # another about which failure was primary. Two values derived
+            # from the same first-failure event have to be latched in the
+            # same statement or they drift apart exactly here.
+            #
+            # A timeout the RUNNER observed still outranks whatever the child
             # returned: previously a killed step fell through to the child's
             # code, so `ctx seq` reported 3 for a timeout the manifest
             # recorded, against the 124 in the docs/CLI.md exit-code table.
-            if result["timedOut"]:
-                any_timed_out = True
-                final_exit = final_exit or 124
-            else:
-                final_exit = final_exit or (
-                    exit_code if exit_code not in (0, None) else 124
-                )
+            if final_exit == 0:
+                if result["timedOut"]:
+                    final_exit, first_failure_timed_out = 124, True
+                else:
+                    final_exit = exit_code if exit_code not in (0, None) else 124
             if halt_on_fail:
                 halted_at = idx
                 break
@@ -129,4 +137,4 @@ def run_seq(
                 f"also failed: {others} (digest omitted; each is addressable "
                 "via its run: handle above)"
             )
-    return "\n".join(body), final_exit, any_timed_out
+    return "\n".join(body), final_exit, first_failure_timed_out

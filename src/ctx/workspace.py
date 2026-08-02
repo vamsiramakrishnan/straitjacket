@@ -260,7 +260,10 @@ def stat_fingerprint(root: Path | str, rels, h) -> None:
     metadata rather than content because hashing every file on every lookup
     is the thing they exist to avoid; ``skeleton`` keys on the source blob
     hash and deliberately does not use this — content is the stronger basis
-    and it already has the hash in hand.
+    and it already has the hash in hand. ``astgrep``'s rewrite guard is the
+    fourth caller and the one that is not a cache: it had hand-rolled a
+    weaker ``(rel, size, mtime_ns)`` fold of its own, which is how a guard
+    ended up trusting less evidence than the caches it sits beside.
 
     The basis is ``(rel, size, mtime_ns, ctime_ns)``. ``ctime_ns`` is not
     redundant: mtime is settable from userspace, so a same-length edit whose
@@ -269,15 +272,19 @@ def stat_fingerprint(root: Path | str, rels, h) -> None:
     to serve a stale map/graph/node result. ctime is bumped by the write and
     by the utime call itself and cannot be moved backwards.
 
-    Unstattable paths are skipped (a deleted file leaves the listing that
-    produced ``rels`` anyway); the traversal order is the caller's, so the
-    caller owns determinism.
+    An unstattable path folds in as ``missing`` rather than being skipped.
+    Skipping made a vanished file hash identically to a workspace where it
+    had never existed, which is tolerable for a cache that will be rebuilt
+    and not tolerable for a guard that is being asked whether the worktree
+    moved. Recording it is strictly stronger and costs one line; the
+    traversal order is the caller's, so the caller owns determinism.
     """
     base = Path(root)
     for rel in rels:
         try:
             st = (base / rel).stat()
         except OSError:
+            h.update(f"{rel}|missing\n".encode("utf-8"))
             continue
         h.update(
             f"{rel}|{st.st_size}|{st.st_mtime_ns}|{st.st_ctime_ns}\n".encode("utf-8")

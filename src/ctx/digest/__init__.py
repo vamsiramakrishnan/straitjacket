@@ -8,6 +8,7 @@ fall back to ``text/v1``.
 from __future__ import annotations
 
 import re
+import functools
 import hashlib
 from typing import Any
 
@@ -62,6 +63,31 @@ def detect_profile(ctx: DigestContext) -> tuple[Profile, str]:
         if reason:
             return profile, reason
     return _PROFILES[-1], "fallback"  # pragma: no cover - text always matches
+
+
+@functools.lru_cache(maxsize=1)
+def extractor_epoch() -> str:
+    """Identity of the FACT-tier extraction the registry can currently do.
+
+    Derived from the registry, never hand-maintained. The fact cache keys a
+    derived run census on the manifest id alone, and a manifest id does not
+    move when this file gains an extractor -- so every store that had already
+    derived a unittest / Go / Cargo / Jest run kept serving the old
+    pytest-only census after the upgrade that taught those profiles to
+    extract, and `ctx q 'fails last'` went on answering "no failures" about a
+    run with failures in it. The cached fingerprint carries this epoch beside
+    the manifest id, so teaching a profile to extract, or bumping a profile
+    version, invalidates exactly the derivations whose answer could change.
+
+    A hand-bumped constant would have the same shape and the same failure:
+    the bump is remembered on the day the extractor is written and forgotten
+    every day after. Deriving it means the invalidation cannot be forgotten.
+    """
+    parts = sorted(
+        f"{p.version}:{int(type(p).extract is not Profile.extract)}"
+        for p in _PROFILES
+    )
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
 # Lines a profile emits that are pure bookkeeping: provenance, byte counts, and

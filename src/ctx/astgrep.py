@@ -495,23 +495,32 @@ def _guard_state(ws: Workspace) -> str:
     preview", and quietly making a safety guard accept more than it says it
     accepts is the failure this whole fix is about. If that trade is worth
     making it should be made in the docs first.
+
+    The stat basis is ``workspace.stat_fingerprint``, not a local fold. This
+    hand-rolled ``(rel, size, mtime_ns)`` and omitted ``ctime_ns``, which the
+    shared helper carries precisely because mtime is settable from userspace:
+    a same-size edit whose mtime is restored (``os.utime``, ``rsync -t``,
+    ``tar -p``, editors that save-and-restore timestamps) was invisible here,
+    so the guard accepted a worktree that had changed under it and let a
+    stale preview apply. A safety guard reading a WEAKER basis than the
+    performance caches is the wrong way round -- there is one stat basis in
+    this harness and this is one of its callers.
     """
     from ctx.execution import generation_hash
+    from ctx.workspace import stat_fingerprint
 
     gen = generation_hash(ws.root)
     if gen:
         return f"gen:{gen}"
-    h = hashlib.sha256(b"ctx.rewrite.worktree/v1\n")
+    # /v2: the basis gained ctime_ns. A preview taken under /v1 must not
+    # compare equal to a /v2 state, and it does not -- the version is folded
+    # in, so the mismatch refuses rather than silently trusting the old fold.
+    h = hashlib.sha256(b"ctx.rewrite.worktree/v2\n")
     try:
         rels = ws.list_files()
     except Exception:
         return "unknown"  # refuses on compare: two "unknown"s are not equal
-    for rel in rels:
-        try:
-            st = (ws.root / rel).stat()
-            h.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\n".encode())
-        except OSError:
-            h.update(f"{rel}\0missing\n".encode())
+    stat_fingerprint(ws.root, rels, h)
     return f"worktree:{h.hexdigest()}"
 
 
