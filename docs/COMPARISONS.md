@@ -28,10 +28,37 @@ idea the harness kept — losslessly.
 | **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
 | **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
 | **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+| **TokenSave** (code-intelligence MCP server) | pre-indexed symbol graph answers instead of file reads; savings metered on every call | 40+ tool schemas is 40+ tool definitions of prompt prefix, re-paid every request and churned on release | one stable `ctx` tool with an `op` discriminator — prefix never churns (96.5–98.1% cache hit); per-call savings already in the digest header |
+| **wozcode** (Claude Code plugin) | replaces built-in file tools with purpose-built agents; installs in seconds, no signup | plugin-scoped to one host; no addressing story published | `ctx wrap` targets three hosts and merges non-destructively — but see the setup-friction note below, where they beat us outright |
+
+*Rows for TokenSave and wozcode are desk research, not head-to-head runs —
+their figures are their own claims. Marked as such in
+[`evals/field-devex-2026-08-02.md`](../evals/field-devex-2026-08-02.md), which
+is the receipt for this section and is explicitly not allowed to move any
+performance number we publish.*
 
 What each still does better than us, by design: Headroom's zero-integration
 generality, rtk's 15-host reach and <10ms single binary, Ponytail's 20-host
-rule files, Maki's OS-level sandbox (ours arrives with the broker, Phase 3).
+rule files, Maki's OS-level sandbox (ours arrives with the broker, Phase 3)
+and its user-space `init.lua` plugin model, TokenSave's ambient session cost
+panel, wozcode's zero-signup install.
+
+### Two places the field beats us on devex, stated plainly
+
+**Distribution.** rtk is `cargo install`. Headroom is `headroom wrap claude`.
+wozcode installs in seconds with no signup. We are `git clone` →
+`pip install -e .` → `ctx wrap setup`. Step three is the best in the field —
+idempotent, non-destructive, self-verifying, exits non-zero rather than
+claiming a success it didn't achieve. Steps one and two are the worst. That is
+a release we have not cut, not a design position.
+
+**Malleability.** Maki's users shape the agent from `init.lua` in user space.
+Ours must edit `src/ctx/digest/<family>prof.py` and append to the `_PROFILES`
+tuple in our source tree — i.e. **carry a fork** to teach the harness their
+own test runner or in-house log format. For a project whose thesis is that
+output families are diverse and deserve typed treatment, a closed profile
+registry caps the system at the families we personally got around to writing.
+Opening it is backlog item 2 in the scan above.
 
 ## How each neighbour is built — and where the harness diverges
 
@@ -150,4 +177,15 @@ less tool-output on an unavoidable flood, honest parity-loss on the greppable on
 - **Caveman** → terse narration kept, the loss dropped: citations resolve,
   compressed prose doesn't.
 - **Maki** → the interpreter collapse generalized (`ctx seq` declared → `ctx
-  eval` computed) with the provenance a raw sandbox drops.
+  eval` computed) with the provenance a raw sandbox drops. Still owed: its
+  user-space extension model — see the malleability note above.
+- **TokenSave** → the argument for keeping our surface at *one* tool got
+  sharper, not weaker: their 40+ schemas are the concrete cost of the
+  alternative. Taken: the instinct to meter savings where the user sees them.
+  Declined: metering *bytes avoided*, which is trivially inflatable — a
+  savings counter here has to be billed-token delta against a measured naive
+  arm, the distinction our own bug-bash A/B ran into when the harnessed arm
+  won on bytes-per-result and lost on total billed tokens by taking more
+  turns.
+- **wozcode** → nothing technical yet; it is on this list as a standing
+  reproach about install friction.

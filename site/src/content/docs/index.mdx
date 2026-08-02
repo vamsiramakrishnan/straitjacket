@@ -134,7 +134,51 @@ We benchmarked or stress-tested each of these, kept the good idea, and recorded
 what each still does better than us. That last part matters and is written
 down: Headroom's zero-integration generality, rtk's 15-host reach and sub-10ms
 binary, and more, in
-[Comparisons](/straitjacket/guides/comparisons/).
+[Comparisons](/straitjacket/guides/comparisons/) — including the two places the
+field currently beats us outright, which are install friction and how easily you
+can extend this thing without forking it.
+
+## The two surfaces your agent actually touches
+
+Everything above is the argument. These are the parts you install.
+
+### One MCP tool, not forty
+
+The comprehensive servers in this space ship 40+ separate MCP tools. Every tool
+definition is prompt prefix — re-sent on every single request, and invalidated
+whenever the server adds a tool. We expose exactly **one** tool with an
+operation parameter, so the prefix never churns. That is upstream of the
+96.5–98.1% cache-hit number at the top of this page.
+
+It is bounded by construction, not by convention:
+
+- The token ceiling is declared in the published schema **and** clamped at
+  runtime. An advertised bound that nothing enforces is worse than no bound.
+- There is no execution surface. Running commands stays on your host's own
+  command tool, so your permission prompts still appear — a retrieval server
+  that can quietly run things is not a retrieval server.
+- A bad reference is a typed error, never a silent empty result that reads like
+  "nothing found".
+
+The honest cost: one tool with an `op` parameter is less obvious than forty
+named ones, to a model and to you. We think prefix stability is worth more, and
+the cache numbers are the argument.
+
+### A skill that stays small until you need it
+
+The skill is the advisory layer — it teaches the protocol, and unlike the hook
+it can be ignored. It is written to be cheap at rest: a short always-loaded
+protocol, with six reference documents that load **only** when a task reaches
+for them. Same discipline we apply to your tool output, applied to our own
+instructions.
+
+Its rules are numbered and checkable, which is the point — a rule you can score
+is a rule you can A/B. That is how the solution ladder earned its place here
+(−28% turns, −33% time, −17% cost) instead of being asserted.
+
+Advisory means bypassable. That is the honest boundary of this layer, and it is
+why the hook exists: the hook enforces at the tool boundary what the skill can
+only recommend.
 
 <div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow); margin: 1rem 0;">
   <img className="sj-dark" src="/straitjacket/diagrams/field-treemap.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail, Maki and wozcode. Each tile names the tool's one good idea, its limitation, and — on an amber strip — the lossless form straitjacket adopted." style="display:block" />

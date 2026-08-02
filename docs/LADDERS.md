@@ -31,7 +31,7 @@ it; "latching" says whether it can flap.
 
 | ladder | axis | steps | traversed by | signal | latching | measured today? |
 |---|---|---|---|---|---|---|
-| Solution ladder (skill r13) | what code to write | not-needed → reuse → stdlib → one-liner → new code | model (advisory) | none (in-prompt) | n/a | ✅ deliverable metrics, A/B-adopted |
+| Solution ladder (skill r13) | what code to write | not-needed → reuse → native feature → stdlib → one-liner → new code (exempt: trust boundaries, data loss, security, accessibility) | model (advisory) | none (in-prompt) | n/a | ✅ deliverable metrics, A/B-adopted |
 | Capture ladder | how work executes | native → `run` → pipeline (`--shell`) → `seq` → `eval` → `job` (this wave) | model (taught) + hook (steered) | command shape | n/a | ⚠️ adoption ledger just landed (eval wave); no per-step traversal metric |
 | Emission budgets | how much rides | inline-complete → digest → failure×2 → truncation note | harness | output size, exit code | no (per event) | ✅ telemetry raw/emitted per verb |
 | Graduated engagement | affordance surface | passive → active | harness | call count ≥ 8, truncation events, model tier | latches up per session | ⚠️ state file exists; transitions not telemetried |

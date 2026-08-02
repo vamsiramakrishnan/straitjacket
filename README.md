@@ -626,8 +626,27 @@ broker owns the store.)*
 
 ### MCP surface
 
-One stable tool (**ctx**), operations selected by parameter — no dynamic tool
-injection, so the prompt-cache prefix never churns:
+**One stable tool, and that is the design.** The obvious alternative is a wide
+server — TokenSave, the most comprehensive in this space, ships 40+ MCP tools.
+Every tool definition is prompt prefix: it is re-sent on every request, and a
+server that adds tools over time invalidates the cached prefix on each release.
+One schema with an `op` discriminator never churns, which is upstream of the
+measured 96.5–98.1% cache-hit band.
+
+What that buys, concretely:
+
+| Property | How it's held |
+|---|---|
+| **Prefix stability** | one schema, ops selected by parameter — no dynamic tool injection, ever |
+| **Bounded by construction** | `maxTokens` is declared in the published schema *and* clamped at runtime to 64–4000; an advertised bound nothing enforces is worse than no bound |
+| **No execution surface** | `investigate` accepts observe-class evidence plans only; execute-class ops are typed rejections at `tier='mcp'`. Command execution stays on `ctx run` through the host's native command tool, so your permission flow stays visible (SPEC §10.4) |
+| **Warm across calls** | resolved workspaces are cached with TTL eviction, so a tool call doesn't re-spawn git subprocesses and reopen SQLite |
+| **Fail-closed** | a malformed ref or an unknown op is a typed error, not a silent empty result |
+
+The cost of this choice, stated because it is real: `op` is less discoverable
+than forty named tools — to a model reading a tool list and to a human reading
+one. We think prefix stability is worth more than nominal discoverability, and
+the cache numbers are the argument.
 
 ```json
 {
@@ -643,8 +662,36 @@ injection, so the prompt-cache prefix never churns:
 }
 ```
 
-Command execution stays on `ctx run` through the host's native command tool
-so your permission flow stays visible (SPEC §10.4).
+### The skill
+
+The skill is the *advisory* tier — protocol, not enforcement — and it is
+written to be small at rest and deep on demand.
+
+- **Progressive disclosure.** [`SKILL.md`](plugins/antigravity/skills/ctx-harness/SKILL.md)
+  is the always-loaded protocol; six reference files
+  ([verbs](plugins/antigravity/skills/ctx-harness/references/verbs.md),
+  [evidence plans](plugins/antigravity/skills/ctx-harness/references/evidence-plans.md),
+  [routing policy](plugins/antigravity/skills/ctx-harness/references/routing-policy.md),
+  [model catalog](plugins/antigravity/skills/ctx-harness/references/model-catalog.md),
+  [addressing](plugins/antigravity/skills/ctx-harness/references/repository-addressing.md),
+  [collaboration](plugins/antigravity/skills/ctx-harness/references/harness-collaboration.md))
+  load only when the task reaches for them. The resident cost is the protocol;
+  the depth is addressable — the same discipline the digest layer applies to
+  bytes, applied to instructions.
+- **The description is a trigger condition, not a summary.** It names the
+  situations that should invoke it (output that may exceed ~2,000 tokens;
+  repository questions) rather than describing what the tool is.
+- **Numbered, checkable rules.** Each is a behavior an observer can score,
+  which is what let the solution ladder (rule 13) be A/B-adopted on evidence
+  rather than asserted — −28% turns, −33% wall-clock, −17% cost.
+- **It carries the ladders.** Rule 13 is the solution ladder; rule 15 is the
+  capture ladder; rules 11–12 are cite-don't-quote. See
+  [`docs/LADDERS.md`](docs/LADDERS.md) for the conditionality audit of all of
+  them, including which are measured and which are not.
+
+Skill rules are advisory by construction and therefore bypassable — that is
+the honest boundary of this tier, and it is why the **Plugin** mode exists.
+The hook enforces at the tool boundary what the skill can only recommend.
 
 ### Configuration
 

@@ -39,10 +39,16 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     satisfy the task's required output format in full. Sub-agent reports
     use the checkpoint shape (goal, findings, evidence handles, negatives).
 13. Apply the solution ladder before writing any code — prefer in order:
-    not needed at all, reuse what exists, standard library, a one-liner,
-    minimal new code. Be lazy about the solution, never about reading.
-    Deliberately deferred improvements are declared
-    (`ctx debt add "<note>" --ref repo:file:line`), never silently skipped.
+    not needed at all, reuse what exists, a native platform/runtime feature,
+    standard library, a one-liner, minimal new code. Be lazy about the
+    solution, never about reading. Reuse ranks above stdlib deliberately:
+    in a codebase with its own vocabulary, hand-rolling with `hashlib` what
+    the repo already exposes as a shared helper is the wrong move even
+    though both are "simple". The ladder does **not** apply to trust
+    boundaries, data loss, security, or accessibility — on those four,
+    write the fuller version. Deliberately deferred improvements are
+    declared (`ctx debt add "<note>" --ref repo:file:line`), never silently
+    skipped.
 14. Plan backward: state the final acceptance check first, then the step
     before it, back to your first action — then execute forward without
     re-planning. Mechanical chains you can declare upfront run as one

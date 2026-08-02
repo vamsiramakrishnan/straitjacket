@@ -6,6 +6,60 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+### The solution ladder gains its missing rung — and a safety exemption
+
+**Prompt-cache impact: `PREFIX_VERSION` 7 → 8.** Skill rule 13 is injected
+prefix text, so this edit cold-invalidates every user's prompt cache once —
+one full prefix rewrite per model (~56k tokens / ~$0.21 on Sonnet, measured in
+`evals/matrix-2026-07-18.md`). Declared here rather than absorbed silently,
+per the prefix-stability contract.
+
+A rung-by-rung audit of our ladder against the
+[Ponytail](https://www.alphamatch.ai/blog/ponytail-ai-coding-skill-2026)
+decision ladder (written up in `evals/field-devex-2026-08-02.md`) found we had
+adopted five of six rungs and were missing one: **"is there a native platform
+or runtime feature?"** — the rung that catches a hand-written helper for
+something the language or host already does. Added.
+
+Also added: an explicit **exemption list**. The ladder does not apply to trust
+boundaries, data loss, security, or accessibility; on those four, write the
+fuller version. Ponytail carries the same carve-out and we did not, which left
+a foreseeable failure where "prefer the one-liner" meets an input-validation
+path.
+
+Rung *order* deliberately still differs from Ponytail's: they check stdlib
+before installed dependencies, we check *reuse what exists* first. Reaching for
+`hashlib` when the repo already exposes a shared helper is the wrong move even
+though both are "simple" — not hypothetical, it is exactly the defect an
+automated reviewer found in this branch's rewrite guard.
+
+### Field scan: two neighbours added, two devex gaps admitted
+
+`evals/field-devex-2026-08-02.md` — desk research, explicitly not a
+head-to-head, and explicitly not permitted to move any published performance
+number. Adds **TokenSave** and **wozcode** to `docs/COMPARISONS.md` and records
+two places the field beats us:
+
+- **Distribution.** Every peer installs in one step from a published artifact;
+  we are `git clone` → `pip install -e .`. `ctx wrap setup` is the best
+  onboarding step in the field and is unreachable until that is fixed.
+- **Malleability.** Teaching the harness a new output family means editing
+  `src/ctx/digest/` and the `_PROFILES` tuple — carrying a fork. Maki's users
+  shape their agent from a user-space `init.lua`. A closed profile registry
+  caps a system whose whole thesis is that output families are diverse.
+
+Both are filed as `ctx debt`, not fixed here.
+
+### README and docs: the two surfaces you actually install
+
+The MCP server and the skill now have sections explaining what makes them
+*good*, not just what they are: one stable tool with an `op` discriminator
+(against the 40+-tool alternative, with the prefix-churn argument and the
+discoverability cost both stated), bounds declared in the schema *and* clamped
+at runtime, no execution surface, and — for the skill — progressive disclosure,
+trigger-condition descriptions, numbered scoreable rules, and the honest note
+that advisory means bypassable.
+
 ### The call graph gets scope, a second language, and its disclosure back
 
 `ctx callers/callees/impact` were the only code verbs that did not ride the
