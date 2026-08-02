@@ -229,6 +229,9 @@ _HEAD_TAIL_MAX = 400  # max -n allowed for native head/tail
 _MAX_INLINE_BYTES_DEFAULT = 16384
 _MAX_INLINE_LINES_DEFAULT = 240
 _SESSION_READ_BUDGET_DEFAULT = 262144  # 256 KiB of raw native reads per session
+# Floor for the escalating over-budget read window: below this a bounded read
+# stops being evidence and becomes a round trip that teaches the model nothing.
+_OVER_BUDGET_MIN_LINES = 20
 _WINDOW_PRESSURE_PCT_DEFAULT = 70  # window fullness (%) at which budgets tighten
 # Universal emission gate: a PostToolUse tool result larger than this many
 # bytes is replaced by a bounded digest. Keep in sync with config.Budgets.
@@ -1458,6 +1461,34 @@ def _read_budget_reason(total: int) -> str:
     )
 
 
+def _pressured_window(max_lines: int, total: int, budget: int) -> int:
+    """Line window for a bounded read, tightened by how far the session has
+    already overrun its read budget.
+
+    Two properties this must have, both learned from a measured failure
+    (evals/devex/, harnessed arm: 167 native reads landed 796 KiB against a
+    256 KiB budget):
+
+    * **It escalates.** The old throttle was a single binary step — one fixed
+      window the moment the budget was crossed, identical at 1.01x and at
+      6.3x overrun. A session already 6x over kept paying the same toll, so
+      133 post-budget reads still averaged ~4 KiB apiece.
+    * **It applies to large files too.** The large-file branch returned before
+      the ledger was ever consulted, so files over ``max_inline_bytes`` — the
+      reads that dominate the flood — were the *only* ones exempt from session
+      pressure. Measured max read stayed ~15 KiB before and after the budget
+      was crossed, because those reads never saw it.
+
+    At or under budget the window is unchanged. At exactly the budget it
+    reproduces the previous over-budget behaviour (``max_lines // 4``), then
+    tightens hyperbolically with the overrun ratio, floored so a bounded read
+    still carries enough lines to be worth reading at all."""
+    if budget <= 0 or total <= budget:
+        return max_lines
+    over = total / budget
+    return max(_OVER_BUDGET_MIN_LINES, int(max_lines / (4 * over)))
+
+
 def classify_read(
     path_str: str,
     workspace_root: str | None,
@@ -1483,6 +1514,16 @@ def classify_read(
     in_ledger = _LEDGER_DIR_NAME in path_str.replace("\\", "/").split("/")
     limit = int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT))
     note = str(policy.get("_window_note", ""))  # window pressure, "" when idle
+    max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+    budget = int(
+        policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT)
+    )
+    # Peek the ledger before branching. The large-file branch below returns
+    # without ever consulting it, so without this the biggest reads in a
+    # session are the only ones that never feel session pressure. Charging
+    # zero is a read of the running total; it stays fail-open (0 on any error,
+    # which _pressured_window reads as "no pressure").
+    seen = 0 if in_ledger else _ledger_charge(workspace_root, session_id, 0)
     if size > limit:
         price = _price_note(size, workspace_root)
         decision: dict[str, Any] = _deny(
@@ -1492,7 +1533,7 @@ def classify_read(
             "or:  ctx search repo:<relative-path> '<pattern>' --context 3" + note
         )
         if _steering_allows(policy):
-            max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+            max_lines = _pressured_window(max_lines, seen, budget)
             decision["_rewrite"] = {
                 "fields": {"limit": max_lines},
                 "reason": (
@@ -1510,16 +1551,12 @@ def classify_read(
     if in_ledger:
         return dict(DECISION_ALLOW)
     total = _ledger_charge(workspace_root, session_id, size)
-    budget = int(
-        policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT)
-    )
     if total > budget:
         reason = _read_budget_reason(total) + note
         if _steering_allows(policy):
-            max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
             pressured: dict[str, Any] = dict(DECISION_ALLOW)
             pressured["_rewrite"] = {
-                "fields": {"limit": max_lines // 4},
+                "fields": {"limit": _pressured_window(max_lines, total, budget)},
                 "reason": reason,
             }
             return pressured

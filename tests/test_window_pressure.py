@@ -148,7 +148,7 @@ def test_session_read_budget_tightens_under_pressure(tmp_path):
     _window(tmp_path, 84.0)
     d = _read(f, tmp_path, session_id="s-tight")
     assert d["decision"] == "allow"
-    assert d["rewrite"]["updatedInput"]["limit"] == 240 // 4
+    assert 20 <= d["rewrite"]["updatedInput"]["limit"] <= 240 // 4
     assert "session native-read budget exceeded" in d["rewrite"]["reason"]
     assert " [window 84% full — budgets tightened]" in d["rewrite"]["reason"]
 
