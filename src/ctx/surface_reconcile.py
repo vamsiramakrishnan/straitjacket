@@ -19,6 +19,7 @@ rule should be trusted to run unattended.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,12 @@ from ctx.surface_gateway import KERNEL_FAMILIES, load_state, save_state
 SHADOW_LEDGER = ".ctx-surface/reconcile-shadow.jsonl"
 
 # Task-intent → family. A prompt that mentions any keyword reveals the family.
+#
+# Edge whitespace is SIGNIFICANT and is the boundary declaration: `" pr "` may
+# only match the whole word, while an unpadded `"vulnerab"` or `"infra"` is a
+# deliberate prefix that should still fire on "vulnerability" / "infrastructure".
+# The matcher used to `.strip()` these before the substring test, throwing the
+# declaration away -- "sprint" then revealed remote-source-control.
 INTENT_TRIGGERS: dict[str, tuple[str, ...]] = {
     "remote-source-control": ("pull request", " pr ", "open a pr", "merge", "github",
                               "review the pr", "push the branch"),
@@ -62,16 +69,37 @@ class Signals:
     available_families: set[str] = field(default_factory=set)
 
 
+_SEP_RE = re.compile(r"[^0-9a-z]+")
+
+
+def _normalize(text: str) -> str:
+    """Lowercase, collapse every non-alphanumeric run to one space, pad.
+
+    Padding the TEXT is what makes padding a KEYWORD mean anything. Doing it
+    with a bare `f" {text} "` was not enough: `"open a PR."` and `"the pr,"`
+    have punctuation where the boundary is, so `" pr "` missed the very
+    mentions it exists to catch while `.strip()` let it match inside
+    "sprint". Normalizing separators fixes both directions at once.
+    """
+    return " " + _SEP_RE.sub(" ", text.lower()).strip() + " "
+
+
+def _normalize_kw(kw: str) -> str:
+    """Same normalization, but edge padding is preserved -- it is the
+    keyword's boundary declaration, not incidental whitespace."""
+    return _SEP_RE.sub(" ", kw.lower())
+
+
 def reconcile(sig: Signals) -> list[Action]:
     """Pure reconciliation: signals → the minimal reveal/hide actions.
     Deterministic and side-effect-free."""
     actions: list[Action] = []
-    low = f" {sig.intent_text.lower()} "
+    low = _normalize(sig.intent_text)
     # 1. reveal on intent (smallest cover: only families that actually exist here)
     for fam, kws in INTENT_TRIGGERS.items():
         if fam in sig.revealed or (sig.available_families and fam not in sig.available_families):
             continue
-        hit = next((k for k in kws if k.strip() in low), None)
+        hit = next((k for k in kws if _normalize_kw(k) in low), None)
         if hit:
             actions.append(Action("reveal", fam, f"intent match: '{hit.strip()}'",
                                   sig.family_tokens.get(fam, 0)))
