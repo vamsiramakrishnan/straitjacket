@@ -70,3 +70,57 @@ def test_a_genuine_internal_error_is_still_one():
     from ctx.commands._errors import bad_input_errors
 
     assert not issubclass(RuntimeError, bad_input_errors())
+
+
+# ---------------------------------- a snapshot names what it was asked about
+def test_a_symlink_keeps_its_own_name(state_home, workspace_dir):
+    """`snapshot_file` recorded `ws.relativize(full)` -- the RESOLVED path --
+    so a snapshot of link.py was filed under a.py. `ctx q '... | outline'`
+    then printed the target twice and the name the caller asked about not at
+    all. Two paths, two jobs: one is where the bytes come from, the other is
+    what the caller asked about."""
+    from conftest import make_store, make_ws
+    from ctx.execution import snapshot_file
+
+    (workspace_dir / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (workspace_dir / "link.py").symlink_to(workspace_dir / "a.py")
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+
+    assert snapshot_file(store, ws, "a.py")["path"] == "a.py"
+    assert snapshot_file(store, ws, "link.py")["path"] == "link.py"
+
+
+def test_a_symlink_is_excluded_if_either_name_is(state_home, workspace_dir):
+    """Ignored by EITHER name. A link is excluded when its own name is
+    excluded or when it points at something excluded -- refusing more is
+    always the safe direction for a capture policy."""
+    import pytest
+
+    from conftest import make_store, make_ws
+    from ctx.execution import ExecutionError, snapshot_file
+
+    (workspace_dir / ".ctxignore").write_text("secret.txt\n", encoding="utf-8")
+    (workspace_dir / "secret.txt").write_text("s\n", encoding="utf-8")
+    (workspace_dir / "innocent.txt").symlink_to(workspace_dir / "secret.txt")
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+
+    with pytest.raises(ExecutionError, match="excluded"):
+        snapshot_file(store, ws, "innocent.txt")
+
+
+def test_relativize_as_asked_does_not_follow_links(state_home, workspace_dir):
+    from conftest import make_ws
+
+    (workspace_dir / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (workspace_dir / "link.py").symlink_to(workspace_dir / "a.py")
+    ws = make_ws(workspace_dir)
+
+    assert ws.relativize_as_asked("link.py") == "link.py"
+    assert ws.relativize_as_asked("./link.py") == "link.py"
+    assert ws.relativize_as_asked(str(workspace_dir / "link.py")) == "link.py"
+    # relativize() resolves against the PROCESS cwd for a bare relative path,
+    # so the meaningful comparison is on an absolute one: same input, one
+    # answer naming the link and one naming what it points at.
+    assert ws.relativize(str(workspace_dir / "link.py")) == "a.py"

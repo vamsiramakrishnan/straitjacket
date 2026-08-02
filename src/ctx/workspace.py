@@ -105,11 +105,37 @@ class Workspace:
         return resolved
 
     def relativize(self, p: str | Path) -> str:
-        """Repo-relative POSIX path for model-visible output."""
+        """Repo-relative POSIX path for model-visible output.
+
+        RESOLVES symlinks -- use it for the path bytes were read FROM. For
+        the path the caller asked ABOUT, use ``relativize_as_asked``.
+        """
         try:
             return Path(p).resolve().relative_to(self.root.resolve()).as_posix()
         except ValueError:
             return Path(p).name
+
+    def relativize_as_asked(self, p: str | Path) -> str:
+        """Repo-relative POSIX path WITHOUT following symlinks.
+
+        ``relativize`` resolves, which is right when the answer is about
+        bytes and wrong when it is about identity: a snapshot of
+        ``link.py`` recorded ``a.py``, so ``ctx q '... | outline'`` filed
+        the symlink's outline under its target -- printing the target twice
+        and the name the caller actually asked about not at all.
+
+        Normalization is lexical (``..`` collapsed, no syscall), so the
+        result is a repo-relative path that still names what was requested.
+        """
+        raw = Path(p)
+        base = raw if raw.is_absolute() else self.root / raw
+        lex = Path(os.path.normpath(base))
+        for root in (Path(os.path.normpath(self.root)), self.root.resolve()):
+            try:
+                return lex.relative_to(root).as_posix()
+            except ValueError:
+                continue
+        return self.relativize(p)
 
     def is_ignored(self, rel_path: str) -> bool:
         rel = rel_path.removeprefix("./")

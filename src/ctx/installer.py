@@ -808,7 +808,18 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     except Exception as e:
         check("manifest schema", False, str(e)[:120])
 
-    # Hook self-test: classifier must emit a decision for a known flood.
+    # Hook self-test: an unbounded whole-suite run must never reach the
+    # terminal AS WRITTEN.
+    #
+    # This asserted `decision == "deny"`, which is one of the shapes that
+    # satisfy that property, not the property itself. Under the replacement
+    # surface a recognised loop-shape is ALLOWED and rewritten into the
+    # collapsed `ctx q` op -- the flood is contained by substitution rather
+    # than refusal -- so merely having captured one pytest failure earlier in
+    # the session (an entirely normal thing to have done) made `ctx doctor`
+    # report PROBLEMS FOUND while the guard was behaving exactly as designed.
+    # A self-test that pins a proxy fails when the implementation finds a
+    # better way to keep the promise.
     try:
         from ctx.hook import classify
 
@@ -819,7 +830,11 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
                 "workspacePaths": [str(ws.root)],
             }
         )
-        check("hook classifier", d.get("decision") == "deny", f"pytest → {d.get('decision')}")
+        verdict = str(d.get("decision"))
+        rewritten = isinstance(d.get("_rewrite"), dict)
+        contained = verdict in ("deny", "force_ask") or rewritten
+        how = f"pytest → {verdict}" + (" + collapsed rewrite" if rewritten else "")
+        check("hook classifier", contained, how)
     except Exception as e:
         check("hook classifier", False, str(e))
 
