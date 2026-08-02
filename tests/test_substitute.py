@@ -110,9 +110,28 @@ def test_pytest_already_narrowed_is_left_alone():
         assert collapse(cmd, failure_available=True) is None
 
 
+def _assert_runnable(command: str) -> None:
+    """The substituted command must actually parse. A collapse that emits
+    something ctx cannot run is worse than no collapse: the agent gets an
+    exit-2 error instead of the answer it asked for."""
+    import shlex
+
+    from ctx.cli import _build_parser
+
+    argv = shlex.split(command)
+    assert argv[0] == "ctx"
+    _build_parser().parse_args(argv[1:])
+
+
 def test_glob_hint_carried_through():
     sub = collapse('grep -rn "raise ValueError" src/foo/*.py')
-    assert sub is not None and "--glob '*.py'" in sub.command
+    # The glob rides INSIDE the query string, because `ctx q`'s own parser
+    # takes only [--trace] and the query -- a top-level --glob made the
+    # substituted command exit 2. This asserts the command PARSES, which is
+    # the property that matters; the old assertion pinned the literal broken
+    # spelling.
+    assert sub is not None and "--glob *.py" in sub.command
+    _assert_runnable(sub.command)
 
 
 # ── the hook honours the flag ───────────────────────────────────────────────

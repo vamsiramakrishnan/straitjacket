@@ -67,11 +67,13 @@ from ctx.workspace import Workspace, stat_fingerprint
 #: v2.1 adds the resolved import edges to the serialized graph so `ctx cycles`
 #: reads them from cache instead of re-deriving them. v2.2 makes node keys
 #: file-scoped ("rel::qual") and stores each definition's qual explicitly
-#: rather than deriving it from the key. The suffix is part of every cache
+#: rather than deriving it from the key. v2.3 records whether each call site
+#: was attribute-qualified, which is what separates real recursion from an
+#: attribute call sharing the enclosing function's trailing name. The suffix is part of every cache
 #: key, so graphs written by an older version are simply not found — a stale
 #: graph read under the new key shape would answer confidently and wrongly,
 #: and a wrong answer from a cache is worse than a rebuild.
-_FORMAT = "ctx.callgraph/v2.2"
+_FORMAT = "ctx.callgraph/v2.3"
 _MAX_FILES = 5000
 _MAX_DEPTH = 6  # hard bound on impact/reachability recursion
 _MAX_ROWS = 20  # per-section row cap; the remainder is declared, never dropped
@@ -116,8 +118,8 @@ class _Unit:
     lang: str
     engine: str
     defs: list[_Def] = field(default_factory=list)
-    # (enclosing qual, callee name, call-site line)
-    calls: list[tuple[str, str, int]] = field(default_factory=list)
+    # (enclosing qual, callee name, call-site line, was_attribute_call)
+    calls: list[tuple[str, str, int, bool]] = field(default_factory=list)
     # module-ish import targets as written, for the fallback scoping tier
     imports: list[str] = field(default_factory=list)
 
@@ -240,13 +242,13 @@ class _PyVisitor(ast.NodeVisitor):
         # reading as if it worked. Its descendants were already queued, so every
         # call inside a closure was attributed to the enclosing function TOO,
         # as a duplicate edge that no ctx callers/callees output could explain.
-        for name, lineno in _own_calls(node):
-            self.unit.calls.append((qual, name, lineno))
+        for name, lineno, is_attr in _own_calls(node):
+            self.unit.calls.append((qual, name, lineno, is_attr))
         self.generic_visit(node)
         self.stack.pop()
 
 
-def _own_calls(node) -> list[tuple[str, int]]:  # noqa: ANN001
+def _own_calls(node) -> list[tuple[str, int, bool]]:  # noqa: ANN001
     """Call sites lexically owned by ``node``, not by a def nested inside it.
 
     A real pruned traversal. ``ast.walk`` cannot express this: it is a
@@ -262,7 +264,7 @@ def _own_calls(node) -> list[tuple[str, int]]:  # noqa: ANN001
     methods are FunctionDefs and prune normally). A decorator or default
     argument on a nested def also evaluates in this scope, so those descend.
     """
-    out: list[tuple[str, int]] = []
+    out: list[tuple[str, int, bool]] = []
     # The BODY, not every child: a def's own decorators, argument defaults and
     # annotations are written here but EVALUATED in the scope that contains it,
     # which is the branch below. Starting from iter_child_nodes gave a
@@ -282,7 +284,12 @@ def _own_calls(node) -> list[tuple[str, int]]:  # noqa: ANN001
         if isinstance(child, ast.Call):
             name = _callee_name(child.func)
             if name:
-                out.append((name, int(child.lineno)))
+                # Whether it was `foo()` or `x.foo()`. The resolver needs it
+                # to tell genuine recursion from an attribute call that
+                # merely shares the enclosing function's trailing name.
+                out.append(
+                    (name, int(child.lineno), isinstance(child.func, ast.Attribute))
+                )
         stack.extend(ast.iter_child_nodes(child))
     out.sort(key=lambda p: (p[1], p[0]))
     return out
@@ -302,8 +309,8 @@ def _unit_python(rel: str, source: str) -> _Unit:
     tree = ast.parse(source)
     _PyVisitor(unit).visit(tree)
     # Deduplicate call sites per (caller, name, line) while keeping order.
-    seen: set[tuple[str, str, int]] = set()
-    calls: list[tuple[str, str, int]] = []
+    seen: set[tuple[str, str, int, bool]] = set()
+    calls: list[tuple[str, str, int, bool]] = []
     for c in unit.calls:
         if c not in seen:
             seen.add(c)
@@ -373,7 +380,12 @@ def _unit_polyglot(store: Store, ws: Workspace, rel: str, lang: str) -> _Unit:
     for name, line in _astgrep_calls(source, ag_lang):
         for a, b, qual in ranges:
             if a <= line <= b:
-                unit.calls.append((qual, name, line))
+                # The polyglot rung cannot tell an attribute call from a
+                # bare one (ast-grep's `$F($$$A)` matches both), so it says
+                # False: the self-edge filter then leaves these alone, which
+                # is the conservative direction -- it keeps a possibly-
+                # phantom edge rather than dropping a real recursive one.
+                unit.calls.append((qual, name, line, False))
                 break
     return unit
 
@@ -522,11 +534,25 @@ def _link(ws: Workspace, units: dict[str, _Unit]) -> _Graph:
     g.engines["nodes"] = "+".join(sorted(engines)) if engines else "none"
 
     for rel in sorted(units):
-        for caller_qual, callee, line in units[rel].calls:
+        for caller_qual, callee, line, is_attr in units[rel].calls:
             targets, tier = _resolve_name(callee, rel, g, imports_of)
             if not targets:
                 continue  # not an in-repo definition (builtin, third party)
             caller = _nid(rel, caller_qual)
+            # A node is not its own caller by trailing-name coincidence.
+            # `self._db.close()` inside `Store.close` resolves by the
+            # attribute TAIL against every same-file definition, so the
+            # method appeared to call itself -- a phantom self-edge that
+            # inflates `impact` and makes a leaf look recursive. The
+            # subclass path below already excludes its identity edge.
+            #
+            # Only for ATTRIBUTE calls: `close()` written bare inside `close`
+            # IS recursion and must keep its edge. That distinction is the
+            # whole reason the extractor now records which kind it was.
+            if is_attr:
+                targets = [t for t in targets if t != caller]
+                if not targets:
+                    continue
             g.out_edges.setdefault(caller, []).append((callee, line, targets, tier))
             for t in targets:
                 g.in_edges.setdefault(t, []).append((caller, line, tier))
@@ -572,7 +598,8 @@ def _unit_to_json(u: _Unit) -> dict[str, Any]:
 def _unit_from_json(d: dict[str, Any]) -> _Unit:
     u = _Unit(rel=d["rel"], lang=d["lang"], engine=d["engine"])
     u.defs = [_Def(x[0], x[1], x[2], x[3], x[4], list(x[5]), x[6]) for x in d["defs"]]
-    u.calls = [(c[0], c[1], int(c[2])) for c in d["calls"]]
+    u.calls = [(c[0], c[1], int(c[2]), bool(c[3]) if len(c) > 3 else False)
+               for c in d["calls"]]
     u.imports = list(d.get("imports") or [])
     return u
 

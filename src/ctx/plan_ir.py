@@ -242,6 +242,19 @@ def _budget_int(budget: dict[str, Any], key: str, default: int) -> int:
         return -1
 
 
+def _policy_int(policy, name: str, default: int) -> int:
+    """A config-supplied bound, or the default when it is not a number.
+
+    The workspace policy is foreign input: it comes from ctx.toml, which a
+    user hand-edits. A bare int() on it turns a typo into a traceback out of
+    plan validation, where the documented behaviour is to degrade.
+    """
+    try:
+        return int(getattr(policy, name, default))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def validate_plan(
     plan: EvidencePlan,
     *,
@@ -299,9 +312,15 @@ def validate_plan(
 
     max_nodes = MAX_NODES_HARD
     max_fanout = MAX_FANOUT_HARD
+
     if plan_policy is not None:
-        max_nodes = min(max_nodes, int(getattr(plan_policy, "max_nodes", max_nodes)))
-        max_fanout = min(max_fanout, int(getattr(plan_policy, "max_fanout", max_fanout)))
+        # config.py documents a malformed ctx.toml as degrading to defaults
+        # (SPEC 15), but that covers TOML SYNTAX errors -- a syntactically
+        # valid file with `max_nodes = "lots"` parsed fine and reached this
+        # bare int(), raising ValueError out of plan validation. Fail-open
+        # here too, and toward the HARD cap rather than away from it.
+        max_nodes = min(max_nodes, _policy_int(plan_policy, "max_nodes", max_nodes))
+        max_fanout = min(max_fanout, _policy_int(plan_policy, "max_fanout", max_fanout))
     own_nodes = _budget_int(plan.budget, "max_nodes", max_nodes)
     own_fanout = _budget_int(plan.budget, "max_fanout", max_fanout)
     if own_nodes < 1 or own_fanout < 1:

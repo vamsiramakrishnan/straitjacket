@@ -500,6 +500,11 @@ def _stage_callers(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     call it claims to have found. Unscoped edges are excluded — a query
     algebra row is consumed as a fact by later stages."""
     symbol = _need_arg(args, "callers", "a <Symbol>")
+    # The flag the omission note tells the reader to use. It was registered
+    # as a recognized token and never READ, so `ctx q 'callers X --unscoped'`
+    # returned the scoped answer again -- the remedy the tool prints being a
+    # no-op is worse than no remedy, because it looks answered.
+    unscoped = "--unscoped" in args
     cg, g = _callgraph(qc)
     rows = []
     hidden = 0
@@ -508,7 +513,7 @@ def _stage_callers(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
             n = g.nodes.get(qual)
             if n is None:
                 continue
-            if tier == cg._TIER_REPO:
+            if tier == cg._TIER_REPO and not unscoped:
                 hidden += 1  # declared below, never silently dropped
                 continue
             rows.append({"file": n.rel, "line": line, "symbol": n.qual})
@@ -523,9 +528,10 @@ def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     rows = []
     seen: set[str] = set()
     hidden = 0
+    unscoped = "--unscoped" in args
     for t in cg._resolve_target(g, symbol):
         for _name, _line, quals, tier in g.out_edges.get(t, []):
-            if tier == cg._TIER_REPO:
+            if tier == cg._TIER_REPO and not unscoped:
                 hidden += 1
                 continue
             for qual in quals:
@@ -544,7 +550,8 @@ def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     cg, g = _callgraph(qc)
     rows: list[dict] = []
     targets = cg._resolve_target(g, symbol)
-    scoped = cg._reachable(g, targets, depth, False)
+    unscoped = "--unscoped" in args
+    scoped = cg._reachable(g, targets, depth, unscoped)
     for qual, d in scoped.items():
         n = g.nodes.get(qual)
         if n is not None:

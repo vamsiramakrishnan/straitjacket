@@ -305,9 +305,24 @@ def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution |
         # --glob. Substituting anyway would run it over the whole repo, so
         # this shape is left alone (still bounded at the emission gate).
         return None
-    tail = f" --glob {shlex.quote(scope)}" if scope else ""
+    # INSIDE the query string. `ctx q`'s own parser takes only [--trace] and
+    # the query, so a top-level `--glob` was an unrecognized argument and the
+    # substituted command exited 2 -- the collapse producing something that
+    # cannot run. Latent before (only a trailing `*.ext` ever set it) and
+    # made common by the scope-preserving fix, which sets it for every
+    # directory-scoped grep. `search` is the stage that reads --glob.
+    # No inner shlex.quote: the whole query is quoted once as a single
+    # argument below, and quoting twice produced a valid but unreadable
+    # '"'"' nest. A scope containing a quote character cannot survive that
+    # single layer, so it declines rather than emitting something malformed.
+    if scope and ("'" in scope or '"' in scope):
+        return None
+    scoped_query = (
+        f"search {pattern} --glob {scope} | files" if scope
+        else f"search {pattern} | files"
+    )
     return Substitution(
-        command=f"ctx q {shlex.quote(f'search {pattern} | files')}{tail}",
+        command=f"ctx q {shlex.quote(scoped_query)}",
         reason=("CTX_CONTEXT_GUARD: recursive content search floods the next "
                 "turn with re-ingested matches. `ctx q 'search … | files'` "
                 "returns a bounded, addressable slice; page exact bytes with "
