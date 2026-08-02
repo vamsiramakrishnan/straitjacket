@@ -1299,7 +1299,7 @@ def _classify_command_inner(
     # Repo-configured overrides win over built-in tables.
     canonical = " ".join(argv)
     for prefix in policy.get("deny_commands", []):
-        if canonical.startswith(prefix):
+        if _restricts_match(canonical, prefix):
             # Safety class: a rule the repo committed on purpose. Its wording is
             # frozen by the rule-7 invariant (tests/test_safety_invariant.py) —
             # no adaptive state may reword it, so mark it and never decay it.
@@ -1337,16 +1337,20 @@ def _classify_command_inner(
     # ``not has_meta`` (deny prefixes are not: denying more is always safe).
     if not has_meta:
         for prefix in policy.get("allow_commands", []):
-            if canonical.startswith(prefix):
+            if _grants_match(canonical, prefix):
                 return dict(DECISION_ALLOW)
         # Learned policy epoch (ctx-policy.toml): promoted signatures behave
         # exactly like allow_commands canonical prefixes. Demoted signatures
         # are checked FIRST and are never allowed via promotion (belt against
         # a conflicting or hand-edited epoch); a demoted command is not
         # denied here — it simply falls through to normal classification.
-        if not any(canonical.startswith(p) for p in policy.get("demoted_commands", [])):
+        if not any(
+            # A demotion RESTRICTS (it withholds a promotion), so it matches
+            # unbounded for the same reason a deny does.
+            _restricts_match(canonical, p) for p in policy.get("demoted_commands", [])
+        ):
             for prefix in policy.get("promoted_commands", []):
-                if canonical.startswith(prefix):
+                if _grants_match(canonical, prefix):
                     return dict(DECISION_ALLOW)
 
     # `bash -c '<inner>'`: classify the inner command, not the shell.
@@ -1606,9 +1610,46 @@ def _deny_commands_match(fragment: str, policy: dict[str, Any]) -> list[str] | N
         return None
     canonical = " ".join(argv)
     for prefix in policy.get("deny_commands", []):
-        if canonical.startswith(prefix):
+        if _restricts_match(canonical, prefix):
             return argv
     return None
+
+
+def _grants_match(canonical: str, prefix: str) -> bool:
+    """Prefix match for a rule that GRANTS authority, at a token boundary.
+
+    config.py documents these as "prefix matches against the canonical
+    argv", and the match was a raw ``str.startswith`` -- so a prefix ending
+    mid-token matched a different token that merely shares its opening
+    characters. An ``allow_commands`` entry of ``git push origin main`` also
+    matched ``git push origin main-hotfix --force``: a different branch,
+    admitted by a rule written to scope pushes to one. Same class as a path
+    glob whose ``*`` crosses a ``/``, an intent keyword firing inside
+    "sprint", and an MCP provider named ``git`` absorbing ``github``'s
+    invocations -- the fourth on this branch.
+
+    A prefix still matches the same command with extra ARGUMENTS -- that is
+    what makes it a prefix -- but only when the next character ends the token
+    it stopped on.
+    """
+    prefix = prefix.strip()
+    if not prefix:
+        return False
+    return canonical == prefix or canonical.startswith(prefix + " ")
+
+
+def _restricts_match(canonical: str, prefix: str) -> bool:
+    """Prefix match for a rule that RESTRICTS -- deliberately unbounded.
+
+    The asymmetry is the same one already documented for ``has_meta`` a few
+    lines below: denying more is always safe, allowing more is not. A
+    ``deny_commands`` entry of ``rm -rf /tmp/scratch`` should keep covering
+    ``rm -rf /tmp/scratch/inner``, and tightening it to a token boundary
+    would have quietly NARROWED a safety rule while fixing the grant side --
+    a fix in one direction that opens a hole in the other.
+    """
+    prefix = prefix.strip()
+    return bool(prefix) and canonical.startswith(prefix)
 
 
 def _pressured_window(max_lines: int, total: int, budget: int) -> int:

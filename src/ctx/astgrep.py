@@ -285,7 +285,21 @@ def ast_search(
         "precision": "textual (metavariable-anchored regex; ast-grep absent)",
         "matched": len(rows),
     }
-    return rows[: bounds.count(cap)], meta
+    # The patch is built from EVERY matched file; `cap` only bounded the rows
+    # shown for review. A preview that lists 200 files and applies 260 is not
+    # a preview -- so the gap is declared, with the count and the flag that
+    # widens it, and the patch stays complete (silently applying less would
+    # be the worse failure: a partial mechanical rewrite).
+    shown = bounds.count(cap)
+    meta["files_previewed"] = min(shown, len(rows))
+    if len(rows) > shown:
+        meta["preview_omitted"] = len(rows) - shown
+        meta["note"] = (
+            f"{len(rows) - shown} of {len(rows)} changed files are NOT shown "
+            f"below but ARE in the patch; re-run with a larger cap to review "
+            f"them before ast.rewrite.apply"
+        )
+    return rows[:shown], meta
 
 
 def _lib_search(
@@ -333,7 +347,21 @@ def _lib_search(
             rows.append({"file": rel, "line": line, "col": col, "text": first})
     rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
     meta = {"engine": engine_id(), "precision": "structural", "matched": len(rows)}
-    return rows[: bounds.count(cap)], meta
+    # The patch is built from EVERY matched file; `cap` only bounded the rows
+    # shown for review. A preview that lists 200 files and applies 260 is not
+    # a preview -- so the gap is declared, with the count and the flag that
+    # widens it, and the patch stays complete (silently applying less would
+    # be the worse failure: a partial mechanical rewrite).
+    shown = bounds.count(cap)
+    meta["files_previewed"] = min(shown, len(rows))
+    if len(rows) > shown:
+        meta["preview_omitted"] = len(rows) - shown
+        meta["note"] = (
+            f"{len(rows) - shown} of {len(rows)} changed files are NOT shown "
+            f"below but ARE in the patch; re-run with a larger cap to review "
+            f"them before ast.rewrite.apply"
+        )
+    return rows[:shown], meta
 
 
 def _language_matches(rel: str, language: str) -> bool:
@@ -432,7 +460,21 @@ def rewrite_preview(
         "generation": _guard_state(ws),
         "files": len(rows),
     }
-    return rows[: bounds.count(cap)], meta
+    # The patch is built from EVERY matched file; `cap` only bounded the rows
+    # shown for review. A preview that lists 200 files and applies 260 is not
+    # a preview -- so the gap is declared, with the count and the flag that
+    # widens it, and the patch stays complete (silently applying less would
+    # be the worse failure: a partial mechanical rewrite).
+    shown = bounds.count(cap)
+    meta["files_previewed"] = min(shown, len(rows))
+    if len(rows) > shown:
+        meta["preview_omitted"] = len(rows) - shown
+        meta["note"] = (
+            f"{len(rows) - shown} of {len(rows)} changed files are NOT shown "
+            f"below but ARE in the patch; re-run with a larger cap to review "
+            f"them before ast.rewrite.apply"
+        )
+    return rows[:shown], meta
 
 
 def _guard_state(ws: Workspace) -> str:

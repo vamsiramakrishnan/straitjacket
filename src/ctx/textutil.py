@@ -442,7 +442,12 @@ def bounded(
     if nl >= 0 and nl * 2 >= len(cut):
         cut = cut[:nl]
     total_est = estimate_tokens(len(raw))
-    note = f"\n[ctx:truncated shown≈{budget_tokens} of ≈{total_est} est tokens]"
+    # What was actually kept, not what was asked for. The note reported the
+    # nominal budget, so after the line-boundary trim discarded content it
+    # claimed to have shown up to twice what it did -- an accounting line
+    # that is wrong about its own accounting.
+    shown_est = estimate_tokens(len(encode_exact(cut)))
+    note = f"\n[ctx:truncated shown≈{shown_est} of ≈{total_est} est tokens]"
     tail = continuation or truncation_continuation
     if tail:
         note += f"\nnext: {tail}"

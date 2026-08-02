@@ -13,6 +13,42 @@ _GO_FAIL_RE = re.compile(r"^--- FAIL: (\S+)", re.MULTILINE)
 _GO_PKG_RE = re.compile(r"^(ok|FAIL|---)\s", re.MULTILINE)
 
 
+def _fail_item(node: str, cls: str | None, location: str | None, rank: int,
+               stream: str, line: int):
+    """One failing-test EvidenceItem, built the same way for every runner."""
+    from ctx.evidence import EvidenceItem
+
+    return EvidenceItem(
+        id=node,
+        kind="failing_test",
+        severity="error",
+        summary=f"fail: {node}",
+        failure_class=cls or "TestFailure",
+        location=location,
+        causal_rank=rank,
+        attributes={"stream": stream, "line": line},
+    )
+
+
+def _graph_of(profile, items):
+    """The EvidenceGraph wrapper, identical across runners.
+
+    Note the outcome vocabulary is the GRAPH's ("pass"/"fail"/...), not the
+    run-outcome words used elsewhere -- getting that wrong once raised inside
+    a fail-open caller and reported the census as merely empty.
+    """
+    from ctx.evidence import EvidenceGraph
+
+    return EvidenceGraph(
+        family=profile.version.split("/")[0],
+        profile_version=profile.version,
+        outcome="fail" if items else "pass",
+        aggregate={"failing": len(items)},
+        items=tuple(items),
+        artifacts={},
+    )
+
+
 class GoTestProfile(Profile):
     """v2 (SWE-bench multilingual mine, gin-4003): v1 named only the first
     failure; the failing census is the work queue, and the innermost
@@ -21,6 +57,40 @@ class GoTestProfile(Profile):
     defect."""
 
     version = "gotest/v2"
+
+    def extract(self, ctx: DigestContext):
+        """Fact-tier extraction (see Profile.extract).
+
+        `go test` prints `--- FAIL: TestX` followed by indented
+        `file_test.go:12: message` lines; the FIRST of those is the assertion
+        that failed, which is the coordinate a fix lands on.
+        """
+        items = []
+        for view in (ctx.stdout, ctx.stderr):
+            lines = view.text_lines
+            for i, ln in enumerate(lines, start=1):
+                m = re.match(r"^\s*--- FAIL: (?P<name>\S+)", ln)
+                if not m:
+                    continue
+                # BACKWARDS. `go test` prints the assertion under `=== RUN`
+                # and the `--- FAIL:` banner AFTER it, so scanning forward
+                # from the banner finds the next test's output or nothing.
+                location = None
+                for j in range(i - 2, max(-1, i - 42), -1):
+                    if j < 0:
+                        break
+                    if re.match(r"^\s*(---|===)\s", lines[j]):
+                        break  # crossed into the previous test's block
+                    loc = re.match(
+                        r"^\s+(?P<file>[\w./-]+\.go):(?P<line>\d+):", lines[j]
+                    )
+                    if loc:
+                        location = f"{loc.group('file')}:{loc.group('line')}"
+                items.append(
+                    _fail_item(m.group("name"), "TestFailure", location,
+                               len(items), view.name, i)
+                )
+        return _graph_of(self, items)
 
     def detect(self, ctx: DigestContext) -> str | None:
         argv = ctx.manifest["argv"]
@@ -119,6 +189,31 @@ class CargoTestProfile(Profile):
     """
 
     version = "cargotest/v1"
+
+    def extract(self, ctx: DigestContext):
+        """Fact-tier extraction (see Profile.extract). Cargo prints the
+        failing test names in one block and the panic locations in another,
+        so the panics are collected first and paired by order."""
+        panics: list[str] = []
+        names: list[tuple[str, str, int]] = []
+        for view in (ctx.stdout, ctx.stderr):
+            for i, ln in enumerate(view.text_lines, start=1):
+                fm = _CARGO_FAILED_RE.match(ln.strip())
+                if fm:
+                    names.append((fm.group(1), view.name, i))
+                pm = _CARGO_PANIC_RE.search(ln)
+                if pm:
+                    loc = pm.group("loc")
+                    # `file:line:col` -> `file:line`; the fact table's
+                    # location grammar is file:line.
+                    parts = loc.rsplit(":", 1)
+                    panics.append(parts[0] if len(parts) == 2 else loc)
+        items = [
+            _fail_item(name, "panic", panics[k] if k < len(panics) else None,
+                       k, stream, line)
+            for k, (name, stream, line) in enumerate(names)
+        ]
+        return _graph_of(self, items)
 
     def detect(self, ctx: DigestContext) -> str | None:
         combined = ctx.stdout.text + "\n" + ctx.stderr.text
@@ -376,6 +471,28 @@ _JEST_FAIL_FILE_RE = re.compile(r"^\s*(?:FAIL|✕|×)\s+(.+)$", re.MULTILINE)
 
 class JestProfile(Profile):
     version = "jest/v1"
+
+    def extract(self, ctx: DigestContext):
+        """Fact-tier extraction (see Profile.extract).
+
+        Jest's summary names the failing FILE and not a line. The location is
+        emitted as the file alone rather than fabricating `:1` -- the fact
+        table's grammar wants file:line, so these are declared without a
+        location instead of given a wrong one.
+        """
+        items = []
+        for view in (ctx.stdout, ctx.stderr):
+            for i, ln in enumerate(view.text_lines, start=1):
+                fm = _JEST_FAIL_FILE_RE.match(ln)
+                if not fm:
+                    continue
+                name = fm.group(1).strip()
+                if not name or name.startswith("("):
+                    continue
+                items.append(
+                    _fail_item(name, "TestFailure", None, len(items), view.name, i)
+                )
+        return _graph_of(self, items)
 
     def detect(self, ctx: DigestContext) -> str | None:
         joined = " ".join(ctx.manifest["argv"])

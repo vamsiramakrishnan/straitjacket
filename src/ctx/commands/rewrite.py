@@ -29,6 +29,15 @@ def cmd_rewrite(ws, ns) -> int:
           f"{total} edit(s) · {meta.get('precision', 'structural')} · {meta.get('engine')}")
     for r in rows:
         print(f"  {r['file']}: {r.get('edits', 0)} edit(s)")
+    # The patch covers EVERY matched file; the row list is capped. A preview
+    # that lists 200 files and applies 210 is not a preview, so the gap is
+    # declared where the reviewer is actually looking -- putting it only in
+    # `meta` is not a declaration, it is a place to have put one.
+    hidden = int(meta.get("preview_omitted", 0) or 0)
+    if hidden:
+        print(f"  … {hidden} more changed file(s) NOT listed above but INCLUDED "
+              f"in the patch — review them before --apply "
+              f"(ctx get {meta.get('patch_blob')} for the full diff)")
     if not blob:
         print("no matches — nothing to rewrite")
         return 0
@@ -36,6 +45,21 @@ def cmd_rewrite(ws, ns) -> int:
     if not ns.apply:
         print("dry run — add --apply to write the change transactionally")
         return 0
+    if hidden:
+        # A bounded DISPLAY with a declared remainder is this project's house
+        # style for a read. A mutation is different: "you reviewed 200, I
+        # changed 210" is not something a note repairs, because the extra ten
+        # are already written. The reviewable set and the applied set have to
+        # be the same set, so this refuses rather than declares -- the same
+        # posture the generation guard and the overlapping-rewrite check
+        # already take in this module.
+        print(
+            f"ctx rewrite: apply refused — the patch changes {hidden} file(s) "
+            f"beyond the {len(rows)} shown for review. Narrow --pattern or "
+            f"--glob so the whole change is reviewable, then re-run.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         applied, ameta = astgrep.rewrite_apply(ws, store, blob, meta.get("generation"))
     except Exception as e:
