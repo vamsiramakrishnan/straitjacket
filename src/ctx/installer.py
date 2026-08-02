@@ -360,14 +360,46 @@ def _refusal(path: Path, err: Exception, *, what: str) -> str:
     )
 
 
+def _iter_hook_commands(settings: object):
+    """Yield every hook ``command`` string in an agent settings document,
+    tolerating any shape.
+
+    These files are foreign input — hand-edited, written by another tool, or
+    truncated mid-write — and the install path documents a graceful refusal
+    for malformed ones. The straightforward traversal
+    (``settings["hooks"].values()`` → iterate → ``group["hooks"]``) makes three
+    unchecked shape assumptions, and a bug bash confirmed that any of them
+    raises instead of refusing: ``hooks`` as a list gave an AttributeError out
+    of ``ctx wrap setup``, not the documented message.
+
+    Being shape-tolerant here, once, is the mechanism. Callers get "no ctx
+    hook found" for a malformed document and go on to the normal refusal path,
+    rather than each one growing its own try/except.
+    """
+    if not isinstance(settings, dict):
+        return
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for stage in hooks.values():
+        if not isinstance(stage, list):
+            continue
+        for group in stage:
+            if not isinstance(group, dict):
+                continue
+            entries = group.get("hooks")
+            if not isinstance(entries, list):
+                continue
+            for hook in entries:
+                if isinstance(hook, dict):
+                    yield str(hook.get("command", ""))
+
+
 def _hook_command_present(settings: dict, ctx_exe: str) -> bool:
     """True if a ctx-harness hook command is already registered."""
-    for stage in settings.get("hooks", {}).values():
-        for group in stage:
-            for hook in group.get("hooks", []):
-                cmd = str(hook.get("command", ""))
-                if " hook claude-code " in cmd or cmd.endswith("hook claude-code"):
-                    return True
+    for cmd in _iter_hook_commands(settings):
+        if " hook claude-code " in cmd or cmd.endswith("hook claude-code"):
+            return True
     return False
 
 
@@ -546,11 +578,11 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
 
 
 def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
-    for stage in settings.get("hooks", {}).values():
-        for group in stage:
-            for hook in group.get("hooks", []):
-                if " hook codex " in str(hook.get("command", "")):
-                    return True
+    # Same shape-tolerant traversal as the Claude reader: .codex/hooks.json is
+    # foreign input too, and carried the identical unchecked assumptions.
+    for cmd in _iter_hook_commands(settings):
+        if " hook codex " in cmd:
+            return True
     return False
 
 

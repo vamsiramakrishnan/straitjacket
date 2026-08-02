@@ -308,11 +308,36 @@ def _wrap_claude_merged(
 ) -> int:
     """Fallback for claude builds without --settings: merge hooks into the
     workspace settings file, run, then restore the previous state exactly."""
+    from ctx.installer import SettingsUnreadable, _read_settings_object
+
     path = workspace_root / ".claude" / "settings.json"
     original = path.read_bytes() if path.is_file() else None
-    merged: dict = json.loads(original) if original else {}
+    # The persistent install path already refuses a malformed settings.json
+    # with a named, actionable error; this ephemeral path used to read the
+    # same file with a bare json.loads and die of an unhandled
+    # JSONDecodeError instead. Two readers of one foreign file, only one of
+    # them hardened, is the defect -- so there is now one reader.
+    try:
+        merged: dict = _read_settings_object(path) if original else {}
+    except SettingsUnreadable as e:
+        print(
+            f"ctx wrap claude: {e}\n"
+            "Refusing to merge harness hooks into a settings file this run "
+            "cannot safely restore. Fix or move the file, then retry.",
+            file=sys.stderr,
+        )
+        return 2
     for stage, entries in settings["hooks"].items():
-        merged.setdefault("hooks", {}).setdefault(stage, []).extend(entries)
+        bucket = merged.setdefault("hooks", {})
+        if not isinstance(bucket, dict):
+            print(
+                "ctx wrap claude: .claude/settings.json has a 'hooks' value "
+                f"that is a JSON {type(bucket).__name__}, not an object. "
+                "Refusing to merge into it.",
+                file=sys.stderr,
+            )
+            return 2
+        bucket.setdefault(stage, []).extend(entries)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.write_text(json.dumps(merged, indent=2), encoding="utf-8")

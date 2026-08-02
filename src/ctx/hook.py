@@ -1179,6 +1179,21 @@ def _classify_command_inner(
         if redir:
             target = redir.group("t1") or redir.group("t2") or ""
             if not target.startswith("/dev/") and not target.startswith("/proc/"):
+                # This shortcut answers the VOLUME question and only that one:
+                # `pytest > out.log 2>&1` keeps the console clean, so the
+                # volume-class steering that would otherwise route it through
+                # `ctx run` is legitimately satisfied. It must not also answer
+                # the SAFETY question. It used to return straight out, ahead
+                # of the repo-committed [guard] deny_commands check below, so
+                # `denied-command > out.txt 2>&1` switched off a rule the repo
+                # committed on purpose just by adding a redirect.
+                denied = _deny_commands_match(redir.group("cmd") or "", policy)
+                if denied is not None:
+                    d = _deny_cmd(
+                        denied, policy, original=stripped, has_meta=has_meta
+                    )
+                    d["_safety"] = "1"
+                    return d
                 return dict(DECISION_ALLOW)
         # Bounded chain: `a; b && c` with no other metacharacters. Each
         # segment is classified independently; the chain is allowed only if
@@ -1459,6 +1474,30 @@ def _read_budget_reason(total: int) -> str:
         "ctx search repo: '<pattern>' or ctx get repo:<path> "
         "--symbol/--lines for targeted evidence"
     )
+
+
+def _deny_commands_match(fragment: str, policy: dict[str, Any]) -> list[str] | None:
+    """The repo-committed ``[guard] deny_commands`` prefix match for a command
+    fragment, or None. Returns the parsed argv so the caller can build the
+    canonical denial.
+
+    Split out so an allow-shortcut can consult the SAFETY class without
+    inheriting volume-class steering. The two are different questions and a
+    redirect only answers one of them: `pytest > out.log 2>&1` genuinely
+    solves the volume problem, but no amount of redirection makes a command
+    the repo deliberately forbade acceptable to run.
+    """
+    try:
+        argv = _unwrap(shlex.split(fragment.strip()))
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    canonical = " ".join(argv)
+    for prefix in policy.get("deny_commands", []):
+        if canonical.startswith(prefix):
+            return argv
+    return None
 
 
 def _pressured_window(max_lines: int, total: int, budget: int) -> int:
