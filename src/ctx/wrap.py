@@ -506,7 +506,12 @@ def _short_path(path: str | None, width: int = 34) -> str:
     if len(p) <= width:
         return p
     keep = (width - 1) // 2
-    return p[:keep] + "…" + p[-(width - keep - 1):]
+    # `p[-n:]` is the whole string at n == 0, so a width small enough to leave
+    # no room for a tail returned the FULL path from the function whose job is
+    # to shorten it -- the elision widening its own output. Same class as
+    # `ctx job --tail 0` dumping the spool, in a display helper.
+    tail = max(0, width - keep - 1)
+    return p[:keep] + "…" + (p[len(p) - tail :] if tail else "")
 
 
 def _guided_step(n: int, total: int, title: str) -> None:

@@ -339,8 +339,15 @@ def fmt_bytes(n: int) -> str:
     """Deterministic binary-size formatting."""
     value = float(n)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if value < 1024 or unit == "TiB":
-            return f"{n} B" if unit == "B" else f"{value:.1f} {unit}"
+        if unit == "B":
+            if value < 1024:
+                return f"{n} B"
+        # Threshold-check the ROUNDED value, not the raw one: 1023.97 KiB is
+        # under the limit and renders as "1024.0 KiB" once rounded to one
+        # decimal -- a unit that displays its own overflow. Deciding on the
+        # number the reader will actually see is the only way the two agree.
+        elif round(value, 1) < 1024 or unit == "TiB":
+            return f"{value:.1f} {unit}"
         value /= 1024
     raise AssertionError("unreachable")
 
@@ -394,7 +401,11 @@ def bounded(
     # whatever is there, and the cut is declared either way.
     cut = decode_exact(raw[:budget_bytes])
     nl = cut.rfind("\n")
-    if nl > 0:
+    # >= 0, not > 0: index 0 IS a line boundary. When the only newline inside
+    # the budget was the first character, the trim was skipped entirely and
+    # this "hard backstop" kept a mid-line fragment -- the one thing it exists
+    # to prevent -- because a falsy index read as "no newline found".
+    if nl >= 0:
         cut = cut[:nl]
     total_est = estimate_tokens(len(raw))
     note = f"\n[ctx:truncated shown≈{budget_tokens} of ≈{total_est} est tokens]"

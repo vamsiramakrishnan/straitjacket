@@ -33,6 +33,7 @@ import hashlib
 import time
 from typing import Any
 
+from ctx import bounds
 from ctx.gitstatus import changed_paths
 from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
@@ -208,7 +209,11 @@ def _foreach_expand(step: Any, inp: dict, max_fanout: int) -> tuple[list[Any], i
         v = row.get(step.foreach)
         if v is not None and v not in values:
             values.append(v)
-    cap = min(int(step.cap or max_fanout), max_fanout)
+    # bounds, not `or`: a plan declaring `cap: 0` for a foreach step means
+    # "fan out over nothing", and `or` read that as "unset" and substituted
+    # max_fanout -- the widest possible fan-out from the narrowest possible
+    # request. A negative cap reached values[:cap] as a suffix slice too.
+    cap = min(bounds.count(bounds.explicit(step.cap, max_fanout)), max_fanout)
     return values[:cap], max(0, len(values) - cap)
 
 

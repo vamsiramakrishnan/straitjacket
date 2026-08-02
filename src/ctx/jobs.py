@@ -400,6 +400,19 @@ def _clip(line: str) -> str:
     return line if len(line) <= _CLIP_COLS else line[: _CLIP_COLS - 1] + "…"
 
 
+def _tail_of(lines: list[str], tail: int) -> list[str]:
+    """The last ``tail`` lines -- and NO lines when ``tail`` is 0.
+
+    `lines[-tail:]` is `lines[0:]` at zero, so `ctx job <id> --tail 0`, an
+    explicit request for no live tail, dumped the entire spool. Negative
+    indexing turning a request for nothing into a request for everything is
+    the same shape ctx.bounds exists for; it just was not spelled `max(1, n)`,
+    which is all the adoption test was looking for.
+    """
+    n = bounds.count(tail)
+    return lines[len(lines) - n :] if n else []
+
+
 def _spool_excerpt(path: Path, head: int, tail: int) -> list[str]:
     """Bounded head/tail of a (possibly still-growing) spool file. Reads at
     most 64 KiB from each end; never returns more than head+tail+1 lines."""
@@ -420,7 +433,7 @@ def _spool_excerpt(path: Path, head: int, tail: int) -> list[str]:
             return (
                 [_clip(ln) for ln in lines[:head]]
                 + [f"... ({omitted} lines omitted) ..."]
-                + [_clip(ln) for ln in lines[-tail:]]
+                + [_clip(ln) for ln in _tail_of(lines, tail)]
             )
         fh.seek(size - window)
         tail_text = fh.read(window).decode("utf-8", "replace")
@@ -429,7 +442,7 @@ def _spool_excerpt(path: Path, head: int, tail: int) -> list[str]:
     return (
         [_clip(ln) for ln in head_lines]
         + ["... (middle omitted; spool exceeds preview window) ..."]
-        + [_clip(ln) for ln in tail_lines[-tail:]]
+        + [_clip(ln) for ln in _tail_of(tail_lines, tail)]
     )
 
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from ctx.execution import snapshot_file
 from ctx.refs import Ref
+from ctx import bounds
 from ctx.store import Store, canonical_json
 from ctx.textutil import fmt_int, short_id
 from ctx.workspace import Workspace
@@ -298,7 +299,12 @@ def search(
         raise RetrievalError("at least one pattern is required")
     ref = _parse(ref_text)
     store, ws = _route_workspace(store, ws, ref)
-    cap = max_matches or ws.config.budgets.max_matches
+    # `or` reads an explicit 0 as unset, and a negative cap reached
+    # `matches[:cap]` as a SUFFIX slice -- widening the output from the
+    # argument whose job is to narrow it. Both spellings of the bounds defect
+    # in one line: bounds.explicit answers "was it given", bounds.count
+    # answers "is it a sane count".
+    cap = bounds.count(bounds.explicit(max_matches, ws.config.budgets.max_matches))
 
     # MULTILINE keeps ^/$ line-anchored now that matching runs whole-text.
     flags = re.MULTILINE

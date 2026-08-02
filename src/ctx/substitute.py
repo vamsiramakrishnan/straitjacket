@@ -76,10 +76,48 @@ def _probe(flag: Probe) -> bool:
     return bool(flag() if callable(flag) else flag)
 
 
+# The same operators, seen as CHARACTERS. shlex.split only separates on
+# whitespace, so `wc -l < f` tokenizes the operator out but `src|wc` does not
+# -- the whole pipeline arrives as one token and the exact-token test misses
+# it. Substitution then replaced the compound command wholesale and silently
+# discarded the stage the caller wrote.
+_SHELL_OP_CHARS = frozenset("|&;<>")
+
+
 def _is_compound(toks: list[str], raw: str) -> bool:
     if any(t in _SHELL_OPS for t in toks):
         return True
+    # Look INSIDE the tokens too. A quoted argument may legitimately contain
+    # these characters (`grep 'a|b' f`), and shlex has already stripped the
+    # quotes by the time we see it -- so the character scan runs over the raw
+    # text outside quotes, which is the only place an operator can operate.
+    if _SHELL_OP_CHARS & set(_unquoted(raw)):
+        return True
     return "$(" in raw or "`" in raw  # command substitution
+
+
+def _unquoted(raw: str) -> str:
+    """``raw`` with quoted spans removed, so a shell operator INSIDE a quoted
+    argument is not mistaken for one the shell would act on."""
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    for ch in raw:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "'\"":
+            quote = ch
+            continue
+        out.append(ch)
+    return "".join(out)
 
 
 class Substitution:
