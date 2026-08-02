@@ -57,6 +57,12 @@ def clone_at(dest: pathlib.Path, base: str) -> pathlib.Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     sh(["git", "clone", "--quiet", "--no-hardlinks", str(REPO), str(dest)])
     sh(["git", "checkout", "--quiet", base], cwd=dest)
+    # The eval harness must not be visible to the arms it grades. Once this
+    # directory is committed, an arm could read the verifier -- the trivial-
+    # repro regex, the guards -- and tune its findings to them. Removing it
+    # from every clone (both arms, and the pristine verification tree) keeps
+    # the grader out of the graded tree without pinning base to a stale commit.
+    shutil.rmtree(dest / "evals" / "devex", ignore_errors=True)
     return dest
 
 
@@ -75,14 +81,19 @@ def run_arm(arm: str, out: pathlib.Path, base: str, max_turns: int,
             "--allowedTools", TOOLS,
             "--permission-mode", "acceptEdits", "--model", model]
     t0 = time.time()
-    try:
-        r = sh(argv, cwd=repo, env=env, timeout=timeout)
-        raw, rc = r.stdout, r.returncode
-        if r.stderr:
-            (d / "stderr.txt").write_text(r.stderr[:20000], encoding="utf-8")
-    except subprocess.TimeoutExpired:
-        raw, rc = "", -1
-    (d / "stream.jsonl").write_text(raw or "", encoding="utf-8")
+    # Stream straight to disk. Buffering stdout and writing on exit loses the
+    # entire wire record if the runner dies mid-arm -- which is exactly what
+    # happened to the naive arm on the first run.
+    with (d / "stream.jsonl").open("w", encoding="utf-8") as fout, \
+            (d / "stderr.txt").open("w", encoding="utf-8") as ferr:
+        proc = subprocess.Popen(argv, cwd=repo, env=env, stdout=fout,
+                                stderr=ferr, text=True)
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=60)
+            rc = -1
     return {"_wall_s": round(time.time() - t0, 1), "_rc": rc}
 
 
@@ -155,19 +166,33 @@ def verify(arm: str, out: pathlib.Path, base: str) -> dict:
     """Run each claimed repro on a PRISTINE tree. Only exit!=0 counts."""
     d = out / f"arm-{arm}"
     arm_repo = d / "repo"
+    # findings.jsonl (append-only, one object per line) is preferred: an arm
+    # cut off by the turn cap still leaves every finding it had already
+    # proved. findings.json remains accepted for whole-file writers.
+    claims: list = []
+    jsonl = arm_repo / "findings.jsonl"
     fpath = arm_repo / "findings.json"
-    if not fpath.exists():
-        return {"error": "no findings.json", "claimed": 0, "confirmed": 0,
+    if jsonl.exists():
+        for line in jsonl.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                claims.append(json.loads(line))
+            except Exception:
+                continue  # a half-written last line costs one finding, not all
+    elif fpath.exists():
+        try:
+            claims = json.loads(fpath.read_text(encoding="utf-8"))
+            assert isinstance(claims, list)
+        except Exception as e:
+            return {"error": f"unparseable findings.json: {e}",
+                    "claimed": 0, "confirmed": 0, "findings": []}
+    if not claims:
+        return {"error": "no findings", "claimed": 0, "confirmed": 0,
                 "findings": []}
-    try:
-        claims = json.loads(fpath.read_text(encoding="utf-8"))
-        assert isinstance(claims, list)
-    except Exception as e:
-        return {"error": f"unparseable findings.json: {e}",
-                "claimed": 0, "confirmed": 0, "findings": []}
 
     clean = clone_at(d / "verify", base)
-    shutil.copy2(fpath, clean / "findings.json")
     src_bb = arm_repo / "bugbash"
     if src_bb.is_dir():
         shutil.copytree(src_bb, clean / "bugbash", dirs_exist_ok=True)

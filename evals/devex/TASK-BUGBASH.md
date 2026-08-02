@@ -7,21 +7,19 @@ or any existing file. Your entire deliverable is evidence.
 
 ## Deliverable
 
-Write `findings.json` at the repository root: a JSON **array**, one object
-per defect.
+Write `findings.jsonl` at the repository root: **one JSON object per line,
+appended the moment you confirm each defect.**
 
-```json
-[
-  {
-    "id": "short-kebab-slug",
-    "file": "src/ctx/example.py",
-    "line": 123,
-    "severity": "crash | wrong-output | data-loss | contract-violation | docs-drift",
-    "claim": "One sentence stating what is wrong.",
-    "repro": "python3 bugbash/repro_short_kebab_slug.py"
-  }
-]
+Append as you go. Do not batch them to the end -- if you run out of turns,
+everything you have already proved still counts, and everything you have not
+written is lost.
+
 ```
+{"id":"short-kebab-slug","file":"src/ctx/example.py","line":123,"severity":"crash","claim":"One sentence stating what is wrong.","repro":"python3 bugbash/repro_short_kebab_slug.py"}
+```
+
+`severity` is one of: `crash`, `wrong-output`, `data-loss`,
+`contract-violation`, `docs-drift`.
 
 ## The reproduction rule — read this twice
 
@@ -30,9 +28,9 @@ non-zero on this tree because of the defect**, and would exit zero once the
 defect is fixed. It is the only thing that makes a finding count.
 
 - Put repro scripts in a new `bugbash/` directory. That directory and
-  `findings.json` are the **only** paths you may create.
+  `findings.jsonl` are the **only** paths you may create.
 - A repro is executed against a **pristine checkout** of this repository —
-  not your working tree. Only `findings.json` and `bugbash/` are copied
+  not your working tree. Only `findings.jsonl` and `bugbash/` are copied
   across. A repro that depends on any other edit you made will not run.
 - The repro must actually exercise the defect. A command that fails for an
   unrelated reason (missing file, syntax error, bare `exit 1`) is discarded,
