@@ -754,6 +754,26 @@ def _stage_top(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 _WHERE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(!=|=|~)(.*)$")
 
 
+def _regroup(groups, rows):
+    """Recompute a group census from surviving rows, preserving group order.
+
+    ``groups`` is a census OF ``rows``; the moment a stage filters rows it
+    becomes a statement about data that is no longer there. Carrying it
+    through unchanged is how `where` fed a stale census to every stage after
+    it -- `top` picked groups by pre-filter rank and `count` reported
+    pre-filter totals, both silently. Emptied groups drop out; the surviving
+    order is the order they already had, so determinism is unaffected.
+    """
+    if groups is None:
+        return None
+    counts: dict = {}
+    for r in rows:
+        g = r.get("_group")
+        if g is not None:
+            counts[g] = counts.get(g, 0) + 1
+    return [(k, counts[k]) for k, _ in groups if counts.get(k)]
+
+
 def _stage_where(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     cond = _need_arg(args, "where", "a <field><op><value> (ops: = != ~)")
     m = _WHERE_RE.match(cond)
@@ -771,7 +791,8 @@ def _stage_where(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         keep = lambda r: val in str(r.get(fld, ""))  # noqa: E731
     rows = [r for r in stream.rows if keep(r)]
     out = Stream(stream.kind, rows, omitted=stream.omitted)
-    out.groups = stream.groups
+    # Derived state must not outlive its source (see _regroup).
+    out.groups = _regroup(stream.groups, rows)
     return out
 
 
