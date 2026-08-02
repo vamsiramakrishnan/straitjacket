@@ -10,7 +10,7 @@ import re
 
 from ctx.refs import Ref, parse_ref
 from ctx.store import Store
-from ctx.textutil import bounded, redact, sanitize_for_model
+from ctx.textutil import _redaction_of, bounded, redact, sanitize_for_model
 from ctx.workspace import Workspace
 
 
@@ -43,9 +43,13 @@ def _emit(
     so the one case where an exact answer is not byte-exact says so.
     """
     if exact:
-        text, redactions = redact(text, ws.config.redaction.patterns)
+        # The exact path skips control STRIPPING, not redaction -- but it goes
+        # through the same switch, so `[redaction] enabled = false` means the
+        # same thing here as everywhere else.
+        enabled, patterns = _redaction_of(ws.config.redaction)
+        text, redactions = redact(text, patterns) if enabled else (text, [])
     else:
-        text, redactions = sanitize_for_model(text, ws.config.redaction.patterns)
+        text, redactions = sanitize_for_model(text, ws.config.redaction)
     if redactions:
         text += "\nredaction: applied [" + ", ".join(redactions) + "]"
     fallback = f"ctx get {handle}" if handle else None

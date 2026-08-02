@@ -268,8 +268,16 @@ def cmd_seq(ws, ns) -> int:
     from ctx.store import Store as _Store
 
     store = _Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    # `--step` (documented in docs/CLI.md) and the positional form are the
+    # same list. Flags first, then positionals -- the order a reader of
+    # `ctx seq --step A --step B C` would expect.
+    steps = [*getattr(ns, "step", []), *(ns.steps or [])]
+    if not steps:
+        print("ctx seq: at least one step is required "
+              "(positional, or --step 'cmd' repeated)", file=sys.stderr)
+        return 2
     text, code, timed_out = run_seq(
-        ws, store, ns.steps,
+        ws, store, steps,
         halt_on_fail=not ns.keep_going,
         timeout=ns.timeout, focus=ns.focus,
     )

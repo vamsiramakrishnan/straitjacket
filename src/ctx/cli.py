@@ -416,7 +416,16 @@ def _build_parser():
     sub.add_parser("jobs", help="list this workspace's backgrounded runs")
 
     p_seq = sub.add_parser("seq", help="declared command tree: N steps, one round")
-    p_seq.add_argument("steps", nargs="+", help="shell command strings, run in order")
+    # Both spellings. docs/CLI.md documents the repeatable `--step` form and
+    # only the positional was registered, so every invocation that followed
+    # the documentation verbatim died on an argparse error. Accepting both is
+    # the honest resolution: the documented form works, and the positional
+    # that everything else already uses keeps working.
+    p_seq.add_argument("steps", nargs="*", default=[],
+                       help="shell command strings, run in order")
+    p_seq.add_argument("--step", action="append", dest="step", default=[],
+                       metavar="CMD",
+                       help="a step, repeatable (equivalent to a positional)")
     p_seq.add_argument("--keep-going", action="store_true", dest="keep_going",
                        help="run remaining steps after a failure (default: halt)")
     p_seq.add_argument("--timeout", type=float, help="per-step timeout seconds")

@@ -305,6 +305,22 @@ def strip_control(text: str) -> str:
     return _CTRL_RE.sub("", text)
 
 
+def _redaction_of(policy) -> tuple[bool, tuple[str, ...]]:
+    """(enabled, patterns) from a ``Redaction`` config section.
+
+    ``enabled`` is documented in CONFIGURATION.md as the switch that turns
+    secret redaction off. It was parsed into the Config object and then read
+    by NOBODY: every caller reached past it for ``.patterns``, so
+    ``enabled = false`` was a setting the docs promised and the code ignored.
+
+    Taking the SECTION rather than its patterns is what makes that
+    impossible to repeat -- there is no longer a call shape that can drop the
+    flag on the way in. tests/test_redaction_switch.py pins that no call site
+    reaches for ``.redaction.patterns`` again.
+    """
+    return bool(getattr(policy, "enabled", True)), tuple(getattr(policy, "patterns", ()))
+
+
 def redact(text: str, pattern_names: tuple[str, ...]) -> tuple[str, list[str]]:
     """Replace secrets with a deterministic marker carrying a short hash of
     the secret (declares redaction without revealing it). Returns
@@ -325,9 +341,16 @@ def redact(text: str, pattern_names: tuple[str, ...]) -> tuple[str, list[str]]:
     return text, sorted(fired)
 
 
-def sanitize_for_model(text: str, pattern_names: tuple[str, ...]) -> tuple[str, list[str]]:
-    """Full model-visible pipeline: control stripping then redaction."""
-    return redact(strip_control(text), pattern_names)
+def sanitize_for_model(text: str, policy) -> tuple[str, list[str]]:
+    """Full model-visible pipeline: control stripping then redaction.
+
+    ``policy`` is the ``[redaction]`` config SECTION (``ws.config.redaction``),
+    not its patterns tuple -- see _redaction_of for why that distinction is
+    the fix rather than a style choice.
+    """
+    enabled, patterns = _redaction_of(policy)
+    text = strip_control(text)
+    return (text, []) if not enabled else redact(text, patterns)
 
 
 def fmt_int(n: int) -> str:

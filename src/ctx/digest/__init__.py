@@ -168,7 +168,7 @@ def render_run_digest(
 
     body = profile.render(ctx)
     body = _pass_through_if_digest_earned_nothing(ctx, body, ws)
-    body, redactions = sanitize_for_model(body, ws.config.redaction.patterns)
+    body, redactions = sanitize_for_model(body, ws.config.redaction)
     if redactions:
         body += "\nredaction: applied [" + ", ".join(redactions) + "]"
 
