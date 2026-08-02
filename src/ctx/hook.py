@@ -232,6 +232,10 @@ _SECRET_PATH_RE = re.compile(
     r"|\.(pem|key)$|id_rsa|id_ed25519",
 )
 
+# Secret filenames carrying neither a slash nor a dot: without this the
+# path-shape filter below would skip them.
+_SECRET_BARE_RE = re.compile(r"^(id_rsa|id_ed25519|id_ecdsa|id_dsa)$")
+
 _HEAD_TAIL_MAX = 400  # max -n allowed for native head/tail
 # A bound expressed in LINES cannot see a request expressed in BYTES:
 # `head -c 200000 f` walked straight past the -n guard. Aligned with
@@ -1231,6 +1235,7 @@ def _classify_command_inner(
     argv = _unwrap(argv)
     if not argv:
         return dict(DECISION_ALLOW)
+
     prog = os.path.basename(argv[0])
 
     # Already routed through ctx → always allow.
@@ -1247,6 +1252,29 @@ def _classify_command_inner(
             d = _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
             d["_safety"] = "1"
             return d
+
+    # One guard, every door. docs/TROUBLESHOOTING.md promises a BLANKET
+    # guarantee that secret-bearing paths always force-ask, but the check
+    # lived only in classify_read -- the native Read door -- so `head .env`,
+    # `cat secrets.json` and `tail id_rsa` walked past it through the shell.
+    #
+    # Placed AFTER the deny_commands loop on purpose: an explicit repo-
+    # committed deny is stronger than a force_ask, and putting this first
+    # downgraded `echo secrets please` from deny to ask. Restricted to
+    # arguments that are shaped like paths, because the regex alone matches
+    # the bare WORD "secrets", which is a sentence, not a file.
+    for _arg in argv[1:]:
+        if _arg.startswith("-"):
+            continue
+        _p = _arg.replace("\\", "/")
+        if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
+            continue
+        if _SECRET_PATH_RE.search(_p):
+            return _force_ask(
+                "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
+                "an explicit user-visible permission step; it is excluded "
+                "from automatic capture."
+            )
     # A prefix allow/promotion applies to a single command only. When shell
     # metacharacters survived the chain/redirect handling above (e.g.
     # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary

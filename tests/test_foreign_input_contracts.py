@@ -102,3 +102,24 @@ def test_ephemeral_wrap_refuses_wrong_hooks_shape(tmp_path, capsys):
     )
     assert rc == 2
     assert "not an object" in capsys.readouterr().err
+
+
+# ------------------------------------------- secret guard: one door was open
+def test_secret_paths_force_ask_through_the_shell_too():
+    """docs/TROUBLESHOOTING.md promises a blanket guarantee, but the check
+    lived only in classify_read -- the native Read door. `head .env` and
+    friends walked past it through Bash."""
+    p = _policy(deny_commands=[])
+    for cmd in ("head .env", "cat secrets.json", "tail -n 5 id_rsa",
+                "cat app-credentials.yaml", "head ~/.aws/config"):
+        assert classify_command(cmd, p)["decision"] == "force_ask", cmd
+
+
+def test_secret_guard_does_not_fire_on_ordinary_words_or_outrank_deny():
+    """Two errors the first cut made: it matched the bare WORD `secrets` in a
+    sentence, and being placed ahead of deny_commands it downgraded an
+    explicit repo-committed deny into a weaker force_ask."""
+    p = _policy(deny_commands=["echo secrets"])
+    assert classify_command("echo secrets please", p)["decision"] == "deny"
+    assert classify_command("echo hello", p)["decision"] == "allow"
+    assert classify_command("head README.md", p)["decision"] == "allow"
