@@ -273,6 +273,11 @@ class CoverageReceipt:
     omitted_bytes: int
     omitted_items: int
     attested_complete: bool
+    #: Required fact classes the validator has NO checker for. Appended last
+    #: so positional construction keeps working. These are counted as ABSENT,
+    #: not present: a contract that cannot check a class it calls required is
+    #: not enforcing it, and saying so is the only honest option.
+    unverifiable_fields: tuple[str, ...] = ()
 
     @property
     def required_fraction(self) -> float:

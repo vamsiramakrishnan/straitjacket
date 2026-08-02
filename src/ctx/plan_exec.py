@@ -801,19 +801,42 @@ def _render_investigation(
     # typed facts; a violated required class is a bug, surfaced loudly.
     try:
         contract = contract_for_family("investigate")
+        # Declare what this run actually delivered, not what the shape of an
+        # investigation usually delivers. `counterevidence` was in this set
+        # unconditionally, and the validator's catch-all then took the
+        # declaration as proof -- so a contract that marks the class REQUIRED
+        # with loss_severities = "major", precisely because "its absence is
+        # exactly the anchoring failure the plan exists to prevent", was
+        # satisfied by the word appearing in a literal.
         included = {
             "aggregate_counts",
             "complete_identity_census",
             "location",
             "one_line_summary",
-            "counterevidence",
             "coverage_attestation",
         }
-        receipt = validate_selection((i.id for i in graph.items), included, contract, graph)
+        witnessed: set[str] = set()
+        if counter_nodes:
+            # This run actually produced counterevidence, and this is the
+            # only layer that can know it -- so this is the only layer that
+            # may attest it.
+            included.add("counterevidence")
+            witnessed.add("counterevidence")
+        receipt = validate_selection(
+            (i.id for i in graph.items), included, contract, graph, witnessed
+        )
         if receipt.required_fraction < 1.0:
+            note = ""
+            if receipt.unverifiable_fields:
+                # Name them: "PARTIAL 5/6" with no reason is an alarm nobody
+                # can act on, and an unverifiable requirement is a fact about
+                # the CONTRACT, not about this run.
+                note = (
+                    " · unverifiable: " + ", ".join(receipt.unverifiable_fields)
+                )
             lines.append(
                 f"contract: PARTIAL — required classes {receipt.required_fields_present}"
-                f"/{receipt.required_fields_total} (declared, never silent)"
+                f"/{receipt.required_fields_total} (declared, never silent){note}"
             )
     except Exception:
         pass
