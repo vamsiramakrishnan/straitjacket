@@ -20,6 +20,7 @@ from ctx import bounds
 import array
 import hashlib
 import json
+import re
 import os
 import sqlite3
 import tempfile
@@ -32,6 +33,33 @@ MIN_ID_DISPLAY = 12
 # sha256 hex alphabet — used to gate the resolve_id() range-scan fast path
 # (see resolve_id docstring for why a plain LIKE query can't use the index).
 _HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+
+_BLOB_ID_RE = re.compile(r"\b(?:sha256:)?([0-9a-f]{64})\b")
+
+
+def _referenced_blobs(node: object, _depth: int = 0) -> set[str]:
+    """Every blob id reachable anywhere in a manifest document.
+
+    Structural rather than schema-aware on purpose: a collector that learns
+    each manifest kind's blob fields by hand is one new kind away from
+    deleting live data, which is exactly what happened to
+    ``ctx.investigation/v1``. Depth-bounded so a pathological document cannot
+    turn the mark phase into a stack overflow.
+    """
+    found: set[str] = set()
+    if _depth > 16:
+        return found
+    if isinstance(node, str):
+        found.update(_BLOB_ID_RE.findall(node))
+    elif isinstance(node, dict):
+        for v in node.values():
+            found |= _referenced_blobs(v, _depth + 1)
+    elif isinstance(node, (list, tuple)):
+        for v in node:
+            found |= _referenced_blobs(v, _depth + 1)
+    return found
 
 
 class StoreError(Exception):
@@ -404,7 +432,16 @@ class Store:
             for r in self.db.execute("SELECT id FROM objects WHERE created_at >= ?", (cutoff,))
         }
         live |= leased | recent
-        # Mark blobs referenced by live manifests.
+        # Mark blobs referenced by live manifests. Discovery is STRUCTURAL:
+        # every sha256-shaped string anywhere in the document counts as a
+        # reference. This used to read exactly two hand-maintained places --
+        # manifest["streams"][*]["blob"] and manifest["blob"] -- so any
+        # manifest kind that carried its blobs elsewhere was invisible to the
+        # mark phase. A bug bash confirmed the consequence: gc() deleted blobs
+        # still referenced by a LIVE ctx.investigation/v1 manifest, which is
+        # data loss, and the field list would have had to grow by hand for
+        # every future kind. Over-marking is the safe direction for a
+        # collector -- an extra live id merely survives a cycle.
         for mid in list(live):
             mpath = self.manifest_dir / f"{mid}.json"
             if mpath.is_file():
@@ -412,13 +449,7 @@ class Store:
                     manifest = json.loads(mpath.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     continue
-                for stream in (manifest.get("streams") or {}).values():
-                    blob = str(stream.get("blob", "")).removeprefix("sha256:")
-                    if blob:
-                        live.add(blob)
-                blob = str(manifest.get("blob", "")).removeprefix("sha256:")
-                if blob:
-                    live.add(blob)
+                live |= _referenced_blobs(manifest)
         removed_blobs = removed_manifests = 0
         # Files are unlinked eagerly per object (unchanged); the two catalog
         # DELETEs are batched into one transaction with executemany instead

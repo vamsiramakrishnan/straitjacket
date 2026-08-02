@@ -219,12 +219,24 @@ _BOUNDED_CMDS = {
 # Shell metacharacters that make static reasoning unreliable.
 _SHELL_META_RE = re.compile(r"[|;&<>`$(){}\\]|\|\||&&|\$\(")
 
+# The token used to have to be a WHOLE path component, so `secrets.json`,
+# `my-secrets.yaml` and `app-credentials.env` all walked past the guard --
+# a classifier whose entire job is to catch secret-bearing paths, blind to
+# the most ordinary way of naming one. Tokens may now appear inside a
+# filename, bounded by non-letters so `secretary.py` is still not a secret.
+# For a safety classifier the failure direction must be over-matching: a
+# false positive costs one permission prompt, a false negative leaks a key.
 _SECRET_PATH_RE = re.compile(
-    r"(^|/)(\.env(\..*)?|\.aws|\.ssh|\.config/gcloud|secrets?|credentials?)(/|$)"
+    r"(^|/)(\.env(\..*)?|\.aws|\.ssh|\.config/gcloud)(/|$)"
+    r"|(?<![A-Za-z])(secrets?|credentials?)(?![A-Za-z])"
     r"|\.(pem|key)$|id_rsa|id_ed25519",
 )
 
 _HEAD_TAIL_MAX = 400  # max -n allowed for native head/tail
+# A bound expressed in LINES cannot see a request expressed in BYTES:
+# `head -c 200000 f` walked straight past the -n guard. Aligned with
+# max_inline_bytes so both spellings of "a small slice" agree.
+_HEAD_TAIL_MAX_BYTES = 16384
 
 _MAX_INLINE_BYTES_DEFAULT = 16384
 _MAX_INLINE_LINES_DEFAULT = 240
@@ -1385,6 +1397,23 @@ def _extract_line_count(argv: list[str]) -> int | None:
             return abs(int(raw))
         except ValueError:
             return None
+
+    # Byte-count flags first: they bound the same read in a different unit,
+    # and the line guard was blind to them entirely.
+    for i, a in enumerate(argv[1:], start=1):
+        raw_bytes: str | None = None
+        if a in ("-c", "--bytes") and i + 1 < len(argv):
+            raw_bytes = argv[i + 1]
+        elif a.startswith("--bytes="):
+            raw_bytes = a.split("=", 1)[1]
+        elif a.startswith("-c") and len(a) > 2:
+            raw_bytes = a[2:]
+        if raw_bytes is not None:
+            nbytes = _count(raw_bytes)
+            # Unparseable, signed (unbounded mode), or simply too big.
+            if nbytes is None or nbytes > _HEAD_TAIL_MAX_BYTES:
+                return None
+            return 1  # a genuinely small byte slice is a bounded read
 
     for i, a in enumerate(argv[1:], start=1):
         if a in ("-n", "--lines") and i + 1 < len(argv):

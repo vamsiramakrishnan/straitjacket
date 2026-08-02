@@ -91,3 +91,17 @@ def test_coercions_are_total_including_infinities():
         assert bounds.budget_bytes(v) == 0
         assert bounds.span(1, v, 10) in (None, (1, 10))
         assert bounds.span(v, 10, 10) in (None, (1, 10))
+
+
+def test_pricing_tier_tokens_match_on_letter_boundaries():
+    """The collision that matters: `mini` must not price `gemini-*` as a mini
+    tier. A bug-bash arm flagged pricing.py's docstring for promising more
+    than a boundary rule can deliver (it used `ge-mini-3-pro`, which no
+    lexical rule separates from `gpt-4o-mini-2024`). The docstring was wrong;
+    this pins the behaviour that is actually load-bearing."""
+    from ctx.pricing import _token_matches
+
+    assert _token_matches("mini", "gpt-5-mini") is True
+    assert _token_matches("mini", "gpt-4o-mini-2024") is True
+    assert _token_matches("mini", "gemini-3-pro") is False
+    assert _token_matches("mini", "gemini-3.6-flash") is False
