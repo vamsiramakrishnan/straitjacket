@@ -29,6 +29,12 @@ These helpers are deliberately total -- they never raise. A caller that
 wants to reject bad input should validate before calling; a caller on an
 emission path wants the floor, not an exception, because an exception on
 the way out of a digest is itself an unbounded failure.
+
+That totality has to be enforced, not merely asserted: the first cut of this
+module guarded ``(TypeError, ValueError)`` and a bug-bash arm immediately
+found that ``int(float("inf"))`` raises ``OverflowError``, so the "never
+raises" claim was false for the one input a runaway budget calculation is
+most likely to produce. Every coercion below catches OverflowError too.
 """
 
 from __future__ import annotations
@@ -46,7 +52,7 @@ def count(raw: object, *, default: int = 0) -> int:
     """
     try:
         n = int(raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return max(0, default)
     return n if n > 0 else 0
 
@@ -59,7 +65,7 @@ def budget_bytes(budget_tokens: object, *, bytes_per_token: int = 4) -> int:
     """
     try:
         tokens = int(budget_tokens)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     return max(0, tokens) * max(0, int(bytes_per_token))
 
@@ -76,7 +82,7 @@ def span(start: object, end: object, total: int) -> tuple[int, int] | None:
     try:
         lo = int(start)  # type: ignore[arg-type]
         hi = int(end)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     lo = max(1, lo)
     if hi < 0 or lo > total or hi < lo:

@@ -79,3 +79,15 @@ def test_bounded_negative_budget_emits_almost_nothing():
         "a negative budget must emit (almost) nothing, never a near-complete "
         "suffix of the input"
     )
+
+
+def test_coercions_are_total_including_infinities():
+    """The module claims never to raise. A bug-bash arm found that claim false
+    within minutes: int(float("inf")) raises OverflowError, which the first
+    cut did not catch -- and a runaway budget calculation is exactly where an
+    infinity comes from. Totality is a contract, so it gets a test."""
+    for v in (float("inf"), -float("inf"), float("nan"), None, "x", object(), [1]):
+        assert bounds.count(v) == 0
+        assert bounds.budget_bytes(v) == 0
+        assert bounds.span(1, v, 10) in (None, (1, 10))
+        assert bounds.span(v, 10, 10) in (None, (1, 10))
