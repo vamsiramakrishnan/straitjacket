@@ -121,6 +121,17 @@ class Stream:
     # population (``corpus``) attaches {considered, selected, engine, …} here;
     # the executor carries it through combinators and the renderer declares it.
     coverage: dict | None = None
+    # Why rows were dropped, and the flag that gets them back. Appended LAST
+    # on purpose: Stream is constructed positionally in places
+    # (``Stream("sites", [], 3, [("k", 3)])``), and a field inserted mid-list
+    # silently rebinds those arguments -- which is what the back-compat test
+    # for this dataclass exists to catch, and did.
+    #
+    # The default tail ("narrow with where/top") is right for a row cap and
+    # wrong for everything else: callers/callees/impact drop UNSCOPED edges,
+    # which no narrowing recovers. A drop declared with the wrong remedy is
+    # only half-declared.
+    omitted_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -376,8 +387,43 @@ def parse_query(text: str) -> list[tuple[str, list[str]]]:
 
 
 # ------------------------------------------------------------ arg helpers
+#: Flags that take NO value. Everything else in a stage's arg list consumes
+#: the token after it, which is what makes that token not a positional.
+#: Keeping the boolean set (small, enumerable) rather than the value set
+#: means a new value-taking flag is handled correctly by default.
+#: tests/test_query.py pins this against the flags the stages actually read.
+_BOOLEAN_FLAGS = frozenset({"--changed", "--jsonl", "--unscoped"})
+
+
+def _positionals(args: list[str]) -> list[str]:
+    """The tokens that are genuinely positional.
+
+    ``[a for a in args if not a.startswith("--")]`` is a DIFFERENT parse of
+    the same list than ``_flag`` performs: ``_flag`` knows the token after
+    ``--depth`` is that flag's value, and this did not. So
+    ``impact --depth 3 run_query`` handed ``"3"`` to the stage as its symbol
+    and dropped the real one -- silently, with no error, returning a
+    plausible empty answer for a symbol nobody asked about. Flag order is
+    not something a caller should have to know.
+
+    Two parsers over one argument list is the same defect shape as two glob
+    dialects over one path: each is locally reasonable and they disagree.
+    """
+    out: list[str] = []
+    expect_value = False
+    for a in args:
+        if expect_value:
+            expect_value = False
+            continue
+        if a.startswith("--"):
+            expect_value = a not in _BOOLEAN_FLAGS
+            continue
+        out.append(a)
+    return out
+
+
 def _need_arg(args: list[str], stage: str, what: str) -> str:
-    pos = [a for a in args if not a.startswith("--")]
+    pos = _positionals(args)
     if not pos:
         raise QueryError(f"ctx q: stage {stage!r} needs {what}")
     return pos[0]
@@ -427,6 +473,16 @@ def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     return out
 
 
+#: The remedy for an unscoped drop. `ctx callers/impact` already declare this
+#: tail via callgraph._omission_note; the q stages filtered the same edges and
+#: said nothing, so `ctx ask --intent impact` reported 0 rows for a symbol with
+#: hundreds of real callers -- an empty answer that looked like a fact.
+_UNSCOPED_REASON = (
+    "unscoped: name matched repo-wide but the caller's file neither defines "
+    "nor imports the target; resolve with --unscoped"
+)
+
+
 def _callgraph(qc: _Ctx):
     from ctx import callgraph
 
@@ -441,13 +497,19 @@ def _stage_callers(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "callers", "a <Symbol>")
     cg, g = _callgraph(qc)
     rows = []
+    hidden = 0
     for t in cg._resolve_target(g, symbol):
         for qual, line, tier in g.in_edges.get(t, []):
             n = g.nodes.get(qual)
-            if n is not None and tier != cg._TIER_REPO:
-                rows.append({"file": n.rel, "line": line, "symbol": qual})
+            if n is None:
+                continue
+            if tier == cg._TIER_REPO:
+                hidden += 1  # declared below, never silently dropped
+                continue
+            rows.append({"file": n.rel, "line": line, "symbol": qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
@@ -455,9 +517,11 @@ def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     cg, g = _callgraph(qc)
     rows = []
     seen: set[str] = set()
+    hidden = 0
     for t in cg._resolve_target(g, symbol):
         for _name, _line, quals, tier in g.out_edges.get(t, []):
             if tier == cg._TIER_REPO:
+                hidden += 1
                 continue
             for qual in quals:
                 n = g.nodes.get(qual)
@@ -465,7 +529,8 @@ def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
                     seen.add(qual)
                     rows.append({"file": n.rel, "line": n.lineno, "symbol": qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
@@ -474,12 +539,19 @@ def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     cg, g = _callgraph(qc)
     rows: list[dict] = []
     targets = cg._resolve_target(g, symbol)
-    for qual, d in cg._reachable(g, targets, depth, False).items():
+    scoped = cg._reachable(g, targets, depth, False)
+    for qual, d in scoped.items():
         n = g.nodes.get(qual)
         if n is not None:
             rows.append({"file": n.rel, "line": n.lineno, "symbol": qual, "depth": d})
     rows.sort(key=lambda r: (r["depth"], r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    # Reachability COMPOUNDS the omission: one dropped edge at depth 1 hides
+    # its whole cone, so the honest count is the difference between the two
+    # walks, not the number of edges skipped. A second bounded BFS is the
+    # only way to say a true number.
+    hidden = len(set(cg._reachable(g, targets, depth, True)) - set(scoped))
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
@@ -1090,10 +1162,8 @@ def _render(
     shown_rows = out.rows[:RENDER_CAP]
     census = f"rows (census): {fmt_int(total)} · shown: {fmt_int(len(shown_rows))}"
     if out.omitted:
-        census += (
-            f" · capped: {fmt_int(out.omitted)} rows omitted upstream (declared; "
-            "narrow with where/top)"
-        )
+        why = out.omitted_reason or "declared; narrow with where/top"
+        census += f" · capped: {fmt_int(out.omitted)} rows omitted upstream ({why})"
     lines.append(census)
     if out.coverage:
         cov = out.coverage

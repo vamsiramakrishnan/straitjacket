@@ -236,6 +236,60 @@ _SECRET_PATH_RE = re.compile(
 # path-shape filter below would skip them.
 _SECRET_BARE_RE = re.compile(r"^(id_rsa|id_ed25519|id_ecdsa|id_dsa)$")
 
+def _is_secret_path(path_str: str, root: str | None = None) -> bool:
+    """Does this path name -- or the file it actually opens -- bear secrets?
+
+    A name-based denylist has to look at the name the FILESYSTEM will open.
+    Both doors onto this guard matched the literal argument only, so
+    ``ln -s .env notes.txt`` was a complete bypass: an innocuous name for the
+    same bytes, which is the cheapest possible attack on a rule expressed as
+    a regex over strings. docs/TROUBLESHOOTING.md promises the guarantee is
+    blanket, so the resolution belongs inside the guard rather than at one
+    caller.
+
+    Both the literal name and the resolution are judged WORKSPACE-RELATIVE
+    when they land inside the workspace, and in full when they land outside.
+    Absolute paths were previously judged whole, so a checkout at
+    ``~/my-credentials/`` or ``~/.aws-tools/`` force-asked every native Read
+    in it -- the guard failing loudly instead of working. The distinction is
+    the useful one either way: a secret token in the path BELOW the root is
+    about this file, and one above the root is about where you keep your
+    code.
+
+    Resolution is best-effort: a path that does not exist yet, or that
+    cannot be resolved, is judged on its name alone.
+    """
+    literal = str(path_str)
+    if _SECRET_PATH_RE.search(_scoped_path(literal, root)):
+        return True
+    try:
+        raw = os.path.expanduser(literal)
+        base = root or os.getcwd()
+        real = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(base, raw))
+    except (OSError, ValueError):
+        return False
+    return bool(_SECRET_PATH_RE.search(_scoped_path(real, root)))
+
+
+def _scoped_path(path_str: str, root: str | None) -> str:
+    """The part of a path the guard should judge, in POSIX form.
+
+    Inside the workspace: the workspace-relative part. Outside (or with no
+    workspace): the whole thing.
+    """
+    p = str(path_str).replace("\\", "/")
+    if not root:
+        return p
+    try:
+        root_abs = os.path.realpath(root)
+        cand = os.path.abspath(os.path.expanduser(str(path_str)))
+        if cand == root_abs or cand.startswith(root_abs + os.sep):
+            return os.path.relpath(cand, root_abs).replace("\\", "/")
+    except (OSError, ValueError):
+        pass
+    return p
+
+
 _HEAD_TAIL_MAX = 400  # max -n allowed for native head/tail
 # A bound expressed in LINES cannot see a request expressed in BYTES:
 # `head -c 200000 f` walked straight past the -n guard. Aligned with
@@ -1269,7 +1323,7 @@ def _classify_command_inner(
         _p = _arg.replace("\\", "/")
         if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
             continue
-        if _SECRET_PATH_RE.search(_p):
+        if _is_secret_path(_p, cwd):
             return _force_ask(
                 "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
                 "an explicit user-visible permission step; it is excluded "
@@ -1591,7 +1645,7 @@ def classify_read(
     policy: dict[str, Any],
     session_id: str = "unknown",
 ) -> dict[str, str]:
-    if _SECRET_PATH_RE.search(path_str.replace("\\", "/")):
+    if _is_secret_path(path_str, workspace_root):
         return _force_ask(
             "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires an explicit "
             "user-visible permission step; it is excluded from automatic capture."

@@ -308,7 +308,11 @@ def _wrap_claude_merged(
 ) -> int:
     """Fallback for claude builds without --settings: merge hooks into the
     workspace settings file, run, then restore the previous state exactly."""
-    from ctx.installer import SettingsUnreadable, _read_settings_object
+    from ctx.installer import (
+        SettingsUnreadable,
+        _read_settings_object,
+        merge_hook_stages,
+    )
 
     path = workspace_root / ".claude" / "settings.json"
     original = path.read_bytes() if path.is_file() else None
@@ -327,17 +331,18 @@ def _wrap_claude_merged(
             file=sys.stderr,
         )
         return 2
-    for stage, entries in settings["hooks"].items():
-        bucket = merged.setdefault("hooks", {})
-        if not isinstance(bucket, dict):
-            print(
-                "ctx wrap claude: .claude/settings.json has a 'hooks' value "
-                f"that is a JSON {type(bucket).__name__}, not an object. "
-                "Refusing to merge into it.",
-                file=sys.stderr,
-            )
-            return 2
-        bucket.setdefault(stage, []).extend(entries)
+    # Third caller of one merge. The shape guard used to be inlined here and
+    # in install_claude, and install_codex -- which does the same merge -- had
+    # neither, so a bug bash crashed it on the shape both others handled.
+    try:
+        merge_hook_stages(merged, settings["hooks"])
+    except SettingsUnreadable as e:
+        print(
+            f"ctx wrap claude: .claude/settings.json — {e}. "
+            "Refusing to merge into it.",
+            file=sys.stderr,
+        )
+        return 2
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.write_text(json.dumps(merged, indent=2), encoding="utf-8")

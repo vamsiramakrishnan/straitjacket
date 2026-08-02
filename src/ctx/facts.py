@@ -1200,10 +1200,13 @@ def _stage_fails(qc, stream, args: list[str]):
 def _stage_in_changed(qc, stream, args: list[str]):
     from ctx.query import Stream
 
-    generation: str | None = None
-    for a in args:
-        if not a.startswith("--"):
-            generation = a
+    # Third parser over one arg list is how the flag-steals-the-positional
+    # defect happened in query._need_arg; this one takes the LAST bare token
+    # rather than the first, so `--kind x` would have set generation="x".
+    from ctx.query import _positionals
+
+    pos = _positionals(args)
+    generation: str | None = pos[-1] if pos else None
     # Live-path auto-derive (found by the pre-live smoke, not the referee:
     # the referee derived explicitly). With no explicit generation, ensure
     # the current worktree's changed() facts exist — derive_generation is

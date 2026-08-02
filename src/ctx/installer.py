@@ -348,6 +348,39 @@ def _read_settings_object(path: Path) -> dict:
     return parsed
 
 
+def merge_hook_stages(doc: dict, stages: dict) -> None:
+    """Append our hook entries into a foreign settings document, in place.
+
+    THE MERGE, not a check beside it. ``install_claude`` grew an
+    ``isinstance(bucket, dict)`` guard after a bug bash crashed it on a
+    ``"hooks": []``; ``install_codex`` performs the identical merge four
+    hundred lines away and did not inherit it, so the next bash crashed the
+    Codex door with the same raw AttributeError. That is the fifth door onto
+    this guard. A check every caller must remember is not a mechanism -- the
+    merge itself is now the only way to do this, so a sixth host cannot
+    forget it.
+
+    Raises SettingsUnreadable, which every caller already answers with
+    ``_refusal``: an untouched file and a message naming the problem. The
+    per-stage list check comes along for free, and closes a shape neither
+    bash reported (``{"hooks": {"PreToolUse": "nope"}}`` reached ``.extend``
+    on a string).
+    """
+    bucket = doc.setdefault("hooks", {})
+    if not isinstance(bucket, dict):
+        raise SettingsUnreadable(
+            f"its 'hooks' value is a JSON {type(bucket).__name__}, not an object"
+        )
+    for stage, entries in stages.items():
+        current = bucket.setdefault(stage, [])
+        if not isinstance(current, list):
+            raise SettingsUnreadable(
+                f"its 'hooks.{stage}' value is a JSON "
+                f"{type(current).__name__}, not an array"
+            )
+        current.extend(entries)
+
+
 def _refusal(path: Path, err: Exception, *, what: str) -> str:
     """What we say instead of destroying someone's configuration."""
     return "\n".join(
@@ -421,27 +454,13 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     if _hook_command_present(existing, exe):
         lines.append(".claude/settings.json hooks already harnessed; left unchanged")
     else:
-        bucket = merged.setdefault("hooks", {})
-        if not isinstance(bucket, dict):
+        try:
+            merge_hook_stages(merged, claude_hook_settings(exe)["hooks"])
+        except SettingsUnreadable as e:
             # Refuse the same way an unparseable file is refused, a few lines
             # above: a message and an untouched file. Raising here would have
             # swapped one unhandled exception for another.
-            # Fourth door onto one guard. _iter_hook_commands was hardened so
-            # READING a malformed settings.json refuses gracefully, and
-            # wrap._wrap_claude_merged got the same treatment for the
-            # ephemeral path -- but this MERGE still called .setdefault on
-            # whatever was there, so a `hooks` list crashed install_claude
-            # with a raw AttributeError instead of the documented refusal.
-            return _refusal(
-                settings_path,
-                SettingsUnreadable(
-                    f"its 'hooks' value is a JSON {type(bucket).__name__}, "
-                    "not an object"
-                ),
-                what="Claude Code",
-            )
-        for stage, entries in claude_hook_settings(exe)["hooks"].items():
-            bucket.setdefault(stage, []).extend(entries)
+            return _refusal(settings_path, e, what="Claude Code")
         lines.append("merged PreToolUse/PostToolUse hooks")
         changed = True
     # Status line, independently idempotent: add only when the user has none,
@@ -581,12 +600,13 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
         elif _hook_command_present_codex(cur, exe):
             lines.append(".codex/hooks.json already harnessed; left unchanged")
         else:
-            ours = json.loads(hooks_rendered)
-            cur.setdefault("hooks", {})
-            for stage, entries in ours["hooks"].items():
-                cur["hooks"].setdefault(stage, []).extend(entries)
-            hooks_path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
-            lines.append("merged ctx-harness hooks into .codex/hooks.json")
+            try:
+                merge_hook_stages(cur, json.loads(hooks_rendered)["hooks"])
+            except SettingsUnreadable as e:
+                lines.append(_refusal(hooks_path, e, what="Codex hooks"))
+            else:
+                hooks_path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+                lines.append("merged ctx-harness hooks into .codex/hooks.json")
 
     lines.append(_upsert_agents_block(root / "AGENTS.md", _render_codex_file("AGENTS.md", exe)))
 

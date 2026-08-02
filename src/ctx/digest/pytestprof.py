@@ -61,6 +61,13 @@ _FAILED_LINE_RE = re.compile(r"^(?:FAILED|ERROR) (?P<nodeid>\S+)(?: - (?P<msg>.*
 # fallback when output was truncated before the short-summary section.
 _VERBOSE_PROG_RE = re.compile(r"^(?P<nodeid>\S+::\S+) (?:FAILED|ERROR)\b")
 _FAIL_HEADER_RE = re.compile(r"^_{3,} (?P<nodeid>.+?) _{3,}$")
+# A collection error banners the node with prose -- "ERROR collecting
+# tests/test_x.py" -- while the short-summary line carries the bare node id
+# ("ERROR tests/test_x.py"). Nothing matched the two, so ONE failure became
+# TWO census entries: the real one, and a phantom with no failure_class, no
+# location and no summary, under a coverage line attesting complete identity
+# coverage. A census that miscounts is worse than one that admits a gap.
+_COLLECT_HEADER_RE = re.compile(r"^ERROR collecting (?P<nodeid>.+?)\s*$")
 _SHORT_SUMMARY_BANNER_RE = re.compile(r"=+ short test summary info =+")
 _FAILURES_BANNER_RE = re.compile(r"^=+ (?:FAILURES|ERRORS) =+", re.MULTILINE)
 _DURATION_RE = re.compile(r"\bin (?P<secs>[\d.]+)s\b")
@@ -146,6 +153,18 @@ def _collect_failed_tests(out_lines: list[str]) -> list[tuple[int, str, str]]:
     return failed_tests
 
 
+def _block_node(header: str) -> str:
+    """The node a traceback block is ABOUT, not the prose banner around it.
+
+    A block header normally carries the bare test name; a collection error
+    wraps the path in "ERROR collecting <path>", which matched no summary
+    line and so doubled the entry. Identity comes from the node.
+    """
+    header = header.strip()
+    m = _COLLECT_HEADER_RE.match(header)
+    return m.group("nodeid") if m else header
+
+
 def _collect_blocks(out_lines: list[str]) -> list[tuple[str, int, int]]:
     """Traceback blocks: each `___ name ___` header owns the lines up to
     the next header or `=` banner (trailing blanks trimmed) — real block
@@ -155,7 +174,7 @@ def _collect_blocks(out_lines: list[str]) -> list[tuple[str, int, int]]:
     for i, ln in enumerate(out_lines, start=1):
         hm = _FAIL_HEADER_RE.match(ln.strip())
         if hm:
-            headers.append((hm.group("nodeid").strip(), i))
+            headers.append((_block_node(hm.group("nodeid")), i))
             boundaries.append(i)
         elif _is_banner(ln):
             boundaries.append(i)

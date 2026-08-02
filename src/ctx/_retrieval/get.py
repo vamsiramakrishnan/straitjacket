@@ -30,6 +30,30 @@ class Selector:
     span: str | None = None  # opaque span token minted by a digest (SPEC §6.4)
 
 
+def _window(flag: str, a: int, b: int, total: int, unit: str) -> tuple[int, int]:
+    """Clamp a range selector into the content, or refuse it. One shape.
+
+    Every ``ctx get`` range selector makes the same promise: the header says
+    ``--<flag> A:B of N`` and the body is what that range covers. A start past
+    the end breaks it in the quietest possible way -- an empty body, exit 0,
+    and a header stating a range whose start exceeds its own total.
+
+    ``--lines`` was hardened for this twice, once per code path, and the
+    hardening stopped there; the next bug bash walked in through ``--records``,
+    which had the identical hole. Three selectors, one contract, so one
+    function: a new selector inherits the refusal instead of re-earning it.
+    """
+    window = bounds.span(a, b, total)
+    if window is None:
+        suggest = min(total, 200) or 1
+        raise RetrievalError(
+            f"--{flag} {a}:{b} selects nothing: the content has "
+            f"{fmt_int(total)} {unit}. Use --{flag} 1:{suggest} or omit "
+            f"--{flag}."
+        )
+    return window
+
+
 def get(
     store: Store,
     ws: Workspace,
@@ -175,6 +199,10 @@ def get(
     elif selector.records is not None:
         a, b = selector.records
         lines = [ln for ln in data.decode("utf-8", "replace").splitlines() if ln.strip()]
+        # Third door onto the contract _window now owns: a start past the
+        # record count returned an empty body under a header claiming the
+        # range, and exited 0.
+        a, b = _window("records", a, b, len(lines), "records")
         header.append(f"selector: --records {a}:{b} of {fmt_int(len(lines))}")
         body = "\n".join(lines[a - 1 : b])
         if b < len(lines):
@@ -183,12 +211,14 @@ def get(
         a, b = selector.bytes
         if fast_bytes is not None:
             blob_hash_b, total_b = fast_bytes
-            chunk = _read_bytes_range(store, blob_hash_b, a, min(b, total_b))
+            a, b = _window("bytes", a, b, total_b, "bytes")
+            chunk = _read_bytes_range(store, blob_hash_b, a, b)
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(total_b)}")
             body = chunk.decode("utf-8", "replace")
             if b < total_b:
                 continuation = f"ctx get {ref_text} --bytes {b + 1}:{min(total_b, b + (b - a + 1))}"
         else:
+            a, b = _window("bytes", a, b, len(data), "bytes")
             chunk = data[a - 1 : b]
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(len(data))}")
             body = chunk.decode("utf-8", "replace")
@@ -204,13 +234,7 @@ def get(
             # clamped, so a START past EOF printed a self-contradictory
             # header (start > total) over a silently empty body and still
             # exited 0. An empty span is empty, and says so.
-            window = bounds.span(a, b, total)
-            if window is None:
-                raise RetrievalError(
-                    f"--lines {a}:{b} selects nothing: the blob has {total} "
-                    f"lines. Use --lines 1:{min(total, 200)} or omit --lines."
-                )
-            a, b = window
+            a, b = _window("lines", a, b, total, "lines")
             if b - a + 1 > budget.max_inline_lines:
                 b = a + budget.max_inline_lines - 1
                 continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
@@ -230,14 +254,7 @@ def get(
             # END too, so `--lines 1000:5` on a 5-line file printed the header
             # "--lines 1000:5 of 5" -- a range whose start exceeds its own
             # total -- over an empty body, and exited 0.
-            _win = bounds.span(a, b, len(all_lines))
-            if _win is None:
-                raise RetrievalError(
-                    f"--lines {a}:{b} selects nothing: the content has "
-                    f"{len(all_lines)} lines. Use --lines 1:"
-                    f"{min(len(all_lines), 200)} or omit --lines."
-                )
-            a, b = _win
+            a, b = _window("lines", a, b, len(all_lines), "lines")
             if b - a + 1 > budget.max_inline_lines:
                 b = a + budget.max_inline_lines - 1
                 continuation = f"ctx get {ref_text} --lines {b + 1}:{min(len(all_lines), b + budget.max_inline_lines)}"
