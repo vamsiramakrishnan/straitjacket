@@ -81,8 +81,10 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     `ctx q 'records run:<id>#stdout --jsonl | group level | count'`
     (query captured JSON/JSONL where it already lives — no re-parsing);
     `distinct <field>` and `histogram <field>` summarize any stream.
-    Reach for `ctx py` only when the control flow is genuinely
-    computational; `ctx q` covers bounded evidence composition.
+    Also available as the MCP `q` op (`options.pipeline`) — prefer one
+    pipeline over several round-trips whenever the answer is a composition
+    (locate → narrow → read). Reach for `ctx py` only when the control flow
+    is genuinely computational; `ctx q` covers bounded evidence composition.
 
 ## Verb index
 

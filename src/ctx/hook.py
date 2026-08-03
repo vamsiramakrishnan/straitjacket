@@ -1888,6 +1888,22 @@ def classify(
                     failure_available=lambda: _failure_available(workspace_root),
                     symbols_resolvable=lambda: _symbols_resolvable(workspace_root))
                 if sub is not None:
+                    # Deliberately overrides a DENY as well as an allow, and
+                    # that is the product: the flagship case (`grep -rn X .`)
+                    # is denied by the canonical layer as unbounded, and the
+                    # whole point of the replacement surface is to hand back a
+                    # bounded op the agent can actually run instead of a
+                    # refusal. Substituting only on allow was tried and is
+                    # wrong — it would silently disable the surface on exactly
+                    # the commands it exists for.
+                    #
+                    # What makes the override safe is not the decision it
+                    # replaces but the command it installs: every Substitution
+                    # emits a bounded `ctx` op, so a denied flood is replaced
+                    # by something that cannot flood. That invariant is the
+                    # load-bearing one, and it is pinned by test
+                    # `test_every_substitution_installs_a_bounded_ctx_op`
+                    # rather than left to each recogniser's good manners.
                     decision = dict(DECISION_ALLOW)
                     decision["_rewrite"] = {"command": sub.command, "reason": sub.reason}
                     _note_collapse(workspace_root, sub.shape, sub.rung)

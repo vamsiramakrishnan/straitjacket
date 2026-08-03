@@ -248,3 +248,63 @@ this file's job is to name them.
 
 Items 3 and the ponytail rung are landed in this change. The rest are
 backlog, filed as `ctx debt` entries rather than asserted as done.
+
+---
+
+## 5 · Landed after this scan (2026-08-03)
+
+Two items the scan did not surface, because it was reading the *field* rather
+than our own surfaces. Both came out of asking what an agent can actually
+reach.
+
+### 5.1 `q` reaches the bounded tier
+
+`ctx q` — a total pipeline algebra over typed streams, 17 stages, hard 8-stage
+cap — was **CLI-only**, on the recorded grounds that MCP wiring would churn the
+prefix asset. So the sharpest turn-compressing surface in the harness (locate →
+narrow → read in ONE call) was reachable only by shelling out, while the
+bounded tier got the heavier `investigate` plan interface instead.
+
+That trade no longer holds: one enum entry plus one options key is a far
+smaller prefix delta than the tool it was implicitly being weighed against.
+Now `op: "q"`, `options.pipeline`. Totality is what makes it safe there — no
+loops, no recursion, statically boundable cost, which is exactly the property
+`ctx py` lacks and why py stays CLI-only.
+
+Bounds are inherited rather than re-implemented: `run_query` already returns
+`bounded(rendered, result_tokens)`, and `_dispatch` tightens `result_tokens`
+to the caller's `maxTokens` before dispatch. A malformed pipeline raises
+instead of returning its teaching line as content — rendered as content, a
+failure description would reach the model as a *successful* result, which is
+the fail-open shape this codebase keeps finding.
+
+### 5.2 The replacement surface goes from 3 shapes to 8
+
+rtk's breadth idea, vendored. Added: `head -n N`, `sed -n 'A,Bp'`, `wc -l`,
+`find -name`, `ls -R`/`tree`.
+
+The bar each had to clear is **equivalence, not plausibility** — and it caught
+a real defect in my own first cut: the generated listing pipelines were
+`corpus --glob X | files`, which is a *type error* (`corpus` already emits
+`files`; the `files` stage consumes `sites`). Every substituted `find` and
+`ls -R` would have handed the agent an invalid pipeline. The equivalence test
+found it before it shipped, which is the argument for writing equivalence
+tests rather than shape tests.
+
+Most of `tests/test_substitute_common_commands.py` is negative cases, and that
+is the point. A recogniser that fires too eagerly answers a question the
+operator did not ask, silently, under their own command — precisely the
+complaint this project makes about the lossy filters. So: `tail` is **not**
+handled (`ctx get` has no from-the-end window, and any mapping would be a
+guess); `head -c` is not (byte mode is a different range unit); `find … -exec`
+and `-delete` are never rewritten (they have effects); a flat `ls` is left
+alone (it is cheap and honest).
+
+**Still not measured:** which commands agents actually run, and how often. All
+five rungs above were chosen by inspection, which is the same guessing the
+scan criticised. Backlog item 8 below is the instrument that would replace the
+guess.
+
+| # | Item | Why | Size |
+|---|---|---|---|
+| 8 | **Command-frequency corpus** — mine recorded sessions for the actual distribution of commands, then aim the next rungs at the head of it | five rungs shipped on inspection; the next five should ship on data | M |

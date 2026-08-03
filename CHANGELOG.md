@@ -6,6 +6,55 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+### `q` reaches the bounded tier, and the replacement surface triples
+
+**Prompt-cache impact: `PREFIX_VERSION` 8 → 9** (the MCP tool description is a
+prefix asset). Same one-time cold-cache cost as the 7 → 8 bump below; users
+upgrading across both pay it once.
+
+**The composition algebra is now an MCP op.** `ctx q` — a total pipeline over
+typed record streams, 17 stages, joined by `|`, no loops, no recursion, hard
+8-stage cap — shipped CLI-only, on the recorded grounds that MCP wiring would
+churn the prefix asset. The cost of that deferral was that the sharpest
+turn-compressing surface in the harness (locate → narrow → read in *one* call
+rather than three round-trips) was reachable only by shelling out, while the
+bounded tier got the heavier `investigate` plan interface instead. One enum
+entry plus one options key is a far smaller prefix delta than the tool it was
+implicitly being weighed against, so: `op: "q"`, `options.pipeline`.
+
+Totality is the whole argument for why it is safe there — statically boundable
+cost is exactly the property `ctx py` lacks, and why py stays CLI-only. Bounds
+are inherited rather than re-implemented: `run_query` already bounds its render
+against `result_tokens`, which `_dispatch` tightens to the caller's
+`maxTokens`. A malformed pipeline **raises** rather than returning its teaching
+line as content — as content, a failure description reaches the model as a
+*successful* result, which is the fail-open shape this codebase keeps finding.
+
+**The replacement surface goes from 3 command shapes to 8.** rtk's breadth idea
+vendored: `head -n N`, `sed -n 'A,Bp'`, `wc -l`, `find -name`, and
+`ls -R`/`tree` now collapse to their bounded, addressed equivalents. This was
+never an architectural gap — a substitution only ships where a bounded `ctx` op
+means the *same* thing, and nobody had walked the common commands looking for
+those pairs.
+
+The bar is **equivalence, not plausibility**, and it earned its keep
+immediately: the first cut generated `corpus --glob X | files`, which is a type
+error (`corpus` already emits `files`; the `files` stage consumes `sites`), so
+every substituted `find` and `ls -R` would have handed the agent an invalid
+pipeline. The equivalence test caught it before it shipped.
+
+Most of `tests/test_substitute_common_commands.py` is negative cases,
+deliberately — a recogniser that fires too eagerly answers a question the
+operator did not ask, under their own command, which is this project's own
+complaint about the lossy filters. So `tail` is **not** handled (`ctx get` has
+no from-the-end window; any mapping would guess), `head -c` is not (byte mode
+is a different range unit), `find … -exec`/`-delete` are never rewritten (they
+have effects), and a flat `ls` is left alone (cheap and honest).
+
+Still unmeasured, and filed as `ctx debt`: which commands agents actually run.
+All five rungs were chosen by inspection — the same guessing the field scan
+criticised. A command-frequency corpus is the instrument that would replace it.
+
 ### The solution ladder gains its missing rung — and a safety exemption
 
 **Prompt-cache impact: `PREFIX_VERSION` 7 → 8.** Skill rule 13 is injected

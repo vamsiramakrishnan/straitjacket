@@ -2,7 +2,7 @@
 
 Exposes exactly one stable tool schema with an ``op`` discriminator:
 ``search | get | stats | map | def | refs | diag | callers | callees | impact |
-diff | repo | doctor | investigate``. Arbitrary command execution stays
+diff | repo | doctor | investigate | q``. Arbitrary command execution stays
 on ``ctx run`` through the native command tool so the user's permission flow
 remains visible; this server is bounded-only by construction —
 ``investigate`` accepts observe-class evidence plans only (execute-class
@@ -41,7 +41,10 @@ TOOL_SCHEMA: dict[str, Any] = {
         "callees of a symbol), impact (transitive callers of a symbol — blast radius, "
         "bounded depth), diff (regression delta between two captured run: refs), "
         "repo (workspace summary), doctor (health), investigate (one observe-class "
-        "ctx.plan/v1 evidence plan executed as a single bounded digest)."
+        "ctx.plan/v1 evidence plan executed as a single bounded digest), "
+        "q (compose typed evidence in one call: a total `|`-pipeline over "
+        "symbols/sites/files/records streams — options.pipeline, e.g. "
+        "\"refs Foo | group file | top 3 | get --context 5\")."
     ),
     "inputSchema": {
         "type": "object",
@@ -51,7 +54,7 @@ TOOL_SCHEMA: dict[str, Any] = {
                 "enum": [
                     "search", "get", "stats", "map",
                     "def", "refs", "diag", "callers", "callees", "impact",
-                    "diff", "repo", "doctor", "investigate",
+                    "diff", "repo", "doctor", "investigate", "q",
                 ],
                 "description": (
                     "callers/callees: direct call-graph edges for options.symbol; "
@@ -59,6 +62,10 @@ TOOL_SCHEMA: dict[str, Any] = {
                     "diff: regression delta between two run: refs (options.refA/refB); "
                     "investigate: execute an observe-class ctx.plan/v1 evidence plan "
                     "(options.plan, a JSON object) — total DAG, bounded, one digest; "
+                    "q: one total pipeline (options.pipeline) — stages joined by '|', "
+                    "no loops, no recursion, max 8 stages, so cost is statically "
+                    "bounded; prefer it over several round-trips when the answer is a "
+                    "composition (locate → narrow → read). "
                     "execute-class ops (test.run, ast.rewrite.*) are CLI-only."
                 ),
             },
@@ -79,7 +86,7 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "options": {
                 "type": "object",
-                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path} · callers/callees/impact options: {symbol,depth} · diff options: {refA,refB}",
+                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path} · callers/callees/impact options: {symbol,depth} · diff options: {refA,refB} · q options: {pipeline}",
             },
             "maxTokens": {
                 "type": "integer",
@@ -259,6 +266,33 @@ def _dispatch(args: dict[str, Any]) -> str:
         # Bounded-only by construction (SPEC §10.4): the MCP tier validates
         # at tier='mcp', so execute-class ops are typed rejections here.
         result, _code = execute_plan(ws, store, plan_doc, tier="mcp")
+    elif op == "q":
+        # The composition algebra, finally on the bounded tier. `ctx q` shipped
+        # CLI-only on the stated grounds that MCP wiring would churn the prefix
+        # asset -- true, but one enum entry plus one options key is a far
+        # smaller delta than the tool it was being weighed against, and the
+        # cost of the deferral was that the sharpest turn-compressing surface
+        # we have was reachable only by shelling out. Totality is what makes
+        # this safe here: no loops, no recursion, hard 8-stage cap, every
+        # stage's cost statically boundable -- the property `ctx py` can never
+        # have, which is why py stays CLI-only and this does not.
+        from ctx.query import run_query
+
+        pipeline = (args.get("options") or {}).get("pipeline")
+        if not isinstance(pipeline, str) or not pipeline.strip():
+            raise RetrievalError(
+                "q requires options.pipeline — e.g. "
+                "\"refs TokenBucket | group file | top 3\""
+            )
+        # run_query returns (rendered, exit_code) and already applies
+        # bounded(...) against result_tokens, which _dispatch has tightened to
+        # the caller's maxTokens above. A query error renders as its own
+        # teaching line; surface it as a typed error rather than as content,
+        # so a malformed pipeline cannot read as an empty result.
+        text, code = run_query(ws, store, pipeline)
+        if code != 0:
+            raise RetrievalError(text)
+        return text
     elif op == "repo":
         result = stats(store, ws, "repo:")
     elif op == "doctor":

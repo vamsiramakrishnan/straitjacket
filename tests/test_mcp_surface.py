@@ -90,17 +90,7 @@ def test_tool_description_bytes_unchanged():
     from ctx.mcp import TOOL_SCHEMA
 
     assert TOOL_SCHEMA["description"] == (
-        "Execute bounded retrieval against repository state or captured artifacts "
-        "without placing unbounded output in model context. Ops: search (multi-pattern "
-        "over run:/blob:/repo: refs), get (exact line/byte/record/json-pointer slices), "
-        "stats (schema and repository shape), map (ranked budget-fitted codebase map), "
-        "def (symbol definition site with snapshot + span), refs (reference sites for "
-        "a symbol), diag (deterministic lint/syntax digest), "
-        "callers (direct call-graph callers of a symbol), callees (direct call-graph "
-        "callees of a symbol), impact (transitive callers of a symbol — blast radius, "
-        "bounded depth), diff (regression delta between two captured run: refs), "
-        "repo (workspace summary), doctor (health), investigate (one observe-class "
-        "ctx.plan/v1 evidence plan executed as a single bounded digest)."
+        'Execute bounded retrieval against repository state or captured artifacts without placing unbounded output in model context. Ops: search (multi-pattern over run:/blob:/repo: refs), get (exact line/byte/record/json-pointer slices), stats (schema and repository shape), map (ranked budget-fitted codebase map), def (symbol definition site with snapshot + span), refs (reference sites for a symbol), diag (deterministic lint/syntax digest), callers (direct call-graph callers of a symbol), callees (direct call-graph callees of a symbol), impact (transitive callers of a symbol — blast radius, bounded depth), diff (regression delta between two captured run: refs), repo (workspace summary), doctor (health), investigate (one observe-class ctx.plan/v1 evidence plan executed as a single bounded digest), q (compose typed evidence in one call: a total `|`-pipeline over symbols/sites/files/records streams — options.pipeline, e.g. "refs Foo | group file | top 3 | get --context 5").'
     )
 
 

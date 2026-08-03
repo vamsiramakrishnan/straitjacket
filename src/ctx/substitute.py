@@ -438,6 +438,185 @@ def _collapse_pytest(command: str, failure_available: Probe) -> Substitution | N
         rung="failure-slice", shape="pytest_rerun")
 
 
+# ---------------------------------------------------------------- rtk-shaped
+# The filter binaries in this space (rtk et al.) intercept 100+ dev commands;
+# this surface had three. The gap was never architectural — a substitution only
+# ships when there is a bounded ctx op with the SAME meaning, and nobody had
+# gone through the common commands looking for those pairs.
+#
+# The bar every rung below clears, and the reason there are five rather than a
+# hundred: the replacement must answer the question the operator actually
+# asked. `head -n 20 f` and `ctx get repo:f --lines 1:20` are the same bytes;
+# `ls -R` and `ctx map` are NOT the same question (map is ranked and budgeted,
+# a listing is exhaustive), so `ls` maps to a corpus listing instead. A
+# substitution that quietly answers a nearby question is worse than none —
+# that is the whole complaint against the lossy filters.
+#
+# Anything whose meaning depends on shell context is already excluded upstream
+# by `_is_compound`: a pipe or redirect means the operator is composing, and
+# a composed command is theirs, not ours.
+
+#: `sed -n 'A,Bp'` / `sed -n A,Bp` — the exact-range read.
+_SED_RANGE_RE = re.compile(r"^(\d+),(\d+)p$")
+
+#: `find … -name <glob>` value flags to skip when hunting the pattern.
+_FIND_VALUE_FLAGS = {"-name", "-iname", "-path", "-ipath", "-type", "-maxdepth",
+                     "-mindepth", "-not", "-o", "-a"}
+
+
+def _lines_sub(f: str, a: int, b: int, *, was: str, shape: str) -> Substitution | None:
+    """`ctx get repo:<f> --lines A:B` — the addressed form of a range read."""
+    if not _shell_safe(f):
+        return None
+    return Substitution(
+        command=f"ctx get {shlex.quote('repo:' + f)} --lines {a}:{b}",
+        reason=(f"CTX_CONTEXT_GUARD: {was} returns bytes with no address — the "
+                f"next turn cannot cite them or page past them. `ctx get "
+                f"repo:<file> --lines {a}:{b}` returns the same lines with a "
+                f"handle, and a continuation that advances."),
+        rung="addressed-range", shape=shape)
+
+
+def _collapse_head(toks: list[str]) -> Substitution | None:
+    """``head -n N <file>`` → the same lines, addressed."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "head":
+        return None
+    n, rest = 10, []
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t == "-n" and i + 1 < len(toks):
+            if not toks[i + 1].lstrip("-").isdigit():
+                return None  # `-n -5` / `-n 5k` — not a plain line count
+            n = int(toks[i + 1]); i += 2; continue
+        if t.startswith("-n") and t[2:].isdigit():
+            n = int(t[2:]); i += 1; continue
+        if t.startswith("-c") or t == "-c":
+            return None  # byte mode: --bytes is the right op, different range
+        if len(t) > 1 and t[0] == "-" and t[1:].isdigit():
+            n = int(t[1:]); i += 1; continue  # the obsolete-but-ubiquitous `-20`
+        if t.startswith("-"):
+            return None  # -q/-v/unknown: leave it alone
+        rest.append(t); i += 1
+    if len(rest) != 1 or n < 1:
+        return None  # multiple files (banner-separated) or a stdin read
+    return _lines_sub(rest[0], 1, n, was=f"head -n {n}", shape="head_lines")
+
+
+def _collapse_sed_range(toks: list[str]) -> Substitution | None:
+    """``sed -n 'A,Bp' <file>`` → the same lines, addressed."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "sed" or "-n" not in toks:
+        return None
+    script, files = None, []
+    for t in toks[1:]:
+        if t == "-n":
+            continue
+        if t.startswith("-"):
+            return None  # -i/-E/-e: editing or extended scripts are not reads
+        m = _SED_RANGE_RE.match(t)
+        if m and script is None:
+            script = (int(m.group(1)), int(m.group(2)))
+        else:
+            files.append(t)
+    if script is None or len(files) != 1:
+        return None
+    a, b = script
+    if a < 1 or b < a:
+        return None
+    return _lines_sub(files[0], a, b, was=f"sed -n '{a},{b}p'", shape="sed_range")
+
+
+def _collapse_wc(toks: list[str]) -> Substitution | None:
+    """``wc -l <source-file>`` → the priced outline, which carries the count
+    AND the structure the count was standing in for."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "wc":
+        return None
+    flags = [t for t in toks[1:] if t.startswith("-")]
+    args = [t for t in toks[1:] if not t.startswith("-")]
+    if flags != ["-l"] or len(args) != 1:
+        return None
+    f = args[0]
+    if not f.endswith(_SKELETON_EXTS) or not _shell_safe(f):
+        return None
+    return Substitution(
+        command=f"ctx stats {shlex.quote('repo:' + f)}",
+        reason=("CTX_CONTEXT_GUARD: a line count is almost always a proxy for "
+                "\"how big is this and what is in it\". `ctx stats repo:<file>` "
+                "answers both — the count plus the priced symbol outline with "
+                "line ranges — for about the same tokens."),
+        rung="skeleton-first", shape="wc_lines")
+
+
+def _collapse_find_name(toks: list[str]) -> Substitution | None:
+    """``find <dir> -name '<glob>'`` → a bounded corpus listing with a
+    coverage receipt."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "find":
+        return None
+    root, pattern = None, None
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t in ("-name", "-iname") and i + 1 < len(toks):
+            if pattern is not None:
+                return None  # several predicates — the operator is composing
+            pattern = toks[i + 1]; i += 2; continue
+        if t in ("-type",) and i + 1 < len(toks):
+            if toks[i + 1] != "f":
+                return None  # -type d/l is a different question
+            i += 2; continue
+        if t.startswith("-"):
+            return None  # -exec/-delete/-newer/-size: not a plain name hunt
+        if root is not None:
+            return None  # several roots
+        root = t; i += 1
+    if pattern is None:
+        return None
+    root = (root or ".").rstrip("/")
+    glob = pattern if root in (".", "") else f"{root}/**/{pattern}"
+    if not _shell_safe(glob):
+        return None
+    return Substitution(
+        command=f"ctx q {shlex.quote(f'corpus --glob {glob}')}",
+        reason=("CTX_CONTEXT_GUARD: `find` walks into vendor, build and VCS "
+                "directories and returns an unbounded, unaddressed path list. "
+                "`ctx q 'corpus --glob <glob>'` respects ignore rules, "
+                "declares its coverage (considered/selected), and the result "
+                "composes — pipe it into `outline` or `search` without a second "
+                "round-trip."),
+        rung="bounded-listing", shape="find_name")
+
+
+def _collapse_ls_recursive(toks: list[str]) -> Substitution | None:
+    """``ls -R`` / ``tree`` → the same listing, ignore-aware and bounded."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog == "ls":
+        flags = "".join(t[1:] for t in toks[1:] if t.startswith("-") and not t.startswith("--"))
+        if "R" not in flags:
+            return None  # a flat `ls` is cheap and honest — leave it
+    elif prog != "tree":
+        return None
+    args = [t for t in toks[1:] if not t.startswith("-")]
+    if len(args) > 1:
+        return None
+    scope = args[0].rstrip("/") if args else ""
+    glob = f"{scope}/**" if scope else None
+    if glob is not None and not _shell_safe(glob):
+        return None
+    pipeline = f"corpus --glob {glob}" if glob else "corpus"
+    return Substitution(
+        command=f"ctx q {shlex.quote(pipeline)}",
+        reason=("CTX_CONTEXT_GUARD: a recursive listing descends into "
+                "node_modules, .git, target and build output — usually most of "
+                "its own output. `ctx q 'corpus'` lists the tracked "
+                "corpus with a coverage receipt, and the stream composes into "
+                "`outline`/`search` instead of needing a second command."),
+        rung="bounded-listing", shape="ls_recursive")
+
+
 def collapse(command: str, *, failure_available: Probe = False,
              symbols_resolvable: Probe = True) -> Substitution | None:
     """Recognise a collapsible loop-shape in ``command`` and return the
@@ -460,12 +639,22 @@ def collapse(command: str, *, failure_available: Probe = False,
         return None
     if _is_compound(toks, command):
         return None  # a pipe/redirect/chain changes meaning — never clobber it
+    # Pure recognisers first, cheapest and always safe; the store-gated pytest
+    # slice last, since it is the only one that costs I/O to decide.
     sub = _collapse_grep(toks, symbols_resolvable)
     if sub:
         return sub
-    sub = _collapse_cat(toks)
-    if sub:
-        return sub
+    for fn in (
+        _collapse_cat,
+        _collapse_head,
+        _collapse_sed_range,
+        _collapse_wc,
+        _collapse_find_name,
+        _collapse_ls_recursive,
+    ):
+        sub = fn(toks)
+        if sub:
+            return sub
     return _collapse_pytest(command, failure_available)
 
 

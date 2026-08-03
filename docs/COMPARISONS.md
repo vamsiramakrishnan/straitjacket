@@ -24,7 +24,7 @@ idea the harness kept — losslessly.
 | Post-hoc compaction / summarization | reclaim a bloated window | rewrites history; evidence irrecoverable, prefix cache invalidated | checkpoint-then-rescue: secure handles first, then clearing is lossless |
 | RAG / vector memory | recall without resending | probabilistic, no provenance | deterministic addresses: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever |
 | **Headroom** (rewriting wire proxy) | rescue an already-bloated transcript | silent evidence drops (347,595→68 tok, no trace); cache hit 80.6–84.2% vs our 96.5–98.1%; 3–6× cache-write churn | v0.10 epoch-latched lossless rescue: ~18× less cache churn, every elided byte file-backed and addressed |
-| **rtk** (bash-hook filter binary) | filter floods at the source | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` |
+| **rtk** (bash-hook filter binary) | filter floods at the source, across 100+ commands | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` — and the *breadth* idea vendored: the replacement surface now covers 8 command shapes (grep-family, `cat`, `pytest`, `head`, `sed -n A,Bp`, `wc -l`, `find -name`, `ls -R`/`tree`), each substituted only where a bounded `ctx` op means the **same** thing |
 | **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
 | **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
 | **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
@@ -167,7 +167,19 @@ less tool-output on an unavoidable flood, honest parity-loss on the greppable on
   needed *structure, not compression* (`lint/v1` exact censuses; the live
   lint-fix benchmark went honest-loss → iterate → parity), and our own
   scaffold was inflating small outputs (slim inline: ~100–400 tok overhead →
-  ~20).
+  ~20). **Breadth taken second, deliberately**: rtk intercepts 100+ commands
+  and we had three shapes, which was never an architectural gap — a
+  substitution only ships where a bounded `ctx` op means the *same* thing, and
+  nobody had walked the common commands looking for those pairs. Five more
+  landed (`head`, `sed -n A,Bp`, `wc -l`, `find -name`, `ls -R`/`tree`), each
+  with the equivalence pinned by test rather than asserted. The bar that keeps
+  this from becoming rtk's lossiness: `head -n 20 f` and `ctx get repo:f
+  --lines 1:20` are the same bytes, so it substitutes; `ls -R` and `ctx map`
+  are *different questions* (a map is ranked and budgeted, a listing is
+  exhaustive), so `ls -R` maps to a corpus listing instead. Most of
+  `tests/test_substitute_common_commands.py` is negative cases — a recogniser
+  that fires too eagerly answers a question nobody asked, under the operator's
+  own command, which is precisely the complaint against the lossy filters.
 - **Headroom** → its one structural edge (rescuing a bloated transcript) taken
   losslessly: epoch-latched elision, +$0.05 where per-request rewriting pays
   $0.90 in churn, 18 turns of lossless runway per 27k elided; live-validated

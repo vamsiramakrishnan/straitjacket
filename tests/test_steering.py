@@ -164,11 +164,39 @@ def test_grep_single_file_gets_match_cap_injected(tmp_path):
 
 
 # ------------------------------------------------- text tools (M-K5.3)
-def test_sed_readonly_steers_to_ctx_run(tmp_path):
+def test_sed_range_read_collapses_to_an_addressed_get(tmp_path):
+    """`sed -n 'A,Bp' <file>` now has a rung on the replacement surface.
+
+    It used to land on the generic steer — deny, plus `ctx run -- sed …`,
+    which captures the output but keeps the operator's own unaddressed range.
+    The collapse rung is strictly better: `ctx get repo:<f> --lines A:B` is
+    the same bytes with a handle and a continuation that advances, so the
+    replacement surface overrides the deny the same way it does for the
+    flagship `grep -rn` case.
+    """
     (tmp_path / "notes.txt").write_text("a\nb\n", encoding="utf-8")
     d = _classify(
         "run_command",
         {"CommandLine": "sed -n 1,5p notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d["decision"] == "allow"
+    assert d["rewrite"]["updatedInput"]["CommandLine"] == (
+        "ctx get repo:notes.txt --lines 1:5"
+    )
+
+
+def test_sed_outside_the_collapsible_range_shape_still_steers_to_ctx_run(tmp_path):
+    """The generic steer must still cover every sed the rung declines.
+
+    A script, an edit or a stdin read is not a range read, so it falls back to
+    the canonical layer — the rung narrowing what reaches the steer must not
+    narrow the steer itself.
+    """
+    (tmp_path / "notes.txt").write_text("a\nb\n", encoding="utf-8")
+    d = _classify(
+        "run_command",
+        {"CommandLine": "sed -n /pat/p notes.txt", "Cwd": str(tmp_path)},
         tmp_path,
     )
     assert d["decision"] == "deny"  # canonical layer: unbounded output
