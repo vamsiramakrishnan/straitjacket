@@ -264,10 +264,16 @@ def _scope_hint(paths: list[str]) -> str | None:
     if len(real) > 1:
         return None  # not expressible as one --glob; the caller must not widen
     p = real[0].rstrip("/")
-    if re.search(r"\*\.\w+$", p):
-        return re.search(r"\*\.\w+$", p).group(0)
+    # A glob the caller wrote is returned VERBATIM. This used to run a
+    # `\*\.\w+$` branch first and return only the matched tail, so
+    # `src/ctx/*.py` became `*.py` -- the whole repo instead of one directory.
+    # That is the exact widening this function exists to prevent, hiding in
+    # the branch meant to preserve a caller's glob: for a bare `*.py` the two
+    # are identical, so it looked correct, and it only widened once a
+    # directory prefix was present. Ordering the general case first makes both
+    # right, and the special case was never needed.
     if any(ch in p for ch in "*?["):
-        return p  # already a glob the caller wrote
+        return p
     return p if re.search(r"\.\w+$", p) else f"{p}/**"
 
 
@@ -303,11 +309,27 @@ def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution |
     if prog not in _GREP_PROGS:
         return None
     flags = [t for t in toks[1:] if t.startswith("-")]
-    if not git_grep and not _is_recursive_grep(prog, flags):
-        return None  # single-file/bounded grep is handled elsewhere (the -m cap)
     pattern, paths = _grep_pattern_and_globs(toks)
     if not pattern:
         return None
+    if not git_grep and not _is_recursive_grep(prog, flags):
+        # A NON-recursive grep was declined wholesale as "single-file and
+        # therefore already bounded". That is true of `grep -n pat one.py` and
+        # false of `grep -n pat src/ctx/*.py`, which the shell expands into
+        # however many files match — unbounded, and the single most common
+        # uncovered shape in the recorded corpus by a wide margin
+        # (466 of 477 uncovered greps; 8.7% of ALL commands issued —
+        # `evals/command-corpus-2026-08-03.md`).
+        #
+        # The distinction that matters is not the -r flag but whether the
+        # target names ONE file or MANY. A glob character means many; so does
+        # a bare directory. Both are exactly what `ctx search --glob` bounds.
+        targets = [p for p in paths if p not in (".", "./")]
+        many = any(ch in p for p in targets for ch in "*?[") or (
+            len(targets) == 1 and not re.search(r"\.\w+$", targets[0])
+        )
+        if not many:
+            return None  # genuinely one file: already bounded, leave it alone
     # `_probe` second: the repo scan behind `symbols_resolvable` is only worth
     # paying once we know this really is a bare-identifier hunt.
     if _IDENT_RE.match(pattern) and _probe(symbols_resolvable):

@@ -139,7 +139,16 @@ def test_glob_hint_carried_through():
     from ctx.query import parse_query
 
     stages = parse_query(_shlex.split(sub.command)[2])
-    assert "*.py" in stages[0][1], stages
+    # The caller's scope must survive INTACT. This asserted the glob was
+    # `*.py`, which was the widening bug written down as the contract:
+    # `src/foo/*.py` returned only the matched tail, so a search scoped to one
+    # directory silently became a search of the whole repository, and the extra
+    # matches are indistinguishable from real ones. The substitution may make a
+    # search cheaper; it may never make it bigger.
+    assert "src/foo/*.py" in stages[0][1], stages
+    assert "*.py" not in stages[0][1], (
+        "scope widened: the directory prefix was dropped from the glob"
+    )
 
 
 # ── the hook honours the flag ───────────────────────────────────────────────

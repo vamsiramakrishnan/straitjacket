@@ -306,6 +306,62 @@ def test_every_substitution_installs_a_bounded_ctx_op():
         )
 
 
+# ------------------------------------------------------- scope preservation
+def test_a_directory_scoped_glob_is_never_widened():
+    """`src/ctx/*.py` must not become `*.py`.
+
+    `_scope_hint` ran an extension branch before its general glob branch and
+    returned only the matched tail, so a search scoped to one directory became
+    a search of the entire repository. For a bare `*.py` the two are identical,
+    which is why it read as correct; it only widened once a directory prefix
+    was present. The extra matches a widened search returns are
+    indistinguishable from real ones, which is what makes this worse than
+    declining.
+    """
+    from ctx.substitute import _scope_hint
+
+    assert _scope_hint(["src/ctx/*.py"]) == "src/ctx/*.py"
+    assert _scope_hint(["tests/*.py"]) == "tests/*.py"
+    assert _scope_hint(["*.py"]) == "*.py"          # bare glob unchanged
+    assert _scope_hint(["src/ctx/"]) == "src/ctx/**"
+    assert _scope_hint(["a.py", "b.py"]) is None    # not expressible as one
+
+
+def test_the_preserved_glob_actually_matches_only_that_directory():
+    """Scope preservation is only real if the glob dialect agrees."""
+    from ctx.pathglob import matches
+
+    assert matches("src/ctx/hook.py", "src/ctx/*.py")
+    assert not matches("src/ctx/_retrieval/get.py", "src/ctx/*.py")
+    assert not matches("tests/test_a.py", "src/ctx/*.py")
+
+
+# --------------------------------------------- non-recursive multi-file grep
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -n pat src/ctx/*.py",   # a glob: the shell expands it to many
+        "grep -n pat src/ctx",        # a bare directory: also many
+    ],
+)
+def test_a_non_recursive_grep_over_many_files_collapses(command):
+    """`-r` was the wrong discriminator.
+
+    A non-recursive grep was declined wholesale as "single-file and therefore
+    already bounded". True of `grep -n pat one.py`; false of
+    `grep -n pat src/ctx/*.py`, which the shell expands into however many
+    files match. What matters is whether the target names one file or many.
+    """
+    sub = collapse(command, symbols_resolvable=False)
+    assert sub is not None and sub.command.startswith("ctx q ")
+
+
+def test_a_single_file_grep_is_still_left_alone():
+    """The corpus says this is 88% of uncovered greps, and declining is right:
+    one file is already bounded, and the `-m` cap covers it."""
+    assert collapse("grep -n pat src/ctx/hook.py", symbols_resolvable=False) is None
+
+
 def test_reasons_name_the_replacement_and_the_cost():
     """The reason string is what the model reads. It has to say what to run
     and why, or the substitution reads as an unexplained refusal."""
