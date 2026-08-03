@@ -9,6 +9,7 @@ rendered document; the old transcript and ledger stay immutable.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ctx.refs import RefError, parse_ref
@@ -45,7 +46,15 @@ def create_checkpoint(
         if ref.id:
             full = store.resolve_id(ref.id)
             store.pin(full)  # survives gc for the life of the checkpoint
-            ref_text = ref_text.replace(ref.id, full[:12], 1)
+            # parse_ref lower-cases the id; ref_text is what the user TYPED,
+            # and the ref grammar accepts [0-9a-fA-F]. A case-sensitive
+            # replace therefore no-opped on `run:6A1B3F5B#stdout`, silently
+            # freezing an unexpanded abbreviation into a checkpoint whose
+            # whole promise is exact coordinates. Matched case-insensitively,
+            # against the text as typed.
+            ref_text = re.sub(
+                re.escape(ref.id), full[:12], ref_text, count=1, flags=re.IGNORECASE
+            )
         resolved_evidence.append({"ref": ref_text, "note": note})
 
     manifest: dict[str, Any] = {
@@ -93,7 +102,7 @@ def render_checkpoint(ws: Workspace, cp_id: str, manifest: dict[str, Any]) -> st
         "resume: start a new conversation from this document; "
         "retrieve evidence with ctx get/search on the handles above."
     )
-    text, _ = sanitize_for_model("\n".join(lines), ws.config.redaction.patterns)
+    text, _ = sanitize_for_model("\n".join(lines), ws.config.redaction)
     return text
 
 

@@ -39,10 +39,16 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     satisfy the task's required output format in full. Sub-agent reports
     use the checkpoint shape (goal, findings, evidence handles, negatives).
 13. Apply the solution ladder before writing any code — prefer in order:
-    not needed at all, reuse what exists, standard library, a one-liner,
-    minimal new code. Be lazy about the solution, never about reading.
-    Deliberately deferred improvements are declared
-    (`ctx debt add "<note>" --ref repo:file:line`), never silently skipped.
+    not needed at all, reuse what exists, a native platform/runtime feature,
+    standard library, a one-liner, minimal new code. Be lazy about the
+    solution, never about reading. Reuse ranks above stdlib deliberately:
+    in a codebase with its own vocabulary, hand-rolling with `hashlib` what
+    the repo already exposes as a shared helper is the wrong move even
+    though both are "simple". The ladder does **not** apply to trust
+    boundaries, data loss, security, or accessibility — on those four,
+    write the fuller version. Deliberately deferred improvements are
+    declared (`ctx debt add "<note>" --ref repo:file:line`), never silently
+    skipped.
 14. Plan backward: state the final acceptance check first, then the step
     before it, back to your first action — then execute forward without
     re-planning. Mechanical chains you can declare upfront run as one
@@ -75,8 +81,10 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     `ctx q 'records run:<id>#stdout --jsonl | group level | count'`
     (query captured JSON/JSONL where it already lives — no re-parsing);
     `distinct <field>` and `histogram <field>` summarize any stream.
-    Reach for `ctx py` only when the control flow is genuinely
-    computational; `ctx q` covers bounded evidence composition.
+    Also available as the MCP `q` op (`options.pipeline`) — prefer one
+    pipeline over several round-trips whenever the answer is a composition
+    (locate → narrow → read). Reach for `ctx py` only when the control flow
+    is genuinely computational; `ctx q` covers bounded evidence composition.
 
 ## Verb index
 
@@ -129,10 +137,8 @@ that answers the question.
 **Skill (this file + `references/`).** Instructions and contracts only. Free to
 read, but not free to read *all of* — see progressive disclosure below.
 
-**CLI (`ctx`).** The execution surface. `run` · `search` · `get` · `stats` · `map` ·
-`def`/`refs`/`diag` · `callers`/`callees`/`impact` · `diff` · `q` · `ask` ·
-`plan` · `checkpoint` · `gain` · `debt` · `doctor` · `orchestrate` · `wrap`.
-Every one is bounded by construction.
+**CLI (`ctx`).** The execution surface; every verb bounded by construction.
+The verbs themselves are listed once, above, under *Verb index* — not twice.
 
 **MCP servers.** Allowed: **`ctx-harness`** only (`ctx mcp --bounded-only`) —
 its tools are capped by construction, which is why retrieval through it is safe

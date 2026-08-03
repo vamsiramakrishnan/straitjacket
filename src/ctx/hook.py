@@ -219,16 +219,89 @@ _BOUNDED_CMDS = {
 # Shell metacharacters that make static reasoning unreliable.
 _SHELL_META_RE = re.compile(r"[|;&<>`$(){}\\]|\|\||&&|\$\(")
 
+# The token used to have to be a WHOLE path component, so `secrets.json`,
+# `my-secrets.yaml` and `app-credentials.env` all walked past the guard --
+# a classifier whose entire job is to catch secret-bearing paths, blind to
+# the most ordinary way of naming one. Tokens may now appear inside a
+# filename, bounded by non-letters so `secretary.py` is still not a secret.
+# For a safety classifier the failure direction must be over-matching: a
+# false positive costs one permission prompt, a false negative leaks a key.
 _SECRET_PATH_RE = re.compile(
-    r"(^|/)(\.env(\..*)?|\.aws|\.ssh|\.config/gcloud|secrets?|credentials?)(/|$)"
+    r"(^|/)(\.env(\..*)?|\.aws|\.ssh|\.config/gcloud)(/|$)"
+    r"|(?<![A-Za-z])(secrets?|credentials?)(?![A-Za-z])"
     r"|\.(pem|key)$|id_rsa|id_ed25519",
 )
 
+# Secret filenames carrying neither a slash nor a dot: without this the
+# path-shape filter below would skip them.
+_SECRET_BARE_RE = re.compile(r"^(id_rsa|id_ed25519|id_ecdsa|id_dsa)$")
+
+def _is_secret_path(path_str: str, root: str | None = None) -> bool:
+    """Does this path name -- or the file it actually opens -- bear secrets?
+
+    A name-based denylist has to look at the name the FILESYSTEM will open.
+    Both doors onto this guard matched the literal argument only, so
+    ``ln -s .env notes.txt`` was a complete bypass: an innocuous name for the
+    same bytes, which is the cheapest possible attack on a rule expressed as
+    a regex over strings. docs/TROUBLESHOOTING.md promises the guarantee is
+    blanket, so the resolution belongs inside the guard rather than at one
+    caller.
+
+    Both the literal name and the resolution are judged WORKSPACE-RELATIVE
+    when they land inside the workspace, and in full when they land outside.
+    Absolute paths were previously judged whole, so a checkout at
+    ``~/my-credentials/`` or ``~/.aws-tools/`` force-asked every native Read
+    in it -- the guard failing loudly instead of working. The distinction is
+    the useful one either way: a secret token in the path BELOW the root is
+    about this file, and one above the root is about where you keep your
+    code.
+
+    Resolution is best-effort: a path that does not exist yet, or that
+    cannot be resolved, is judged on its name alone.
+    """
+    literal = str(path_str)
+    if _SECRET_PATH_RE.search(_scoped_path(literal, root)):
+        return True
+    try:
+        raw = os.path.expanduser(literal)
+        base = root or os.getcwd()
+        real = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(base, raw))
+    except (OSError, ValueError):
+        return False
+    return bool(_SECRET_PATH_RE.search(_scoped_path(real, root)))
+
+
+def _scoped_path(path_str: str, root: str | None) -> str:
+    """The part of a path the guard should judge, in POSIX form.
+
+    Inside the workspace: the workspace-relative part. Outside (or with no
+    workspace): the whole thing.
+    """
+    p = str(path_str).replace("\\", "/")
+    if not root:
+        return p
+    try:
+        root_abs = os.path.realpath(root)
+        cand = os.path.abspath(os.path.expanduser(str(path_str)))
+        if cand == root_abs or cand.startswith(root_abs + os.sep):
+            return os.path.relpath(cand, root_abs).replace("\\", "/")
+    except (OSError, ValueError):
+        pass
+    return p
+
+
 _HEAD_TAIL_MAX = 400  # max -n allowed for native head/tail
+# A bound expressed in LINES cannot see a request expressed in BYTES:
+# `head -c 200000 f` walked straight past the -n guard. Aligned with
+# max_inline_bytes so both spellings of "a small slice" agree.
+_HEAD_TAIL_MAX_BYTES = 16384
 
 _MAX_INLINE_BYTES_DEFAULT = 16384
 _MAX_INLINE_LINES_DEFAULT = 240
 _SESSION_READ_BUDGET_DEFAULT = 262144  # 256 KiB of raw native reads per session
+# Floor for the escalating over-budget read window: below this a bounded read
+# stops being evidence and becomes a round trip that teaches the model nothing.
+_OVER_BUDGET_MIN_LINES = 20
 _WINDOW_PRESSURE_PCT_DEFAULT = 70  # window fullness (%) at which budgets tighten
 # Universal emission gate: a PostToolUse tool result larger than this many
 # bytes is replaced by a bounded digest. Keep in sync with config.Budgets.
@@ -1176,6 +1249,21 @@ def _classify_command_inner(
         if redir:
             target = redir.group("t1") or redir.group("t2") or ""
             if not target.startswith("/dev/") and not target.startswith("/proc/"):
+                # This shortcut answers the VOLUME question and only that one:
+                # `pytest > out.log 2>&1` keeps the console clean, so the
+                # volume-class steering that would otherwise route it through
+                # `ctx run` is legitimately satisfied. It must not also answer
+                # the SAFETY question. It used to return straight out, ahead
+                # of the repo-committed [guard] deny_commands check below, so
+                # `denied-command > out.txt 2>&1` switched off a rule the repo
+                # committed on purpose just by adding a redirect.
+                denied = _deny_commands_match(redir.group("cmd") or "", policy)
+                if denied is not None:
+                    d = _deny_cmd(
+                        denied, policy, original=stripped, has_meta=has_meta
+                    )
+                    d["_safety"] = "1"
+                    return d
                 return dict(DECISION_ALLOW)
         # Bounded chain: `a; b && c` with no other metacharacters. Each
         # segment is classified independently; the chain is allowed only if
@@ -1201,6 +1289,7 @@ def _classify_command_inner(
     argv = _unwrap(argv)
     if not argv:
         return dict(DECISION_ALLOW)
+
     prog = os.path.basename(argv[0])
 
     # Already routed through ctx → always allow.
@@ -1210,13 +1299,36 @@ def _classify_command_inner(
     # Repo-configured overrides win over built-in tables.
     canonical = " ".join(argv)
     for prefix in policy.get("deny_commands", []):
-        if canonical.startswith(prefix):
+        if _restricts_match(canonical, prefix):
             # Safety class: a rule the repo committed on purpose. Its wording is
             # frozen by the rule-7 invariant (tests/test_safety_invariant.py) —
             # no adaptive state may reword it, so mark it and never decay it.
             d = _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
             d["_safety"] = "1"
             return d
+
+    # One guard, every door. docs/TROUBLESHOOTING.md promises a BLANKET
+    # guarantee that secret-bearing paths always force-ask, but the check
+    # lived only in classify_read -- the native Read door -- so `head .env`,
+    # `cat secrets.json` and `tail id_rsa` walked past it through the shell.
+    #
+    # Placed AFTER the deny_commands loop on purpose: an explicit repo-
+    # committed deny is stronger than a force_ask, and putting this first
+    # downgraded `echo secrets please` from deny to ask. Restricted to
+    # arguments that are shaped like paths, because the regex alone matches
+    # the bare WORD "secrets", which is a sentence, not a file.
+    for _arg in argv[1:]:
+        if _arg.startswith("-"):
+            continue
+        _p = _arg.replace("\\", "/")
+        if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
+            continue
+        if _is_secret_path(_p, cwd):
+            return _force_ask(
+                "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
+                "an explicit user-visible permission step; it is excluded "
+                "from automatic capture."
+            )
     # A prefix allow/promotion applies to a single command only. When shell
     # metacharacters survived the chain/redirect handling above (e.g.
     # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary
@@ -1225,16 +1337,20 @@ def _classify_command_inner(
     # ``not has_meta`` (deny prefixes are not: denying more is always safe).
     if not has_meta:
         for prefix in policy.get("allow_commands", []):
-            if canonical.startswith(prefix):
+            if _grants_match(canonical, prefix):
                 return dict(DECISION_ALLOW)
         # Learned policy epoch (ctx-policy.toml): promoted signatures behave
         # exactly like allow_commands canonical prefixes. Demoted signatures
         # are checked FIRST and are never allowed via promotion (belt against
         # a conflicting or hand-edited epoch); a demoted command is not
         # denied here — it simply falls through to normal classification.
-        if not any(canonical.startswith(p) for p in policy.get("demoted_commands", [])):
+        if not any(
+            # A demotion RESTRICTS (it withholds a promotion), so it matches
+            # unbounded for the same reason a deny does.
+            _restricts_match(canonical, p) for p in policy.get("demoted_commands", [])
+        ):
             for prefix in policy.get("promoted_commands", []):
-                if canonical.startswith(prefix):
+                if _grants_match(canonical, prefix):
                     return dict(DECISION_ALLOW)
 
     # `bash -c '<inner>'`: classify the inner command, not the shell.
@@ -1368,6 +1484,23 @@ def _extract_line_count(argv: list[str]) -> int | None:
         except ValueError:
             return None
 
+    # Byte-count flags first: they bound the same read in a different unit,
+    # and the line guard was blind to them entirely.
+    for i, a in enumerate(argv[1:], start=1):
+        raw_bytes: str | None = None
+        if a in ("-c", "--bytes") and i + 1 < len(argv):
+            raw_bytes = argv[i + 1]
+        elif a.startswith("--bytes="):
+            raw_bytes = a.split("=", 1)[1]
+        elif a.startswith("-c") and len(a) > 2:
+            raw_bytes = a[2:]
+        if raw_bytes is not None:
+            nbytes = _count(raw_bytes)
+            # Unparseable, signed (unbounded mode), or simply too big.
+            if nbytes is None or nbytes > _HEAD_TAIL_MAX_BYTES:
+                return None
+            return 1  # a genuinely small byte slice is a bounded read
+
     for i, a in enumerate(argv[1:], start=1):
         if a in ("-n", "--lines") and i + 1 < len(argv):
             return _count(argv[i + 1])
@@ -1458,13 +1591,102 @@ def _read_budget_reason(total: int) -> str:
     )
 
 
+def _deny_commands_match(fragment: str, policy: dict[str, Any]) -> list[str] | None:
+    """The repo-committed ``[guard] deny_commands`` prefix match for a command
+    fragment, or None. Returns the parsed argv so the caller can build the
+    canonical denial.
+
+    Split out so an allow-shortcut can consult the SAFETY class without
+    inheriting volume-class steering. The two are different questions and a
+    redirect only answers one of them: `pytest > out.log 2>&1` genuinely
+    solves the volume problem, but no amount of redirection makes a command
+    the repo deliberately forbade acceptable to run.
+    """
+    try:
+        argv = _unwrap(shlex.split(fragment.strip()))
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    canonical = " ".join(argv)
+    for prefix in policy.get("deny_commands", []):
+        if _restricts_match(canonical, prefix):
+            return argv
+    return None
+
+
+def _grants_match(canonical: str, prefix: str) -> bool:
+    """Prefix match for a rule that GRANTS authority, at a token boundary.
+
+    config.py documents these as "prefix matches against the canonical
+    argv", and the match was a raw ``str.startswith`` -- so a prefix ending
+    mid-token matched a different token that merely shares its opening
+    characters. An ``allow_commands`` entry of ``git push origin main`` also
+    matched ``git push origin main-hotfix --force``: a different branch,
+    admitted by a rule written to scope pushes to one. Same class as a path
+    glob whose ``*`` crosses a ``/``, an intent keyword firing inside
+    "sprint", and an MCP provider named ``git`` absorbing ``github``'s
+    invocations -- the fourth on this branch.
+
+    A prefix still matches the same command with extra ARGUMENTS -- that is
+    what makes it a prefix -- but only when the next character ends the token
+    it stopped on.
+    """
+    prefix = prefix.strip()
+    if not prefix:
+        return False
+    return canonical == prefix or canonical.startswith(prefix + " ")
+
+
+def _restricts_match(canonical: str, prefix: str) -> bool:
+    """Prefix match for a rule that RESTRICTS -- deliberately unbounded.
+
+    The asymmetry is the same one already documented for ``has_meta`` a few
+    lines below: denying more is always safe, allowing more is not. A
+    ``deny_commands`` entry of ``rm -rf /tmp/scratch`` should keep covering
+    ``rm -rf /tmp/scratch/inner``, and tightening it to a token boundary
+    would have quietly NARROWED a safety rule while fixing the grant side --
+    a fix in one direction that opens a hole in the other.
+    """
+    prefix = prefix.strip()
+    return bool(prefix) and canonical.startswith(prefix)
+
+
+def _pressured_window(max_lines: int, total: int, budget: int) -> int:
+    """Line window for a bounded read, tightened by how far the session has
+    already overrun its read budget.
+
+    Two properties this must have, both learned from a measured failure
+    (evals/devex/, harnessed arm: 167 native reads landed 796 KiB against a
+    256 KiB budget):
+
+    * **It escalates.** The old throttle was a single binary step — one fixed
+      window the moment the budget was crossed, identical at 1.01x and at
+      6.3x overrun. A session already 6x over kept paying the same toll, so
+      133 post-budget reads still averaged ~4 KiB apiece.
+    * **It applies to large files too.** The large-file branch returned before
+      the ledger was ever consulted, so files over ``max_inline_bytes`` — the
+      reads that dominate the flood — were the *only* ones exempt from session
+      pressure. Measured max read stayed ~15 KiB before and after the budget
+      was crossed, because those reads never saw it.
+
+    At or under budget the window is unchanged. At exactly the budget it
+    reproduces the previous over-budget behaviour (``max_lines // 4``), then
+    tightens hyperbolically with the overrun ratio, floored so a bounded read
+    still carries enough lines to be worth reading at all."""
+    if budget <= 0 or total <= budget:
+        return max_lines
+    over = total / budget
+    return max(_OVER_BUDGET_MIN_LINES, int(max_lines / (4 * over)))
+
+
 def classify_read(
     path_str: str,
     workspace_root: str | None,
     policy: dict[str, Any],
     session_id: str = "unknown",
 ) -> dict[str, str]:
-    if _SECRET_PATH_RE.search(path_str.replace("\\", "/")):
+    if _is_secret_path(path_str, workspace_root):
         return _force_ask(
             "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires an explicit "
             "user-visible permission step; it is excluded from automatic capture."
@@ -1483,6 +1705,16 @@ def classify_read(
     in_ledger = _LEDGER_DIR_NAME in path_str.replace("\\", "/").split("/")
     limit = int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT))
     note = str(policy.get("_window_note", ""))  # window pressure, "" when idle
+    max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+    budget = int(
+        policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT)
+    )
+    # Peek the ledger before branching. The large-file branch below returns
+    # without ever consulting it, so without this the biggest reads in a
+    # session are the only ones that never feel session pressure. Charging
+    # zero is a read of the running total; it stays fail-open (0 on any error,
+    # which _pressured_window reads as "no pressure").
+    seen = 0 if in_ledger else _ledger_charge(workspace_root, session_id, 0)
     if size > limit:
         price = _price_note(size, workspace_root)
         decision: dict[str, Any] = _deny(
@@ -1492,7 +1724,7 @@ def classify_read(
             "or:  ctx search repo:<relative-path> '<pattern>' --context 3" + note
         )
         if _steering_allows(policy):
-            max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+            max_lines = _pressured_window(max_lines, seen, budget)
             decision["_rewrite"] = {
                 "fields": {"limit": max_lines},
                 "reason": (
@@ -1510,16 +1742,12 @@ def classify_read(
     if in_ledger:
         return dict(DECISION_ALLOW)
     total = _ledger_charge(workspace_root, session_id, size)
-    budget = int(
-        policy.get("session_read_budget_bytes", _SESSION_READ_BUDGET_DEFAULT)
-    )
     if total > budget:
         reason = _read_budget_reason(total) + note
         if _steering_allows(policy):
-            max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
             pressured: dict[str, Any] = dict(DECISION_ALLOW)
             pressured["_rewrite"] = {
-                "fields": {"limit": max_lines // 4},
+                "fields": {"limit": _pressured_window(max_lines, total, budget)},
                 "reason": reason,
             }
             return pressured
@@ -1660,6 +1888,22 @@ def classify(
                     failure_available=lambda: _failure_available(workspace_root),
                     symbols_resolvable=lambda: _symbols_resolvable(workspace_root))
                 if sub is not None:
+                    # Deliberately overrides a DENY as well as an allow, and
+                    # that is the product: the flagship case (`grep -rn X .`)
+                    # is denied by the canonical layer as unbounded, and the
+                    # whole point of the replacement surface is to hand back a
+                    # bounded op the agent can actually run instead of a
+                    # refusal. Substituting only on allow was tried and is
+                    # wrong — it would silently disable the surface on exactly
+                    # the commands it exists for.
+                    #
+                    # What makes the override safe is not the decision it
+                    # replaces but the command it installs: every Substitution
+                    # emits a bounded `ctx` op, so a denied flood is replaced
+                    # by something that cannot flood. That invariant is the
+                    # load-bearing one, and it is pinned by test
+                    # `test_every_substitution_installs_a_bounded_ctx_op`
+                    # rather than left to each recogniser's good manners.
                     decision = dict(DECISION_ALLOW)
                     decision["_rewrite"] = {"command": sub.command, "reason": sub.reason}
                     _note_collapse(workspace_root, sub.shape, sub.rung)

@@ -27,6 +27,8 @@ recency is volatile, machine-local, and unreplayable (SUBSTRATE §2.4).
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import os
 import shutil
 import subprocess
@@ -149,9 +151,14 @@ def select(
     selected = len(rels)
     coverage["selected"] = selected
     omitted = 0
-    if max_files is not None and max_files >= 0 and selected > max_files:
-        omitted = selected - max_files
-        rels = rels[:max_files]
+    if max_files is not None:
+        # bounds.count, not `max_files >= 0`: a negative cap failed that test
+        # and skipped truncation ENTIRELY, so `corpus --max -1` returned the
+        # whole set. A bound must narrow or empty a row set, never widen it.
+        cap = bounds.count(max_files)
+        if selected > cap:
+            omitted = selected - cap
+            rels = rels[:cap]
 
     rows: list[dict[str, Any]] = []
     for r in rels:

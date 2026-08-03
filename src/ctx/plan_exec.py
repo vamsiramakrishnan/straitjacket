@@ -33,6 +33,7 @@ import hashlib
 import time
 from typing import Any
 
+from ctx import bounds
 from ctx.gitstatus import changed_paths
 from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
@@ -208,7 +209,11 @@ def _foreach_expand(step: Any, inp: dict, max_fanout: int) -> tuple[list[Any], i
         v = row.get(step.foreach)
         if v is not None and v not in values:
             values.append(v)
-    cap = min(int(step.cap or max_fanout), max_fanout)
+    # bounds, not `or`: a plan declaring `cap: 0` for a foreach step means
+    # "fan out over nothing", and `or` read that as "unset" and substituted
+    # max_fanout -- the widest possible fan-out from the narrowest possible
+    # request. A negative cap reached values[:cap] as a suffix slice too.
+    cap = min(bounds.count(bounds.explicit(step.cap, max_fanout)), max_fanout)
     return values[:cap], max(0, len(values) - cap)
 
 
@@ -796,19 +801,42 @@ def _render_investigation(
     # typed facts; a violated required class is a bug, surfaced loudly.
     try:
         contract = contract_for_family("investigate")
+        # Declare what this run actually delivered, not what the shape of an
+        # investigation usually delivers. `counterevidence` was in this set
+        # unconditionally, and the validator's catch-all then took the
+        # declaration as proof -- so a contract that marks the class REQUIRED
+        # with loss_severities = "major", precisely because "its absence is
+        # exactly the anchoring failure the plan exists to prevent", was
+        # satisfied by the word appearing in a literal.
         included = {
             "aggregate_counts",
             "complete_identity_census",
             "location",
             "one_line_summary",
-            "counterevidence",
             "coverage_attestation",
         }
-        receipt = validate_selection((i.id for i in graph.items), included, contract, graph)
+        witnessed: set[str] = set()
+        if counter_nodes:
+            # This run actually produced counterevidence, and this is the
+            # only layer that can know it -- so this is the only layer that
+            # may attest it.
+            included.add("counterevidence")
+            witnessed.add("counterevidence")
+        receipt = validate_selection(
+            (i.id for i in graph.items), included, contract, graph, witnessed
+        )
         if receipt.required_fraction < 1.0:
+            note = ""
+            if receipt.unverifiable_fields:
+                # Name them: "PARTIAL 5/6" with no reason is an alarm nobody
+                # can act on, and an unverifiable requirement is a fact about
+                # the CONTRACT, not about this run.
+                note = (
+                    " · unverifiable: " + ", ".join(receipt.unverifiable_fields)
+                )
             lines.append(
                 f"contract: PARTIAL — required classes {receipt.required_fields_present}"
-                f"/{receipt.required_fields_total} (declared, never silent)"
+                f"/{receipt.required_fields_total} (declared, never silent){note}"
             )
     except Exception:
         pass

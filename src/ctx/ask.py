@@ -24,6 +24,8 @@ What each intent guarantees (the contract, enforced by the plan shape):
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import difflib
 import json
 import re
@@ -83,7 +85,7 @@ def _impact(*, symbol: str, question: str, run=None, depth=None, **_) -> dict[st
         "steps": [
             {"id": "callers", "op": "code.callers", "args": {"symbol": symbol}},
             {"id": "blast", "op": "code.impact",
-             "args": {"symbol": symbol, "depth": int(depth or 3)}},
+             "args": {"symbol": symbol, "depth": int(bounds.explicit(depth, 3))}},
             {"id": "tests", "op": "code.related_tests", "input": "blast"},
             {"id": "changes", "op": "repo.changed"},
         ],
@@ -132,7 +134,7 @@ def _trace(*, symbol: str, question: str, run=None, depth=None, **_) -> dict[str
             {"id": "into", "op": "code.callers", "args": {"symbol": symbol}},
             {"id": "outof", "op": "code.callees", "args": {"symbol": symbol}},
             {"id": "reach", "op": "code.impact",
-             "args": {"symbol": symbol, "depth": int(depth or 3)}},
+             "args": {"symbol": symbol, "depth": int(bounds.explicit(depth, 3))}},
         ],
     }
 

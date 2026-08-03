@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,339 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,605 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -267,6 +267,37 @@ The most common question — which verb do I use — as a flowchart:
 Use the lightest verb the work allows. Anything that outlives the wait
 backgrounds into a `job:` handle instead of idling the session.
 
+### …and the other eight
+
+The capture ladder is one of **nine**. Same shape everywhere in the system:
+start on the cheapest rung, escalate only when the work demands it. What
+differs is *who* climbs — the model, the hook, or a static setting — and,
+more importantly, whether anyone measured the climb:
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ladders-efficiency.svg">
+  <img src="assets/readme/diagrams/ladders-efficiency-light.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it — the model, the hook, or a static setting — and whether its traversal is measured — derived from the registry in src/ctx/ladders.py, not hand-maintained.">
+</picture>
+
+</div>
+
+The right-hand column is the point, and it is **derived rather than
+asserted**: a ladder counts as measured when it declares a signal naming a
+ledger that actually carries rung values, and one that cannot be scored has to
+say why. Six of the nine qualify today, scored against a corpus of 29 recorded sessions.
+
+Run it against your own workspace:
+
+```bash
+ctx ladders          # what this repo recorded climbing
+```
+
+The rungs are configurable too, because they are a declaration rather than a
+literal — `[ladders.capture] rungs = [...]` in `ctx.toml` narrows a ladder you
+never want climbed. The full audit is [`docs/LADDERS.md`](docs/LADDERS.md).
+
 The measured differences
 ([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)):
 a bash pipeline under `ctx run --shell` already collapses stream-shaped
@@ -433,7 +464,7 @@ each tile below is the idea the harness kept — losslessly.
 | Post-hoc compaction / summarization | reclaim a bloated window | rewrites history; evidence irrecoverable, prefix cache invalidated | checkpoint-then-rescue: secure handles first, then clearing is lossless |
 | RAG / vector memory | recall without resending | probabilistic, no provenance | deterministic addresses: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever |
 | **Headroom** (rewriting wire proxy) | rescue an already-bloated transcript | silent evidence drops (347,595→68 tok, no trace); cache hit 80.6–84.2% vs our 96.5–98.1%; 3–6× cache-write churn | v0.10 epoch-latched lossless rescue: ~18× less cache churn, every elided byte file-backed and addressed |
-| **rtk** (bash-hook filter binary) | filter floods at the source | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` |
+| **rtk** (bash-hook filter binary) | filter floods at the source, across 100+ commands | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` — and the *breadth* idea vendored: the replacement surface now covers 8 command shapes (grep-family, `cat`, `pytest`, `head`, `sed -n A,Bp`, `wc -l`, `find -name`, `ls -R`/`tree`), each substituted only where a bounded `ctx` op means the **same** thing |
 | **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
 | **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
 | **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
@@ -541,7 +572,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,339 acceptance-oriented determinism & security test functions
+└── tests/             # 1,605 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -626,8 +657,27 @@ broker owns the store.)*
 
 ### MCP surface
 
-One stable tool (**ctx**), operations selected by parameter — no dynamic tool
-injection, so the prompt-cache prefix never churns:
+**One stable tool, and that is the design.** The obvious alternative is a wide
+server — TokenSave, the most comprehensive in this space, ships 40+ MCP tools.
+Every tool definition is prompt prefix: it is re-sent on every request, and a
+server that adds tools over time invalidates the cached prefix on each release.
+One schema with an `op` discriminator never churns, which is upstream of the
+measured 96.5–98.1% cache-hit band.
+
+What that buys, concretely:
+
+| Property | How it's held |
+|---|---|
+| **Prefix stability** | one schema, ops selected by parameter — no dynamic tool injection, ever |
+| **Bounded by construction** | `maxTokens` is declared in the published schema *and* clamped at runtime to 64–4000; an advertised bound nothing enforces is worse than no bound |
+| **No execution surface** | `investigate` accepts observe-class evidence plans only; execute-class ops are typed rejections at `tier='mcp'`. Command execution stays on `ctx run` through the host's native command tool, so your permission flow stays visible (SPEC §10.4) |
+| **Warm across calls** | resolved workspaces are cached with TTL eviction, so a tool call doesn't re-spawn git subprocesses and reopen SQLite |
+| **Fail-closed** | a malformed ref or an unknown op is a typed error, not a silent empty result |
+
+The cost of this choice, stated because it is real: `op` is less discoverable
+than forty named tools — to a model reading a tool list and to a human reading
+one. We think prefix stability is worth more than nominal discoverability, and
+the cache numbers are the argument.
 
 ```json
 {
@@ -643,8 +693,36 @@ injection, so the prompt-cache prefix never churns:
 }
 ```
 
-Command execution stays on `ctx run` through the host's native command tool
-so your permission flow stays visible (SPEC §10.4).
+### The skill
+
+The skill is the *advisory* tier — protocol, not enforcement — and it is
+written to be small at rest and deep on demand.
+
+- **Progressive disclosure.** [`SKILL.md`](plugins/antigravity/skills/ctx-harness/SKILL.md)
+  is the always-loaded protocol; six reference files
+  ([verbs](plugins/antigravity/skills/ctx-harness/references/verbs.md),
+  [evidence plans](plugins/antigravity/skills/ctx-harness/references/evidence-plans.md),
+  [routing policy](plugins/antigravity/skills/ctx-harness/references/routing-policy.md),
+  [model catalog](plugins/antigravity/skills/ctx-harness/references/model-catalog.md),
+  [addressing](plugins/antigravity/skills/ctx-harness/references/repository-addressing.md),
+  [collaboration](plugins/antigravity/skills/ctx-harness/references/harness-collaboration.md))
+  load only when the task reaches for them. The resident cost is the protocol;
+  the depth is addressable — the same discipline the digest layer applies to
+  bytes, applied to instructions.
+- **The description is a trigger condition, not a summary.** It names the
+  situations that should invoke it (output that may exceed ~2,000 tokens;
+  repository questions) rather than describing what the tool is.
+- **Numbered, checkable rules.** Each is a behavior an observer can score,
+  which is what let the solution ladder (rule 13) be A/B-adopted on evidence
+  rather than asserted — −28% turns, −33% wall-clock, −17% cost.
+- **It carries the ladders.** Rule 13 is the solution ladder; rule 15 is the
+  capture ladder; rules 11–12 are cite-don't-quote. See
+  [`docs/LADDERS.md`](docs/LADDERS.md) for the conditionality audit of all of
+  them, including which are measured and which are not.
+
+Skill rules are advisory by construction and therefore bypassable — that is
+the honest boundary of this tier, and it is why the **Plugin** mode exists.
+The hook enforces at the tool boundary what the skill can only recommend.
 
 ### Configuration
 
@@ -695,7 +773,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 1,339 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,605 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

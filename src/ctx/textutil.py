@@ -3,6 +3,8 @@ secret redaction, and bounded emission (SPEC §8, §12.4, §16)."""
 
 from __future__ import annotations
 
+from ctx import bounds as _bounds
+
 import hashlib
 import re
 
@@ -194,6 +196,55 @@ def json_pointer(doc, pointer: str):
     return node
 
 
+#: How bytes that are not valid UTF-8 survive a str-typed pipeline.
+#:
+#: `ctx get --bytes A:B` is documented as the exact-bytes escape hatch -- the
+#: thing `ctx get` itself tells you to use for binary content -- and it
+#: decoded with errors="replace", turning every invalid byte into a 3-byte
+#: U+FFFD. The result was neither byte-exact nor even the same LENGTH as what
+#: was captured: silent, irreversible loss through the tool's own exactness
+#: interface, while the blob on disk stayed perfect.
+#:
+#: surrogateescape is the stdlib's answer: undecodable bytes become lone
+#: surrogates that encode back to exactly the original bytes. The pipeline
+#: stays str-typed and every string operation on the way out still works;
+#: only the two ends -- the decode and the final write -- have to agree, so
+#: they both go through here.
+BYTE_EXACT_ERRORS = "surrogateescape"
+
+
+def decode_exact(data: bytes) -> str:
+    """Decode bytes losslessly into a str that re-encodes to the same bytes."""
+    return data.decode("utf-8", BYTE_EXACT_ERRORS)
+
+
+def encode_exact(text: str) -> bytes:
+    """The inverse of decode_exact. Total: a str carrying no surrogates
+    encodes exactly as plain UTF-8 would."""
+    return text.encode("utf-8", BYTE_EXACT_ERRORS)
+
+
+def write_exact(text: str, stream=None, *, newline: bool = True) -> None:
+    """Write a possibly-byte-exact result to stdout without corrupting it.
+
+    print() encodes through the stream's own error handler, which is strict
+    by default -- a surrogate would raise there and turn a correct answer
+    into a crash. Writing the bytes ourselves is the only way to keep the
+    exactness the decode side just preserved.
+    """
+    import sys
+
+    stream = stream if stream is not None else sys.stdout
+    eol = "\n" if newline else ""
+    buf = getattr(stream, "buffer", None)
+    if buf is None:  # captured/text-only stream (pytest capsys): best effort
+        stream.write(text + eol)
+        return
+    stream.flush()
+    buf.write(encode_exact(text) + eol.encode())
+    buf.flush()
+
+
 def estimate_tokens(n_bytes: int) -> int:
     """Cheap deterministic token estimate: ~4 bytes per token."""
     return max(1, n_bytes // 4) if n_bytes else 0
@@ -254,6 +305,22 @@ def strip_control(text: str) -> str:
     return _CTRL_RE.sub("", text)
 
 
+def _redaction_of(policy) -> tuple[bool, tuple[str, ...]]:
+    """(enabled, patterns) from a ``Redaction`` config section.
+
+    ``enabled`` is documented in CONFIGURATION.md as the switch that turns
+    secret redaction off. It was parsed into the Config object and then read
+    by NOBODY: every caller reached past it for ``.patterns``, so
+    ``enabled = false`` was a setting the docs promised and the code ignored.
+
+    Taking the SECTION rather than its patterns is what makes that
+    impossible to repeat -- there is no longer a call shape that can drop the
+    flag on the way in. tests/test_redaction_switch.py pins that no call site
+    reaches for ``.redaction.patterns`` again.
+    """
+    return bool(getattr(policy, "enabled", True)), tuple(getattr(policy, "patterns", ()))
+
+
 def redact(text: str, pattern_names: tuple[str, ...]) -> tuple[str, list[str]]:
     """Replace secrets with a deterministic marker carrying a short hash of
     the secret (declares redaction without revealing it). Returns
@@ -274,9 +341,16 @@ def redact(text: str, pattern_names: tuple[str, ...]) -> tuple[str, list[str]]:
     return text, sorted(fired)
 
 
-def sanitize_for_model(text: str, pattern_names: tuple[str, ...]) -> tuple[str, list[str]]:
-    """Full model-visible pipeline: control stripping then redaction."""
-    return redact(strip_control(text), pattern_names)
+def sanitize_for_model(text: str, policy) -> tuple[str, list[str]]:
+    """Full model-visible pipeline: control stripping then redaction.
+
+    ``policy`` is the ``[redaction]`` config SECTION (``ws.config.redaction``),
+    not its patterns tuple -- see _redaction_of for why that distinction is
+    the fix rather than a style choice.
+    """
+    enabled, patterns = _redaction_of(policy)
+    text = strip_control(text)
+    return (text, []) if not enabled else redact(text, patterns)
 
 
 def fmt_int(n: int) -> str:
@@ -288,8 +362,15 @@ def fmt_bytes(n: int) -> str:
     """Deterministic binary-size formatting."""
     value = float(n)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if value < 1024 or unit == "TiB":
-            return f"{n} B" if unit == "B" else f"{value:.1f} {unit}"
+        if unit == "B":
+            if value < 1024:
+                return f"{n} B"
+        # Threshold-check the ROUNDED value, not the raw one: 1023.97 KiB is
+        # under the limit and renders as "1024.0 KiB" once rounded to one
+        # decimal -- a unit that displays its own overflow. Deciding on the
+        # number the reader will actually see is the only way the two agree.
+        elif round(value, 1) < 1024 or unit == "TiB":
+            return f"{value:.1f} {unit}"
         value /= 1024
     raise AssertionError("unreachable")
 
@@ -325,18 +406,48 @@ def bounded(
     needs a retrieval address is the moment the clamp deletes it. Callers
     that can name a handle pass it here; nothing is added to an untruncated
     digest, so an emission that fits stays byte-identical."""
-    budget_bytes = budget_tokens * 4
-    raw = text.encode("utf-8")
+    # ctx.bounds, not `budget_tokens * 4`: a negative budget made this
+    # `raw[:-4]` -- almost the whole input -- from the one function documented
+    # as the hard backstop. The failure direction must be toward less output.
+    budget_bytes = _bounds.budget_bytes(budget_tokens)
+    # encode_exact, not a bare encode: this is the ONE backstop every emission
+    # passes through, so a byte-exact --bytes result reaches it carrying lone
+    # surrogates, and strict UTF-8 raised here -- the exactness fix turned a
+    # correct answer into a crash at the measuring step. The count is
+    # identical for text that has no surrogates.
+    raw = encode_exact(text)
     if len(raw) <= budget_bytes:
         if continuation:
             return text + f"\nnext: {continuation}"
         return text
-    cut = raw[:budget_bytes].decode("utf-8", "ignore")
+    # "ignore" would drop a partial character at the cut; decode_exact keeps
+    # whatever is there, and the cut is declared either way.
+    cut = decode_exact(raw[:budget_bytes])
     nl = cut.rfind("\n")
-    if nl > 0:
+    # Trim back to a line boundary only when that costs a LINE.
+    #
+    # Two bug bashes shaped this. The first found `if nl > 0`, where a
+    # boundary at index 0 read as "no newline found" and the trim was skipped
+    # exactly when the only newline in budget was the first character. The
+    # second found the real damage: on newline-sparse content -- one long
+    # line, or the exact-bytes body `--bytes` exists to serve -- the last
+    # newline inside the budget is the HEADER's own, so trimming to it
+    # deleted every byte the caller asked for while still exiting 0 under a
+    # header claiming the full range.
+    #
+    # The half-of-budget test is the operative rule and it subsumes the
+    # index-0 case (0 is never at least half of a non-empty cut). Trimming to
+    # a line boundary is a readability nicety; it may never be the reason a
+    # bounded preview previews nothing.
+    if nl >= 0 and nl * 2 >= len(cut):
         cut = cut[:nl]
     total_est = estimate_tokens(len(raw))
-    note = f"\n[ctx:truncated shown≈{budget_tokens} of ≈{total_est} est tokens]"
+    # What was actually kept, not what was asked for. The note reported the
+    # nominal budget, so after the line-boundary trim discarded content it
+    # claimed to have shown up to twice what it did -- an accounting line
+    # that is wrong about its own accounting.
+    shown_est = estimate_tokens(len(encode_exact(cut)))
+    note = f"\n[ctx:truncated shown≈{shown_est} of ≈{total_est} est tokens]"
     tail = continuation or truncation_continuation
     if tail:
         note += f"\nnext: {tail}"

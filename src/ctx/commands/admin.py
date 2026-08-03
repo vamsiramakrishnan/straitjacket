@@ -32,8 +32,15 @@ def cmd_gc(ws, ns) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    days = ns.retention_days or ws.config.store.retention_days
-    result = store.gc(days)
+    from ctx import bounds
+
+    # bounds.explicit, not `or`: --retention-days 0 means collect everything
+    # already expired. `or` made the one spelling that means 'now' the one
+    # spelling that silently did nothing.
+    days = int(bounds.explicit(ns.retention_days, ws.config.store.retention_days))
+    # An explicitly supplied horizon is the user overriding the configured
+    # policy, so it outranks the retention leases that policy minted.
+    result = store.gc(days, override_retention=ns.retention_days is not None)
     print(
         f"gc: removed {result['blobs_removed']} blobs, "
         f"{result['manifests_removed']} manifests (retention {days}d)"
@@ -60,11 +67,21 @@ def cmd_pin(ws, ns) -> int:
 
 def cmd_checkpoint(ws, ns) -> int:
     from ctx.checkpoint import create_checkpoint, show_checkpoint
+    from ctx.commands._errors import bad_input_errors, fail
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     if ns.show:
-        print(show_checkpoint(store, ws, ns.show))
+        # `--show` takes the same handles as `get`, so it owes the same
+        # attributed message and the same exit code. Without this an
+        # unresolvable checkpoint fell through to cli.py's blanket handler
+        # and exited 1 -- indistinguishable, to a calling script, from ctx
+        # itself failing -- while the identical mistake through `ctx get`
+        # exited 2 as documented.
+        try:
+            print(show_checkpoint(store, ws, ns.show))
+        except bad_input_errors() as e:
+            return fail("checkpoint", e)
         return 0
     if not ns.goal:
         print("ctx checkpoint: --goal is required (or --show <checkpoint:id>)", file=sys.stderr)
@@ -211,3 +228,75 @@ def cmd_policy(ws, ns) -> int:
     print(render_policy(policy))
     print(f"written: {write_policy(ws, policy)}")
     return 0
+
+
+def cmd_ladders(ws, ns) -> int:
+    """`ctx ladders` — the conditionality audit, measured rather than asserted.
+
+    The "measured today?" column in docs/LADDERS.md was hand-maintained, which
+    made it the part of the audit most likely to drift into advertising. This
+    derives it: a ladder is measurable when it declares a signal naming a
+    ledger that exists, and the report shows the real distribution or says
+    exactly why there is none.
+    """
+    import json as _json
+
+    from ctx import ladders as _ladders
+
+    raw = _raw_ladders_config(ws)
+    corpus = getattr(ns, "ladders_corpus", None)
+    if corpus:
+        roots = _ladders.discover_workspaces(corpus)
+        if getattr(ns, "ladders_json", False):
+            print(_json.dumps({
+                "schema": "ctx.ladders/v1",
+                "corpus": str(corpus),
+                "workspaces": len(roots),
+                "ladders": [
+                    {"key": lad.key, "name": lad.name,
+                     **_ladders.measure_corpus(roots, lad)}
+                    for lad in _ladders.configured(raw)
+                ],
+            }, indent=2, sort_keys=True))
+            return 0
+        print(_ladders.report_corpus(corpus, raw))
+        return 0
+    if getattr(ns, "ladders_json", False):
+        out = {
+            "schema": "ctx.ladders/v1",
+            "ladders": [
+                {
+                    "key": lad.key,
+                    "name": lad.name,
+                    "axis": lad.axis,
+                    "rungs": list(lad.rungs),
+                    "traversed_by": lad.traversed_by,
+                    "latching": lad.latching,
+                    **_ladders.measure(ws.root, lad),
+                }
+                for lad in _ladders.configured(raw)
+            ],
+            "config_problems": _ladders.validate(raw),
+        }
+        print(_json.dumps(out, indent=2, sort_keys=True))
+        return 0
+    print(_ladders.report(ws.root, raw))
+    return 0
+
+
+def _raw_ladders_config(ws) -> dict:
+    """The `[ladders]` table straight from ctx.toml.
+
+    Read raw rather than through Config: rung lists are a per-ladder open
+    vocabulary, and threading them through the typed Config dataclass would
+    mean a field per ladder — the copy-per-consumer this registry exists to
+    remove.
+    """
+    import tomllib
+
+    path = ws.root / "ctx.toml"
+    try:
+        with open(path, "rb") as fh:
+            return (tomllib.load(fh) or {}).get("ladders") or {}
+    except (OSError, ValueError):
+        return {}

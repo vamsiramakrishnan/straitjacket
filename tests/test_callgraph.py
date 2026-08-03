@@ -208,8 +208,12 @@ def test_local_tier_binds_the_same_file_definition(ws_store):
 
     ws, store = ws_store
     g = _load_graph(store, ws)
-    callers = g.in_edges.get("detect", [])
-    assert any(c[0] == "detect_all" and c[2] == "local" for c in callers)
+    # Node ids are file-scoped ("rel::qual") since two files may define the
+    # same name; the tier assertion is about the qual, so resolve through it.
+    callers = [
+        c for nid, cs in g.in_edges.items() if g.nodes[nid].qual == "detect" for c in cs
+    ]
+    assert any(g.nodes[c[0]].qual == "detect_all" and c[2] == "local" for c in callers)
 
 
 def test_import_tier_binds_across_a_direct_import(ws_store):
@@ -223,10 +227,10 @@ def test_import_tier_binds_across_a_direct_import(ws_store):
         (target, c)
         for target, cs in g.in_edges.items()
         for c in cs
-        if c[0] == "dispatch"
+        if g.nodes[c[0]].qual == "dispatch"
     ]
     assert edges, "dispatch must have a resolved callee"
-    targets = {t for t, _ in edges}
+    targets = {g.nodes[t].qual for t, _ in edges}
     assert targets <= {"Base.detect", "LogProfile.detect", "JsonProfile.detect"}
     assert all(c[2] == "import" for _, c in edges)
 
@@ -239,7 +243,11 @@ def test_unscoped_edges_are_omitted_by_default_and_declared(ws_store):
 
     ws, store = ws_store
     g = _load_graph(store, ws)
-    assert ("use", 2, _TIER_REPO) in g.in_edges["leaf"], "loose call must be repo-tier"
+    leaf = next(n for n, d in g.nodes.items() if d.qual == "leaf")
+    assert any(
+        g.nodes[c[0]].qual == "use" and c[1] == 2 and c[2] == _TIER_REPO
+        for c in g.in_edges[leaf]
+    ), "loose call must be repo-tier"
 
     default = cmd_callers(store, ws, "leaf")
     assert "use" not in default.split("omitted:")[0], "unscoped row leaked into the default"
@@ -450,7 +458,9 @@ def test_editing_one_file_reuses_every_other_units_cache(ws_store):
     assert changed == ["pkg/other.py"], f"only the edited file may re-key, got {changed}"
 
     g = _load_graph(store, ws)
-    assert "added" in g.nodes, "the edited file must be re-parsed"
+    assert any(d.qual == "added" for d in g.nodes.values()), (
+        "the edited file must be re-parsed"
+    )
 
 
 # ------------------------------------------------------------------ wiring
@@ -468,3 +478,174 @@ def test_cli_wiring_impls(ws_store, capsys):
     ws, _ = ws_store
     assert main(["--workspace", str(ws.root), "impls", "Base"]) == 0
     assert "LogProfile" in capsys.readouterr().out
+
+
+# ================================================ file-scoped node identity
+def _tiny_ws(tmp_path, files: dict):
+    """A workspace with exactly the files given, plus a ctx.toml."""
+    from conftest import make_store, make_ws
+
+    (tmp_path / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    for rel, body in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    ws = make_ws(tmp_path)
+    return ws, make_store(ws)
+
+
+def test_same_name_in_two_files_is_two_nodes(state_home, tmp_path):
+    """Nodes were keyed by bare qual, so `nodes.setdefault` kept the first
+    definition of a colliding name and DROPPED the rest. The second file's
+    function was then absent from the graph entirely, and an unambiguous
+    same-file call to it resolved to nothing."""
+    from ctx.callgraph import _load_graph, cmd_callers
+
+    ws, store = _tiny_ws(tmp_path, {
+        "one.py": "def shared():\n    return 1\n",
+        "two.py": "def shared():\n    return 2\n\n\ndef caller():\n    return shared()\n",
+    })
+    g = _load_graph(store, ws)
+    shared = [n for n, d in g.nodes.items() if d.qual == "shared"]
+    assert len(shared) == 2, f"both definitions must exist as nodes: {shared}"
+    assert {g.nodes[n].rel for n in shared} == {"one.py", "two.py"}
+
+    out = cmd_callers(store, ws, "shared")
+    assert "caller" in out, "the same-file caller must be reported, not hidden"
+    assert "2 definitions match 'shared' (ambiguous)" in out, (
+        "an ambiguous name is answered out loud, never merged silently"
+    )
+
+
+def test_unrelated_hierarchies_sharing_a_name_are_not_merged(state_home, tmp_path):
+    """The false-positive half of the same root: subtype edges recorded
+    against a bare-name `Base` node were reported for whichever `Base` the
+    query matched, asserting that SubTwo extends one.py's class."""
+    from ctx.callgraph import _load_graph, cmd_impls
+
+    ws, store = _tiny_ws(tmp_path, {
+        "one.py": "class Base:\n    pass\n\n\nclass SubOne(Base):\n    pass\n",
+        "two.py": "class Base:\n    pass\n\n\nclass SubTwo(Base):\n    pass\n",
+    })
+    g = _load_graph(store, ws)
+    bases = sorted(n for n, d in g.nodes.items() if d.qual == "Base")
+    assert len(bases) == 2
+    subs = {b: [g.nodes[s].qual for s in g.subclasses.get(b, [])] for b in bases}
+    assert subs[bases[0]] == ["SubOne"], subs
+    assert subs[bases[1]] == ["SubTwo"], subs
+
+    out = cmd_impls(store, ws, "Base")
+    assert "2 definitions match 'Base' (ambiguous)" in out
+
+
+def test_node_ids_never_leak_into_rendered_output(state_home, tmp_path):
+    """A node id is internal. Every renderer prints the qual and the file
+    separately -- the cache round-trip once rebuilt _Def from the KEY and
+    started printing `pkg/core.py::Widget.render` as a symbol name."""
+    from ctx.callgraph import cmd_callers, cmd_impact, cmd_impls
+
+    ws, store = _tiny_ws(tmp_path, {
+        "one.py": "class Base:\n    pass\n\n\ndef shared():\n    return 1\n",
+        "two.py": "from one import shared\n\n\ndef caller():\n    return shared()\n",
+    })
+    for out in (cmd_callers(store, ws, "shared"),
+                cmd_impact(store, ws, "shared"),
+                cmd_impls(store, ws, "Base")):
+        assert "py::" not in out, f"node id leaked into output:\n{out}"
+
+
+def test_graph_cache_round_trips_the_qual(state_home, tmp_path):
+    """The cached path must answer identically to the cold one. It did not:
+    _graph_from_json rebuilt _Def(key, ...) back when the key WAS the qual,
+    so file-scoped ids silently corrupted every cached qual."""
+    from ctx.callgraph import cmd_impact
+
+    ws, store = _tiny_ws(tmp_path, {
+        "one.py": "def leaf():\n    return 1\n\n\ndef mid():\n    return leaf()\n",
+    })
+    cold = cmd_impact(store, ws, "leaf")
+    warm = cmd_impact(store, ws, "leaf")
+    assert cold == warm, "cached and uncached answers must be byte-identical"
+
+
+# ------------------------------------------- nested defs own their own calls
+def test_nested_function_calls_belong_to_the_nested_function_only(
+    state_home, tmp_path
+):
+    """`_function` walked with ast.walk and `continue`d past nested defs.
+    ast.walk enqueues a node's children BEFORE yielding the node, so the
+    guard skipped only the FunctionDef itself -- which is never a Call, so it
+    was a no-op that read as if it worked. Every call inside a closure was
+    attributed to the enclosing function too."""
+    from ctx.callgraph import _load_graph
+
+    ws, store = _tiny_ws(tmp_path, {
+        "m.py": (
+            "def target():\n    return 1\n\n\n"
+            "def outer():\n"
+            "    def inner():\n"
+            "        return target()\n"
+            "    return inner\n"
+        ),
+    })
+    g = _load_graph(store, ws)
+    callers = {
+        g.nodes[c[0]].qual
+        for nid, cs in g.in_edges.items() if g.nodes[nid].qual == "target"
+        for c in cs
+    }
+    assert callers == {"outer.inner"}, f"only the nested def calls target: {callers}"
+
+
+def test_class_bodies_and_lambdas_stay_with_the_enclosing_scope(
+    state_home, tmp_path
+):
+    """The pruning boundary is 'things that get their own node' -- nested
+    defs. A lambda body gets no node, so pruning it would DROP its call
+    sites; a class body genuinely executes in the enclosing scope."""
+    from ctx.callgraph import _load_graph
+
+    ws, store = _tiny_ws(tmp_path, {
+        "m.py": (
+            "def target():\n    return 1\n\n\n"
+            "def outer():\n"
+            "    f = lambda: target()\n"
+            "    class C:\n"
+            "        v = target()\n"
+            "    return f, C\n"
+        ),
+    })
+    g = _load_graph(store, ws)
+    callers = {
+        g.nodes[c[0]].qual
+        for nid, cs in g.in_edges.items() if g.nodes[nid].qual == "target"
+        for c in cs
+    }
+    assert "outer" in callers, f"lambda/class-body calls must not vanish: {callers}"
+
+
+def test_decorator_on_a_nested_def_evaluates_in_the_enclosing_scope(
+    state_home, tmp_path
+):
+    """A decorator EXPRESSION runs where the def is written, not inside it.
+    (`@deco` bare is an ast.Name and no call site at all -- only `@deco(...)`
+    is one, which is why the factory form is what this asserts.)"""
+    from ctx.callgraph import _load_graph
+
+    ws, store = _tiny_ws(tmp_path, {
+        "m.py": (
+            "def deco(n):\n    return lambda fn: fn\n\n\n"
+            "def outer():\n"
+            "    @deco(1)\n"
+            "    def inner():\n"
+            "        return 2\n"
+            "    return inner\n"
+        ),
+    })
+    g = _load_graph(store, ws)
+    callers = {
+        g.nodes[c[0]].qual
+        for nid, cs in g.in_edges.items() if g.nodes[nid].qual == "deco"
+        for c in cs
+    }
+    assert callers == {"outer"}, callers

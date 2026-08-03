@@ -76,10 +76,52 @@ def _probe(flag: Probe) -> bool:
     return bool(flag() if callable(flag) else flag)
 
 
+# The same operators, seen as CHARACTERS. shlex.split only separates on
+# whitespace, so `wc -l < f` tokenizes the operator out but `src|wc` does not
+# -- the whole pipeline arrives as one token and the exact-token test misses
+# it. Substitution then replaced the compound command wholesale and silently
+# discarded the stage the caller wrote.
+_SHELL_OP_CHARS = frozenset("|&;<>")
+
+
 def _is_compound(toks: list[str], raw: str) -> bool:
     if any(t in _SHELL_OPS for t in toks):
         return True
+    # Look INSIDE the tokens too. A quoted argument may legitimately contain
+    # these characters (`grep 'a|b' f`), and shlex has already stripped the
+    # quotes by the time we see it -- so the character scan runs over the raw
+    # text outside quotes, which is the only place an operator can operate.
+    if _SHELL_OP_CHARS & set(_unquoted(raw)):
+        return True
     return "$(" in raw or "`" in raw  # command substitution
+
+
+def _unquoted(raw: str) -> str:
+    """``raw`` with quoted spans removed, so a shell operator INSIDE a quoted
+    argument is not mistaken for one the shell would act on."""
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    for ch in raw:
+        if escaped:
+            escaped = False
+            continue
+        # A backslash is LITERAL inside single quotes -- sh has no escapes
+        # there at all. Treating it as one desynchronized the quote tracking
+        # on `grep 'a\' | wc -l`, which then read as a bare invocation and
+        # got its pipeline stage silently substituted away.
+        if ch == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "'\"":
+            quote = ch
+            continue
+        out.append(ch)
+    return "".join(out)
 
 
 class Substitution:
@@ -178,17 +220,88 @@ def _grep_pattern_and_globs(toks: list[str]) -> tuple[str | None, list[str]]:
     return pattern, positionals
 
 
-def _glob_hint(paths: list[str]) -> str:
-    """A single ``--glob`` hint if the paths clearly scope a file type."""
-    for p in paths:
-        m = re.search(r"\*\.\w+$", p)
-        if m:
-            return m.group(0)
-    return ""
+#: Characters that mean something to a consumer of the assembled query --
+#: the SHELL (quotes) or `ctx q`'s own pipeline parser (`|`). A user's grep
+#: pattern is data; every one of these turns part of it into syntax.
+_QUERY_UNSAFE = ("'", '"', "|")
+
+
+def _shell_safe(*fields: str) -> bool:
+    """Can these untrusted fields ride inside a `ctx q` query safely?
+
+    Every one of them is interpolated into a string that is quoted once for
+    the shell and then parsed by `ctx q`'s own pipeline splitter, so a quote
+    or a `|` in any of them turns the user's DATA into syntax.
+
+    Validate the untrusted FIELDS, not the assembled string. Round 15 framed
+    the principle as "check the whole query so a new field inherits the
+    guard", which read well and was wrong: the assembled query legitimately
+    contains the `|` this function must reject, because that pipe is the
+    TEMPLATE's own stage separator. Checking the result made every collapse
+    decline. The template is ours and trusted; the pattern and the scope come
+    from the user's command line and are not.
+    """
+    return not any(ch in field for field in fields for ch in _QUERY_UNSAFE)
+
+
+def _scope_hint(paths: list[str]) -> str | None:
+    """A ``--glob`` that preserves the SCOPE the caller wrote.
+
+    This only ever looked for a trailing ``*.ext``, so `grep -rn X tests/`
+    and `grep -rn X` collapsed to the identical whole-repo command: a
+    substitution that WIDENED what was asked. The replacement surface is
+    allowed to make a search cheaper; it is not allowed to make it bigger,
+    because the extra results are indistinguishable from real ones.
+
+    A directory becomes ``dir/**``, a single file becomes itself, and a
+    literal ``*.ext`` keeps working. Several paths that cannot be expressed
+    as one glob yield "" -- and the caller declines to substitute rather
+    than silently dropping the scope.
+    """
+    real = [p for p in paths if p not in (".", "./")]
+    if not real:
+        return ""
+    if len(real) > 1:
+        return None  # not expressible as one --glob; the caller must not widen
+    p = real[0].rstrip("/")
+    # A glob the caller wrote is returned VERBATIM. This used to run a
+    # `\*\.\w+$` branch first and return only the matched tail, so
+    # `src/ctx/*.py` became `*.py` -- the whole repo instead of one directory.
+    # That is the exact widening this function exists to prevent, hiding in
+    # the branch meant to preserve a caller's glob: for a bare `*.py` the two
+    # are identical, so it looked correct, and it only widened once a
+    # directory prefix was present. Ordering the general case first makes both
+    # right, and the special case was never needed.
+    if any(ch in p for ch in "*?["):
+        return p
+    return p if re.search(r"\.\w+$", p) else f"{p}/**"
+
+
+#: grep flags that change what a match MEANS, rather than how much is
+#: printed. `ctx q search` has no equivalent for these, so a command
+#: carrying one cannot be collapsed -- substituting anyway answers a
+#: different question. `-v` is the sharp one: it inverts the match, so the
+#: collapse returned the files that DO contain the pattern when the caller
+#: asked for the ones that do not.
+_SEMANTIC_GREP_FLAGS = frozenset({
+    "-v", "--invert-match", "-L", "--files-without-match",
+    "-c", "--count", "-x", "--line-regexp",
+})
+#: NOT in that set: `-w`. Word-boundary matching is exactly what
+#: `ctx q refs` does, so `grep -rnw <symbol>` is the one semantic flag the
+#: substitution PRESERVES rather than contradicts.
 
 
 def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution | None:
     prog = toks[0].rsplit("/", 1)[-1]
+    for t in toks[1:]:
+        if t in _SEMANTIC_GREP_FLAGS:
+            return None
+        # Bundled short flags (`-rvn`): a semantic flag hides inside them.
+        if re.fullmatch(r"-[A-Za-z]{2,}", t) and any(
+            c in t[1:] for c in ("v", "L", "c", "x")
+        ):
+            return None
     git_grep = prog == "git" and len(toks) > 1 and toks[1] == "grep"
     if git_grep:
         toks = ["grep", *toks[2:]]  # normalise `git grep …` (recursive by default)
@@ -196,11 +309,27 @@ def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution |
     if prog not in _GREP_PROGS:
         return None
     flags = [t for t in toks[1:] if t.startswith("-")]
-    if not git_grep and not _is_recursive_grep(prog, flags):
-        return None  # single-file/bounded grep is handled elsewhere (the -m cap)
     pattern, paths = _grep_pattern_and_globs(toks)
     if not pattern:
         return None
+    if not git_grep and not _is_recursive_grep(prog, flags):
+        # A NON-recursive grep was declined wholesale as "single-file and
+        # therefore already bounded". That is true of `grep -n pat one.py` and
+        # false of `grep -n pat src/ctx/*.py`, which the shell expands into
+        # however many files match — unbounded, and the single most common
+        # uncovered shape in the recorded corpus by a wide margin
+        # (466 of 477 uncovered greps; 8.7% of ALL commands issued —
+        # `evals/command-corpus-2026-08-03.md`).
+        #
+        # The distinction that matters is not the -r flag but whether the
+        # target names ONE file or MANY. A glob character means many; so does
+        # a bare directory. Both are exactly what `ctx search --glob` bounds.
+        targets = [p for p in paths if p not in (".", "./")]
+        many = any(ch in p for p in targets for ch in "*?[") or (
+            len(targets) == 1 and not re.search(r"\.\w+$", targets[0])
+        )
+        if not many:
+            return None  # genuinely one file: already bounded, leave it alone
     # `_probe` second: the repo scan behind `symbols_resolvable` is only worth
     # paying once we know this really is a bare-identifier hunt.
     if _IDENT_RE.match(pattern) and _probe(symbols_resolvable):
@@ -209,17 +338,49 @@ def _collapse_grep(toks: list[str], symbols_resolvable: Probe) -> Substitution |
         # index, unsupported language) we fall through to bounded content search
         # below — never to nothing, so the agent is never stranded.
         return Substitution(
-            command=f"ctx q {shlex.quote(f'refs {pattern} | group file')}",
+            command=f"ctx q {shlex.quote(f'refs {shlex.quote(pattern)} | group file')}",
             reason=("CTX_CONTEXT_GUARD: recursive search for the identifier "
                     f"`{pattern}` is a navigation loop — the grep dump is "
                     "re-ingested next turn. `ctx q 'refs … | group file'` "
                     "resolves it through the symbol index in one bounded, "
                     "addressable call (cite the file:line handles)."),
             rung="reuse-index", shape="grep_symbol")
-    glob = _glob_hint(paths)
-    tail = f" --glob {shlex.quote(glob)}" if glob else ""
+    scope = _scope_hint(paths)
+    if scope is None:
+        # The caller scoped this search somewhere we cannot express as one
+        # --glob. Substituting anyway would run it over the whole repo, so
+        # this shape is left alone (still bounded at the emission gate).
+        return None
+    # INSIDE the query string. `ctx q`'s own parser takes only [--trace] and
+    # the query, so a top-level `--glob` was an unrecognized argument and the
+    # substituted command exited 2 -- the collapse producing something that
+    # cannot run. Latent before (only a trailing `*.ext` ever set it) and
+    # made common by the scope-preserving fix, which sets it for every
+    # directory-scoped grep. `search` is the stage that reads --glob.
+    # No inner shlex.quote: the whole query is quoted once as a single
+    # argument below, and quoting twice produced a valid but unreadable
+    # '"'"' nest. Nothing embedded in it may carry a quote character.
+    #
+    # The first cut guarded only the SCOPE. The PATTERN goes into the same
+    # string and needed the same guard -- `grep -rn "TODO's" src` collapsed
+    # to a query with an unbalanced quote, which is the identical
+    # "collapsed command does not parse" defect one commit later, through
+    # the other half of the same expression.
+    # shlex.quote the untrusted fields INSIDE the query, then quote the whole
+    # query again for the shell. Nested quoting produces an ugly '"'"' nest,
+    # which is why round 14 removed it -- and that traded correctness for
+    # readability. `ctx q`'s parser is shlex-aware, so a quoted pipe or
+    # apostrophe survives as ONE token; without the inner quoting a pattern
+    # like `a | b` was split into two stages and a pattern like `TODO's` left
+    # the query unbalanced. Verified to round-trip for pipes, apostrophes and
+    # double quotes alike.
+    scoped_query = (
+        f"search {shlex.quote(pattern)} --glob {shlex.quote(scope)} | files" if scope
+        else f"search {shlex.quote(pattern)} | files"
+    )
+
     return Substitution(
-        command=f"ctx q {shlex.quote(f'search {pattern} | files')}{tail}",
+        command=f"ctx q {shlex.quote(scoped_query)}",
         reason=("CTX_CONTEXT_GUARD: recursive content search floods the next "
                 "turn with re-ingested matches. `ctx q 'search … | files'` "
                 "returns a bounded, addressable slice; page exact bytes with "
@@ -299,6 +460,185 @@ def _collapse_pytest(command: str, failure_available: Probe) -> Substitution | N
         rung="failure-slice", shape="pytest_rerun")
 
 
+# ---------------------------------------------------------------- rtk-shaped
+# The filter binaries in this space (rtk et al.) intercept 100+ dev commands;
+# this surface had three. The gap was never architectural — a substitution only
+# ships when there is a bounded ctx op with the SAME meaning, and nobody had
+# gone through the common commands looking for those pairs.
+#
+# The bar every rung below clears, and the reason there are five rather than a
+# hundred: the replacement must answer the question the operator actually
+# asked. `head -n 20 f` and `ctx get repo:f --lines 1:20` are the same bytes;
+# `ls -R` and `ctx map` are NOT the same question (map is ranked and budgeted,
+# a listing is exhaustive), so `ls` maps to a corpus listing instead. A
+# substitution that quietly answers a nearby question is worse than none —
+# that is the whole complaint against the lossy filters.
+#
+# Anything whose meaning depends on shell context is already excluded upstream
+# by `_is_compound`: a pipe or redirect means the operator is composing, and
+# a composed command is theirs, not ours.
+
+#: `sed -n 'A,Bp'` / `sed -n A,Bp` — the exact-range read.
+_SED_RANGE_RE = re.compile(r"^(\d+),(\d+)p$")
+
+#: `find … -name <glob>` value flags to skip when hunting the pattern.
+_FIND_VALUE_FLAGS = {"-name", "-iname", "-path", "-ipath", "-type", "-maxdepth",
+                     "-mindepth", "-not", "-o", "-a"}
+
+
+def _lines_sub(f: str, a: int, b: int, *, was: str, shape: str) -> Substitution | None:
+    """`ctx get repo:<f> --lines A:B` — the addressed form of a range read."""
+    if not _shell_safe(f):
+        return None
+    return Substitution(
+        command=f"ctx get {shlex.quote('repo:' + f)} --lines {a}:{b}",
+        reason=(f"CTX_CONTEXT_GUARD: {was} returns bytes with no address — the "
+                f"next turn cannot cite them or page past them. `ctx get "
+                f"repo:<file> --lines {a}:{b}` returns the same lines with a "
+                f"handle, and a continuation that advances."),
+        rung="addressed-range", shape=shape)
+
+
+def _collapse_head(toks: list[str]) -> Substitution | None:
+    """``head -n N <file>`` → the same lines, addressed."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "head":
+        return None
+    n, rest = 10, []
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t == "-n" and i + 1 < len(toks):
+            if not toks[i + 1].lstrip("-").isdigit():
+                return None  # `-n -5` / `-n 5k` — not a plain line count
+            n = int(toks[i + 1]); i += 2; continue
+        if t.startswith("-n") and t[2:].isdigit():
+            n = int(t[2:]); i += 1; continue
+        if t.startswith("-c") or t == "-c":
+            return None  # byte mode: --bytes is the right op, different range
+        if len(t) > 1 and t[0] == "-" and t[1:].isdigit():
+            n = int(t[1:]); i += 1; continue  # the obsolete-but-ubiquitous `-20`
+        if t.startswith("-"):
+            return None  # -q/-v/unknown: leave it alone
+        rest.append(t); i += 1
+    if len(rest) != 1 or n < 1:
+        return None  # multiple files (banner-separated) or a stdin read
+    return _lines_sub(rest[0], 1, n, was=f"head -n {n}", shape="head_lines")
+
+
+def _collapse_sed_range(toks: list[str]) -> Substitution | None:
+    """``sed -n 'A,Bp' <file>`` → the same lines, addressed."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "sed" or "-n" not in toks:
+        return None
+    script, files = None, []
+    for t in toks[1:]:
+        if t == "-n":
+            continue
+        if t.startswith("-"):
+            return None  # -i/-E/-e: editing or extended scripts are not reads
+        m = _SED_RANGE_RE.match(t)
+        if m and script is None:
+            script = (int(m.group(1)), int(m.group(2)))
+        else:
+            files.append(t)
+    if script is None or len(files) != 1:
+        return None
+    a, b = script
+    if a < 1 or b < a:
+        return None
+    return _lines_sub(files[0], a, b, was=f"sed -n '{a},{b}p'", shape="sed_range")
+
+
+def _collapse_wc(toks: list[str]) -> Substitution | None:
+    """``wc -l <source-file>`` → the priced outline, which carries the count
+    AND the structure the count was standing in for."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "wc":
+        return None
+    flags = [t for t in toks[1:] if t.startswith("-")]
+    args = [t for t in toks[1:] if not t.startswith("-")]
+    if flags != ["-l"] or len(args) != 1:
+        return None
+    f = args[0]
+    if not f.endswith(_SKELETON_EXTS) or not _shell_safe(f):
+        return None
+    return Substitution(
+        command=f"ctx stats {shlex.quote('repo:' + f)}",
+        reason=("CTX_CONTEXT_GUARD: a line count is almost always a proxy for "
+                "\"how big is this and what is in it\". `ctx stats repo:<file>` "
+                "answers both — the count plus the priced symbol outline with "
+                "line ranges — for about the same tokens."),
+        rung="skeleton-first", shape="wc_lines")
+
+
+def _collapse_find_name(toks: list[str]) -> Substitution | None:
+    """``find <dir> -name '<glob>'`` → a bounded corpus listing with a
+    coverage receipt."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog != "find":
+        return None
+    root, pattern = None, None
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t in ("-name", "-iname") and i + 1 < len(toks):
+            if pattern is not None:
+                return None  # several predicates — the operator is composing
+            pattern = toks[i + 1]; i += 2; continue
+        if t in ("-type",) and i + 1 < len(toks):
+            if toks[i + 1] != "f":
+                return None  # -type d/l is a different question
+            i += 2; continue
+        if t.startswith("-"):
+            return None  # -exec/-delete/-newer/-size: not a plain name hunt
+        if root is not None:
+            return None  # several roots
+        root = t; i += 1
+    if pattern is None:
+        return None
+    root = (root or ".").rstrip("/")
+    glob = pattern if root in (".", "") else f"{root}/**/{pattern}"
+    if not _shell_safe(glob):
+        return None
+    return Substitution(
+        command=f"ctx q {shlex.quote(f'corpus --glob {glob}')}",
+        reason=("CTX_CONTEXT_GUARD: `find` walks into vendor, build and VCS "
+                "directories and returns an unbounded, unaddressed path list. "
+                "`ctx q 'corpus --glob <glob>'` respects ignore rules, "
+                "declares its coverage (considered/selected), and the result "
+                "composes — pipe it into `outline` or `search` without a second "
+                "round-trip."),
+        rung="bounded-listing", shape="find_name")
+
+
+def _collapse_ls_recursive(toks: list[str]) -> Substitution | None:
+    """``ls -R`` / ``tree`` → the same listing, ignore-aware and bounded."""
+    prog = toks[0].rsplit("/", 1)[-1]
+    if prog == "ls":
+        flags = "".join(t[1:] for t in toks[1:] if t.startswith("-") and not t.startswith("--"))
+        if "R" not in flags:
+            return None  # a flat `ls` is cheap and honest — leave it
+    elif prog != "tree":
+        return None
+    args = [t for t in toks[1:] if not t.startswith("-")]
+    if len(args) > 1:
+        return None
+    scope = args[0].rstrip("/") if args else ""
+    glob = f"{scope}/**" if scope else None
+    if glob is not None and not _shell_safe(glob):
+        return None
+    pipeline = f"corpus --glob {glob}" if glob else "corpus"
+    return Substitution(
+        command=f"ctx q {shlex.quote(pipeline)}",
+        reason=("CTX_CONTEXT_GUARD: a recursive listing descends into "
+                "node_modules, .git, target and build output — usually most of "
+                "its own output. `ctx q 'corpus'` lists the tracked "
+                "corpus with a coverage receipt, and the stream composes into "
+                "`outline`/`search` instead of needing a second command."),
+        rung="bounded-listing", shape="ls_recursive")
+
+
 def collapse(command: str, *, failure_available: Probe = False,
              symbols_resolvable: Probe = True) -> Substitution | None:
     """Recognise a collapsible loop-shape in ``command`` and return the
@@ -321,12 +661,22 @@ def collapse(command: str, *, failure_available: Probe = False,
         return None
     if _is_compound(toks, command):
         return None  # a pipe/redirect/chain changes meaning — never clobber it
+    # Pure recognisers first, cheapest and always safe; the store-gated pytest
+    # slice last, since it is the only one that costs I/O to decide.
     sub = _collapse_grep(toks, symbols_resolvable)
     if sub:
         return sub
-    sub = _collapse_cat(toks)
-    if sub:
-        return sub
+    for fn in (
+        _collapse_cat,
+        _collapse_head,
+        _collapse_sed_range,
+        _collapse_wc,
+        _collapse_find_name,
+        _collapse_ls_recursive,
+    ):
+        sub = fn(toks)
+        if sub:
+            return sub
     return _collapse_pytest(command, failure_available)
 
 

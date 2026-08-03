@@ -26,6 +26,8 @@ flow is visible.
 
 from __future__ import annotations
 
+from ctx import bounds
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -265,8 +267,13 @@ def _op_code_refs(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
 def _mk_callgraph_op(stage: str):
     def op(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
         argv = [str(args.get("symbol") or "")]
-        if stage == "impact" and args.get("depth"):
-            argv += ["--depth", str(int(args["depth"]))]
+        # `is not None`, not truthiness: ask.py already fixed `--depth 0`
+        # becoming 3 at ITS layer, and the 0 then survived all the way into
+        # the compiled plan's step args only to be dropped here, where a
+        # falsy depth read as "no depth given". Two layers, one flag, and the
+        # second one undid the first.
+        if stage == "impact" and args.get("depth") is not None:
+            argv += ["--depth", str(bounds.count(args["depth"]))]
         out = _run_q_stage(pc, stage, argv)
         return payload(
             "sites", out.rows, omitted=out.omitted,
@@ -285,7 +292,7 @@ def _op_ast_search(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
         str(args.get("pattern") or ""),
         language=args.get("language"),
         glob=args.get("glob"),
-        cap=int(args.get("cap", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP),
+        cap=bounds.count(bounds.explicit(args.get("cap"), DEFAULT_ROW_CAP)),
     )
     omitted = max(0, int(meta.pop("matched", len(rows))) - len(rows))
     return payload("sites", rows, omitted=omitted, meta=meta)
@@ -356,7 +363,7 @@ def _op_ast_outline(pc: PlanContext, args: dict, inp: dict | None) -> dict[str, 
         f = str(r.get("file") or "")
         if f and f not in files:
             files.append(f)
-    cap = int(args.get("cap", OUTLINE_FILE_CAP) or OUTLINE_FILE_CAP)
+    cap = bounds.count(bounds.explicit(args.get("cap"), OUTLINE_FILE_CAP))
     take, omitted = files[:cap], max(0, len(files) - cap)
     rows: list[dict[str, Any]] = []
     parsers: list[str] = []
@@ -536,12 +543,23 @@ def _op_semantic(mode: str):
             pc.ws,
             str(args.get("rules") or ""),
             paths=paths,
-            cap=int(args.get("cap", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP),
+            cap=bounds.count(bounds.explicit(args.get("cap"), DEFAULT_ROW_CAP)),
         )
+        # The cap's overflow, declared -- exactly as ast.search already does
+        # with the same meta key. Without this the coverage line attested a
+        # complete census over a truncated one: six findings scanned, two
+        # rows shown, four gone with nothing saying so. plan_ir's docstring
+        # calls this out by name ("overflow executes as declared omission,
+        # never silently"); semantic.* was the op that did not.
+        omitted = max(0, int(meta.pop("matched", len(rows))) - len(rows))
         if mode == "taint":
-            rows = [r for r in rows if r.get("trace")] or rows
+            traced = [r for r in rows if r.get("trace")]
+            if traced:
+                # The filter is a second, narrower drop on the same stream.
+                omitted += len(rows) - len(traced)
+                rows = traced
         meta["mode"] = mode
-        return payload("records", rows, meta=meta)
+        return payload("records", rows, omitted=omitted, meta=meta)
 
     return op
 
@@ -556,7 +574,7 @@ def _op_evidence_failures(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     from ctx import facts
 
     run = args.get("run")
-    limit = int(args.get("limit", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP)
+    limit = bounds.count(bounds.explicit(args.get("limit"), DEFAULT_ROW_CAP))
     rows = facts.fails_sites(pc.ws, pc.store, run=run, limit=limit)
     run_id: str | None = None
     gen: str | None = None
@@ -643,7 +661,7 @@ def _op_code_symbols(pc: PlanContext, args: dict, inp: dict | None) -> dict[str,
                 derived += 1
         except Exception:
             pass
-    limit = int(args.get("limit", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP)
+    limit = bounds.count(bounds.explicit(args.get("limit"), DEFAULT_ROW_CAP))
     sym = str(args.get("symbol") or "")
     pre_limit = 2000 if (files or sym) else limit
     rows = facts.decls_rows(pc.ws, pc.store, kind=args.get("kind"), limit=pre_limit)
@@ -651,11 +669,21 @@ def _op_code_symbols(pc: PlanContext, args: dict, inp: dict | None) -> dict[str,
         keep = set(files)
         rows = [r for r in rows if r.get("file") in keep]
     if sym:
+        # Symmetric on BOTH sides. The three original clauses all assumed the
+        # STORED symbol was the dotted one, so a dotted query
+        # (`Store.put_blob`) against a bare stored symbol found nothing and
+        # `ctx ask --intent locate` reported zero definitions for a symbol
+        # that is right there.
+        sym_tail = sym.rsplit(".", 1)[-1]
         rows = [
             r for r in rows
-            if r.get("symbol") == sym
-            or str(r.get("symbol", "")).rsplit(".", 1)[-1] == sym
-            or str(r.get("symbol", "")).startswith(sym + ".")
+            if (lambda stored: (
+                stored == sym
+                or stored.rsplit(".", 1)[-1] == sym
+                or stored.startswith(sym + ".")
+                or stored == sym_tail
+                or stored.endswith("." + sym_tail)
+            ))(str(r.get("symbol", "")))
         ]
     rows = rows[:limit]
     meta: dict[str, Any] = {
@@ -684,7 +712,7 @@ def _op_code_context(pc: PlanContext, args: dict, inp: dict | None) -> dict[str,
     rows_in = list((inp or {}).get("rows") or [])
     kind_in = str((inp or {}).get("kind") or "sites")
     context = max(0, int(args.get("context", 3) or 3))
-    cap = max(1, min(int(args.get("cap", 8) or 8), OUTLINE_FILE_CAP))
+    cap = min(bounds.count(args.get("cap", 8)), OUTLINE_FILE_CAP)
     take = rows_in[:cap]
     omitted = max(0, len(rows_in) - len(take))
     out_rows: list[dict[str, Any]] = []

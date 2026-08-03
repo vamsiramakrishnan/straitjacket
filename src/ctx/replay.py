@@ -345,7 +345,7 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
 
     from ctx.textutil import sanitize_for_model
 
-    safe_misses = [sanitize_for_model(m, ws.config.redaction.patterns)[0] for m in misses[:5]]
+    safe_misses = [sanitize_for_model(m, ws.config.redaction)[0] for m in misses[:5]]
     for b in regret_by_profile.values():
         b["regret_tok"] = b["actual_tok"] - b["oracle_tok"]
         # Naive comparison only over calls whose raw bytes replay actually

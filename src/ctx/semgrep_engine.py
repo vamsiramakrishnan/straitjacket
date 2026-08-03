@@ -17,6 +17,8 @@ participates in node cache keys.
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import json
 import shutil
 import subprocess
@@ -165,7 +167,7 @@ def scan(
     }
     if errors:
         meta["parser_warnings"] = len(errors)
-    return rows[: max(1, cap)], meta
+    return rows[: bounds.count(cap)], meta
 
 
 __all__ = ["EngineMissing", "SemgrepError", "available", "binary", "engine_id", "scan"]

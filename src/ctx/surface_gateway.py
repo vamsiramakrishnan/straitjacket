@@ -50,10 +50,18 @@ def _bound_result(result: dict[str, Any], max_bytes: int = _MAX_BACKEND_RESULT_B
                 and isinstance(block.get("text"), str)):
             raw = block["text"].encode("utf-8")
             if len(raw) > max_bytes:
-                head = raw[:max_bytes].decode("utf-8", "ignore")
-                block = {**block, "text": head + (
+                # The note is part of the output, so it comes OUT of the
+                # budget rather than being added on top of it. Appending it
+                # to a slice already at max_bytes made the block that
+                # announces a 16,384-byte cap the thing that exceeded it --
+                # a bound whose own disclosure broke it.
+                note = (
                     f"\n[ctx-gateway: backend output bounded to {max_bytes:,} of "
-                    f"{len(raw):,} bytes — the gateway caps proxied floods]")}
+                    f"{len(raw):,} bytes — the gateway caps proxied floods]"
+                )
+                room = max(0, max_bytes - len(note.encode("utf-8")))
+                head = raw[:room].decode("utf-8", "ignore")
+                block = {**block, "text": head + note}
         out_blocks.append(block)
     return {**result, "content": out_blocks}
 

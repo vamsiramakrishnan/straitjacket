@@ -127,16 +127,28 @@ class LintProfile(Profile):
         # the work queue). Each file's diagnostic block gets its own span,
         # so fixing file-by-file is one retrieval per file, not per question.
         views = {"stdout": ctx.stdout, "stderr": ctx.stderr}
-        file_lines: dict[str, tuple[str, list[int]]] = {}
+        # Keyed by (stream, file), not by file. Keying by file alone put a
+        # file's stdout AND stderr line numbers in one list and minted the
+        # span against whichever stream it was seen on first -- so a tool
+        # that splits diagnostics across both streams got a range computed
+        # from mixed coordinates, addressing unrelated lines.
+        file_lines: dict[tuple[str, str], list[int]] = {}
         for stream_name, lineno, f, _, _ in diags:
-            file_lines.setdefault(f, (stream_name, []))[1].append(lineno)
+            file_lines.setdefault((stream_name, f), []).append(lineno)
         file_bits = []
         for f, n in sorted(by_file.most_common(8)):
-            stream_name, span_lines = file_lines[f]
-            fsid = ctx.mint_span(
-                views[stream_name], "region", a=min(span_lines), b=max(span_lines)
-            )
-            tag = f" span {fsid}" if fsid else ""
+            spans = []
+            for (stream_name, ff), span_lines in sorted(file_lines.items()):
+                if ff != f or not span_lines:
+                    continue
+                sid = ctx.mint_span(
+                    views[stream_name], "region",
+                    a=min(span_lines), b=max(span_lines),
+                )
+                if sid:
+                    spans.append(sid)
+            fsid = spans[0] if spans else None
+            tag = (" span " + " ".join(spans)) if spans else ""
             file_bits.append(f"{short_path(f)}×{n}{tag}")
         body.append("  by file (exact): " + " · ".join(file_bits))
         first_stream, first_line = diags[0][0], diags[0][1]

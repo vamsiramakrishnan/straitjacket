@@ -46,7 +46,12 @@ def add(workspace_root: Path, note: str, *, ref: str = "") -> str:
     note = " ".join(note.split())
     if not note:
         raise ValueError("debt note must not be empty")
-    entry_id = hashlib.sha256(f"{note}|{ref}".encode("utf-8")).hexdigest()[:10]
+    # Length-prefixed, not delimiter-joined: `f"{note}|{ref}"` lets two
+    # distinct declarations straddle the separator differently and hash to
+    # the same id (note="a|b", ref="" collides with note="a", ref="b"), so
+    # the second silently becomes an update to the first.
+    _basis = f"{len(note)}:{note}{len(ref)}:{ref}"
+    entry_id = hashlib.sha256(_basis.encode("utf-8")).hexdigest()[:10]
     entries = _load(workspace_root)
     if any(e.get("id") == entry_id and e.get("op") == "add" for e in entries):
         return entry_id  # already declared; idempotent

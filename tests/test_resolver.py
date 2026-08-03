@@ -416,7 +416,7 @@ def test_golden_eval_digest_byte_identical_to_legacy(ws_store, capsys, fail):
     assert rc == (3 if fail else 0)
     emitted = capsys.readouterr().out
 
-    text, code = run_eval(ws, store, script)
+    text, code, _timed_out = run_eval(ws, store, script)
     assert code == (2 if fail else 0)
     assert emitted == _with_truncation_handle(_legacy_emitted(ws, text, code), text)
 
@@ -432,7 +432,7 @@ def test_golden_seq_digest_byte_identical_to_legacy(ws_store, capsys, fail):
     assert rc == (3 if fail else 0)
     emitted = capsys.readouterr().out
 
-    text, code = run_seq(ws, store, steps, halt_on_fail=True, timeout=None, focus=None)
+    text, code, _timed_out = run_seq(ws, store, steps, halt_on_fail=True, timeout=None, focus=None)
     assert code == (1 if fail else 0)
     # seq always emits against the result budget (pre-change behavior).
     from ctx.engagement import filter_digest, suggestion_cap
@@ -485,7 +485,16 @@ def test_no_hand_rolled_budget_math_left_in_cli():
     cli_layer += sorted(Path(cli_mod.__file__).parent.joinpath("commands").glob("*.py"))
     src = "\n".join(p.read_text(encoding="utf-8") for p in cli_layer)
     assert "failure_budget_factor" not in src  # budget math lives in resolver.py
-    assert src.count("_emit_retrieval(ws, store, out)") == 4  # diff/map/code/retrieval
+    # Matched on the call PREFIX, not the full argument spelling: the
+    # invariant is "every retrieval verb funnels through the one choke
+    # point", and pinning the exact argument list made it fail the moment
+    # a keyword was added at a single site -- brittle about something the
+    # invariant does not actually care about. The definition line is excluded,
+    # since a prefix match otherwise counts it as a fifth call.
+    import re as _re
+
+    calls = _re.findall(r"(?<!def )_emit_retrieval\(ws, store, out", src)
+    assert len(calls) == 4  # diff/map/code/retrieval
     assert src.count("_delivery_plan(") >= 3  # run + eval + seq (+ render plan)
     assert "resolve_retrieval_budget" in src
 

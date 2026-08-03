@@ -61,7 +61,12 @@ def charge_turn_budget(store: Store, ws: Workspace, emitted_text: str) -> str | 
     turn = os.environ.get("CTX_TURN_ID")
     if not conv or not turn:
         return None
-    tokens = estimate_tokens(len(emitted_text.encode("utf-8")))
+    # encode_exact, not a bare encode: a byte-exact --bytes result carries
+    # lone surrogates, and strict UTF-8 would raise here -- turning a correct
+    # answer into a crash at the accounting step.
+    from ctx.textutil import encode_exact
+
+    tokens = estimate_tokens(len(encode_exact(emitted_text)))
     total = store.add_turn_tokens(conv, turn, tokens)
     limit = ws.config.budgets.turn_retrieval_tokens
     if total > limit:

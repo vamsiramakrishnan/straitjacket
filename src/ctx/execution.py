@@ -338,17 +338,26 @@ def snapshot_file(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
     full = ws.confine(rel_path, must_exist=True)
     if not full.is_file():
         raise ExecutionError(f"not a file: {rel_path}")
-    if ws.is_ignored(ws.relativize(full)):
-        raise ExecutionError(
-            f"path is excluded from capture by policy: {ws.relativize(full)}"
-        )
+    # Two paths, two jobs: `full` is where the bytes come from, `asked` is
+    # what the caller asked about. They differ for a symlink, and recording
+    # the resolved one filed link.py's snapshot under a.py -- so
+    # `ctx q 'corpus --changed | outline'` printed the target twice and the
+    # symlink's own name not at all.
+    asked = ws.relativize_as_asked(rel_path)
+    # Ignored by EITHER name: a link is excluded if its own name is excluded
+    # or if it points at something excluded. Refusing more is always safe.
+    for candidate in (asked, ws.relativize(full)):
+        if ws.is_ignored(candidate):
+            raise ExecutionError(
+                f"path is excluded from capture by policy: {candidate}"
+            )
     data = full.read_bytes()
     blob_hash = store.put_blob(data)
     _, encoding, media_type = decode_stream(data[:8192] if data else b"")
     manifest = {
         "schema": "ctx.snapshot/v1",
         "workspaceId": ws.workspace_id,
-        "path": ws.relativize(full),
+        "path": asked,
         "blob": f"sha256:{blob_hash}",
         "bytes": len(data),
         "lines": data.count(b"\n") + (0 if data.endswith(b"\n") or not data else 1),

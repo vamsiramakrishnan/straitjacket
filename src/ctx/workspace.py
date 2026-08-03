@@ -6,13 +6,13 @@ search results always use repo-relative POSIX paths.
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from ctx import pathglob
 from ctx.config import CONFIG_FILENAME, Config, load_config, load_ctxignore
 
 
@@ -105,11 +105,52 @@ class Workspace:
         return resolved
 
     def relativize(self, p: str | Path) -> str:
-        """Repo-relative POSIX path for model-visible output."""
+        """Repo-relative POSIX path for model-visible output.
+
+        RESOLVES symlinks -- use it for the path bytes were read FROM. For
+        the path the caller asked ABOUT, use ``relativize_as_asked``.
+        """
         try:
             return Path(p).resolve().relative_to(self.root.resolve()).as_posix()
         except ValueError:
             return Path(p).name
+
+    def relativize_as_asked(self, p: str | Path) -> str:
+        """Repo-relative POSIX path WITHOUT following symlinks.
+
+        ``relativize`` resolves, which is right when the answer is about
+        bytes and wrong when it is about identity: a snapshot of
+        ``link.py`` recorded ``a.py``, so ``ctx q '... | outline'`` filed
+        the symlink's outline under its target -- printing the target twice
+        and the name the caller actually asked about not at all.
+
+        Normalization is lexical (``..`` collapsed, no syscall), so the
+        result is a repo-relative path that still names what was requested.
+        """
+        inside = self.rel_if_inside(p)
+        return inside if inside is not None else self.relativize(p)
+
+    def rel_if_inside(self, p: str | Path) -> str | None:
+        """Repo-relative path, or None when it is not in this workspace.
+
+        ``relativize`` and ``relativize_as_asked`` both fall back to
+        ``Path(p).name`` for a path outside the root -- fine for a display
+        label, and wrong for an ADDRESS: `/somewhere/else/test_sample.py`
+        came back as `test_sample.py`, which reads as repo-relative and
+        resolves to nothing. A test runner's traceback carries absolute
+        paths and its files are often outside the workspace, so the fact
+        extractors reach this constantly. None is the honest answer, and it
+        lets the caller omit a location instead of inventing one.
+        """
+        raw = Path(p)
+        base = raw if raw.is_absolute() else self.root / raw
+        lex = Path(os.path.normpath(base))
+        for root in (Path(os.path.normpath(self.root)), self.root.resolve()):
+            try:
+                return lex.relative_to(root).as_posix()
+            except ValueError:
+                continue
+        return None
 
     def is_ignored(self, rel_path: str) -> bool:
         rel = rel_path.removeprefix("./")
@@ -137,12 +178,20 @@ class Workspace:
         return spec
 
     def _is_ignored_fnmatch(self, rel: str) -> bool:
+        """Fallback for a broken pathspec install -- same dialect, one engine.
+
+        Named for the stdlib module it used to call directly. It no longer
+        does: raw fnmatch lets ``*`` cross ``/``, so this fallback disagreed
+        with the pathspec path above it about what an ignore glob covers,
+        and the retrieval-side matcher was a third opinion again. All three
+        now go through ctx.pathglob.
+        """
         for glob in self.ignore_globs:
-            if fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch("/" + rel, "/" + glob):
+            if pathglob.matches(rel, glob):
                 return True
             # Directory patterns like `**/secrets/**` should also match the
             # directory itself and paths under a bare-name pattern.
-            if glob.endswith("/**") and fnmatch.fnmatch(rel, glob[: -len("/**")]):
+            if glob.endswith("/**") and pathglob.matches(rel, glob[: -len("/**")]):
                 return True
         return False
 
@@ -166,8 +215,19 @@ class Workspace:
                     check=True,
                 )
                 prefix = "" if base == self.root else self.relativize(base) + "/"
+                follow = self.config.workspace.follow_symlinks
                 for name in out.stdout.decode("utf-8", "replace").split("\0"):
-                    if name and (base / name).is_file():
+                    if not name:
+                        continue
+                    entry = base / name
+                    # `is_file()` FOLLOWS the link, so this rung listed
+                    # tracked symlinks regardless of the documented
+                    # `follow_symlinks = false` -- the walk rung honours it
+                    # and this one did not, so the file set depended on
+                    # whether git happened to be available.
+                    if not follow and entry.is_symlink():
+                        continue
+                    if entry.is_file():
                         rels.append(prefix + Path(name).as_posix())
             except (OSError, subprocess.SubprocessError):
                 rels = self._walk(base)
@@ -200,7 +260,10 @@ def stat_fingerprint(root: Path | str, rels, h) -> None:
     metadata rather than content because hashing every file on every lookup
     is the thing they exist to avoid; ``skeleton`` keys on the source blob
     hash and deliberately does not use this — content is the stronger basis
-    and it already has the hash in hand.
+    and it already has the hash in hand. ``astgrep``'s rewrite guard is the
+    fourth caller and the one that is not a cache: it had hand-rolled a
+    weaker ``(rel, size, mtime_ns)`` fold of its own, which is how a guard
+    ended up trusting less evidence than the caches it sits beside.
 
     The basis is ``(rel, size, mtime_ns, ctime_ns)``. ``ctime_ns`` is not
     redundant: mtime is settable from userspace, so a same-length edit whose
@@ -209,15 +272,19 @@ def stat_fingerprint(root: Path | str, rels, h) -> None:
     to serve a stale map/graph/node result. ctime is bumped by the write and
     by the utime call itself and cannot be moved backwards.
 
-    Unstattable paths are skipped (a deleted file leaves the listing that
-    produced ``rels`` anyway); the traversal order is the caller's, so the
-    caller owns determinism.
+    An unstattable path folds in as ``missing`` rather than being skipped.
+    Skipping made a vanished file hash identically to a workspace where it
+    had never existed, which is tolerable for a cache that will be rebuilt
+    and not tolerable for a guard that is being asked whether the worktree
+    moved. Recording it is strictly stronger and costs one line; the
+    traversal order is the caller's, so the caller owns determinism.
     """
     base = Path(root)
     for rel in rels:
         try:
             st = (base / rel).stat()
         except OSError:
+            h.update(f"{rel}|missing\n".encode("utf-8"))
             continue
         h.update(
             f"{rel}|{st.st_size}|{st.st_mtime_ns}|{st.st_ctime_ns}\n".encode("utf-8")

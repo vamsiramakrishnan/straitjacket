@@ -97,10 +97,21 @@ class LogTemplateProfile(Profile):
 
         ranked = sorted(templates.items(), key=lambda kv: (-kv[1][0], kv[1][1], kv[0]))
         top = ranked[:10]
-        covered = sum(rec[0] for _, rec in top)
+        shown_lines = sum(rec[0] for _, rec in top)
+        # mine_templates puts every mined line in exactly ONE template, so all
+        # N templates always cover all M lines. The line used to read
+        # "templates: N cover C/M" with C being only the DISPLAYED ten's
+        # count, implying M-C lines had no identified template when in fact
+        # every line had one -- an understatement of the tool's own coverage,
+        # and a number that could never be reconciled with the rows beneath.
         body = [
             f"templates: {fmt_int(len(templates))} cover "
-            f"{fmt_int(covered)}/{fmt_int(len(mined))} lines"
+            f"{fmt_int(len(mined))}/{fmt_int(len(mined))} lines"
+            + (
+                f" · top {len(top)} shown ({fmt_int(shown_lines)} lines)"
+                if len(ranked) > len(top)
+                else ""
+            )
         ]
         for tpl, (count, first) in top:
             line = f"  {fmt_int(count)}× L{first}: {tpl[:EVIDENCE_LINE_CHARS]}"

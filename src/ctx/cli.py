@@ -184,6 +184,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "checkpoint": ("admin", "cmd_checkpoint", True),
     "debt": ("admin", "cmd_debt", True),
     "policy": ("admin", "cmd_policy", True),
+    "ladders": ("admin", "cmd_ladders", True),
     "orchestrate": ("hosts", "cmd_orchestrate", True),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
@@ -416,7 +417,16 @@ def _build_parser():
     sub.add_parser("jobs", help="list this workspace's backgrounded runs")
 
     p_seq = sub.add_parser("seq", help="declared command tree: N steps, one round")
-    p_seq.add_argument("steps", nargs="+", help="shell command strings, run in order")
+    # Both spellings. docs/CLI.md documents the repeatable `--step` form and
+    # only the positional was registered, so every invocation that followed
+    # the documentation verbatim died on an argparse error. Accepting both is
+    # the honest resolution: the documented form works, and the positional
+    # that everything else already uses keeps working.
+    p_seq.add_argument("steps", nargs="*", default=[],
+                       help="shell command strings, run in order")
+    p_seq.add_argument("--step", action="append", dest="step", default=[],
+                       metavar="CMD",
+                       help="a step, repeatable (equivalent to a positional)")
     p_seq.add_argument("--keep-going", action="store_true", dest="keep_going",
                        help="run remaining steps after a failure (default: halt)")
     p_seq.add_argument("--timeout", type=float, help="per-step timeout seconds")
@@ -492,6 +502,20 @@ def _build_parser():
     debt_sub.add_parser("list", help="show outstanding declared debt")
     p_dr = debt_sub.add_parser("resolve", help="mark a debt entry resolved")
     p_dr.add_argument("id", help="entry id from `ctx debt list`")
+
+    p_lad = sub.add_parser(
+        "ladders",
+        help="conditionality audit: every escalation ladder, its rungs, and "
+             "what this workspace actually recorded climbing",
+    )
+    p_lad.add_argument("--json", action="store_true", dest="ladders_json",
+                       help="machine-readable")
+    p_lad.add_argument("--corpus", dest="ladders_corpus", metavar="DIR",
+                       help="aggregate across every workspace under DIR "
+                            "(a directory of recorded sessions). Static "
+                            "ladders -- guard mode, deployment tier -- are one "
+                            "value per workspace, so their distribution is only "
+                            "visible across a corpus")
 
     p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
     p_map.add_argument("--budget", type=int, default=600, help="token budget")

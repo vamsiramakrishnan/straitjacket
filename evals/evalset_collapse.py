@@ -198,7 +198,7 @@ def scenario_fanout(root: Path) -> tuple[list[Arm], list[str]]:
         "    if rate < 0.8:\n"
         "        print(f'LOW {m} {rate:.4f} ({ok}/{n})')\n"
     )
-    text, code = run_eval(ws, store, script)
+    text, code, _to = run_eval(ws, store, script)
     evalarm.round(script)  # the model authored it: it transits context once
     evalarm.round(text)
     evalarm.rounds = 1  # script + digest ride in the same round
@@ -273,7 +273,7 @@ def scenario_branch(root: Path) -> tuple[list[Arm], list[str]]:
         "print(*tail, sep='\\n')\n"
         "sys.exit(r.returncode)\n"
     )
-    text, code = run_eval(ws, store, script)
+    text, code, _to = run_eval(ws, store, script)
     evalarm.round(script + text)
     assert code != 0, "the seeded failing test must surface as a failing eval"
     assert "test_05" in text and "importers:" in text
@@ -300,7 +300,7 @@ def scenario_flood_needle(root: Path) -> tuple[list[Arm], list[str]]:
         "    print(f'frame {i:05d} {tag}')\n"
         "print('SUMMARY frames=20000 anomalies=1')\n"
     )
-    text, code = run_eval(ws, store, script)
+    text, code, _to = run_eval(ws, store, script)
     evalarm.round(script + text)
     assert code == 0
     # The HEAD/TAIL evidence window surfaces the script's own SUMMARY tail
@@ -361,14 +361,14 @@ def scenario_debug_cost(root: Path) -> tuple[list[Arm], list[str]]:
         "        tot[m] = tot.get(m, 0) + 1\n"
         "print('modules:', len(tot))\n"
     )
-    text, code = run_eval(ws, store, bad_script)
+    text, code, _to = run_eval(ws, store, bad_script)
     evalarm.round(bad_script + text)
     assert code != 0 and "KeyError" in text and 'File "<stdin>"' in text
     # Recovery: one bounded slice around the poisoned record, then rerun fixed.
     slice_ = get(store, ws, "repo:runs/run-17.jsonl", Selector(lines=(103, 105)))
     evalarm.round(slice_)
     fixed = bad_script.replace("r['module']", "r.get('module', 'unknown')")
-    text2, code2 = run_eval(ws, store, fixed)
+    text2, code2, _to = run_eval(ws, store, fixed)
     evalarm.round(fixed + text2)
     assert code2 == 0 and "modules:" in text2
     evalarm.rounds = 3

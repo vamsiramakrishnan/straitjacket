@@ -308,11 +308,41 @@ def _wrap_claude_merged(
 ) -> int:
     """Fallback for claude builds without --settings: merge hooks into the
     workspace settings file, run, then restore the previous state exactly."""
+    from ctx.installer import (
+        SettingsUnreadable,
+        _read_settings_object,
+        merge_hook_stages,
+    )
+
     path = workspace_root / ".claude" / "settings.json"
     original = path.read_bytes() if path.is_file() else None
-    merged: dict = json.loads(original) if original else {}
-    for stage, entries in settings["hooks"].items():
-        merged.setdefault("hooks", {}).setdefault(stage, []).extend(entries)
+    # The persistent install path already refuses a malformed settings.json
+    # with a named, actionable error; this ephemeral path used to read the
+    # same file with a bare json.loads and die of an unhandled
+    # JSONDecodeError instead. Two readers of one foreign file, only one of
+    # them hardened, is the defect -- so there is now one reader.
+    try:
+        merged: dict = _read_settings_object(path) if original else {}
+    except SettingsUnreadable as e:
+        print(
+            f"ctx wrap claude: {e}\n"
+            "Refusing to merge harness hooks into a settings file this run "
+            "cannot safely restore. Fix or move the file, then retry.",
+            file=sys.stderr,
+        )
+        return 2
+    # Third caller of one merge. The shape guard used to be inlined here and
+    # in install_claude, and install_codex -- which does the same merge -- had
+    # neither, so a bug bash crashed it on the shape both others handled.
+    try:
+        merge_hook_stages(merged, settings["hooks"])
+    except SettingsUnreadable as e:
+        print(
+            f"ctx wrap claude: .claude/settings.json — {e}. "
+            "Refusing to merge into it.",
+            file=sys.stderr,
+        )
+        return 2
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
@@ -476,7 +506,12 @@ def _short_path(path: str | None, width: int = 34) -> str:
     if len(p) <= width:
         return p
     keep = (width - 1) // 2
-    return p[:keep] + "…" + p[-(width - keep - 1):]
+    # `p[-n:]` is the whole string at n == 0, so a width small enough to leave
+    # no room for a tail returned the FULL path from the function whose job is
+    # to shorten it -- the elision widening its own output. Same class as
+    # `ctx job --tail 0` dumping the spool, in a display helper.
+    tail = max(0, width - keep - 1)
+    return p[:keep] + "…" + (p[len(p) - tail :] if tail else "")
 
 
 def _guided_step(n: int, total: int, title: str) -> None:

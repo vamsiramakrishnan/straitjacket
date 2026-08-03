@@ -348,6 +348,39 @@ def _read_settings_object(path: Path) -> dict:
     return parsed
 
 
+def merge_hook_stages(doc: dict, stages: dict) -> None:
+    """Append our hook entries into a foreign settings document, in place.
+
+    THE MERGE, not a check beside it. ``install_claude`` grew an
+    ``isinstance(bucket, dict)`` guard after a bug bash crashed it on a
+    ``"hooks": []``; ``install_codex`` performs the identical merge four
+    hundred lines away and did not inherit it, so the next bash crashed the
+    Codex door with the same raw AttributeError. That is the fifth door onto
+    this guard. A check every caller must remember is not a mechanism -- the
+    merge itself is now the only way to do this, so a sixth host cannot
+    forget it.
+
+    Raises SettingsUnreadable, which every caller already answers with
+    ``_refusal``: an untouched file and a message naming the problem. The
+    per-stage list check comes along for free, and closes a shape neither
+    bash reported (``{"hooks": {"PreToolUse": "nope"}}`` reached ``.extend``
+    on a string).
+    """
+    bucket = doc.setdefault("hooks", {})
+    if not isinstance(bucket, dict):
+        raise SettingsUnreadable(
+            f"its 'hooks' value is a JSON {type(bucket).__name__}, not an object"
+        )
+    for stage, entries in stages.items():
+        current = bucket.setdefault(stage, [])
+        if not isinstance(current, list):
+            raise SettingsUnreadable(
+                f"its 'hooks.{stage}' value is a JSON "
+                f"{type(current).__name__}, not an array"
+            )
+        current.extend(entries)
+
+
 def _refusal(path: Path, err: Exception, *, what: str) -> str:
     """What we say instead of destroying someone's configuration."""
     return "\n".join(
@@ -360,14 +393,46 @@ def _refusal(path: Path, err: Exception, *, what: str) -> str:
     )
 
 
+def _iter_hook_commands(settings: object):
+    """Yield every hook ``command`` string in an agent settings document,
+    tolerating any shape.
+
+    These files are foreign input — hand-edited, written by another tool, or
+    truncated mid-write — and the install path documents a graceful refusal
+    for malformed ones. The straightforward traversal
+    (``settings["hooks"].values()`` → iterate → ``group["hooks"]``) makes three
+    unchecked shape assumptions, and a bug bash confirmed that any of them
+    raises instead of refusing: ``hooks`` as a list gave an AttributeError out
+    of ``ctx wrap setup``, not the documented message.
+
+    Being shape-tolerant here, once, is the mechanism. Callers get "no ctx
+    hook found" for a malformed document and go on to the normal refusal path,
+    rather than each one growing its own try/except.
+    """
+    if not isinstance(settings, dict):
+        return
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for stage in hooks.values():
+        if not isinstance(stage, list):
+            continue
+        for group in stage:
+            if not isinstance(group, dict):
+                continue
+            entries = group.get("hooks")
+            if not isinstance(entries, list):
+                continue
+            for hook in entries:
+                if isinstance(hook, dict):
+                    yield str(hook.get("command", ""))
+
+
 def _hook_command_present(settings: dict, ctx_exe: str) -> bool:
     """True if a ctx-harness hook command is already registered."""
-    for stage in settings.get("hooks", {}).values():
-        for group in stage:
-            for hook in group.get("hooks", []):
-                cmd = str(hook.get("command", ""))
-                if " hook claude-code " in cmd or cmd.endswith("hook claude-code"):
-                    return True
+    for cmd in _iter_hook_commands(settings):
+        if " hook claude-code " in cmd or cmd.endswith("hook claude-code"):
+            return True
     return False
 
 
@@ -389,8 +454,13 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     if _hook_command_present(existing, exe):
         lines.append(".claude/settings.json hooks already harnessed; left unchanged")
     else:
-        for stage, entries in claude_hook_settings(exe)["hooks"].items():
-            merged.setdefault("hooks", {}).setdefault(stage, []).extend(entries)
+        try:
+            merge_hook_stages(merged, claude_hook_settings(exe)["hooks"])
+        except SettingsUnreadable as e:
+            # Refuse the same way an unparseable file is refused, a few lines
+            # above: a message and an untouched file. Raising here would have
+            # swapped one unhandled exception for another.
+            return _refusal(settings_path, e, what="Claude Code")
         lines.append("merged PreToolUse/PostToolUse hooks")
         changed = True
     # Status line, independently idempotent: add only when the user has none,
@@ -530,12 +600,13 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
         elif _hook_command_present_codex(cur, exe):
             lines.append(".codex/hooks.json already harnessed; left unchanged")
         else:
-            ours = json.loads(hooks_rendered)
-            cur.setdefault("hooks", {})
-            for stage, entries in ours["hooks"].items():
-                cur["hooks"].setdefault(stage, []).extend(entries)
-            hooks_path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
-            lines.append("merged ctx-harness hooks into .codex/hooks.json")
+            try:
+                merge_hook_stages(cur, json.loads(hooks_rendered)["hooks"])
+            except SettingsUnreadable as e:
+                lines.append(_refusal(hooks_path, e, what="Codex hooks"))
+            else:
+                hooks_path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+                lines.append("merged ctx-harness hooks into .codex/hooks.json")
 
     lines.append(_upsert_agents_block(root / "AGENTS.md", _render_codex_file("AGENTS.md", exe)))
 
@@ -546,11 +617,11 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
 
 
 def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
-    for stage in settings.get("hooks", {}).values():
-        for group in stage:
-            for hook in group.get("hooks", []):
-                if " hook codex " in str(hook.get("command", "")):
-                    return True
+    # Same shape-tolerant traversal as the Claude reader: .codex/hooks.json is
+    # foreign input too, and carried the identical unchecked assumptions.
+    for cmd in _iter_hook_commands(settings):
+        if " hook codex " in cmd:
+            return True
     return False
 
 
@@ -737,7 +808,18 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     except Exception as e:
         check("manifest schema", False, str(e)[:120])
 
-    # Hook self-test: classifier must emit a decision for a known flood.
+    # Hook self-test: an unbounded whole-suite run must never reach the
+    # terminal AS WRITTEN.
+    #
+    # This asserted `decision == "deny"`, which is one of the shapes that
+    # satisfy that property, not the property itself. Under the replacement
+    # surface a recognised loop-shape is ALLOWED and rewritten into the
+    # collapsed `ctx q` op -- the flood is contained by substitution rather
+    # than refusal -- so merely having captured one pytest failure earlier in
+    # the session (an entirely normal thing to have done) made `ctx doctor`
+    # report PROBLEMS FOUND while the guard was behaving exactly as designed.
+    # A self-test that pins a proxy fails when the implementation finds a
+    # better way to keep the promise.
     try:
         from ctx.hook import classify
 
@@ -748,7 +830,11 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
                 "workspacePaths": [str(ws.root)],
             }
         )
-        check("hook classifier", d.get("decision") == "deny", f"pytest → {d.get('decision')}")
+        verdict = str(d.get("decision"))
+        rewritten = isinstance(d.get("_rewrite"), dict)
+        contained = verdict in ("deny", "force_ask") or rewritten
+        how = f"pytest → {verdict}" + (" + collapsed rewrite" if rewritten else "")
+        check("hook classifier", contained, how)
     except Exception as e:
         check("hook classifier", False, str(e))
 

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="t d">
+<title id="t">straitjacket</title>
+<desc id="d">Two brackets bound by a pair of woven straps: an addressable container, cinched. Nothing leaves without a handle.</desc>
+<rect width="64" height="64" fill="#0A0C10"/>
+<rect x="1.5" y="1.5" width="61" height="61" fill="none" stroke="#30363D" stroke-width="3"/>
+<rect x="1.5" y="1.5" width="18" height="5" fill="#F0B429"/>
+<g transform="translate(32 32) scale(.75) translate(-32 -32)"><g fill="#E6EDF3"><path d="M6 8h15v6H12v36h9v6H6z"/><path d="M58 8H43v6h9v36h-9v6h15z"/></g><g stroke="#F0B429" stroke-width="7"><path d="M4 14 27.9 29.4"/><path d="M36.1 34.6 60 50"/><path d="M60 14 4 50"/></g></g>
+</svg>

@@ -94,11 +94,15 @@ def test_same_file_calls_bind_at_the_local_tier(ws_store):
 
     ws, store = ws_store
     g = _load_graph(store, ws)
+    # Node ids are file-scoped ("rel::qual"), so resolve names through the
+    # node table rather than indexing the edge maps by bare qual.
     for callee, caller in (("helper", "caller"), ("helperGo", "callerGo")):
-        edges = g.in_edges.get(callee, [])
-        assert any(c == caller and t == _TIER_LOCAL for c, _l, t in edges), (
-            f"{callee} <- {caller} should be a local-tier edge, got {edges}"
-        )
+        edges = [
+            e for nid, es in g.in_edges.items() if g.nodes[nid].qual == callee for e in es
+        ]
+        assert any(
+            g.nodes[c].qual == caller and t == _TIER_LOCAL for c, _l, t in edges
+        ), f"{callee} <- {caller} should be a local-tier edge, got {edges}"
 
 
 def test_call_site_lines_are_real(ws_store):
@@ -107,7 +111,10 @@ def test_call_site_lines_are_real(ws_store):
     ws, store = ws_store
     g = _load_graph(store, ws)
     # `helper(41)` is on line 6 of src/lib.rs.
-    assert any(c == "caller" and line == 6 for c, line, _t in g.in_edges["helper"])
+    edges = [
+        e for nid, es in g.in_edges.items() if g.nodes[nid].qual == "helper" for e in es
+    ]
+    assert any(g.nodes[c].qual == "caller" and line == 6 for c, line, _t in edges)
 
 
 def test_engine_label_names_the_polyglot_rung(ws_store):

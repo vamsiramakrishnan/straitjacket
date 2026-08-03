@@ -36,6 +36,25 @@ JSON_RESPONSE = json.dumps(
     }
 ).encode()
 
+
+def _gz(data: bytes) -> bytes:
+    """Deterministic gzip.
+
+    `gzip.compress(data)` stamps the CURRENT TIME into bytes 4–7 of the header,
+    so compressing the same payload twice yields different bytes whenever the
+    two calls straddle a second boundary. The gzip relay test compressed once
+    in the fake upstream and again in its own assertion, which made it a
+    time-dependent coin flip — green locally, red in CI at
+    `At index 4 diff: b' ' != b'!'`, exactly one second apart.
+
+    `mtime=0` removes the only non-deterministic field, so byte-exactness is
+    now a property of the relay rather than of the clock. A repository whose
+    thesis is deterministic digests should not ship a test that fails on the
+    calendar.
+    """
+    return gzip.compress(data, mtime=0)
+
+
 SSE_EVENTS = (
     b'event: message_start\n'
     b'data: {"type":"message_start","message":{"id":"msg_02","model":"claude-sonnet-5",'
@@ -122,7 +141,7 @@ class _Upstream(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             if gz:
-                payload = gzip.compress(payload)
+                payload = _gz(payload)
                 self.send_header("Content-Encoding", "gzip")
             self.end_headers()
             for i in range(0, len(payload), 40):  # dribble in small pieces
@@ -130,7 +149,7 @@ class _Upstream(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 time.sleep(0.005)
         else:
-            payload = gzip.compress(JSON_RESPONSE) if gz else JSON_RESPONSE
+            payload = _gz(JSON_RESPONSE) if gz else JSON_RESPONSE
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             if gz:
@@ -360,7 +379,7 @@ def test_gzip_json_relayed_compressed_and_observed(proxy, upstream):
         srv.server_address[1], "/v1/messages", REQ_BODY, {"Accept-Encoding": "gzip"}
     )
     assert status == 200
-    assert data == gzip.compress(JSON_RESPONSE)  # compressed bytes, byte-exact
+    assert data == _gz(JSON_RESPONSE)  # compressed bytes, byte-exact
     # The client's Accept-Encoding reached the upstream unmodified.
     assert upstream.captured[0]["headers"]["accept-encoding"] == "gzip"
     window = _wait_window(state, requests=1)

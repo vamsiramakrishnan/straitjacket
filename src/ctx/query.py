@@ -60,6 +60,10 @@ orderings everywhere; content-addressed provenance only).
 
 from __future__ import annotations
 
+import math
+
+from ctx import bounds
+
 import difflib
 import json
 import os
@@ -117,6 +121,17 @@ class Stream:
     # population (``corpus``) attaches {considered, selected, engine, …} here;
     # the executor carries it through combinators and the renderer declares it.
     coverage: dict | None = None
+    # Why rows were dropped, and the flag that gets them back. Appended LAST
+    # on purpose: Stream is constructed positionally in places
+    # (``Stream("sites", [], 3, [("k", 3)])``), and a field inserted mid-list
+    # silently rebinds those arguments -- which is what the back-compat test
+    # for this dataclass exists to catch, and did.
+    #
+    # The default tail ("narrow with where/top") is right for a row cap and
+    # wrong for everything else: callers/callees/impact drop UNSCOPED edges,
+    # which no narrowing recovers. A drop declared with the wrong remedy is
+    # only half-declared.
+    omitted_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -372,8 +387,43 @@ def parse_query(text: str) -> list[tuple[str, list[str]]]:
 
 
 # ------------------------------------------------------------ arg helpers
+#: Flags that take NO value. Everything else in a stage's arg list consumes
+#: the token after it, which is what makes that token not a positional.
+#: Keeping the boolean set (small, enumerable) rather than the value set
+#: means a new value-taking flag is handled correctly by default.
+#: tests/test_query.py pins this against the flags the stages actually read.
+_BOOLEAN_FLAGS = frozenset({"--changed", "--jsonl", "--unscoped"})
+
+
+def _positionals(args: list[str]) -> list[str]:
+    """The tokens that are genuinely positional.
+
+    ``[a for a in args if not a.startswith("--")]`` is a DIFFERENT parse of
+    the same list than ``_flag`` performs: ``_flag`` knows the token after
+    ``--depth`` is that flag's value, and this did not. So
+    ``impact --depth 3 run_query`` handed ``"3"`` to the stage as its symbol
+    and dropped the real one -- silently, with no error, returning a
+    plausible empty answer for a symbol nobody asked about. Flag order is
+    not something a caller should have to know.
+
+    Two parsers over one argument list is the same defect shape as two glob
+    dialects over one path: each is locally reasonable and they disagree.
+    """
+    out: list[str] = []
+    expect_value = False
+    for a in args:
+        if expect_value:
+            expect_value = False
+            continue
+        if a.startswith("--"):
+            expect_value = a not in _BOOLEAN_FLAGS
+            continue
+        out.append(a)
+    return out
+
+
 def _need_arg(args: list[str], stage: str, what: str) -> str:
-    pos = [a for a in args if not a.startswith("--")]
+    pos = _positionals(args)
     if not pos:
         raise QueryError(f"ctx q: stage {stage!r} needs {what}")
     return pos[0]
@@ -396,9 +446,14 @@ def _multi_flag(args: list[str], name: str) -> list[str]:
     out: list[str] = []
     for i, a in enumerate(args):
         if a == name:
-            if i + 1 >= len(args):
+            # A following FLAG is a missing value, not a value. _flag has
+            # always refused this for singular flags; _multi_flag swallowed
+            # the next token whatever it was, so `--glob --ext py` silently
+            # globbed for the literal string "--ext".
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt is None or nxt.startswith("--"):
                 raise QueryError(f"ctx q: {name} needs a value")
-            out.append(args[i + 1])
+            out.append(nxt)
     return out
 
 
@@ -423,6 +478,16 @@ def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     return out
 
 
+#: The remedy for an unscoped drop. `ctx callers/impact` already declare this
+#: tail via callgraph._omission_note; the q stages filtered the same edges and
+#: said nothing, so `ctx ask --intent impact` reported 0 rows for a symbol with
+#: hundreds of real callers -- an empty answer that looked like a fact.
+_UNSCOPED_REASON = (
+    "unscoped: name matched repo-wide but the caller's file neither defines "
+    "nor imports the target; resolve with --unscoped"
+)
+
+
 def _callgraph(qc: _Ctx):
     from ctx import callgraph
 
@@ -435,15 +500,26 @@ def _stage_callers(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     call it claims to have found. Unscoped edges are excluded — a query
     algebra row is consumed as a fact by later stages."""
     symbol = _need_arg(args, "callers", "a <Symbol>")
+    # The flag the omission note tells the reader to use. It was registered
+    # as a recognized token and never READ, so `ctx q 'callers X --unscoped'`
+    # returned the scoped answer again -- the remedy the tool prints being a
+    # no-op is worse than no remedy, because it looks answered.
+    unscoped = "--unscoped" in args
     cg, g = _callgraph(qc)
     rows = []
+    hidden = 0
     for t in cg._resolve_target(g, symbol):
         for qual, line, tier in g.in_edges.get(t, []):
             n = g.nodes.get(qual)
-            if n is not None and tier != cg._TIER_REPO:
-                rows.append({"file": n.rel, "line": line, "symbol": qual})
+            if n is None:
+                continue
+            if tier == cg._TIER_REPO and not unscoped:
+                hidden += 1  # declared below, never silently dropped
+                continue
+            rows.append({"file": n.rel, "line": line, "symbol": n.qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
@@ -451,31 +527,43 @@ def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     cg, g = _callgraph(qc)
     rows = []
     seen: set[str] = set()
+    hidden = 0
+    unscoped = "--unscoped" in args
     for t in cg._resolve_target(g, symbol):
         for _name, _line, quals, tier in g.out_edges.get(t, []):
-            if tier == cg._TIER_REPO:
+            if tier == cg._TIER_REPO and not unscoped:
+                hidden += 1
                 continue
             for qual in quals:
                 n = g.nodes.get(qual)
                 if n is not None and qual not in seen:
-                    seen.add(qual)
-                    rows.append({"file": n.rel, "line": n.lineno, "symbol": qual})
+                    seen.add(qual)  # node id: two files' same-named defs are two rows
+                    rows.append({"file": n.rel, "line": n.lineno, "symbol": n.qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "impact", "a <Symbol>")
-    depth = max(1, min(_flag(args, "--depth", 6, int), 6))
+    depth = min(bounds.count(_flag(args, "--depth", 6, int)), 6)
     cg, g = _callgraph(qc)
     rows: list[dict] = []
     targets = cg._resolve_target(g, symbol)
-    for qual, d in cg._reachable(g, targets, depth, False).items():
+    unscoped = "--unscoped" in args
+    scoped = cg._reachable(g, targets, depth, unscoped)
+    for qual, d in scoped.items():
         n = g.nodes.get(qual)
         if n is not None:
-            rows.append({"file": n.rel, "line": n.lineno, "symbol": qual, "depth": d})
+            rows.append({"file": n.rel, "line": n.lineno, "symbol": n.qual, "depth": d})
     rows.sort(key=lambda r: (r["depth"], r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    # Reachability COMPOUNDS the omission: one dropped edge at depth 1 hides
+    # its whole cone, so the honest count is the difference between the two
+    # walks, not the number of edges skipped. A second bounded BFS is the
+    # only way to say a true number.
+    hidden = len(set(cg._reachable(g, targets, depth, True)) - set(scoped))
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
@@ -730,7 +818,9 @@ def _stage_group(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 def _stage_top(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     raw = _need_arg(args, "top", "an <N>")
     try:
-        n = max(1, int(raw))
+        # bounds.count, not max(1, ...): `top 0` must yield zero rows. Flooring
+        # at 1 turned an explicit request for nothing into one row (ctx.bounds).
+        n = bounds.count(int(raw))
     except ValueError as e:
         raise QueryError(f"ctx q: top needs an integer, got {raw!r}") from e
     if stream.groups is not None:
@@ -750,6 +840,26 @@ def _stage_top(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 _WHERE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(!=|=|~)(.*)$")
 
 
+def _regroup(groups, rows):
+    """Recompute a group census from surviving rows, preserving group order.
+
+    ``groups`` is a census OF ``rows``; the moment a stage filters rows it
+    becomes a statement about data that is no longer there. Carrying it
+    through unchanged is how `where` fed a stale census to every stage after
+    it -- `top` picked groups by pre-filter rank and `count` reported
+    pre-filter totals, both silently. Emptied groups drop out; the surviving
+    order is the order they already had, so determinism is unaffected.
+    """
+    if groups is None:
+        return None
+    counts: dict = {}
+    for r in rows:
+        g = r.get("_group")
+        if g is not None:
+            counts[g] = counts.get(g, 0) + 1
+    return [(k, counts[k]) for k, _ in groups if counts.get(k)]
+
+
 def _stage_where(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     cond = _need_arg(args, "where", "a <field><op><value> (ops: = != ~)")
     m = _WHERE_RE.match(cond)
@@ -767,7 +877,8 @@ def _stage_where(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         keep = lambda r: val in str(r.get(fld, ""))  # noqa: E731
     rows = [r for r in stream.rows if keep(r)]
     out = Stream(stream.kind, rows, omitted=stream.omitted)
-    out.groups = stream.groups
+    # Derived state must not outlive its source (see _regroup).
+    out.groups = _regroup(stream.groups, rows)
     return out
 
 
@@ -795,12 +906,27 @@ def _stage_histogram(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     equal-width buckets; otherwise a categorical census sorted by
     (-count, value), capped at the bucket count with declared omission."""
     fld = _need_arg(args, "histogram", "a <field>")
-    n_buckets = max(1, _flag(args, "--buckets", _HISTOGRAM_BUCKETS, int))
+    n_buckets = bounds.count(_flag(args, "--buckets", _HISTOGRAM_BUCKETS, int))
+    if n_buckets == 0:
+        # Zero buckets is an empty census, not one bucket and not a crash.
+        # `max(1, ...)` used to hide this: it floored the request to a single
+        # bucket, which silently widened it. Routing through bounds.count made
+        # the zero real and exposed that the arithmetic below divides by this
+        # value -- a defensive floor doing load-bearing work by accident.
+        return Stream("records", [], omitted=stream.omitted)
     raw = [str(r.get(fld, "")) for r in stream.rows]
     nums: list[float] | None
     try:
         nums = [float(v) for v in raw] if raw else None
     except ValueError:
+        nums = None
+    # `float("inf")` and `float("nan")` parse without raising, then poison
+    # every downstream arithmetic step: (hi - lo) is inf or nan, the bucket
+    # width follows, and int() of the result raises OverflowError out of a
+    # stage documented as always producing a bounded census. A field holding
+    # a non-finite value is not a numeric distribution -- fall back to the
+    # categorical census, which is total by construction.
+    if nums is not None and not all(math.isfinite(v) for v in nums):
         nums = None
     if nums:
         lo, hi = min(nums), max(nums)
@@ -1048,10 +1174,8 @@ def _render(
     shown_rows = out.rows[:RENDER_CAP]
     census = f"rows (census): {fmt_int(total)} · shown: {fmt_int(len(shown_rows))}"
     if out.omitted:
-        census += (
-            f" · capped: {fmt_int(out.omitted)} rows omitted upstream (declared; "
-            "narrow with where/top)"
-        )
+        why = out.omitted_reason or "declared; narrow with where/top"
+        census += f" · capped: {fmt_int(out.omitted)} rows omitted upstream ({why})"
     lines.append(census)
     if out.coverage:
         cov = out.coverage

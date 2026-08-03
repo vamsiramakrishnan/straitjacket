@@ -587,6 +587,40 @@ def _escalate(
     )[0]
 
 
+def _actual_cost(assigned, outcome) -> float:
+    """What this node cost, preferring the model that ran over the one planned.
+
+    Derived state must not outlive its source: an escalation changes the
+    model, so it changes the price, and a bound computed from the old one is
+    not a bound.
+    """
+    est = float(getattr(assigned, "est_cost_usd", 0.0) or 0.0)
+    # `escalated_to` is host-qualified ("antigravity/gemini-3.6-flash"); the
+    # planned model is assigned.model (NOT assigned.host.model, which does not
+    # exist -- the first cut read it, got None, and silently charged the cheap
+    # estimate exactly as before).
+    ran = str(getattr(outcome, "escalated_to", "") or "").rsplit("/", 1)[-1]
+    planned = str(getattr(getattr(assigned, "model", None), "id", "") or "")
+    if not ran or ran == planned:
+        return est
+    try:
+        from ctx.pricing import price_for
+
+        old_p, new_p = price_for(planned), price_for(ran)
+        old_rate = float(getattr(old_p, "output", 0.0) or 0.0)
+        new_rate = float(getattr(new_p, "output", 0.0) or 0.0)
+        if old_rate > 0 and new_rate > 0 and new_rate > old_rate:
+            return est * (new_rate / old_rate)
+    except Exception:
+        pass
+    # The escalation HAPPENED -- we are here only because a different model
+    # ran -- but pricing could not tell the two apart (both unknown, or both
+    # on the vendor-neutral fallback). Charging the original estimate would
+    # say the escalation was free. A bound that guesses low is the direction
+    # that overruns, which is the defect being fixed, so guess high.
+    return est * 2
+
+
 def run_route(
     ws,
     plan: RoutePlan,
@@ -683,7 +717,13 @@ def run_route(
                     from ctx.checkpoint import show_checkpoint
 
                     docs[a.node.id] = show_checkpoint(store, ws, o.checkpoint_ref)
-            spent_est += a.est_cost_usd
+            # The cost of the model that actually RAN. a.est_cost_usd is
+            # computed once at plan-build time from the originally assigned
+            # model, so when a node failed and run_one escalated it to a
+            # stronger, pricier one, the loop kept charging itself the cheap
+            # estimate -- and budget_usd, documented as one of this loop's
+            # bounds, could be overrun without ever appearing to be.
+            spent_est += _actual_cost(a, o)
         if budget > 0 and spent_est >= budget:
             break
 

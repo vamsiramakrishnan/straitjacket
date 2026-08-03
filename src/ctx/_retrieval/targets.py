@@ -3,9 +3,9 @@ streams, blobs, and repo files) and how each kind is resolved."""
 
 from __future__ import annotations
 
-import fnmatch
 from dataclasses import dataclass
 
+from ctx import pathglob
 from ctx.refs import Ref
 from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
@@ -16,10 +16,14 @@ from .common import RetrievalError, _peek_blob
 
 
 def _glob_match(rel: str, glob: str) -> bool:
-    """fnmatch with the convention that ``**/x`` also matches top-level ``x``."""
-    if fnmatch.fnmatch(rel, glob):
-        return True
-    return glob.startswith("**/") and fnmatch.fnmatch(rel, glob[3:])
+    """One glob dialect, shared with the ignore matcher (see ctx.pathglob).
+
+    Was raw ``fnmatch``, whose ``*`` crosses ``/``: ``--glob 'src/*.py'``
+    reached ``src/sub/nested.py`` here while the same pattern did not on the
+    ignore side. ``**/x`` still matches a top-level ``x`` -- gitwildmatch
+    gives that natively rather than by special case.
+    """
+    return pathglob.matches(rel, glob)
 
 
 def _stream_text(store: Store, blob_ref: str) -> str:

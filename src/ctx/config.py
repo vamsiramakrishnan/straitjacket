@@ -200,9 +200,61 @@ class Config:
     deny_globs: tuple[str, ...] = BUILTIN_DENY_GLOBS
 
 
+def _coerce_like(default: Any, value: Any) -> Any:
+    """``value`` as the same TYPE as ``default``, or ``default`` if it cannot.
+
+    ctx.toml is foreign input: a user hand-edits it, and TOML happily parses
+    `max_inline_bytes = "lots"` as a perfectly valid string. Config declares
+    a fail-open contract for malformed files (SPEC 15) and it only covered
+    SYNTAX errors -- a well-formed file with a wrong-typed value flowed
+    straight through to consumers, where it surfaced as an uncaught
+    ValueError from `int()` or a TypeError from `n <= budget`. Three
+    separate commands crashed that way, each looking like its own bug.
+
+    Coercing at LOAD time means no consumer can meet an un-numeric number,
+    which is one guard instead of one per arithmetic site.
+    """
+    if isinstance(default, bool):  # before int: bool IS an int
+        return value if isinstance(value, bool) else default
+    if isinstance(default, int):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(default, float):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(default, str):
+        return value if isinstance(value, str) else default
+    if isinstance(default, tuple):
+        return tuple(value) if isinstance(value, (list, tuple)) else default
+    return value
+
+
+def _str_tuple(value: Any) -> tuple[str, ...]:
+    """A tuple of strings from a TOML value, or () if it is not a list.
+
+    A bare `tuple(str(x) for x in value)` iterates whatever it is given: an
+    int raises TypeError out of load_config, which every command calls, so a
+    single typo in ctx.toml broke the entire tool rather than that one
+    setting. A string would be worse than a crash -- it would iterate into
+    per-character rules.
+    """
+    if isinstance(value, (list, tuple)):
+        return tuple(str(x) for x in value)
+    return ()
+
+
 def _pick(data: dict[str, Any], cls: type, **overrides: Any) -> Any:
     names = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-    kwargs = {k: v for k, v in data.items() if k in names}
+    proto = cls()  # every config section is fully defaulted
+    kwargs = {
+        k: _coerce_like(getattr(proto, k), v)
+        for k, v in data.items()
+        if k in names
+    }
     kwargs.update(overrides)
     return cls(**kwargs)
 
@@ -239,10 +291,15 @@ def load_config(workspace_root: Path | None) -> Config:
         mode=str(guard_raw.get("mode", gd.mode)),
         unknown_command=str(guard_raw.get("unknown_command", gd.unknown_command)),
         internal_error=str(guard_raw.get("internal_error", gd.internal_error)),
-        steering=str(guard_raw.get("steering", gd.steering)),
-        collapse=bool(guard_raw.get("collapse", gd.collapse)),
-        allow_commands=tuple(str(x) for x in guard_raw.get("allow_commands", ())),
-        deny_commands=tuple(str(x) for x in guard_raw.get("deny_commands", ())),
+        steering=_coerce_like(gd.steering, guard_raw.get("steering", gd.steering)),
+        # `bool()` on a non-bool is a SILENT reinterpretation, not a
+        # coercion: `collapse = "no"` is truthy and turns the flag ON.
+        collapse=_coerce_like(gd.collapse, guard_raw.get("collapse", gd.collapse)),
+        # _str_tuple, not a bare generator: `deny_commands = 42` iterated an
+        # int and crashed load_config -- and load_config is on the path of
+        # every command, so one typo in ctx.toml broke the whole tool.
+        allow_commands=_str_tuple(guard_raw.get("allow_commands", ())),
+        deny_commands=_str_tuple(guard_raw.get("deny_commands", ())),
     )
     orchestrate = _pick(raw.get("orchestrate") or {}, OrchestratePolicy)
     store = _pick(raw.get("store") or {}, StorePolicy)
@@ -254,11 +311,14 @@ def load_config(workspace_root: Path | None) -> Config:
     ed = Engagement()
     engagement = Engagement(
         mode=str(eng_raw.get("mode", ed.mode)),
-        activate_after_calls=int(eng_raw.get("activate_after_calls", ed.activate_after_calls)),
+        activate_after_calls=_coerce_like(
+            ed.activate_after_calls, eng_raw.get("activate_after_calls", ed.activate_after_calls)
+        ),
         lean_models=tuple(
             str(m) for m in eng_raw.get("lean_models", ed.lean_models)
         ),
-        emission_nudge_tokens=int(
+        emission_nudge_tokens=_coerce_like(
+            ed.emission_nudge_tokens,
             eng_raw.get("emission_nudge_tokens", ed.emission_nudge_tokens)
         ),
     )
@@ -271,7 +331,11 @@ def load_config(workspace_root: Path | None) -> Config:
     if not isinstance(red_patterns, list):
         red_patterns = list(Redaction().patterns)
     redaction = Redaction(
-        enabled=bool(red_raw.get("enabled", True)),
+        # NOT bool(): a non-bool value there silently DISABLED redaction in
+        # one direction and enabled it in the other, and this flag decides
+        # whether secrets are stripped from model-visible output. Fail open
+        # to the documented default instead.
+        enabled=_coerce_like(True, red_raw.get("enabled", True)),
         patterns=tuple(str(p) for p in red_patterns),
     )
 
@@ -282,7 +346,7 @@ def load_config(workspace_root: Path | None) -> Config:
     }
 
     return Config(
-        version=int(raw.get("version", 1)),
+        version=_coerce_like(1, raw.get("version", 1)),
         repo_key=raw.get("repo_key"),
         workspace=ws,
         budgets=budgets,

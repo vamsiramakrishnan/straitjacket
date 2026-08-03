@@ -58,6 +58,8 @@ is unchanged and byte-identical. See :func:`_auto_capture_fails` and
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import contextlib
 import hashlib
 import os
@@ -429,7 +431,17 @@ def derive_run(
         if conn is None:
             return result
         key = f"run:{run_id}"
-        if _meta_get(conn, key) == mid_full:
+        # The cached fingerprint is (manifest id, extractor epoch), not the
+        # manifest id alone. The manifest cannot move when this harness learns
+        # to extract facts from a runner it previously only rendered, so a
+        # store that had already derived such a run short-circuited here
+        # forever and kept serving the old pytest-only census. Deriving what
+        # the extraction depends on into the key is the difference between a
+        # cache and a trap.
+        from ctx.digest import extractor_epoch
+
+        cache_fingerprint = f"{mid_full}/{extractor_epoch()}"
+        if _meta_get(conn, key) == cache_fingerprint:
             with conn:
                 _meta_put(conn, "latest_run", run_id)
             result["skipped"] = True
@@ -439,11 +451,35 @@ def derive_run(
             result["ok"] = True
             return result
 
+        from ctx.digest import detect_profile
         from ctx.digest.base import DigestContext
         from ctx.digest.pytestprof import extract_pytest
 
         dctx = DigestContext.load(store, ws, manifest, focus=None)
-        graph = extract_pytest(dctx)
+        # The SAME profile the digest renders with. This called
+        # extract_pytest unconditionally, so the fact tier knew exactly one
+        # runner while the digest tier knew several: a captured
+        # `python -m unittest` run rendered as unittest/v1 with real
+        # failures and inserted ZERO fail rows, and `ctx q 'fails last'`
+        # then answered "no captured test run" about a run captured seconds
+        # earlier. Selecting here means a new runner profile feeds the
+        # census the day it can extract, instead of becoming the next silent
+        # blind spot.
+        profile, _reason = detect_profile(dctx)
+        try:
+            graph = profile.extract(dctx)
+        except Exception as e:
+            # Never let a broken extractor read as "this run had no
+            # failures" -- that is the same silence this whole fix is about.
+            _note_error(f"facts.extract.{profile.version}", e)
+            graph = None
+            result["extractor_error"] = f"{type(e).__name__}: {e}"
+        if graph is None:
+            # A profile with no extractor yet: fall back to the pytest
+            # extractor rather than recording nothing, since many runners
+            # emit pytest-shaped summary lines even when they are not pytest.
+            graph = extract_pytest(dctx)
+        result["profile"] = profile.version
         result["outcome"] = graph.outcome
         generation = current_generation(ws)
         rows: list[tuple] = []
@@ -478,7 +514,7 @@ def derive_run(
                 "VALUES (?,?,?,?,?,?)",
                 rows,
             )
-            _meta_put(conn, key, mid_full)
+            _meta_put(conn, key, cache_fingerprint)
             _meta_put(conn, "latest_run", run_id)
         result.update(ok=True, fail=len(rows))
         return result
@@ -643,7 +679,7 @@ def failing_in_changed(
                              "precision": "file-level (no skeleton facts)"}
                         )
             rows.sort(key=lambda r: (r["file"], r["line"], r["test"]))
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -681,7 +717,7 @@ def untouched_failures(
                 "WHERE NOT EXISTS (SELECT 1 FROM changed c "
                 "WHERE c.generation=? AND c.file=f.file)"
                 + run_sql + " ORDER BY f.file, f.line, f.test LIMIT ?",
-                (gen, *run_args, max(1, int(limit))),
+                (gen, *run_args, bounds.count(limit)),
             ).fetchall()
             return [
                 {"test": t, "failure_class": c, "file": f, "line": ln}
@@ -749,7 +785,7 @@ def shared_cause_groups(
                 key=lambda r: (-r["count"], r["group"], r["file"],
                                str(r.get("failure_class") or r.get("symbol") or ""))
             )
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -822,7 +858,7 @@ def symbol_neighbors(
                          "precision": "same file+scope (v1 structural heuristic)"}
                     )
             rows.extend(sibling_rows)
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -846,15 +882,26 @@ def fails_sites(
         if conn is None:
             return []
         try:
-            run_id = _short_id(str(run).removeprefix("run:")) if run else _meta_get(
-                conn, "latest_run"
-            )
+            if run:
+                run_id = _short_id(str(run).removeprefix("run:"))
+            else:
+                # "last" means the last CAPTURED run, not the last DERIVED
+                # one. `latest_run` is a pointer written when derivation
+                # happens, and nothing re-derives on a fresh `ctx run` -- so
+                # once `ctx ask --intent diagnose` had been asked once, it
+                # answered about that same run forever, while the user kept
+                # capturing new failures and getting the old census.
+                #
+                # The derived pointer is a CACHE. The newest capture is the
+                # answer, and it is only fallen back on when there are no
+                # captures at all.
+                run_id = _newest_captured(store) or _meta_get(conn, "latest_run")
         finally:
             conn.close()
         if run_id is not None:
             rows = _fails_for(store, run_id)
             if rows:
-                return rows[: max(1, int(limit))]
+                return rows[: bounds.count(limit)]
         # Not derived yet: derive on demand (explicit ref, or newest capture).
         derived = derive_run(store, ws, f"run:{run_id}") if run_id else _derive_newest(
             store, ws
@@ -862,7 +909,7 @@ def fails_sites(
         if not derived.get("ok"):
             return []
         rows = _fails_for(store, str(derived.get("run") or run_id))
-        return rows[: max(1, int(limit))]
+        return rows[: bounds.count(limit)]
     except Exception as e:
         _note_error("facts.fails_sites", e)
         return []
@@ -885,6 +932,19 @@ def _fails_for(store: Store, run_id: str) -> list[dict[str, Any]]:
         ]
     finally:
         conn.close()
+
+
+def _newest_captured(store: Store) -> str | None:
+    """Id of the newest captured run, or None. created_at is operational
+    metadata -- it selects WHICH run, never enters fact content."""
+    try:
+        row = store.db.execute(
+            "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC, id LIMIT 1"
+        ).fetchone()
+        return str(row[0]) if row else None
+    except Exception as e:
+        _note_error("facts._newest_captured", e)
+        return None
 
 
 def _derive_newest(store: Store, ws: Workspace) -> dict[str, Any]:
@@ -979,7 +1039,7 @@ def decls_rows(
             sql = ("SELECT symbol, kind, file, line_a, line_b, scope, span FROM decl "
                    + ("WHERE kind=? " if kind else "")
                    + "ORDER BY file, line_a, symbol LIMIT ?")
-            args: tuple = (kind, max(1, int(limit))) if kind else (max(1, int(limit)),)
+            args: tuple = (kind, bounds.count(limit)) if kind else (bounds.count(limit),)
             return [
                 {"symbol": s, "kind": k, "file": f, "line": a, "line_b": b,
                  "scope": sc, "span": sp}
@@ -1198,10 +1258,13 @@ def _stage_fails(qc, stream, args: list[str]):
 def _stage_in_changed(qc, stream, args: list[str]):
     from ctx.query import Stream
 
-    generation: str | None = None
-    for a in args:
-        if not a.startswith("--"):
-            generation = a
+    # Third parser over one arg list is how the flag-steals-the-positional
+    # defect happened in query._need_arg; this one takes the LAST bare token
+    # rather than the first, so `--kind x` would have set generation="x".
+    from ctx.query import _positionals
+
+    pos = _positionals(args)
+    generation: str | None = pos[-1] if pos else None
     # Live-path auto-derive (found by the pre-live smoke, not the referee:
     # the referee derived explicitly). With no explicit generation, ensure
     # the current worktree's changed() facts exist — derive_generation is

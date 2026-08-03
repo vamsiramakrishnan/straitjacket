@@ -6,6 +6,143 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+### The prefix budget is measured, not narrated
+
+**What the harness actually costs a session: ~708 tokens.** Not the ~3,800 an
+earlier reading of this module produced.
+
+`prefix_assets()` tracks five cache-keyed texts, and only some are resident in
+every prompt. That distinction lived in a docstring, and the docstring was
+misread: summing all five counts the 2,586-token skill body (loaded only when
+the skill triggers) and the whole 638-token explorer agent (only its
+description enters the parent prompt; the body travels with the subagent). The
+result was a **5.4× overstatement of this project's own overhead**, in the
+direction that makes it look worse.
+
+Fixed at the root rather than in prose. The split is now data —
+`RESIDENT_ASSETS` and `DEFERRED_ASSETS` — with `resident_bytes()` and
+`budget_report()` reading it, and `tests/test_prefix_budget.py` holding it to
+the published numbers. A new prefix asset must be classified or the suite
+fails, so the budget cannot silently stop describing reality.
+
+The resident total also gains a **ceiling**: under 1,000 tokens, asserted.
+That is the number a user pays on every session in every repository forever,
+so growth in it should require someone to raise the limit on purpose.
+
+Also corrected below: an entry that claimed a cold-cache cost for a skill-body
+edit that is not prefix-resident.
+
+### `q` reaches the bounded tier, and the replacement surface triples
+
+**Prompt-cache impact: `PREFIX_VERSION` 8 → 9** (the MCP tool description is a
+prefix asset). Same one-time cold-cache cost as the 7 → 8 bump below; users
+upgrading across both pay it once.
+
+**The composition algebra is now an MCP op.** `ctx q` — a total pipeline over
+typed record streams, 17 stages, joined by `|`, no loops, no recursion, hard
+8-stage cap — shipped CLI-only, on the recorded grounds that MCP wiring would
+churn the prefix asset. The cost of that deferral was that the sharpest
+turn-compressing surface in the harness (locate → narrow → read in *one* call
+rather than three round-trips) was reachable only by shelling out, while the
+bounded tier got the heavier `investigate` plan interface instead. One enum
+entry plus one options key is a far smaller prefix delta than the tool it was
+implicitly being weighed against, so: `op: "q"`, `options.pipeline`.
+
+Totality is the whole argument for why it is safe there — statically boundable
+cost is exactly the property `ctx py` lacks, and why py stays CLI-only. Bounds
+are inherited rather than re-implemented: `run_query` already bounds its render
+against `result_tokens`, which `_dispatch` tightens to the caller's
+`maxTokens`. A malformed pipeline **raises** rather than returning its teaching
+line as content — as content, a failure description reaches the model as a
+*successful* result, which is the fail-open shape this codebase keeps finding.
+
+**The replacement surface goes from 3 command shapes to 8.** rtk's breadth idea
+vendored: `head -n N`, `sed -n 'A,Bp'`, `wc -l`, `find -name`, and
+`ls -R`/`tree` now collapse to their bounded, addressed equivalents. This was
+never an architectural gap — a substitution only ships where a bounded `ctx` op
+means the *same* thing, and nobody had walked the common commands looking for
+those pairs.
+
+The bar is **equivalence, not plausibility**, and it earned its keep
+immediately: the first cut generated `corpus --glob X | files`, which is a type
+error (`corpus` already emits `files`; the `files` stage consumes `sites`), so
+every substituted `find` and `ls -R` would have handed the agent an invalid
+pipeline. The equivalence test caught it before it shipped.
+
+Most of `tests/test_substitute_common_commands.py` is negative cases,
+deliberately — a recogniser that fires too eagerly answers a question the
+operator did not ask, under their own command, which is this project's own
+complaint about the lossy filters. So `tail` is **not** handled (`ctx get` has
+no from-the-end window; any mapping would guess), `head -c` is not (byte mode
+is a different range unit), `find … -exec`/`-delete` are never rewritten (they
+have effects), and a flat `ls` is left alone (cheap and honest).
+
+Still unmeasured, and filed as `ctx debt`: which commands agents actually run.
+All five rungs were chosen by inspection — the same guessing the field scan
+criticised. A command-frequency corpus is the instrument that would replace it.
+
+### The solution ladder gains its missing rung — and a safety exemption
+
+**Prompt-cache impact: none — correcting an earlier claim in this entry.**
+This originally said the rule-13 edit cold-invalidates every prompt cache at a
+cost of ~56k tokens / ~$0.21 per model. That was wrong. Rule 13 lives in the
+skill **body**, which is loaded when the skill triggers and is *not*
+prefix-resident; the bump policy is "only when prefix-resident bytes change".
+The manifest needed regenerating, the version did not need bumping, and users
+pay nothing for this edit. `PREFIX_VERSION` still moved 7 → 8, which is
+harmless and is left in place rather than rewritten.
+
+The underlying mistake — reading "tracked as a cache-keyed asset" as
+"resident in every prompt" — is the same one that produced a 5.4×
+overstatement of this project's own per-session overhead. It is now fixed at
+the root: see *The prefix budget is measured, not narrated* below.
+
+A rung-by-rung audit of our ladder against the
+[Ponytail](https://www.alphamatch.ai/blog/ponytail-ai-coding-skill-2026)
+decision ladder (written up in `evals/field-devex-2026-08-02.md`) found we had
+adopted five of six rungs and were missing one: **"is there a native platform
+or runtime feature?"** — the rung that catches a hand-written helper for
+something the language or host already does. Added.
+
+Also added: an explicit **exemption list**. The ladder does not apply to trust
+boundaries, data loss, security, or accessibility; on those four, write the
+fuller version. Ponytail carries the same carve-out and we did not, which left
+a foreseeable failure where "prefer the one-liner" meets an input-validation
+path.
+
+Rung *order* deliberately still differs from Ponytail's: they check stdlib
+before installed dependencies, we check *reuse what exists* first. Reaching for
+`hashlib` when the repo already exposes a shared helper is the wrong move even
+though both are "simple" — not hypothetical, it is exactly the defect an
+automated reviewer found in this branch's rewrite guard.
+
+### Field scan: two neighbours added, two devex gaps admitted
+
+`evals/field-devex-2026-08-02.md` — desk research, explicitly not a
+head-to-head, and explicitly not permitted to move any published performance
+number. Adds **TokenSave** and **wozcode** to `docs/COMPARISONS.md` and records
+two places the field beats us:
+
+- **Distribution.** Every peer installs in one step from a published artifact;
+  we are `git clone` → `pip install -e .`. `ctx wrap setup` is the best
+  onboarding step in the field and is unreachable until that is fixed.
+- **Malleability.** Teaching the harness a new output family means editing
+  `src/ctx/digest/` and the `_PROFILES` tuple — carrying a fork. Maki's users
+  shape their agent from a user-space `init.lua`. A closed profile registry
+  caps a system whose whole thesis is that output families are diverse.
+
+Both are filed as `ctx debt`, not fixed here.
+
+### README and docs: the two surfaces you actually install
+
+The MCP server and the skill now have sections explaining what makes them
+*good*, not just what they are: one stable tool with an `op` discriminator
+(against the 40+-tool alternative, with the prefix-churn argument and the
+discoverability cost both stated), bounds declared in the schema *and* clamped
+at runtime, no execution surface, and — for the skill — progressive disclosure,
+trigger-condition descriptions, numbered scoreable rules, and the honest note
+that advisory means bypassable.
+
 ### The call graph gets scope, a second language, and its disclosure back
 
 `ctx callers/callees/impact` were the only code verbs that did not ride the
