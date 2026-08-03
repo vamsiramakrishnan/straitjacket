@@ -267,6 +267,28 @@ The most common question — which verb do I use — as a flowchart:
 Use the lightest verb the work allows. Anything that outlives the wait
 backgrounds into a `job:` handle instead of idling the session.
 
+### …and the other eight
+
+The capture ladder is one of **nine**. Same shape everywhere in the system:
+start on the cheapest rung, escalate only when the work demands it. What
+differs is *who* climbs — the model, the hook, or a static setting — and,
+more importantly, whether anyone measured the climb:
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ladders-efficiency.svg">
+  <img src="assets/readme/diagrams/ladders-efficiency-light.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it — the model, the hook, or a static setting — and whether its traversal is measured: three have receipts, four are instrumented without a traversal metric, two are never scored.">
+</picture>
+
+</div>
+
+The right-hand column is the point. Three ladders have receipts, four are
+instrumented without a traversal metric, and two are never scored at all — a
+ladder nobody measures is a ladder nobody knows is being climbed. The full
+audit, including what each one would need to become measurable, is
+[`docs/LADDERS.md`](docs/LADDERS.md).
+
 The measured differences
 ([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)):
 a bash pipeline under `ctx run --shell` already collapses stream-shaped

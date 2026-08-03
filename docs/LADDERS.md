@@ -26,6 +26,19 @@ or it cannot earn (or lose) its place in a policy epoch.
 
 ## 1 · The ladder registry
 
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ladders-efficiency.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ladders-efficiency-light.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it — the model, the hook, or a static setting — and whether its traversal is measured: three have receipts, four are instrumented without a traversal metric, two are never scored.">
+</picture>
+
+</div>
+
+The table below is the same nine, with the detail the picture cannot carry.
+Read the rightmost column first: it is what makes this an audit rather than a
+feature tour.
+
 Every ladder in the system, by axis. "Traversed by" says who moves along
 it; "latching" says whether it can flap.
 

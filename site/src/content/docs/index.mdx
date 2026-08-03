@@ -138,6 +138,26 @@ binary, and more, in
 field currently beats us outright, which are install friction and how easily you
 can extend this thing without forking it.
 
+## One idea, nine places
+
+Everything here works the same way: **start on the cheapest rung, and escalate
+only when the work actually demands it.** Read a small file natively; capture a
+noisy one. Spend a small budget on output that succeeded; spend more on output
+that failed. Nudge an agent that is drifting; substitute only when nudging
+stopped working.
+
+<div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow); margin: 1rem 0;">
+  <img className="sj-dark" src="/straitjacket/diagrams/ladders-efficiency.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it, and whether its traversal is measured." style="display:block" />
+  <img className="sj-light" src="/straitjacket/diagrams/ladders-efficiency-light.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it, and whether its traversal is measured." style="display:block" />
+</div>
+
+The right-hand column is the honest part, and it is why this is published as an
+audit rather than a feature list: **three of the nine have receipts, four are
+instrumented without a traversal metric, and two are never scored at all.** A
+ladder nobody measures is a ladder nobody knows is being climbed. What each one
+would need to become measurable is written down in
+[Ladders](/straitjacket/design/ladders/).
+
 ## The two surfaces your agent actually touches
 
 Everything above is the argument. These are the parts you install.
