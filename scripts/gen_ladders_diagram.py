@@ -27,30 +27,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gen_compare_diagrams import Canvas, write_pair  # noqa: E402
 
-# (name, rungs, traverser, status) — status drives the right-hand chip.
-#   "measured"  → green: there is a receipt
-#   "partial"   → amber: instrumented, no traversal metric yet
-#   "unmeasured"→ muted: enforced or static, never scored
-LADDERS = [
-    ("Solution", ["not needed", "reuse", "native", "stdlib", "one-liner", "new code"],
-     "model", "measured"),
-    ("Capture", ["native read", "run", "--shell", "seq", "py", "job"],
-     "model", "partial"),
-    ("Emission budgets", ["digest", "result", "turn", "failure ×2"],
-     "hook", "measured"),
-    ("Graduated engagement", ["observe", "nudge", "steer", "substitute"],
-     "hook", "partial"),
-    ("Window pressure", ["calm", "70%", "84%", "floor 1/4"],
-     "hook", "measured"),
-    ("Guard modes", ["advisory", "guarded", "strict"],
-     "static", "unmeasured"),
-    ("Policy epochs", ["latch", "rescue", "clear"],
-     "hook", "partial"),
-    ("Deployment tiers", ["skill", "plugin", "native", "hardened"],
-     "static", "unmeasured"),
-    ("Model tiers", ["economy", "adaptive", "flagship"],
-     "static", "partial"),
-]
+# The ladders come from `ctx.ladders`, not from a copy here. A diagram drawn
+# from its own list is a fourth place the truth can live, and this project has
+# spent a lot of this branch fixing exactly that shape of defect. Status is
+# DERIVED the same way `ctx ladders` derives it — a ladder is "measured" when
+# it declares a signal, "not scored" when it declares why it cannot be.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from ctx.ladders import LADDERS as REGISTRY  # noqa: E402
+
+
+def rows():
+    for lad in REGISTRY:
+        status = "measured" if lad.measurable else "unmeasured"
+        yield lad.name, list(lad.rungs), lad.traversed_by, status
+
 
 STATUS_TEXT = {
     "measured": "measured",
@@ -94,7 +84,7 @@ def build(P: dict) -> str:
 
     y = 112
     row_h = 58
-    for name, rungs, who, status in LADDERS:
+    for name, rungs, who, status in rows():
         accent, text_fill = colour[status]
 
         # The spine: a short amber bar marks where the ladder starts.
@@ -124,9 +114,16 @@ def build(P: dict) -> str:
 
     # The honest footer: this is an audit, not a feature list.
     c.hline(x_name, 1160, y - 24, P["frame"], 2)
+    # DERIVED. This sentence was hardcoded and went stale the moment the
+    # registry became the source of truth -- it still read "three have
+    # receipts" while the data said four. A caption that can disagree with its
+    # own diagram is the drift this refactor exists to end.
+    n_measured = sum(1 for lad in REGISTRY if lad.measurable)
+    n_unscored = len(REGISTRY) - n_measured
     c.text(600, y + 4,
-           "Three ladders have receipts, four are instrumented without a traversal "
-           "metric, two are never scored.",
+           f"{n_measured} of {len(REGISTRY)} ladders declare a traversal signal; "
+           f"{n_unscored} cannot be scored and say why. Run `ctx ladders` for "
+           "what THIS workspace recorded.",
            12.5, 400, P["muted"])
     c.text(600, y + 26,
            "A ladder nobody measures is a ladder nobody knows is being climbed — "

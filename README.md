@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,579 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,599 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -278,16 +278,25 @@ more importantly, whether anyone measured the climb:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ladders-efficiency.svg">
-  <img src="assets/readme/diagrams/ladders-efficiency-light.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it — the model, the hook, or a static setting — and whether its traversal is measured: three have receipts, four are instrumented without a traversal metric, two are never scored.">
+  <img src="assets/readme/diagrams/ladders-efficiency-light.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it — the model, the hook, or a static setting — and whether its traversal is measured — derived from the registry in src/ctx/ladders.py, not hand-maintained.">
 </picture>
 
 </div>
 
-The right-hand column is the point. Three ladders have receipts, four are
-instrumented without a traversal metric, and two are never scored at all — a
-ladder nobody measures is a ladder nobody knows is being climbed. The full
-audit, including what each one would need to become measurable, is
-[`docs/LADDERS.md`](docs/LADDERS.md).
+The right-hand column is the point, and it is **derived rather than
+asserted**: a ladder counts as measured when it declares a signal naming a
+ledger that actually carries rung values, and one that cannot be scored has to
+say why. Four of the nine qualify today.
+
+Run it against your own workspace:
+
+```bash
+ctx ladders          # what this repo recorded climbing
+```
+
+The rungs are configurable too, because they are a declaration rather than a
+literal — `[ladders.capture] rungs = [...]` in `ctx.toml` narrows a ladder you
+never want climbed. The full audit is [`docs/LADDERS.md`](docs/LADDERS.md).
 
 The measured differences
 ([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)):
@@ -563,7 +572,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,579 acceptance-oriented determinism & security test functions
+└── tests/             # 1,599 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -764,7 +773,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 1,579 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,599 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

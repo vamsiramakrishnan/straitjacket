@@ -228,3 +228,58 @@ def cmd_policy(ws, ns) -> int:
     print(render_policy(policy))
     print(f"written: {write_policy(ws, policy)}")
     return 0
+
+
+def cmd_ladders(ws, ns) -> int:
+    """`ctx ladders` — the conditionality audit, measured rather than asserted.
+
+    The "measured today?" column in docs/LADDERS.md was hand-maintained, which
+    made it the part of the audit most likely to drift into advertising. This
+    derives it: a ladder is measurable when it declares a signal naming a
+    ledger that exists, and the report shows the real distribution or says
+    exactly why there is none.
+    """
+    import json as _json
+
+    from ctx import ladders as _ladders
+
+    raw = _raw_ladders_config(ws)
+    if getattr(ns, "ladders_json", False):
+        out = {
+            "schema": "ctx.ladders/v1",
+            "ladders": [
+                {
+                    "key": lad.key,
+                    "name": lad.name,
+                    "axis": lad.axis,
+                    "rungs": list(lad.rungs),
+                    "traversed_by": lad.traversed_by,
+                    "latching": lad.latching,
+                    **_ladders.measure(ws.root, lad),
+                }
+                for lad in _ladders.configured(raw)
+            ],
+            "config_problems": _ladders.validate(raw),
+        }
+        print(_json.dumps(out, indent=2, sort_keys=True))
+        return 0
+    print(_ladders.report(ws.root, raw))
+    return 0
+
+
+def _raw_ladders_config(ws) -> dict:
+    """The `[ladders]` table straight from ctx.toml.
+
+    Read raw rather than through Config: rung lists are a per-ladder open
+    vocabulary, and threading them through the typed Config dataclass would
+    mean a field per ladder — the copy-per-consumer this registry exists to
+    remove.
+    """
+    import tomllib
+
+    path = ws.root / "ctx.toml"
+    try:
+        with open(path, "rb") as fh:
+            return (tomllib.load(fh) or {}).get("ladders") or {}
+    except (OSError, ValueError):
+        return {}

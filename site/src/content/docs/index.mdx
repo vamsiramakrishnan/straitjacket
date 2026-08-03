@@ -152,10 +152,14 @@ stopped working.
 </div>
 
 The right-hand column is the honest part, and it is why this is published as an
-audit rather than a feature list: **three of the nine have receipts, four are
-instrumented without a traversal metric, and two are never scored at all.** A
-ladder nobody measures is a ladder nobody knows is being climbed. What each one
-would need to become measurable is written down in
+audit rather than a feature list. It is **derived, not asserted**: a ladder
+counts as measured only when it declares a signal naming a ledger that really
+carries rung values, and one that cannot be scored has to say why. Four of nine
+qualify today.
+
+`ctx ladders` runs it against your own repository, and the rungs are
+configurable — `[ladders.capture] rungs = [...]` narrows a ladder you never
+want climbed. What each unmeasured one would need is written down in
 [Ladders](/straitjacket/design/ladders/).
 
 ## The two surfaces your agent actually touches

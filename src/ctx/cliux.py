@@ -113,6 +113,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ("checkpoint", "save task state so a fresh session can pick the work up"),
             ("debt", "track work you deliberately deferred"),
+            ("ladders", "audit where the harness escalates, and what it measured"),
             ("surface", "see and trim the tools your agent exposes (they cost tokens too)"),
         ),
     ),

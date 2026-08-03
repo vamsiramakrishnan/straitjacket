@@ -184,6 +184,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "checkpoint": ("admin", "cmd_checkpoint", True),
     "debt": ("admin", "cmd_debt", True),
     "policy": ("admin", "cmd_policy", True),
+    "ladders": ("admin", "cmd_ladders", True),
     "orchestrate": ("hosts", "cmd_orchestrate", True),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
@@ -501,6 +502,14 @@ def _build_parser():
     debt_sub.add_parser("list", help="show outstanding declared debt")
     p_dr = debt_sub.add_parser("resolve", help="mark a debt entry resolved")
     p_dr.add_argument("id", help="entry id from `ctx debt list`")
+
+    p_lad = sub.add_parser(
+        "ladders",
+        help="conditionality audit: every escalation ladder, its rungs, and "
+             "what this workspace actually recorded climbing",
+    )
+    p_lad.add_argument("--json", action="store_true", dest="ladders_json",
+                       help="machine-readable")
 
     p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
     p_map.add_argument("--budget", type=int, default=600, help="token budget")

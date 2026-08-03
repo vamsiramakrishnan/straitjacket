@@ -12,118 +12,108 @@
 <text x="940" y="74" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="700" fill="#6E7781">CLIMBED BY</text>
 <text x="1050" y="74" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="700" fill="#6E7781">MEASURED?</text>
 <line x1="40" y1="84" x2="1160" y2="84" stroke="#30363D" stroke-width="2"/>
-<rect x="28" y="98" width="12" height="22" fill="#3FB950"/>
+<rect x="28" y="98" width="12" height="22" fill="#6E7781"/>
 <text x="50" y="112" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#E6EDF3">Solution</text>
 <rect x="256" y="100" width="102" height="26" fill="#30363D"/>
 <rect x="250" y="94" width="102" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="301.0" y="112" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700" fill="#E6EDF3">not needed</text>
-<line x1="355" y1="107" x2="366" y2="107" stroke="#3FB950" stroke-width="2"/>
-<path d="M366 100 L379 107 L366 114 Z" fill="#3FB950"/>
+<line x1="355" y1="107" x2="366" y2="107" stroke="#6E7781" stroke-width="2"/>
+<path d="M366 100 L379 107 L366 114 Z" fill="#6E7781"/>
 <rect x="388" y="100" width="62" height="26" fill="#30363D"/>
 <rect x="382" y="94" width="62" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="413.0" y="112" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">reuse</text>
-<line x1="447" y1="107" x2="458" y2="107" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M458 100 L471 107 L458 114 Z" fill="#3FB950"/>
+<line x1="447" y1="107" x2="458" y2="107" stroke="#6E7781" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M458 100 L471 107 L458 114 Z" fill="#6E7781"/>
 <rect x="480" y="100" width="70" height="26" fill="#30363D"/>
 <rect x="474" y="94" width="70" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="509.0" y="112" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">native</text>
-<line x1="547" y1="107" x2="558" y2="107" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M558 100 L571 107 L558 114 Z" fill="#3FB950"/>
+<line x1="547" y1="107" x2="558" y2="107" stroke="#6E7781" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M558 100 L571 107 L558 114 Z" fill="#6E7781"/>
 <rect x="580" y="100" width="70" height="26" fill="#30363D"/>
 <rect x="574" y="94" width="70" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="609.0" y="112" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">stdlib</text>
-<line x1="647" y1="107" x2="658" y2="107" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M658 100 L671 107 L658 114 Z" fill="#3FB950"/>
+<line x1="647" y1="107" x2="658" y2="107" stroke="#6E7781" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M658 100 L671 107 L658 114 Z" fill="#6E7781"/>
 <rect x="680" y="100" width="94" height="26" fill="#30363D"/>
 <rect x="674" y="94" width="94" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="721.0" y="112" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">one-liner</text>
-<line x1="771" y1="107" x2="782" y2="107" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M782 100 L795 107 L782 114 Z" fill="#3FB950"/>
+<line x1="771" y1="107" x2="782" y2="107" stroke="#6E7781" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M782 100 L795 107 L782 114 Z" fill="#6E7781"/>
 <rect x="804" y="100" width="86" height="26" fill="#30363D"/>
 <rect x="798" y="94" width="86" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="841.0" y="112" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">new code</text>
 <text x="940" y="112" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="400" fill="#8B949E">model</text>
-<rect x="1050" y="100" width="8" height="8" fill="#3FB950"/>
-<text x="1066" y="112" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#3FB950">measured</text>
-<rect x="28" y="156" width="12" height="22" fill="#F0B429"/>
+<rect x="1050" y="100" width="8" height="8" fill="#6E7781"/>
+<text x="1066" y="112" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#6E7781">not scored</text>
+<rect x="28" y="156" width="12" height="22" fill="#3FB950"/>
 <text x="50" y="170" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#E6EDF3">Capture</text>
 <rect x="256" y="158" width="110" height="26" fill="#30363D"/>
 <rect x="250" y="152" width="110" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="305.0" y="170" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700" fill="#E6EDF3">native read</text>
-<line x1="363" y1="165" x2="374" y2="165" stroke="#F0B429" stroke-width="2"/>
-<path d="M374 158 L387 165 L374 172 Z" fill="#F0B429"/>
+<line x1="363" y1="165" x2="374" y2="165" stroke="#3FB950" stroke-width="2"/>
+<path d="M374 158 L387 165 L374 172 Z" fill="#3FB950"/>
 <rect x="396" y="158" width="46" height="26" fill="#30363D"/>
 <rect x="390" y="152" width="46" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="413.0" y="170" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">run</text>
-<line x1="439" y1="165" x2="450" y2="165" stroke="#F0B429" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M450 158 L463 165 L450 172 Z" fill="#F0B429"/>
+<line x1="439" y1="165" x2="450" y2="165" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M450 158 L463 165 L450 172 Z" fill="#3FB950"/>
 <rect x="472" y="158" width="78" height="26" fill="#30363D"/>
 <rect x="466" y="152" width="78" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="505.0" y="170" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">--shell</text>
-<line x1="547" y1="165" x2="558" y2="165" stroke="#F0B429" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M558 158 L571 165 L558 172 Z" fill="#F0B429"/>
+<line x1="547" y1="165" x2="558" y2="165" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M558 158 L571 165 L558 172 Z" fill="#3FB950"/>
 <rect x="580" y="158" width="46" height="26" fill="#30363D"/>
 <rect x="574" y="152" width="46" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="597.0" y="170" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">seq</text>
-<line x1="623" y1="165" x2="634" y2="165" stroke="#F0B429" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M634 158 L647 165 L634 172 Z" fill="#F0B429"/>
+<line x1="623" y1="165" x2="634" y2="165" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M634 158 L647 165 L634 172 Z" fill="#3FB950"/>
 <rect x="656" y="158" width="38" height="26" fill="#30363D"/>
 <rect x="650" y="152" width="38" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="669.0" y="170" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">py</text>
-<line x1="691" y1="165" x2="702" y2="165" stroke="#F0B429" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M702 158 L715 165 L702 172 Z" fill="#F0B429"/>
+<line x1="691" y1="165" x2="702" y2="165" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M702 158 L715 165 L702 172 Z" fill="#3FB950"/>
 <rect x="724" y="158" width="46" height="26" fill="#30363D"/>
 <rect x="718" y="152" width="46" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="741.0" y="170" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">job</text>
 <text x="940" y="170" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="400" fill="#8B949E">model</text>
-<rect x="1050" y="158" width="8" height="8" fill="#F0B429"/>
-<text x="1066" y="170" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#F0B429">partial</text>
-<rect x="28" y="214" width="12" height="22" fill="#3FB950"/>
+<rect x="1050" y="158" width="8" height="8" fill="#3FB950"/>
+<text x="1066" y="170" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#3FB950">measured</text>
+<rect x="28" y="214" width="12" height="22" fill="#6E7781"/>
 <text x="50" y="228" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#E6EDF3">Emission budgets</text>
 <rect x="256" y="216" width="70" height="26" fill="#30363D"/>
 <rect x="250" y="210" width="70" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="285.0" y="228" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700" fill="#E6EDF3">digest</text>
-<line x1="323" y1="223" x2="334" y2="223" stroke="#3FB950" stroke-width="2"/>
-<path d="M334 216 L347 223 L334 230 Z" fill="#3FB950"/>
+<line x1="323" y1="223" x2="334" y2="223" stroke="#6E7781" stroke-width="2"/>
+<path d="M334 216 L347 223 L334 230 Z" fill="#6E7781"/>
 <rect x="356" y="216" width="70" height="26" fill="#30363D"/>
 <rect x="350" y="210" width="70" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="385.0" y="228" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">result</text>
-<line x1="423" y1="223" x2="434" y2="223" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M434 216 L447 223 L434 230 Z" fill="#3FB950"/>
+<line x1="423" y1="223" x2="434" y2="223" stroke="#6E7781" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M434 216 L447 223 L434 230 Z" fill="#6E7781"/>
 <rect x="456" y="216" width="54" height="26" fill="#30363D"/>
 <rect x="450" y="210" width="54" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="477.0" y="228" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">turn</text>
-<line x1="507" y1="223" x2="518" y2="223" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M518 216 L531 223 L518 230 Z" fill="#3FB950"/>
+<line x1="507" y1="223" x2="518" y2="223" stroke="#6E7781" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M518 216 L531 223 L518 230 Z" fill="#6E7781"/>
 <rect x="540" y="216" width="102" height="26" fill="#30363D"/>
 <rect x="534" y="210" width="102" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
-<text x="585.0" y="228" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">failure ×2</text>
+<text x="585.0" y="228" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">failure x2</text>
 <text x="940" y="228" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="400" fill="#8B949E">hook</text>
-<rect x="1050" y="216" width="8" height="8" fill="#3FB950"/>
-<text x="1066" y="228" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#3FB950">measured</text>
-<rect x="28" y="272" width="12" height="22" fill="#F0B429"/>
+<rect x="1050" y="216" width="8" height="8" fill="#6E7781"/>
+<text x="1066" y="228" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#6E7781">not scored</text>
+<rect x="28" y="272" width="12" height="22" fill="#3FB950"/>
 <text x="50" y="286" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#E6EDF3">Graduated engagement</text>
 <rect x="256" y="274" width="78" height="26" fill="#30363D"/>
 <rect x="250" y="268" width="78" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
-<text x="289.0" y="286" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700" fill="#E6EDF3">observe</text>
-<line x1="331" y1="281" x2="342" y2="281" stroke="#F0B429" stroke-width="2"/>
-<path d="M342 274 L355 281 L342 288 Z" fill="#F0B429"/>
-<rect x="364" y="274" width="62" height="26" fill="#30363D"/>
-<rect x="358" y="268" width="62" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
-<text x="389.0" y="286" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">nudge</text>
-<line x1="423" y1="281" x2="434" y2="281" stroke="#F0B429" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M434 274 L447 281 L434 288 Z" fill="#F0B429"/>
-<rect x="456" y="274" width="62" height="26" fill="#30363D"/>
-<rect x="450" y="268" width="62" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
-<text x="481.0" y="286" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">steer</text>
-<line x1="515" y1="281" x2="526" y2="281" stroke="#F0B429" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M526 274 L539 281 L526 288 Z" fill="#F0B429"/>
-<rect x="548" y="274" width="102" height="26" fill="#30363D"/>
-<rect x="542" y="268" width="102" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
-<text x="593.0" y="286" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">substitute</text>
+<text x="289.0" y="286" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700" fill="#E6EDF3">passive</text>
+<line x1="331" y1="281" x2="342" y2="281" stroke="#3FB950" stroke-width="2"/>
+<path d="M342 274 L355 281 L342 288 Z" fill="#3FB950"/>
+<rect x="364" y="274" width="70" height="26" fill="#30363D"/>
+<rect x="358" y="268" width="70" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
+<text x="393.0" y="286" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">active</text>
 <text x="940" y="286" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="400" fill="#8B949E">hook</text>
-<rect x="1050" y="274" width="8" height="8" fill="#F0B429"/>
-<text x="1066" y="286" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#F0B429">partial</text>
+<rect x="1050" y="274" width="8" height="8" fill="#3FB950"/>
+<text x="1066" y="286" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#3FB950">measured</text>
 <rect x="28" y="330" width="12" height="22" fill="#3FB950"/>
 <text x="50" y="344" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#E6EDF3">Window pressure</text>
 <rect x="256" y="332" width="54" height="26" fill="#30363D"/>
@@ -165,24 +155,24 @@
 <text x="940" y="402" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="400" fill="#8B949E">static</text>
 <rect x="1050" y="390" width="8" height="8" fill="#6E7781"/>
 <text x="1066" y="402" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#6E7781">not scored</text>
-<rect x="28" y="446" width="12" height="22" fill="#F0B429"/>
+<rect x="28" y="446" width="12" height="22" fill="#6E7781"/>
 <text x="50" y="460" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#E6EDF3">Policy epochs</text>
 <rect x="256" y="448" width="62" height="26" fill="#30363D"/>
 <rect x="250" y="442" width="62" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="281.0" y="460" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700" fill="#E6EDF3">latch</text>
-<line x1="315" y1="455" x2="326" y2="455" stroke="#F0B429" stroke-width="2"/>
-<path d="M326 448 L339 455 L326 462 Z" fill="#F0B429"/>
+<line x1="315" y1="455" x2="326" y2="455" stroke="#6E7781" stroke-width="2"/>
+<path d="M326 448 L339 455 L326 462 Z" fill="#6E7781"/>
 <rect x="348" y="448" width="70" height="26" fill="#30363D"/>
 <rect x="342" y="442" width="70" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="377.0" y="460" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">rescue</text>
-<line x1="415" y1="455" x2="426" y2="455" stroke="#F0B429" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M426 448 L439 455 L426 462 Z" fill="#F0B429"/>
+<line x1="415" y1="455" x2="426" y2="455" stroke="#6E7781" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M426 448 L439 455 L426 462 Z" fill="#6E7781"/>
 <rect x="448" y="448" width="62" height="26" fill="#30363D"/>
 <rect x="442" y="442" width="62" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="473.0" y="460" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">clear</text>
 <text x="940" y="460" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="400" fill="#8B949E">hook</text>
-<rect x="1050" y="448" width="8" height="8" fill="#F0B429"/>
-<text x="1066" y="460" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#F0B429">partial</text>
+<rect x="1050" y="448" width="8" height="8" fill="#6E7781"/>
+<text x="1066" y="460" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#6E7781">not scored</text>
 <rect x="28" y="504" width="12" height="22" fill="#6E7781"/>
 <text x="50" y="518" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#E6EDF3">Deployment tiers</text>
 <rect x="256" y="506" width="62" height="26" fill="#30363D"/>
@@ -206,25 +196,25 @@
 <text x="940" y="518" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="400" fill="#8B949E">static</text>
 <rect x="1050" y="506" width="8" height="8" fill="#6E7781"/>
 <text x="1066" y="518" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#6E7781">not scored</text>
-<rect x="28" y="562" width="12" height="22" fill="#F0B429"/>
+<rect x="28" y="562" width="12" height="22" fill="#3FB950"/>
 <text x="50" y="576" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#E6EDF3">Model tiers</text>
 <rect x="256" y="564" width="78" height="26" fill="#30363D"/>
 <rect x="250" y="558" width="78" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="289.0" y="576" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700" fill="#E6EDF3">economy</text>
-<line x1="331" y1="571" x2="342" y2="571" stroke="#F0B429" stroke-width="2"/>
-<path d="M342 564 L355 571 L342 578 Z" fill="#F0B429"/>
+<line x1="331" y1="571" x2="342" y2="571" stroke="#3FB950" stroke-width="2"/>
+<path d="M342 564 L355 571 L342 578 Z" fill="#3FB950"/>
 <rect x="364" y="564" width="86" height="26" fill="#30363D"/>
 <rect x="358" y="558" width="86" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="401.0" y="576" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">adaptive</text>
-<line x1="447" y1="571" x2="458" y2="571" stroke="#F0B429" stroke-width="2" stroke-dasharray="7 5"/>
-<path d="M458 564 L471 571 L458 578 Z" fill="#F0B429"/>
+<line x1="447" y1="571" x2="458" y2="571" stroke="#3FB950" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M458 564 L471 571 L458 578 Z" fill="#3FB950"/>
 <rect x="480" y="564" width="86" height="26" fill="#30363D"/>
 <rect x="474" y="558" width="86" height="26" fill="#0F141B" stroke="#E6EDF3" stroke-width="2"/>
 <text x="517.0" y="576" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" fill="#8B949E">flagship</text>
 <text x="940" y="576" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="400" fill="#8B949E">static</text>
-<rect x="1050" y="564" width="8" height="8" fill="#F0B429"/>
-<text x="1066" y="576" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#F0B429">partial</text>
+<rect x="1050" y="564" width="8" height="8" fill="#3FB950"/>
+<text x="1066" y="576" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700" fill="#3FB950">measured</text>
 <line x1="40" y1="610" x2="1160" y2="610" stroke="#30363D" stroke-width="2"/>
-<text x="600" y="638" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" font-weight="400" fill="#6E7781">Three ladders have receipts, four are instrumented without a traversal metric, two are never scored.</text>
+<text x="600" y="638" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" font-weight="400" fill="#6E7781">4 of 9 ladders declare a traversal signal; 5 cannot be scored and say why. Run `ctx ladders` for what THIS workspace recorded.</text>
 <text x="600" y="660" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" font-weight="400" fill="#6E7781">A ladder nobody measures is a ladder nobody knows is being climbed — which is why this is an audit, not a feature list.</text>
 </svg>
