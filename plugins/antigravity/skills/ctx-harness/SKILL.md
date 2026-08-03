@@ -137,10 +137,8 @@ that answers the question.
 **Skill (this file + `references/`).** Instructions and contracts only. Free to
 read, but not free to read *all of* — see progressive disclosure below.
 
-**CLI (`ctx`).** The execution surface. `run` · `search` · `get` · `stats` · `map` ·
-`def`/`refs`/`diag` · `callers`/`callees`/`impact` · `diff` · `q` · `ask` ·
-`plan` · `checkpoint` · `gain` · `debt` · `doctor` · `orchestrate` · `wrap`.
-Every one is bounded by construction.
+**CLI (`ctx`).** The execution surface; every verb bounded by construction.
+The verbs themselves are listed once, above, under *Verb index* — not twice.
 
 **MCP servers.** Allowed: **`ctx-harness`** only (`ctx mcp --bounded-only`) —
 its tools are capped by construction, which is why retrieval through it is safe

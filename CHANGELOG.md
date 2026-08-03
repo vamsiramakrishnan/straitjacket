@@ -6,6 +6,32 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+### The prefix budget is measured, not narrated
+
+**What the harness actually costs a session: ~708 tokens.** Not the ~3,800 an
+earlier reading of this module produced.
+
+`prefix_assets()` tracks five cache-keyed texts, and only some are resident in
+every prompt. That distinction lived in a docstring, and the docstring was
+misread: summing all five counts the 2,586-token skill body (loaded only when
+the skill triggers) and the whole 638-token explorer agent (only its
+description enters the parent prompt; the body travels with the subagent). The
+result was a **5.4× overstatement of this project's own overhead**, in the
+direction that makes it look worse.
+
+Fixed at the root rather than in prose. The split is now data —
+`RESIDENT_ASSETS` and `DEFERRED_ASSETS` — with `resident_bytes()` and
+`budget_report()` reading it, and `tests/test_prefix_budget.py` holding it to
+the published numbers. A new prefix asset must be classified or the suite
+fails, so the budget cannot silently stop describing reality.
+
+The resident total also gains a **ceiling**: under 1,000 tokens, asserted.
+That is the number a user pays on every session in every repository forever,
+so growth in it should require someone to raise the limit on purpose.
+
+Also corrected below: an entry that claimed a cold-cache cost for a skill-body
+edit that is not prefix-resident.
+
 ### `q` reaches the bounded tier, and the replacement surface triples
 
 **Prompt-cache impact: `PREFIX_VERSION` 8 → 9** (the MCP tool description is a
@@ -57,11 +83,19 @@ criticised. A command-frequency corpus is the instrument that would replace it.
 
 ### The solution ladder gains its missing rung — and a safety exemption
 
-**Prompt-cache impact: `PREFIX_VERSION` 7 → 8.** Skill rule 13 is injected
-prefix text, so this edit cold-invalidates every user's prompt cache once —
-one full prefix rewrite per model (~56k tokens / ~$0.21 on Sonnet, measured in
-`evals/matrix-2026-07-18.md`). Declared here rather than absorbed silently,
-per the prefix-stability contract.
+**Prompt-cache impact: none — correcting an earlier claim in this entry.**
+This originally said the rule-13 edit cold-invalidates every prompt cache at a
+cost of ~56k tokens / ~$0.21 per model. That was wrong. Rule 13 lives in the
+skill **body**, which is loaded when the skill triggers and is *not*
+prefix-resident; the bump policy is "only when prefix-resident bytes change".
+The manifest needed regenerating, the version did not need bumping, and users
+pay nothing for this edit. `PREFIX_VERSION` still moved 7 → 8, which is
+harmless and is left in place rather than rewritten.
+
+The underlying mistake — reading "tracked as a cache-keyed asset" as
+"resident in every prompt" — is the same one that produced a 5.4×
+overstatement of this project's own per-session overhead. It is now fixed at
+the root: see *The prefix budget is measured, not narrated* below.
 
 A rung-by-rung audit of our ladder against the
 [Ponytail](https://www.alphamatch.ai/blog/ponytail-ai-coding-skill-2026)

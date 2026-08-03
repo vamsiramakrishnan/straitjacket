@@ -4,7 +4,7 @@
   "assets": {
     "agent.ctx-explorer": "sha256:9818ea52833f7c9bbd17cd974c3f7c22f979a217b87b53652abd4955590471fc",
     "mcp.tool_description": "sha256:e99e8a21e220c259396a0e25ec3a65a07e1a4cf5597512a1aaa880682da365f2",
-    "skill.ctx-harness.body": "sha256:e695d8f1f708718f7c2dfa2f7110dc5dd494fc00c30d6610c4e3ac11efe23c9e",
+    "skill.ctx-harness.body": "sha256:b0791b33665bb5fb3d043412fad9c0f493c838969b64d7421535ec5ea18e501f",
     "skill.ctx-harness.frontmatter": "sha256:7ead9429ed7ec565fcea2c9896f95880c8815c81f2b455478748dcd14c5a90a6",
     "wrap.output_discipline": "sha256:b969739439b4f5f5a96f9e6534eb12a8e558b2f286cd17275b99e209e229a060"
   }
