@@ -50,8 +50,15 @@ to say why.
 
 ```bash
 ctx ladders            # what THIS workspace recorded climbing
+ctx ladders --corpus <dir>   # aggregate across a directory of recorded sessions
 ctx ladders --json     # machine-readable
 ```
+
+Scored against the bug-bash corpus (29 recorded workspaces, no new runs):
+**6 measured · 2 instrumented but silent · 1 not scored** —
+[`evals/ladder-scores-2026-08-03.md`](../evals/ladder-scores-2026-08-03.md).
+Two ladders are static *per workspace* (guard mode, deployment tier), so only
+a corpus can show their distribution; `--corpus` is what asks that question.
 
 Rungs are configurable, because they are a declaration rather than a literal:
 
@@ -72,12 +79,12 @@ it; "latching" says whether it can flap.
 |---|---|---|---|---|---|---|
 | Solution ladder (skill r13) | what code to write | not-needed → reuse → native feature → stdlib → one-liner → new code (exempt: trust boundaries, data loss, security, accessibility) | model (advisory) | none (in-prompt) | n/a | ❌ **not scored** — the rung is chosen inside the model's reasoning and never crosses a tool boundary; the A/B measured the ladder's *outcome* (−28% turns), not its traversal |
 | Capture ladder | how work executes | native → `run` → pipeline (`--shell`) → `seq` → `eval` → `job` (this wave) | model (taught) + hook (steered) | command shape | n/a | ✅ **measured** — `collapse.jsonl` carries a rung per substitution; `ctx ladders` shows the distribution |
-| Emission budgets | how much rides | inline-complete → digest → failure×2 → truncation note | harness | output size, exit code | no (per event) | ❌ **not scored** — nothing records *which* budget bound a given emission. `ctx gain` measures budget outcomes; traversal needs the gate to record the tier it applied |
+| Emission budgets | how much rides | inline-complete → digest → failure×2 → truncation note | harness | output size, exit code | no (per event) | ✅ **measured (derived)** — `plan-emissions.jsonl` `visible_tokens`, bucketed against the configured budgets. The tier a size falls under, not a record of which check bound it |
 | Graduated engagement | affordance surface | passive → active | harness | call count ≥ 8, truncation events, model tier | latches up per session | ✅ **measured** (point sample) — `engagement.json` carries the current level; still no transition history |
 | Window pressure | residency defense | normal → tightened budgets → epoch-latched rescue | harness (hook + proxy) | window.json fullness % | rescue latches | ✅ **measured** — proxy `window.json` fullness, bucketed onto the rungs |
-| Guard modes | steering strength | advisory → guarded → strict; allow → ask → force_ask → deny | static config | none at runtime | static | ❌ **not scored** — a static setting, not a traversal; the useful question is the cross-workspace distribution, which no single workspace can see |
-| Policy epochs | per-command trust | unknown → promoted / demoted | compiler (offline) | run telemetry: bounded-output reliability | committed epochs | ❌ **not scored** — epoch transitions are not logged. `planMode` rides on every intervention and is tempting to read as this ladder, but it is a different axis |
-| Deployment tiers | enforcement depth | skill → plugin → native → hardened | human | none | static | ❌ **not scored** — chosen by `ctx wrap`, not climbed during a session |
+| Guard modes | steering strength | advisory → guarded → strict; allow → ask → force_ask → deny | static config | none at runtime | static | ✅ **measured** — `guard-policy-cache.json` `policy.mode`; one value per workspace, so use `ctx ladders --corpus` for the distribution |
+| Policy epochs | per-command trust | unknown → promoted / demoted | compiler (offline) | run telemetry: bounded-output reliability | committed epochs | ✅ **measured** — promoted/demoted command counts in the committed policy. (`planMode` is a *different* axis and is deliberately not read here) |
+| Deployment tiers | enforcement depth | skill → plugin → native → hardened | human | none | static | ✅ **measured (probe)** — read from what `ctx wrap` actually installed, not from a ledger |
 | Model tiers (Maki steal, open) | who reasons | economy → adaptive → flagship | router | task complexity | per node | ⚠️ **instrumented, silent** — `route.jsonl` records a tier per routed node; no data until `ctx orchestrate` runs |
 
 Two observations fall out of just writing the table:

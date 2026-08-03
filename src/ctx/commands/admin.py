@@ -244,6 +244,23 @@ def cmd_ladders(ws, ns) -> int:
     from ctx import ladders as _ladders
 
     raw = _raw_ladders_config(ws)
+    corpus = getattr(ns, "ladders_corpus", None)
+    if corpus:
+        roots = _ladders.discover_workspaces(corpus)
+        if getattr(ns, "ladders_json", False):
+            print(_json.dumps({
+                "schema": "ctx.ladders/v1",
+                "corpus": str(corpus),
+                "workspaces": len(roots),
+                "ladders": [
+                    {"key": lad.key, "name": lad.name,
+                     **_ladders.measure_corpus(roots, lad)}
+                    for lad in _ladders.configured(raw)
+                ],
+            }, indent=2, sort_keys=True))
+            return 0
+        print(_ladders.report_corpus(corpus, raw))
+        return 0
     if getattr(ns, "ladders_json", False):
         out = {
             "schema": "ctx.ladders/v1",

@@ -125,16 +125,19 @@ LADDERS: tuple[Ladder, ...] = (
         key="emission",
         name="Emission budgets",
         axis="how many bytes may be emitted",
-        rungs=("digest", "result", "turn", "failure x2"),
+        rungs=("under digest", "digest..result", "result..turn", "over turn"),
         traversed_by="hook",
         latching="flaps freely (economic)",
-        unmeasured_because=(
-            "nothing records WHICH budget bound a given emission. "
-            "interventions.jsonl carries the output family, not the tier, and "
-            "reading family as a rung was the first draft of this registry -- "
-            "it produced a confident histogram of zeros. The digest layer "
-            "measures budget OUTCOMES (`ctx gain`); traversal needs the gate "
-            "to record the tier it applied"
+        signal=Signal(
+            ledger="plan-emissions.jsonl",
+            field="visible_tokens",
+            note=(
+                "BUCKETED by emitted size against the configured budgets "
+                "(480/1200/2800). This is the tier an emission's size falls "
+                "under, not a record of which check bound it -- the gate still "
+                "does not log the tier it applied. A derived rung, labelled as "
+                "one, the same way window pressure buckets a percentage"
+            ),
         ),
     ),
     Ladder(
@@ -164,23 +167,33 @@ LADDERS: tuple[Ladder, ...] = (
         rungs=("advisory", "guarded", "strict"),
         traversed_by="static",
         latching="set once, in ctx.toml",
-        unmeasured_because=(
-            "a static setting, not a traversal — the useful question is the "
-            "distribution across workspaces, which no single workspace can see"
+        signal=Signal(
+            ledger="guard-policy-cache.json",
+            field="mode",
+            note=(
+                "the resolved mode for this workspace. A point sample, not a "
+                "traversal -- the useful question is the distribution ACROSS "
+                "workspaces, which is what `ctx ladders --corpus` answers"
+            ),
         ),
     ),
     Ladder(
         key="epochs",
         name="Policy epochs",
         axis="how a bloated window is reclaimed",
-        rungs=("latch", "rescue", "clear"),
+        rungs=("unknown", "promoted", "demoted"),
         traversed_by="hook",
         latching="latches (defensive)",
-        unmeasured_because=(
-            "epoch transitions are not logged. `planMode` (normal|dense|bypass) "
-            "rides on every intervention and is tempting to read as this "
-            "ladder, but it is a different axis -- mapping it here would report "
-            "plan density under the name of epoch escalation"
+        signal=Signal(
+            ledger="guard-policy-cache.json",
+            field="_epoch",
+            note=(
+                "counts of promoted/demoted commands in the committed policy. "
+                "`planMode` (normal|dense|bypass) rides on every intervention "
+                "and is tempting to read as this ladder; it is a different axis "
+                "(plan density) and mapping it here would report the wrong "
+                "thing under this name"
+            ),
         ),
     ),
     Ladder(
@@ -190,9 +203,14 @@ LADDERS: tuple[Ladder, ...] = (
         rungs=("skill", "plugin", "native", "hardened"),
         traversed_by="static",
         latching="set once, at install",
-        unmeasured_because=(
-            "chosen by `ctx wrap`, not climbed during a session; `ctx doctor` "
-            "reports the tier in force but there is no traversal to score"
+        signal=Signal(
+            ledger="(filesystem probe)",   # not a file — see measure()
+            field="_deployment",
+            note=(
+                "probed from what `ctx wrap` actually installed in the "
+                "workspace, not from a ledger. Static per workspace, so the "
+                "informative form is the corpus distribution"
+            ),
         ),
     ),
     Ladder(
@@ -314,6 +332,69 @@ def _bucket_pressure(value: Any, rungs: tuple[str, ...]) -> str | None:
     return rungs[0] if rungs else None
 
 
+#: Emission budget thresholds, in tokens. Read from ctx.toml when available;
+#: these are the shipped defaults and keep the bucket honest when it is not.
+_EMISSION_TIERS = (480, 1200, 2800)
+
+
+def _bucket_emission(value: Any, rungs: tuple[str, ...],
+                     tiers: tuple[int, ...] = _EMISSION_TIERS) -> str | None:
+    """Emitted size onto the budget tier it falls under.
+
+    Derived, and labelled as derived in the signal note: this says which tier
+    a given emission's size lands in, NOT which check bound it. The gate does
+    not record the tier it applied, and inventing that record here would be
+    the confident-histogram failure this registry already made once.
+    """
+    try:
+        tok = float(value)
+    except (TypeError, ValueError):
+        return None
+    for i, edge in enumerate(tiers):
+        if tok <= edge:
+            return rungs[i] if i < len(rungs) else None
+    return rungs[-1] if rungs else None
+
+
+def _epoch_rung(record: dict, rungs: tuple[str, ...]) -> list[str]:
+    """Policy epochs are counts, not a single value.
+
+    One committed policy can hold many promoted and many demoted commands, so
+    a record yields a LIST of rungs rather than one. Everything not named in
+    either list is `unknown` — the rung a command sits on before the epoch
+    compiler has an opinion about it, which is most of them and is the honest
+    denominator.
+    """
+    policy = record.get("policy") or record
+    promoted = list(policy.get("promoted_commands") or [])
+    demoted = list(policy.get("demoted_commands") or [])
+    out = [rungs[1]] * len(promoted) + [rungs[2]] * len(demoted)
+    return out or [rungs[0]]
+
+
+def _deployment_rung(root: Path, rungs: tuple[str, ...]) -> str | None:
+    """Which enforcement tier is actually installed in this workspace.
+
+    Probed rather than recorded: the tier is a property of the files `ctx
+    wrap` wrote, and asking the filesystem is both cheaper and harder to
+    falsify than a ledger entry claiming a tier. Highest tier present wins,
+    because the tiers are cumulative.
+    """
+    hooks = any(
+        (root / rel).is_file()
+        for rel in (".claude/settings.json", ".codex/hooks.json")
+    ) or (root / ".antigravity" / "hooks.json").is_file()
+    skill = any(
+        (root / rel).is_dir()
+        for rel in (".claude/skills", ".antigravity/skills", ".codex")
+    ) or (root / "AGENTS.md").is_file()
+    if hooks:
+        return rungs[1] if len(rungs) > 1 else None   # plugin
+    if skill:
+        return rungs[0]                               # skill
+    return None
+
+
 def measure(root: Path | str, lad: Ladder) -> dict[str, Any]:
     """Observed traversal for one ladder, from this workspace's ledgers.
 
@@ -330,19 +411,38 @@ def measure(root: Path | str, lad: Ladder) -> dict[str, Any]:
             "records": 0,
             "rungs": {},
         }
+    if lad.key == "deployment":
+        rung = _deployment_rung(Path(root), lad.rungs)
+        counts = {r: 0 for r in lad.rungs}
+        if rung:
+            counts[rung] = 1
+        return {
+            "measurable": True, "ledger": "(filesystem probe)",
+            "note": lad.signal.note, "records": 1 if rung else 0,
+            "unmapped": 0, "rungs": counts,
+        }
     records = _read_records(Path(root), lad.signal.ledger)
     counts: dict[str, int] = {r: 0 for r in lad.rungs}
     seen = unmapped = 0
     for rec in records:
-        if lad.signal.field not in rec:
+        # Two ledgers nest the interesting fields under "policy"; flattening
+        # here keeps the Signal declaration a plain (ledger, field) pair.
+        flat = {**(rec.get("policy") or {}), **rec} if isinstance(rec, dict) else {}
+        if lad.key == "epochs":
+            seen += 1
+            for rung in _epoch_rung(rec, lad.rungs):
+                counts[rung] = counts.get(rung, 0) + 1
+            continue
+        if lad.signal.field not in flat:
             continue
         seen += 1
-        raw = rec[lad.signal.field]
-        rung = (
-            _bucket_pressure(raw, lad.rungs)
-            if lad.key == "pressure"
-            else lad.signal.resolve(str(raw))
-        )
+        raw = flat[lad.signal.field]
+        if lad.key == "pressure":
+            rung = _bucket_pressure(raw, lad.rungs)
+        elif lad.key == "emission":
+            rung = _bucket_emission(raw, lad.rungs)
+        else:
+            rung = lad.signal.resolve(str(raw))
         if rung in counts:
             counts[rung] += 1
         else:
@@ -410,3 +510,95 @@ __all__ = [
     "LADDERS", "BY_KEY", "Ladder", "Signal",
     "configured", "validate", "measure", "report",
 ]
+
+
+def discover_workspaces(root: Path | str) -> list[Path]:
+    """Every workspace under ``root`` that carries a session ledger directory.
+
+    The bug-bash arms each ran in their own checkout and left their own
+    ledgers, so a directory of round outputs is a corpus of real sessions at
+    zero additional cost — the measurement equivalent of mining the arms for
+    defects rather than running new ones.
+    """
+    root = Path(root)
+    if (root / LEDGER_DIR_NAME).is_dir():
+        return [root]
+    return sorted({p.parent for p in root.rglob(f"{LEDGER_DIR_NAME}/")})
+
+
+def measure_corpus(roots, lad: Ladder) -> dict[str, Any]:
+    """``measure`` summed across many workspaces.
+
+    Two of these ladders are *static per workspace* — guard mode is set once
+    in ctx.toml, deployment tier once at install — so a single workspace can
+    only ever report one value. Their distribution is a cross-workspace
+    question, and this is the instrument that can ask it. `workspaces` is
+    reported beside the counts because "18 workspaces all say guarded" and
+    "18 sessions in one workspace" are very different evidence.
+    """
+    roots = list(roots)
+    total = {r: 0 for r in lad.rungs}
+    records = unmapped = seen_ws = 0
+    measurable = lad.measurable
+    for root in roots:
+        m = measure(root, lad)
+        if not m["measurable"]:
+            return m
+        if m["records"]:
+            seen_ws += 1
+        records += m["records"]
+        unmapped += m.get("unmapped", 0)
+        for rung, n in m["rungs"].items():
+            total[rung] = total.get(rung, 0) + n
+    return {
+        "measurable": measurable,
+        "ledger": lad.signal.ledger if lad.signal else None,
+        "note": lad.signal.note if lad.signal else "",
+        "records": records,
+        "unmapped": unmapped,
+        "rungs": total,
+        "workspaces": len(roots),
+        "workspaces_with_data": seen_ws,
+    }
+
+
+def report_corpus(root: Path | str, raw_config: dict[str, Any] | None = None) -> str:
+    """`ctx ladders --corpus <dir>`: the audit over a directory of sessions."""
+    roots = discover_workspaces(root)
+    ladders = configured(raw_config)
+    lines = [
+        f"[ctx ladders · corpus of {len(roots)} workspace(s) under {root}]",
+    ]
+    measured = silent = unscored = 0
+    for lad in ladders:
+        m = measure_corpus(roots, lad)
+        lines.append("")
+        lines.append(f"{lad.name} — {lad.axis} · climbed by {lad.traversed_by}")
+        if not m["measurable"]:
+            unscored += 1
+            lines.append(f"  not scored: {m['reason']}")
+            continue
+        if m["records"] == 0:
+            silent += 1
+            lines.append(
+                f"  instrumented, silent: {m['ledger']} carried no usable "
+                "records in any workspace"
+            )
+            continue
+        measured += 1
+        total = sum(m["rungs"].values()) or 1
+        lines.append(
+            f"  {m['records']:,} record(s) across "
+            f"{m['workspaces_with_data']}/{m['workspaces']} workspaces"
+        )
+        for rung in lad.rungs:
+            n = m["rungs"].get(rung, 0)
+            bar = "#" * min(30, round(30 * n / total))
+            lines.append(f"  {rung:<16} {n:>6}  {100 * n / total:5.1f}%  {bar}")
+        if m["unmapped"]:
+            lines.append(f"  {m['unmapped']} unmapped value(s) — declared, not dropped")
+        if m["note"]:
+            lines.append(f"  note: {m['note']}")
+    lines.append("")
+    lines.append(f"{measured} measured · {silent} instrumented but silent · {unscored} not scored")
+    return "\n".join(lines)

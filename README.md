@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,599 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,605 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -286,7 +286,7 @@ more importantly, whether anyone measured the climb:
 The right-hand column is the point, and it is **derived rather than
 asserted**: a ladder counts as measured when it declares a signal naming a
 ledger that actually carries rung values, and one that cannot be scored has to
-say why. Four of the nine qualify today.
+say why. Six of the nine qualify today, scored against a corpus of 29 recorded sessions.
 
 Run it against your own workspace:
 
@@ -572,7 +572,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,599 acceptance-oriented determinism & security test functions
+└── tests/             # 1,605 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -773,7 +773,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 1,599 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,605 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

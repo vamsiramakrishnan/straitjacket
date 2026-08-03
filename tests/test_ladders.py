@@ -119,7 +119,7 @@ def test_malformed_config_is_reported_and_survivable(bad):
 
 # ------------------------------------------------------------- measurement
 def test_an_unmeasurable_ladder_reports_its_reason(tmp_path):
-    m = L.measure(tmp_path, L.BY_KEY["guard"])
+    m = L.measure(tmp_path, L.BY_KEY["solution"])
     assert m["measurable"] is False
     assert m["reason"]
     assert m["rungs"] == {}
@@ -254,3 +254,92 @@ def test_the_audit_doc_documents_every_ladder_in_the_registry():
         assert any(lad.name in row for row in rows), (
             f"{lad.name!r} is in the registry but has no row in docs/LADDERS.md"
         )
+
+
+# ------------------------------------------------------- corpus measurement
+def test_a_corpus_aggregates_across_workspaces(tmp_path):
+    """Two ladders are static PER WORKSPACE — guard mode is set once in
+    ctx.toml, deployment tier once at install — so a single workspace can only
+    ever report one value. Their distribution is a cross-workspace question,
+    and answering it is the whole reason this mode exists."""
+    from ctx.sessiondir import LEDGER_DIR_NAME
+
+    for i, mode in enumerate(("guarded", "guarded", "strict")):
+        ws = tmp_path / f"ws{i}"
+        (ws / LEDGER_DIR_NAME).mkdir(parents=True)
+        (ws / LEDGER_DIR_NAME / "guard-policy-cache.json").write_text(
+            json.dumps({"key": [], "policy": {"mode": mode}}), encoding="utf-8"
+        )
+
+    roots = L.discover_workspaces(tmp_path)
+    assert len(roots) == 3
+    m = L.measure_corpus(roots, L.BY_KEY["guard"])
+    assert m["rungs"]["guarded"] == 2
+    assert m["rungs"]["strict"] == 1
+    assert m["workspaces_with_data"] == 3
+
+
+def test_discovery_returns_the_root_itself_when_it_is_a_workspace(tmp_path):
+    from ctx.sessiondir import LEDGER_DIR_NAME
+
+    (tmp_path / LEDGER_DIR_NAME).mkdir()
+    assert L.discover_workspaces(tmp_path) == [tmp_path]
+
+
+def test_emission_buckets_are_labelled_as_derived():
+    """The bucket says which tier a size falls under, NOT which check bound
+    it. That distinction is the difference between a measurement and the
+    confident histogram this registry already produced once, so the signal
+    note has to carry it."""
+    note = L.BY_KEY["emission"].signal.note
+    assert "not a record of which check bound it" in note
+
+
+def test_epochs_counts_every_promoted_and_demoted_command(tmp_path):
+    """One policy holds MANY promoted and demoted commands, so a record
+    yields a list of rungs rather than one value."""
+    from ctx.sessiondir import LEDGER_DIR_NAME
+
+    (tmp_path / LEDGER_DIR_NAME).mkdir(parents=True)
+    (tmp_path / LEDGER_DIR_NAME / "guard-policy-cache.json").write_text(
+        json.dumps({"policy": {"promoted_commands": ["a", "b"],
+                               "demoted_commands": ["c"]}}),
+        encoding="utf-8",
+    )
+    m = L.measure(tmp_path, L.BY_KEY["epochs"])
+    assert m["rungs"]["promoted"] == 2
+    assert m["rungs"]["demoted"] == 1
+
+
+def test_an_empty_policy_reports_the_unknown_rung(tmp_path):
+    """Commands the epoch compiler has no opinion about are the honest
+    denominator, not an absence of data."""
+    from ctx.sessiondir import LEDGER_DIR_NAME
+
+    (tmp_path / LEDGER_DIR_NAME).mkdir(parents=True)
+    (tmp_path / LEDGER_DIR_NAME / "guard-policy-cache.json").write_text(
+        json.dumps({"policy": {"mode": "guarded"}}), encoding="utf-8"
+    )
+    m = L.measure(tmp_path, L.BY_KEY["epochs"])
+    assert m["rungs"]["unknown"] == 1
+
+
+def test_deployment_is_probed_from_the_filesystem(tmp_path):
+    """Probed, not recorded: the tier is a property of the files `ctx wrap`
+    wrote, and asking the filesystem is harder to falsify than a ledger entry
+    claiming a tier."""
+    from ctx.sessiondir import LEDGER_DIR_NAME
+
+    (tmp_path / LEDGER_DIR_NAME).mkdir(parents=True)
+    bare = L.measure(tmp_path, L.BY_KEY["deployment"])
+    assert bare["records"] == 0            # nothing installed
+
+    (tmp_path / "AGENTS.md").write_text("x", encoding="utf-8")
+    skill = L.measure(tmp_path, L.BY_KEY["deployment"])
+    assert skill["rungs"]["skill"] == 1
+
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    plugin = L.measure(tmp_path, L.BY_KEY["deployment"])
+    assert plugin["rungs"]["plugin"] == 1, "hooks present must outrank skill-only"
+    assert plugin["rungs"]["skill"] == 0

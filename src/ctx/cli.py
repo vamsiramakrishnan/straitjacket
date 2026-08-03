@@ -510,6 +510,12 @@ def _build_parser():
     )
     p_lad.add_argument("--json", action="store_true", dest="ladders_json",
                        help="machine-readable")
+    p_lad.add_argument("--corpus", dest="ladders_corpus", metavar="DIR",
+                       help="aggregate across every workspace under DIR "
+                            "(a directory of recorded sessions). Static "
+                            "ladders -- guard mode, deployment tier -- are one "
+                            "value per workspace, so their distribution is only "
+                            "visible across a corpus")
 
     p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
