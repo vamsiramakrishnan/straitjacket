@@ -126,6 +126,52 @@ line, drawn out under each approach:
 
 </div>
 
+## One hostile payload across seven containment strategies
+
+The broader model-free comparison sends the same 302,628-token log through
+seven delivery strategies. Headroom and straitjacket execute their real
+implementations. Caveman, rtk, Ponytail and Maki are explicit models of their
+documented strategy; they are not presented as third-party package benchmarks.
+
+| Strategy | Output tokens | Compression | Quiet needle | Address after omission |
+|---|---:|---:|---|---|
+| Naive raw output | 302,628 | 1.0× | kept | none |
+| Caveman head + tail | 1,219 | 248× | **dropped** | none |
+| rtk-style loud-line filter | 361 | 838× | **dropped** | none |
+| Ponytail-style advisory rules | 302,698 | 1.0× | kept | none |
+| Maki-style anomaly script | 58 | 5,218× | **dropped** | none |
+| Headroom 0.32.1 | 357 | 848× | **dropped** | none |
+| **straitjacket `ctx run`** | **524** | **578×** | **kept** | **yes** |
+
+The result is not “more compression is better.” It exposes three independent
+properties: bounded output, survival of structurally quiet evidence, and a
+resolvable address for omitted bytes. Only the straitjacket arm has all three
+on this workload. See the [runner](../evals/field_needle.py), [machine
+record](../evals/field-needle-record.json), and [dated
+receipt](../evals/field-needle-2026-07-20.md).
+
+## The workload curve from 20 real agent runs
+
+A separate five-task Antigravity evaluation tested naive and harnessed agent
+loops across two heavy floods, one medium flood, and two low-volume tasks. All
+20 runs completed correctly.
+
+| Output regime | Billed-token result | Direct tool-output effect |
+|---|---:|---:|
+| Heavy keyword flood | −71.9% | 186× less into context |
+| Heavy quiet flood | −61.0% | 63× less into context |
+| Medium traceback | −13.4% | 11× less into context |
+| Small file read | within run-to-run noise | wrapper overhead becomes visible |
+| Several small files | −4.2%, treated as neutral | harness emitted more tool-context bytes |
+
+This is the expected mechanism curve: large savings when output floods,
+smaller savings on medium output, and neutral-to-negative overhead when there
+is nothing to contain. The run used two repeats per arm and committed aggregate
+records, so it is directional regime evidence rather than a current benchmark.
+See the [receipt](../evals/coding-suite-2026-07-20.md),
+[record](../evals/coding-suite-record.json), and
+[runner](../evals/coding_suite.py).
+
 ## Regime scoreboard (worst case and best case, all measured)
 
 | Regime | straitjacket vs naive | vs the field |

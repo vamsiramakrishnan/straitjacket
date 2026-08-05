@@ -30,6 +30,7 @@ regress containment or evidence preservation.
 ```bash
 pip install -e '.[dev]'
 python evals/headroom_needle_v2.py     # needle-survival head-to-head vs Headroom
+python evals/field_needle.py           # seven strategies on identical hostile bytes
 python evals/coverage_corpus.py        # replay real hostile outputs through stub binaries
 python evals/plan_collapse.py          # rounds collapse, byte-stable digest
 ```
@@ -61,6 +62,12 @@ these hosts, live determinism comes from paired tasks × repeats × median with
 frozen-constant checksums — see [`BENCHMARK.md`](BENCHMARK.md).
 `agy_ab_matrix.py` collapses a set of its run directories into one priced
 model × scenario matrix.
+
+`coding_suite.py` is the dated five-task naive-vs-straitjacket runner behind
+[`coding-suite-2026-07-20.md`](coding-suite-2026-07-20.md). Its committed
+record has two repeats per arm and aggregate results rather than raw
+transcripts, so use it as regime evidence and rerun it before making a current
+performance claim.
 
 Two live runners drive from-scratch web builds graded by headless Chromium
 (needs `playwright` and the Chromium under `/opt/pw-browsers`) — see

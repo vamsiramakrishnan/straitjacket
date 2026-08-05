@@ -478,6 +478,16 @@ neighbour is architected and where the harness diverges, the model-free
 head-to-head against Headroom, the worst-case/best-case regime scoreboard, and
 the measured receipt behind every number above.
 
+Two receipts make the boundary explicit. On one identical 302,628-token log,
+straitjacket was the only tested strategy that was simultaneously bounded,
+preserved the structurally quiet needle, and retained an address for omitted
+bytes ([seven-strategy receipt](evals/field-needle-2026-07-20.md)). Across 20
+real agent runs, the measured benefit followed output volume: 61–72% lower
+billed tokens on heavy floods, 13% on a medium traceback, and neutral-to-small
+overhead on low-volume tasks ([five-task receipt](evals/coding-suite-2026-07-20.md)).
+The latter has two repeats per arm and is regime evidence, not a current
+precision benchmark.
+
 ## 🏗️ Architecture & deployment
 
 ```
