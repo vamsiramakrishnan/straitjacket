@@ -25,6 +25,7 @@ different safety contracts. The mental model can stay small.
 | Compose typed facts | `ctx q '<pipeline>'` | Total, bounded repository/evidence query algebra |
 | Answer a question | `ctx ask "…" --intent <i>` | Typed intent preset (locate/impact/diagnose) → one evidence view |
 | Compare two runs | `ctx diff run:A run:B` | Behavioral delta instead of two complete outputs |
+| Inspect or compare binary evidence | `ctx image digest …` / `ctx image diff …` | Typed structure and identity without inlining pixels or PDF bytes |
 | Session scorecard | `ctx stats --session` | Wire residency, rounds, behavior and interventions |
 | Cumulative savings | `ctx gain` | Containment savings by command family/verb |
 | Replay histories | `ctx replay …` | Read-only counterfactual analysis over recorded sessions |
@@ -274,6 +275,27 @@ ctx diff run:<before> run:<after>
 
 The comparison should answer the verification question directly: what failures,
 templates, exits, signals, or stream sizes changed? New evidence receives coordinates.
+
+## Inspect binary evidence: `ctx image`
+
+```bash
+ctx image digest screenshots/home.png reports/month-end.pdf
+ctx image diff screenshots/before.png screenshots/after.png
+```
+
+`digest` prints a bounded structural view: magic-byte format, byte size, exact
+SHA-256 identity, common image dimensions and colour mode, or labelled PDF
+structure heuristics. It never prints the image pixels or PDF body.
+
+`diff` compares two decodable images using a deterministic 64-bit dHash and
+also reports whether their bytes are identical. Install the optional decoder
+with `python -m pip install -e '.[image]'`. A dHash is a coarse render-change
+signal, not a semantic or aesthetic judgment; inspect the actual raster when
+visual correctness matters.
+
+Paths are confined to the workspace and respect `.ctxignore`. Binary output
+captured by `ctx run` selects `binary/v1` automatically and keeps the complete
+artifact behind its run handle.
 
 ## Measure a session
 

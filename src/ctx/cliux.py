@@ -77,6 +77,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("stats", "size, shape and schema of a file or saved output"),
             ("map", "a ranked tour of the codebase that fits a token budget"),
             ("diff", "what changed between two saved runs"),
+            ("image", "inspect image/PDF structure or compare two image renders"),
         ),
     ),
     (
