@@ -1,0 +1,125 @@
+{
+  "date": "2026-07-20",
+  "model": "gemini-3.5-flash",
+  "repeats": 2,
+  "arms": [
+    "naive",
+    "sj"
+  ],
+  "per_task": {
+    "keyword_flood": {
+      "kind": "flood-keyword",
+      "naive": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 414600,
+        "toolout_med": 27621,
+        "calls_med": 10,
+        "wall_med": 28.8
+      },
+      "sj": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 116485,
+        "toolout_med": 148,
+        "calls_med": 8,
+        "wall_med": 22.2
+      }
+    },
+    "quiet_flood": {
+      "kind": "flood-quiet",
+      "naive": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 322694,
+        "toolout_med": 26715,
+        "calls_med": 9,
+        "wall_med": 24.0
+      },
+      "sj": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 125923,
+        "toolout_med": 424,
+        "calls_med": 9,
+        "wall_med": 23.9
+      }
+    },
+    "traceback": {
+      "kind": "traceback",
+      "naive": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 170406,
+        "toolout_med": 5154,
+        "calls_med": 9,
+        "wall_med": 22.9
+      },
+      "sj": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 147494,
+        "toolout_med": 451,
+        "calls_med": 9,
+        "wall_med": 23.2
+      }
+    },
+    "bigtest": {
+      "kind": "bigtest",
+      "naive": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 105627,
+        "toolout_med": 266,
+        "calls_med": 7,
+        "wall_med": 23.4
+      },
+      "sj": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 89731,
+        "toolout_med": 325,
+        "calls_med": 7,
+        "wall_med": 22.9
+      }
+    },
+    "multifile": {
+      "kind": "multifile",
+      "naive": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 119982,
+        "toolout_med": 98,
+        "calls_med": 7,
+        "wall_med": 21.1
+      },
+      "sj": {
+        "n": 2,
+        "success": 2,
+        "billed_med": 114989,
+        "toolout_med": 163,
+        "calls_med": 7,
+        "wall_med": 19.4
+      }
+    }
+  },
+  "pooled": {
+    "naive": {
+      "n": 10,
+      "success": 10,
+      "billed_med": 170406,
+      "toolout_med": 5154,
+      "calls_med": 9,
+      "wall_med": 23.8
+    },
+    "sj": {
+      "n": 10,
+      "success": 10,
+      "billed_med": 116485,
+      "toolout_med": 325,
+      "calls_med": 7,
+      "wall_med": 22.4
+    }
+  },
+  "n_runs": 20
+}
