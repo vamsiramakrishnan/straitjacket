@@ -23,7 +23,7 @@ Three questions, answered exactly:
 
 - **Gaps** (``--gaps``): where the raw bytes fell — which profiles claimed
   them, how much fell to ``text/v1``, hand-rolled slicer frequency, and
-  ``ctx eval`` opportunities — the empirical priority list for the next
+  ``ctx py`` opportunities — the empirical priority list for the next
   coverage wave, mined from real sessions instead of intuition.
 
 - **Evidence regret** (``--regret``): the rate–distortion frontier gap per
@@ -345,7 +345,7 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
 
     from ctx.textutil import sanitize_for_model
 
-    safe_misses = [sanitize_for_model(m, ws.config.redaction.patterns)[0] for m in misses[:5]]
+    safe_misses = [sanitize_for_model(m, ws.config.redaction)[0] for m in misses[:5]]
     for b in regret_by_profile.values():
         b["regret_tok"] = b["actual_tok"] - b["oracle_tok"]
         # Naive comparison only over calls whose raw bytes replay actually

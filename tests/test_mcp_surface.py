@@ -5,13 +5,17 @@ bounded workspace cache (S6 finding).
    handles (callers/callees/impact were dispatched but undeclared; diff was
    neither declared nor dispatched) — a model reading the schema must be
    able to discover every reachable op.
-2. ``_WS_CACHE`` must never grow without bound and must close evicted Store
+2. Conversely, every declared op must be *described* in the tool description
+   — the enum grew to 14 ops while the prose catalogue still listed 9, so
+   five ops were callable but undiscoverable (D1).
+3. ``_WS_CACHE`` must never grow without bound and must close evicted Store
    sqlite connections rather than leaking them.
 
 The MCP tool description string is a golden-hashed prefix asset
-(``ctx.prefixassets``); these tests touch only the enum/options schema and
-module docstring, which are not part of that hash, so PREFIX_VERSION stays
-put — ``test_prefix_stability.py`` is the guard for that invariant.
+(``ctx.prefixassets``): editing it is an explicit, versioned decision that
+costs one cold cache write per model, so it moves together with
+PREFIX_VERSION and the committed manifest — ``test_prefix_stability.py`` is
+the guard for that invariant.
 """
 
 import subprocess
@@ -60,6 +64,24 @@ def test_tool_schema_enum_declares_every_dispatched_op():
         assert op in enum, f"{op!r} is dispatched but missing from the op enum"
 
 
+def test_tool_description_documents_every_enum_op():
+    """Drift guard: the tool description is the only op catalogue a model
+    reads before it picks an op. Every declared op must be glossed there, or
+    the op is callable-but-undiscoverable (callers/callees/impact/diff/
+    investigate were exactly that). Naming an op in the enum is therefore a
+    commitment to describe it — with a parenthetical gloss, not a bare name,
+    so a model can choose between ops without trial calls."""
+    from ctx.mcp import TOOL_SCHEMA
+
+    description = str(TOOL_SCHEMA["description"])
+    enum = TOOL_SCHEMA["inputSchema"]["properties"]["op"]["enum"]
+    for op in enum:
+        assert f"{op} (" in description, (
+            f"op {op!r} is in the enum but has no gloss in the tool description; "
+            "add one (and bump PREFIX_VERSION — the description is a prefix asset)"
+        )
+
+
 def test_tool_description_bytes_unchanged():
     """The golden-hashed asset is TOOL_SCHEMA['description'] specifically
     (see ctx.prefixassets.prefix_assets); enum/schema extensions must not
@@ -68,13 +90,7 @@ def test_tool_description_bytes_unchanged():
     from ctx.mcp import TOOL_SCHEMA
 
     assert TOOL_SCHEMA["description"] == (
-        "Execute bounded retrieval against repository state or captured artifacts "
-        "without placing unbounded output in model context. Ops: search (multi-pattern "
-        "over run:/blob:/repo: refs), get (exact line/byte/record/json-pointer slices), "
-        "stats (schema and repository shape), map (ranked budget-fitted codebase map), "
-        "def (symbol definition site with snapshot + span), refs (reference sites for "
-        "a symbol), diag (deterministic lint/syntax digest), "
-        "repo (workspace summary), doctor (health)."
+        'Execute bounded retrieval against repository state or captured artifacts without placing unbounded output in model context. Ops: search (multi-pattern over run:/blob:/repo: refs), get (exact line/byte/record/json-pointer slices), stats (schema and repository shape), map (ranked budget-fitted codebase map), def (symbol definition site with snapshot + span), refs (reference sites for a symbol), diag (deterministic lint/syntax digest), callers (direct call-graph callers of a symbol), callees (direct call-graph callees of a symbol), impact (transitive callers of a symbol — blast radius, bounded depth), diff (regression delta between two captured run: refs), repo (workspace summary), doctor (health), investigate (one observe-class ctx.plan/v1 evidence plan executed as a single bounded digest), q (compose typed evidence in one call: a total `|`-pipeline over symbols/sites/files/records streams — options.pipeline, e.g. "refs Foo | group file | top 3 | get --context 5").'
     )
 
 

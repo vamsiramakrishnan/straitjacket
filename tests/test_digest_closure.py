@@ -23,12 +23,17 @@ CORE_CLOSURE = {
     "callees": "source",
     "impact": "source",
     "search": "source",
+    # M-K2/M-K3 sources: the file-set and stored-record planes (SUBSTRATE.md)
+    "corpus": "source",
+    "records": "source",
     # closed: representation → representation, digest-rate, no byte rehydration
     "files": "closed",
     "group": "closed",
     "top": "closed",
     "where": "closed",
     "count": "closed",
+    "distinct": "closed",
+    "histogram": "closed",
     # materialize: emits the terminal `text` payload — the priced refinement boundary
     "get": "materialize",
     "outline": "materialize",

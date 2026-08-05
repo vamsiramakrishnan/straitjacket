@@ -91,3 +91,30 @@ def test_override_can_replace_fallback(tmp_path):
     )
     p = pricing.price_for("some-unlisted-model", workspace_root=tmp_path)
     assert p.vendor == "house" and p.input == 2.0
+
+
+def test_only_the_implemented_override_is_promised(tmp_path):
+    """R14, docs-vs-code guard. The module docstring and the shipped data
+    file both advertised a ``[pricing]`` block in ctx.toml; nothing anywhere
+    read one, so a user following the documentation got silently ignored
+    prices. ``.ctx-prices.json`` is the single override seam.
+
+    If a ``[pricing]`` reader is ever implemented, this test must be updated
+    deliberately — that is the point of pinning both halves: the promise and
+    the behaviour must move together.
+    """
+    doc = pricing.__doc__ or ""
+    assert "no ``[pricing]`` block" in doc, (
+        "the docstring must state that ctx.toml carries no [pricing] block, "
+        "not advertise one that no code reads"
+    )
+    shipped = json.loads(pricing._shipped_data_path().read_text(encoding="utf-8"))
+    assert "[pricing]" not in str(shipped.get("note", ""))
+
+    # Behaviour: a workspace ctx.toml (with or without a [pricing] block)
+    # never moves a price — only .ctx-prices.json does.
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n\n[pricing]\nmodels = [{match = "gemini-3.5-flash", in = 99.0}]\n',
+        encoding="utf-8",
+    )
+    assert pricing.price_for("gemini-3.5-flash", workspace_root=tmp_path).input == 1.50

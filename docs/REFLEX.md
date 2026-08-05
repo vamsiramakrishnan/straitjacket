@@ -7,6 +7,13 @@
 
 # Reflex: closed-loop conditionality
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+
 **Date:** 2026-07-18 · design doc for the intelligence layer, written
 against the spec3 receipt (`evals/spec3-haiku-2026-07-18.md`): every
 conditional fired to spec, and the system still hit the turn cap at
@@ -193,7 +200,7 @@ normalized command signatures with the per-family scope tables,
 validated_after_edit / retrieved / equivalent_requery / redundant /
 reversed / abandoned) with deterministic attribution reasons and
 confidences. `ctx policy compile --plan-value` aggregates them into the
-committed `[plan_value]` priors that `ctx investigate --advise` reads —
+committed `[plan_value]` priors that `ctx plan run --advise` reads —
 the same telemetry-→-epoch pattern as `[digest_density]`, applied to
 action selection instead of digest shape (docs/EVIDENCE-PLANS.md
 §plan-value). One vocabulary rule carried over unchanged: censored

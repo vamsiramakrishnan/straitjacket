@@ -7,6 +7,13 @@
 
 # Priced Context: a thesis on metadata as economic signposting
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+
 **Claim.** An agent's retrieval choices are economically rational only to
 the extent that every choice carries a visible price *at decision time*,
 denominated in the currency the agent is budgeted in (tokens), relativized

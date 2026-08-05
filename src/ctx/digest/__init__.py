@@ -7,6 +7,8 @@ fall back to ``text/v1``.
 
 from __future__ import annotations
 
+import re
+import functools
 import hashlib
 from typing import Any
 
@@ -30,7 +32,7 @@ from ctx.digest.tableprof import TableProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
-from ctx.textutil import decode_stream, sanitize_for_model
+from ctx.textutil import decode_stream, sanitize_for_model, short_id
 from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
@@ -65,6 +67,97 @@ def detect_profile(ctx: DigestContext) -> tuple[Profile, str]:
     return _PROFILES[-1], "fallback"  # pragma: no cover - text always matches
 
 
+@functools.lru_cache(maxsize=1)
+def extractor_epoch() -> str:
+    """Identity of the FACT-tier extraction the registry can currently do.
+
+    Derived from the registry, never hand-maintained. The fact cache keys a
+    derived run census on the manifest id alone, and a manifest id does not
+    move when this file gains an extractor -- so every store that had already
+    derived a unittest / Go / Cargo / Jest run kept serving the old
+    pytest-only census after the upgrade that taught those profiles to
+    extract, and `ctx q 'fails last'` went on answering "no failures" about a
+    run with failures in it. The cached fingerprint carries this epoch beside
+    the manifest id, so teaching a profile to extract, or bumping a profile
+    version, invalidates exactly the derivations whose answer could change.
+
+    A hand-bumped constant would have the same shape and the same failure:
+    the bump is remembered on the day the extractor is written and forgotten
+    every day after. Deriving it means the invalidation cannot be forgotten.
+    """
+    parts = sorted(
+        f"{p.version}:{int(type(p).extract is not Profile.extract)}"
+        for p in _PROFILES
+    )
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
+# Lines a profile emits that are pure bookkeeping: provenance, byte counts, and
+# accounting about what it chose to omit. Anything NOT matching is evidence the
+# profile derived — a failure census, a span, a schema, a heavy-hitter table —
+# and evidence is worth its bytes however small the output was.
+_ACCOUNTING_LINE = re.compile(
+    r"""^\s*(
+        cwd: | command: | exit[: ] | signal[: ] | timed\ out
+      | stdout: | stderr: | summary: | coverage:
+      | parsed: | shown: | tests: | omitted
+      | next: | ctx\             # retrieval affordances, not findings
+      | ---\ stderr\ ---
+    )""",
+    re.VERBOSE,
+)
+
+
+def _only_accounting(body: str) -> bool:
+    """True when the profile added no evidence — only bookkeeping."""
+    for line in body.splitlines():
+        if line.strip() and not _ACCOUNTING_LINE.match(line):
+            return False
+    return True
+
+
+def _pass_through_if_digest_earned_nothing(ctx: Any, body: str, ws: Workspace) -> str:
+    """Emit the output plainly when the digest around it earned no bytes.
+
+    A profile's scaffolding pays for itself on a flood and not at all on two
+    lines. Measured: a passing 98-byte pytest run rendered a 248-byte digest
+    (2.5x) whose `coverage:` block spent five lines accounting for the omission
+    of one line out of two — and the actual result line ("1 passed") was the
+    thing omitted. Replaying this repo's own sessions showed short ones coming
+    out worse under the harness than without it.
+
+    The test is *evidence*, not size. An earlier attempt compared byte counts
+    and suppressed pytest failure spans and JSON schema summaries, which are
+    worth far more than their length. So pass through only when every line the
+    profile produced is bookkeeping (:data:`_ACCOUNTING_LINE`) — any derived
+    finding blocks it — and only when the whole output fits inline anyway. The
+    run handle still addresses the stored capture, so nothing becomes
+    unretrievable. Fail-open: any problem keeps the profile's rendering."""
+    try:
+        content = sum(v.bytes for v in (ctx.stdout, ctx.stderr) if v.bytes)
+        if not content or content > ws.config.budgets.max_inline_bytes:
+            return body  # large enough that the digest is doing real work
+        if not _only_accounting(body):
+            return body  # the profile found something; keep it
+        r = ctx.manifest["result"]
+        status = (
+            f"exit {r['exitCode']}" if r.get("exitCode") is not None
+            else f"signal {r.get('signal')}"
+        )
+        if r.get("timedOut"):
+            status += " · timed out"
+        out = [f"{status} · output (complete):"]
+        for view in (ctx.stdout, ctx.stderr):
+            if view.bytes:
+                if view is ctx.stderr and ctx.stdout.bytes:
+                    out.append("--- stderr ---")
+                out.extend(view.text_lines)
+        plain = "\n".join(out)
+        return plain if len(plain.encode("utf-8")) < len(body.encode("utf-8")) else body
+    except Exception:
+        return body
+
+
 def render_run_digest(
     store: Store,
     ws: Workspace,
@@ -74,6 +167,7 @@ def render_run_digest(
     op: str = "run",
     dense: bool = False,
     plan: Any = None,
+    contained: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Produce the bounded deterministic digest for a captured invocation and
     republish the manifest with its final digest identity.
@@ -101,7 +195,8 @@ def render_run_digest(
     profile, reason = detect_profile(ctx)
 
     body = profile.render(ctx)
-    body, redactions = sanitize_for_model(body, ws.config.redaction.patterns)
+    body = _pass_through_if_digest_earned_nothing(ctx, body, ws)
+    body, redactions = sanitize_for_model(body, ws.config.redaction)
     if redactions:
         body += "\nredaction: applied [" + ", ".join(redactions) + "]"
 
@@ -117,7 +212,7 @@ def render_run_digest(
         "bytesHash": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
     }
     final_id, final_manifest = update_manifest_digest(store, manifest, digest_meta)
-    short = final_id[:12]
+    short = short_id(final_id)
 
     header = f"[ctx run:{short} profile={profile_version}]"
     digest = header + "\n" + body.replace("run:PENDING", f"run:{short}")
@@ -125,7 +220,13 @@ def render_run_digest(
     from ctx.retrieval import record_telemetry
 
     raw = sum(int(s["bytes"]) for s in manifest["streams"].values())
-    record_telemetry(store, op, raw, len(digest.encode("utf-8")))
+    # `contained=False` means the host had no way to substitute this digest for
+    # the raw result, so the raw bytes reached the transcript anyway. The
+    # artifact is still stored and addressable, but claiming the digest's size
+    # as "emitted" would book a saving that never happened — so the event is
+    # recorded at raw->raw, a real event with an honest zero gain.
+    emitted = len(digest.encode("utf-8")) if contained else raw
+    record_telemetry(store, op, raw, emitted)
 
     # Graduated engagement (mechanism C): an output too large to inline is
     # the measured proof the task outgrew "small" — graduate the session.
@@ -145,8 +246,14 @@ def digest_output(
     *,
     is_error: bool = False,
     argv: list[str] | None = None,
+    contained: bool = True,
 ) -> tuple[str, str]:
     """Digest an already-produced tool result (not a shell capture).
+
+    ``contained`` is False when the calling host has no output-substitution
+    field, so this digest is stored and addressable but never replaces the raw
+    result in the transcript. It only affects telemetry honesty (see
+    :func:`render_run_digest`), never the digest bytes.
 
     The universal emission gate (``ctx.hook._emission_gate``) calls this when a
     PostToolUse tool result exceeds the byte budget: it persists the raw bytes
@@ -205,8 +312,9 @@ def digest_output(
         },
     }
 
-    digest, final = render_run_digest(store, ws, manifest, focus=None)
-    short = str(final.get("id", "")).removeprefix("sha256:")[:12]
+    digest, final = render_run_digest(store, ws, manifest, focus=None,
+                                      contained=contained)
+    short = short_id(final.get("id", ""))
 
     from ctx.engagement import filter_digest, suggestion_cap
     from ctx.textutil import bounded

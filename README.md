@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.25.0 (pre-1.0, minor bump per mechanism) · 798 tests · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,618 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -21,15 +21,37 @@ round — a routine `mcp__github__list_commits` alone is ~19.8k tokens per
 round. Then compaction deletes the one line you needed, with no trace it
 ever existed.
 
-straitjacket stops that at the source. The raw bytes go into an immutable
-local store, and the transcript gets a small, deterministic digest instead.
-The digest is a fixed size no matter how much output the command produced.
-Every byte it leaves out keeps an address, so you can pull the exact
-original bytes back at any later turn.
+**straitjacket stops that at the source.**
 
-You run coding agents daily and pay per token per turn. This keeps the
-window small, keeps the cost down, and keeps the failing test line
-retrievable after compaction would have dropped it.
+| | |
+|---|---|
+| **304,113 → ~210** | tokens a full test log costs your transcript |
+| **−28% · −33% · −17%** | turns · wall-clock time · cost, on the same tasks |
+| **96.5–98.1%** | prompt-cache hit rate held — Headroom measured 80.6–84.2% |
+| **zero** | evidence dropped without a retrievable address |
+
+What that buys you:
+
+- **Your agent stops going blind halfway through.** It can run the noisy
+  suite, tail the long build and sweep the big repository without spending
+  its whole window on the output.
+- **You stop re-paying for the same bytes every turn.** A 304,113-token log
+  costs ~210 tokens in your transcript, and stays that size however loud the
+  command was. Charged once, not on every round for the rest of the session.
+- **Nothing you needed vanishes quietly.** Every byte left out keeps an exact
+  address — still retrievable long after compaction would have dropped it.
+- **You can check what the agent tells you.** The same address returns the
+  same bytes tomorrow, next week, on another machine.
+- **Sessions finish sooner, not just cheaper.** A small window keeps the cache
+  warm and the plan intact; fewer tokens is the mechanism, finishing sooner is
+  the result.
+- **It works with the agent you already use.** Antigravity, Claude Code and
+  Codex — one command, merged into your existing config, never clobbering it.
+
+Every number above has a receipt in [`evals/`](evals/); the house rule is
+*receipts before doctrine*.
+
+### Then, how it works
 
 <div align="center">
 
@@ -40,8 +62,16 @@ retrievable after compaction would have dropped it.
 
 </div>
 
-Raw bytes stop at the gate. The transcript carries the digest and its
-addresses. Any address resolves back to the exact original bytes later.
+Raw bytes stop at the gate: they go into an immutable local store, and the
+transcript gets a small, deterministic digest instead — a fixed size no matter
+how much output the command produced. The digest carries addresses, and any
+address resolves back to the exact original bytes at any later turn.
+
+> **New here?** The CLI is `ctx`, installed from a clone (no PyPI release yet).
+> The gentlest introduction is **[How it works](docs/HOW-IT-WORKS.md)** — one
+> command walked through the whole system in plain language, ten minutes. The
+> rest of this README is the reference tour; skip to [Quickstart](#-quickstart)
+> to just install it.
 
 ## ⚡ Quickstart
 
@@ -57,6 +87,22 @@ ctx wrap setup      # done — Antigravity, Claude Code, and Codex are harnessed
 config, never clobbers it, and re-running is a no-op. From the next agent
 session on, flooding tool output is captured into a local store and your
 agent sees a small digest with exact retrieval addresses instead.
+
+It also walks you through it rather than dumping paths — four steps, about five
+seconds:
+
+1. **What you have** — which agent CLIs were found, which will be harnessed,
+   which were skipped and why, and which are optional (never configured behind
+   your back).
+2. **Harnessing** — every file written, named, so the undo note is true.
+3. **Verifying** — re-runs `ctx doctor`'s own checks, so setup and the doctor
+   cannot disagree about what "healthy" means.
+4. **What now** — the one command to try immediately, and how to see what it
+   saved.
+
+If a check fails it says which one, what to do, and exits non-zero — it never
+reports success while broken. Scripts that want just the installer report can
+set `CTX_SETUP_PLAIN=1`.
 
 **See it work** (no agent needed):
 
@@ -80,7 +126,7 @@ Setting up one host only, or checking what setup writes first:
 | `ctx wrap antigravity` / `claude` / `codex` | set up a single host |
 | `ctx wrap <host> --print-config` | preview the exact config without writing it |
 | `ctx wrap claude -- -p "fix the tests"` | one ephemeral Claude session, zero residue |
-| `ctx doctor --antigravity` | verify the install (15 health checks) |
+| `ctx doctor --antigravity` | verify the install (hooks, store, classifier, plugin) |
 
 Everything else — the wire-observer proxy, mid-session rescue, pip extras,
 the optional Rust hook accelerator — is opt-in and documented in
@@ -88,14 +134,33 @@ the optional Rust hook accelerator — is opt-in and documented in
 **[How it works](docs/HOW-IT-WORKS.md)** first — it walks one command
 through the whole system in plain language.
 
-## 🆕 New in v0.25
+## 🆕 Recent highlights
 
-Plain-language highlights; full detail in [`CHANGELOG.md`](CHANGELOG.md).
+Plain-language highlights from recent releases; full detail in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 - **One-command, three-host setup.** `ctx wrap setup` harnesses Antigravity,
-  Claude Code, *and Codex* (new — with real enforcement, not just advice)
-  in a single idempotent command.
-- **Compiled investigations.** `ctx plan` / `ctx investigate` let an agent
+  Claude Code, *and Codex* (with real enforcement, not just advice) in a
+  single idempotent command.
+- **Harness collaboration by capability × price, per model.** `ctx wrap detect`
+  finds every coding-agent CLI on PATH and prices it by its model;
+  `ctx orchestrate "<task>"` then has a cheap coordinator (Gemini-flash-lite)
+  split the task into a `ctx.route/v1` DAG and route each node to the right
+  *(harness, model)*: **planning → the flagship (Opus)**, **implementation →
+  complexity-adaptive** (Gemini 3.6 Flash for real work, 3.5 Flash-lite for a
+  simple edit), explore/verify → an economy model — even within one harness. A
+  **closed loop** runs it: parallel waves, addressed-evidence handoff (not
+  bytes), failure escalation to a stronger model, bounded re-planning. The point
+  is **allocation, not raw savings**: it spends the flagship (Opus) only on the
+  plan step and keeps every other phase cheap — about the cost of running the
+  whole task on Sonnet, and far under running it all on Opus. The
+  [receipt](evals/orchestrator-cost-routing-2026-07-24.md) shows the honest
+  per-baseline math (it is *not* cheaper than a flat Sonnet run). Separately, a
+  **live real-task** run had the cheap Gemini node plan and Claude implement with
+  its own tools (no API key) until a failing test went green — a cross-vendor
+  handoff through the loop, not a cost demo
+  ([receipt](evals/live-collab-antigravity-claude-2026-07-24.md)).
+- **Compiled investigations.** `ctx plan` / `ctx plan run` let an agent
   run a bounded multi-step evidence program in **one round instead of N**
   — measured 6 rounds → 1 ([receipt](evals/plan-collapse-2026-07-19.md)).
 - **The harness now measures itself.** `ctx replay --regret` scores each
@@ -194,7 +259,7 @@ The most common question — which verb do I use — as a flowchart:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ladder.svg">
-  <img src="assets/readme/diagrams/ladder-light.svg" width="100%" alt="The capture ladder: native read for small bounded output; ctx run for one noisy command; ctx run --shell for pipe chains; ctx seq for N declared steps; ctx eval for computed control flow. Long work backgrounds into a job handle.">
+  <img src="assets/readme/diagrams/ladder-light.svg" width="100%" alt="The capture ladder: native read for small bounded output; ctx run for one noisy command; ctx run --shell for pipe chains; ctx seq for N declared steps; ctx py for computed control flow. Long work backgrounds into a job handle.">
 </picture>
 
 </div>
@@ -202,10 +267,41 @@ The most common question — which verb do I use — as a flowchart:
 Use the lightest verb the work allows. Anything that outlives the wait
 backgrounds into a `job:` handle instead of idling the session.
 
+### …and the other eight
+
+The capture ladder is one of **nine**. Same shape everywhere in the system:
+start on the cheapest rung, escalate only when the work demands it. What
+differs is *who* climbs — the model, the hook, or a static setting — and,
+more importantly, whether anyone measured the climb:
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ladders-efficiency.svg">
+  <img src="assets/readme/diagrams/ladders-efficiency-light.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it — the model, the hook, or a static setting — and whether its traversal is measured — derived from the registry in src/ctx/ladders.py, not hand-maintained.">
+</picture>
+
+</div>
+
+The right-hand column is the point, and it is **derived rather than
+asserted**: a ladder counts as measured when it declares a signal naming a
+ledger that actually carries rung values, and one that cannot be scored has to
+say why. Six of the nine qualify today, scored against a corpus of 29 recorded sessions.
+
+Run it against your own workspace:
+
+```bash
+ctx ladders          # what this repo recorded climbing
+```
+
+The rungs are configurable too, because they are a declaration rather than a
+literal — `[ladders.capture] rungs = [...]` in `ctx.toml` narrows a ladder you
+never want climbed. The full audit is [`docs/LADDERS.md`](docs/LADDERS.md).
+
 The measured differences
 ([`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)):
 a bash pipeline under `ctx run --shell` already collapses stream-shaped
-chains (266 tok, one round). `ctx eval` wins on round count only when the
+chains (266 tok, one round). `ctx py` wins on round count only when the
 intermediate results are *structured*: the 30-file aggregate is 146 tok in
 one round vs 96k naive, and a bounded-slice baseline cannot finish that task
 at all. When a script fails mid-corpus, debugging is retrieval, not
@@ -341,7 +437,7 @@ Concretely:
   full cold cache rewrite per model (~56k tokens).
 - A measured A/B is the bar for shipping a steering change: the solution
   ladder shipped only after −28% turns / −33% time / −17% cost; backward
-  planning after −17% cost / −16% turns. The `ctx eval` adoption ledger
+  planning after −17% cost / −16% turns. The `ctx py` adoption ledger
   exists because a live A/B showed the discipline winning while the verb went
   unadopted — recorded as debt, then instrumented.
 
@@ -356,7 +452,7 @@ each tile below is the idea the harness kept — losslessly.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/field-treemap.svg">
-  <img src="assets/readme/diagrams/field-treemap-light.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail and Maki. Each tile names the tool's one good idea, its limitation, and — on an amber strip — the lossless form straitjacket adopted.">
+  <img src="assets/readme/diagrams/field-treemap-light.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail, Maki and wozcode. Each tile names the tool's one good idea, its limitation, and — on an amber strip — the lossless form straitjacket adopted.">
 </picture>
 
 </div>
@@ -368,133 +464,19 @@ each tile below is the idea the harness kept — losslessly.
 | Post-hoc compaction / summarization | reclaim a bloated window | rewrites history; evidence irrecoverable, prefix cache invalidated | checkpoint-then-rescue: secure handles first, then clearing is lossless |
 | RAG / vector memory | recall without resending | probabilistic, no provenance | deterministic addresses: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever |
 | **Headroom** (rewriting wire proxy) | rescue an already-bloated transcript | silent evidence drops (347,595→68 tok, no trace); cache hit 80.6–84.2% vs our 96.5–98.1%; 3–6× cache-write churn | v0.10 epoch-latched lossless rescue: ~18× less cache churn, every elided byte file-backed and addressed |
-| **rtk** (bash-hook filter binary) | filter floods at the source | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` |
+| **rtk** (bash-hook filter binary) | filter floods at the source, across 100+ commands | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` — and the *breadth* idea vendored: the replacement surface now covers 8 command shapes (grep-family, `cat`, `pytest`, `head`, `sed -n A,Bp`, `wc -l`, `find -name`, `ls -R`/`tree`), each substituted only where a bounded `ctx` op means the **same** thing |
 | **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
 | **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
-| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx eval`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
 
 What each still does better than us, by design: Headroom's zero-integration
 generality, rtk's 15-host reach and <10ms single binary, Ponytail's 20-host
 rule files, Maki's OS-level sandbox (ours arrives with the broker, Phase 3).
 
-### How each neighbour is built — and where the harness diverges
-
-The neighbours split into two architectural families. **Headroom** sits on the
-wire and rewrites transcript history on every request — compression happens
-_after_ the bytes are already resident, and the original is gone. **rtk** and
-**Caveman** cut earlier, at the shell hook or in the prompt, but throw the cut
-bytes away. The harness's move is orthogonal to all three: capture at the
-source into an immutable, addressable store, and put only a bounded digest —
-plus a resolvable address for every omitted byte — on the wire.
-
-<div align="center">
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/headroom-arch.svg">
-  <img src="assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two lanes. Top: an agent loop feeds a Headroom proxy that compresses messages and rewrites history on each call; the model sees a rewritten log and the quiet needle is silently dropped with no address. Bottom: straitjacket captures tool output at the birth gate into an immutable artifact store where every line is addressed, sends the model a bounded digest, and ctx get resolves any omitted line by address.">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/filters-arch.svg">
-  <img src="assets/readme/diagrams/filters-arch-light.svg" width="100%" alt="rtk filters a flooding shell command at a fast bash hook and emits truncated output with no addresses; Caveman prompts the agent to narrate tersely, squeezing evidence into prose that cannot be resolved. Both feed into the harness's answer: keep the bytes in the store and carry a cited, resolvable handle, under a failure-asymmetric budget.">
-</picture>
-
-</div>
-
-### The one we ran head-to-head — Headroom
-
-Headroom is the only neighbour that is a drop-in library, so it is the only one
-we can run behind our own observer. The needle-drop comparison is **model-free
-and reproducible** — it exercises the compression/digest layer only, no LLM, so
-it re-runs in a review sandbox in seconds
-([`evals/headroom_needle_v2.py`](evals/headroom_needle_v2.py)):
-
-```bash
-pip install -e '.[dev]' headroom-ai tiktoken
-python evals/headroom_needle_v2.py
-```
-
-Rerun **2026-07-19 against the current `headroom-ai==0.32.1`** on a 20,001-line
-log (302,628 tok) hiding one structurally rare "quiet needle" with no error
-keyword ([receipt](evals/headroom-needle-2026-07-19.md)):
-
-| | Headroom 0.32.1 | `ctx run` logtemplate/v1 |
-|---|---|---|
-| Output | **357 tok** (847×) | **~520 tok** (584×) |
-| Loud ERROR line | ✅ kept (keyword window) | ✅ kept, at `L17650` |
-| **Quiet structural needle** | ❌ **silently dropped** | ✅ **verbatim at `L14238`** |
-| Omission keeps an address | ❌ none | ✅ `ctx get run:<id>#stdout --lines 14238:14241` |
-
-Headroom compresses harder and keeps the ERROR **because it announces itself**;
-the quiet needle, structurally identical to an INFO line, vanishes with no
-trace. `ctx` spends ~160 more tokens to buy the evidence that _doesn't_ announce
-itself, plus an address for every omitted line — **needle-drop rate 100% vs 0%**
-on this workload. (On the long task our mechanisms also beat Headroom outright:
-42 turns / 243s vs 53 / 279s at comparable cost, per the
-[2026-07-17 run](evals/headroom-needle-drop-2026-07-17.md).) The same anomalous
-line, drawn out under each approach:
-
-<div align="center">
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/fates.svg">
-  <img src="assets/readme/diagrams/fates-light.svg" width="100%" alt="A 20,001-line log with one anomalous line. Compaction deletes it without trace. A rewriting proxy dropped it in every measured run. straitjacket's logtemplate profile kept it verbatim with an exact retrieval address.">
-</picture>
-
-</div>
-
-### Regime scoreboard (worst case and best case, all measured)
-
-| Regime | straitjacket vs naive | vs the field |
-|---|---|---|
-| Catastrophic floods | 456 tok vs ~222k first exposure (487×) | Headroom silently dropped the needle (347,595→68) |
-| Repo comprehension | only-correct-answers across rounds; first-ever haiku pass | untested by others |
-| Long overhaul | −21% turns, −9% time, −16% output | beats Headroom on turns/time at par cost |
-| Tiny surgical tasks | parity (was 4.5×; graduated engagement fixed it) | rtk-class tasks: parity is the ceiling |
-| Mechanical bulk repair | parity after per-file-span iteration | our worst regime, no longer a loss |
-| Small spec-driven creation (haiku) | **current loss**: 33 turns (cap) vs naive's 11–26 at 2.7–3.8× cost; quality tied (16/16 holdout all arms), cache hit still best (96–98%) | diagnosed to one loop — pytest digest lacks the failing-test census — fix candidates ranked, referee frozen ([`evals/spec3-haiku-2026-07-18.md`](evals/spec3-haiku-2026-07-18.md)) |
-
-Depth, per topic:
-[`evals/matrix-2026-07-18.md`](evals/matrix-2026-07-18.md) (scenario matrix +
-cache economics) ·
-[`evals/headroom-needle-2026-07-19.md`](evals/headroom-needle-2026-07-19.md)
-(needle-drop rerun vs headroom 0.32.1, model-free + reproducible) ·
-[`evals/headroom-needle-drop-2026-07-17.md`](evals/headroom-needle-drop-2026-07-17.md)
-(original needle-drop head-to-head) ·
-[`evals/ab-claude-code-2026-07-17.md`](evals/ab-claude-code-2026-07-17.md)
-(N=5 A/B: cost parity, 5/5 correct both arms, zero denials) ·
-[`evals/antigravity-gemini-2026-07-19.md`](evals/antigravity-gemini-2026-07-19.md)
-(first non-Claude host: Antigravity SDK + `gemini-3.5-flash`, −30% total / 152×
-less tool-output on an unavoidable flood, honest parity-loss on the greppable one) ·
-[`evals/overhaul-3arm-2026-07-17.md`](evals/overhaul-3arm-2026-07-17.md)
-(v0.6 rematch: −40% cost vs naive at quality parity) ·
-[`evals/rtk-corpus-2026-07-18.md`](evals/rtk-corpus-2026-07-18.md)
-(real-corpus reversals + live lint-fix rounds) ·
-[`evals/eval-collapse-2026-07-18.md`](evals/eval-collapse-2026-07-18.md)
-(programmable capture) ·
-[`evals/plan-collapse-2026-07-19.md`](evals/plan-collapse-2026-07-19.md)
-(compiled evidence plans: rounds 6→1, resend cost 9.0×↓, byte-stable digest) ·
-[`docs/LOSSLESS-RESCUE.md`](docs/LOSSLESS-RESCUE.md) ·
-[`docs/PRICED-CONTEXT.md`](docs/PRICED-CONTEXT.md) ·
-[`docs/LADDERS.md`](docs/LADDERS.md) (the conditionality audit behind v0.20).
-
-### What we took from each
-
-- **rtk** → real corpora reversed our hypotheses before we built: diagnostics
-  needed *structure, not compression* (`lint/v1` exact censuses; the live
-  lint-fix benchmark went honest-loss → iterate → parity), and our own
-  scaffold was inflating small outputs (slim inline: ~100–400 tok overhead →
-  ~20).
-- **Headroom** → its one structural edge (rescuing a bloated transcript) taken
-  losslessly: epoch-latched elision, +$0.05 where per-request rewriting pays
-  $0.90 in churn, 18 turns of lossless runway per 27k elided; live-validated
-  with 10/10 facts correct including elided ones.
-- **Ponytail** → solution ladder adopted only after the A/B won on every axis;
-  rebuilt with enforcement (`ctx debt`) and per-session measurement.
-- **Caveman** → terse narration kept, the loss dropped: citations resolve,
-  compressed prose doesn't.
-- **Maki** → the interpreter collapse generalized (`ctx seq` declared → `ctx
-  eval` computed) with the provenance a raw sandbox drops.
+**Full detail lives in [`docs/COMPARISONS.md`](docs/COMPARISONS.md):** how each
+neighbour is architected and where the harness diverges, the model-free
+head-to-head against Headroom, the worst-case/best-case regime scoreboard, and
+the measured receipt behind every number above.
 
 ## 🏗️ Architecture & deployment
 
@@ -522,6 +504,25 @@ canonical hook decision, translated to each host's dialect: Antigravity's plugin
 `hooks.json`, Claude Code's `.claude/settings.json`, and Codex's `.codex/hooks.json`
 (`hookSpecificOutput` PreToolUse + `decision:block` PostToolUse substitution).
 One classifier, three emitters — `ctx wrap setup` wires all three at once.
+
+The **birth-gate** decision (PreToolUse: contain flooding commands, steer native
+and semantic search to bounded `ctx` ops) fires on all three, but it is applied
+differently. Claude Code (`updatedInput`) and Codex rewrite the command
+*transparently* — the agent never sees a refusal. Antigravity's [published
+PreToolUse schema](https://antigravity.google/docs/hooks) carries no field for
+modified arguments, so there the same decision lands as a **deny whose reason
+names the contained command**: the flood is still prevented, but the agent
+spends a turn re-issuing it itself.
+
+The **output-side** gate (PostToolUse: replace an oversized tool result with a
+digest) needs a host field that can substitute output — Claude Code
+(`updatedToolOutput`) and Codex (`decision:block`) have one. Antigravity's
+published PostToolUse contract permits exactly one output, `{}`: it can neither
+replace a result nor attach a nudge, so on that host the PostToolUse hook is
+**observational** — it still captures the bytes into the store so `ctx get` can
+resolve them later, but it cannot shrink what already reached the transcript. A
+verbose MCP/connector result therefore lands in full on Antigravity; retrieve
+through the bounded `ctx` MCP tool to stay capped.
 
 ### Steering policy (the hooks)
 
@@ -562,7 +563,8 @@ fail-open on internal error is the default, fail-closed is one config line.
 straitjacket/
 ├── src/ctx/           # cli, hook (stdlib-only hot path), mcp, store (CAS+SQLite),
 │                      # execution, refs, retrieval, repomap, rundiff, jobs, pyeval,
-│                      # rescue, proxy, wrap, scorecard, digest/ (profiles)
+│                      # rescue, proxy, wrap, hosts (registry), orchestrator,
+│                      # pricing, scorecard, digest/ (profiles)
 ├── native/ctx-hook-native/  # optional Rust post-hook shim (~3 ms), parity-tested
 ├── plugins/antigravity/     # plugin template: hooks, MCP config, skill, ctx-explorer agent
 ├── plugins/codex/           # Codex template: config.toml (MCP+hooks), hooks.json, AGENTS.md
@@ -570,7 +572,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 733 acceptance-oriented determinism & security tests
+└── tests/             # 1,618 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -588,13 +590,16 @@ Full flags and when-to-use detail:
 | `search` / `get` / `stats` | batched patterns · exact slices (`--lines/--span/--symbol/--records/--json-pointer/--bytes`) · shape stats, or a priced symbol outline on a single code file |
 | `map` / `def` / `refs` / `diag` | ranked priced codebase map · symbol definition/reference/diagnostic verbs |
 | `callers` / `callees` / `impact` | call graph: direct callers, callees, transitive blast radius (`--depth ≤6`) — one query replaces a recursive grep trace |
+| `q` | total, bounded composition over typed evidence: `fails last \| in-changed`, `refs Foo \| group file \| top 5` — no loops, statically priced, every stage addressable |
+| `ask` | a repository question through a typed intent (`locate`, `impact`, `diagnose`, `trace`, `compare`, `verify`, `review`) → one investigation digest |
 | `plan` / `investigate` | compiled evidence plans ([`docs/EVIDENCE-PLANS.md`](docs/EVIDENCE-PLANS.md)): `validate`/`price` a `ctx.plan/v1` DAG statically, `run` it locally (joins, tests, structural/semantic scans), get ONE ranked investigation digest — O(hypothesis epochs) model rounds instead of O(operations) |
 | `diff run:A run:B` | regression delta between captured runs, span-backed |
 | `stats --session` / `gain` | wire scorecard (rounds, cache classes, effort mix) · cumulative savings |
 | `checkpoint` / `pin` / `gc` | cache epochs · retention leases · mark-and-sweep |
 | `debt` | declared-omission ledger for deferred engineering decisions (`add`/`list`/`resolve`) |
 | `policy` | compiled steering policy from telemetry (`compile`/`show`) |
-| `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages |
+| `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages; `wrap detect` lists installed CLIs priced by model, `wrap setup` harnesses the ones it finds |
+| `orchestrate` | harness collaboration: a cheap coordinator (Gemini-flash-lite) splits a task into a `ctx.route/v1` DAG and routes each node to the cheapest **(harness, model)** that clears its tier — implement on a cheap standard model, plan on a frontier one — then a closed loop runs it: parallel waves, `checkpoint:` handoff (evidence, not bytes), failure escalation to a stronger model, bounded re-planning; prices the plan, then runs it |
 | `init` / `doctor` | write `ctx.toml` + `.ctxignore` · validate hooks, manifests, store, classifier |
 
 Examples:
@@ -603,7 +608,7 @@ Examples:
 ctx run --focus "find test failures" --cwd services/payments -- pytest -q
 ctx run --bg-after 30 -- npm run build          # backgrounds if it outlives 30s
 ctx seq 'pytest -q' 'ruff check .' 'npm run build'
-ctx eval - <<'EOF'                              # computed control flow, one round
+ctx py - <<'EOF'                              # computed control flow, one round
 import json, glob, statistics
 lat = [json.loads(l)["ms"] for f in glob.glob("runs/*.jsonl") for l in open(f)]
 print(f"p95: {statistics.quantiles(lat, n=20)[18]:.0f}ms over {len(lat)} records")
@@ -615,6 +620,9 @@ ctx get repo:svc/retry.py --symbol Handler.process
 ctx stats repo:src/ctx/hook.py     # priced symbol outline: 12.8–54.5× cheaper than the file
 ctx map --budget 500 --focus payments
 ctx impact register_span --depth 4
+ctx callers Handler.process       # scoped: the caller's file defines or imports it
+ctx callers Handler.process --unscoped   # + repo-wide name matches, labelled
+ctx impls Profile                 # what implements or extends this type
 ctx diff run:7bd91f2a4c3d run:9ae02c17b5ff
 ```
 
@@ -649,15 +657,34 @@ broker owns the store.)*
 
 ### MCP surface
 
-One stable tool (**ctx**), operations selected by parameter — no dynamic tool
-injection, so the prompt-cache prefix never churns:
+**One stable tool, and that is the design.** The obvious alternative is a wide
+server — TokenSave, the most comprehensive in this space, ships 40+ MCP tools.
+Every tool definition is prompt prefix: it is re-sent on every request, and a
+server that adds tools over time invalidates the cached prefix on each release.
+One schema with an `op` discriminator never churns, which is upstream of the
+measured 96.5–98.1% cache-hit band.
+
+What that buys, concretely:
+
+| Property | How it's held |
+|---|---|
+| **Prefix stability** | one schema, ops selected by parameter — no dynamic tool injection, ever |
+| **Bounded by construction** | `maxTokens` is declared in the published schema *and* clamped at runtime to 64–4000; an advertised bound nothing enforces is worse than no bound |
+| **No execution surface** | `investigate` accepts observe-class evidence plans only; execute-class ops are typed rejections at `tier='mcp'`. Command execution stays on `ctx run` through the host's native command tool, so your permission flow stays visible (SPEC §10.4) |
+| **Warm across calls** | resolved workspaces are cached with TTL eviction, so a tool call doesn't re-spawn git subprocesses and reopen SQLite |
+| **Fail-closed** | a malformed ref or an unknown op is a typed error, not a silent empty result |
+
+The cost of this choice, stated because it is real: `op` is less discoverable
+than forty named tools — to a model reading a tool list and to a human reading
+one. We think prefix stability is worth more than nominal discoverability, and
+the cache numbers are the argument.
 
 ```json
 {
   "name": "ctx",
   "description": "Bounded retrieval against repository state or captured artifacts.",
   "input": {
-    "op": "search | get | stats | map | repo | doctor",
+    "op": "search | get | stats | map | def | refs | diag | callers | callees | impact | diff | investigate | repo | doctor",
     "ref": "run:<id>[#stdout|#stderr] | snapshot:<id> | repo:[path]",
     "patterns": ["TimeoutError", "deadline"],
     "selector": {"lines": "8412:8440"},
@@ -666,8 +693,36 @@ injection, so the prompt-cache prefix never churns:
 }
 ```
 
-Command execution stays on `ctx run` through the host's native command tool
-so your permission flow stays visible (SPEC §10.4).
+### The skill
+
+The skill is the *advisory* tier — protocol, not enforcement — and it is
+written to be small at rest and deep on demand.
+
+- **Progressive disclosure.** [`SKILL.md`](plugins/antigravity/skills/ctx-harness/SKILL.md)
+  is the always-loaded protocol; six reference files
+  ([verbs](plugins/antigravity/skills/ctx-harness/references/verbs.md),
+  [evidence plans](plugins/antigravity/skills/ctx-harness/references/evidence-plans.md),
+  [routing policy](plugins/antigravity/skills/ctx-harness/references/routing-policy.md),
+  [model catalog](plugins/antigravity/skills/ctx-harness/references/model-catalog.md),
+  [addressing](plugins/antigravity/skills/ctx-harness/references/repository-addressing.md),
+  [collaboration](plugins/antigravity/skills/ctx-harness/references/harness-collaboration.md))
+  load only when the task reaches for them. The resident cost is the protocol;
+  the depth is addressable — the same discipline the digest layer applies to
+  bytes, applied to instructions.
+- **The description is a trigger condition, not a summary.** It names the
+  situations that should invoke it (output that may exceed ~2,000 tokens;
+  repository questions) rather than describing what the tool is.
+- **Numbered, checkable rules.** Each is a behavior an observer can score,
+  which is what let the solution ladder (rule 13) be A/B-adopted on evidence
+  rather than asserted — −28% turns, −33% wall-clock, −17% cost.
+- **It carries the ladders.** Rule 13 is the solution ladder; rule 15 is the
+  capture ladder; rules 11–12 are cite-don't-quote. See
+  [`docs/LADDERS.md`](docs/LADDERS.md) for the conditionality audit of all of
+  them, including which are measured and which are not.
+
+Skill rules are advisory by construction and therefore bypassable — that is
+the honest boundary of this tier, and it is why the **Plugin** mode exists.
+The hook enforces at the tool boundary what the skill can only recommend.
 
 ### Configuration
 
@@ -718,7 +773,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 798 tests: determinism, budgets, hook contract, escapes
+pytest        # 1,618 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

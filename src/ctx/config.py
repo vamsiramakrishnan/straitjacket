@@ -10,6 +10,9 @@ from typing import Any
 # module, no import cycle) so the config default never drifts from the
 # engagement mechanism's own default.
 from ctx.engagement import DEFAULT_LEAN_MODELS as _DEFAULT_LEAN_MODELS
+from ctx.engagement import (
+    EMISSION_NUDGE_TOKENS_DEFAULT as _EMISSION_NUDGE_TOKENS_DEFAULT,
+)
 
 CONFIG_FILENAME = "ctx.toml"
 IGNORE_FILENAME = ".ctxignore"
@@ -69,6 +72,15 @@ class Guard:
     unknown_command: str = "force_ask"  # allow | deny | ask | force_ask
     internal_error: str = "allow"  # availability-safe default (SPEC §10.2)
     steering: str = "auto"  # auto | rewrite | deny — deny keeps pure deny-with-remediation
+    # Replacement surface (default posture): substitute loop-shapes with
+    # collapsed ctx ops; set collapse=false to break-glass off.
+    collapse: bool = True
+    # Repo-tunable classification: prefix matches against the canonical argv.
+    allow_commands: tuple[str, ...] = ()
+    deny_commands: tuple[str, ...] = ()
+    # NOTE: the guard hot path (ctx.hook._load_guard_policy) re-reads these
+    # keys with its own stdlib-only parser for latency. tests/test_config_hook_
+    # parity.py pins the two readers so they can never silently drift.
 
 
 @dataclass(frozen=True)
@@ -79,6 +91,40 @@ class Engagement:
     mode: str = "auto"  # auto | active | passive
     activate_after_calls: int = 8
     lean_models: tuple[str, ...] = _DEFAULT_LEAN_MODELS
+    # Emission-gate nudge budget (read on the hot path by ctx.hook); pinned to
+    # the guard reader by tests/test_config_hook_parity.py.
+    emission_nudge_tokens: int = _EMISSION_NUDGE_TOKENS_DEFAULT
+
+
+@dataclass(frozen=True)
+class OrchestratePolicy:
+    """Harness collaboration (ctx.orchestrator): a cheap coordinator splits a
+    task across the installed harnesses by capability x price and a closed loop
+    coordinates it. The coordinator emits a ``ctx.route/v1`` DAG; when none can
+    run, a deterministic capability-routed fallback is used. ``confirm`` is off
+    by default — the plan is priced, shown, then run (rewrite-not-ask)."""
+
+    confirm: bool = False       # print the priced plan and stop before running
+    fallback_only: bool = False  # skip the coordinator model; always use the fallback route
+    # Closed-loop totality bounds (mirrors PlanPolicy). The loop stops at the
+    # first bound it hits; a single installed harness degrades gracefully.
+    max_nodes: int = 12
+    max_waves: int = 4
+    max_replans: int = 2
+    budget_usd: float = 0.0     # 0 = unbounded (still bounded by nodes/waves)
+    node_timeout: float = 900.0
+    # Complexity-adaptive implementation tier for the deterministic fallback:
+    # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
+    # simple edits. A live coordinator overrides this per task.
+    implement_tier: str = "standard"
+    # Coarse per-node token estimates for the deterministic fallback route and
+    # for pricing the plan up front; real spend is reconciled from wire truth.
+    explore_input_tokens: int = 24000
+    explore_output_tokens: int = 3000
+    implement_input_tokens: int = 48000
+    implement_output_tokens: int = 9000
+    review_input_tokens: int = 20000
+    review_output_tokens: int = 2500
 
 
 @dataclass(frozen=True)
@@ -142,6 +188,7 @@ class Config:
     budgets: Budgets = field(default_factory=Budgets)
     guard: Guard = field(default_factory=Guard)
     engagement: Engagement = field(default_factory=Engagement)
+    orchestrate: OrchestratePolicy = field(default_factory=OrchestratePolicy)
     store: StorePolicy = field(default_factory=StorePolicy)
     plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
@@ -153,9 +200,61 @@ class Config:
     deny_globs: tuple[str, ...] = BUILTIN_DENY_GLOBS
 
 
+def _coerce_like(default: Any, value: Any) -> Any:
+    """``value`` as the same TYPE as ``default``, or ``default`` if it cannot.
+
+    ctx.toml is foreign input: a user hand-edits it, and TOML happily parses
+    `max_inline_bytes = "lots"` as a perfectly valid string. Config declares
+    a fail-open contract for malformed files (SPEC 15) and it only covered
+    SYNTAX errors -- a well-formed file with a wrong-typed value flowed
+    straight through to consumers, where it surfaced as an uncaught
+    ValueError from `int()` or a TypeError from `n <= budget`. Three
+    separate commands crashed that way, each looking like its own bug.
+
+    Coercing at LOAD time means no consumer can meet an un-numeric number,
+    which is one guard instead of one per arithmetic site.
+    """
+    if isinstance(default, bool):  # before int: bool IS an int
+        return value if isinstance(value, bool) else default
+    if isinstance(default, int):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(default, float):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(default, str):
+        return value if isinstance(value, str) else default
+    if isinstance(default, tuple):
+        return tuple(value) if isinstance(value, (list, tuple)) else default
+    return value
+
+
+def _str_tuple(value: Any) -> tuple[str, ...]:
+    """A tuple of strings from a TOML value, or () if it is not a list.
+
+    A bare `tuple(str(x) for x in value)` iterates whatever it is given: an
+    int raises TypeError out of load_config, which every command calls, so a
+    single typo in ctx.toml broke the entire tool rather than that one
+    setting. A string would be worse than a crash -- it would iterate into
+    per-character rules.
+    """
+    if isinstance(value, (list, tuple)):
+        return tuple(str(x) for x in value)
+    return ()
+
+
 def _pick(data: dict[str, Any], cls: type, **overrides: Any) -> Any:
     names = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-    kwargs = {k: v for k, v in data.items() if k in names}
+    proto = cls()  # every config section is fully defaulted
+    kwargs = {
+        k: _coerce_like(getattr(proto, k), v)
+        for k, v in data.items()
+        if k in names
+    }
     kwargs.update(overrides)
     return cls(**kwargs)
 
@@ -184,18 +283,43 @@ def load_config(workspace_root: Path | None) -> Config:
             scopes[str(name)] = tuple(str(r) for r in roots)
 
     budgets = _pick(raw.get("budgets") or {}, Budgets)
-    guard = _pick(raw.get("guard") or {}, Guard)
+    # Guard is hand-built (not _pick) so list keys coerce to tuples and bools
+    # coerce honestly — and so Config models every key the hot-path guard reads.
+    guard_raw = raw.get("guard") or {}
+    gd = Guard()
+    guard = Guard(
+        mode=str(guard_raw.get("mode", gd.mode)),
+        unknown_command=str(guard_raw.get("unknown_command", gd.unknown_command)),
+        internal_error=str(guard_raw.get("internal_error", gd.internal_error)),
+        steering=_coerce_like(gd.steering, guard_raw.get("steering", gd.steering)),
+        # `bool()` on a non-bool is a SILENT reinterpretation, not a
+        # coercion: `collapse = "no"` is truthy and turns the flag ON.
+        collapse=_coerce_like(gd.collapse, guard_raw.get("collapse", gd.collapse)),
+        # _str_tuple, not a bare generator: `deny_commands = 42` iterated an
+        # int and crashed load_config -- and load_config is on the path of
+        # every command, so one typo in ctx.toml broke the whole tool.
+        allow_commands=_str_tuple(guard_raw.get("allow_commands", ())),
+        deny_commands=_str_tuple(guard_raw.get("deny_commands", ())),
+    )
+    orchestrate = _pick(raw.get("orchestrate") or {}, OrchestratePolicy)
     store = _pick(raw.get("store") or {}, StorePolicy)
     plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
     surface = _pick(raw.get("surface") or {}, SurfacePolicy)
 
     eng_raw = raw.get("engagement") or {}
+    ed = Engagement()
     engagement = Engagement(
-        mode=str(eng_raw.get("mode", "auto")),
-        activate_after_calls=int(eng_raw.get("activate_after_calls", 8)),
+        mode=str(eng_raw.get("mode", ed.mode)),
+        activate_after_calls=_coerce_like(
+            ed.activate_after_calls, eng_raw.get("activate_after_calls", ed.activate_after_calls)
+        ),
         lean_models=tuple(
-            str(m) for m in eng_raw.get("lean_models", Engagement().lean_models)
+            str(m) for m in eng_raw.get("lean_models", ed.lean_models)
+        ),
+        emission_nudge_tokens=_coerce_like(
+            ed.emission_nudge_tokens,
+            eng_raw.get("emission_nudge_tokens", ed.emission_nudge_tokens)
         ),
     )
 
@@ -207,7 +331,11 @@ def load_config(workspace_root: Path | None) -> Config:
     if not isinstance(red_patterns, list):
         red_patterns = list(Redaction().patterns)
     redaction = Redaction(
-        enabled=bool(red_raw.get("enabled", True)),
+        # NOT bool(): a non-bool value there silently DISABLED redaction in
+        # one direction and enabled it in the other, and this flag decides
+        # whether secrets are stripped from model-visible output. Fail open
+        # to the documented default instead.
+        enabled=_coerce_like(True, red_raw.get("enabled", True)),
         patterns=tuple(str(p) for p in red_patterns),
     )
 
@@ -218,12 +346,13 @@ def load_config(workspace_root: Path | None) -> Config:
     }
 
     return Config(
-        version=int(raw.get("version", 1)),
+        version=_coerce_like(1, raw.get("version", 1)),
         repo_key=raw.get("repo_key"),
         workspace=ws,
         budgets=budgets,
         guard=guard,
         engagement=engagement,
+        orchestrate=orchestrate,
         store=store,
         plan=plan,
         redaction=redaction,

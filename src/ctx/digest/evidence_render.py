@@ -50,7 +50,7 @@ from ctx.evidence import (
     graph_id,
 )
 from ctx.store import canonical_json
-from ctx.textutil import fmt_bytes, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_bytes, fmt_int, short_id
 
 CENSUS_BLOB_SCHEMA = "ctx.pytest-census/v1"
 
@@ -162,7 +162,7 @@ def _file_key(item: EvidenceItem) -> str:
 
 
 def _row_lines(idx: int, item: EvidenceItem, summaries: str, indent: str) -> list[str]:
-    row = f"{indent}{idx}. {_short_nodeid(item.id)[:160]}  {item.location or '?'} · {item.failure_class or '?'}"
+    row = f"{indent}{idx}. {_short_nodeid(item.id)[:EVIDENCE_LINE_CHARS]}  {item.location or '?'} · {item.failure_class or '?'}"
     if summaries in ("one_line", "expanded") and item.summary:
         row += f" · {item.summary[:120]}"
     addr = _addr(item)
@@ -171,7 +171,7 @@ def _row_lines(idx: int, item: EvidenceItem, summaries: str, indent: str) -> lis
     lines = [row]
     if summaries == "expanded":
         for ev in tuple(item.attributes.get("evidence_lines", ()))[:2]:
-            lines.append(indent + "    " + str(ev)[:160])
+            lines.append(indent + "    " + str(ev)[:EVIDENCE_LINE_CHARS])
     return lines
 
 
@@ -345,7 +345,7 @@ def _compose(
         shown += 1
         if detail_body:
             for raw in tuple(root.attributes.get("detail_head", ())):
-                lines.append(f"    | {str(raw)[:160]}")
+                lines.append(f"    | {str(raw)[:EVIDENCE_LINE_CHARS]}")
 
     # ---- run-context evidence (stderr head, focus spans)
     if env.stderr_head:
@@ -409,7 +409,7 @@ def _render_flood(
     census as a content-addressed canonical-JSON blob reference."""
     items = graph.items
     denom = _denominator(graph)
-    blob12 = flood_census_blob_id(graph)[:12]
+    blob12 = short_id(flood_census_blob_id(graph))
 
     hist_class: dict[str, int] = {}
     hist_file: dict[str, int] = {}

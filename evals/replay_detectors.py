@@ -53,6 +53,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from ctx import reflex  # noqa: E402
+from ctx.sessiondir import session_reads_path  # noqa: E402
 
 ARCHIVES = [
     ("r1", "spec3-transcripts.tar.gz"),
@@ -136,7 +137,7 @@ def _replay(seq: list[tuple[str, str]], ws: Path) -> dict:
     emissions: dict[str, dict] = {}  # iid -> emission line
     outcomes: list[dict] = []
     transitions: list[dict] = []
-    v2_path = ws / ".ctx-session-reads" / "interventions.jsonl"
+    v2_path = session_reads_path(ws, "interventions.jsonl")
     if v2_path.is_file():
         for line in v2_path.read_text(encoding="utf-8").splitlines():
             try:
@@ -151,7 +152,7 @@ def _replay(seq: list[tuple[str, str]], ws: Path) -> dict:
             elif ev == "circuit_transition":
                 transitions.append(rec)
     v1_events = []
-    v1_path = ws / ".ctx-session-reads" / "reflex-outcomes.jsonl"
+    v1_path = session_reads_path(ws, "reflex-outcomes.jsonl")
     if v1_path.is_file():
         for line in v1_path.read_text(encoding="utf-8").splitlines():
             try:

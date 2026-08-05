@@ -38,6 +38,8 @@ Single-writer discipline (race containment):
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import json
 import os
 import re
@@ -48,7 +50,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ctx._proc import exit_status, wait_or_kill
 from ctx.store import Store, _atomic_write
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 
@@ -251,25 +255,9 @@ def supervise_main(jobdir_str: str) -> int:
         )
         _write_meta(jobdir, meta)
 
-        timed_out = False
-        try:
-            proc.wait(timeout=meta.get("timeout"))
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            try:
-                os.killpg(proc.pid, signal_mod.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
-            proc.wait()
+        timed_out = wait_or_kill(proc, meta.get("timeout"))
 
-    exit_code: int | None = proc.returncode
-    sig_name: str | None = None
-    if exit_code is not None and exit_code < 0:
-        try:
-            sig_name = signal_mod.Signals(-exit_code).name
-        except ValueError:  # pragma: no cover - exotic signal number
-            sig_name = f"SIG{-exit_code}"
-        exit_code = None
+    exit_code, sig_name = exit_status(proc.returncode)
     meta.update(
         state="done",
         exitCode=exit_code,
@@ -305,25 +293,12 @@ def finalize_job(ws: Workspace, store: Store, job_id: str) -> tuple[str, dict[st
         raise JobError(f"job {job_id} is still {meta.get('state', 'unknown')}; not finalizable")
 
     from ctx.digest import render_run_digest
-    from ctx.execution import _count_lines, _worktree_hash, focus_hash
-    from ctx.textutil import decode_stream
+    from ctx.execution import invocation_manifest, stream_entries
 
-    streams: dict[str, dict[str, Any]] = {}
     for name in ("stdout", "stderr"):
-        path = jobdir / name
-        if not path.exists():  # pragma: no cover - created at start
-            path.touch()
-        blob_hash, size = store.put_blob_from_file(path)
-        with path.open("rb") as fh:
-            head = fh.read(8192)
-        _, encoding, media_type = decode_stream(head if size else b"")
-        streams[name] = {
-            "blob": f"sha256:{blob_hash}",
-            "bytes": size,
-            "lines": _count_lines(path),
-            "mediaType": media_type if size else "text/plain",
-            "encoding": encoding if size else "utf-8",
-        }
+        if not (jobdir / name).exists():  # pragma: no cover - created at start
+            (jobdir / name).touch()
+    streams = stream_entries(store, {n: jobdir / n for n in ("stdout", "stderr")})
 
     exit_code = meta.get("exitCode")
     sig_name = meta.get("signal")
@@ -334,31 +309,21 @@ def finalize_job(ws: Workspace, store: Store, job_id: str) -> tuple[str, dict[st
     if (jobdir / "kill").exists() and sig_name == "SIGKILL":
         timed_out = True
 
-    manifest: dict[str, Any] = {
-        "schema": "ctx.invocation/v1",
-        "workspaceId": ws.workspace_id,
-        "cwd": meta["cwd"],
-        "argv": list(meta["argv"]),
-        "shell": bool(meta["shell"]),
-        "result": {
-            "exitCode": exit_code,
-            "signal": sig_name,
-            "timedOut": timed_out,
-        },
-        "streams": streams,
-        "source": {
-            "gitHead": ws.git.head if ws.git else None,
-            "worktreeHash": _worktree_hash(ws),
-        },
-        # Same placeholder block run_capture publishes; the digest layer
-        # replaces it before the final (identity-bearing) publish.
-        "digest": {
-            "profile": "text/v1",
-            "policy": "default/v1",
-            "focusHash": focus_hash(None),
-            "bytesHash": "sha256:" + "0" * 64,
-        },
-    }
+    # The shared shape (R7). This used to be a hand-kept copy of
+    # run_capture's literal, with a comment promising it stayed "exactly the
+    # shape run_capture produces"; the promise is now structural, which is
+    # what makes identical bytes + argv yield an identical manifest id
+    # whether the command ran in the foreground or under a supervisor.
+    manifest = invocation_manifest(
+        ws,
+        cwd=meta["cwd"],
+        argv=list(meta["argv"]),
+        shell=bool(meta["shell"]),
+        exit_code=exit_code,
+        signal=sig_name,
+        timed_out=timed_out,
+        streams=streams,
+    )
     mid = store.put_manifest(manifest, kind="run")
     manifest["id"] = f"sha256:{mid}"
     digest, final_manifest = render_run_digest(store, ws, manifest, focus=meta.get("focus"))
@@ -435,6 +400,19 @@ def _clip(line: str) -> str:
     return line if len(line) <= _CLIP_COLS else line[: _CLIP_COLS - 1] + "…"
 
 
+def _tail_of(lines: list[str], tail: int) -> list[str]:
+    """The last ``tail`` lines -- and NO lines when ``tail`` is 0.
+
+    `lines[-tail:]` is `lines[0:]` at zero, so `ctx job <id> --tail 0`, an
+    explicit request for no live tail, dumped the entire spool. Negative
+    indexing turning a request for nothing into a request for everything is
+    the same shape ctx.bounds exists for; it just was not spelled `max(1, n)`,
+    which is all the adoption test was looking for.
+    """
+    n = bounds.count(tail)
+    return lines[len(lines) - n :] if n else []
+
+
 def _spool_excerpt(path: Path, head: int, tail: int) -> list[str]:
     """Bounded head/tail of a (possibly still-growing) spool file. Reads at
     most 64 KiB from each end; never returns more than head+tail+1 lines."""
@@ -455,7 +433,7 @@ def _spool_excerpt(path: Path, head: int, tail: int) -> list[str]:
             return (
                 [_clip(ln) for ln in lines[:head]]
                 + [f"... ({omitted} lines omitted) ..."]
-                + [_clip(ln) for ln in lines[-tail:]]
+                + [_clip(ln) for ln in _tail_of(lines, tail)]
             )
         fh.seek(size - window)
         tail_text = fh.read(window).decode("utf-8", "replace")
@@ -464,7 +442,7 @@ def _spool_excerpt(path: Path, head: int, tail: int) -> list[str]:
     return (
         [_clip(ln) for ln in head_lines]
         + ["... (middle omitted; spool exceeds preview window) ..."]
-        + [_clip(ln) for ln in tail_lines[-tail:]]
+        + [_clip(ln) for ln in _tail_of(tail_lines, tail)]
     )
 
 
@@ -525,7 +503,7 @@ def job_status(store: Store, job_id: str, *, tail: int | None = None) -> str:
         f"command: {_command_display(meta)}",
     ]
     if tail is not None:
-        tail = max(1, min(tail, _MAX_STATUS_LINES))
+        tail = min(bounds.count(tail), _MAX_STATUS_LINES)
         head_n, tail_n = 0, tail
     else:
         head_n, tail_n = 6, 18
@@ -572,7 +550,7 @@ def list_jobs(store: Store) -> str:
         fin = jobdir / "finalized.json"
         if fin.is_file():
             try:
-                short = json.loads(fin.read_text(encoding="utf-8"))["manifestId"][:12]
+                short = short_id(json.loads(fin.read_text(encoding="utf-8"))["manifestId"])
             except (OSError, json.JSONDecodeError, KeyError):  # pragma: no cover
                 short = "?"
             desc = f"finalized → run:{short}"

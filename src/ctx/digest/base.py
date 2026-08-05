@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ctx.store import Store
-from ctx.textutil import estimate_tokens, fmt_bytes, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, estimate_tokens, fmt_bytes, fmt_int
 from ctx.workspace import Workspace
 
 # Cap how much of a stream a profile parses in memory. Coverage reporting
@@ -69,8 +69,29 @@ class DigestContext:
     meta_profile_version: str | None = None
 
     def mint_span(self, stream: "StreamView", kind: str, **kw: Any) -> str | None:
+        """Mint an addressable span into ``stream``.
+
+        A region's coordinates must be LINE NUMBERS IN THAT STREAM. Two
+        profiles were minting from something else and the span silently
+        addressed the wrong bytes: search/v1 passed match ORDINALS (match #9
+        is nowhere near stdout line 9 once grep prints -C context), and
+        lint/v1 mixed line numbers from stdout and stderr into one range and
+        minted it against whichever stream the file was seen on first.
+        Neither produced an error -- just a span resolving to unrelated text.
+
+        The guard lives here because every profile mints through this one
+        door: an out-of-range region is refused rather than registered, so a
+        digest loses one address instead of gaining a wrong one.
+        """
         if self.store is None:
             return None
+        if kind == "region":
+            a, b = kw.get("a"), kw.get("b")
+            total = stream.lines
+            if not isinstance(a, int) or not isinstance(b, int):
+                return None
+            if a < 1 or b < a or (total and b > total):
+                return None
         blob = str(self.manifest["streams"][stream.name]["blob"])
         return self.store.register_span(blob, kind, **kw)
 
@@ -145,7 +166,7 @@ class DigestContext:
                 low = line.lower()
                 if any(t in low for t in self.focus_terms):
                     spans.append(
-                        (view.name, max(1, i - context), i + context, line.strip()[:160])
+                        (view.name, max(1, i - context), i + context, line.strip()[:EVIDENCE_LINE_CHARS])
                     )
                     if len(spans) >= max_spans:
                         return spans
@@ -162,6 +183,24 @@ class Profile:
 
     def render(self, ctx: DigestContext) -> str:
         raise NotImplementedError
+
+    def extract(self, ctx: DigestContext):
+        """Typed extraction for the FACT tier, or None when this profile
+        has none. Returns an ``EvidenceGraph``.
+
+        The digest tier has always known several runners; the fact tier
+        called ``extract_pytest`` directly and therefore knew exactly one.
+        A captured `python -m unittest` run rendered as ``unittest/v1``
+        with real failures and inserted ZERO rows, so `ctx q 'fails last'`
+        answered "no captured test run" about a run captured seconds
+        earlier -- the census that is supposed to be the work queue,
+        silently empty.
+
+        Profiles that can extract override this. A profile that cannot
+        returns None and the fact tier records nothing for it, which is a
+        gap it can at least see.
+        """
+        return None
 
     # Shared closing sections -------------------------------------------------
     def coverage_lines(self, ctx: DigestContext, shown_spans: int, omitted: int | None = None) -> list[str]:

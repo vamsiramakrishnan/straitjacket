@@ -131,10 +131,13 @@ def test_small_output_inline_path_has_no_window_scaffolding(make_ws_store):
     digest, m = render_run_digest(store, ws, cap.manifest)
     assert m["digest"]["profile"] == "text/v1"
     body = digest.splitlines()
-    # Slim complete-inline shape, byte-compatible with the pre-window layout.
-    assert body[1] == f"command: {sys.executable} -c print('tiny ok')"
-    assert body[2] == "exit 0 · output (complete):"
-    assert body[3] == "tiny ok"
+    # Slim complete-inline shape: status + the content, no window scaffolding.
+    # The `command:` echo is NOT here — provenance must pay for itself, and for
+    # an 8-byte output the echo costs several times the content it annotates
+    # (see ctx/digest/text.py). The run handle on line 0 still addresses it.
+    assert f"command: {sys.executable}" not in digest
+    assert body[1] == "exit 0 · output (complete):"
+    assert body[2] == "tiny ok"
     for marker in ("head stdout:", "tail stdout:", "omitted", "summary:", "coverage:"):
         assert marker not in digest, marker
 

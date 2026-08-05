@@ -35,7 +35,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ctx.textutil import estimate_tokens
+from ctx.proxywindow import PROXY_SUBDIR
+from ctx.sessiondir import session_reads_path
+from ctx.textutil import EVIDENCE_LINE_CHARS, estimate_tokens
 
 _PROBE_CACHE = ".ctx-surface/probe-cache.json"
 
@@ -150,6 +152,28 @@ def infer_authority(*texts: str) -> str:
     return "unknown"
 
 
+def _provider_match(tool_name: str, provider: str) -> bool:
+    """Is this observed tool call one of ``provider``'s?
+
+    Both spellings, each terminated: ``mcp__<p>__<tool>`` and
+    ``mcp.<p>.<tool>``, plus the bare server name itself.
+    """
+    for stem, sep in ((f"mcp__{provider}", "__"), (f"mcp.{provider}", ".")):
+        if tool_name == stem or tool_name.startswith(stem + sep):
+            return True
+    return False
+
+
+def _excessive_authority(kind: str, authority: str, invocations: int) -> bool:
+    """The rule, in one place. It is DERIVED from invocations, which is why
+    it cannot be computed once and carried."""
+    return (
+        kind in _ACTION_KINDS
+        and authority in ("remote-write", "destructive")
+        and invocations in (0, -1)
+    )
+
+
 def _leakage_tags(text: str, kind: str, authority: str, invocations: int
                   ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(leakage classes, sample sensitive terms). Descriptive/heuristic.
@@ -165,7 +189,7 @@ def _leakage_tags(text: str, kind: str, authority: str, invocations: int
             tags.append(f"unrelated-domain:{domain}")
             break
     if kind in _ACTION_KINDS:
-        if authority in ("remote-write", "destructive") and invocations in (0, -1):
+        if _excessive_authority(kind, authority, invocations):
             tags.append("excessive-authority")
     else:
         mentioned = infer_authority(text)
@@ -303,7 +327,7 @@ def _collect_files(root: Path, globs, kind: str, provider_of, records: list[Capa
                 id=cid, kind=kind, provider=provider_of(rel),
                 source=rel, tokens=tokens, authority="n/a", activation="always",
                 invocations=-1, sensitive_terms=terms, leakage=leakage,
-                detail=(text.strip().splitlines() or [""])[0][:160],
+                detail=(text.strip().splitlines() or [""])[0][:EVIDENCE_LINE_CHARS],
             ))
 
 
@@ -318,7 +342,7 @@ def _collect_repo_instructions(root: Path, records: list[Capability]) -> None:
             id=f"repo.{name}", kind="repo_instructions", provider="repo",
             source=name, tokens=_tokens_of(text), authority="n/a",
             activation="always", invocations=-1, sensitive_terms=terms, leakage=leakage,
-            detail=(text.strip().splitlines() or [""])[0][:160],
+            detail=(text.strip().splitlines() or [""])[0][:EVIDENCE_LINE_CHARS],
         ))
 
 
@@ -357,7 +381,7 @@ def observed_tool_counts(ws_root: Path | str) -> dict[str, int]:
     """Per-tool invocation counts observed by the proxy wire log across this
     workspace's sessions. Fail-open to empty."""
     counts: dict[str, int] = {}
-    proxy = Path(ws_root) / ".ctx-session-reads" / "proxy"
+    proxy = session_reads_path(ws_root, PROXY_SUBDIR)
     if not proxy.is_dir():
         return counts
     for wire in proxy.glob("**/wire.jsonl"):
@@ -383,9 +407,14 @@ def _match_invocations(cap: Capability, counts: dict[str, int]) -> int:
     if not counts:
         return -1
     if cap.kind == "mcp_server":
-        prefix = f"mcp__{cap.provider}"
+        # The DELIMITER is what makes a prefix a provider name. Bare
+        # startswith let a server called `git` absorb every `mcp__github__*`
+        # invocation, so `github` looked never-used and `git` looked busy --
+        # and never_used / unused_high_authority / excessive-authority are all
+        # computed from this number. Same boundary defect as matching a path
+        # glob or an intent keyword without one.
         return sum(n for name, n in counts.items()
-                   if name.startswith(prefix) or name.startswith(f"mcp.{cap.provider}"))
+                   if _provider_match(name, cap.provider))
     if cap.kind == "mcp_tool":
         tool = cap.id.split(".", 2)[-1]
         want = {f"mcp__{cap.provider}__{tool}", f"mcp.{cap.provider}.{tool}", tool}
@@ -426,8 +455,23 @@ def detect_overlaps(records: list[Capability]) -> list[Capability]:
 
 
 def _with(cap: Capability, **changes: Any) -> Capability:
+    """A capability with fields replaced -- and its DERIVED fields reconciled.
+
+    `excessive-authority` means "can act, never observed acting". probe_surface
+    computes it with invocations hardcoded to -1 (unknown), and audit() then
+    joins the real wire-log counts through this function. Nothing recomputed
+    the tag, so a tool the audit had just PROVEN was used kept a label saying
+    it never was. Derived state outliving its source is a defect class this
+    branch has now met more than once; the single mutation door is where it
+    stops.
+    """
     data = cap.as_dict()
     data.update(changes)
+    if "invocations" in changes:
+        tags = [t for t in data["leakage"] if t != "excessive-authority"]
+        if _excessive_authority(data["kind"], data["authority"], data["invocations"]):
+            tags.append("excessive-authority")
+        data["leakage"] = tuple(tags)
     return Capability(
         id=data["id"], kind=data["kind"], provider=data["provider"], source=data["source"],
         tokens=data["tokens"], authority=data["authority"], activation=data["activation"],

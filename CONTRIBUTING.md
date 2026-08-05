@@ -16,7 +16,25 @@ pip install -e '.[dev,map,fast,code]'   # grimp+networkx map engine, orjson, jed
 apt-get install ripgrep universal-ctags
 ```
 
-## Running tests
+## Where the code lives
+
+`src/ctx/` is a flat package of ~60 modules organized into six planes
+(Safety, Execution, Derivation, Evidence, Delivery, Behaviour).
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the map — start there with its
+"which file do I touch for X" table, then read the plane your change lands in.
+Common on-ramps:
+
+- **A digest profile for a new tool** → [`docs/WRITING-A-PROFILE.md`](docs/WRITING-A-PROFILE.md)
+  (names the modules, the registry, the contract format, and the tests).
+- **Command steering** → `src/ctx/hook.py` (the stdlib-only hot path).
+- **A `ctx q` stage** → `src/ctx/query.py`. **A plan operator** → `src/ctx/plan_ops.py`.
+- **A CLI verb** → three edits: its parser block and one `_COMMANDS` row in
+  `src/ctx/cli.py`, a `cmd_<verb>(ws, ns)` handler in
+  `src/ctx/commands/<family>.py`, and its plain-English line in
+  `src/ctx/cliux.py`. Tests fail if you skip one. Keep the handler's imports
+  inside the function: the table is lazy on purpose.
+
+## Running and writing tests
 
 ```bash
 python -m pytest tests/ -q
@@ -24,10 +42,45 @@ python -m pytest tests/ -q
 
 The suite is acceptance-oriented (determinism, budgets, hook contract,
 path/symlink escapes, redaction) and must pass on a bare `[dev]` install with
-no binaries present. CI runs both configurations: the full matrix with every
-engine installed, and a "minimal" job with `CTX_SEARCH_ENGINE=python
-CTX_MAP_ENGINE=builtin CTX_CODE_ENGINE=ast` and no optional deps. If your
-change only works when ripgrep/ctags/grimp/jedi are installed, it is not done.
+no binaries present. `tests/conftest.py` isolates each test's artifact store, so
+tests never touch your real state.
+
+**CI runs two configurations** (`.github/workflows/ci.yml`):
+
+- **full** — the py3.11/3.12/3.13 matrix with every engine installed
+  (ripgrep, universal-ctags, and the `map,fast,code,scip` extras);
+- **minimal** — py3.11, `[dev]` only, no binaries, with the builtin engines
+  pinned (`CTX_SEARCH_ENGINE=python CTX_MAP_ENGINE=builtin CTX_CODE_ENGINE=ast`)
+  to prove the deterministic-fallback story.
+
+If your change only works when ripgrep/ctags/grimp/jedi are installed, it is not
+done. Run the minimal config locally before pushing:
+
+```bash
+CTX_SEARCH_ENGINE=python CTX_MAP_ENGINE=builtin CTX_CODE_ENGINE=ast \
+  python -m pytest tests/ -q
+```
+
+**Which test file to extend:**
+
+| Your change | Add tests to |
+|---|---|
+| a new digest profile | `tests/test_coverage_profiles.py` + `tests/test_contract_conformance.py` + a census test like `tests/test_pytest_census.py` |
+| a `ctx q` stage | `tests/test_query.py` (the composition-algebra referee) |
+| a CLI verb | the verb's own file (e.g. `tests/test_ask.py`, `tests/test_debt_and_deliverable.py`) |
+| hook / steering behaviour | `tests/test_hook.py`, `tests/test_steering.py`, `tests/test_emission_gate.py` |
+| determinism / safety invariants | `tests/test_capture_and_determinism.py`, `tests/test_safety_invariant.py` |
+
+The one custom marker is `sj_canary` — the Tier-0 evidence-channel conformance
+tests. Run them as a fast PR gate with `python -m pytest -m sj_canary`.
+
+## Running the evals
+
+Performance and quality claims are backed by measured receipts, not adjectives.
+[`evals/README.md`](evals/README.md) explains how to run them — the model-free
+ones (no API key, reproducible) and the live ones (real agent + API key) — and
+which instrument answers which question. A new claim ships with its runner and a
+dated receipt in the same change.
 
 ## The four load-bearing conventions
 
@@ -73,6 +126,18 @@ swap and never an error.
 mechanism wave (v0.4 steering + wrap, v0.5 zoom spans, v0.6 map/diff/
 explorer/governor), recorded in `CHANGELOG.md`; patch-level churn within a
 wave does not get its own release.
+
+## Making a change
+
+1. Branch from `main`.
+2. Ship the mechanism, its acceptance tests, and — for any performance or
+   quality claim — its eval receipt, in the same change. A green suite
+   (including the minimal config) is the merge gate.
+3. Keep model-visible output deterministic and every omission addressed; run
+   `python scripts/check_docs_links.py` and `python scripts/check_docs_facts.py`
+   if you touched docs.
+4. Open a PR that says what changed and points at the receipt for any number you
+   cite.
 
 ## Where things are decided
 

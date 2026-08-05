@@ -3,7 +3,7 @@
 A plan pays one model round to compile a bounded evidence DAG; the harness
 validates, prices, and executes it locally, then returns one ranked
 investigation digest. Read this before authoring a `ctx.plan/v1` document
-for `ctx plan run` or `ctx investigate`.
+for `ctx plan run` or `ctx plan run`.
 
 ## The `ctx.plan/v1` shape
 
@@ -79,7 +79,7 @@ participates in the node's cache key.
   not a runtime surprise.
 - **`when` admits only the guard micro-grammar**: `<node>.count <op>
   <int>` (`op` ∈ `== != >= <= > <`) or `<node>.outcome ==|!= pass|fail`.
-  No arbitrary predicates — computed control flow stays in `ctx eval`,
+  No arbitrary predicates — computed control flow stays in `ctx py`,
   off the plan language entirely.
 - **Execute-class ops are CLI-only.** `test.run`, `ast.rewrite.preview`,
   `ast.rewrite.apply` require the CLI tier; an MCP-tier plan containing

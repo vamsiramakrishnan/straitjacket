@@ -31,7 +31,12 @@ from pathlib import Path
 # measured A/B win (evals/rtk-corpus eval doc).
 # v3: backward planning adopted after a held-out A/B win on every axis
 # (Tura wave): -17% cost, -16% turns, -18% output, more tests.
-PREFIX_VERSION = 3
+# v5: `ctx eval` renamed to `ctx py` and `ctx investigate` folded into
+# `ctx plan run`; both names appear in prefix-resident teaching text.
+# v6: MCP tool description now glosses all 14 declared ops (callers, callees,
+# impact, diff, investigate were callable but absent from the prose catalogue,
+# so a model could not discover them).
+PREFIX_VERSION = 9
 
 _MANIFEST_NAME = "prefix-manifest.json"
 
@@ -52,10 +57,38 @@ def _split_skill(raw: bytes) -> tuple[bytes, bytes]:
     return raw, b""
 
 
+#: Which tracked assets are ACTUALLY resident in every session's prompt, as
+#: opposed to loaded on demand. This was documented in prose and the prose was
+#: misread — summing every tracked asset gives ~3,800 tokens and reads as "the
+#: harness costs 3,800 tokens a session", when the true standing cost is ~708
+#: and the rest is paid only when the skill triggers or a subagent spawns.
+#:
+#: Machine-readable because a docstring cannot be asserted. `resident_bytes()`
+#: and `tests/test_prefix_budget.py` both read this, so the published number
+#: and the classification can never drift apart, and the next person to ask
+#: "what does this cost me per session" gets an answer they cannot misread.
+RESIDENT_ASSETS = frozenset({
+    "wrap.output_discipline",          # appended system prompt (wrap print mode)
+    "mcp.tool_description",            # tool definitions are prefix content
+    "skill.ctx-harness.frontmatter",   # the description is listed in the prompt
+})
+
+#: Tracked, cache-keyed, but NOT resident: paid only at the moment named.
+DEFERRED_ASSETS = {
+    "skill.ctx-harness.body": "loaded only when the skill triggers",
+    "agent.ctx-explorer": (
+        "only the frontmatter description enters the parent prompt; the body "
+        "is paid inside the subagent, and only if one spawns"
+    ),
+}
+
+
 def prefix_assets() -> dict[str, bytes]:
     """Every injected text that lands in a host prompt prefix, plus the
     invocation-loaded skill body (tracked, but changes to it are not
     cache-relevant — see PREFIX_VERSION policy above).
+
+    Tracked here is NOT the same as resident — see ``RESIDENT_ASSETS``.
 
     - wrap discipline prompt (appended system prompt, wrap print mode)
     - explorer agent definition (agent description enters the system prompt)
@@ -127,3 +160,41 @@ def check() -> list[str]:
         if name not in current["assets"]:
             problems.append(f"manifest lists removed asset: {name}")
     return problems
+
+
+def resident_bytes() -> dict[str, int]:
+    """Byte cost of what is actually in every session's prompt.
+
+    The explorer agent contributes only its frontmatter ``description`` — the
+    host lists that so the parent can choose the agent; the body travels with
+    the subagent. Counting the whole file overstates the standing cost by
+    ~530 tokens, which is most of how the ~3,800 misreading happened.
+    """
+    import re
+
+    assets = prefix_assets()
+    out = {name: len(assets[name]) for name in sorted(RESIDENT_ASSETS)}
+    agent = assets.get("agent.ctx-explorer", b"").decode("utf-8", "replace")
+    head = re.search(r"^---\n(.*?)\n---\n", agent, re.S)
+    desc = re.search(r"description:\s*>-\n((?:[ \t]{2,}.*\n)+)", head.group(1)) if head else None
+    if desc:
+        out["agent.ctx-explorer(description)"] = len(desc.group(1).encode("utf-8"))
+    return out
+
+
+def budget_report() -> str:
+    """Human-readable split of resident vs deferred, for `ctx doctor` and docs."""
+    lines = ["prefix budget — what the harness costs a session", ""]
+    resident = resident_bytes()
+    total = sum(resident.values())
+    lines.append("RESIDENT (every session):")
+    for name, n in sorted(resident.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {name:38} {n:>6,} B  ~{n // 4:>5,} tok")
+    lines.append(f"  {'TOTAL':38} {total:>6,} B  ~{total // 4:>5,} tok")
+    lines.append("")
+    lines.append("DEFERRED (paid only when named):")
+    assets = prefix_assets()
+    for name, when in DEFERRED_ASSETS.items():
+        n = len(assets.get(name, b""))
+        lines.append(f"  {name:38} {n:>6,} B  ~{n // 4:>5,} tok  — {when}")
+    return "\n".join(lines)

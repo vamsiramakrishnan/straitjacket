@@ -14,14 +14,27 @@ Two rules keep it honest and host-neutral:
    (Claude Code's status line ``cost.total_cost_usd``), use it verbatim; the
    table is only for hosts that report usage but not dollars.
 2. **Match on tier tokens, not substrings.** ``mini`` must match
-   ``gpt-5-mini`` but not ``ge-mini-3-pro`` — the same letter-boundary rule
+   ``gpt-5-mini`` and ``gpt-4o-mini-2024`` but not ``gemini-3-pro`` — the
+   real collision this rule exists to prevent, and one a plain substring
+   test gets wrong. The rule is a LETTER boundary: a tier token may sit
+   between any non-letters, so ``mini`` does match a contrived
+   ``ge-mini-3-pro``. That is deliberate and not fixable by a stricter
+   segment rule without also breaking ``gpt-4o-mini-2024`` — distinguishing
+   the two needs vendor knowledge, not lexing. An earlier version of this
+   docstring used ``ge-mini-3-pro`` as the counter-example, which no
+   boundary rule can satisfy; the example was wrong, not the matcher.
+   The same letter-boundary rule
    the engagement lean-model matcher uses. Entry order is specific->general;
    the first tier token that matches wins.
 
-Overridable per repo: a ``.ctx-prices.json`` at the workspace root (same
-schema) or a ``[pricing]`` block in ctx.toml replaces or extends rows. Every
-entry point fails open to the vendor-neutral fallback so a cost estimate can
-never crash a session.
+Overridable per repo: a ``.ctx-prices.json`` at the workspace root, on the
+same schema, replaces or extends rows — published prices go stale, and a
+repo on negotiated rates should be able to say so. That file is the *only*
+override seam. ``ctx.toml`` deliberately has no ``[pricing]`` block: it
+carries repository policy (budgets, guard, scopes), while a price table is
+vendor data on a versioned schema, and one override mechanism beats two
+with a precedence rule between them. Every entry point fails open to the
+vendor-neutral fallback so a cost estimate can never crash a session.
 """
 
 from __future__ import annotations

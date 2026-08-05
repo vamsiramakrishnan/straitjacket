@@ -17,16 +17,46 @@ different safety contracts. The mental model can stay small.
 | One noisy command | `ctx run -- <command>` | One birth gate, one immutable run artifact |
 | A shell pipeline | `ctx run --shell '<pipeline>'` | Captures the stream-shaped program as one operation |
 | Known steps | `ctx seq …` | Per-step provenance without model round-trips |
-| Computed control flow | `ctx eval <script>` | Branch, loop, aggregate; one bounded final digest |
+| Computed control flow | `ctx py <script>` | Branch, loop, aggregate; one bounded final digest |
 | Long-running work | `ctx run --bg-after N -- …` | Returns a job handle instead of idling |
 | Inspect a job | `ctx job <id>` | Bounded live tail and lifecycle control |
 | Exact evidence | `ctx get <handle>` | Address in, exact bytes or bounded zoom out |
 | Search stored evidence | `ctx search …` | Search artifacts without re-execution |
 | Compose typed facts | `ctx q '<pipeline>'` | Total, bounded repository/evidence query algebra |
+| Answer a question | `ctx ask "…" --intent <i>` | Typed intent preset (locate/impact/diagnose) → one evidence view |
 | Compare two runs | `ctx diff run:A run:B` | Behavioral delta instead of two complete outputs |
 | Session scorecard | `ctx stats --session` | Wire residency, rounds, behavior and interventions |
 | Cumulative savings | `ctx gain` | Containment savings by command family/verb |
 | Replay histories | `ctx replay …` | Read-only counterfactual analysis over recorded sessions |
+
+### Understand code without reading it into context
+
+| Need | Command | Why |
+|---|---|---|
+| A map of the repo | `ctx map --budget N` | Ranked, token-budgeted file/symbol map instead of a directory dump |
+| Where a symbol lives | `ctx def <symbol>` | Definition site as a snapshot + span |
+| Who uses a symbol | `ctx refs <symbol>` | Reference sites, bounded |
+| Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
+| Blast radius of a change | `ctx impact <symbol> --depth N` | Transitive callers (`--depth ≤ 6`) |
+| What implements a type | `ctx impls <Type> --depth N` | Subtypes with coordinates, plus what the type itself extends |
+| Why the import fails | `ctx cycles` / `ctx cycles --calls` | Circular imports between files, or mutual recursion between functions |
+| Lint/syntax digest | `ctx diag <path>` | Deterministic diagnostics without running a full linter into context |
+| A compiled investigation | `ctx plan …` / `ctx plan run …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
+
+### Manage the store and the session
+
+| Need | Command | Why |
+|---|---|---|
+| Set up a workspace | `ctx init` | Write `ctx.toml` + `.ctxignore` |
+| Verify the install | `ctx doctor` | Validate hooks, manifests, store, and classifier |
+| Harness / unharness a host | `ctx wrap …` | Install or inject host integration (see [Getting started](GETTING-STARTED.md)) |
+| Freeze a cache epoch | `ctx checkpoint` | Mark a task boundary for lossless rescue |
+| Protect / reclaim storage | `ctx pin` / `ctx gc` | Retention leases and mark-and-sweep |
+| Track deferred decisions | `ctx debt …` | Declared-omission ledger (`add`/`list`/`resolve`) |
+| Inspect steering policy | `ctx policy show` | Print the compiled, committed policy |
+
+Full flags for every verb live in the skill reference
+([`verbs.md`](../plugins/antigravity/skills/ctx-harness/references/verbs.md)).
 
 ## Initialize a workspace
 
@@ -45,7 +75,7 @@ ctx run -- ruff check .
 ctx run -- git diff --stat
 ```
 
-`--` ends Straitjacket’s options. Everything after it is the child command.
+`--` ends straitjacket’s options. Everything after it is the child command.
 
 A run has two products:
 
@@ -99,21 +129,21 @@ ctx seq \
 ```
 
 A sequence is preferable to several model-mediated tool calls because scheduling,
-capture, and intermediate storage remain local. It is preferable to `ctx eval` when no
+capture, and intermediate storage remain local. It is preferable to `ctx py` when no
 computed control flow is needed.
 
-## Execute computed control flow: `ctx eval`
+## Execute computed control flow: `ctx py`
 
 Use eval when a script must branch, loop, or aggregate structured intermediate results.
 
 ```bash
-ctx eval investigation.py
+ctx py investigation.py
 ```
 
 The script itself is stored as an addressable artifact. Intermediate command output does
 not enter the transcript; failures remain deterministic and retrievable.
 
-`ctx eval` provides bounded capture, not OS isolation. Treat it as having the same
+`ctx py` provides bounded capture, not OS isolation. Treat it as having the same
 execution authority as `ctx run` until the broker security boundary ships.
 
 ## Retrieve exact evidence: `ctx get`
@@ -143,19 +173,97 @@ ctx search 'authorization failed' --run run:<id>
 Searching an artifact is cheaper and more trustworthy than rerunning a command merely
 to recover text the harness already captured.
 
+## Walk the call graph: `ctx callers` / `callees` / `impact` / `impls`
+
+```bash
+ctx callers Store.put_blob            # who calls it, with the call-site line
+ctx callees digest_output             # what it calls, in-repo only
+ctx impact Store.put_blob --depth 4   # transitive callers (blast radius)
+ctx impls Profile                     # what implements or extends this type
+ctx cycles                            # circular imports between files
+ctx cycles --calls                    # mutual recursion between functions
+```
+
+`ctx cycles` answers an operational question, not an aesthetic one: a circular
+import is *why the module fails to load*, and a recursion cycle is *why the
+stack blew*. Components are found with Tarjan's algorithm (networkx when it is
+importable, an iterative stdlib implementation otherwise — identical output,
+verified by test) and printed largest first.
+
+Edges come from the languages the skeleton tier parses — Python, plus
+JavaScript, TypeScript, Go and Rust with the `[code]` extra. The engines in
+force are printed in the header of every answer.
+
+### Scoped by default, and the rest is one flag away
+
+A call to `render` could name any `render` in the repo. Rather than guess, each
+call site is resolved in tiers and the first non-empty one wins:
+
+| tier | the call binds to | stated as |
+|---|---|---|
+| `local` | a definition in the calling file | fact |
+| `import` | a definition in a file the caller **directly** imports | fact |
+| `repo` | any definition with that name, anywhere | candidate |
+
+Only the first two are reported by default. Repo-wide matches are held back
+with their count and the flag that resolves them, so the default answer is one
+you can act on and the wider net is never silently mixed in:
+
+```
+callers: 1
+    detect_profile  src/ctx/digest/__init__.py:61
+  omitted: 35 UNSCOPED callers (name matched repo-wide; the caller's file
+    neither defines nor imports the target)
+    resolve: ctx callers LogTemplateProfile.detect --unscoped
+```
+
+`--unscoped` widens `callers`, `callees` and `impact`; the widened rows stay
+marked `[unscoped]` so a candidate never reads as a fact. When several
+definitions answer to one name, every one of them is listed before the results
+— an ambiguous question gets an ambiguous answer, out loud.
+
+## Answer a question: `ctx ask`
+
+```bash
+ctx ask "Where is AuthContext defined and used" --intent locate
+ctx ask "What could break if CacheKey.build changes" --intent impact --symbol CacheKey.build
+ctx ask "Why are the authentication tests failing" --intent diagnose
+ctx ask "Where is TokenBucket defined" --intent locate --plan   # show the compiled plan, don't run
+```
+
+`ctx ask` compiles a repository question into a typed intent preset — a frozen
+`ctx.plan/v1` — and runs it on the plan executor, answering with the investigate
+digest. Seven intents ship — five that observe and two that execute:
+`locate` (where is X defined and used), `impact` (what could break if X
+changes), `diagnose` (what explains the captured failures — reads captured
+facts, never reruns tests), `trace` (how control/data flows through X),
+`compare` (what differs between two runs), `verify` (what proves a change is
+correct — execute-class, runs the test command), and `review` (what changed,
+what is risky, what is under-verified — execute-class). There is no
+natural-language parser: `--intent` is required
+(a missing one is a teaching error that suggests, never guesses), and the subject
+is `--symbol` or the question's sole identifier-shaped token, always disclosed.
+See [docs/ASK.md](ASK.md).
+
 ## Compose evidence: `ctx q`
 
 ```bash
 ctx q 'fails last | in-changed'
 ctx q 'refs TokenBucket | group file | top 5'
 ctx q 'fails last | shared-cause | top 10'
+ctx q 'corpus --ext py --changed | outline'
+ctx q 'records run:<id>#stdout --jsonl | group level | count'
+ctx q 'search TODO --glob "src/*.py" | histogram file'
 ```
 
 `ctx q` operates over typed record streams such as failures, symbols, files, and sites.
+`corpus` selects a bounded eligible file set with a coverage receipt (`--changed` binds
+to worktree generations, never mtime); `records` opens a stored JSON/JSONL artifact as a
+record stream; `distinct` and `histogram` summarize any field.
 The algebra is deliberately total: bounded stages, no loops, no recursion. This makes
 costs statically boundable and every stage’s result addressable.
 
-Use `ctx eval` when the control flow is genuinely computational. Use `ctx q` when the
+Use `ctx py` when the control flow is genuinely computational. Use `ctx q` when the
 intent is a bounded composition of repository and evidence facts.
 
 ## Compare runs: `ctx diff`
@@ -213,7 +321,7 @@ ctx replay --outcomes <t.jsonl>          # per-operator follow-up counts (associ
 ctx replay --outcomes --append-ledger …  # explicit: feed the workspace follow-up ledger
 ctx policy compile --plan-value          # aggregate ledger → committed [plan_value] COUNTS
 ctx plan price --value <plan.json>       # price card + shadow follow-up ranking (report only)
-ctx investigate --advise <plan.json>     # digest + shadow report + shadow ledger line
+ctx plan run --advise <plan.json>     # digest + shadow report + shadow ledger line
 ```
 
 Counts, not rates, in the committed table; Wilson lower bounds derive at
@@ -223,7 +331,7 @@ hard constraints always dominate. Runtime never writes the policy file.
 
 ## Failure semantics
 
-Straitjacket distinguishes safety from optional intelligence:
+straitjacket distinguishes safety from optional intelligence:
 
 - safety gates fail closed when allowing an operation could violate the containment
   invariant;
@@ -231,6 +339,40 @@ Straitjacket distinguishes safety from optional intelligence:
   mode;
 - degraded precision is disclosed in the digest;
 - omission is declared and addressed, never silent.
+
+## Exit codes
+
+`ctx` is invoked from hooks, wrappers, CI steps, and — most often — by an agent
+deciding what to do next, so its exit status is part of the interface. Six codes are
+used, and they answer three different questions.
+
+| Code | Meaning | What the caller should do |
+|---|---|---|
+| `0` | Success | Continue |
+| `1` | **ctx** failed | Not your invocation's fault: an internal error, an unreadable store, an engine that would not start. Retry or run `ctx doctor` |
+| `2` | ctx **rejected the invocation** | Fix the arguments. Unknown command or flag, a malformed selector (`--lines nope`), an ungrammatical reference (`zzz:xyz`), a missing required argument, a workspace that will not resolve, or a handle that no longer resolves because `ctx gc` or the retention window collected it |
+| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output |
+| `124` | Timed out | The child exceeded `--timeout` (or `ctx job --wait` gave up). Matches `timeout(1)` |
+| `127` | Not found | The program ctx was asked to launch or wrap is not on `PATH`. Matches the shell's convention |
+
+The important line is between `1`, `2`, and `3`. A script that treats every nonzero
+status as "the command failed" will re-run work that already produced its evidence
+(`3`), and retry invocations that will never succeed as typed (`2`).
+
+Human-readable errors go to **stderr**; digests, reports, and status output go to
+**stdout**. An error message names the verb that produced it (`ctx get: …`), so a
+failure in a pipeline is attributable without a traceback.
+
+### When the message is not enough
+
+```bash
+CTX_DEBUG=1 ctx <command> …
+```
+
+`CTX_DEBUG` prints the real traceback for an unhandled error, on the CLI and on the
+MCP server alike. Without it, an exception that escapes a handler is summarized as
+`ctx <command>: <ExceptionType>: <message>` — enough to attribute the failure, not
+enough to fix it.
 
 ## Output discipline
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ctx-harness"
-version = "0.25.0"
+version = "0.31.0"
 description = "straitjacket: artifact-backed, repository-aware context containment harness for Antigravity. Unbounded tool output becomes an immutable artifact plus a bounded deterministic digest."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,9 +34,26 @@ ctx = "ctx.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "jsonschema>=4"]
-map = ["grimp>=3", "networkx>=3"]
+map = ["grimp>=3.15", "networkx>=3.4"]
 fast = ["orjson>=3"]
-code = ["jedi>=0.19", "tree-sitter>=0.21", "tree-sitter-language-pack>=0.1", "ast-grep-py>=0.37"]
+# Individual grammar wheels are the maintained, offline-safe tree-sitter
+# path (the bundle language-pack fetches parsers at runtime); the skeleton
+# tier tries these first, then the bundles. SCIP xref ingestion is
+# opportunistic: `scip` (protobuf) reads an index.scip when present.
+#
+# Floors track the versions actually exercised in CI rather than the oldest
+# release that once worked. The previous floors (tree-sitter>=0.22 against
+# 0.26, ast-grep-py>=0.37 against 0.45) permitted resolving an install two
+# API generations behind what any test covers — a combination nothing in
+# this repo has ever run.
+code = ["jedi>=0.20", "tree-sitter>=0.25", "tree-sitter-python>=0.25",
+        "tree-sitter-javascript>=0.25", "tree-sitter-typescript>=0.23",
+        "tree-sitter-go>=0.25", "tree-sitter-rust>=0.24",
+        "ast-grep-py>=0.45"]
+# The vendored scip_pb2 uses protobuf's runtime_version guard (5.26+). A
+# mismatched/absent runtime raises on import and the ingester degrades to
+# None — SCIP is skipped, never an error.
+scip = ["protobuf>=5.26"]
 # Perceptual hashing for the binary/image digest (dhash) and `ctx image diff`.
 # Absent, image digests still carry format + dimensions + exact hash (stdlib);
 # only the pixel-free perceptual comparison needs a decode.

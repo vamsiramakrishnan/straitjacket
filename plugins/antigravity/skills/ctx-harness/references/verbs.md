@@ -3,6 +3,41 @@
 Full flag detail for verbs the skill body indexes. Read this when a one-line
 index entry is not enough; each verb's output is bounded and deterministic.
 
+## Answer a question / compose facts (start here)
+
+- `ctx ask "<question>" --intent <intent> [--symbol X] [--run r]
+  [--against B] [--command C] [--depth N] [--plan]` — compile a repository
+  question into one bounded evidence view (a typed `ctx.plan/v1` preset run
+  through the plan tier). Intents: `locate` (where is X defined/used),
+  `impact` (what breaks if X changes — callers + blast radius + related
+  tests), `diagnose` (what explains the captured failures — reads the last
+  run's facts and joins against the change set; **never reruns tests**),
+  `trace` (structural call path through X — callers/callees/reach),
+  `compare` (behavioral delta between two runs: `--run A --against B`),
+  `verify` (run the tests covering the change and report), `review`
+  (changed symbols + tests + a fresh run + root-cause join). `verify` and
+  `review` are **execute-class** (they run tests) — CLI-only; the bounded
+  MCP tier rejects them. No natural-language guessing: `--intent` is
+  required (a missing one teaches and suggests), and the subject is
+  `--symbol` or the question's single identifier-shaped token (disclosed).
+  `--plan` prints the compiled plan without executing.
+- `ctx q '<stage> | <stage> | …'` — total pipeline algebra over typed
+  record streams; bounded, no loops, every stage's result minted as an
+  addressable `blob:`. Sources open a stream: `refs <Sym>`, `search <pat>
+  [--glob G]`, `callers/callees/impact <Sym>`, `fails [run:|last]`,
+  `corpus [--ext E]… [--glob G]… [--exclude G]… [--changed] [--max N]`
+  (the eligible file set with a coverage receipt — `--changed` binds to
+  worktree generations, never mtime), `records <run:|blob:> [--jsonl]
+  [--pointer /p]` (a stored JSON/JSONL artifact as records — query
+  compiler/test/SARIF/lockfile output where it already lives, no
+  re-parsing). Combinators: `where <field><op><val>` (= != ~), `group
+  <field>`, `top <N>`, `count`, `distinct <field>`, `histogram <field>
+  [--buckets N]`. Materializers (terminal): `get [--context N]`, `outline`.
+  The root-cause one-liner: `ctx q 'fails last | in-changed'` — failing
+  tests inside symbols changed this generation. Prefer `ctx q` over piping
+  raw output through grep/awk/jq/sort/uniq; reach for `ctx py` only when
+  the control flow is genuinely computational.
+
 ## Capture and retrieval
 
 - `ctx run -- <cmd> [args...]` — execute with birth-time capture; transcript
@@ -27,7 +62,7 @@ index entry is not enough; each verb's output is bounded and deterministic.
   step's digest rides in full, a green tree stays terse. Use for
   mechanical chains you can declare upfront (test → build → lint):
   measured, 65–70% of repair/creation rounds were such chains.
-- `ctx eval '<python script>' | --file <path> | -` (stdin/heredoc) —
+- `ctx py '<python script>' | --file <path> | -` (stdin/heredoc) —
   programmable capture: when the chain needs computed control flow
   (branch on a result, loop over files, aggregate before emitting), write
   a short Python script instead of N rounds of tool calls. It runs under
@@ -90,7 +125,7 @@ index entry is not enough; each verb's output is bounded and deterministic.
   test.run, evidence.join, ast.search, semantic.taint, …) locally; ONE
   ranked investigation digest returns: conclusion candidates with plane
   attribution, counterevidence, coverage, per-node `blob:` addresses.
-- `ctx investigate <plan.json|->` — the epochal loop: same execution plus
+- `ctx plan run <plan.json|->` — the epochal loop: same execution plus
   the replan allowance (default 1; exceeding it is declared, recorded, and
   argues for patch/verify instead of another sweep).
 - Use a plan when you would otherwise run 3+ exploration commands whose

@@ -58,7 +58,7 @@ prior confidence: insufficient (0 observations · backoff: builtin)
 value score: 2.59
 selected over:  repo.changed  1.47
 
-$ ctx investigate --advise plan.json     (after repo.changed + evidence.join ran)
+$ ctx plan run --advise plan.json     (after repo.changed + evidence.join ran)
 required floors:
   causality          1.00 / 0.80
   changedness        1.00 / 1.00

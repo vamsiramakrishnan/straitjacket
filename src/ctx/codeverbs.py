@@ -23,13 +23,12 @@ from ctx.retrieval import (
     record_telemetry,
 )
 from ctx.store import Store
-from ctx.textutil import fmt_bytes, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_bytes, fmt_int, short_id
 from ctx.workspace import Workspace
 
 _ENGINE_JEDI = "jedi"
 _ENGINE_AST = "ast"
 _DIAG_MAX_FILES = 200
-_LINE_CAP = 160
 
 
 # ----------------------------------------------------------------- engine
@@ -153,7 +152,7 @@ def cmd_def(store: Store, ws: Workspace, target: str) -> str:
         def_rel, a, b, kind = _ast_def(ws, rel, symbol)
 
     snap = snapshot_file(store, ws, def_rel)
-    snap_short = str(snap["id"]).removeprefix("sha256:")[:12]
+    snap_short = short_id(snap["id"])
     blob = str(snap["blob"]).removeprefix("sha256:")
     sid = store.register_span(blob, "region", a=a, b=b, note=f"def {symbol}")
 
@@ -243,24 +242,64 @@ def _ast_refs(
     return sites, scanned
 
 
+def resolve_refs(
+    store: Store, ws: Workspace, symbol: str
+) -> tuple[list[tuple[str, int, str]], str]:
+    """The reference-resolution engine ladder, one place: SCIP (precise,
+    compiler-backed — when an ``index.scip`` and the protobuf runtime are
+    present) → jedi (semantic) → ast (textual approximation). Returns
+    ``(sites, engine_label)``; the label is disclosed by callers so a
+    fallback is never anonymous (CONTRIBUTING rule)."""
+    try:
+        from ctx import scip_ingest
+
+        scip_sites = scip_ingest.refs(ws, symbol)
+        if scip_sites:  # a non-empty precise answer wins the ladder
+            return scip_sites, "scip (exact)"
+    except Exception:
+        pass
+    if _select_engine() == _ENGINE_JEDI:
+        try:
+            sites, _ = _jedi_refs(ws, symbol)
+            return sites, _ENGINE_JEDI
+        except Exception:
+            pass
+    sites, _ = _ast_refs(store, ws, symbol, None)
+    return sites, "ast (textual)"
+
+
+def _check_refs_symbol(symbol: str) -> None:
+    """``refs`` takes a NAME (``foo`` or ``Class.method``), not a selector.
+
+    Given ``repo:<path>:<Symbol>`` — which is ``ctx def``'s grammar, and a
+    natural thing to try — the ladder found nothing at the SCIP or jedi rungs
+    and fell through to the word-boundary regex, which matched the symbol's
+    own name inside the argument and returned string literals as references.
+    A degradation that turns a more precise question into a less precise
+    answer is worse than an error, so this is an error.
+    """
+    t = (symbol or "").strip()
+    if t and all(p.isidentifier() for p in t.split(".")):
+        return
+    hint = "symbol grammar: <name> or <Class.method>"
+    if t.startswith("repo:") or "/" in t:
+        hint += (
+            f"; for a file-scoped lookup use 'ctx def {t}', "
+            f"or 'ctx refs <name> --path <subtree>' to narrow references"
+        )
+    raise RetrievalError(f"unparseable symbol {symbol!r}; {hint}")
+
+
 def cmd_refs(
     store: Store, ws: Workspace, symbol: str, scope_path: str | None = None
 ) -> str:
     """Reference sites as coordinates: deterministic (path, line) order,
     budget-capped with continuation, snapshot-on-first-cite per file."""
+    _check_refs_symbol(symbol)
     budget = ws.config.budgets
     cap = budget.max_matches
 
-    engine = _select_engine()
-    label = engine
-    if engine == _ENGINE_JEDI:
-        try:
-            sites, scanned = _jedi_refs(ws, symbol)
-        except Exception:
-            engine = _ENGINE_AST
-    if engine == _ENGINE_AST:
-        label = "ast (textual)"
-        sites, scanned = _ast_refs(store, ws, symbol, scope_path)
+    sites, label = resolve_refs(store, ws, symbol)
 
     if scope_path:
         pfx = scope_path.strip("/")
@@ -276,7 +315,7 @@ def cmd_refs(
     scope_note = f" · path {scope_path}" if scope_path else ""
     out = [f"[ctx refs {symbol}{scope_note} · engine {label}]"]
     for (rel, line), text in shown:
-        out.append(f"repo:{rel}:L{line}: {text[:_LINE_CAP]}")
+        out.append(f"repo:{rel}:L{line}: {text[:EVIDENCE_LINE_CHARS]}")
     out.append("coverage:")
     out.append(
         f"  sites: {fmt_int(len(ordered))} · shown: {fmt_int(len(shown))}"
@@ -288,7 +327,7 @@ def cmd_refs(
         try:
             snap = snapshot_file(store, ws, rel)
             snapshot_note.append(
-                f"  {rel} → snapshot:{str(snap['id']).removeprefix('sha256:')[:12]}"
+                f"  {rel} → snapshot:{short_id(snap['id'])}"
             )
         except Exception:
             pass
@@ -303,6 +342,9 @@ def cmd_refs(
             f"(narrow scope; {fmt_int(len(ordered) - len(shown))} sites omitted)"
         )
     result = _emit(ws, "\n".join(out), budget.result_tokens, continuation)
+    # Input-bytes proxy for telemetry: the resolved sites' text (the engine
+    # ladder abstracts away per-engine scan volume).
+    scanned = sum(len(t) for _, _, t in sites)
     record_telemetry(store, "code", scanned, len(result.encode("utf-8")))
     return result
 
@@ -400,7 +442,7 @@ def cmd_diag(store: Store, ws: Workspace, path: str | None = None) -> str:
         counts = " · ".join(f"{sev} {fmt_int(by_sev[sev])}" for sev in sorted(by_sev))
         out.append(f"diagnostics (exact): {fmt_int(len(diags))} · {counts}")
         for rel, line, _, msg in diags[:10]:
-            out.append(f"repo:{rel}:L{line}: {msg[:_LINE_CAP]}")
+            out.append(f"repo:{rel}:L{line}: {msg[:EVIDENCE_LINE_CHARS]}")
         if len(diags) > 10:
             out.append(f"… +{fmt_int(len(diags) - 10)} more diagnostics")
     else:

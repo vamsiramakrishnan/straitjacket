@@ -28,7 +28,7 @@ def test_seq_green_tree_is_one_terse_round(ws_store):
     from ctx.seq import run_seq
 
     ws, store = ws_store
-    text, code = run_seq(ws, store, ["echo alpha", "echo beta", "echo gamma"])
+    text, code, _timed_out = run_seq(ws, store, ["echo alpha", "echo beta", "echo gamma"])
     assert code == 0
     assert "[ctx seq · 3 steps]" in text
     assert text.count("✓") == 3
@@ -43,7 +43,7 @@ def test_seq_halts_at_failure_with_full_evidence(ws_store):
     from ctx.seq import run_seq
 
     ws, store = ws_store
-    text, code = run_seq(
+    text, code, _timed_out = run_seq(
         ws, store,
         ["echo ok", "sh -c 'echo BOOM-DETAIL >&2; exit 7'", "echo never"],
     )
@@ -59,7 +59,7 @@ def test_seq_keep_going_runs_all(ws_store):
     from ctx.seq import run_seq
 
     ws, store = ws_store
-    text, code = run_seq(
+    text, code, _timed_out = run_seq(
         ws, store, ["sh -c 'exit 3'", "echo survivor"], halt_on_fail=False
     )
     assert code == 3
@@ -72,7 +72,7 @@ def test_seq_steps_resolvable_as_runs(ws_store):
     from ctx.seq import run_seq
 
     ws, store = ws_store
-    text, _ = run_seq(ws, store, ["echo needle-in-step-one", "echo two"])
+    text, _, _timed_out = run_seq(ws, store, ["echo needle-in-step-one", "echo two"])
     rid = next(
         ln.split("run:")[1].split(" ")[0]
         for ln in text.splitlines() if ln.startswith("step 1")
@@ -95,7 +95,7 @@ def test_seq_signal_death_is_failure(ws_store):
     from ctx.seq import run_seq
 
     ws, store = ws_store
-    text, code = run_seq(ws, store, ["sh -c 'kill -9 $$'", "echo after"])
+    text, code, _timed_out = run_seq(ws, store, ["sh -c 'kill -9 $$'", "echo after"])
     assert code != 0
     assert "step 1 ✗" in text
     assert "after" not in text  # tree halted at the failure

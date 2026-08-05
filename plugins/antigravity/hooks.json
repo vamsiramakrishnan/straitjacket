@@ -15,7 +15,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "run_command|Read|read_file|grep_search|find_by_name|glob_search|codebase_search",
+        "matcher": "run_command|Read|read_file|grep_search|find_by_name|glob_search|codebase_search|mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -25,12 +25,12 @@
         ]
       }
     ],
-    "SessionStart": [
+    "PreInvocation": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "{{CTX_EXECUTABLE}} hook antigravity session-start",
+            "command": "{{CTX_EXECUTABLE}} hook antigravity pre-invocation",
             "timeout": 15
           }
         ]

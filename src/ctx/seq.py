@@ -18,6 +18,7 @@ exit code is the first failure's exit code, else 0.
 from __future__ import annotations
 
 from ctx.store import Store
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 
@@ -30,13 +31,24 @@ def run_seq(
     timeout: float | None = None,
     focus: str | None = None,
 ) -> tuple[str, int]:
-    """Execute a declared step list; return (composite digest, exit code)."""
+    """Execute a declared step list; return (composite digest, exit code,
+    timed_out).
+
+    ``timed_out`` travels beside the exit code rather than inside it. A step
+    that the runner killed on timeout and a step that chose to return 124 are
+    different events, and the child's exit code cannot tell them apart -- the
+    same overload that made ``ctx py`` misreport ``sys.exit(124)``."""
     from ctx.digest import render_run_digest
     from ctx.execution import ExecutionError, run_capture
 
     lines_out: list[str] = []
-    step_digests: list[tuple[int, str, str, int]] = []  # (idx, cmd, digest, exit)
+    # (idx, cmd, digest, exit, failed). `failed` is carried rather than
+    # re-derived from the exit code: a step killed by the runner can still
+    # report exitCode 0, and the selection below has to agree with the ✓/✗
+    # already printed beside it.
+    step_digests: list[tuple[int, str, str, int, bool]] = []
     final_exit = 0
+    first_failure_timed_out = False
     halted_at: int | None = None
 
     for idx, cmd in enumerate(steps, start=1):
@@ -52,7 +64,7 @@ def run_seq(
         digest, manifest = render_run_digest(
             store, ws, capture.manifest, focus=focus
         )
-        rid = str(manifest["id"]).removeprefix("sha256:")[:12]
+        rid = short_id(manifest["id"])
         result = manifest["result"]
         exit_code = result["exitCode"]
         # exitCode None means signal death — failure, not success (S6 finding).
@@ -62,9 +74,29 @@ def run_seq(
         if result["timedOut"]:
             status += " · timed out"
         lines_out.append(f"step {idx} {mark} {status} · run:{rid} · {cmd}")
-        step_digests.append((idx, cmd, digest, exit_code if exit_code is not None else 1))
+        step_digests.append(
+            (idx, cmd, digest, exit_code if exit_code is not None else 1, failed)
+        )
         if failed:
-            final_exit = final_exit or (exit_code if exit_code not in (0, None) else 124)
+            # ONE latch, not two. The exit code was first-failure-wins
+            # (`final_exit or ...`) while the timeout flag was
+            # any-failure-wins, so under `--keep-going` an early exit-3
+            # followed by a later timeout latched code 3 -- and rendered
+            # step 1's digest to match -- while still returning 124 to the
+            # caller. The summary said one thing and the exit status said
+            # another about which failure was primary. Two values derived
+            # from the same first-failure event have to be latched in the
+            # same statement or they drift apart exactly here.
+            #
+            # A timeout the RUNNER observed still outranks whatever the child
+            # returned: previously a killed step fell through to the child's
+            # code, so `ctx seq` reported 3 for a timeout the manifest
+            # recorded, against the 124 in the docs/CLI.md exit-code table.
+            if final_exit == 0:
+                if result["timedOut"]:
+                    final_exit, first_failure_timed_out = 124, True
+                else:
+                    final_exit = exit_code if exit_code not in (0, None) else 124
             if halt_on_fail:
                 halted_at = idx
                 break
@@ -78,16 +110,31 @@ def run_seq(
     header += "]"
 
     body = [header] + lines_out
-    # Failure asymmetry: the failing step's digest rides in full; on green
-    # trees only the final step's digest is included (the others were
-    # boilerplate by definition — each remains addressable via run:<id>).
-    detail: tuple[int, str, str, int] | None = None
-    if halted_at is not None and step_digests and step_digests[-1][0] == halted_at:
-        detail = step_digests[-1]
-    elif step_digests and final_exit == 0:
-        detail = step_digests[-1]
+    # Failure asymmetry, derived from the rule rather than enumerated:
+    # if anything failed, the FIRST failing step's digest rides in full;
+    # otherwise the last step's does (the earlier ones were boilerplate by
+    # definition, and each stays addressable via run:<id>).
+    #
+    # It used to be two explicit branches -- halted-at-the-last-step, and
+    # green -- which between them missed the third case entirely. Under
+    # `--keep-going` a failure sets neither condition, so `detail` stayed
+    # None and NO digest was emitted at all: the one time a step actually
+    # failed, its captured output was the single thing the summary omitted,
+    # directly against this module's own "failure is evidence".
+    #
+    # FIRST failing, not last: it is the one the halting mode would have
+    # stopped at, and later failures are usually its consequences.
+    failures = [d for d in step_digests if d[4]]
+    detail = failures[0] if failures else (step_digests[-1] if step_digests else None)
     if detail is not None:
-        idx, _, digest, _ = detail
+        idx, _, digest, _, _ = detail
         body.append(f"--- step {idx} digest ---")
         body.append(digest)
-    return "\n".join(body), final_exit
+        if len(failures) > 1:
+            # Never silently: the other failures are named and addressable.
+            others = ", ".join(f"step {d[0]}" for d in failures[1:])
+            body.append(
+                f"also failed: {others} (digest omitted; each is addressable "
+                "via its run: handle above)"
+            )
+    return "\n".join(body), final_exit, first_failure_timed_out

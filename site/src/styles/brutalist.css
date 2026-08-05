@@ -133,3 +133,118 @@ nav.sidebar .top-level a,
 .sj-light { display: none !important; }
 :root[data-theme='light'] .sj-light { display: block !important; }
 :root[data-theme='light'] .sj-dark { display: none !important; }
+
+/* ---------------------------------------------------------------- benefits
+   The home page leads on outcomes, so the outcomes need weight on the page,
+   not just position in the source order. Two devices, both theme-aware and
+   both self-contained (no external assets, no JS):
+
+   .sj-stats  a headline number row directly under the hero — the four
+              figures a reader should leave with, before any prose.
+   .sj-wins   the benefit list, set larger than body copy so it reads as the
+              point of the page rather than as a feature inventory. */
+
+/* The splash hero reserves a tall block for an image this page does not use,
+   which left ~180px of dead space between the buttons and the numbers and
+   pushed the numbers below the fold — the opposite of featuring them. */
+.hero { padding-bottom: 0; }
+
+/* Seams are drawn by the grid gap showing the container's background through
+   it, not by per-cell borders. With `auto-fit` the column count changes with
+   viewport, so a cell cannot know whether it ends a row — per-cell borders
+   doubled against the container edge every time the grid wrapped. */
+.sj-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 2px;
+  background: var(--sl-color-white);
+  border: 2px solid var(--sl-color-white);
+  box-shadow: var(--sj-shadow);
+  margin: 0 0 3rem;
+}
+
+.sj-stats > div {
+  padding: 1.4rem 1.25rem;
+  background: var(--sl-color-bg, var(--sl-color-black));
+  /* Starlight gives adjacent siblings inside .sl-markdown-content a top
+     margin. On grid children that margin sits INSIDE the cell's track, so
+     the cell background starts below it and the container shows through as
+     a thick ragged band instead of a 2px seam. */
+  margin: 0;
+  /* Labels line up across cells even when one figure wraps to two lines. */
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.sj-stat-n {
+  font-family: var(--sl-font-mono);
+  font-weight: 700;
+  /* Capped so the widest figure ("304,113 → 210") sits on one line in a
+     four-up row at desktop width instead of wrapping alone. */
+  font-size: clamp(1.35rem, 2.6vw, 1.75rem);
+  line-height: 1.1;
+  color: var(--sl-color-accent);
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.sj-stat-l {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--sl-color-gray-2);
+}
+
+/* Benefit cards. A full-width stack left half the desktop viewport empty and
+   read as one long column of prose; a two-up grid of framed cards is
+   scannable, and the border + hard shadow is the same device the stat strip
+   and the diagrams already use, so the page holds one visual language. */
+.sj-wins {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  counter-reset: sj-win;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.75rem;
+}
+
+.sj-wins li {
+  /* Reset Starlight's sibling margin: on a grid child it sits inside the
+     track and pushes the frame off its own cell. */
+  margin: 0;
+  padding: 1.4rem 1.35rem 1.5rem;
+  border: 2px solid var(--sl-color-white);
+  box-shadow: var(--sj-shadow-sm);
+  background: var(--sl-color-bg, var(--sl-color-black));
+  display: flex;
+  flex-direction: column;
+}
+
+/* An amber index gives the grid rhythm without repeating the numbers the
+   stat strip already carries. */
+.sj-wins li::before {
+  counter-increment: sj-win;
+  content: counter(sj-win, decimal-leading-zero);
+  font-family: var(--sl-font-mono);
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  color: var(--sl-color-accent);
+  margin-bottom: 0.85rem;
+}
+
+.sj-wins b {
+  display: block;
+  font-family: var(--sl-font);
+  font-weight: 700;
+  font-size: clamp(1.05rem, 1.7vw, 1.22rem);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.5rem;
+  color: var(--sl-color-white);
+}
+
+.sj-wins li > :last-child { margin-bottom: 0; }

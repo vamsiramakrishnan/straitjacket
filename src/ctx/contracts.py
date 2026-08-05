@@ -185,6 +185,7 @@ def _class_present(
     selected: tuple,
     selected_ids: frozenset[str],
     included_fields: frozenset[str],
+    attested: frozenset[str] = frozenset(),
 ) -> bool:
     """Is a fact class actually delivered by this selection, judged over
     TYPED facts — a class counts only if it was both included in the
@@ -205,8 +206,42 @@ def _class_present(
         return bool(selected) and all(i.summary for i in selected)
     if fact_class == "root_detail":
         return any(i.detail_ref is not None for i in selected)
-    # Unknown/forward-compatible classes: declared inclusion is presence.
-    return True
+    if fact_class == "coverage_attestation":
+        # The graph HAS a coverage attestation; the class asks whether the
+        # selection carries it, not whether the parse was complete (an
+        # honest "incomplete" is still an attestation).
+        return bool(graph.coverage) and "complete" in graph.coverage
+    if fact_class in _PLAN_LAYER_CLASSES:
+        # Invisible to an EvidenceGraph by construction: whether a plan
+        # produced counterevidence is a fact about which NODES ran, not
+        # about the extracted graph. So it takes a SEPARATE attestation --
+        # naming the class in included_fields is never enough.
+        #
+        # The first cut of this fix put that discipline in plan_exec, the one
+        # caller that knows. That is not a mechanism: validate_selection is a
+        # public seam, and any other caller could still satisfy the class by
+        # typing its name. `attested` defaults to empty, so a caller that
+        # cannot witness a plan-layer class cannot accidentally claim it.
+        return fact_class in attested
+    # Everything else: a class this module cannot check is NOT a class it can
+    # report as delivered. The catch-all used to `return True`, so naming a
+    # class in included_fields was enough to satisfy a contract whose own
+    # docstring promises required classes are machine-CHECKED. Forward
+    # compatibility is a fine reason to TOLERATE an unknown class; it is not a
+    # reason to count it as present.
+    return False
+
+
+#: Fact classes an EvidenceGraph cannot witness, verified one layer up.
+_PLAN_LAYER_CLASSES: frozenset[str] = frozenset({"counterevidence"})
+
+#: Classes with a checker in _class_present. Anything else that a contract
+#: marks REQUIRED is reported on the receipt as unverifiable rather than
+#: silently counted.
+_CHECKED_CLASSES: frozenset[str] = frozenset({
+    "aggregate_counts", CENSUS_CLASS, "location", "failure_class",
+    "one_line_summary", "root_detail", "coverage_attestation",
+}) | _PLAN_LAYER_CLASSES
 
 
 def validate_selection(
@@ -214,10 +249,16 @@ def validate_selection(
     included_fields: Iterable[str],
     contract: EvidenceContract,
     graph: EvidenceGraph,
+    attested: Iterable[str] = (),
 ) -> CoverageReceipt:
     """Coverage accounting at the selection seam (EDC §5.3 amendment 1).
 
     ``selected_item_ids``: item identities the plan delivers inline.
+    ``attested``: plan-layer classes the CALLER can witness (e.g.
+    ``counterevidence``, true only when a node that provides it actually
+    ran). Empty by default, because a caller that cannot witness such a
+    class must not be able to claim it by naming it.
+
     ``included_fields``: fact classes the selection includes inline
     (e.g. {"aggregate_counts", "complete_identity_census", "location",
     "failure_class", "one_line_summary", "root_detail"}).
@@ -233,14 +274,19 @@ def validate_selection(
         )
     selected_ids = frozenset(selected_item_ids)
     included = frozenset(included_fields)
+    # Plan-layer classes need this WITNESS, not just a name in `included`.
+    witnessed = frozenset(attested)
     # Graph (stable) order preserved by filtering the graph, not the input.
     selected = tuple(i for i in graph.items if i.id in selected_ids)
     req = contract.for_outcome(graph.outcome)
     present = sum(
         1
         for cls in req.required
-        if _class_present(cls, graph, selected, selected_ids, included)
+        if _class_present(cls, graph, selected, selected_ids, included, witnessed)
     )
+    # Named, so the gap is visible on the receipt rather than inferred from a
+    # fraction that quietly fell short.
+    unverifiable = tuple(sorted(c for c in req.required if c not in _CHECKED_CLASSES))
     named = len(selected)
     return CoverageReceipt(
         items_total=len(graph.items),
@@ -259,6 +305,7 @@ def validate_selection(
         omitted_bytes=0,
         omitted_items=len(graph.items) - named,
         attested_complete=bool(graph.coverage.get("complete")),
+        unverifiable_fields=unverifiable,
     )
 
 

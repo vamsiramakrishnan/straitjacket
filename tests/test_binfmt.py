@@ -110,8 +110,46 @@ def test_ctx_run_binary_profile_end_to_end():
     out = proc.stdout
     assert "profile=binary/v1" in out          # NOT text/v1
     assert "image: 320×240 rgb" in out
-    assert "phash:" in out
+    # The captured-run digest is identity-bearing, so it must NOT carry the
+    # Pillow-gated phash line (that would make the run id depend on an optional
+    # extra). The perceptual hash lives on the interactive `ctx image` path.
+    assert "phash:" not in out
+    assert "status: exit 0" in out             # exit status is preserved
     assert "ctx get run:" in out and "#stdout" in out   # working address
+
+
+def test_binary_profile_preserves_failure_evidence():
+    # A process that emits a valid PNG on stdout but fails on stderr with a
+    # nonzero exit must not be rendered as an apparently-normal image.
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "shot.png").write_bytes(_png(64, 48))
+        script = "cat shot.png; echo 'FATAL conversion failed' >&2; exit 7"
+        proc = subprocess.run(
+            [sys.executable, "-m", "ctx", "run", "--shell", script],
+            cwd=td, capture_output=True, text=True,
+            env={"PYTHONPATH": str(SRC), "PATH": __import__("os").environ.get("PATH", "")},
+        )
+    out = proc.stdout
+    assert "profile=binary/v1" in out          # still a typed binary digest
+    assert "image: 64×48" in out
+    assert "status: exit 7" in out             # the failure is not swallowed
+    assert "FATAL conversion failed" in out    # stderr diagnostics survive
+
+
+def test_binary_digest_identity_independent_of_pillow():
+    # render_digest with include_perceptual=False must be byte-identical whether
+    # or not Pillow could produce a hash — that body feeds the run identity.
+    data = _png(120, 90)
+    info = binfmt.inspect(data)
+    body = binfmt.render_digest(info, address="ctx get run:x#stdout",
+                                include_perceptual=False)
+    assert "phash" not in body
+    # Simulate the Pillow-absent environment: identity body is unchanged.
+    info_no_pill = binfmt.inspect(data)
+    info_no_pill.perceptual_hash = None
+    body2 = binfmt.render_digest(info_no_pill, address="ctx get run:x#stdout",
+                                 include_perceptual=False)
+    assert body == body2
 
 
 def test_ctx_image_diff_cli():

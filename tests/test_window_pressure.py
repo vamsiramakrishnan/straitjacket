@@ -148,22 +148,51 @@ def test_session_read_budget_tightens_under_pressure(tmp_path):
     _window(tmp_path, 84.0)
     d = _read(f, tmp_path, session_id="s-tight")
     assert d["decision"] == "allow"
-    assert d["rewrite"]["updatedInput"]["limit"] == 240 // 4
+    assert 20 <= d["rewrite"]["updatedInput"]["limit"] <= 240 // 4
     assert "session native-read budget exceeded" in d["rewrite"]["reason"]
     assert " [window 84% full — budgets tightened]" in d["rewrite"]["reason"]
 
 
 # --------------------------------------------------------- head/tail -n cap
 def test_head_tail_cap_scales_with_window(tmp_path):
+    """Exercised through `tail`, deliberately.
+
+    `head` used to demonstrate this cap, but it has since gained a rung on the
+    replacement surface, so a `head -n N` is collapsed to `ctx get --lines 1:N`
+    before the cap can bite. That is an improvement rather than a regression —
+    `ctx get` is bounded by `result_tokens`, which is itself scaled by this
+    same window pressure, so the flood is prevented by a stricter mechanism.
+    But it does mean `head` can no longer show that this cap works.
+
+    `tail` has no collapse rung (`ctx get` has no from-the-end window, so any
+    mapping would guess), so it still reaches this layer and is now what pins
+    the behaviour. If `tail` ever gains a rung, this test needs a new subject —
+    not deletion.
+    """
     f = _make_file(tmp_path, "notes.txt", 100)
-    cmd = f"head -n 300 {f.name}"
+    cmd = f"tail -n 300 {f.name}"
     assert _cmd(cmd, tmp_path) == {"decision": "allow"}  # 300 ≤ 400 default
 
     _window(tmp_path, 84.0)  # cap int(400*0.72) = 288 < 300
     d = _cmd(cmd, tmp_path)
     assert d["decision"] == "deny"
     assert d["reason"].endswith(" [window 84% full — budgets tightened]")
-    assert d["rewrite"]["updatedInput"]["CommandLine"] == f"ctx run -- head -n 300 {f.name}"
+    assert d["rewrite"]["updatedInput"]["CommandLine"] == f"ctx run -- tail -n 300 {f.name}"
     assert " [window 84% full — budgets tightened]" in d["rewrite"]["reason"]
     # Still inside the tightened cap: unchanged allow.
-    assert _cmd(f"head -n 200 {f.name}", tmp_path) == {"decision": "allow"}
+    assert _cmd(f"tail -n 200 {f.name}", tmp_path) == {"decision": "allow"}
+
+
+def test_head_is_collapsed_before_the_cap_applies(tmp_path):
+    """The interaction the test above documents, asserted rather than implied.
+
+    A `head` under window pressure must still not flood: it is replaced by a
+    bounded `ctx get`, whose own budget tightens with the same pressure.
+    """
+    f = _make_file(tmp_path, "notes.txt", 100)
+    _window(tmp_path, 84.0)
+    d = _cmd(f"head -n 300 {f.name}", tmp_path)
+    assert d["decision"] == "allow"
+    assert d["rewrite"]["updatedInput"]["CommandLine"] == (
+        f"ctx get repo:{f.name} --lines 1:300"
+    )

@@ -67,10 +67,13 @@ def test_pytest_rewrite_antigravity_dialect(tmp_path):
     out = _invoke_hook(
         _payload({"CommandLine": "pytest -q", "Cwd": str(tmp_path)}, tmp_path)
     )
-    assert out["decision"] == "allow"
-    assert out["updatedInput"]["CommandLine"] == "ctx run -- pytest -q"
-    assert out["updatedInput"]["Cwd"] == str(tmp_path)  # untouched fields survive
-    assert out["reason"] == "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
+    # Antigravity's published PreToolUse schema has no updatedInput, so the
+    # rewrite cannot be applied transparently: it degrades to a deny whose
+    # reason names the contained command for the agent to re-issue.
+    assert out["decision"] == "deny"
+    assert "ctx run -- pytest -q" in out["reason"]
+    assert "updatedInput" not in out
+    assert set(out) <= {"decision", "reason", "permissionOverrides"}
 
 
 def test_pytest_rewrite_claude_code_dialect(tmp_path):
@@ -137,8 +140,8 @@ def test_metachar_pipeline_rewrites_to_ctx_run_shell(tmp_path):
         "ctx run --shell -- " + shlex.quote(cmd)
     )
     out = _invoke_hook(_payload({"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path))
-    assert out["decision"] == "allow"
-    assert out["updatedInput"]["CommandLine"] == "ctx run --shell -- 'cat x | head -n 5'"
+    assert out["decision"] == "deny"  # no input substitution on this host
+    assert "ctx run --shell -- 'cat x | head -n 5'" in out["reason"]
 
 
 def test_grep_single_file_gets_match_cap_injected(tmp_path):
@@ -160,6 +163,85 @@ def test_grep_single_file_gets_match_cap_injected(tmp_path):
     assert rw is None or "-m 25" not in rw["updatedInput"]["CommandLine"]
 
 
+# ------------------------------------------------- text tools (M-K5.3)
+def test_sed_range_read_collapses_to_an_addressed_get(tmp_path):
+    """`sed -n 'A,Bp' <file>` now has a rung on the replacement surface.
+
+    It used to land on the generic steer — deny, plus `ctx run -- sed …`,
+    which captures the output but keeps the operator's own unaddressed range.
+    The collapse rung is strictly better: `ctx get repo:<f> --lines A:B` is
+    the same bytes with a handle and a continuation that advances, so the
+    replacement surface overrides the deny the same way it does for the
+    flagship `grep -rn` case.
+    """
+    (tmp_path / "notes.txt").write_text("a\nb\n", encoding="utf-8")
+    d = _classify(
+        "run_command",
+        {"CommandLine": "sed -n 1,5p notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d["decision"] == "allow"
+    assert d["rewrite"]["updatedInput"]["CommandLine"] == (
+        "ctx get repo:notes.txt --lines 1:5"
+    )
+
+
+def test_sed_outside_the_collapsible_range_shape_still_steers_to_ctx_run(tmp_path):
+    """The generic steer must still cover every sed the rung declines.
+
+    A script, an edit or a stdin read is not a range read, so it falls back to
+    the canonical layer — the rung narrowing what reaches the steer must not
+    narrow the steer itself.
+    """
+    (tmp_path / "notes.txt").write_text("a\nb\n", encoding="utf-8")
+    d = _classify(
+        "run_command",
+        {"CommandLine": "sed -n /pat/p notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d["decision"] == "deny"  # canonical layer: unbounded output
+    assert d["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run -- sed")
+
+
+def test_sed_inplace_force_asks_with_preview_remediation(tmp_path):
+    for cmd in (
+        "sed -i s/a/b/ notes.txt",
+        "sed -i.bak s/a/b/ notes.txt",
+        "sed --in-place=.bak s/a/b/ notes.txt",
+        "sed -ni s/a/b/p notes.txt",
+    ):
+        d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
+        assert d["decision"] == "force_ask", cmd
+        assert "ctx rewrite" in d["reason"], cmd
+        assert "rewrite" not in d, cmd  # mutation is never silently rerouted
+
+
+def test_awk_inplace_force_asks_readonly_steers(tmp_path):
+    d = _classify(
+        "run_command",
+        {"CommandLine": "gawk -i inplace '{print}' notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d["decision"] == "force_ask" and "ctx rewrite" in d["reason"]
+    # Read-only awk with a program text carries `{}` → the compound path:
+    # force_ask, steered into a bounded shell capture (mutation-free).
+    d2 = _classify(
+        "run_command",
+        {"CommandLine": "awk '{print $1}' notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d2["decision"] == "force_ask"
+    assert d2["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --shell -- ")
+    # Braceless read-only awk (-f progfile) takes the plain-argv rung.
+    d3 = _classify(
+        "run_command",
+        {"CommandLine": "awk -f prog.awk notes.txt", "Cwd": str(tmp_path)},
+        tmp_path,
+    )
+    assert d3["decision"] == "deny"
+    assert d3["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run -- awk")
+
+
 # ----------------------------------------------------------- read rewrites
 def test_oversized_read_bounded_with_limit_under_auto(tmp_path):
     big = tmp_path / "big.txt"
@@ -172,8 +254,11 @@ def test_oversized_read_bounded_with_limit_under_auto(tmp_path):
     assert "20000 bytes" in d["rewrite"]["reason"]
     assert "ctx get repo:" in d["rewrite"]["reason"]
     out = _invoke_hook(_payload({"file_path": str(big)}, tmp_path, tool_name="Read"))
-    assert out["decision"] == "allow"
-    assert out["updatedInput"]["limit"] == 240
+    # A field rewrite (limit injection) has no command to name, so the deny
+    # reason carries the canonical explanation and the retrieval address.
+    assert out["decision"] == "deny"
+    assert "ctx get repo:" in out["reason"]
+    assert "updatedInput" not in out
 
 
 def test_oversized_read_denied_under_steering_deny(tmp_path):

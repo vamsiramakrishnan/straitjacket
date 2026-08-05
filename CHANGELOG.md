@@ -4,6 +4,618 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [Unreleased]
+
+### The prefix budget is measured, not narrated
+
+**What the harness actually costs a session: ~708 tokens.** Not the ~3,800 an
+earlier reading of this module produced.
+
+`prefix_assets()` tracks five cache-keyed texts, and only some are resident in
+every prompt. That distinction lived in a docstring, and the docstring was
+misread: summing all five counts the 2,586-token skill body (loaded only when
+the skill triggers) and the whole 638-token explorer agent (only its
+description enters the parent prompt; the body travels with the subagent). The
+result was a **5.4× overstatement of this project's own overhead**, in the
+direction that makes it look worse.
+
+Fixed at the root rather than in prose. The split is now data —
+`RESIDENT_ASSETS` and `DEFERRED_ASSETS` — with `resident_bytes()` and
+`budget_report()` reading it, and `tests/test_prefix_budget.py` holding it to
+the published numbers. A new prefix asset must be classified or the suite
+fails, so the budget cannot silently stop describing reality.
+
+The resident total also gains a **ceiling**: under 1,000 tokens, asserted.
+That is the number a user pays on every session in every repository forever,
+so growth in it should require someone to raise the limit on purpose.
+
+Also corrected below: an entry that claimed a cold-cache cost for a skill-body
+edit that is not prefix-resident.
+
+### `q` reaches the bounded tier, and the replacement surface triples
+
+**Prompt-cache impact: `PREFIX_VERSION` 8 → 9** (the MCP tool description is a
+prefix asset). Same one-time cold-cache cost as the 7 → 8 bump below; users
+upgrading across both pay it once.
+
+**The composition algebra is now an MCP op.** `ctx q` — a total pipeline over
+typed record streams, 17 stages, joined by `|`, no loops, no recursion, hard
+8-stage cap — shipped CLI-only, on the recorded grounds that MCP wiring would
+churn the prefix asset. The cost of that deferral was that the sharpest
+turn-compressing surface in the harness (locate → narrow → read in *one* call
+rather than three round-trips) was reachable only by shelling out, while the
+bounded tier got the heavier `investigate` plan interface instead. One enum
+entry plus one options key is a far smaller prefix delta than the tool it was
+implicitly being weighed against, so: `op: "q"`, `options.pipeline`.
+
+Totality is the whole argument for why it is safe there — statically boundable
+cost is exactly the property `ctx py` lacks, and why py stays CLI-only. Bounds
+are inherited rather than re-implemented: `run_query` already bounds its render
+against `result_tokens`, which `_dispatch` tightens to the caller's
+`maxTokens`. A malformed pipeline **raises** rather than returning its teaching
+line as content — as content, a failure description reaches the model as a
+*successful* result, which is the fail-open shape this codebase keeps finding.
+
+**The replacement surface goes from 3 command shapes to 8.** rtk's breadth idea
+vendored: `head -n N`, `sed -n 'A,Bp'`, `wc -l`, `find -name`, and
+`ls -R`/`tree` now collapse to their bounded, addressed equivalents. This was
+never an architectural gap — a substitution only ships where a bounded `ctx` op
+means the *same* thing, and nobody had walked the common commands looking for
+those pairs.
+
+The bar is **equivalence, not plausibility**, and it earned its keep
+immediately: the first cut generated `corpus --glob X | files`, which is a type
+error (`corpus` already emits `files`; the `files` stage consumes `sites`), so
+every substituted `find` and `ls -R` would have handed the agent an invalid
+pipeline. The equivalence test caught it before it shipped.
+
+Most of `tests/test_substitute_common_commands.py` is negative cases,
+deliberately — a recogniser that fires too eagerly answers a question the
+operator did not ask, under their own command, which is this project's own
+complaint about the lossy filters. So `tail` is **not** handled (`ctx get` has
+no from-the-end window; any mapping would guess), `head -c` is not (byte mode
+is a different range unit), `find … -exec`/`-delete` are never rewritten (they
+have effects), and a flat `ls` is left alone (cheap and honest).
+
+Still unmeasured, and filed as `ctx debt`: which commands agents actually run.
+All five rungs were chosen by inspection — the same guessing the field scan
+criticised. A command-frequency corpus is the instrument that would replace it.
+
+### The solution ladder gains its missing rung — and a safety exemption
+
+**Prompt-cache impact: none — correcting an earlier claim in this entry.**
+This originally said the rule-13 edit cold-invalidates every prompt cache at a
+cost of ~56k tokens / ~$0.21 per model. That was wrong. Rule 13 lives in the
+skill **body**, which is loaded when the skill triggers and is *not*
+prefix-resident; the bump policy is "only when prefix-resident bytes change".
+The manifest needed regenerating, the version did not need bumping, and users
+pay nothing for this edit. `PREFIX_VERSION` still moved 7 → 8, which is
+harmless and is left in place rather than rewritten.
+
+The underlying mistake — reading "tracked as a cache-keyed asset" as
+"resident in every prompt" — is the same one that produced a 5.4×
+overstatement of this project's own per-session overhead. It is now fixed at
+the root: see *The prefix budget is measured, not narrated* below.
+
+A rung-by-rung audit of our ladder against the
+[Ponytail](https://www.alphamatch.ai/blog/ponytail-ai-coding-skill-2026)
+decision ladder (written up in `evals/field-devex-2026-08-02.md`) found we had
+adopted five of six rungs and were missing one: **"is there a native platform
+or runtime feature?"** — the rung that catches a hand-written helper for
+something the language or host already does. Added.
+
+Also added: an explicit **exemption list**. The ladder does not apply to trust
+boundaries, data loss, security, or accessibility; on those four, write the
+fuller version. Ponytail carries the same carve-out and we did not, which left
+a foreseeable failure where "prefer the one-liner" meets an input-validation
+path.
+
+Rung *order* deliberately still differs from Ponytail's: they check stdlib
+before installed dependencies, we check *reuse what exists* first. Reaching for
+`hashlib` when the repo already exposes a shared helper is the wrong move even
+though both are "simple" — not hypothetical, it is exactly the defect an
+automated reviewer found in this branch's rewrite guard.
+
+### Field scan: two neighbours added, two devex gaps admitted
+
+`evals/field-devex-2026-08-02.md` — desk research, explicitly not a
+head-to-head, and explicitly not permitted to move any published performance
+number. Adds **TokenSave** and **wozcode** to `docs/COMPARISONS.md` and records
+two places the field beats us:
+
+- **Distribution.** Every peer installs in one step from a published artifact;
+  we are `git clone` → `pip install -e .`. `ctx wrap setup` is the best
+  onboarding step in the field and is unreachable until that is fixed.
+- **Malleability.** Teaching the harness a new output family means editing
+  `src/ctx/digest/` and the `_PROFILES` tuple — carrying a fork. Maki's users
+  shape their agent from a user-space `init.lua`. A closed profile registry
+  caps a system whose whole thesis is that output families are diverse.
+
+Both are filed as `ctx debt`, not fixed here.
+
+### README and docs: the two surfaces you actually install
+
+The MCP server and the skill now have sections explaining what makes them
+*good*, not just what they are: one stable tool with an `op` discriminator
+(against the 40+-tool alternative, with the prefix-churn argument and the
+discoverability cost both stated), bounds declared in the schema *and* clamped
+at runtime, no execution surface, and — for the skill — progressive disclosure,
+trigger-condition descriptions, numbered scoreable rules, and the honest note
+that advisory means bypassable.
+
+### The call graph gets scope, a second language, and its disclosure back
+
+`ctx callers/callees/impact` were the only code verbs that did not ride the
+resolution ladder the rest of the harness already uses. They built a private
+index that bound a call to `foo` to *every* in-repo `def foo`, and the cost was
+measured on this repo: 152 of 2,964 definition names collide, putting **501 of
+3,313 definitions (15%) behind an ambiguous name**.
+
+Three defects fell out of that, all reproduced as regression tests in
+`tests/test_callgraph.py`:
+
+- **`callees` merged same-named definitions silently.** `ctx callees render`
+  unioned the callees of 22 unrelated `render` methods into one 31-call answer
+  — `statusline`'s `_fmt_usd` beside `jsonprof`'s `_dominant_array` — with no
+  note. `cmd_callers` emitted the ambiguity note; `cmd_callees` never did.
+- **A qualified query silently answered the unqualified question.**
+  `in_edges` was keyed by *unqualified* callee name, so
+  `ctx callers LogTemplateProfile.detect` returned 32 rows labelled "exact by
+  name", including `hosts.detect_all` — which calls the unrelated module-level
+  `hosts.detect`. Worse, narrowing the target to one definition is what
+  suppressed the ambiguity note, so disambiguating successfully hid the warning.
+- **`impact` disclosed nothing at all** and walked an unqualified frontier, so
+  one collision at depth 1 pulled its whole cone in: `ctx impact put_blob`
+  reported 1,902 reached out of 3,313 definitions.
+
+**Resolution is now tiered and its confidence is on every edge.** A call site
+binds to a definition in the calling file (`local`), else in a file the caller
+*directly* imports (`import`), else repo-wide (`repo`). Only the first two are
+stated as fact; `repo` edges are held back by default with their count and the
+`--unscoped` flag that resolves them (CONTRIBUTING §4). Direct, not transitive,
+is what discriminates: `ctx.hosts` *does* transitively reach
+`ctx.digest.logprof` through installer→hook→digest.
+
+Measured on this repo, `ctx callers LogTemplateProfile.detect`:
+
+| | v1 | v2 |
+|---|---|---|
+| rows | 32, labelled "exact by name" | 1 |
+| answer | incl. `hosts.detect_all` (wrong) | `detect_profile` `digest/__init__.py:61` |
+| ambiguity note | none | omission count + `--unscoped` |
+
+That single row is the same site `ctx refs LogTemplateProfile.detect` finds via
+jedi — the precise answer was already in the tree, and the call-graph verbs
+were the only ones not asking for it.
+
+**Nothing here is hand-rolled that a declared dependency already does.** Nodes
+outside Python come from `ctx.skeleton` (tree-sitter, 20 extensions,
+content-cached); call sites come from one ast-grep pattern (`$F($$$A)`) over
+the 16 languages `ctx.astgrep` already maps; the import graph is the one
+`ctx.repomap._grimp_edges` already resolves; traversal uses networkx when
+importable. Every rung is an existing optional extra with the stdlib `ast` path
+as the always-available fallback (CONTRIBUTING §1), and the rung in force is
+printed in the header of every answer.
+
+- **Polyglot edges** — the v0.15.0 note deferred tree-sitter breadth "pending a
+  measured win"; the win is that `ctx stats` on `native/ctx-hook-native/src/main.rs`
+  returned 13 symbols and spans while `ctx callers lexical_normalize` answered
+  *"no definition ... in workspace Python sources"*. It now returns both call
+  sites. Rust/Go/TypeScript covered by `tests/test_callgraph_polyglot.py`;
+  `CTX_CALLGRAPH_ENGINE=ast` pins the Python-only corpus.
+- **New `ctx impls`** — type hierarchy, the question `ctx q 'refs Profile |
+  group file'` could only approximate (30 rows mixing import lines with class
+  declarations and test files). `ctx impls Profile` returns the 14 subtypes
+  with coordinates, plus the inverse `extends:` direction.
+- **New `ctx cycles`** — circular imports between files, or mutual recursion
+  with `--calls`. Operational, not aesthetic: a circular import is why the
+  module fails to load. On this repo it finds 5 import cycles, including
+  `query → filesets → facts → query` (the last two lazy, inside functions, so
+  no single file reads as circular). Components come from Tarjan via networkx
+  when importable, else an **iterative** stdlib implementation — recursion
+  depth in Tarjan is the longest path, so the textbook recursive form turns a
+  5,000-file import chain from a diagnostic into a `RecursionError`. Both
+  engines are asserted to return identical output.
+  Call cycles use scoped edges only: an unscoped edge does not merely add a
+  row to a cycle search, it fuses unrelated components into one phantom cycle.
+- **Call-site lines on every caller row.** v1 printed the caller's *definition*
+  range, so seeing the actual call cost another read; two calls from one
+  function collapsed to one row. `digest_output` now shows both
+  `digest/__init__.py:249` and `:250`.
+- **First-party and test callers are grouped**, not interleaved: 26 of 37
+  `callers put_blob` rows were tests, sorted in among the 11 production callers
+  that were the answer.
+- **Per-file caching.** The cache key was one `stat_fingerprint` over the whole
+  corpus, so any edit rebuilt everything — 170 ms warm against **1,754 ms**
+  after a single-file touch, on the hot path of an agent that edits constantly.
+  Units are keyed per file: the same edit now costs **446 ms**, a 3.9× cut,
+  while covering 259 files instead of 95.
+- **`ctx refs` rejects an out-of-grammar target** instead of degrading to a
+  textual scan. Given `repo:<path>:<Symbol>` (which is `ctx def`'s grammar) the
+  ladder fell past SCIP and jedi to a word-boundary regex that matched the
+  symbol's own name inside the argument and returned argparse string literals
+  as "references". A degradation that turns a more precise question into a less
+  precise answer is worse than an error.
+
+#### Engine selection follows its own documentation again
+
+`ctx.skeleton._TS_GRAMMAR_MODULES` documents the individual grammar wheels as
+"the maintained, offline path", and the bundles (`tree_sitter_language_pack`,
+`tree_sitter_languages`) as lagging the core API and fetching parsers at
+runtime — a network 403 in a sandbox. Selection then tried the bundles
+**first**, so a stale bundle that merely imported outranked a current wheel.
+The order now matches the note; the bundles stay as the fallback for languages
+no wheel is declared for. Both directions are pinned in
+`tests/test_treesitter_backend.py`.
+
+Dependency floors now track the versions CI actually exercises rather than the
+oldest release that once worked: `tree-sitter>=0.25` (was `0.22`, against 0.26
+current), `ast-grep-py>=0.45` (was `0.37`), `jedi>=0.20`, `grimp>=3.15`,
+`networkx>=3.4`, and the grammar wheels to their current majors. The old floors
+permitted resolving an install two API generations behind anything under test.
+
+*Considered and declined, with a receipt:* `griffe` resolves class bases to
+canonical paths and would have been the obvious library for `ctx impls`. A
+differential run over every base in this repo found **zero disagreements** with
+the tier resolver already in place, while griffe costs 0.79 s of load, a new
+dependency, and Python-only coverage — the tier resolver answers for Rust, Go
+and TypeScript through the same path. `PyCG` was also evaluated and is
+unusable: 0.0.8 ships a `PyCG/` package directory whose own modules import
+`pycg`, so it fails at import.
+
+### Routing gains dimensions beyond price — and a provenance rule
+
+Routing chose between models on capability tier and price alone. Both are
+coarse: they cannot express that one model greps instead of dumping, or that
+the cheapest model per token was the most expensive arm in a real build.
+
+- **New `ctx/data/model-catalog.json` + `ctx.catalog`** carry specialities,
+  anti-specialities, latency class, measured throughput, benchmark slots and
+  this repo's own observed-behaviour receipts, overridable per repo with a
+  `.ctx-catalog.json` (merged per model, so tuning one does not restate the
+  table).
+- **Every quantitative claim carries a `source`**, enforced by
+  `lint_catalog()` and `tests/test_model_catalog.py`. Benchmarks ship *empty*
+  rather than invented: public scores for these model versions are not in this
+  repo's evidence base, and a fabricated number is indistinguishable from a real
+  one at the point of use while silently steering every routing decision.
+  `declared-heuristic` is a legitimate source value and means exactly that.
+- **Absent data reads as UNKNOWN, never as bad.** An unmeasured model scores
+  neutral rather than being deprioritised, and unknown latency sorts as
+  `moderate` rather than optimistically as `fast`.
+- Measured throughput ships for `gemini-3.6-flash` (91.3 output tok/s) and
+  `gemini-3.5-flash-lite` (58.8), both n=8 from isolated single-agent runs. The
+  Claude models are deliberately absent: the only wall-clock data here mixes
+  model time with Playwright grading, and publishing that as throughput would be
+  false precision.
+
+**Prompt-cache impact: `PREFIX_VERSION` 6 -> 7.** `SKILL.md` gained a surface
+section (skill vs CLI vs allowed MCP servers) and a progressive-disclosure index
+so a reference is loaded only when the task needs it. That rewrites the injected
+prefix once for every user — taken deliberately, because the index is what stops
+the new `references/model-catalog.md` from being read on every task.
+
+Breaking, taken deliberately while the user count is zero: two command names
+were wrong, so they were fixed at the source rather than described around.
+
+- **`ctx eval` is now `ctx py`.** It runs a Python script; `eval` reads as
+  shell-eval and taught the wrong thing every time an agent saw it. The hook's
+  teaching string, the skill, and all docs move with it.
+- **`ctx investigate` is gone; use `ctx plan run`.** Its own docstring said it
+  was "Same execution as `ctx plan run`, plus the epochal-control ledger" — one
+  behaviour behind two names. `plan run` absorbed the ledger and the
+  `--replans` / `--advise` flags; `investigate` survives where it is still the
+  right word: the artifact family and the `investigate/v1` digest an
+  investigation *produces*.
+- **Prompt-cache impact:** both names appear in cache-keyed prefix assets, so
+  `PREFIX_VERSION` goes 4 → 5 and every model's prompt prefix is rewritten once
+  on first use. Cost is one cold prefix per model; taken now precisely because
+  it is free today and would not be later.
+- `ctx --help` no longer lists 34 commands as a wall (see the CLI front-door
+  entry below); the count is now 33.
+
+## [0.31.0] - 2026-07-24
+
+Harness collaboration: `ctx wrap` stops knowing three hosts by name, and starts
+routing work across the harnesses it finds by what their models cost.
+
+- **M-M · Data-driven host registry** (`src/ctx/hosts.py`): one `HostSpec` per
+  coding-agent CLI states how to detect it on PATH, how to resolve its model,
+  which installer/wrapper wires it, and whether its output side can substitute
+  (enforced) or only nudge. Adding a host is a data edit. Each detected CLI is
+  joined to `ctx.pricing` so it carries a model→price tier. The three shipped
+  hosts move in verbatim; extra CLIs (Gemini, Cursor, aider, opencode) are
+  detected and priced but marked not-yet-harnessable rather than silently
+  dropped.
+- **`ctx wrap detect`** prints an installed/model/price table across every
+  registered CLI; **`ctx wrap setup` is now detection-driven** — it configures
+  the harnessable CLIs it finds and names the ones it skipped, while
+  **`ctx wrap all`** forces every supported host (the old behaviour). The
+  low-level `setup_hosts` primitive is unchanged.
+- **M-M · Harness collaboration orchestrator** (`src/ctx/orchestrator.py`,
+  `ctx orchestrate "<task>"`): **task coordination, not open-loop calling.** A
+  cheap coordinator — the cheapest installed harness priced by its *coordinator
+  model* (Antigravity on Gemini-flash-lite), guided by the routing skill —
+  splits the task into a `ctx.route/v1` DAG. Each node is routed by **capability
+  × price** at the *(harness, model)* level (`hosts.pick_model`) — the model that
+  clears the node's `min_tier` and covers its roles: explore/verify to an economy
+  model, implementation to a standard model, and the plan node to the frontier
+  flagship. The DAG is validated (acyclic, bounded, budgeted) and
+  **priced up front, shown, then run in a closed loop**: ready nodes run in
+  parallel waves; each dependent sees only its upstreams' `ctx.checkpoint/v1`
+  digests (addressed evidence, never raw bytes); a failed node escalates once to
+  a stronger harness; between waves the coordinator may patch the plan with
+  follow-up nodes. When no coordinator can run, a deterministic model-routed
+  fallback DAG (explore→plan→implement→verify) is used, so orchestration works
+  offline. Bounded by `max_waves` / `max_replans` / `budget_usd`; fail-open
+  throughout; a single installed harness degrades with zero claimed saving.
+- **Routing is by model, not just harness.** `HostSpec` carries a `models`
+  catalog — each harness runs several models spanning tiers (Claude:
+  opus-4.8/sonnet-4.6/haiku-4.5; Codex: gpt-5.6 sol/terra/luna; Antigravity:
+  gemini-3.1-pro/3.6-flash/3.5-flash-lite), researched from each CLI's model
+  list. `hosts.pick_model` chooses the `(harness, model)` that clears a node's
+  tier and covers its roles, with a `prefer` knob: **planning takes the frontier
+  flagship (Opus) via `prefer:"strong"`**, while **implementation is
+  complexity-adaptive** — `standard` (Gemini 3.6 Flash) for real work, `economy`
+  (Gemini 3.5 Flash-lite) for a simple edit (`[orchestrate] implement_tier`, or
+  the coordinator's per-task judgment). Routes deliberately per model even within
+  one harness (Claude-only: explore→Haiku, plan→Opus, implement→Sonnet). Coverage
+  scores on model roles (not host strengths, which had pulled work onto
+  broadly-tagged hosts). Nodes can pin `"host"`/`"model"`/`"prefer"`; escalation
+  bumps to a stronger model; the catalog is in the routing skill. New
+  gemini-3.6-flash / gemini-3.5-flash-lite price rows.
+- **Routing skill** (`references/harness-collaboration.md`): the `ctx.route/v1`
+  contract and capability×price routing rules, kept in lockstep with
+  `ROUTING_CONTRACT` so the coordinator behaves the same from the skill or the
+  inlined prompt.
+- **`[orchestrate]` config block** (`ctx.config.OrchestratePolicy`): closed-loop
+  bounds (`max_nodes`/`max_waves`/`max_replans`/`budget_usd`/`node_timeout`),
+  `fallback_only`, `confirm` gate, and per-node token estimates.
+- **Live cross-vendor collaboration on a real task, proven**
+  (`evals/live-collab-antigravity-claude-2026-07-24.md`): Gemini (Antigravity's
+  model, via the API) plans, Claude — running as-is with its own Edit/Bash tools,
+  no `ANTHROPIC_API_KEY` — implements from the plan's `checkpoint:` and runs the
+  test itself; a failing test goes **green**, verified outside the model. Real
+  tokens billed (~$0.11), both providers exercised, through the actual
+  `run_route` loop. Also fired the **failure-escalation** path on a real failure
+  (`--dangerously-skip-permissions` refused under root → node re-routed).
+  Surfaced and fixed a real gap: launch-time model ids differ from
+  display/pricing ids — Claude wants `haiku`, the Gemini API serves
+  `gemini-3.5-flash-lite`. Added `ModelChoice.cli_id` (`launch_id`), threaded
+  through `run_route`; Codex corrected to `codex exec` (flag order still
+  unverified — Codex absent).
+- **Offline receipt** (`evals/orchestrator-cost-routing-2026-07-24.md`): the
+  deterministic cost model, stated against multiple baselines honestly — routing
+  is ~79% under running the whole task on Opus, but **≈break-even vs a flat
+  Sonnet run** (the Opus plan node cancels the bulk savings). The mechanism is a
+  quality allocator (flagship money only on planning), not a dollar-saver against
+  a sane baseline. The full live billed A/B remains TO-BUILD.
+- Tests: `tests/test_hosts.py` (capability tiers, `pick_model` gating + prefer,
+  cheapest-coordinator), `tests/test_orchestrator.py` (route-IR validation —
+  cycles/unknown-deps/budget/node-cap, topological waves, deterministic priced
+  plan, coordinator JSON parse, and the closed loop — parallel handoff, failure
+  escalation, dependent-skip, bounded re-plan).
+- **MCP tool description now documents all 14 ops** (`mcp.py`): the `op` enum
+  declared 14 operations while the prose catalogue in the tool description
+  listed 9 — `callers`, `callees`, `impact`, `diff` and `investigate` were
+  callable but undiscoverable to a model reading the tool definition. Each now
+  carries a gloss alongside the existing nine, and
+  `test_tool_description_documents_every_enum_op` asserts every enum member is
+  described, so the catalogue cannot drift from the enum again.
+  **Cache impact:** the tool description is a prefix-resident asset, so
+  `PREFIX_VERSION` moves 5 → 6 and every user pays one cold prompt-cache write
+  per model on first use after upgrading.
+
+## [0.30.0] - 2026-07-21
+
+Building the toolchains that were "not available" — tree-sitter and SCIP.
+
+- **M-K4 · SCIP ingestion, shipped** (`scip_ingest.py`, `_vendor/scip_pb2`):
+  an opportunistic `index.scip` reader adds **precise, compiler-backed
+  references** at the top of the refs engine ladder (**SCIP (exact) →
+  jedi → ast**), disclosed per node (`ctx refs` / `code.refs` show `engine
+  scip (exact)`). `find_index` reads `index.scip` at the workspace root or
+  `$CTX_SCIP_INDEX`; the index is only read, never generated. The protobuf
+  runtime is the `[scip]` extra; the SCIP bindings are vendored
+  (`src/ctx/_vendor/scip_pb2.py` generated from the committed `scip.proto`);
+  either absent → the ingester degrades to None and the ladder falls
+  through — absence costs nothing. `resolve_refs` is now the single ladder
+  used by `ctx refs`, `ctx q refs`, and the `code.refs` op.
+  - **Precision receipt** (`evals/scip_precision.py` + `.md`): on an
+    ambiguity fixture (a name also in a comment, a string, and a shadowing
+    local), SCIP scores 100% precision / 0 false positives vs the textual
+    rung's 50% / 4 false positives. Tested with a committed real
+    `index.scip` (`tests/fixtures/scip_sample.scip`, from `scip-python`),
+    so CI needs only protobuf, not the indexer.
+- **Tree-sitter grammar-wheel backend** (`skeleton.py`): the skeleton
+  tier's tree-sitter extractor gains a third, offline-safe path —
+  individual `tree_sitter_<lang>` grammar wheels via the modern core API
+  (the bundle `tree-sitter-language-pack` fetches parsers at runtime, a
+  sandbox 403). It carries a JS/TS skeleton that stdlib `ast` cannot parse
+  and ctags need not. The `[code]` extra now pins the grammar wheels
+  (`tree-sitter-python/javascript/typescript`) instead of the unreliable
+  language-pack.
+- CI `full` job installs `.[dev,map,fast,code,scip]` so both new backends
+  are exercised, not just skipped. Suite: 994 passed (venv with all
+  extras); tests skip-if-absent so the minimal job stays green.
+
+## [0.29.0] - 2026-07-20
+
+Finishing the designed-not-built bucket (M-K/M-L), with receipts.
+
+- **`ctx ask` intent family completed** (`ask.py`, `plan_ops.py`, `cli.py`):
+  four new intents join locate/impact/diagnose. `trace` (structural call
+  path — refs → callers → callees → transitive reach) and `compare`
+  (behavioral run-diff via the new `evidence.diff` plan op) are observe-
+  class. `verify` (changes → related tests → run the suite) and `review`
+  (changes → symbols → tests → run → root-cause join + counterevidence)
+  are **execute-class**: CLI runs them, the bounded MCP tier rejects
+  `test.run` (`execute_on_observe_tier`), and each intent discloses its
+  class. New `--against`/`--command` flags; compare/verify slots teach when
+  missing. All seven compile deterministically to `ctx.plan/v1`.
+- **M-K3 `records_opportunity` ledger** (`hook.py`): a jq / `sort|uniq -c`
+  / awk-projection pipeline is detected, taught the `ctx q records`
+  collapse, and recorded to `.ctx-session-reads/records-adoption.jsonl` —
+  the demand denominator. (The jq physical compile target stays deferred:
+  pure speed, no capability gain.)
+- **M-K5 comby decline-corpus gate** (`plan_ops.py`): `ast.rewrite.preview`
+  now records `comby_candidate` entries (engine absent, or no structural
+  match) to `.ctx-session-reads/rewrite-declines.jsonl`. Instrumentation
+  ONLY — the comby rung stays unbuilt until this corpus shows real demand.
+- **M-K4 SCIP ingestion: deferred, with reason** — no SCIP toolchain or
+  protobuf in this environment to produce a real `.scip` test fixture, so
+  building an untested ingester is the speculative code the project
+  refuses. Recorded in docs/SUBSTRATE.md.
+- **Evals**: M-K2 scoped-scan receipt (`evals/corpus_scoped_scan.py` +
+  receipt) — corpus reduces the eligible set 178→9 files (94.9%), a 13.1×
+  ast-grep wall speedup even on the fast engine (the slow Semgrep arm is
+  declared, not run — Semgrep absent here). Plus a Sonnet addendum to the
+  3-arm diagnosis receipt: a stronger model adopts `ctx ask` once the card
+  is in context (as haiku did), but on a no-flood task adoption still
+  costs turns — the A/B/C payoff referee needs a flood-bearing task.
+- Skill/AGENTS teach all seven intents (skill BODY change — invocation-
+  loaded, no prefix-cache cost; manifest regenerated at PREFIX_VERSION 4).
+
+## [0.28.0] - 2026-07-20
+
+The skill catches up to the engines, plus a measured three-arm receipt.
+
+- **Skill vocabulary refresh** (`plugins/antigravity/skills/ctx-harness/`,
+  Codex `AGENTS.md` block): `SKILL.md` and `references/verbs.md` stopped at
+  the pre-M-J `run/search/get/stats` vocabulary. They now teach `ctx ask`
+  (intents locate/impact/diagnose), `ctx q` (the composition algebra incl.
+  `corpus`/`records`/`distinct`/`histogram`), and `ctx plan run`/`plan`.
+  **PREFIX_VERSION 3 → 4**: the skill body/frontmatter are prefix-resident,
+  so this is a one-time full-prefix cache rewrite per user (the injected-
+  prefix stability contract; `prefixassets.py` manifest regenerated).
+- **Claude Code teaching surface** (`installer.py`): `install_claude` now
+  upserts a compact ctx verb card into the workspace `CLAUDE.md` (marker-
+  delimited, idempotent, mirroring the Codex `AGENTS.md` block). Measured
+  gap — the shipped verbs had no teaching surface on Claude Code, so agents
+  never invoked them (see the receipt below); with the card in context,
+  they do.
+- **Three-arm diagnosis receipt** (`evals/ask_diagnose_3arm.py`,
+  `evals/ask-diagnose-3arm-2026-07-20.md`): real coding agents (Haiku),
+  naive vs Headroom vs straitjacket vs straitjacket+card, on a seeded
+  single-bug diagnosis with a model-free grader. Findings: on a no-flood
+  task all arms solve it and containment is bounded overhead (the expected
+  low-complexity regime); and the vocabulary is adopted only when it
+  reaches the agent (0 `ctx ask`/`ctx q` bare; both invoked once the card
+  is in `CLAUDE.md`). Reusable 3/4-arm harness with a transcript-derived
+  adoption counter.
+
+## [0.27.0] - 2026-07-20
+
+The `ctx ask` wave (ROADMAP M-L, docs/ASK.md): a repository question
+compiles into a typed intent preset — a frozen `ctx.plan/v1` template
+with typed slots — executed on the shipped plan tier. Collapses the
+*decision cost* of exploration (which verbs, in what order) the way M-J
+collapsed its *turn cost*. The adopted core of an external retrieval
+proposal, audited: the natural-language parser, `reveal`/`audit` verbs,
+the whole-surface rebrand, and the entity/relation ontology were cut;
+what shipped is the elegant, testable spine.
+
+- **Phase 0 · thin observe ops** (`plan_ops.py`):
+  - `evidence.failures` — failure census from CAPTURED facts, never a
+    rerun. Freshness against the current generation is computed and
+    DECLARED: stale facts carry `fresh: false` + a note proposing (never
+    running) a refresh — the observe invariant made legible, using the
+    same `generation_hash` semantics as the rest of the system.
+  - `code.symbols` — structured symbol rows (identity · kind · range ·
+    span) from skeleton-derived facts; census before detail, no outline
+    text. An input warms facts for exactly those files (content-keyed).
+  - `code.context` — terminal bounded materialization (sites get
+    line±context, symbols their clamped range); emits `text`, the
+    refinement boundary at the plan tier.
+- **Phase 1 · intents + `ctx ask`** (`ask.py`, `cli.py`): `locate`,
+  `impact`, `diagnose` as deterministic slot→`ctx.plan/v1` presets
+  (`json.dumps(sort_keys=True)` ⇒ stable plan id ⇒ stable node-cache
+  keys). **No natural-language parser**: `--intent` is a flag; the
+  subject is `--symbol` or the question's sole identifier-shaped token
+  (dotted/snake/CamelCase — capitalized English is skipped), inferred
+  only when unambiguous and always disclosed. A missing/ambiguous slot
+  is a teaching error that SUGGESTS an intent and never guesses-and-runs.
+  The interpretation (`intent:`/`subject:`) rides above the digest, never
+  behind `--trace`. `ctx ask "q" --intent <i> [--symbol X] [--run r]
+  [--depth N] [--plan]`.
+- Every intent is observe-class end to end (diagnose reads captured
+  failures, never reruns); counterevidence is a structural join node
+  (rendered even when empty); the only text-emitting node is
+  `code.context` (bytes materialize once, terminally — the closure law).
+- Verified end to end: on a seeded regression (`raise` in a changed
+  function, its failing run captured), `ctx ask --intent diagnose` names
+  the culprit symbol with plane attribution in one digest, no rerun.
+- Tests: `test_ask.py` (compiler determinism, teaching-not-guessing,
+  no-rerun invariant at compile time and end to end, freshness
+  declaration, terminal materialization). Suite 968 passed / 0 failed.
+
+## [0.26.0] - 2026-07-20
+
+The substrate wave (ROADMAP M-K, docs/SUBSTRATE.md): the operator classes
+beneath the semantic layers, from the audited external "evidence algebra"
+proposal. Phases K1–K3 + K5.3 shipped; K4 (SCIP) and K5 (comby, gated on a
+decline corpus) remain designed; K6 (watch warming) waits for the broker.
+
+- **M-K1 · span-precise sites** (`rg_engine.py`, `search.py`, `query.py`):
+  search results carry 1-based half-open `[col_a, col_b)` character
+  columns — captured from the rg `--json` submatches already on the wire,
+  and from `finditer` spans in the Python engine (leftmost match per line,
+  parity by construction; pattern-index recovery is span-anchored, the
+  whole-line re-match demoted to labeled fallback). Every `ctx search`
+  emission now mints a `ctx.search/v1` result blob (`result: blob:<id>`)
+  so a search is citable as one handle — engine parity extends to
+  byte-identical blobs.
+- **M-K2 · the file-set algebra** (`filesets.py`, new): the missing
+  `file_select` operator class. `ctx q 'corpus [--ext E]… [--glob G]…
+  [--exclude G]… [--changed] [--max N]'` and the `repo.files` plan op
+  emit a bounded eligible file set with a coverage receipt (`considered ·
+  selected · engine [· gen]`) that survives combinators and rides the
+  minted payload. Engine ladder git ls-files → **fd** (opportunistic, run
+  `--no-ignore` so `ws.is_ignored` stays the single ignore authority —
+  listings byte-identical across engines by construction;
+  `CTX_FILES_ENGINE` kill-switch) → os.walk. `--changed` binds to the
+  generation snapshot, never mtime (SUBSTRATE §2.4). Scoping
+  `semantic.*` to a `repo.files` result confines the engine to the
+  selected set — *select files before scanning*.
+- **M-K3 · the records algebra** (`query.py`): `records <run:|blob:>
+  [--jsonl] [--pointer /p]` opens stored JSON/JSONL artifacts (compiler
+  output, test JSON, SARIF, lockfiles) as the `records` kind, where the
+  shipped combinators plus new total stages `distinct <field>` and
+  `histogram <field> [--buckets N]` (numeric buckets or categorical
+  census, capped with declared omission) absorb the jq class without
+  importing the jq language. All four new stages carry derived closure
+  classes; the digest-closure pins extend to them.
+- **M-K5.3 · text-tool steering** (`hook.py`): `sed`/`awk`-family
+  commands leave the unknown-command limbo. Read-only invocations steer
+  into bounded `ctx run` capture like grep/find; **in-place** invocations
+  (`sed -i`, `gawk -i inplace` — detected in plain argv and inside
+  compound expressions, which is where every `{…}` awk program lands)
+  force_ask with a preview-first remediation and are never auto-rewritten
+  into a capture that would still mutate files.
+- Tests: `test_filesets.py` (engine parity incl. fd skip-if-absent,
+  generation-bound `--changed`, receipts), `test_substrate.py` (span
+  blobs, records/distinct/histogram, totality), closure pins, rg/python
+  column-parity extension, sed/awk steering cases.
+- **Word-anchored pytest detection** (`pytestprof.py`, `facts.py`): the
+  profile claim and the facts-tier family detection matched `"pytest"`
+  as a raw substring of the joined argv, so a command whose INTERPRETER
+  lives under a pytest-named directory (uv tool shims:
+  `…/tools/pytest/bin/python -c …`) or whose args carry pytest-named
+  paths (`/tmp/pytest-of-root/…`) was misclaimed as a test run — the
+  replay doctrine's "a file containing test markers is not a test run",
+  violated at birth. Detection is now word-anchored (program basename or
+  `-m` module target; never an interior path component), shared via
+  `argv_invokes_pytest`, and regression-pinned.
+- **Environment-robust fixtures**: three fixtures invoked a bare
+  `python3 -m pytest` (the one interpreter NOT guaranteed to carry
+  pytest) — `test_plan_exec`'s diagnosis plan, `evals/plan_collapse.py`'s
+  plan arm (its other two arms already used `sys.executable`), and
+  `test_reflex`'s ground-truth run — all now `sys.executable`. The
+  scaffold-slim overhead budget in `test_lint_and_gain` is now relative
+  to the rendered command line (a venv-deep interpreter path must not
+  fail a fixed byte budget). Full suite green under both a clean venv
+  and a uv-tool pytest shim.
+
 ## [0.25.0] - 2026-07-19
 
 The compiled-evidence-plans wave (ROADMAP M-J, docs/EVIDENCE-PLANS.md):
@@ -48,7 +660,7 @@ executes it locally; one causally organized digest returns.
 - **EvidenceGraph v2 relations** (additive): typed `(from, relation, to)`
   triples from a closed vocabulary; a graph without relations serializes
   byte-identically to v1, so every pinned golden and cache key holds.
-- **CLI + MCP**: `ctx plan validate|price|run|ops`, `ctx investigate`
+- **CLI + MCP**: `ctx plan validate|price|run|ops`, `ctx plan run`
   (epochal control: replans beyond the `[plan]` allowance get a declared
   banner + reflex-plane ledger event, never a block). MCP op
   `investigate` accepts observe-class plans only; execute-class ops are
@@ -284,7 +896,7 @@ keeping what a raw interpreter sandbox drops: provenance. Maki's script and
 its intermediates vanish into the chat log with no address; here every
 piece keeps one.
 
-- **`ctx eval`** (`ctx.pyeval`): a Python script runs under birth-gate
+- **`ctx py`** (`ctx.pyeval`): a Python script runs under birth-gate
   capture and only its bounded digest returns. The script is stored first
   as a content-addressed blob, cited in the digest header
   (`script blob:<id>`) and in the final manifest (`eval.script`) —

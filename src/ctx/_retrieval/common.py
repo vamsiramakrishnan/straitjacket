@@ -10,7 +10,7 @@ import re
 
 from ctx.refs import Ref, parse_ref
 from ctx.store import Store
-from ctx.textutil import bounded, sanitize_for_model
+from ctx.textutil import _redaction_of, bounded, redact, sanitize_for_model
 from ctx.workspace import Workspace
 
 
@@ -18,11 +18,42 @@ class RetrievalError(Exception):
     pass
 
 
-def _emit(ws: Workspace, text: str, budget_tokens: int, continuation: str | None = None) -> str:
-    text, redactions = sanitize_for_model(text, ws.config.redaction.patterns)
+def _emit(
+    ws: Workspace,
+    text: str,
+    budget_tokens: int,
+    continuation: str | None = None,
+    *,
+    handle: str | None = None,
+    exact: bool = False,
+) -> str:
+    """Bound a retrieval result, keeping a way back to the rest of it.
+
+    ``continuation`` is set when the *caller* decided to cut (a line span it
+    clipped itself). ``handle`` covers the other cut: ``bounded`` trimming on
+    the token budget, which the caller cannot predict. Without it a
+    budget-truncated result ends at the bare truncation note, with no address
+    — the same defect fixed on the digest side, and it lives here too.
+
+    ``exact`` marks an EXACT-BYTES answer (``ctx get --bytes``). Control
+    stripping is a display nicety everywhere else and the thing that makes
+    this answer wrong: it silently deletes every byte below 0x20 from a slice
+    the caller asked for verbatim. Redaction still runs -- it is a security
+    control, not a presentation one, and it announces itself when it fires,
+    so the one case where an exact answer is not byte-exact says so.
+    """
+    if exact:
+        # The exact path skips control STRIPPING, not redaction -- but it goes
+        # through the same switch, so `[redaction] enabled = false` means the
+        # same thing here as everywhere else.
+        enabled, patterns = _redaction_of(ws.config.redaction)
+        text, redactions = redact(text, patterns) if enabled else (text, [])
+    else:
+        text, redactions = sanitize_for_model(text, ws.config.redaction)
     if redactions:
         text += "\nredaction: applied [" + ", ".join(redactions) + "]"
-    return bounded(text, budget_tokens, continuation)
+    fallback = f"ctx get {handle}" if handle else None
+    return bounded(text, budget_tokens, continuation, truncation_continuation=fallback)
 
 
 def _parse(ref_text: str) -> Ref:

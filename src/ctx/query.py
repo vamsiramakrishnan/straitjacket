@@ -4,7 +4,7 @@ A TOTAL pipeline language over typed record streams: stages joined by
 ``|``, no loops, no recursion, hard cap of 8 stages. Totality is by
 construction — every query terminates and its cost is statically
 boundable, which is exactly WHY this algebra is safe for the bounded MCP
-tier later, where arbitrary-code ``ctx eval`` can never live. This wave
+tier later, where arbitrary-code ``ctx py`` can never live. This wave
 deliberately ships NO MCP wiring (prefix-asset churn); the CLI verb is
 the only entry point.
 
@@ -60,6 +60,10 @@ orderings everywhere; content-addressed provenance only).
 
 from __future__ import annotations
 
+import math
+
+from ctx import bounds
+
 import difflib
 import json
 import os
@@ -68,11 +72,11 @@ import shlex
 import tempfile
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable
 
+from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
-from ctx.textutil import bounded, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, bounded, fmt_int, short_id
 from ctx.workspace import Workspace
 
 # ------------------------------------------------------------------ model
@@ -91,8 +95,6 @@ DEFAULT_ROW_CAP = 200
 GET_SITE_CAP = 24  # ``get`` fans out one bounded slice per site
 OUTLINE_FILE_CAP = 12  # ``outline`` fans out one outline per file
 RENDER_CAP = 100  # rows rendered inline; remainder declared + addressable
-_LINE_CAP = 160
-_LEDGER_DIR = ".ctx-session-reads"  # house ledger dir: bookkeeping, never evidence
 
 
 class QueryError(Exception):
@@ -115,6 +117,21 @@ class Stream:
     omitted: int = 0  # rows dropped by declared caps anywhere upstream
     groups: list[tuple[str, int]] | None = None  # set by ``group``
     note: str | None = None  # runtime empty-result hint (facts note channel)
+    # Selection receipt (M-K2, additive): a source that SELECTS from a larger
+    # population (``corpus``) attaches {considered, selected, engine, …} here;
+    # the executor carries it through combinators and the renderer declares it.
+    coverage: dict | None = None
+    # Why rows were dropped, and the flag that gets them back. Appended LAST
+    # on purpose: Stream is constructed positionally in places
+    # (``Stream("sites", [], 3, [("k", 3)])``), and a field inserted mid-list
+    # silently rebinds those arguments -- which is what the back-compat test
+    # for this dataclass exists to catch, and did.
+    #
+    # The default tail ("narrow with where/top") is right for a row cap and
+    # wrong for everything else: callers/callees/impact drop UNSCOPED edges,
+    # which no narrowing recovers. A drop declared with the wrong remedy is
+    # only half-declared.
+    omitted_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -244,6 +261,13 @@ _EXAMPLES: dict[str, tuple[str, ...]] = {
     "impact": ("impact TokenBucket --depth 3",),
     "search": ("search TODO --glob 'src/*.py' | files",),
     "files": ("search TODO --glob 'src/*.py' | files",),
+    "corpus": (
+        "corpus --ext py --changed | outline",
+        "corpus --glob 'src/**' --max 20",
+    ),
+    "records": ("records run:<id>#stdout --jsonl | group level | count",),
+    "distinct": ("search TODO --glob 'src/*.py' | distinct file",),
+    "histogram": ("search TODO --glob 'src/*.py' | histogram file",),
     "outline": ("search TODO --glob 'src/*.py' | files | outline",),
     "get": ("refs TokenBucket | get --context 5",),
     "group": ("search TODO --glob 'src/*.py' | group file | count",),
@@ -363,8 +387,43 @@ def parse_query(text: str) -> list[tuple[str, list[str]]]:
 
 
 # ------------------------------------------------------------ arg helpers
+#: Flags that take NO value. Everything else in a stage's arg list consumes
+#: the token after it, which is what makes that token not a positional.
+#: Keeping the boolean set (small, enumerable) rather than the value set
+#: means a new value-taking flag is handled correctly by default.
+#: tests/test_query.py pins this against the flags the stages actually read.
+_BOOLEAN_FLAGS = frozenset({"--changed", "--jsonl", "--unscoped"})
+
+
+def _positionals(args: list[str]) -> list[str]:
+    """The tokens that are genuinely positional.
+
+    ``[a for a in args if not a.startswith("--")]`` is a DIFFERENT parse of
+    the same list than ``_flag`` performs: ``_flag`` knows the token after
+    ``--depth`` is that flag's value, and this did not. So
+    ``impact --depth 3 run_query`` handed ``"3"`` to the stage as its symbol
+    and dropped the real one -- silently, with no error, returning a
+    plausible empty answer for a symbol nobody asked about. Flag order is
+    not something a caller should have to know.
+
+    Two parsers over one argument list is the same defect shape as two glob
+    dialects over one path: each is locally reasonable and they disagree.
+    """
+    out: list[str] = []
+    expect_value = False
+    for a in args:
+        if expect_value:
+            expect_value = False
+            continue
+        if a.startswith("--"):
+            expect_value = a not in _BOOLEAN_FLAGS
+            continue
+        out.append(a)
+    return out
+
+
 def _need_arg(args: list[str], stage: str, what: str) -> str:
-    pos = [a for a in args if not a.startswith("--")]
+    pos = _positionals(args)
     if not pos:
         raise QueryError(f"ctx q: stage {stage!r} needs {what}")
     return pos[0]
@@ -382,27 +441,51 @@ def _flag(args: list[str], name: str, default, cast=str):
     return default
 
 
+def _multi_flag(args: list[str], name: str) -> list[str]:
+    """All values of a repeatable ``--flag value`` pair, in order."""
+    out: list[str] = []
+    for i, a in enumerate(args):
+        if a == name:
+            # A following FLAG is a missing value, not a value. _flag has
+            # always refused this for singular flags; _multi_flag swallowed
+            # the next token whatever it was, so `--glob --ext py` silently
+            # globbed for the literal string "--ext".
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt is None or nxt.startswith("--"):
+                raise QueryError(f"ctx q: {name} needs a value")
+            out.append(nxt)
+    return out
+
+
 # ------------------------------------------------------------ source stages
 def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "refs", "a <Symbol>")
     from ctx import codeverbs
 
-    sites = None
-    if codeverbs._select_engine() == "jedi":
-        try:
-            sites, _ = codeverbs._jedi_refs(qc.ws, symbol)
-        except Exception:
-            sites = None
-    if sites is None:
-        sites, _ = codeverbs._ast_refs(qc.store, qc.ws, symbol, None)
+    # The shared engine ladder: SCIP (precise) → jedi → ast (docs/SUBSTRATE
+    # §M-K4). The engine label rides the stream note so the code.refs op and
+    # the digest can disclose which tier answered.
+    sites, engine = codeverbs.resolve_refs(qc.store, qc.ws, symbol)
     uniq: dict[tuple[str, int], str] = {}
     for rel, line, text in sites:
         uniq.setdefault((rel, line), text)
     rows = [
-        {"file": rel, "line": line, "text": text.strip()[:_LINE_CAP], "symbol": symbol}
+        {"file": rel, "line": line, "text": text.strip()[:EVIDENCE_LINE_CHARS], "symbol": symbol}
         for (rel, line), text in sorted(uniq.items())
     ]
-    return Stream("sites", rows)
+    out = Stream("sites", rows)
+    out.note = f"engine: {engine}"
+    return out
+
+
+#: The remedy for an unscoped drop. `ctx callers/impact` already declare this
+#: tail via callgraph._omission_note; the q stages filtered the same edges and
+#: said nothing, so `ctx ask --intent impact` reported 0 rows for a symbol with
+#: hundreds of real callers -- an empty answer that looked like a fact.
+_UNSCOPED_REASON = (
+    "unscoped: name matched repo-wide but the caller's file neither defines "
+    "nor imports the target; resolve with --unscoped"
+)
 
 
 def _callgraph(qc: _Ctx):
@@ -412,62 +495,75 @@ def _callgraph(qc: _Ctx):
 
 
 def _stage_callers(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """Rows carry the CALL-SITE line, not the caller's definition line: a
+    site stream whose coordinates point at a `def` cannot be zoomed to the
+    call it claims to have found. Unscoped edges are excluded — a query
+    algebra row is consumed as a fact by later stages."""
     symbol = _need_arg(args, "callers", "a <Symbol>")
+    # The flag the omission note tells the reader to use. It was registered
+    # as a recognized token and never READ, so `ctx q 'callers X --unscoped'`
+    # returned the scoped answer again -- the remedy the tool prints being a
+    # no-op is worse than no remedy, because it looks answered.
+    unscoped = "--unscoped" in args
     cg, g = _callgraph(qc)
-    name, targets = cg._resolve(g, symbol)
     rows = []
-    if targets:
-        for qual in g.in_edges.get(name, []):
+    hidden = 0
+    for t in cg._resolve_target(g, symbol):
+        for qual, line, tier in g.in_edges.get(t, []):
             n = g.nodes.get(qual)
-            if n is not None:
-                rows.append({"file": n.rel, "line": n.lineno, "symbol": qual})
+            if n is None:
+                continue
+            if tier == cg._TIER_REPO and not unscoped:
+                hidden += 1  # declared below, never silently dropped
+                continue
+            rows.append({"file": n.rel, "line": line, "symbol": n.qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_callees(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "callees", "a <Symbol>")
     cg, g = _callgraph(qc)
-    _, targets = cg._resolve(g, symbol)
     rows = []
     seen: set[str] = set()
-    for t in targets:
-        for callee in g.out_edges.get(t.qual, []):
-            for n in g.defs_by_name.get(callee, []):
-                if n.qual not in seen:
-                    seen.add(n.qual)
+    hidden = 0
+    unscoped = "--unscoped" in args
+    for t in cg._resolve_target(g, symbol):
+        for _name, _line, quals, tier in g.out_edges.get(t, []):
+            if tier == cg._TIER_REPO and not unscoped:
+                hidden += 1
+                continue
+            for qual in quals:
+                n = g.nodes.get(qual)
+                if n is not None and qual not in seen:
+                    seen.add(qual)  # node id: two files' same-named defs are two rows
                     rows.append({"file": n.rel, "line": n.lineno, "symbol": n.qual})
     rows.sort(key=lambda r: (r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     symbol = _need_arg(args, "impact", "a <Symbol>")
-    depth = max(1, min(_flag(args, "--depth", 6, int), 6))
+    depth = min(bounds.count(_flag(args, "--depth", 6, int)), 6)
     cg, g = _callgraph(qc)
-    name, targets = cg._resolve(g, symbol)
     rows: list[dict] = []
-    if targets:
-        reached: dict[str, int] = {}
-        frontier = {name}
-        for d in range(1, depth + 1):
-            nxt: set[str] = set()
-            for nm in frontier:
-                for caller in g.in_edges.get(nm, []):
-                    if caller not in reached:
-                        reached[caller] = d
-                        nxt.add(caller.split(".")[-1])
-            frontier = nxt
-            if not frontier:
-                break
-        for qual, d in reached.items():
-            n = g.nodes.get(qual)
-            if n is not None:
-                rows.append(
-                    {"file": n.rel, "line": n.lineno, "symbol": qual, "depth": d}
-                )
+    targets = cg._resolve_target(g, symbol)
+    unscoped = "--unscoped" in args
+    scoped = cg._reachable(g, targets, depth, unscoped)
+    for qual, d in scoped.items():
+        n = g.nodes.get(qual)
+        if n is not None:
+            rows.append({"file": n.rel, "line": n.lineno, "symbol": n.qual, "depth": d})
     rows.sort(key=lambda r: (r["depth"], r["file"], r["line"], r["symbol"]))
-    return Stream("sites", rows)
+    # Reachability COMPOUNDS the omission: one dropped edge at depth 1 hides
+    # its whole cone, so the honest count is the difference between the two
+    # walks, not the number of edges skipped. A second bounded BFS is the
+    # only way to say a true number.
+    hidden = len(set(cg._reachable(g, targets, depth, True)) - set(scoped))
+    return Stream("sites", rows, omitted=hidden,
+                  omitted_reason=_UNSCOPED_REASON if hidden else None)
 
 
 def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
@@ -489,12 +585,145 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         # execution.py excludes it from generation hashing likewise) — and
         # since the q dry-run guard rail records pipeline texts there, a
         # ledger-scanning search would match its own guard state.
-        if _LEDGER_DIR in str(t.label).replace("\\", "/").split("/"):
+        if LEDGER_DIR_NAME in str(t.label).replace("\\", "/").split("/"):
             continue
         for i, ln in enumerate(t.text.splitlines(), start=1):
-            if rx.search(ln):
-                rows.append({"file": t.label, "line": i, "text": ln.strip()[:_LINE_CAP]})
+            m = rx.search(ln)
+            if m:
+                # Span-precise sites (M-K1): 1-based [col_a, col_b) character
+                # columns of the first match on the line.
+                rows.append(
+                    {
+                        "file": t.label,
+                        "line": i,
+                        "col_a": m.start() + 1,
+                        "col_b": m.end() + 1,
+                        "text": ln.strip()[:EVIDENCE_LINE_CHARS],
+                    }
+                )
     return Stream("sites", rows)
+
+
+def _stage_corpus(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """M-K2 ``file_select``: the bounded eligible file set, with a coverage
+    receipt. Engines (git → fd → walk) live in ``ctx.filesets``."""
+    from ctx import filesets
+
+    rows, coverage, omitted = filesets.select(
+        qc.ws,
+        exts=_multi_flag(args, "--ext"),
+        globs=_multi_flag(args, "--glob"),
+        excludes=_multi_flag(args, "--exclude"),
+        changed="--changed" in args,
+        max_files=_flag(args, "--max", None, int),
+    )
+    out = Stream("files", rows, omitted=omitted)
+    out.coverage = coverage
+    if not rows and "--changed" in args:
+        out.note = (
+            "no changed files this generation — clean tree, or a non-git "
+            "workspace (changed binds to generation facts, never mtime); "
+            "drop --changed to select from the full corpus"
+        )
+    return out
+
+
+def _json_pointer(doc, pointer: str):
+    """RFC 6901, via the one implementation in :mod:`ctx.textutil`."""
+    from ctx.textutil import json_pointer
+
+    return json_pointer(doc, pointer)
+
+
+def _records_rows(text: str, *, jsonl: bool, pointer: str | None) -> list[dict]:
+    """Typed rows from a stored JSON/JSONL artifact. Dict items become rows
+    verbatim; scalars/arrays are wrapped as ``{"value": item}``."""
+
+    def _norm(items) -> list[dict]:
+        if isinstance(items, dict):
+            items = [items]
+        if not isinstance(items, list):
+            items = [items]
+        return [
+            it if isinstance(it, dict) else {"value": it}
+            for it in items
+        ]
+
+    if jsonl:
+        rows: list[dict] = []
+        for i, ln in enumerate(text.splitlines(), start=1):
+            if not ln.strip():
+                continue
+            try:
+                obj = json.loads(ln)
+            except json.JSONDecodeError as e:
+                raise QueryError(
+                    f"ctx q: records --jsonl: line {i} is not JSON ({e.msg})"
+                ) from e
+            rows.extend(_norm(obj))
+        return rows
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError:
+        # One labeled retry as JSONL before failing: tool output is often
+        # JSON Lines without saying so.
+        try:
+            return _records_rows(text, jsonl=True, pointer=None)
+        except QueryError:
+            raise QueryError(
+                "ctx q: records: artifact is neither a JSON document nor JSON "
+                "Lines; for line-delimited streams pass --jsonl"
+            ) from None
+    if pointer:
+        from ctx.textutil import JsonPointerError
+
+        try:
+            doc = _json_pointer(doc, pointer)
+        except (JsonPointerError, KeyError, IndexError, ValueError) as e:
+            raise QueryError(
+                f"ctx q: records --pointer {pointer!r} does not resolve ({e})"
+            ) from e
+    return _norm(doc)
+
+
+def _stage_records_src(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """M-K3 ``record_transform`` source: open a stored artifact (run stream
+    or blob) as the ``records`` kind — compiler/test/SARIF/lockfile JSON
+    becomes queryable where it already lives, the store."""
+    handle = _need_arg(args, "records", "a <handle> (run:<id>[#stream] | blob:<id>)")
+    pointer = _flag(args, "--pointer", None)
+    jsonl = "--jsonl" in args
+    from ctx.refs import parse_ref
+
+    try:
+        ref = parse_ref(handle)
+    except Exception as e:
+        raise QueryError(f"ctx q: records: bad handle {handle!r} ({e})") from e
+    from ctx._retrieval.targets import _resolve_run_targets, _stream_text
+
+    try:
+        if ref.kind == "blob":
+            blob_id = qc.store.resolve_id(ref.id or "", kinds=("blob",))
+            text = _stream_text(qc.store, blob_id)
+        elif ref.kind == "run":
+            targets, _skipped = _resolve_run_targets(qc.store, ref)
+            if not targets:
+                out = Stream("records", [])
+                out.note = (
+                    f"{handle} has no text streams — pick one with "
+                    "#stdout/#stderr, or the run captured nothing"
+                )
+                return out
+            text = targets[0].text
+        else:
+            raise QueryError(
+                f"ctx q: records reads run:/blob: handles, got {ref.kind!r}"
+            )
+    except QueryError:
+        raise
+    except Exception as e:
+        raise QueryError(f"ctx q: records: cannot resolve {handle!r} ({e})") from e
+    return Stream("records", _records_rows(text, jsonl=jsonl, pointer=pointer))
 
 
 # ------------------------------------------------------- transform stages
@@ -589,7 +818,9 @@ def _stage_group(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 def _stage_top(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     raw = _need_arg(args, "top", "an <N>")
     try:
-        n = max(1, int(raw))
+        # bounds.count, not max(1, ...): `top 0` must yield zero rows. Flooring
+        # at 1 turned an explicit request for nothing into one row (ctx.bounds).
+        n = bounds.count(int(raw))
     except ValueError as e:
         raise QueryError(f"ctx q: top needs an integer, got {raw!r}") from e
     if stream.groups is not None:
@@ -609,6 +840,26 @@ def _stage_top(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 _WHERE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(!=|=|~)(.*)$")
 
 
+def _regroup(groups, rows):
+    """Recompute a group census from surviving rows, preserving group order.
+
+    ``groups`` is a census OF ``rows``; the moment a stage filters rows it
+    becomes a statement about data that is no longer there. Carrying it
+    through unchanged is how `where` fed a stale census to every stage after
+    it -- `top` picked groups by pre-filter rank and `count` reported
+    pre-filter totals, both silently. Emptied groups drop out; the surviving
+    order is the order they already had, so determinism is unaffected.
+    """
+    if groups is None:
+        return None
+    counts: dict = {}
+    for r in rows:
+        g = r.get("_group")
+        if g is not None:
+            counts[g] = counts.get(g, 0) + 1
+    return [(k, counts[k]) for k, _ in groups if counts.get(k)]
+
+
 def _stage_where(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     cond = _need_arg(args, "where", "a <field><op><value> (ops: = != ~)")
     m = _WHERE_RE.match(cond)
@@ -626,7 +877,8 @@ def _stage_where(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         keep = lambda r: val in str(r.get(fld, ""))  # noqa: E731
     rows = [r for r in stream.rows if keep(r)]
     out = Stream(stream.kind, rows, omitted=stream.omitted)
-    out.groups = stream.groups
+    # Derived state must not outlive its source (see _regroup).
+    out.groups = _regroup(stream.groups, rows)
     return out
 
 
@@ -636,6 +888,71 @@ def _stage_count(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     else:
         rows = [{"n": len(stream.rows)}]
     return Stream("records", rows, omitted=stream.omitted)
+
+
+def _stage_distinct(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """M-K3: the unique values of one field, sorted — ``sort -u`` as a
+    typed, closed stage."""
+    fld = _need_arg(args, "distinct", "a <field>")
+    vals = sorted({str(r.get(fld, "")) for r in stream.rows})
+    return Stream("records", [{fld: v} for v in vals], omitted=stream.omitted)
+
+
+_HISTOGRAM_BUCKETS = 10
+
+
+def _stage_histogram(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """M-K3: value distribution of one field. All-numeric values get
+    equal-width buckets; otherwise a categorical census sorted by
+    (-count, value), capped at the bucket count with declared omission."""
+    fld = _need_arg(args, "histogram", "a <field>")
+    n_buckets = bounds.count(_flag(args, "--buckets", _HISTOGRAM_BUCKETS, int))
+    if n_buckets == 0:
+        # Zero buckets is an empty census, not one bucket and not a crash.
+        # `max(1, ...)` used to hide this: it floored the request to a single
+        # bucket, which silently widened it. Routing through bounds.count made
+        # the zero real and exposed that the arithmetic below divides by this
+        # value -- a defensive floor doing load-bearing work by accident.
+        return Stream("records", [], omitted=stream.omitted)
+    raw = [str(r.get(fld, "")) for r in stream.rows]
+    nums: list[float] | None
+    try:
+        nums = [float(v) for v in raw] if raw else None
+    except ValueError:
+        nums = None
+    # `float("inf")` and `float("nan")` parse without raising, then poison
+    # every downstream arithmetic step: (hi - lo) is inf or nan, the bucket
+    # width follows, and int() of the result raises OverflowError out of a
+    # stage documented as always producing a bounded census. A field holding
+    # a non-finite value is not a numeric distribution -- fall back to the
+    # categorical census, which is total by construction.
+    if nums is not None and not all(math.isfinite(v) for v in nums):
+        nums = None
+    if nums:
+        lo, hi = min(nums), max(nums)
+        if lo == hi:
+            rows = [{"bucket": format(lo, "g"), "n": len(nums)}]
+            return Stream("records", rows, omitted=stream.omitted)
+        width = (hi - lo) / n_buckets
+        counts = [0] * n_buckets
+        for v in nums:
+            counts[min(n_buckets - 1, int((v - lo) / width))] += 1
+        rows = [
+            {
+                "bucket": f"{format(lo + i * width, 'g')}–{format(lo + (i + 1) * width, 'g')}",
+                "n": c,
+            }
+            for i, c in enumerate(counts)
+        ]
+        return Stream("records", rows, omitted=stream.omitted)
+    sizes: dict[str, int] = {}
+    for v in raw:
+        sizes[v] = sizes.get(v, 0) + 1
+    order = sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0]))
+    kept = order[:n_buckets]
+    omitted = stream.omitted + sum(c for _, c in order[n_buckets:])
+    rows = [{"bucket": k, "n": c} for k, c in kept]
+    return Stream("records", rows, omitted=omitted)
 
 
 # ------------------------------------------------------------ registration
@@ -649,6 +966,16 @@ register_stage("impact", _stage_impact, input_kinds=(), output_kind="sites",
                doc="impact <Symbol> [--depth N] — transitive callers, depth≤6")
 register_stage("search", _stage_search, input_kinds=(), output_kind="sites",
                doc="search <pattern> [--glob G] — regex over repo files")
+register_stage("corpus", _stage_corpus, input_kinds=(), output_kind="files",
+               doc="corpus [--ext E]… [--glob G]… [--exclude G]… [--changed] "
+                   "[--max N] — bounded eligible file set (git → fd → walk)",
+               empty_hint="no files selected — loosen --ext/--glob/--exclude, "
+                          "or drop --changed on a clean tree")
+register_stage("records", _stage_records_src, input_kinds=(), output_kind="records",
+               doc="records <handle> [--jsonl] [--pointer /p] — stored JSON/JSONL "
+                   "artifact as a typed record stream",
+               empty_hint="the artifact parsed to zero records — check the "
+                          "handle's stream (#stdout/#stderr) and --pointer")
 register_stage("files", _stage_files, input_kinds=("sites",), output_kind="files",
                doc="files — dedup sites to per-file counts")
 register_stage("outline", _stage_outline, input_kinds=("files",), output_kind="text",
@@ -663,6 +990,13 @@ register_stage("where", _stage_where, input_kinds=KINDS, output_kind=SAME,
                doc="where <field><op><value> — filter rows (= != ~substring)")
 register_stage("count", _stage_count, input_kinds=KINDS, output_kind="records",
                doc="count — row count, or per-group counts after group")
+register_stage("distinct", _stage_distinct, input_kinds=REPRESENTATION_KINDS,
+               output_kind="records",
+               doc="distinct <field> — unique values of a field, sorted")
+register_stage("histogram", _stage_histogram, input_kinds=REPRESENTATION_KINDS,
+               output_kind="records",
+               doc="histogram <field> [--buckets N] — numeric buckets or "
+                   "categorical census of a field")
 
 
 # ---------------------------------------------------------------- execution
@@ -719,7 +1053,7 @@ def _qdry_read(root) -> list[str]:
     problem (the guard rail degrades to silence, never to an error)."""
     try:
         doc = json.loads(
-            (Path(root) / _LEDGER_DIR / _QDRY_STATE).read_text(encoding="utf-8")
+            session_reads_path(root, _QDRY_STATE).read_text(encoding="utf-8")
         )
         dry = doc.get("dry") if isinstance(doc, dict) else None
         if isinstance(dry, list):
@@ -733,7 +1067,7 @@ def _qdry_write(root, dry: list[str]) -> None:
     """Atomic temp+rename write of the dry-pipeline state (house pattern:
     reflex.json). Fail-open — never raises."""
     try:
-        d = Path(root) / _LEDGER_DIR
+        d = session_reads_path(root)
         d.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"dry": dry[-Q_DRY_REMEMBER:]}, sort_keys=True)
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".q-dry-")
@@ -751,7 +1085,7 @@ def _qdry_ledger_append(root, pipeline: str) -> None:
     operational-only (house rule: the ledger minus ts is a pure function
     of the session's query sequence). Fail-open — never raises."""
     try:
-        d = Path(root) / _LEDGER_DIR
+        d = session_reads_path(root)
         d.mkdir(parents=True, exist_ok=True)
         line = json.dumps(
             {"op": "q_dry_rerun", "pipeline": pipeline, "ts": time.time()},
@@ -795,7 +1129,11 @@ def _row_line(kind: str, r: dict) -> str:
         depth = f" · depth {r['depth']}" if "depth" in r else ""
         return f"repo:{r.get('file','')}:L{r.get('line','?')}: {what}{depth}"
     if kind == "files":
-        return f"{r.get('file','')} · {fmt_int(int(r.get('n', 0)))} sites"
+        if "n" in r:
+            return f"{r.get('file','')} · {fmt_int(int(r.get('n', 0)))} sites"
+        if "size" in r:
+            return f"{r.get('file','')} · {fmt_int(int(r.get('size', 0)))} B"
+        return str(r.get("file", ""))
     if kind == "symbols":
         return f"{r.get('symbol', r.get('name',''))}  {r.get('file','')}:{r.get('line','')}"
     # records (and any future kind): sorted key=value, private fields hidden
@@ -826,19 +1164,29 @@ def _render(
         "rows": public_rows,
         "omitted_upstream": out.omitted,
     }
+    if out.coverage:
+        payload["coverage"] = out.coverage
     blob_id = store.put_blob(canonical_json(payload))
-    short = blob_id[:12]
+    short = short_id(blob_id)
 
     lines = [f"[ctx q · {n_stages} stages · {out.kind} · blob:{short}]"]
     total = len(out.rows)
     shown_rows = out.rows[:RENDER_CAP]
     census = f"rows (census): {fmt_int(total)} · shown: {fmt_int(len(shown_rows))}"
     if out.omitted:
-        census += (
-            f" · capped: {fmt_int(out.omitted)} rows omitted upstream (declared; "
-            "narrow with where/top)"
-        )
+        why = out.omitted_reason or "declared; narrow with where/top"
+        census += f" · capped: {fmt_int(out.omitted)} rows omitted upstream ({why})"
     lines.append(census)
+    if out.coverage:
+        cov = out.coverage
+        seg = (
+            f"coverage: considered {fmt_int(int(cov.get('considered', 0)))} · "
+            f"selected {fmt_int(int(cov.get('selected', 0)))} · "
+            f"engine {cov.get('engine', '?')}"
+        )
+        if cov.get("generation"):
+            seg += f" · gen {cov['generation']}"
+        lines.append(seg)
     # Self-healing emptiness: a 0-row result is never a bare census — the
     # per-stage diagnosis (and, on an identical dry re-issue, the stronger
     # banner) is evidence, not a suggestion; it must survive the
@@ -892,7 +1240,10 @@ def run_query(
         for i, (name, args) in enumerate(parsed, start=1):
             st = STAGES[name]
             n_in = len(stream.rows)
+            prev_coverage = stream.coverage
             stream = st.fn(qc, stream, args)
+            if stream.coverage is None and prev_coverage is not None:
+                stream.coverage = prev_coverage  # selection receipt survives
             if len(stream.rows) > st.row_cap:
                 stream.omitted += len(stream.rows) - st.row_cap
                 stream.rows = stream.rows[: st.row_cap]

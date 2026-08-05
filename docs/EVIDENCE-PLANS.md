@@ -1,6 +1,13 @@
 <sub><a href="README.md">« straitjacket / docs</a></sub>
 
-# Compiled evidence plans (`ctx plan` / `ctx investigate`)
+# Compiled evidence plans (`ctx plan` / `ctx plan run`)
+
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
 
 **Date:** 2026-07-19 · design for the post-ALGEBRA wave (doc 5 of 5).
 **Status:** shipped v0.25.0 — P0–P3 + the P5 surface (`plan_ir` /
@@ -93,7 +100,7 @@ anywhere in the tree today.
   just "plan" in code — the resolver's `DeliveryPlan` already owns that
   word. Modules: `src/ctx/plan_ir.py`, `plan_exec.py`, `plan_ops.py`,
   `plan_cost.py`.
-- **Investigation**: one compile→execute→digest cycle (`ctx investigate`),
+- **Investigation**: one compile→execute→digest cycle (`ctx plan run`),
   manifest kind `investigation`, digest profile `investigate/v1`, contract
   `contracts/investigate.toml`.
 - **Epoch** here = *hypothesis epoch* (one plan run). Distinct from the
@@ -103,7 +110,7 @@ anywhere in the tree today.
 ## The plan IR (`ctx.plan/v1`)
 
 Model-authored JSON (stdlib-parsed; canonical-JSON identity; stored as
-`blob:` and cited in the digest header, exactly like `ctx eval` scripts).
+`blob:` and cited in the digest header, exactly like `ctx py` scripts).
 No YAML — it would be the core's first hard dependency.
 
 ```json
@@ -145,7 +152,7 @@ cannot train epoch tables):
   declared omission (count + continuation address), never silently.
 - **Guards, not expressions**: `when` admits only a micro-grammar
   (`<node>.count <op> <int>`, `<node>.outcome == pass|fail`). No
-  arbitrary predicates — computed control flow remains `ctx eval`'s job,
+  arbitrary predicates — computed control flow remains `ctx py`'s job,
   off the MCP tier.
 - **Capability check**: every op declares `class = observe | execute` and
   its engine requirements. A plan is validated against the *capability
@@ -162,7 +169,7 @@ cannot train epoch tables):
   here, "this plan ≈ N s local · 1 round · ≤M digest tokens vs ~K
   interactive rounds").
 
-Why not arbitrary Python: `ctx eval` already exists for computed control
+Why not arbitrary Python: `ctx py` already exists for computed control
 flow and stays. The plan language deliberately gives up Turing-completeness
 to buy static cost estimation, capability validation, safe parallelization,
 operator-level caching, plan inspection, and MCP-tier eligibility — the
@@ -206,7 +213,7 @@ Notes binding the table:
   never anonymous (CONTRIBUTING rule).
 - **Execute-class ops are host-visible.** SPEC §10.4 keeps command
   execution on the host's native command tool so the permission flow stays
-  visible. `ctx investigate` from the CLI runs execute-class nodes through
+  visible. `ctx plan run` from the CLI runs execute-class nodes through
   the same guard/confinement as `ctx run`. The MCP tier accepts
   **observe-class plans only** — the read-only investigation is the
   TokenSave-shaped voluntary tier's biggest capability gain, and it gains
@@ -361,16 +368,16 @@ objective is `recall_decisive × precision_presented × coverage_confidence`,
 with sufficiency a contract constraint, never a priced term — the EDC
 objective function, unchanged, applied to a new family.
 
-## `ctx investigate`: epochal control
+## `ctx plan run`: epochal control
 
 ```
 ctx plan validate <plan.json>      # typed verdict, no execution
 ctx plan price    <plan.json>      # est wall · nodes · tokens · vs-interactive delta
 ctx plan run      <plan.json>      # execute → investigation digest
-ctx investigate --objective "..." [--replans 1] [--budget-tokens 1800]
+ctx plan run --objective "..." [--replans 1] [--budget-tokens 1800]
 ```
 
-`ctx investigate` is the packaged loop: the model (or skill-guided host)
+`ctx plan run` is the packaged loop: the model (or skill-guided host)
 authors a plan for the current epoch; the harness validates, prices,
 executes, digests. The default control policy — one reconnaissance plan,
 at most **one** causal replan, then patch/verify — is a budget
@@ -405,7 +412,7 @@ evidence_followup/v1 events — match classes, four states, no floats
 [plan_value] COUNTS table, committed like code
         ↓ read-only at runtime
 per-operator report (ctx replay --outcomes) · shadow ranking
-(ctx investigate --advise / ctx plan price --value) · shadow ledger
+(ctx plan run --advise / ctx plan price --value) · shadow ledger
         ↓ paired referee (pending)
 ONLY THEN: a conservative tie-break between semantically equivalent actions
 ```
@@ -510,7 +517,7 @@ telemetry into the ledger; `ctx policy compile` learns `[plan_engines]`.
 node; epoch table changes engine choice only through a committed policy
 file, byte-diffable in review.
 
-**P5 · MCP tier + `ctx investigate` + measurement** (~2–3 days)
+**P5 · MCP tier + `ctx plan run` + measurement** (~2–3 days)
 MCP `op: investigate` accepting observe-class plans only; the packaged
 epochal verb with `--replans`; reflex hypothesis/outcome events; the eval.
 *Gate*: MCP-tier execute-class rejection test; the four-arm referee below.
@@ -541,7 +548,7 @@ suite.
 ## Non-goals
 
 - No arbitrary code on the MCP tier — computed control flow stays in
-  `ctx eval`, CLI-only; the plan grammar will not grow expressions.
+  `ctx py`, CLI-only; the plan grammar will not grow expressions.
 - No unbounded replanning; the replan allowance is a budget with a low
   committed default.
 - No network access from any plan operator; no Semgrep registry fetches;

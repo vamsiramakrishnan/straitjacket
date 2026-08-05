@@ -5,8 +5,6 @@
   <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/docs-header-light.svg" width="100%" alt="straitjacket documentation — use the harness, understand the architecture, verify the claims, and extend the evidence system.">
 </picture>
 
-**Use it. Understand it. Verify it. Extend it.**
-
 [How it works](HOW-IT-WORKS.md) · [Getting started](GETTING-STARTED.md) · [Core concepts](CONCEPTS.md) · [Architecture path](#architecture-reading-path) · [Evaluation receipts](../evals/) · [Normative specs](../spec/)
 
 </div>
@@ -32,11 +30,14 @@ Start with **[How it works](HOW-IT-WORKS.md)** (a ten-minute plain-language walk
 
 You will learn how to:
 
-- set up all three hosts (Antigravity, Claude Code, Codex) in one command;
+- set up every agent CLI you have in one guided command;
+- see what each host can actually enforce ([Host capabilities](HOST-CAPABILITIES.md)) —
+  they do not all protect you equally;
 - run one harnessed or ephemeral agent session;
 - capture, inspect, search, and retrieve evidence;
 - choose between `run`, `seq`, `eval`, `q`, and background jobs;
 - interpret the session scorecard;
+- split a task across models by cost and capability ([Routing](ROUTING.md));
 - understand the current trust boundary.
 
 ### Understand the mental model
@@ -72,6 +73,11 @@ First identify which plane owns the change:
 
 A new mechanism should fit one plane, reuse the existing evidence and delivery contracts, and name its acceptance referee before implementation.
 
+Then find the code: **[ARCHITECTURE.md](ARCHITECTURE.md)** maps every module to
+its plane with a "which file do I touch for X" table. To add a digest profile,
+follow **[Writing a profile](WRITING-A-PROFILE.md)**; for setup, the invariants,
+and how to run the tests and evals, see **[`CONTRIBUTING.md`](../CONTRIBUTING.md)**.
+
 ---
 
 ## Foundations already shipped
@@ -97,7 +103,7 @@ The open-loop ladders fired on output volume while the actual failure lived on t
 
 ### 3. [EDC — govern evidence delivery](EDC.md)
 
-The Evidence Delivery Controller replaces profile-specific truncation logic with typed evidence, command-family contracts, one policy resolver, deterministic plans, and coverage receipts. **Coverage is the objective; size is the constraint.**
+The Evidence Delivery Controller replaces profile-specific truncation logic with typed evidence, command-family contracts, one policy resolver, deterministic plans, and coverage receipts. It optimizes for keeping the required facts, and treats the token budget as the limit to fit them into.
 
 ### 4. [ALGEBRA — derive and compose evidence](ALGEBRA.md)
 
@@ -111,9 +117,29 @@ The closure audit of the algebra: which operators run at digest-rate (homomorphi
 
 The formalization in one page: the information-bottleneck objective with the lazy-lossless constraint, the two enforced theorems (determinism, single refinement boundary), the evidence-regret metric (`ctx replay --regret`) that scores every digest profile's distance from the rate–distortion frontier on real trajectories, and the honest ledger of which mechanisms are derived from the objective versus empirically adopted under it.
 
+### 4d. [SUBSTRATE — operator classes under the semantic layers](SUBSTRATE.md)
+
+The audit of the "just add Unix tools" instinct. Six proposed additions (fd,
+rg --json, ctags, jq, comby, watchexec) examined against the shipped tree:
+three already exist, one is rephrased to survive determinism, and the rest
+become the M-K phases — a file-set algebra (`corpus`), a records algebra over
+stored artifacts, span-precise sites, and a gated second rewrite rung. The
+governing rule: every binary is an engine behind a logical operator, every
+operator carries a contract, and no tool merges without a referee.
+
+### 4e. [ASK — intents as typed plan presets](ASK.md)
+
+The retrieval front door done without a natural-language parser. A repository
+question becomes a frozen `ctx.plan/v1` template with typed slots
+(`locate`/`impact`/`diagnose`), executed on the shipped plan tier and answered
+with the investigate digest — collapsing the *decision cost* of exploration the
+way evidence plans collapsed its *turn cost*. Includes the audit's cut list:
+what an elegant system declines (the NL parser as primary path, a speculative
+ontology, unscoped new verbs) matters as much as what it builds.
+
 ### 5. [EVIDENCE-PLANS — compile the investigation](EVIDENCE-PLANS.md)
 
-The model compiles its exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx investigate`); the harness validates, prices, and executes it locally, and one causally organized digest returns. ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). Shipped v0.25.0; measured in [`evals/plan-collapse-2026-07-19.md`](../evals/plan-collapse-2026-07-19.md).
+The model compiles its exploration intent into a typed, total, bounded DAG (`ctx plan` / `ctx plan run`); the harness validates, prices, and executes it locally, and one causally organized digest returns. ast-grep and Semgrep join as physical operators behind logical ops; rounds go from O(operations) to O(hypothesis epochs). Shipped v0.25.0; measured in [`evals/plan-collapse-2026-07-19.md`](../evals/plan-collapse-2026-07-19.md).
 
 ---
 
@@ -147,6 +173,9 @@ Every mechanism inherits the same invariants:
 | the ten-minute overview | [HOW-IT-WORKS.md](HOW-IT-WORKS.md) |
 | first successful session | [GETTING-STARTED.md](GETTING-STARTED.md) |
 | vocabulary and invariants | [CONCEPTS.md](CONCEPTS.md) |
+| every `ctx.toml` setting | [CONFIGURATION.md](CONFIGURATION.md) |
+| when something breaks | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
+| the code map (which file for what) | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | retrieval economics | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
 | context rescue | [LOSSLESS-RESCUE.md](LOSSLESS-RESCUE.md) |
 | conditional mechanisms | [LADDERS.md](LADDERS.md) |
@@ -170,16 +199,17 @@ Every mechanism inherits the same invariants:
 |---|---|
 | [Use cases](USE-CASES.md) | You know the task or failure mode and want the shortest path through the harness. |
 | [CLI guide](CLI.md) | You need to choose a verb, retrieve evidence, or interpret a scorecard. |
+| [Configuration](CONFIGURATION.md) | You want to tune budgets, the guard, scopes, or redaction in `ctx.toml`. |
+| [Troubleshooting & FAQ](TROUBLESHOOTING.md) | Something isn't working, or you have a "does it…?" question. |
 | [Writing an evidence profile](WRITING-A-PROFILE.md) | You are extending extraction, contracts, or rendering. |
-| [Why Straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
+| [Why straitjacket](WHY-STRAITJACKET.md) | You want the context-cost, cache, latency, and quality thesis in one place. |
+| [Comparisons](COMPARISONS.md) | You want the head-to-head data versus Headroom, rtk, Ponytail, Caveman, Maki, and the rest of the field. |
 <!-- docs-phase2:end -->
 
 ---
 
 <div align="center">
 
-**The store keeps the truth. The transcript keeps the address.**
-
-<sub><a href="../README.md">« repository</a> · <a href="index.md">docs page</a> · <a href="../spec/">specifications</a> · <a href="../evals/">evaluation receipts</a> · <a href="../ROADMAP.md">roadmap</a></sub>
+<sub><a href="../README.md">« repository</a> · <a href="../spec/">specifications</a> · <a href="../evals/">evaluation receipts</a> · <a href="../ROADMAP.md">roadmap</a></sub>
 
 </div>

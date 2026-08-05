@@ -15,9 +15,12 @@ catalog and never participates in content identity.
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import array
 import hashlib
 import json
+import re
 import os
 import sqlite3
 import tempfile
@@ -32,16 +35,55 @@ MIN_ID_DISPLAY = 12
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
 
+
+_BLOB_ID_RE = re.compile(r"\b(?:sha256:)?([0-9a-f]{64})\b")
+
+
+def _referenced_blobs(node: object, _depth: int = 0) -> set[str]:
+    """Every blob id reachable anywhere in a manifest document.
+
+    Structural rather than schema-aware on purpose: a collector that learns
+    each manifest kind's blob fields by hand is one new kind away from
+    deleting live data, which is exactly what happened to
+    ``ctx.investigation/v1``. Depth-bounded so a pathological document cannot
+    turn the mark phase into a stack overflow.
+    """
+    found: set[str] = set()
+    if _depth > 16:
+        return found
+    if isinstance(node, str):
+        found.update(_BLOB_ID_RE.findall(node))
+    elif isinstance(node, dict):
+        for v in node.values():
+            found |= _referenced_blobs(v, _depth + 1)
+    elif isinstance(node, (list, tuple)):
+        for v in node:
+            found |= _referenced_blobs(v, _depth + 1)
+    return found
+
+
 class StoreError(Exception):
     pass
 
 
+# How many candidate ids an ambiguity message may name. This message is read
+# by an agent, in a tool whose entire purpose is bounding what a model reads:
+# every candidate is 64 hex characters, and a 6-character prefix over a large
+# catalog can match hundreds, so the uncapped version was an unbounded flood
+# emitted BY the flood guard. Enough to disambiguate by eye, never a page.
+MAX_AMBIGUOUS_CANDIDATES = 8
+
+
 class AmbiguousIdError(StoreError):
     def __init__(self, short: str, candidates: list[str]):
-        self.candidates = candidates
-        joined = "\n  ".join(candidates)
+        self.candidates = candidates  # full list stays available to callers
+        shown = candidates[:MAX_AMBIGUOUS_CANDIDATES]
+        joined = "\n  ".join(shown)
+        if len(candidates) > len(shown):
+            joined += f"\n  … and {len(candidates) - len(shown)} more"
         super().__init__(
-            f"ambiguous short id {short!r}; candidates:\n  {joined}\nuse a longer prefix"
+            f"ambiguous short id {short!r}; {len(candidates)} candidates:\n  "
+            f"{joined}\nuse a longer prefix"
         )
 
 
@@ -89,7 +131,27 @@ CREATE TABLE IF NOT EXISTS objects (
     created_at REAL NOT NULL,     -- operational only, never in content identity
     meta TEXT NOT NULL DEFAULT '{}'
 );
-CREATE INDEX IF NOT EXISTS objects_kind ON objects(kind);
+-- Every catalog read of a *kind* is really "the newest N of this kind":
+--     SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC, id LIMIT ?
+-- (facts.py, policy.py, repomap.py, installer.py). A plain objects(kind)
+-- index answers only the WHERE half: SQLite then sorts every matching row
+-- in a temp b-tree just to take the first few. The composite carries the
+-- sort order *and* the selected column, so the same query becomes a
+-- covering-index seek that stops at the LIMIT. Measured on a 50k-object
+-- catalog (4,107 runs, SQLite 3.45.1, EXPLAIN QUERY PLAN in
+-- tests/test_store_perf.py):
+--     SEARCH objects USING INDEX objects_kind (kind=?) + TEMP B-TREE FOR ORDER BY
+--         → 2.213 ms (LIMIT 40) / 2.017 ms (LIMIT 1)
+--     SEARCH objects USING COVERING INDEX objects_kind_recent (kind=?)
+--         → 0.012 ms (LIMIT 40) / 0.002 ms (LIMIT 1)
+-- objects(kind) is a strict prefix of this index, so it is now redundant:
+-- every plan it could serve, the composite serves at least as well (the
+-- planner picked the composite even while both existed). Keeping both cost
+-- 50.4 vs 44.6 us per single-row INSERT and ~0.7 MB per 50k objects, so the
+-- old one is dropped. Dropping an index destroys no data and is reversible
+-- (an older ctx reopening the same file just recreates it).
+CREATE INDEX IF NOT EXISTS objects_kind_recent ON objects(kind, created_at DESC, id);
+DROP INDEX IF EXISTS objects_kind;
 CREATE TABLE IF NOT EXISTS leases (
     id TEXT NOT NULL,
     reason TEXT NOT NULL,         -- retention | pin | checkpoint
@@ -269,13 +331,28 @@ class Store:
         blob_hash = blob_hash.removeprefix("sha256:")
         idx = self.line_index(blob_hash)
         n_lines = max(0, len(idx) - 1)
-        if n_lines == 0 or start > n_lines:
+        # bounds.span, not min(end, n_lines): a negative `end` survived that
+        # clamp and idx[end] wrapped around to dump most of the blob
+        # (ctx.bounds). An empty span is empty, never a suffix.
+        window = bounds.span(start, end, n_lines)
+        if window is None:
             return b""
-        start = max(1, start)
-        end = min(end, n_lines)
-        with self.blob_path(self.resolve_id(blob_hash, kinds=("blob",))).open("rb") as fh:
-            fh.seek(idx[start - 1])
-            return fh.read(idx[end] - idx[start - 1])
+        start, end = window
+        try:
+            path = self.blob_path(self.resolve_id(blob_hash, kinds=("blob",)))
+            with path.open("rb") as fh:
+                fh.seek(idx[start - 1])
+                return fh.read(idx[end] - idx[start - 1])
+        except FileNotFoundError:
+            # gc sweeps blobs but not their indexes/lines/*.idx sidecars, so a
+            # collected blob can still HAVE a line index -- line_index()
+            # succeeds, the open() then does not, and the caller saw a raw
+            # FileNotFoundError where every other missing-object path raises
+            # the documented UnknownIdError (which the CLI maps to exit 2).
+            raise UnknownIdError(
+                f"blob {blob_hash[:MIN_ID_DISPLAY]} not found "
+                "(collected by gc or retention); re-capture it"
+            ) from None
 
     # ------------------------------------------------------------- lookups
     def resolve_id(self, short: str, kinds: tuple[str, ...] | None = None) -> str:
@@ -298,6 +375,12 @@ class Store:
         in SQL, the planner preferred the secondary ``objects_kind`` index
         over the id range/index, undoing the win above. A prefix match is
         always a handful of rows at most, so the Python-side filter is free.
+
+        (Re-measured when ``objects_kind`` was replaced by the composite
+        ``objects_kind_recent``: the planner now stays on the id index even
+        with the kind filter written in SQL. The Python-side filter is kept
+        anyway — it costs nothing on a handful of rows and does not depend
+        on which secondary index happens to exist or on planner statistics.)
         """
         short = short.removeprefix("sha256:").lower()
         if len(short) == 64:
@@ -318,7 +401,13 @@ class Store:
             rows = [r for r in rows if r[1] in kinds]
         ids = [r[0] for r in rows]
         if not ids:
-            raise UnknownIdError(f"no object matches id prefix {short!r} in this workspace")
+            raise UnknownIdError(
+                f"no object matches id prefix {short!r} in this workspace; it was "
+                "either never captured here, or `ctx gc` / the retention window "
+                "has already collected it. Re-capture the evidence "
+                "(`ctx run -- <command>`); `ctx pin <handle>` keeps an artifact "
+                "past retention next time"
+            )
         if len(ids) > 1:
             raise AmbiguousIdError(short, ids)
         return ids[0]
@@ -335,27 +424,65 @@ class Store:
     def pin(self, obj_id: str) -> None:
         self.lease(self.resolve_id(obj_id), "pin", ttl_days=None)
 
-    def gc(self, retention_days: int) -> dict[str, int]:
+    def gc(self, retention_days: int, *, override_retention: bool = False) -> dict[str, int]:
         """Mark-and-sweep over leases and pins. Blobs referenced by any live
-        manifest survive. Never touches objects with a pin."""
+        manifest survive. Never touches objects with a pin.
+
+        ``override_retention`` marks a horizon the USER supplied explicitly
+        (``ctx gc --retention-days N``) rather than the workspace default.
+        It exists because those are different claims:
+
+        * By default a ``retention`` lease -- minted at write time from the
+          configured policy -- protects its object even past the recency
+          cutoff. That is deliberate and pinned by
+          tests/test_pr1_review_fixes.py.
+        * But it made the FLAG advisory. `ctx gc --retention-days 0`, which
+          admin.py documents as "collect everything already expired", left
+          every freshly-written manifest alive behind a 30-day lease it had
+          minted for itself moments earlier -- the user's explicit horizon
+          losing to the default it was written to override.
+
+        So an explicit horizon overrides retention leases and an implicit one
+        does not. Pins (NULL expiry) and checkpoint leases are never
+        overridden either way: those are protection someone asked for, not a
+        default policy being retuned.
+        """
         now = time.time()
         cutoff = now - retention_days * 86400
         live: set[str] = set()
         # Every unexpired lease keeps its object alive — pins (NULL expiry)
         # and time-bounded retention/checkpoint leases alike. Expired leases
         # no longer protect anything.
-        leased = {
-            r[0]
-            for r in self.db.execute(
-                "SELECT id FROM leases WHERE expires_at IS NULL OR expires_at > ?", (now,)
-            )
-        }
+        # `retention` leases are EXCLUDED here: they were minted at write
+        # time from the Store's configured retention_days, so honouring them
+        # made this argument advisory. `ctx gc --retention-days 0` -- which
+        # admin.py documents as "collect everything already expired" -- left
+        # every freshly-written manifest alive behind a 30-day lease it had
+        # minted for itself moments earlier. The horizon this call was GIVEN
+        # is the horizon it uses, and `recent` below applies it uniformly.
+        #
+        # Pins (NULL expiry) and checkpoint leases are untouched: those are
+        # explicit protection someone asked for, not a default policy the
+        # caller is overriding.
+        lease_sql = "SELECT id FROM leases WHERE (expires_at IS NULL OR expires_at > ?)"
+        if override_retention:
+            lease_sql += " AND reason != 'retention'"
+        leased = {r[0] for r in self.db.execute(lease_sql, (now,))}
         recent = {
             r[0]
             for r in self.db.execute("SELECT id FROM objects WHERE created_at >= ?", (cutoff,))
         }
         live |= leased | recent
-        # Mark blobs referenced by live manifests.
+        # Mark blobs referenced by live manifests. Discovery is STRUCTURAL:
+        # every sha256-shaped string anywhere in the document counts as a
+        # reference. This used to read exactly two hand-maintained places --
+        # manifest["streams"][*]["blob"] and manifest["blob"] -- so any
+        # manifest kind that carried its blobs elsewhere was invisible to the
+        # mark phase. A bug bash confirmed the consequence: gc() deleted blobs
+        # still referenced by a LIVE ctx.investigation/v1 manifest, which is
+        # data loss, and the field list would have had to grow by hand for
+        # every future kind. Over-marking is the safe direction for a
+        # collector -- an extra live id merely survives a cycle.
         for mid in list(live):
             mpath = self.manifest_dir / f"{mid}.json"
             if mpath.is_file():
@@ -363,13 +490,7 @@ class Store:
                     manifest = json.loads(mpath.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     continue
-                for stream in (manifest.get("streams") or {}).values():
-                    blob = str(stream.get("blob", "")).removeprefix("sha256:")
-                    if blob:
-                        live.add(blob)
-                blob = str(manifest.get("blob", "")).removeprefix("sha256:")
-                if blob:
-                    live.add(blob)
+                live |= _referenced_blobs(manifest)
         removed_blobs = removed_manifests = 0
         # Files are unlinked eagerly per object (unchanged); the two catalog
         # DELETEs are batched into one transaction with executemany instead

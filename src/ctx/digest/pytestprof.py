@@ -26,7 +26,26 @@ from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
 from ctx.evidence import EvidenceGraph, EvidenceItem, EvidenceRef
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
+
+# Word-anchored pytest invocation: the name as a program basename or a
+# module target, never as an interior path component. A raw substring
+# test misclaims commands whose INTERPRETER lives under a pytest-named
+# directory (uv tool shims: .../tools/pytest/bin/python) or whose args
+# carry pytest-named paths (/tmp/pytest-of-root/...). Doctrine: a
+# command that merely MENTIONS pytest's name is not a test run — the
+# replay read-path rule, applied at birth. The char after the word may
+# not be `/` (interior path component) or `-` (pytest-of-root, and any
+# pytest-*-named artifact).
+_PYTEST_WORD_RE = re.compile(r"(?:^|[\s/=])(?:pytest|py\.test)(?=[\s'\";|&)]|$)")
+
+
+def argv_invokes_pytest(argv) -> bool:
+    """True when the command genuinely invokes pytest (shared with the
+    facts tier's family detection)."""
+    joined = " ".join(str(a) for a in argv)
+    return bool(_PYTEST_WORD_RE.search(joined))
+
 
 _SESSION_RE = re.compile(r"=+ test session starts =+")
 _SUMMARY_RE = re.compile(
@@ -42,6 +61,13 @@ _FAILED_LINE_RE = re.compile(r"^(?:FAILED|ERROR) (?P<nodeid>\S+)(?: - (?P<msg>.*
 # fallback when output was truncated before the short-summary section.
 _VERBOSE_PROG_RE = re.compile(r"^(?P<nodeid>\S+::\S+) (?:FAILED|ERROR)\b")
 _FAIL_HEADER_RE = re.compile(r"^_{3,} (?P<nodeid>.+?) _{3,}$")
+# A collection error banners the node with prose -- "ERROR collecting
+# tests/test_x.py" -- while the short-summary line carries the bare node id
+# ("ERROR tests/test_x.py"). Nothing matched the two, so ONE failure became
+# TWO census entries: the real one, and a phantom with no failure_class, no
+# location and no summary, under a coverage line attesting complete identity
+# coverage. A census that miscounts is worse than one that admits a gap.
+_COLLECT_HEADER_RE = re.compile(r"^ERROR collecting (?P<nodeid>.+?)\s*$")
 _SHORT_SUMMARY_BANNER_RE = re.compile(r"=+ short test summary info =+")
 _FAILURES_BANNER_RE = re.compile(r"^=+ (?:FAILURES|ERRORS) =+", re.MULTILINE)
 _DURATION_RE = re.compile(r"\bin (?P<secs>[\d.]+)s\b")
@@ -127,6 +153,18 @@ def _collect_failed_tests(out_lines: list[str]) -> list[tuple[int, str, str]]:
     return failed_tests
 
 
+def _block_node(header: str) -> str:
+    """The node a traceback block is ABOUT, not the prose banner around it.
+
+    A block header normally carries the bare test name; a collection error
+    wraps the path in "ERROR collecting <path>", which matched no summary
+    line and so doubled the entry. Identity comes from the node.
+    """
+    header = header.strip()
+    m = _COLLECT_HEADER_RE.match(header)
+    return m.group("nodeid") if m else header
+
+
 def _collect_blocks(out_lines: list[str]) -> list[tuple[str, int, int]]:
     """Traceback blocks: each `___ name ___` header owns the lines up to
     the next header or `=` banner (trailing blanks trimmed) — real block
@@ -136,7 +174,7 @@ def _collect_blocks(out_lines: list[str]) -> list[tuple[str, int, int]]:
     for i, ln in enumerate(out_lines, start=1):
         hm = _FAIL_HEADER_RE.match(ln.strip())
         if hm:
-            headers.append((hm.group("nodeid").strip(), i))
+            headers.append((_block_node(hm.group("nodeid")), i))
             boundaries.append(i)
         elif _is_banner(ln):
             boundaries.append(i)
@@ -257,11 +295,11 @@ def _entry_semantics(
     if summary:
         summary = summary[:120]
 
-    evidence = tuple(el[:160] for el in e_lines[:4])
+    evidence = tuple(el[:EVIDENCE_LINE_CHARS] for el in e_lines[:4])
     if not evidence:
         fallback = msg or summary
         if fallback:
-            evidence = (fallback[:160],)
+            evidence = (fallback[:EVIDENCE_LINE_CHARS],)
     return failure_class, location, summary, evidence
 
 
@@ -304,7 +342,7 @@ def extract_pytest(ctx: DigestContext) -> EvidenceGraph:
                 for raw in out_lines[ent["a"] - 1 : min(ent["b"], ent["a"] + 12)]:
                     if _is_banner(raw):
                         break
-                    head.append(raw[:160])
+                    head.append(raw[:EVIDENCE_LINE_CHARS])
                 attributes["detail_head"] = tuple(head)
                 root_seen = True
         else:
@@ -366,10 +404,13 @@ class PytestProfile(Profile):
     version = "pytest/v1"
     failure_version = "pytest/v2"
 
+    def extract(self, ctx: DigestContext):
+        """This profile's fact extraction (see Profile.extract)."""
+        return extract_pytest(ctx)
+
     def detect(self, ctx: DigestContext) -> str | None:
         argv = ctx.manifest["argv"]
-        joined = " ".join(argv)
-        if "pytest" in joined or "py.test" in joined:
+        if argv_invokes_pytest(argv):
             return "argv invokes pytest"
         text = ctx.stdout.text
         if _SESSION_RE.search(text[:4000]):
@@ -493,7 +534,7 @@ class PytestProfile(Profile):
             spent = 0
             shown_entries = 0
             for ent in entries:
-                row = "    " + _short_nodeid(ent["id"])[:160]
+                row = "    " + _short_nodeid(ent["id"])[:EVIDENCE_LINE_CHARS]
                 if ent["b"] is not None:
                     sid = ctx.mint_span(ctx.stdout, "region", a=ent["a"], b=ent["b"])
                     row += f"  stdout:L{ent['a']}-L{ent['b']}"
@@ -505,7 +546,7 @@ class PytestProfile(Profile):
                 if dense:
                     err = self._error_line(ent, out_lines)
                     if err:
-                        chunk.append("      " + err[:160])
+                        chunk.append("      " + err[:EVIDENCE_LINE_CHARS])
                 cost = sum(len(c.encode("utf-8")) + 1 for c in chunk)
                 if shown_entries and spent + cost > census_budget:
                     break
@@ -548,7 +589,7 @@ class PytestProfile(Profile):
                     # elapsed-time noise and belong to other regions.
                     if _is_banner(raw):
                         break
-                    summary.append(f"    | {raw[:160]}")
+                    summary.append(f"    | {raw[:EVIDENCE_LINE_CHARS]}")
         elif failed_tests:
             summary.append(f"  first failure: {failed_tests[0][1]} - {failed_tests[0][2][:120]}")
             shown += 1

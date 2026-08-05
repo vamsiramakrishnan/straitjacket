@@ -35,6 +35,25 @@ SQLite 3.45.1, warm page cache):
                                                                  ~519 us/call  ~16 us/call   (~32x, read_blob_lines)
     resolve_id() prefix lookup           50k objects, 1 kind    ~3.2-3.8 ms   ~5.5-10 us    ADOPTED  (~500x)
     gc() catalog sweep                   50k obj / ~25k dead    3973 ms       1061 ms       ADOPTED  (~3.7x)
+    "newest N of a kind" query           50k objects/4107 runs  2.148 ms      0.012 ms      ADOPTED  (~180x)
+      (perf task 2026-07-24; LIMIT 40)   objects_kind + TEMP    covering objects_kind_recent
+                                         B-TREE FOR ORDER BY    seek, no sort
+
+    Every production reader of the kind index really asks for "the newest N
+    of this kind" (facts.py, policy.py, repomap.py, installer.py):
+    ``WHERE kind='run' ORDER BY created_at DESC, id LIMIT ?``. objects(kind)
+    answered only the WHERE half and left SQLite sorting every matching row
+    in a temp b-tree to take the first few; objects(kind, created_at DESC,
+    id) carries the order and the selected column, so the plan becomes a
+    covering seek that stops at the LIMIT. The single-column objects(kind)
+    index was DROPPED in the same change: it is a strict prefix of the
+    composite, the planner picked the composite even while both existed, and
+    keeping both cost 50.4 vs 44.6 us per single-row INSERT and ~0.7 MB per
+    50k objects. Dropping an index destroys no data and is reversible — an
+    older ctx opening the same catalog recreates it from its own IF NOT
+    EXISTS schema. (Not to be confused with the rejected objects(created_at)
+    index below: that one was for gc's unselective full-range scan, which a
+    non-covering index makes slower, not for a LIMIT-ed ordered lookup.)
 
     REJECTED (measured, no win, not shipped):
     - line_index via bytes.split(b"\\n") + cumulative offsets: ~1.5% faster
@@ -82,6 +101,7 @@ import array
 import hashlib
 import mmap
 import random
+import sqlite3
 import time
 
 import pytest
@@ -501,3 +521,154 @@ def test_benchmark_mmap_vs_plain_read(state_home):
     print(f"[bench] 1000-line slice of {len(data)/1e6:.0f} MB blob: "
           f"plain={t_plain:.1f} us  mmap={t_mmap:.1f} us")
     assert plain == mmapped
+
+
+# --------------------------------------------------------------------------
+# objects(kind, created_at DESC, id) — the "newest N of this kind" index
+# (perf task, 2026-07-24). See the receipts row in the module docstring.
+# --------------------------------------------------------------------------
+
+# The catalog schema exactly as it stood before the composite index: used to
+# build a pre-change database on disk and to time the "before" arm.
+LEGACY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS objects (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    meta TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS objects_kind ON objects(kind);
+CREATE TABLE IF NOT EXISTS leases (
+    id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    expires_at REAL,
+    PRIMARY KEY (id, reason)
+);
+"""
+
+# The shape every production reader of the kind index actually uses
+# (facts.py, policy.py, repomap.py, installer.py).
+RECENT_RUNS_SQL = (
+    "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC, id LIMIT 40"
+)
+
+
+def _object_indexes(db) -> set[str]:
+    return {
+        r[0]
+        for r in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='objects'"
+        )
+    }
+
+
+def test_objects_kind_recent_index_exists_and_supersedes_objects_kind(state_home):
+    """The composite exists; the single-column prefix index is gone.
+
+    objects(kind) is a strict prefix of objects(kind, created_at DESC, id):
+    any plan it could serve, the composite serves at least as well, so
+    carrying both only paid extra INSERT and file-size cost."""
+    store = Store("perf-kind-index")
+    names = _object_indexes(store.db)
+    assert "objects_kind_recent" in names
+    assert "objects_kind" not in names
+    sql = store.db.execute(
+        "SELECT sql FROM sqlite_master WHERE name='objects_kind_recent'"
+    ).fetchone()[0]
+    assert "kind" in sql and "created_at DESC" in sql and "id" in sql
+
+
+def test_recent_runs_query_plan_is_a_covering_index_seek(state_home):
+    """EXPLAIN QUERY PLAN: index seek, no temp b-tree sort — the before/after
+    that motivated the index (2.213 ms -> 0.012 ms on a 50k catalog)."""
+    store = Store("perf-kind-index-plan")
+    now = time.time()
+    with store.db:
+        store.db.executemany(
+            "INSERT INTO objects (id, kind, created_at, meta) VALUES (?,?,?,'{}')",
+            [
+                (hashlib.sha256(f"plan-{i}".encode()).hexdigest(),
+                 "run" if i % 3 == 0 else "blob", now - i)
+                for i in range(2000)
+            ],
+        )
+    plan = " ".join(r[3] for r in store.db.execute("EXPLAIN QUERY PLAN " + RECENT_RUNS_SQL))
+    assert "objects_kind_recent" in plan, plan
+    assert "TEMP B-TREE" not in plan.upper(), plan
+
+
+def test_legacy_catalog_opens_cleanly_and_upgrades_in_place(state_home, tmp_path):
+    """A catalog written before this change must open, keep every row, and
+    pick up the new index — no destructive migration, no rebuild."""
+    root = tmp_path / "legacy" / "workspaces" / "legacy-ws" / "indexes"
+    root.mkdir(parents=True)
+    now = time.time()
+    legacy_ids = [hashlib.sha256(f"legacy-{i}".encode()).hexdigest() for i in range(50)]
+    conn = sqlite3.connect(root / "catalog.sqlite3")
+    conn.executescript(LEGACY_SCHEMA)
+    with conn:
+        conn.executemany(
+            "INSERT INTO objects (id, kind, created_at, meta) VALUES (?,?,?,'{}')",
+            [(h, "run", now - n) for n, h in enumerate(legacy_ids)],
+        )
+        conn.execute(
+            "INSERT INTO leases (id, reason, expires_at) VALUES (?,'pin',NULL)",
+            (legacy_ids[0],),
+        )
+    assert "objects_kind" in _object_indexes(conn)
+    conn.close()
+
+    store = Store("legacy-ws", state_root=tmp_path / "legacy")
+    # Rows and leases survive; index swapped; newest-first order still right.
+    assert store.db.execute("SELECT COUNT(*) FROM objects").fetchone()[0] == 50
+    assert store.db.execute("SELECT COUNT(*) FROM leases").fetchone()[0] == 1
+    assert "objects_kind_recent" in _object_indexes(store.db)
+    assert "objects_kind" not in _object_indexes(store.db)
+    newest = [r[0] for r in store.db.execute(RECENT_RUNS_SQL)]
+    assert newest[:3] == legacy_ids[:3]
+    # And the store still works normally on top of the upgraded catalog.
+    h = store.put_blob(b"after the upgrade")
+    assert store.resolve_id(h[:12]) == h
+    assert store.get_blob(h[:12]) == b"after the upgrade"
+    assert set(store.gc(retention_days=30)) == {"blobs_removed", "manifests_removed"}
+
+
+def test_benchmark_recent_runs_query(state_home, tmp_path):
+    """Prints the receipt behind the composite index; asserts only that both
+    index layouts return exactly the same rows."""
+    n = 50_000
+    rng = random.Random(3)
+    now = time.time()
+    kinds = ["blob"] * 40 + ["run"] * 5 + ["snapshot"] * 10 + ["search"] * 5
+    rows = [
+        (hashlib.sha256(f"kindbench-{i}".encode()).hexdigest(),
+         rng.choice(kinds), now - rng.random() * 1e6, "{}")
+        for i in range(n)
+    ]
+
+    legacy = sqlite3.connect(tmp_path / "legacy-catalog.sqlite3")
+    legacy.executescript(LEGACY_SCHEMA)
+    with legacy:
+        legacy.executemany("INSERT OR IGNORE INTO objects VALUES (?,?,?,?)", rows)
+    legacy.execute("ANALYZE")
+
+    store = Store("perf-bench-kind-index")
+    with store.db:
+        store.db.executemany("INSERT OR IGNORE INTO objects VALUES (?,?,?,?)", rows)
+    store.db.execute("ANALYZE")
+
+    results = {}
+    for tag, db in (("before (objects_kind)", legacy), ("after (composite)", store.db)):
+        results[tag] = db.execute(RECENT_RUNS_SQL).fetchall()
+        samples = []
+        for _ in range(20):
+            t0 = time.perf_counter()
+            db.execute(RECENT_RUNS_SQL).fetchall()
+            samples.append((time.perf_counter() - t0) * 1000)
+        samples.sort()
+        plan = " ".join(r[3] for r in db.execute("EXPLAIN QUERY PLAN " + RECENT_RUNS_SQL))
+        print(f"[bench] recent runs, {n} objects, {tag}: "
+              f"{samples[len(samples) // 2]:.3f} ms median  plan={plan}")
+    legacy.close()
+
+    assert results["before (objects_kind)"] == results["after (composite)"]

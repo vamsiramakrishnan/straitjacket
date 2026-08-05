@@ -33,8 +33,11 @@ import hashlib
 import time
 from typing import Any
 
+from ctx import bounds
+from ctx.gitstatus import changed_paths
+from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
-from ctx.workspace import Workspace
+from ctx.workspace import Workspace, stat_fingerprint
 
 NODE_SCHEMA = "ctx.plan-node/v1"
 INVESTIGATION_SCHEMA = "ctx.investigation/v1"
@@ -76,10 +79,12 @@ def _workspace_fingerprint(ws: Workspace) -> str | None:
     The facts *generation* (porcelain + untracked triples) is operational
     identity and deliberately blind to content edits of already-modified
     TRACKED files — correct for rerun classification, too weak for a
-    result cache. This fingerprint adds HEAD plus (path, size, mtime_ns)
-    for every porcelain-listed path, so any edit that touches a listed
-    file invalidates. None (non-git / git error) disables caching — an
-    unknown state must never serve a cached result."""
+    result cache. This fingerprint adds HEAD plus the shared stat basis
+    (:func:`ctx.workspace.stat_fingerprint`: size, mtime_ns, ctime_ns) for
+    every porcelain-listed path, so any edit that touches a listed file
+    invalidates — including one that restores the old mtime. None (non-git
+    / git error) disables caching — an unknown state must never serve a
+    cached result."""
     import subprocess
 
     if ws.git is None:
@@ -99,34 +104,23 @@ def _workspace_fingerprint(ws: Workspace) -> str | None:
 
         root = Path(ws.root)
         listed: list[Path] = []
-        for line in out.stdout.decode("utf-8", "replace").splitlines():
-            if len(line) < 4:
-                continue
-            rel = line[3:]
-            if " -> " in rel:
-                rel = rel.split(" -> ", 1)[1]
-            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
-                rel = rel[1:-1]
-            if rel.rstrip("/").split("/")[0] == ".ctx-session-reads":
-                continue
+        for rel in changed_paths(out.stdout, exclude_top=LEDGER_DIR_NAME):
             p = root / rel
             if rel.endswith("/") or p.is_dir():
                 listed.extend(s for s in sorted(p.rglob("*"))[:1024] if s.is_file())
             elif p.is_file():
                 listed.append(p)
-        for p in sorted(listed)[:2048]:
-            try:
-                st = p.stat()
-                h.update(f"\x00{p}\x00{st.st_size}\x00{st.st_mtime_ns}".encode())
-            except OSError:
-                h.update(f"\x00{p}\x00gone".encode())
+        stat_fingerprint(root, sorted(listed)[:2048], h)
         return h.hexdigest()
     except Exception:
         return None
 
 
-def _cache_key(op: str, args: dict, input_blob: str | None, fingerprint: str,
-               engine: str) -> str:
+def _node_cache_key(op: str, args: dict, input_blob: str | None,
+                    fingerprint: str, engine: str) -> str:
+    """Key for one executed plan node. Invalidation basis: the node itself
+    (op/args/input) plus ``_workspace_fingerprint`` — HEAD, raw porcelain
+    bytes, and the shared stat basis over every listed path."""
     seed = canonical_json(
         {"op": op, "args": args, "input": input_blob, "ws": fingerprint, "engine": engine}
     )
@@ -215,7 +209,11 @@ def _foreach_expand(step: Any, inp: dict, max_fanout: int) -> tuple[list[Any], i
         v = row.get(step.foreach)
         if v is not None and v not in values:
             values.append(v)
-    cap = min(int(step.cap or max_fanout), max_fanout)
+    # bounds, not `or`: a plan declaring `cap: 0` for a foreach step means
+    # "fan out over nothing", and `or` read that as "unset" and substituted
+    # max_fanout -- the widest possible fan-out from the narrowest possible
+    # request. A negative cap reached values[:cap] as a suffix slice too.
+    cap = min(bounds.count(bounds.explicit(step.cap, max_fanout)), max_fanout)
     return values[:cap], max(0, len(values) - cap)
 
 
@@ -275,7 +273,7 @@ def execute_plan(
     # and break replan byte-determinism. Fail-open: an unwritable root just
     # skips emissions; in ignored/committed setups this is a no-op.
     try:
-        ledger_dir = ws.root / ".ctx-session-reads"
+        ledger_dir = session_reads_path(ws.root)
         ledger_dir.mkdir(parents=True, exist_ok=True)
         (ledger_dir / "plan-emissions.jsonl").touch(exist_ok=True)
     except OSError:
@@ -358,7 +356,7 @@ def execute_plan(
 
         cache_key = None
         if spec.cacheable and spec.klass == "observe" and ws_fingerprint is not None:
-            cache_key = _cache_key(step.op, dict(step.args), input_blob, ws_fingerprint, engine)
+            cache_key = _node_cache_key(step.op, dict(step.args), input_blob, ws_fingerprint, engine)
             hit = _cache_get(store, cache_key)
             if hit is not None:
                 try:
@@ -509,7 +507,7 @@ def _append_plan_emissions(
 
     from ctx.textutil import estimate_tokens
 
-    ledger_dir = ws.root / ".ctx-session-reads"
+    ledger_dir = session_reads_path(ws.root)
     ledger_dir.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     for nid, res in results.items():
@@ -697,7 +695,7 @@ def _render_investigation(
     n_skip = sum(1 for m in node_meta.values() if m.get("status") == "skipped")
     n_err = sum(1 for m in node_meta.values() if m.get("status") == "error")
 
-    lines = [f"[ctx investigate:{inv_id[:12]} profile={PROFILE_VERSION}]"]
+    lines = [f"[ctx plan run:{inv_id[:12]} profile={PROFILE_VERSION}]"]
     lines.append(f"objective: {plan.question}")
     lines.append(
         f"plan: blob:{plan_blob[:12]} · generation: {generation or 'unknown'} · "
@@ -803,19 +801,42 @@ def _render_investigation(
     # typed facts; a violated required class is a bug, surfaced loudly.
     try:
         contract = contract_for_family("investigate")
+        # Declare what this run actually delivered, not what the shape of an
+        # investigation usually delivers. `counterevidence` was in this set
+        # unconditionally, and the validator's catch-all then took the
+        # declaration as proof -- so a contract that marks the class REQUIRED
+        # with loss_severities = "major", precisely because "its absence is
+        # exactly the anchoring failure the plan exists to prevent", was
+        # satisfied by the word appearing in a literal.
         included = {
             "aggregate_counts",
             "complete_identity_census",
             "location",
             "one_line_summary",
-            "counterevidence",
             "coverage_attestation",
         }
-        receipt = validate_selection((i.id for i in graph.items), included, contract, graph)
+        witnessed: set[str] = set()
+        if counter_nodes:
+            # This run actually produced counterevidence, and this is the
+            # only layer that can know it -- so this is the only layer that
+            # may attest it.
+            included.add("counterevidence")
+            witnessed.add("counterevidence")
+        receipt = validate_selection(
+            (i.id for i in graph.items), included, contract, graph, witnessed
+        )
         if receipt.required_fraction < 1.0:
+            note = ""
+            if receipt.unverifiable_fields:
+                # Name them: "PARTIAL 5/6" with no reason is an alarm nobody
+                # can act on, and an unverifiable requirement is a fact about
+                # the CONTRACT, not about this run.
+                note = (
+                    " · unverifiable: " + ", ".join(receipt.unverifiable_fields)
+                )
             lines.append(
                 f"contract: PARTIAL — required classes {receipt.required_fields_present}"
-                f"/{receipt.required_fields_total} (declared, never silent)"
+                f"/{receipt.required_fields_total} (declared, never silent){note}"
             )
     except Exception:
         pass

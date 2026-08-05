@@ -99,10 +99,18 @@ the harness with your agent host:
   search/get/stats over the store and the repo — retrieval that *cannot*
   flood, because every operation is capped.
 
-All three hosts (Antigravity, Claude Code, Codex) get the same three
-pieces, translated to each host's native config format. Nothing here
-requires trusting the model to follow instructions — the hooks are
-mechanical.
+Every host gets these pieces, translated to its native config format.
+Nothing here requires trusting the model to follow instructions — the hooks
+are mechanical.
+
+They are not, however, equally enforceable everywhere. Claude Code and Codex
+can both rewrite a command *and* replace an oversized result. Antigravity's
+published hook contract can do neither: its birth gate has to **deny** and
+name the contained command rather than substitute it silently, and it has
+**no output-side safety net** at all, so a verbose MCP/connector result
+reaches the transcript in full. If you use Antigravity, read
+[Host capabilities](HOST-CAPABILITIES.md) — it is short, and it changes what
+you should route through `ctx`.
 
 ## What else is in the box (each optional, each measured)
 
@@ -111,7 +119,7 @@ mechanical.
   repo maps). The agent explores without `cat`-ing files into context.
 - **`ctx q`** — small pipelines over typed evidence
   (`refs Foo | group file | top 3 | get`), executed locally in one step.
-- **`ctx plan` / `ctx investigate`** — the agent writes a short JSON plan
+- **`ctx plan` / `ctx plan run`** — the agent writes a short JSON plan
   (a bounded DAG of evidence operations); the harness validates, prices,
   executes it locally, and returns **one** digest instead of N rounds of
   tool calls. Measured: a 6-round investigation collapsed to 1.
@@ -140,6 +148,8 @@ mechanical.
 |---|---|
 | to install and try it | [GETTING-STARTED.md](GETTING-STARTED.md) |
 | the vocabulary (artifact, span, digest, contract) | [CONCEPTS.md](CONCEPTS.md) |
+| to tune budgets, the guard, or scopes | [CONFIGURATION.md](CONFIGURATION.md) |
+| to fix a problem or ask "does it…?" | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 | the numbers behind every claim | [`evals/`](../evals/) — one receipt per claim |
 | why retrieval choices carry price tags | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
 | the formal objective and its theorems | [THEORY.md](THEORY.md) |

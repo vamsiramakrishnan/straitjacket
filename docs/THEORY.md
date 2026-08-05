@@ -2,6 +2,13 @@
 
 # The objective: what straitjacket optimizes, stated once
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+
 **Date:** 2026-07-19 · This document states the system's objective function,
 labels every shipped mechanism as *derived* from it or *empirically adopted*
 under it, and names the measured quantity that scores how close the system is

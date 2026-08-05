@@ -26,10 +26,14 @@ flow is visible.
 
 from __future__ import annotations
 
+from ctx import bounds
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+from ctx.sessiondir import session_reads_path
 from ctx.store import Store
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 DEFAULT_ROW_CAP = 200
@@ -202,6 +206,40 @@ def _op_repo_changed(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     return payload("files", [{"file": f} for f in files], meta=meta)
 
 
+def _listify(v) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v] if v else []
+    return [str(x) for x in v if str(x)]
+
+
+def _op_repo_files(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
+    """M-K2 ``file_select``: the bounded eligible file set with a coverage
+    receipt — *select files before scanning*. Feed it to a scan-class op
+    via ``foreach`` (capped) or as a ``semantic.*`` input to scope the
+    engine to the selected set."""
+    from ctx import filesets
+
+    max_files = args.get("max")
+    rows, coverage, omitted = filesets.select(
+        pc.ws,
+        exts=_listify(args.get("ext") or args.get("exts")),
+        globs=_listify(args.get("glob") or args.get("globs")),
+        excludes=_listify(args.get("exclude") or args.get("excludes")),
+        changed=bool(args.get("changed")),
+        max_files=int(max_files) if max_files is not None else None,
+    )
+    meta: dict[str, Any] = {
+        "engine": coverage.get("engine"),
+        "considered": coverage.get("considered"),
+        "selected": coverage.get("selected"),
+    }
+    if coverage.get("generation"):
+        meta["generation"] = coverage["generation"]
+    return payload("files", rows, omitted=omitted, meta=meta)
+
+
 def _op_repo_inventory(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     from ctx.repomap import repo_map
 
@@ -220,20 +258,22 @@ def _op_code_search(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
 
 def _op_code_refs(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     out = _run_q_stage(pc, "refs", [str(args.get("symbol") or "")])
-    try:
-        from ctx.codeverbs import _select_engine
-
-        engine = _select_engine()
-    except Exception:
-        engine = "ast"
+    # The refs stage records the actual ladder tier (scip/jedi/ast) in its
+    # note — disclose it verbatim rather than re-guessing the engine.
+    engine = (out.note or "").removeprefix("engine: ") or "ast"
     return payload("sites", out.rows, omitted=out.omitted, meta={"engine": engine})
 
 
 def _mk_callgraph_op(stage: str):
     def op(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
         argv = [str(args.get("symbol") or "")]
-        if stage == "impact" and args.get("depth"):
-            argv += ["--depth", str(int(args["depth"]))]
+        # `is not None`, not truthiness: ask.py already fixed `--depth 0`
+        # becoming 3 at ITS layer, and the 0 then survived all the way into
+        # the compiled plan's step args only to be dropped here, where a
+        # falsy depth read as "no depth given". Two layers, one flag, and the
+        # second one undid the first.
+        if stage == "impact" and args.get("depth") is not None:
+            argv += ["--depth", str(bounds.count(args["depth"]))]
         out = _run_q_stage(pc, stage, argv)
         return payload(
             "sites", out.rows, omitted=out.omitted,
@@ -252,7 +292,7 @@ def _op_ast_search(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
         str(args.get("pattern") or ""),
         language=args.get("language"),
         glob=args.get("glob"),
-        cap=int(args.get("cap", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP),
+        cap=bounds.count(bounds.explicit(args.get("cap"), DEFAULT_ROW_CAP)),
     )
     omitted = max(0, int(meta.pop("matched", len(rows))) - len(rows))
     return payload("sites", rows, omitted=omitted, meta=meta)
@@ -323,7 +363,7 @@ def _op_ast_outline(pc: PlanContext, args: dict, inp: dict | None) -> dict[str, 
         f = str(r.get("file") or "")
         if f and f not in files:
             files.append(f)
-    cap = int(args.get("cap", OUTLINE_FILE_CAP) or OUTLINE_FILE_CAP)
+    cap = bounds.count(bounds.explicit(args.get("cap"), OUTLINE_FILE_CAP))
     take, omitted = files[:cap], max(0, len(files) - cap)
     rows: list[dict[str, Any]] = []
     parsers: list[str] = []
@@ -405,7 +445,7 @@ def _op_test_run(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     timeout = float(args.get("timeout", pc.timeout) or pc.timeout)
     capture = run_capture(pc.ws, [command], shell=True, timeout=timeout, store=pc.store)
     _digest, manifest = render_run_digest(pc.store, pc.ws, capture.manifest, focus=None)
-    short = str(manifest.get("id", "")).removeprefix("sha256:")[:12]
+    short = short_id(manifest.get("id", ""))
     facts.derive_generation(pc.ws, store=pc.store)
     derived = facts.derive_run(pc.store, pc.ws, manifest)
     run_id = str(derived.get("run") or short)
@@ -422,17 +462,56 @@ def _op_test_run(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     return payload("records", rows, meta=meta, artifacts={"run": f"run:{short}"})
 
 
+def _note_rewrite_decline(pc: PlanContext, args: dict, reason: str) -> None:
+    """M-K5 decline corpus (docs/SUBSTRATE.md §M-K5): record a rewrite the
+    ast-grep rung could not express — engine absent, or a pattern that
+    matched nothing. This is the DEMAND denominator; the comby rung merges
+    only if this corpus shows a real population. Fail-open; never raises."""
+    try:
+        import json
+        import time
+
+        d = session_reads_path(pc.ws.root)
+        d.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(
+            {
+                "op": "comby_candidate",
+                "reason": reason,
+                "pattern": str(args.get("pattern") or ""),
+                "rewrite": str(args.get("rewrite") or ""),
+                "language": args.get("language"),
+                "glob": args.get("glob"),
+                "ts": time.time(),  # operational only
+            },
+            sort_keys=True,
+        )
+        with (d / "rewrite-declines.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
+
+
 def _op_rewrite_preview(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
     from ctx import astgrep
 
-    rows, meta = astgrep.rewrite_preview(
-        pc.ws,
-        pc.store,
-        str(args.get("pattern") or ""),
-        str(args.get("rewrite") or ""),
-        language=args.get("language"),
-        glob=args.get("glob"),
-    )
+    try:
+        rows, meta = astgrep.rewrite_preview(
+            pc.ws,
+            pc.store,
+            str(args.get("pattern") or ""),
+            str(args.get("rewrite") or ""),
+            language=args.get("language"),
+            glob=args.get("glob"),
+        )
+    except astgrep.EngineMissing:
+        # The rung is unavailable — a decline the comby corpus should count.
+        _note_rewrite_decline(pc, args, "engine_absent")
+        raise
+    if not rows:
+        # Matched nothing structurally: a candidate the current rung could
+        # not express (or a genuinely absent occurrence — the corpus is a
+        # candidate list a human reviews, not an auto-merge signal).
+        _note_rewrite_decline(pc, args, "no_structural_match")
     artifacts = {}
     if meta.get("patch_blob"):
         artifacts["patch"] = f"blob:{meta['patch_blob']}"
@@ -464,14 +543,199 @@ def _op_semantic(mode: str):
             pc.ws,
             str(args.get("rules") or ""),
             paths=paths,
-            cap=int(args.get("cap", DEFAULT_ROW_CAP) or DEFAULT_ROW_CAP),
+            cap=bounds.count(bounds.explicit(args.get("cap"), DEFAULT_ROW_CAP)),
         )
+        # The cap's overflow, declared -- exactly as ast.search already does
+        # with the same meta key. Without this the coverage line attested a
+        # complete census over a truncated one: six findings scanned, two
+        # rows shown, four gone with nothing saying so. plan_ir's docstring
+        # calls this out by name ("overflow executes as declared omission,
+        # never silently"); semantic.* was the op that did not.
+        omitted = max(0, int(meta.pop("matched", len(rows))) - len(rows))
         if mode == "taint":
-            rows = [r for r in rows if r.get("trace")] or rows
+            traced = [r for r in rows if r.get("trace")]
+            if traced:
+                # The filter is a second, narrower drop on the same stream.
+                omitted += len(rows) - len(traced)
+                rows = traced
         meta["mode"] = mode
-        return payload("records", rows, meta=meta)
+        return payload("records", rows, omitted=omitted, meta=meta)
 
     return op
+
+
+# ------------------------------------------------- M-L0 thin ops (docs/ASK.md)
+def _op_evidence_failures(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
+    """Failure census from CAPTURED facts — never a rerun. ``run`` absent
+    → the latest derived run (deriving the newest captured manifest on
+    demand, content-keyed). Freshness against the current worktree
+    generation is computed and DECLARED; a stale census proposes a rerun
+    in prose and never executes one (observe-class by construction)."""
+    from ctx import facts
+
+    run = args.get("run")
+    limit = bounds.count(bounds.explicit(args.get("limit"), DEFAULT_ROW_CAP))
+    rows = facts.fails_sites(pc.ws, pc.store, run=run, limit=limit)
+    run_id: str | None = None
+    gen: str | None = None
+    try:
+        conn = facts._connect(pc.store)
+        if conn is not None:
+            try:
+                run_id = (
+                    facts._short(str(run).removeprefix("run:"))
+                    if run
+                    else facts._meta_get(conn, "latest_run")
+                )
+                if run_id:
+                    got = conn.execute(
+                        "SELECT DISTINCT generation FROM fail WHERE run_id=? LIMIT 1",
+                        (run_id,),
+                    ).fetchone()
+                    gen = got[0] if got else None
+            finally:
+                conn.close()
+    except Exception:
+        pass
+    try:
+        now_gen = facts.current_generation(pc.ws)
+    except Exception:
+        now_gen = None
+    fresh = bool(gen) and gen == now_gen
+    meta: dict[str, Any] = {
+        "engine": "facts.sqlite",
+        "run": run_id,
+        "generation": gen,
+        "fresh": fresh,
+    }
+    if rows and not fresh:
+        meta["note"] = (
+            f"failure facts from gen:{gen or '?'} — worktree is now "
+            f"gen:{now_gen or '?'}; rerun tests to refresh (never automatic)"
+        )
+    if not rows:
+        meta["note"] = (
+            "no captured failures — run tests under the birth gate first "
+            "(ctx run -- pytest …), or the last run passed"
+        )
+    artifacts = {"run": f"run:{run_id}"} if run_id else {}
+    return payload("sites", rows, meta=meta, artifacts=artifacts)
+
+
+def _op_evidence_diff(pc: PlanContext, args: dict, _inp) -> dict[str, Any]:
+    """Behavioral delta between two captured runs (the shipped ``run_diff``
+    as a plan node) — the ``compare`` intent's engine. Emits the terminal
+    ``text`` kind; missing/unresolvable refs degrade to a declared note,
+    never an error."""
+    a = str(args.get("ref_a") or args.get("run_a") or "")
+    b = str(args.get("ref_b") or args.get("run_b") or "")
+    if not a or not b:
+        return payload("text", [{"text": "compare needs two run refs (ref_a, ref_b)"}],
+                       meta={"engine": "rundiff", "note": "two run: refs required"})
+    from ctx.rundiff import run_diff
+
+    try:
+        text = run_diff(pc.store, pc.ws, a, b)
+    except Exception as e:
+        return payload("text", [{"text": f"diff unavailable: {e}"}],
+                       meta={"engine": "rundiff", "note": "unresolved refs"})
+    return payload("text", [{"text": text}], meta={"engine": "rundiff"})
+
+
+def _op_code_symbols(pc: PlanContext, args: dict, inp: dict | None) -> dict[str, Any]:
+    """Structured symbol rows (identity · kind · range · span) from the
+    skeleton-derived fact plane — census before detail, no outline text.
+    An input (files|sites) warms facts for exactly those files first;
+    derivation is content-keyed, so unchanged files cost nothing."""
+    from ctx import facts
+
+    files: list[str] = []
+    if inp is not None:
+        files = sorted({str(r.get("file") or "") for r in inp.get("rows") or []} - {""})
+    elif args.get("file"):
+        files = [str(args["file"])]
+    derived = 0
+    for rel in files[:_CHANGED_DERIVE_CAP]:
+        try:
+            if facts.derive_file(pc.store, pc.ws, rel).get("ok"):
+                derived += 1
+        except Exception:
+            pass
+    limit = bounds.count(bounds.explicit(args.get("limit"), DEFAULT_ROW_CAP))
+    sym = str(args.get("symbol") or "")
+    pre_limit = 2000 if (files or sym) else limit
+    rows = facts.decls_rows(pc.ws, pc.store, kind=args.get("kind"), limit=pre_limit)
+    if files:
+        keep = set(files)
+        rows = [r for r in rows if r.get("file") in keep]
+    if sym:
+        # Symmetric on BOTH sides. The three original clauses all assumed the
+        # STORED symbol was the dotted one, so a dotted query
+        # (`Store.put_blob`) against a bare stored symbol found nothing and
+        # `ctx ask --intent locate` reported zero definitions for a symbol
+        # that is right there.
+        sym_tail = sym.rsplit(".", 1)[-1]
+        rows = [
+            r for r in rows
+            if (lambda stored: (
+                stored == sym
+                or stored.rsplit(".", 1)[-1] == sym
+                or stored.startswith(sym + ".")
+                or stored == sym_tail
+                or stored.endswith("." + sym_tail)
+            ))(str(r.get("symbol", "")))
+        ]
+    rows = rows[:limit]
+    meta: dict[str, Any] = {
+        "engine": "facts.sqlite (skeleton-derived)",
+        "derived_files": derived,
+    }
+    if not rows:
+        meta["note"] = (
+            "no matching decl facts — facts derive on demand per file: feed "
+            "an input (sites/files) or pass args.file to warm exactly the "
+            "relevant slice"
+        )
+    return payload("symbols", rows, meta=meta)
+
+
+_CONTEXT_SYMBOL_SPAN_CAP = 60  # bounded zoom: a symbol body, never a file flood
+
+
+def _op_code_context(pc: PlanContext, args: dict, inp: dict | None) -> dict[str, Any]:
+    """Terminal bounded materialization — the refinement boundary at the
+    plan tier. Sites materialize line ± context; symbols materialize
+    their declared range (clamped). Emits ``text``: by the closure law,
+    nothing downstream can lift bytes back into a representation."""
+    from ctx.retrieval import Selector, get
+
+    rows_in = list((inp or {}).get("rows") or [])
+    kind_in = str((inp or {}).get("kind") or "sites")
+    context = max(0, int(args.get("context", 3) or 3))
+    cap = min(bounds.count(args.get("cap", 8)), OUTLINE_FILE_CAP)
+    take = rows_in[:cap]
+    omitted = max(0, len(rows_in) - len(take))
+    out_rows: list[dict[str, Any]] = []
+    for r in take:
+        rel = str(r.get("file") or "")
+        if not rel:
+            omitted += 1
+            continue
+        if kind_in == "symbols":
+            a = max(1, int(r.get("line") or 1))
+            b = max(a, int(r.get("line_b") or a))
+            b = min(b, a + _CONTEXT_SYMBOL_SPAN_CAP - 1)
+        else:
+            line = max(1, int(r.get("line") or 1))
+            a, b = max(1, line - context), line + context
+        try:
+            text = get(pc.store, pc.ws, f"repo:{rel}", Selector(lines=(a, b)))
+        except Exception:
+            omitted += 1
+            continue
+        out_rows.append({"file": rel, "line": int(r.get("line") or a), "text": text})
+    meta = {"engine": "store-materialize", "refinement": "terminal"}
+    return payload("text", out_rows, omitted=omitted, meta=meta)
 
 
 # ------------------------------------------------------------- registration
@@ -490,6 +754,12 @@ def _check_rewrite(args: dict) -> str | None:
 register_op("repo.changed", _op_repo_changed, input_kinds=(), output_kind="files",
             provides={"changedness": 1.0, "freshness": 0.6},
             cost="index", doc="changed files this generation (git porcelain → facts)")
+register_op("repo.files", _op_repo_files, input_kinds=(), output_kind="files",
+            provides={"coverage": 0.5, "topology": 0.2},
+            cost="index",
+            doc="bounded eligible file set with coverage receipt (args: ext, "
+                "glob, exclude, changed, max) — select files before scanning; "
+                "changed binds to generation facts, never mtime")
 register_op("repo.inventory", _op_repo_inventory, input_kinds=(), output_kind="text",
             provides={"topology": 0.3, "coverage": 0.2},
             cost="scan", doc="ranked budget-fitted codebase map")
@@ -552,6 +822,28 @@ register_op("evidence.top", _mk_combinator_op("top", ("n",)),
 register_op("evidence.count", _mk_combinator_op("count", ()),
             input_kinds=("sites", "files", "records", "text", "symbols"),
             output_kind="records", cost="index", doc="row count or per-group counts")
+register_op("evidence.failures", _op_evidence_failures, input_kinds=(),
+            output_kind="sites",
+            provides={"dynamic_failure": 0.9, "freshness": 0.3},
+            cost="index",
+            doc="failure census from captured facts — never a rerun; freshness "
+                "vs the current generation declared (args: run, limit)")
+register_op("code.symbols", _op_code_symbols, input_kinds=("files", "sites"),
+            input_optional=True, output_kind="symbols",
+            provides={"topology": 0.5, "coverage": 0.2}, cost="index",
+            doc="structured symbol rows from skeleton-derived facts; an input "
+                "warms facts for exactly those files (args: symbol, kind, file, "
+                "limit)")
+register_op("code.context", _op_code_context, input_kinds=("sites", "symbols"),
+            output_kind="text", cost="index",
+            doc="terminal bounded materialization of input regions — sites get "
+                f"line±context, symbols their range (args: context, cap ≤ "
+                f"{OUTLINE_FILE_CAP})")
+register_op("evidence.diff", _op_evidence_diff, input_kinds=(), output_kind="text",
+            provides={"changedness": 0.6, "dynamic_failure": 0.3},
+            cost="index",
+            doc="behavioral delta between two captured runs (args: ref_a, ref_b) "
+                "— the compare intent's engine")
 register_op("test.run", _op_test_run, input_kinds=(), output_kind="records",
             provides={"dynamic_failure": 1.0, "freshness": 0.8, "coverage": 0.3},
             klass="execute", cost="test", cacheable=False,

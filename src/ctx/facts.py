@@ -23,7 +23,7 @@ Derivation discipline:
   fingerprint in the ``derived`` ledger table; re-deriving unchanged
   content is a no-op (row counts stable, byte-identical query results).
 - **Short ids, house style**: run ids and generation ids are stored as
-  12-hex short ids (``removeprefix("sha256:")[:12]``), the same
+  12-hex short ids (:func:`ctx.textutil.short_id`), the same
   shortening the reflex/intervention plane and run digests use.
 - **Generation tiers, honestly labeled**: ``changed(file, gen)`` rows are
   keyed by ``ctx.execution.generation_hash`` (EDC §8 operational
@@ -58,6 +58,8 @@ is unchanged and byte-identical. See :func:`_auto_capture_fails` and
 
 from __future__ import annotations
 
+from ctx import bounds
+
 import contextlib
 import hashlib
 import os
@@ -68,15 +70,20 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from ctx.gitstatus import changed_paths
+from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store, canonical_json
+from ctx.textutil import SHORT_ID_CHARS, short_id
 from ctx.workspace import Workspace
 
 FACTS_SCHEMA_VERSION = "ctx.facts/v1"
 FACTS_DB_NAME = "facts.sqlite"
 
-#: House short-id length — matches run short ids (`sha256:`-stripped
-#: 12-hex) and the reflex plane's 12-hex intervention ids.
-SHORT_ID = 12
+#: House short-id length. Re-exported from ctx.textutil, which owns the
+#: number — the fact store's stored run/generation ids MUST be the same
+#: width as the handles the model is shown, or a `--run` argument copied
+#: from a digest would not match a stored row.
+SHORT_ID = SHORT_ID_CHARS
 
 #: Default declared cap for join results (bounded by construction).
 DEFAULT_ROW_CAP = 50
@@ -89,7 +96,6 @@ _MAX_CHANGED = 4096
 
 #: Ledger dir excluded from porcelain snapshots (mirrors execution.py:
 #: including it would mark a generation changed on our own bookkeeping).
-_SNAPSHOT_EXCLUDE_DIR = ".ctx-session-reads"
 
 #: Last swallowed error, for diagnostics only. Never raised to callers.
 LAST_ERROR: str | None = None
@@ -206,11 +212,16 @@ def _connect(store: Store) -> sqlite3.Connection | None:
     return None
 
 
-def _short(h: Any) -> str | None:
-    """House short id: strip ``sha256:``, keep 12 hex chars. Tolerates
-    already-short input; returns None for empty/None."""
-    s = str(h or "").removeprefix("sha256:").strip()
-    return s[:SHORT_ID] or None
+def _short_id(h: Any) -> str | None:
+    """House short id (:func:`ctx.textutil.short_id`) in the fact store's
+    dialect: ``None`` rather than ``""`` for an absent id, and tolerant of
+    surrounding whitespace because these values reach us from CLI arguments
+    (``--run 'run: abc '``) and DB rows, not only from manifests.
+
+    The strip happens BEFORE the shared helper and AFTER the prefix, exactly
+    as it always did — order matters for input like ``"sha256:  abc"``.
+    """
+    return short_id(str(h or "").removeprefix("sha256:").strip()) or None
 
 
 def _posix(p: str) -> str:
@@ -232,10 +243,10 @@ def _meta_put(conn: sqlite3.Connection, key: str, fingerprint: str) -> None:
 # ------------------------------------------------------- generation snapshot
 def changed_files_snapshot(ws: Workspace) -> list[str]:
     """Repo-relative files that differ from HEAD right now: a ``git status
-    --porcelain`` parse (the execution.generation_hash pattern — renames
-    take the new side, untracked directories are walked, the session
-    ledger dir is excluded, quoted paths unquoted). Sorted, bounded,
-    fail-open to []."""
+    --porcelain`` parse via :mod:`ctx.gitstatus` (renames take the new side,
+    untracked directories are walked, the session ledger dir is excluded,
+    quoted paths are C-unescaped). Deleted paths stay in the set — a
+    deletion is a change. Sorted, bounded, fail-open to []."""
     try:
         out = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -246,16 +257,7 @@ def changed_files_snapshot(ws: Workspace) -> list[str]:
         if out.returncode != 0:
             return []
         files: set[str] = set()
-        for line in out.stdout.decode("utf-8", "replace").splitlines():
-            if len(line) < 4:
-                continue
-            rel = line[3:]
-            if " -> " in rel:  # rename/copy: the new path is the changed one
-                rel = rel.split(" -> ", 1)[1]
-            if rel.startswith('"') and rel.endswith('"') and len(rel) >= 2:
-                rel = rel[1:-1]
-            if rel.rstrip("/").split("/")[0] == _SNAPSHOT_EXCLUDE_DIR:
-                continue
+        for rel in changed_paths(out.stdout, exclude_top=LEDGER_DIR_NAME):
             p = Path(ws.root) / rel
             if rel.endswith("/") or p.is_dir():
                 # Porcelain lists an untracked directory as one entry.
@@ -277,7 +279,7 @@ def current_generation(ws: Workspace) -> str | None:
     try:
         from ctx.execution import generation_hash
 
-        return _short(generation_hash(ws.root))
+        return _short_id(generation_hash(ws.root))
     except Exception as e:
         _note_error("facts.current_generation", e)
         return None
@@ -429,7 +431,17 @@ def derive_run(
         if conn is None:
             return result
         key = f"run:{run_id}"
-        if _meta_get(conn, key) == mid_full:
+        # The cached fingerprint is (manifest id, extractor epoch), not the
+        # manifest id alone. The manifest cannot move when this harness learns
+        # to extract facts from a runner it previously only rendered, so a
+        # store that had already derived such a run short-circuited here
+        # forever and kept serving the old pytest-only census. Deriving what
+        # the extraction depends on into the key is the difference between a
+        # cache and a trap.
+        from ctx.digest import extractor_epoch
+
+        cache_fingerprint = f"{mid_full}/{extractor_epoch()}"
+        if _meta_get(conn, key) == cache_fingerprint:
             with conn:
                 _meta_put(conn, "latest_run", run_id)
             result["skipped"] = True
@@ -439,11 +451,35 @@ def derive_run(
             result["ok"] = True
             return result
 
+        from ctx.digest import detect_profile
         from ctx.digest.base import DigestContext
         from ctx.digest.pytestprof import extract_pytest
 
         dctx = DigestContext.load(store, ws, manifest, focus=None)
-        graph = extract_pytest(dctx)
+        # The SAME profile the digest renders with. This called
+        # extract_pytest unconditionally, so the fact tier knew exactly one
+        # runner while the digest tier knew several: a captured
+        # `python -m unittest` run rendered as unittest/v1 with real
+        # failures and inserted ZERO fail rows, and `ctx q 'fails last'`
+        # then answered "no captured test run" about a run captured seconds
+        # earlier. Selecting here means a new runner profile feeds the
+        # census the day it can extract, instead of becoming the next silent
+        # blind spot.
+        profile, _reason = detect_profile(dctx)
+        try:
+            graph = profile.extract(dctx)
+        except Exception as e:
+            # Never let a broken extractor read as "this run had no
+            # failures" -- that is the same silence this whole fix is about.
+            _note_error(f"facts.extract.{profile.version}", e)
+            graph = None
+            result["extractor_error"] = f"{type(e).__name__}: {e}"
+        if graph is None:
+            # A profile with no extractor yet: fall back to the pytest
+            # extractor rather than recording nothing, since many runners
+            # emit pytest-shaped summary lines even when they are not pytest.
+            graph = extract_pytest(dctx)
+        result["profile"] = profile.version
         result["outcome"] = graph.outcome
         generation = current_generation(ws)
         rows: list[tuple] = []
@@ -478,7 +514,7 @@ def derive_run(
                 "VALUES (?,?,?,?,?,?)",
                 rows,
             )
-            _meta_put(conn, key, mid_full)
+            _meta_put(conn, key, cache_fingerprint)
             _meta_put(conn, "latest_run", run_id)
         result.update(ok=True, fail=len(rows))
         return result
@@ -510,7 +546,7 @@ def derive_generation(
     conn = None
     try:
         store = store or Store(ws.workspace_id)
-        gen = _short(gen_hash) if gen_hash else current_generation(ws)
+        gen = _short_id(gen_hash) if gen_hash else current_generation(ws)
         if gen is None:
             return result  # non-git workspace / git unavailable: no generation plane
         result["generation"] = gen
@@ -564,14 +600,14 @@ def fact_counts(store: Store) -> dict[str, int]:
 # ------------------------------------------------------- Angle-lite queries
 def _resolve_gen(conn: sqlite3.Connection, generation: str | None) -> str | None:
     if generation:
-        return _short(str(generation).removeprefix("gen:"))
+        return _short_id(str(generation).removeprefix("gen:"))
     return _meta_get(conn, "latest_generation")
 
 
 def _run_filter(run: str | None) -> tuple[str, tuple]:
     if not run:
         return "", ()
-    return " AND f.run_id = ?", (_short(str(run).removeprefix("run:")),)
+    return " AND f.run_id = ?", (_short_id(str(run).removeprefix("run:")),)
 
 
 def _innermost(decls: list[tuple]) -> tuple:
@@ -643,7 +679,7 @@ def failing_in_changed(
                              "precision": "file-level (no skeleton facts)"}
                         )
             rows.sort(key=lambda r: (r["file"], r["line"], r["test"]))
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -681,7 +717,7 @@ def untouched_failures(
                 "WHERE NOT EXISTS (SELECT 1 FROM changed c "
                 "WHERE c.generation=? AND c.file=f.file)"
                 + run_sql + " ORDER BY f.file, f.line, f.test LIMIT ?",
-                (gen, *run_args, max(1, int(limit))),
+                (gen, *run_args, bounds.count(limit)),
             ).fetchall()
             return [
                 {"test": t, "failure_class": c, "file": f, "line": ln}
@@ -749,7 +785,7 @@ def shared_cause_groups(
                 key=lambda r: (-r["count"], r["group"], r["file"],
                                str(r.get("failure_class") or r.get("symbol") or ""))
             )
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -822,7 +858,7 @@ def symbol_neighbors(
                          "precision": "same file+scope (v1 structural heuristic)"}
                     )
             rows.extend(sibling_rows)
-            return rows[: max(1, int(limit))]
+            return rows[: bounds.count(limit)]
         finally:
             conn.close()
     except Exception as e:
@@ -846,15 +882,26 @@ def fails_sites(
         if conn is None:
             return []
         try:
-            run_id = _short(str(run).removeprefix("run:")) if run else _meta_get(
-                conn, "latest_run"
-            )
+            if run:
+                run_id = _short_id(str(run).removeprefix("run:"))
+            else:
+                # "last" means the last CAPTURED run, not the last DERIVED
+                # one. `latest_run` is a pointer written when derivation
+                # happens, and nothing re-derives on a fresh `ctx run` -- so
+                # once `ctx ask --intent diagnose` had been asked once, it
+                # answered about that same run forever, while the user kept
+                # capturing new failures and getting the old census.
+                #
+                # The derived pointer is a CACHE. The newest capture is the
+                # answer, and it is only fallen back on when there are no
+                # captures at all.
+                run_id = _newest_captured(store) or _meta_get(conn, "latest_run")
         finally:
             conn.close()
         if run_id is not None:
             rows = _fails_for(store, run_id)
             if rows:
-                return rows[: max(1, int(limit))]
+                return rows[: bounds.count(limit)]
         # Not derived yet: derive on demand (explicit ref, or newest capture).
         derived = derive_run(store, ws, f"run:{run_id}") if run_id else _derive_newest(
             store, ws
@@ -862,7 +909,7 @@ def fails_sites(
         if not derived.get("ok"):
             return []
         rows = _fails_for(store, str(derived.get("run") or run_id))
-        return rows[: max(1, int(limit))]
+        return rows[: bounds.count(limit)]
     except Exception as e:
         _note_error("facts.fails_sites", e)
         return []
@@ -885,6 +932,19 @@ def _fails_for(store: Store, run_id: str) -> list[dict[str, Any]]:
         ]
     finally:
         conn.close()
+
+
+def _newest_captured(store: Store) -> str | None:
+    """Id of the newest captured run, or None. created_at is operational
+    metadata -- it selects WHICH run, never enters fact content."""
+    try:
+        row = store.db.execute(
+            "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC, id LIMIT 1"
+        ).fetchone()
+        return str(row[0]) if row else None
+    except Exception as e:
+        _note_error("facts._newest_captured", e)
+        return None
 
 
 def _derive_newest(store: Store, ws: Workspace) -> dict[str, Any]:
@@ -979,7 +1039,7 @@ def decls_rows(
             sql = ("SELECT symbol, kind, file, line_a, line_b, scope, span FROM decl "
                    + ("WHERE kind=? " if kind else "")
                    + "ORDER BY file, line_a, symbol LIMIT ?")
-            args: tuple = (kind, max(1, int(limit))) if kind else (max(1, int(limit)),)
+            args: tuple = (kind, bounds.count(limit)) if kind else (bounds.count(limit),)
             return [
                 {"symbol": s, "kind": k, "file": f, "line": a, "line_b": b,
                  "scope": sc, "span": sp}
@@ -1075,7 +1135,12 @@ def _pytest_family_run_exists(store: Store) -> bool:
         for (rid,) in rows:
             with contextlib.suppress(Exception):
                 argv = store.get_manifest(rid).get("argv") or []
-                if any("pytest" in str(a) for a in argv):
+                # Word-anchored (shared with the profile's detect): an
+                # interpreter path under a pytest-named directory is not
+                # a pytest family run.
+                from ctx.digest.pytestprof import argv_invokes_pytest
+
+                if argv_invokes_pytest(argv):
                     return True
         return False
     except Exception as e:
@@ -1193,10 +1258,13 @@ def _stage_fails(qc, stream, args: list[str]):
 def _stage_in_changed(qc, stream, args: list[str]):
     from ctx.query import Stream
 
-    generation: str | None = None
-    for a in args:
-        if not a.startswith("--"):
-            generation = a
+    # Third parser over one arg list is how the flag-steals-the-positional
+    # defect happened in query._need_arg; this one takes the LAST bare token
+    # rather than the first, so `--kind x` would have set generation="x".
+    from ctx.query import _positionals
+
+    pos = _positionals(args)
+    generation: str | None = pos[-1] if pos else None
     # Live-path auto-derive (found by the pre-live smoke, not the referee:
     # the referee derived explicitly). With no explicit generation, ensure
     # the current worktree's changed() facts exist — derive_generation is

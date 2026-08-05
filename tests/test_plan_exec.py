@@ -4,7 +4,9 @@ skip cascades, foreach bounds, wall budget, addressability, MCP tier.
 
 import json
 import os
+import shlex
 import subprocess
+import sys
 
 import pytest
 
@@ -63,7 +65,9 @@ def _diagnosis_plan():
         "steps": [
             {"id": "changes", "op": "repo.changed"},
             {"id": "tests", "op": "test.run",
-             "args": {"command": "python3 -m pytest -q"}},
+             # sys.executable, not a bare python3: the interpreter running
+             # the suite is the one guaranteed to carry pytest.
+             "args": {"command": f"{shlex.quote(sys.executable)} -m pytest -q"}},
             {"id": "culprits", "op": "evidence.join",
              "args": {"on": "failing_in_changed"}, "after": ["tests", "changes"]},
             {"id": "counter", "op": "evidence.join",
@@ -324,7 +328,7 @@ def test_cli_plan_run_and_investigate(seeded_repo, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "profile=investigate/v1" in out
-    rc = main(["--workspace", str(seeded_repo), "investigate", "plan.json"])
+    rc = main(["--workspace", str(seeded_repo), "plan", "run", "plan.json"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "profile=investigate/v1" in out
@@ -343,7 +347,7 @@ def test_replan_budget_banner(seeded_repo, capsys):
     plan_path.write_text(json.dumps(obs), encoding="utf-8")
     for _ in range(3):
         rc = main(
-            ["--workspace", str(seeded_repo), "investigate", "plan.json", "--replans", "1"]
+            ["--workspace", str(seeded_repo), "plan", "run", "plan.json", "--replans", "1"]
         )
         assert rc == 0
         out = capsys.readouterr().out

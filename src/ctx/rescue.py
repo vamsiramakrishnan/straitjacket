@@ -37,6 +37,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from ctx.sessiondir import LEDGER_DIR_NAME
+from ctx.textutil import short_id
+
 DEFAULT_KEEP_RECENT = 6  # most recent tool_results never elided
 DEFAULT_MIN_BLOCK_BYTES = 1024  # small blocks are not worth a stub
 _LOCK = threading.Lock()
@@ -58,7 +61,7 @@ def _stub_prefix(state_dir: Path) -> str:
     absolute path — a stub whose address cannot be followed would make the
     'lossless' claim a lie (found by PR review)."""
     parent = Path(state_dir).parent
-    if parent.name == ".ctx-session-reads":
+    if parent.name == LEDGER_DIR_NAME:
         return f"{parent.name}/{Path(state_dir).name}"
     return str(state_dir)
 
@@ -67,7 +70,7 @@ def stub_for(text: str, sha: str, prefix: str) -> str:
     """The replacement content — pure function of the elided bytes."""
     nbytes = len(text.encode("utf-8"))
     return (
-        f"[ctx rescue: tool_result elided ({nbytes} bytes, sha256:{sha[:12]}) — "
+        f"[ctx rescue: tool_result elided ({nbytes} bytes, sha256:{short_id(sha)}) — "
         f"full content preserved verbatim at "
         f"{prefix}/elided/{sha}.txt; read that file for any detail]"
     )

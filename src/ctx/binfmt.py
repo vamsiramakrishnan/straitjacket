@@ -216,8 +216,17 @@ def inspect(data: bytes) -> BlobInfo:
     return info
 
 
-def render_digest(info: BlobInfo, *, address: str | None = None) -> str:
-    """Bounded, deterministic, human-readable digest — structure, never pixels."""
+def render_digest(info: BlobInfo, *, address: str | None = None,
+                  include_perceptual: bool = True) -> str:
+    """Bounded, deterministic, human-readable digest — structure, never pixels.
+
+    ``include_perceptual`` gates the dHash line. It is presentation, not
+    identity: the hash is present only when Pillow is installed, so a body that
+    carried it would give the *same captured bytes* two different digest
+    identities depending on an optional extra. The captured-run profile
+    therefore renders with ``include_perceptual=False`` (identity stays a pure
+    function of format + dimensions + sha256, all stdlib); the interactive
+    ``ctx image`` command, which does not feed a run identity, keeps it on."""
     from ctx.textutil import estimate_tokens, fmt_bytes
 
     lines = [f"format: {info.format}",
@@ -228,10 +237,11 @@ def render_digest(info: BlobInfo, *, address: str | None = None) -> str:
         if info.color:
             dims += f" {info.color}"
         lines.append(f"image: {dims}")
-        if info.perceptual_hash:
-            lines.append(f"phash: {info.perceptual_hash}  (dhash/8x8 — `ctx image diff` to compare)")
-        else:
-            lines.append("phash: unavailable (install the `image` extra: pip install 'ctx-harness[image]')")
+        if include_perceptual:
+            if info.perceptual_hash:
+                lines.append(f"phash: {info.perceptual_hash}  (dhash/8x8 — `ctx image diff` to compare)")
+            else:
+                lines.append("phash: unavailable (install the `image` extra: pip install 'ctx-harness[image]')")
     if info.format == "pdf":
         p = f"{info.pages} pages" if info.pages else "page count unknown"
         if info.text_extractable is not None:

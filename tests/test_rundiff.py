@@ -198,3 +198,95 @@ def test_removed_dead_code_stays_gone(state_home):
     assert not hasattr(ctx.execution, "manifest_short_id")
     assert not hasattr(ctx.store, "StoredObject")
     assert not hasattr(ctx.store.Store, "kind_of")
+
+
+# --------------------------------------------- a claim's span is its own
+TWO_FAILURES = """\
+========================= test session starts ==========================
+collected 3 items
+
+tests/test_app.py .FF                                            [100%]
+
+=============================== FAILURES ===============================
+______________________________ test_beta _______________________________
+    def test_beta():
+>       assert compute() == 2
+E       AssertionError: BETA-MARKER
+
+tests/test_app.py:7: AssertionError
+______________________________ test_gamma ______________________________
+    def test_gamma():
+>       assert other() == 9
+E       AssertionError: GAMMA-MARKER
+
+tests/test_app.py:12: AssertionError
+======================= short test summary info ========================
+FAILED tests/test_app.py::test_beta - AssertionError: BETA-MARKER
+FAILED tests/test_app.py::test_gamma - AssertionError: GAMMA-MARKER
+===================== 2 failed, 1 passed in 0.02s ======================
+"""
+
+
+def test_span_stops_at_the_next_failure(state_home, workspace_dir, tmp_path):
+    """A span minted for nodeid X must not carry nodeid Y's traceback.
+
+    The window was a flat `start + 12` lines, so on adjacent failures the
+    evidence resolved for test_beta ran straight through test_gamma's block
+    and attributed its assertion to the wrong test.
+    """
+    from ctx.retrieval import Selector, get
+    from ctx.rundiff import run_diff
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    a = _capture_text(tmp_path, ws, store, "a.txt", PASSING, code=0)
+    b = _capture_text(tmp_path, ws, store, "b.txt", TWO_FAILURES, code=1)
+
+    out = run_diff(store, ws, f"run:{a.manifest_id[:12]}", f"run:{b.manifest_id[:12]}")
+    assert "new failures: 2" in out
+    m = re.search(r"test_beta · B stdout:L\d+-L\d+ · span ([0-9a-f]{10})", out)
+    assert m, out
+    resolved = get(store, ws, f"run:{b.manifest_id[:12]}#stdout", Selector(span=m.group(1)))
+    assert "BETA-MARKER" in resolved, "own evidence still resolves"
+    assert "GAMMA-MARKER" not in resolved, "span bled into the next failure's block"
+
+
+def test_span_end_never_precedes_its_start():
+    """Two anchors on consecutive lines collapse the window to one line --
+    never to an inverted range, which is what a bare `next - 1` would give."""
+    from ctx.rundiff import _span_end
+
+    assert _span_end(10, [10, 11], 100) == 10
+    assert _span_end(10, [10], 100) == 22          # no next anchor: full window
+    assert _span_end(10, [10, 40], 100) == 22      # next anchor is further out
+    assert _span_end(95, [95], 100) == 100         # clamped to the stream
+
+
+# --------------------------------------- "skipped" has to mean skipped
+def test_binary_side_skips_the_delta_rather_than_faking_one(
+    state_home, workspace_dir, tmp_path
+):
+    """A binary side is unknown, not empty.
+
+    Substituting "" for it and continuing made every signature and template on
+    the readable side report as `only in B` -- a delta manufactured out of the
+    absence of a comparison, printed directly under a line saying the analysis
+    had been skipped.
+    """
+    import sys as _sys
+
+    from ctx.execution import run_capture
+    from ctx.rundiff import run_diff
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    script = "import sys;sys.stdout.buffer.write(bytes(range(256))*40)"
+    a = run_capture(ws, [_sys.executable, "-c", script], store=store)
+    b = _capture_text(tmp_path, ws, store, "b.txt", FAILING, code=1)
+
+    out = run_diff(store, ws, f"run:{a.manifest_id[:12]}", f"run:{b.manifest_id[:12]}")
+    assert "binary stdout in A" in out
+    assert "skipped" in out
+    assert "new failures" not in out, "a delta against an unknown side is not a delta"
+    assert "only in B" not in out
+    assert "streams:" in out, "size accounting is still honest and still reported"

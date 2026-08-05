@@ -68,7 +68,7 @@ probe-heavy to edit-heavy.
 **F4 — The ctx-eval denominator is real.** 8 `python -c`/heredoc one-liners
 appear across sessions (inspect-signature probes, test-data setup) — exactly
 the programmable-capture opportunities the v0.20 teaching surface detects.
-Zero used `ctx eval`. The adoption ratio's denominator is confirmed nonzero
+Zero used `ctx py`. The adoption ratio's denominator is confirmed nonzero
 in real sessions; conversion remains the metric to move.
 
 **F5 — What naive did right.** summary.json: naive won r1 csvq outright —

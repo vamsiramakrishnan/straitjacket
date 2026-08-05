@@ -1,4 +1,4 @@
-"""Acceptance: ctx eval (programmable capture, the Maki absorption).
+"""Acceptance: ctx py (programmable capture, the Maki absorption).
 
 The contract under test: a Python script chains N operations in one round;
 only its bounded digest returns; the script itself is a content-addressed
@@ -35,9 +35,9 @@ def test_eval_collapses_computation_to_one_digest(ws_store):
         "total = sum(len(str(i)) for i in range(100000))\n"
         "print('checksum:', total)\n"
     )
-    text, code = run_eval(ws, store, script)
+    text, code, _timed_out = run_eval(ws, store, script)
     assert code == 0
-    assert text.startswith("[ctx eval · script blob:")
+    assert text.startswith("[ctx py · script blob:")
     assert "· 2 lines]" in text
     assert "checksum: 488890" in text  # only the emitted result rides
 
@@ -46,7 +46,7 @@ def test_eval_flood_is_bounded_with_addresses(ws_store):
     from ctx.pyeval import run_eval
 
     ws, store = ws_store
-    text, code = run_eval(ws, store, "for i in range(50000): print('line', i)")
+    text, code, _timed_out = run_eval(ws, store, "for i in range(50000): print('line', i)")
     assert code == 0
     assert len(text.encode("utf-8")) < 2000  # ~500 KiB stdout stays out
     assert "run:" in text  # stream evidence stays addressable
@@ -59,7 +59,7 @@ def test_eval_script_is_an_addressable_blob(ws_store):
 
     ws, store = ws_store
     script = "x = 41\nprint('answer:', x + 1)\n"
-    text, _ = run_eval(ws, store, script)
+    text, _, _timed_out = run_eval(ws, store, script)
     blob_short = text.split("script blob:")[1].split(" ")[0]
     fetched = get(store, ws, f"blob:{blob_short}", Selector(lines=(1, 2)))
     assert "x = 41" in fetched and "print('answer:', x + 1)" in fetched
@@ -69,7 +69,7 @@ def test_eval_manifest_carries_script_provenance(ws_store):
     from ctx.pyeval import run_eval
 
     ws, store = ws_store
-    text, _ = run_eval(ws, store, "print('prov')")
+    text, _, _timed_out = run_eval(ws, store, "print('prov')")
     rid = text.split("[ctx run:")[1].split(" ")[0]
     manifest = store.get_manifest(rid)
     assert manifest["eval"]["script"].startswith("sha256:")
@@ -81,7 +81,7 @@ def test_eval_failure_traceback_is_pathfree_evidence(ws_store):
     from ctx.pyeval import run_eval
 
     ws, store = ws_store
-    text, code = run_eval(ws, store, "raise ValueError('boom-evidence')")
+    text, code, _timed_out = run_eval(ws, store, "raise ValueError('boom-evidence')")
     assert code == 1
     assert "ValueError: boom-evidence" in text  # failure evidence rides
     assert 'File "<stdin>"' in text  # deterministic, path-free frames
@@ -93,8 +93,8 @@ def test_eval_deterministic_byte_identical(ws_store):
 
     ws, store = ws_store
     script = "print('stable output')"
-    first, _ = run_eval(ws, store, script)
-    second, _ = run_eval(ws, store, script)
+    first, _, _timed_out = run_eval(ws, store, script)
+    second, _, _timed_out = run_eval(ws, store, script)
     assert first == second
 
 
@@ -102,7 +102,7 @@ def test_eval_timeout_kills_and_reports(ws_store):
     from ctx.pyeval import run_eval
 
     ws, store = ws_store
-    text, code = run_eval(
+    text, code, _timed_out = run_eval(
         ws, store, "import time\ntime.sleep(30)\nprint('never')", timeout=0.5
     )
     assert code == 124
@@ -125,7 +125,7 @@ def test_eval_isolated_mode_blocks_cwd_injection(ws_store):
 
     ws, store = ws_store
     (ws.root / "json.py").write_text("raise SystemExit('poisoned')\n", encoding="utf-8")
-    text, code = run_eval(ws, store, "import json\nprint('stdlib json ok')")
+    text, code, _timed_out = run_eval(ws, store, "import json\nprint('stdlib json ok')")
     assert code == 0
     assert "stdlib json ok" in text
 
@@ -152,13 +152,13 @@ def test_cli_eval_exit_codes_and_stdin(ws_store, capsys, monkeypatch):
 
     ws, _ = ws_store
     root = str(ws.root)
-    assert main(["--workspace", root, "eval", "print('ok')"]) == 0
+    assert main(["--workspace", root, "py", "print('ok')"]) == 0
     assert "ok" in capsys.readouterr().out
-    assert main(["--workspace", root, "eval", "raise SystemExit(7)"]) == 3
+    assert main(["--workspace", root, "py", "raise SystemExit(7)"]) == 3
     capsys.readouterr()
 
     monkeypatch.setattr("sys.stdin", io.StringIO("print('from-stdin')"))
-    assert main(["--workspace", root, "eval"]) == 0
+    assert main(["--workspace", root, "py"]) == 0
     assert "from-stdin" in capsys.readouterr().out
 
 
@@ -167,9 +167,9 @@ def test_cli_eval_file_mode_confined(ws_store, capsys, tmp_path):
 
     ws, _ = ws_store
     (ws.root / "job.py").write_text("print('from-file')\n", encoding="utf-8")
-    assert main(["--workspace", str(ws.root), "eval", "--file", "job.py"]) == 0
+    assert main(["--workspace", str(ws.root), "py", "--file", "job.py"]) == 0
     assert "from-file" in capsys.readouterr().out
     # Escapes are rejected before any read.
     (tmp_path / "outside.py").write_text("print('escape')\n", encoding="utf-8")
-    assert main(["--workspace", str(ws.root), "eval", "--file", "../outside.py"]) != 0
+    assert main(["--workspace", str(ws.root), "py", "--file", "../outside.py"]) != 0
     assert "escape" not in capsys.readouterr().out

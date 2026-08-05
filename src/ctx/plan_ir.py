@@ -12,12 +12,12 @@ cap, generalized to a DAG:
   silently;
 - **guards, not expressions**: ``when`` admits only a micro-grammar over
   upstream results (``<node>.count > 0``, ``<node>.outcome == fail``) —
-  computed control flow stays in ``ctx eval``, off the MCP tier;
+  computed control flow stays in ``ctx py``, off the MCP tier;
 - **static cost**: every op carries a cost class, so ``ctx plan price``
   renders the bill before anything executes (the PRICED-CONTEXT idiom).
 
 Plans are JSON (stdlib-parsed; canonical-JSON identity; stored as ``blob:``
-and cited in the digest header, like ``ctx eval`` scripts). Never YAML —
+and cited in the digest header, like ``ctx py`` scripts). Never YAML —
 it would be the core's first hard dependency.
 
 Validation failures are typed ``Rejection`` records with reasons drawn
@@ -242,6 +242,19 @@ def _budget_int(budget: dict[str, Any], key: str, default: int) -> int:
         return -1
 
 
+def _policy_int(policy, name: str, default: int) -> int:
+    """A config-supplied bound, or the default when it is not a number.
+
+    The workspace policy is foreign input: it comes from ctx.toml, which a
+    user hand-edits. A bare int() on it turns a typo into a traceback out of
+    plan validation, where the documented behaviour is to degrade.
+    """
+    try:
+        return int(getattr(policy, name, default))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def validate_plan(
     plan: EvidencePlan,
     *,
@@ -299,9 +312,15 @@ def validate_plan(
 
     max_nodes = MAX_NODES_HARD
     max_fanout = MAX_FANOUT_HARD
+
     if plan_policy is not None:
-        max_nodes = min(max_nodes, int(getattr(plan_policy, "max_nodes", max_nodes)))
-        max_fanout = min(max_fanout, int(getattr(plan_policy, "max_fanout", max_fanout)))
+        # config.py documents a malformed ctx.toml as degrading to defaults
+        # (SPEC 15), but that covers TOML SYNTAX errors -- a syntactically
+        # valid file with `max_nodes = "lots"` parsed fine and reached this
+        # bare int(), raising ValueError out of plan validation. Fail-open
+        # here too, and toward the HARD cap rather than away from it.
+        max_nodes = min(max_nodes, _policy_int(plan_policy, "max_nodes", max_nodes))
+        max_fanout = min(max_fanout, _policy_int(plan_policy, "max_fanout", max_fanout))
     own_nodes = _budget_int(plan.budget, "max_nodes", max_nodes)
     own_fanout = _budget_int(plan.budget, "max_fanout", max_fanout)
     if own_nodes < 1 or own_fanout < 1:

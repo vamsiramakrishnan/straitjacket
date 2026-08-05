@@ -20,7 +20,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int, short_path
 
 _COLON_RE = re.compile(
     r"^\s*(?P<file>[^\s:][^:]*\.\w{1,12}):(?P<line>\d+):(?:\d+:?)?\s*"
@@ -122,26 +122,34 @@ class LintProfile(Profile):
                 "  by rule (exact): "
                 + " · ".join(f"{r}×{n}" for r, n in sorted(by_rule.most_common(8)))
             )
-        def _short(path: str) -> str:
-            parts = path.replace("\\", "/").split("/")
-            return "/".join(parts[-2:]) if len(parts) > 2 else path
-
         # Repair-mode affordance (measured: in the live lint-fix benchmark
         # the census alone LOST to naive — for bulk repair the full list is
         # the work queue). Each file's diagnostic block gets its own span,
         # so fixing file-by-file is one retrieval per file, not per question.
         views = {"stdout": ctx.stdout, "stderr": ctx.stderr}
-        file_lines: dict[str, tuple[str, list[int]]] = {}
+        # Keyed by (stream, file), not by file. Keying by file alone put a
+        # file's stdout AND stderr line numbers in one list and minted the
+        # span against whichever stream it was seen on first -- so a tool
+        # that splits diagnostics across both streams got a range computed
+        # from mixed coordinates, addressing unrelated lines.
+        file_lines: dict[tuple[str, str], list[int]] = {}
         for stream_name, lineno, f, _, _ in diags:
-            file_lines.setdefault(f, (stream_name, []))[1].append(lineno)
+            file_lines.setdefault((stream_name, f), []).append(lineno)
         file_bits = []
         for f, n in sorted(by_file.most_common(8)):
-            stream_name, span_lines = file_lines[f]
-            fsid = ctx.mint_span(
-                views[stream_name], "region", a=min(span_lines), b=max(span_lines)
-            )
-            tag = f" span {fsid}" if fsid else ""
-            file_bits.append(f"{_short(f)}×{n}{tag}")
+            spans = []
+            for (stream_name, ff), span_lines in sorted(file_lines.items()):
+                if ff != f or not span_lines:
+                    continue
+                sid = ctx.mint_span(
+                    views[stream_name], "region",
+                    a=min(span_lines), b=max(span_lines),
+                )
+                if sid:
+                    spans.append(sid)
+            fsid = spans[0] if spans else None
+            tag = (" span " + " ".join(spans)) if spans else ""
+            file_bits.append(f"{short_path(f)}×{n}{tag}")
         body.append("  by file (exact): " + " · ".join(file_bits))
         first_stream, first_line = diags[0][0], diags[0][1]
         first_view = views[first_stream]
@@ -151,7 +159,7 @@ class LintProfile(Profile):
         tag = f" · span {sid}" if sid else ""
         body.append(f"  first diagnostic {first_stream}:L{first_line}-L{end}:{tag}")
         for raw in first_view.text_lines[first_line - 1 : end]:
-            body.append(f"    | {raw[:160]}")
+            body.append(f"    | {raw[:EVIDENCE_LINE_CHARS]}")
 
         rid = "run:PENDING"
         top_rule = by_rule.most_common(1)[0][0] if by_rule else "error"

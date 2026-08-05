@@ -213,7 +213,7 @@ A request larger than the configured result budget MUST return a bounded preview
 
 Profiles MAY emit exact or approximate schema statistics. Every field MUST be labeled `exact` or `approximate`. High-cardinality operations use deterministic bounded sketches and samples.
 
-### 6.6 `ctx plan` / `ctx investigate`
+### 6.6 `ctx plan` / `ctx plan run`
 
 Compiled evidence plans (`ctx.plan/v1`, docs/EVIDENCE-PLANS.md): a model-authored, total, bounded DAG of logical evidence operations, validated statically and executed locally; one investigation digest (`investigate/v1`) returns.
 

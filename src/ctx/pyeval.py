@@ -1,4 +1,4 @@
-"""`ctx eval`: programmable capture — a Python script runs under the birth
+"""`ctx py`: programmable capture — a Python script runs under the birth
 gate and only its bounded digest returns.
 
 The Maki absorption (maki.sh, studied 2026-07-18): its sandboxed interpreter
@@ -26,6 +26,7 @@ import sys
 
 from ctx.execution import ExecutionError, run_capture
 from ctx.store import Store
+from ctx.textutil import short_id
 from ctx.workspace import Workspace
 
 # Model-visible argv: reproduce with `ctx get blob:<script> | python3 -I -`.
@@ -45,7 +46,12 @@ def run_eval(
 ) -> tuple[str, int]:
     """Execute a Python script under birth-gate capture.
 
-    Returns (digest_text, exit_code) where exit_code is 124 on timeout,
+    Returns (digest_text, exit_code, timed_out). ``timed_out`` is the ONLY
+    trustworthy timeout signal: exit code 124 is by convention a timeout, but
+    it is also a value a script may legitimately return, and overloading the
+    two made ``sys.exit(124)`` indistinguishable from a real kill. The code is
+    still 124 on timeout for the documented CLI contract; callers that need to
+    know WHY must read the flag. Historically returned (digest_text,
     otherwise the script's own exit code (signal death maps to 1).
     """
     from ctx.digest import render_run_digest
@@ -71,12 +77,17 @@ def run_eval(
     digest, manifest = render_run_digest(store, ws, capture.manifest, focus=focus, op="eval")
 
     unit = "line" if lines == 1 else "lines"
-    header = f"[ctx eval · script blob:{script_blob[:12]} · {lines} {unit}]"
+    header = f"[ctx py · script blob:{short_id(script_blob)} · {lines} {unit}]"
     result = manifest["result"]
-    if result["timedOut"]:
+    timed_out = bool(result["timedOut"])
+    if timed_out:
         code = 124
     elif result["exitCode"] is None:
         code = 1  # killed by signal
     else:
         code = int(result["exitCode"])
-    return header + "\n" + digest, code
+    # The digest must not claim a timeout the runner did not observe: a script
+    # that chose 124 itself gets its own exit code reported as its own.
+    if code == 124 and not timed_out:
+        header += "  [exit 124 chosen by the script; not a timeout]"
+    return header + "\n" + digest, code, timed_out

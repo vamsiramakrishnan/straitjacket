@@ -17,7 +17,11 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parent.parent / "src"
 
 DEFAULT_BUDGET = 262144  # 256 KiB
-PRESSURE_LIMIT = 240 // 4  # max_inline_lines default // 4
+# The over-budget window escalates with the overrun ratio (hook._pressured_window),
+# so it is no longer a single constant. These bracket the contract: a pressured
+# window is never looser than the old fixed throttle and never below the floor.
+PRESSURE_CEILING = 240 // 4  # max_inline_lines default // 4, at ~1x overrun
+PRESSURE_FLOOR = 20          # hook._OVER_BUDGET_MIN_LINES
 
 
 def _classify(tool_name, tool_input, workspace, session_id=None):
@@ -64,22 +68,25 @@ def test_small_reads_accumulate_and_flip_past_default_budget(tmp_path):
     assert d["decision"] == "allow"
     updated = d["rewrite"]["updatedInput"]
     assert updated["file_path"] == str(f)
-    assert updated["limit"] == PRESSURE_LIMIT
+    assert PRESSURE_FLOOR <= updated["limit"] <= PRESSURE_CEILING
     reason = d["rewrite"]["reason"]
     assert "session native-read budget exceeded" in reason
     assert "KiB raw reads" in reason
     assert "ctx search repo:" in reason
     assert "ctx get repo:" in reason
 
-    # Emitters turn the pressured decision into allow+updatedInput.
+    # Emitters: Claude Code turns the pressured decision into allow+updatedInput.
+    # Antigravity has no updatedInput field, so the same decision becomes a deny
+    # carrying the reason — the bound is enforced either way, but only one host
+    # can apply it without spending a turn.
     from ctx.hook import _to_antigravity_schema, _to_claude_code_schema
 
     wire = _to_antigravity_schema(dict(d))
-    assert wire["decision"] == "allow"
-    assert wire["updatedInput"]["limit"] == PRESSURE_LIMIT
+    assert wire["decision"] == "deny"
+    assert "updatedInput" not in wire
     hso = _to_claude_code_schema(dict(d))["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
-    assert hso["updatedInput"]["limit"] == PRESSURE_LIMIT
+    assert PRESSURE_FLOOR <= hso["updatedInput"]["limit"] <= PRESSURE_CEILING
 
 
 def test_over_budget_denies_under_steering_deny(tmp_path):
@@ -205,7 +212,7 @@ def test_oversized_read_rewrite_charges_max_inline_bytes(tmp_path):
     small = _make_file(tmp_path, "small.txt", 5000)
     d2 = _read(small, tmp_path)
     assert d2["decision"] == "allow"
-    assert d2["rewrite"]["updatedInput"]["limit"] == PRESSURE_LIMIT
+    assert PRESSURE_FLOOR <= d2["rewrite"]["updatedInput"]["limit"] <= PRESSURE_CEILING
 
 
 # --------------------------------------------------------- configured budget
@@ -218,7 +225,7 @@ def test_configured_budget_flips_after_1kb(tmp_path):
     assert _read(f, tmp_path) == {"decision": "allow"}  # 600 ≤ 1024
     d = _read(f, tmp_path)  # 1200 > 1024
     assert d["decision"] == "allow"
-    assert d["rewrite"]["updatedInput"]["limit"] == PRESSURE_LIMIT
+    assert PRESSURE_FLOOR <= d["rewrite"]["updatedInput"]["limit"] <= PRESSURE_CEILING
     assert "session native-read budget exceeded" in d["rewrite"]["reason"]
 
 
@@ -226,3 +233,61 @@ def test_budgets_dataclass_field_default():
     from ctx.config import Budgets
 
     assert Budgets().session_read_budget_bytes == 262144
+
+
+# ------------------------------------------- escalating over-budget pressure
+# Both properties below were learned from a measured failure (evals/devex/,
+# harnessed arm): 167 native reads landed 796 KiB against a 256 KiB budget.
+def test_over_budget_window_escalates_with_overrun():
+    """The throttle must tighten as the overrun grows, not latch at one step.
+
+    The old behaviour was a single binary gate: the same window at 1.01x
+    overrun and at 6.3x. A session already far over budget therefore kept
+    paying the same toll, and 133 post-budget reads still averaged ~4 KiB."""
+    from ctx.hook import _OVER_BUDGET_MIN_LINES, _pressured_window
+
+    budget = 262144
+    at_budget = _pressured_window(240, budget, budget)
+    just_over = _pressured_window(240, budget + 1, budget)
+    two_x = _pressured_window(240, 2 * budget, budget)
+    six_x = _pressured_window(240, 1647077, budget)  # the measured session
+
+    assert at_budget == 240, "at or under budget the window is untouched"
+    assert just_over <= 240 // 4, "crossing the budget is at least as tight as before"
+    assert two_x < just_over, "2x overrun must be tighter than 1x"
+    assert six_x < two_x, "6.3x overrun must be tighter than 2x"
+    assert six_x >= _OVER_BUDGET_MIN_LINES, "never below the useful-evidence floor"
+    assert _pressured_window(240, 500 * budget, budget) == _OVER_BUDGET_MIN_LINES
+
+
+def test_broken_ledger_applies_no_pressure():
+    """Fail-open contract: a ledger that returns 0 must not throttle."""
+    from ctx.hook import _pressured_window
+
+    assert _pressured_window(240, 0, 262144) == 240
+    assert _pressured_window(240, 100, 0) == 240
+
+
+def test_large_file_read_feels_session_pressure(tmp_path):
+    """A file over max_inline_bytes must be bounded by session pressure too.
+
+    The large-file branch used to return before the ledger was consulted, so
+    the biggest reads -- the ones that dominate the flood -- were the only
+    ones exempt. Measured max read stayed ~15 KiB before and after the budget
+    was crossed precisely because those reads never saw it."""
+    (tmp_path / "ctx.toml").write_text(
+        "version = 1\n[budgets]\nsession_read_budget_bytes = 20000\n",
+        encoding="utf-8",
+    )
+    big = _make_file(tmp_path, "big.txt", 20000)  # > 16384 inline budget
+    first = _read(big, tmp_path, session_id="s-pressure")
+    assert first["rewrite"]["updatedInput"]["limit"] == 240, "fresh session: unpressured"
+
+    # Drive the ledger well past its 20000-byte budget, then read big again.
+    for i in range(6):
+        _read(_make_file(tmp_path, f"f{i}.txt", 15000), tmp_path, session_id="s-pressure")
+    later = _read(big, tmp_path, session_id="s-pressure")
+    assert later["rewrite"]["updatedInput"]["limit"] < 240, (
+        "a large file read by an over-budget session must be bounded tighter "
+        "than the unpressured window"
+    )

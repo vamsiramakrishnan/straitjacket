@@ -7,6 +7,16 @@
 
 # Ladders: the conditionality audit
 
+> **Design & internals — not product documentation.** This doc explains *why* a
+> mechanism exists and how it was reasoned out; it may describe an idea before it
+> ships or record one that was rejected. For what the product does **today**,
+> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
+> status label literally. New to the vocabulary? Read
+> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
+>
+> This is an internal audit that lists known rough edges and design debt by
+> source coordinate — read those as engineering notes, not as product behaviour.
+
 **Date:** 2026-07-18 · analysis pass over every tiered/conditional construct
 in the product — how each is traversed, whether they stack, where the rough
 edges are, and the one change that brings them together. House criterion
@@ -16,20 +26,66 @@ or it cannot earn (or lose) its place in a policy epoch.
 
 ## 1 · The ladder registry
 
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ladders-efficiency.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ladders-efficiency-light.svg" width="100%" alt="The nine ladders of efficiency: solution, capture, emission budgets, graduated engagement, window pressure, guard modes, policy epochs, deployment tiers and model tiers. Each row shows its rungs left to right, who climbs it — the model, the hook, or a static setting — and whether its traversal is measured — derived from the registry in src/ctx/ladders.py, not hand-maintained.">
+</picture>
+
+</div>
+
+The table below is the same nine, with the detail the picture cannot carry.
+Read the rightmost column first: it is what makes this an audit rather than a
+feature tour.
+
+**Both are generated from one declaration.** `src/ctx/ladders.py` holds the
+registry; the diagram is drawn from it, this table is checked against it by
+`tests/test_ladders.py`, and `ctx ladders` measures it. The "measured today?"
+column used to be hand-maintained, which made it the part of this audit most
+likely to drift into advertising — nothing could contradict it. It is now
+*derived*: a ladder is measurable when it declares a signal naming a ledger
+and field that actually carry rung values, and one that cannot be scored has
+to say why.
+
+```bash
+ctx ladders            # what THIS workspace recorded climbing
+ctx ladders --corpus <dir>   # aggregate across a directory of recorded sessions
+ctx ladders --json     # machine-readable
+```
+
+Scored against the bug-bash corpus (29 recorded workspaces, no new runs):
+**6 measured · 2 instrumented but silent · 1 not scored** —
+[`evals/ladder-scores-2026-08-03.md`](../evals/ladder-scores-2026-08-03.md).
+Two ladders are static *per workspace* (guard mode, deployment tier), so only
+a corpus can show their distribution; `--corpus` is what asks that question.
+
+Rungs are configurable, because they are a declaration rather than a literal:
+
+```toml
+[ladders.capture]
+rungs = ["native read", "run", "seq"]   # this repo never reaches for `ctx py`
+```
+
+Configuration **narrows** a ladder. It cannot invent rungs — a rung is a code
+path, and declaring one nothing implements would produce a report about a
+ladder that does not exist. Unknown names are dropped and named by
+`ctx ladders`, never accepted quietly.
+
 Every ladder in the system, by axis. "Traversed by" says who moves along
 it; "latching" says whether it can flap.
 
 | ladder | axis | steps | traversed by | signal | latching | measured today? |
 |---|---|---|---|---|---|---|
-| Solution ladder (skill r13) | what code to write | not-needed → reuse → stdlib → one-liner → new code | model (advisory) | none (in-prompt) | n/a | ✅ deliverable metrics, A/B-adopted |
-| Capture ladder | how work executes | native → `run` → pipeline (`--shell`) → `seq` → `eval` → `job` (this wave) | model (taught) + hook (steered) | command shape | n/a | ⚠️ adoption ledger just landed (eval wave); no per-step traversal metric |
-| Emission budgets | how much rides | inline-complete → digest → failure×2 → truncation note | harness | output size, exit code | no (per event) | ✅ telemetry raw/emitted per verb |
-| Graduated engagement | affordance surface | passive → active | harness | call count ≥ 8, truncation events, model tier | latches up per session | ⚠️ state file exists; transitions not telemetried |
-| Window pressure | residency defense | normal → tightened budgets → epoch-latched rescue | harness (hook + proxy) | window.json fullness % | rescue latches | ✅ scorecard (rescue round, blocks elided) |
-| Guard modes | steering strength | advisory → guarded → strict; allow → ask → force_ask → deny | static config | none at runtime | static | ❌ no per-mode outcome data |
-| Policy epochs | per-command trust | unknown → promoted / demoted | compiler (offline) | run telemetry: bounded-output reliability | committed epochs | ✅ by construction |
-| Deployment tiers | enforcement depth | skill → plugin → native → hardened | human | none | static | n/a |
-| Model tiers (Maki steal, open) | who reasons | lean → strong | not built | task scale | — | — |
+| Solution ladder (skill r13) | what code to write | not-needed → reuse → native feature → stdlib → one-liner → new code (exempt: trust boundaries, data loss, security, accessibility) | model (advisory) | none (in-prompt) | n/a | ❌ **not scored** — the rung is chosen inside the model's reasoning and never crosses a tool boundary; the A/B measured the ladder's *outcome* (−28% turns), not its traversal |
+| Capture ladder | how work executes | native → `run` → pipeline (`--shell`) → `seq` → `eval` → `job` (this wave) | model (taught) + hook (steered) | command shape | n/a | ✅ **measured** — `collapse.jsonl` carries a rung per substitution; `ctx ladders` shows the distribution |
+| Emission budgets | how much rides | inline-complete → digest → failure×2 → truncation note | harness | output size, exit code | no (per event) | ✅ **measured (derived)** — `plan-emissions.jsonl` `visible_tokens`, bucketed against the configured budgets. The tier a size falls under, not a record of which check bound it |
+| Graduated engagement | affordance surface | passive → active | harness | call count ≥ 8, truncation events, model tier | latches up per session | ✅ **measured** (point sample) — `engagement.json` carries the current level; still no transition history |
+| Window pressure | residency defense | normal → tightened budgets → epoch-latched rescue | harness (hook + proxy) | window.json fullness % | rescue latches | ✅ **measured** — proxy `window.json` fullness, bucketed onto the rungs |
+| Guard modes | steering strength | advisory → guarded → strict; allow → ask → force_ask → deny | static config | none at runtime | static | ✅ **measured** — `guard-policy-cache.json` `policy.mode`; one value per workspace, so use `ctx ladders --corpus` for the distribution |
+| Policy epochs | per-command trust | unknown → promoted / demoted | compiler (offline) | run telemetry: bounded-output reliability | committed epochs | ✅ **measured** — promoted/demoted command counts in the committed policy. (`planMode` is a *different* axis and is deliberately not read here) |
+| Deployment tiers | enforcement depth | skill → plugin → native → hardened | human | none | static | ✅ **measured (probe)** — read from what `ctx wrap` actually installed, not from a ledger |
+| Model tiers (Maki steal, open) | who reasons | economy → adaptive → flagship | router | task complexity | per node | ⚠️ **instrumented, silent** — `route.jsonl` records a tier per routed node; no data until `ctx orchestrate` runs |
 
 Two observations fall out of just writing the table:
 

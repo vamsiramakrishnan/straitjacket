@@ -18,7 +18,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int
+from ctx.textutil import fmt_int, short_path
 
 # grep -n / rg: "path:line:content"  (also "path:line:col:content" from some
 # tools — the col is folded into content, harmless for the census).
@@ -26,12 +26,20 @@ _MATCH_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<content>.*)$")
 _MIN_MATCHES = 12  # below this the text profile / inline path is fine
 
 
-def _parse(lines: list[str]) -> list[tuple[str, int, str]]:
-    out: list[tuple[str, int, str]] = []
-    for ln in lines:
+def _parse(lines: list[str]) -> list[tuple[str, int, str, int]]:
+    """(file, file_line, content, STDOUT_LINE).
+
+    The stdout index is the fourth field because the span for "the rest of
+    the matches" has to be minted from it. It used to be minted from the
+    match ORDINAL, which is the same number only when every stdout line is a
+    match -- false the moment grep prints -A/-B/-C context, and then the
+    span covered a fraction of what it claimed.
+    """
+    out: list[tuple[str, int, str, int]] = []
+    for idx, ln in enumerate(lines, start=1):
         m = _MATCH_RE.match(ln)
         if m:
-            out.append((m.group("file"), int(m.group("line")), m.group("content")))
+            out.append((m.group("file"), int(m.group("line")), m.group("content"), idx))
     return out
 
 
@@ -69,20 +77,16 @@ class SearchProfile(Profile):
 
     def render(self, ctx: DigestContext) -> str:
         matches = self._matches
-        by_file = Counter(f for f, _, _ in matches)
+        by_file = Counter(f for f, _, _, _ in matches)
         body = [
             "summary:",
             f"  matches (exact): {fmt_int(len(matches))} across "
             f"{fmt_int(len(by_file))} files",
         ]
 
-        def _short(p: str) -> str:
-            parts = p.replace("\\", "/").split("/")
-            return "/".join(parts[-2:]) if len(parts) > 2 else p
-
         body.append(
             "  by file (exact): "
-            + " · ".join(f"{_short(f)}×{n}" for f, n in by_file.most_common(8))
+            + " · ".join(f"{short_path(f)}×{n}" for f, n in by_file.most_common(8))
         )
         if len(by_file) > 8:
             body.append(f"  … +{fmt_int(len(by_file) - 8)} more files")
@@ -90,11 +94,19 @@ class SearchProfile(Profile):
         # Top matches verbatim with coordinates, then a span to the rest.
         shown = 0
         body.append("top matches:")
-        for f, line, content in matches[:8]:
-            body.append(f"  {_short(f)}:{line}: {content.strip()[:120]}")
+        for f, line, content, _stdout_line in matches[:8]:
+            body.append(f"  {short_path(f)}:{line}: {content.strip()[:120]}")
             shown += 1
         if len(matches) > 8:
-            sid = ctx.mint_span(ctx.stdout, "region", a=9, b=min(len(matches), 9 + 200))
+            # Real stdout coordinates, covering EVERY remaining match. The
+            # old window stopped 200 matches in while the text beside it
+            # claimed all of them -- the count and the address disagreeing
+            # about the same set. A span is a coordinate range, not a
+            # payload: widening it costs nothing to mint, and `ctx get
+            # --span` bounds its own emission.
+            sid = ctx.mint_span(
+                ctx.stdout, "region", a=matches[8][3], b=matches[-1][3]
+            )
             tag = f" · span {sid}" if sid else ""
             body.append(
                 f"  … +{fmt_int(len(matches) - 8)} more matches{tag}"
@@ -105,7 +117,7 @@ class SearchProfile(Profile):
         top_file = by_file.most_common(1)[0][0]
         suggestions = [
             f"ctx get {rid}#stdout --lines 1:{min(len(matches), 60)}",
-            f"ctx search {rid} '<narrower>' --glob '{_short(top_file)}'",
+            f"ctx search {rid} '<narrower>' --glob '{short_path(top_file)}'",
         ]
         return "\n".join(
             ctx.header_lines()
