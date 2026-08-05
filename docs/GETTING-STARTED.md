@@ -16,6 +16,15 @@ straitjacket currently requires:
 
 The Python core remains deliberately small. Optional analysis backends improve precision or speed, but their absence should degrade capability rather than break capture.
 
+For image render comparison, install the optional Pillow decoder:
+
+```bash
+python -m pip install -e '.[image]'
+```
+
+Magic-byte detection, exact hashing, common image dimensions, and labelled PDF
+structure remain available without it.
+
 ## Install and set up (one command)
 
 ```bash

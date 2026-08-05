@@ -36,6 +36,10 @@ ctx = "ctx.cli:main"
 dev = ["pytest>=8", "jsonschema>=4"]
 map = ["grimp>=3.15", "networkx>=3.4"]
 fast = ["orjson>=3"]
+# Pillow decodes images for dHash comparison and enriches formats whose
+# dimensions are not parsed by the stdlib floor. Binary identity, magic-byte
+# detection, common image dimensions, and PDF structure remain dependency-free.
+image = ["pillow>=10"]
 # Individual grammar wheels are the maintained, offline-safe tree-sitter
 # path (the bundle language-pack fetches parsers at runtime); the skeleton
 # tier tries these first, then the bundles. SCIP xref ingestion is

@@ -162,6 +162,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "get": ("retrieve", "cmd_get", True),
     "stats": ("retrieve", "cmd_stats", True),
     "diff": ("retrieve", "cmd_diff", True),
+    "image": ("binary", "cmd_image", True),
     "map": ("retrieve", "cmd_map", True),
     "def": ("retrieve", "cmd_def", True),
     "refs": ("retrieve", "cmd_refs", True),
@@ -373,6 +374,15 @@ def _build_parser():
     p_diff = sub.add_parser("diff", help="run-to-run regression delta digest")
     p_diff.add_argument("ref_a", metavar="handle_before", help="the earlier run handle")
     p_diff.add_argument("ref_b", metavar="handle_after", help="the later run handle")
+
+    p_image = sub.add_parser(
+        "image", help="inspect or compare binary image/PDF evidence"
+    )
+    p_image.add_argument(
+        "image_cmd", choices=("digest", "diff"),
+        help="digest <file>... or diff <before> <after>",
+    )
+    p_image.add_argument("files", nargs="+", help="workspace-relative file path(s)")
 
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")

@@ -6,6 +6,19 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+### Binary output gets a typed, addressable profile
+
+`ctx run` now detects image, PDF, archive, executable, and unknown binary
+output by magic bytes before text profiles run. The complete bytes remain in
+the artifact store; `binary/v1` emits bounded structure, exact SHA-256 identity,
+and a working run handle instead of replacement-character text.
+
+`ctx image digest` inspects workspace-confined files without inlining their
+payload. `ctx image diff` reports deterministic dHash distance and byte
+identity for two decodable images when the optional `[image]` extra is
+installed. PDF page objects and text operators are explicitly labelled as
+byte-scan heuristics; absence is not reported as proof of a scanned document.
+
 ### The prefix budget is measured, not narrated
 
 **What the harness actually costs a session: ~708 tokens.** Not the ~3,800 an

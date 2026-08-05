@@ -29,6 +29,7 @@ class StreamView:
     media_type: str
     text: str  # decoded (possibly lossy) view, capped at MAX_PARSE_BYTES
     parsed_fully: bool
+    head: bytes = b""  # first raw bytes, for binary-format sniffing pre-decode
 
     @property
     def text_lines(self) -> list[str]:
@@ -107,6 +108,7 @@ class DigestContext:
                 views[name] = StreamView(name, 0, 0, meta["mediaType"], "", True)
                 continue
             data = store.get_blob(blob_hash)
+            head = data[:64]
             parsed_fully = len(data) <= MAX_PARSE_BYTES
             if not parsed_fully:
                 data = data[:MAX_PARSE_BYTES]
@@ -115,7 +117,7 @@ class DigestContext:
             else:
                 text = data.decode("utf-8", "replace")
             views[name] = StreamView(
-                name, size, int(meta["lines"]), meta["mediaType"], text, parsed_fully
+                name, size, int(meta["lines"]), meta["mediaType"], text, parsed_fully, head
             )
         terms = tuple(t for t in re.split(r"\W+", (focus or "").lower()) if len(t) >= 2)
         # Note: engagement (mechanism C) deliberately does NOT influence
