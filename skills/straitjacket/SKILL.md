@@ -79,7 +79,3 @@ ctx get run:8d8335db6848#stdout --lines 1280:1300
 - **Prompt Prefix Caching:** Because `straitjacket` strips non-deterministic noise (locale, temp paths, timestamps), identical test failures produce **byte-identical digests**. This prevents prompt prefix drift across multi-turn repair attempts, preserving prompt cache hit rates (typically 96–98%) and lowering API token costs by up to 10×.
 - **Diffing True Signal:** Always prefer `ctx diff run:A run:B` over manual inspection when checking whether a code edit resolved a specific test regression.
 
----
-
-> **Note on Enterprise Tokenomics & Zero-Cost Triage (Tier 2 Reference):**  
-> This skill covers the operational CLI usage of `straitjacket`. For full architectural guidelines on integrating `straitjacket` with multi-LLM orchestration pipelines, Zero-Cost Deterministic Error Triage (`$0.0000` triage spend vs. LLM triage calls), and empirical SWE-bench Pro N=30 benchmark evaluations, refer to the **Tokenomics Reference & Benchmark Repository** (`https://github.com/lexha-redstone/tokenomics-benchmark-multi-llms`).
