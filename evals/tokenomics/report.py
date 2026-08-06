@@ -52,7 +52,7 @@ def summarise(payload: dict, prices: dict | None = None) -> dict:
     counts = {"passed": 0, "failed": 0, "infra_error": 0, "errored": 0}
     solver_in = solver_out = triage_in = triage_out = 0
     solver_usd = triage_usd = 0.0
-    channel_chars = truncated = 0
+    channel_chars = truncated = hops = 0
     per_task = {}
 
     for r in rows:
@@ -69,6 +69,7 @@ def summarise(payload: dict, prices: dict | None = None) -> dict:
             triage_out += c["output_tokens"]
             triage_usd += usd(c["input_tokens"], c["output_tokens"], c["model"], prices)
         channel_chars += r.get("channel_chars", 0)
+        hops += r.get("hops", 0)
 
     n = payload["n"]
     scored = n - counts["errored"] - counts["infra_error"]
@@ -97,6 +98,7 @@ def summarise(payload: dict, prices: dict | None = None) -> dict:
         "total_usd": total_usd,
         "usd_per_solved": total_usd / counts["passed"] if counts["passed"] else float("nan"),
         "repair_channel_chars": channel_chars,
+        "retrieval_hops": hops,
         "truncated_calls": truncated,
         "wall_seconds": payload.get("wall_seconds", 0),
         "per_task": per_task,
@@ -137,9 +139,9 @@ def main() -> int:
     L.append("## Per-arm results\n")
     L.append(
         "| Arm | Ladder | Triage | Pass | Rate (95% CI) | Solver tok (in/out) | "
-        "Triage tok | Triage $ | Total $ | $/solved | Repair-channel chars |"
+        "Triage tok | Triage $ | Total $ | $/solved | Repair-channel chars | ctx get hops |"
     )
-    L.append("|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|")
+    L.append("|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|")
     for s in sorted(summaries, key=lambda x: (x["family"], x["triage"])):
         L.append(
             f"| `{s['arm']}` | {s['ladder']} | {s['triage']} | {s['passed']}/{s['n']} | "
@@ -147,7 +149,7 @@ def main() -> int:
             f"{s['solver_tokens_in']:,}/{s['solver_tokens_out']:,} | "
             f"{s['triage_tokens_in'] + s['triage_tokens_out']:,} | "
             f"${s['triage_usd']:.4f} | ${s['total_usd']:.4f} | "
-            f"${s['usd_per_solved']:.4f} | {s['repair_channel_chars']:,} |"
+            f"${s['usd_per_solved']:.4f} | {s['repair_channel_chars']:,} | {s['retrieval_hops']} |"
         )
 
     L.append("\n## Run health (excluded and degraded tasks are counted, never dropped silently)\n")

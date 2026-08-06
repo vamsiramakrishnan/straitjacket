@@ -103,6 +103,11 @@ ARMS = {
     "cascade_raw": {"ladder": [(LITE, None), (FLASH, "LOW")], "triage": "raw", "family": "cascade"},
     "cascade_llm": {"ladder": [(LITE, None), (FLASH, "LOW")], "triage": "llm", "family": "cascade"},
     "cascade_sj": {"ladder": [(LITE, None), (FLASH, "LOW")], "triage": "sj", "family": "cascade"},
+    "cascade_sjhop": {
+        "ladder": [(LITE, None), (FLASH, "LOW")],
+        "triage": "sj_hop",
+        "family": "cascade",
+    },
     # family: smart_repair (reason first, cheap fix, reasoned escalation) -- their Arms 3/4
     "smart_raw": {
         "ladder": [(FLASH, "LOW"), (LITE, None), (FLASH, "MEDIUM")],
@@ -117,6 +122,11 @@ ARMS = {
     "smart_sj": {
         "ladder": [(FLASH, "LOW"), (LITE, None), (FLASH, "MEDIUM")],
         "triage": "sj",
+        "family": "smart_repair",
+    },
+    "smart_sjhop": {
+        "ladder": [(FLASH, "LOW"), (LITE, None), (FLASH, "MEDIUM")],
+        "triage": "sj_hop",
         "family": "smart_repair",
     },
 }
@@ -257,12 +267,79 @@ def evaluate(problem: dict, solution: str, sandbox_python: str, use_ctx: bool, w
 
 INFRA_RE = re.compile(r"ModuleNotFoundError|ImportError: cannot import name|No module named")
 
+# `[ctx run:<id> profile=...]` header, and the `<stream>:L<n>` span addresses the
+# digest hands out in place of the bytes it omitted.
+RUN_ID_RE = re.compile(r"^\[ctx run:([0-9a-f]{6,64})", re.MULTILINE)
+SPAN_RE = re.compile(r"\b(stdout|stderr):L(\d+)\b")
+
+HOP_WINDOW = 8  # lines either side of a cited span
+HOP_MAX_LINES = 100  # the skill's own ceiling: 50-100 lines per retrieval
+
+
+def _merge_windows(lines: list[int], window: int, cap: int) -> list[tuple[int, int]]:
+    """Collapse cited line numbers into a few bounded, non-overlapping ranges."""
+    spans = sorted((max(1, n - window), n + window) for n in sorted(set(lines)))
+    merged: list[list[int]] = []
+    for lo, hi in spans:
+        if merged and lo <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    out, budget = [], cap
+    for lo, hi in merged:
+        if budget <= 0:
+            break
+        hi = min(hi, lo + budget - 1)
+        out.append((lo, hi))
+        budget -= hi - lo + 1
+    return out
+
+
+def hop_retrieve(digest: str, sandbox_cwd: pathlib.Path) -> tuple[str, int]:
+    """Resolve the spans the digest cites, the way an agent holding it would.
+
+    This is the `+capture+verbs` arm: the digest names where the evidence is, and
+    a consumer that can follow an address goes and gets it. Local, bounded, and
+    free -- `ctx get` makes no API call, so the triage cost stays $0.0000.
+    """
+    m = RUN_ID_RE.search(digest)
+    if not m:
+        return "", 0
+    run_id = m.group(1)
+
+    by_stream: dict[str, list[int]] = {}
+    for stream, num in SPAN_RE.findall(digest):
+        by_stream.setdefault(stream, []).append(int(num))
+    if not by_stream:
+        return "", 0
+
+    chunks, hops = [], 0
+    per_stream_cap = max(1, HOP_MAX_LINES // len(by_stream))
+    for stream, nums in by_stream.items():
+        for lo, hi in _merge_windows(nums, HOP_WINDOW, per_stream_cap):
+            try:
+                r = subprocess.run(
+                    ["ctx", "get", f"run:{run_id}#{stream}", "--lines", f"{lo}:{hi}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    cwd=sandbox_cwd,
+                )
+            except subprocess.TimeoutExpired:
+                continue
+            hops += 1
+            if r.returncode == 0 and r.stdout.strip():
+                chunks.append(r.stdout.strip())
+    if not chunks:
+        return "", hops
+    return "\n\nretrieved spans:\n" + "\n".join(chunks), hops
+
 
 def solve_task(problem: dict, arm: dict, sandbox_python: str) -> dict:
     """Run one task through one arm's ladder. Every call is live or the task errors."""
     calls: list[dict] = []
     triage_calls: list[dict] = []
-    use_ctx = arm["triage"] == "sj"
+    use_ctx = arm["triage"] in ("sj", "sj_hop")
     prompt = SOLVER_ROLE + problem["complete_prompt"]
     code = ""
     outcome = None
@@ -280,6 +357,7 @@ def solve_task(problem: dict, arm: dict, sandbox_python: str) -> dict:
 
 
 def _run_ladder(problem, arm, sandbox_python, workdir, use_ctx, calls, triage_calls) -> dict:
+    hop_count = 0
     prompt = SOLVER_ROLE + problem["complete_prompt"]
     code = ""
     outcome = None
@@ -306,6 +384,7 @@ def _run_ladder(problem, arm, sandbox_python, workdir, use_ctx, calls, triage_ca
                 "calls": calls,
                 "triage_calls": triage_calls,
                 "channel_chars": 0,
+                "hops": hop_count,
             }
 
         if rung == len(arm["ladder"]) - 1:
@@ -313,7 +392,11 @@ def _run_ladder(problem, arm, sandbox_python, workdir, use_ctx, calls, triage_ca
 
         # --- the measured variable: how the failure reaches the next model ---
         channel = outcome["channel"]
-        if arm["triage"] == "llm":
+        if arm["triage"] == "sj_hop":
+            extra, hops = hop_retrieve(channel, workdir)
+            channel += extra
+            hop_count += hops
+        elif arm["triage"] == "llm":
             try:
                 tri = call_model(LITE, TRIAGE_ROLE + "```\n" + channel + "\n```", None, max_tokens=768)
             except ModelCallFailed as exc:
@@ -347,6 +430,7 @@ def _run_ladder(problem, arm, sandbox_python, workdir, use_ctx, calls, triage_ca
         "calls": calls,
         "triage_calls": triage_calls,
         "channel_chars": len(outcome["channel"]) if outcome else 0,
+        "hops": hop_count,
         "last_channel": (outcome["channel"][:600] if outcome else ""),
     }
 

@@ -16,10 +16,25 @@ model somehow. There are three channels:
 | `raw` | forward the unittest stderr verbatim | $0 |
 | `llm` | pay a cheap model to compress it | per repair loop |
 | `sj` | forward the digest from `ctx run --` | $0 |
+| `sj_hop` | that digest, plus the spans it cites, resolved with `ctx get` | $0 |
 
-`sj` and `raw` are both free; the interesting question is whether `sj` holds
+Three of the four are free; the interesting question is whether they hold
 accuracy against `llm` while costing nothing, and how much smaller the repair
 prompt gets. That is the only variable this eval manipulates.
+
+`sj_hop` exists because `sj` alone tests the digest in the mode straitjacket is
+least suited to. The digest is a *census plus addresses*: it names every failing
+test and tells you where the bytes are, on the assumption that whoever reads it
+can follow an address. A single stateless repair call cannot — it sees
+`stderr:L2` and has to guess what was there. `sj_hop` resolves those citations
+locally before handing the channel on, which is what an agent does with the same
+digest. The `sj` vs `sj_hop` delta therefore separates two very different
+claims: *the digest dropped decisive evidence* from *the consumer had no way to
+go get it*. Only the first would be a defect in the digest.
+
+The hop is bounded the way the skill prescribes — a window either side of each
+cited line, merged, capped at 100 lines per retrieval — and it is free: `ctx
+get` reads the local store and makes no API call.
 
 ## Arms
 
@@ -29,8 +44,8 @@ Across families nothing is attributable — the ladder changes too.
 
 | Family | Ladder | Arms |
 |---|---|---|
-| `cascade` | `3.5-flash-lite` → `3.6-flash(low)` | `cascade_raw`, `cascade_llm`, `cascade_sj` |
-| `smart_repair` | `3.6-flash(low)` → `3.5-flash-lite` → `3.6-flash(medium)` | `smart_raw`, `smart_llm`, `smart_sj` |
+| `cascade` | `3.5-flash-lite` → `3.6-flash(low)` | `cascade_raw`, `cascade_llm`, `cascade_sj`, `cascade_sjhop` |
+| `smart_repair` | `3.6-flash(low)` → `3.5-flash-lite` → `3.6-flash(medium)` | `smart_raw`, `smart_llm`, `smart_sj`, `smart_sjhop` |
 
 The Claude tiers from the original suite (`Escalation Shield`, `Ultra-Sweet
 Hybrid`) are **not** run here — no Anthropic credential in this environment.
