@@ -1,0 +1,808 @@
+{
+ "schema": "tokenomics.arm/v1",
+ "arm": "cascade_raw",
+ "family": "cascade",
+ "ladder": [
+  {
+   "model": "gemini-3.5-flash-lite",
+   "thinking": null
+  },
+  {
+   "model": "gemini-3.6-flash",
+   "thinking": "LOW"
+  }
+ ],
+ "triage": "raw",
+ "n": 30,
+ "task_ids": [
+  "BigCodeBench/13",
+  "BigCodeBench/15",
+  "BigCodeBench/17",
+  "BigCodeBench/19",
+  "BigCodeBench/34",
+  "BigCodeBench/37",
+  "BigCodeBench/82",
+  "BigCodeBench/89",
+  "BigCodeBench/92",
+  "BigCodeBench/93",
+  "BigCodeBench/99",
+  "BigCodeBench/100",
+  "BigCodeBench/101",
+  "BigCodeBench/108",
+  "BigCodeBench/120",
+  "BigCodeBench/123",
+  "BigCodeBench/124",
+  "BigCodeBench/129",
+  "BigCodeBench/139",
+  "BigCodeBench/147",
+  "BigCodeBench/161",
+  "BigCodeBench/162",
+  "BigCodeBench/177",
+  "BigCodeBench/184",
+  "BigCodeBench/187",
+  "BigCodeBench/199",
+  "BigCodeBench/208",
+  "BigCodeBench/211",
+  "BigCodeBench/214",
+  "BigCodeBench/227"
+ ],
+ "provenance": "live",
+ "simulated": false,
+ "prices_usd_per_mtok": {
+  "gemini-3.6-flash": {
+   "input": 1.5,
+   "output": 7.5
+  },
+  "gemini-3.5-flash-lite": {
+   "input": 0.3,
+   "output": 2.5
+  }
+ },
+ "price_provenance": "Unverified: carried over from tokenomics-benchmark-multi-llms/src/config.py. Re-price with report.py --prices before quoting USD.",
+ "sandbox_python": "/tmp/claude-0/-home-user-straitjacket/e913754c-4b2d-5b7f-98b1-b17d2ff117a4/scratchpad/bench-env/bin/python",
+ "wall_seconds": 452.9,
+ "results": [
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 475,
+     "output_tokens": 992,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.45
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1488,
+     "output_tokens": 2495,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 13.75
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/13",
+   "seconds": 148.9
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 407,
+     "output_tokens": 762,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.63
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1337,
+     "output_tokens": 2496,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 11.41
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/15",
+   "seconds": 14.2
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 294,
+     "output_tokens": 478,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.76
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1557,
+     "output_tokens": 1598,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 8.92
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/17",
+   "seconds": 11.9
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 258,
+     "output_tokens": 422,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.39
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/19",
+   "seconds": 1.5
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 358,
+     "output_tokens": 480,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.36
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/34",
+   "seconds": 2.9
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 450,
+     "output_tokens": 414,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.25
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/37",
+   "seconds": 5.0
+  },
+  {
+   "status": "failed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 487,
+     "output_tokens": 1061,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.71
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1745,
+     "output_tokens": 1628,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 7.91
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 677,
+   "last_channel": "======================================================================\nFAIL: test_logout_route_redirects_to_login (__main__.TestCases.test_logout_route_redirects_to_login)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/bcb_wgfgqz24/prog.py\", line 189, in test_logout_route_redirects_to_login\n    self.assertIn('Logged in as: testuser', response.data.decode())\nAssertionError: 'Logged in as: testuser' not found in \"Logged in as: <MagicMock name='_get_user().username' id='140193549107984'>\"\n\n------------------------------------",
+   "task_id": "BigCodeBench/82",
+   "seconds": 11.1
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 504,
+     "output_tokens": 857,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.59
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/89",
+   "seconds": 5.1
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 379,
+     "output_tokens": 752,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.08
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/92",
+   "seconds": 4.9
+  },
+  {
+   "status": "failed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 306,
+     "output_tokens": 496,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.56
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1161,
+     "output_tokens": 3348,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 18.94
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 1134,
+   "last_channel": "======================================================================\nFAIL: test_values (__main__.TestCases.test_values)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/bcb_wscaqp0o/prog.py\", line 92, in test_values\n    self.assertAlmostEqual(actual[0], expected[0], places=7, msg=\"DataFrame contents should match the expected output\")\nAssertionError: -0.24451537329797124 != -0.36270132751314693 within 7 places (0.11818595421517569 difference) : DataFrame contents should match the expected output\n\nDuring handling of the abov",
+   "task_id": "BigCodeBench/93",
+   "seconds": 24.0
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 329,
+     "output_tokens": 423,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.48
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/99",
+   "seconds": 10.6
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 344,
+     "output_tokens": 521,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.24
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1948,
+     "output_tokens": 2354,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 10.99
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/100",
+   "seconds": 14.9
+  },
+  {
+   "status": "failed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 291,
+     "output_tokens": 676,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.48
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 2358,
+     "output_tokens": 972,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 5.06
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 1863,
+   "last_channel": "======================================================================\nERROR: test_heatmap_values (__main__.TestCases.test_heatmap_values)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/bcb_g67zwh6l/prog.py\", line 81, in test_heatmap_values\n    self.assertAlmostEqual(heatmap_data.tolist(), expect, \"DataFrame contents should match the expected output\")\n  File \"/usr/lib/python3.11/unittest/case.py\", line 904, in assertAlmostEqual\n    diff = abs(first - second)\n               ~~~~~~^~~~~~~~\nTypeError: unsupported operand type",
+   "task_id": "BigCodeBench/101",
+   "seconds": 15.6
+  },
+  {
+   "status": "failed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 681,
+     "output_tokens": 925,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.76
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 3190,
+     "output_tokens": 2960,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 14.67
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 4000,
+   "last_channel": "ne(result.trend)\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/bcb_ogas3ns4/prog.py\", line 140, in to_single_line\n    return ','.join(data.astype(str))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: sequence item 0: expected str instance, float found\n\n======================================================================\nERROR: test_non_numeric_values (__main__.TestCases.test_non_numeric_values)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/claude-0/-home-user-straitjacket/e913754c-4b2d-5b7f-98b1-b17d2ff117",
+   "task_id": "BigCodeBench/108",
+   "seconds": 24.5
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 637,
+     "output_tokens": 238,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.95
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 3832,
+     "output_tokens": 1833,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 9.09
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/120",
+   "seconds": 10.8
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 404,
+     "output_tokens": 634,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.07
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1180,
+     "output_tokens": 768,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 4.08
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/123",
+   "seconds": 7.0
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 588,
+     "output_tokens": 745,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.09
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 3057,
+     "output_tokens": 5629,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 28.14
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/124",
+   "seconds": 31.8
+  },
+  {
+   "status": "failed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 455,
+     "output_tokens": 872,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.52
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 2699,
+     "output_tokens": 865,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 4.55
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 702,
+   "last_channel": "======================================================================\nFAIL: test_return_type_with_complex_data (__main__.TestCases.test_return_type_with_complex_data)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/usr/lib/python3.11/unittest/mock.py\", line 1378, in patched\n    return func(*newargs, **newkeywargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/bcb_chp73xem/prog.py\", line 134, in test_return_type_with_complex_data\n    self.assertEqual(df.iloc[0]['ID'], '1')\nAssertionError: np.int64(1) != '1'\n\n-----------",
+   "task_id": "BigCodeBench/129",
+   "seconds": 8.3
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 328,
+     "output_tokens": 345,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.1
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/139",
+   "seconds": 2.2
+  },
+  {
+   "status": "failed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 319,
+     "output_tokens": 447,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.39
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 979,
+     "output_tokens": 1604,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 9.16
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 795,
+   "last_channel": "======================================================================\nFAIL: test_open_port (__main__.TestCases.test_open_port)\nTest that an open port is correctly detected.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/usr/lib/python3.11/unittest/mock.py\", line 1378, in patched\n    return func(*newargs, **newkeywargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/bcb_hml1i5ap/prog.py\", line 74, in test_open_port\n    self.assertTrue(any(result.values()), \"At least one port should be open for the test range.\")\nAssertio",
+   "task_id": "BigCodeBench/147",
+   "seconds": 10.9
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 308,
+     "output_tokens": 557,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.8
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/161",
+   "seconds": 2.3
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 310,
+     "output_tokens": 409,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.27
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/162",
+   "seconds": 2.0
+  },
+  {
+   "status": "failed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 320,
+     "output_tokens": 512,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.73
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 2387,
+     "output_tokens": 1461,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 7.84
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 865,
+   "last_channel": "[nltk_data] Downloading package punkt to /root/nltk_data...\n[nltk_data]   Package punkt is already up-to-date!\n======================================================================\nERROR: test_empty_dataframe (__main__.TestCases.test_empty_dataframe)\nTest the function with an empty DataFrame.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/bcb_x2hh577_/prog.py\", line 105, in test_empty_dataframe\n    result = task_func(df_empty)\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/bcb_x2hh577_/prog.py\", line 33, in task_func\n    r",
+   "task_id": "BigCodeBench/177",
+   "seconds": 16.8
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 681,
+     "output_tokens": 845,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.49
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/184",
+   "seconds": 4.0
+  },
+  {
+   "status": "infra_error",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 378,
+     "output_tokens": 565,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.87
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1007,
+     "output_tokens": 1707,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 9.46
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 167,
+   "last_channel": "Traceback (most recent call last):\n  File \"/tmp/bcb_ow3lufxg/prog.py\", line 2, in <module>\n    import geopandas as gpd\nModuleNotFoundError: No module named 'geopandas'",
+   "task_id": "BigCodeBench/187",
+   "seconds": 11.6
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 764,
+     "output_tokens": 966,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.66
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/199",
+   "seconds": 3.1
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 461,
+     "output_tokens": 577,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.68
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/208",
+   "seconds": 2.7
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 290,
+     "output_tokens": 470,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.4
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1952,
+     "output_tokens": 2437,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 12.31
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/211",
+   "seconds": 14.2
+  },
+  {
+   "status": "failed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 355,
+     "output_tokens": 449,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.55
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 4004,
+     "output_tokens": 1497,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 7.78
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 4000,
+   "last_channel": ", 16],\n+   [118, 147, 144],\n+   [232, 36, 119],\n+   [135, 101, 217],\n+   [58, 115, 76],\n+   [136, 72, 36],\n+   [30, 84, 157],\n+   [147, 224, 63],\n+   [239, 155, 206],\n+   [139, 252, 224],\n+   [41, 20, 221]],\n+  [[165, 128, 13],\n-   [68, 112, 104],\n?     -    ^    -\n\n+   [46, 117, 10],\n?    +     ^\n\n+   [137, 20, 89],\n+   [240, 226, 142],\n+   [92, 223, 251],\n+   [46, 240, 178],\n+   [209, 170, 164],\n+   [53, 82, 168],\n+   [210, 253, 147],\n+   [205, 18, 232],\n+   [45, 161, 129],\n+   [165, 59, 206],\n+   [0, 236, 211],\n+   [27, 96, 185],\n+   [255, 226, 26],\n+   [104, 136, 67],\n+   [147, 224, 248],\n",
+   "task_id": "BigCodeBench/214",
+   "seconds": 12.5
+  },
+  {
+   "status": "infra_error",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 494,
+     "output_tokens": 894,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.73
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 1449,
+     "output_tokens": 2817,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 14.44
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 4000,
+   "last_channel": "=======================\nERROR: test_empty_list_input (__main__.TestCases.test_empty_list_input)\nTest handling of an empty list which should raise an error during reshaping.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/usr/lib/python3.11/unittest/mock.py\", line 1378, in patched\n    return func(*newargs, **newkeywargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/bcb_g7ssnfw6/prog.py\", line 81, in test_empty_list_input\n    task_func([], 2, 5, 'audio.wav')\n  File \"/tmp/bcb_g7ssnfw6/prog.py\", line 25, in task_func\n    r",
+   "task_id": "BigCodeBench/227",
+   "seconds": 17.8
+  }
+ ]
+}
