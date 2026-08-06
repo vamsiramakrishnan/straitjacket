@@ -7,14 +7,15 @@
 
 ## Per-arm results
 
-| Arm | Ladder | Triage | Pass | Rate (95% CI) | Solver tok (in/out) | Triage tok | Triage $ | Total $ | $/solved | Repair-channel chars |
-|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|
-| `cascade_llm` | 3.5-flash-lite -> 3.6-flash(low) | llm | 21/30 | 70.0% (52%–83%) | 37,843/65,974 | 23,963 | $0.0172 | $0.4611 | $0.0220 | 20,237 |
-| `cascade_raw` | 3.5-flash-lite -> 3.6-flash(low) | raw | 20/30 | 66.7% (49%–81%) | 49,985/57,253 | 0 | $0.0000 | $0.3953 | $0.0198 | 18,203 |
-| `cascade_sj` | 3.5-flash-lite -> 3.6-flash(low) | sj | 19/30 | 63.3% (46%–78%) | 39,554/65,331 | 0 | $0.0000 | $0.4376 | $0.0230 | 8,822 |
-| `smart_llm` | 3.6-flash(low) -> 3.5-flash-lite -> 3.6-flash(medium) | llm | 24/30 | 80.0% (63%–90%) | 49,083/109,221 | 37,928 | $0.0256 | $0.8342 | $0.0348 | 17,808 |
-| `smart_raw` | 3.6-flash(low) -> 3.5-flash-lite -> 3.6-flash(medium) | raw | 22/30 | 73.3% (56%–86%) | 68,355/133,697 | 0 | $0.0000 | $1.0123 | $0.0460 | 10,993 |
-| `smart_sj` | 3.6-flash(low) -> 3.5-flash-lite -> 3.6-flash(medium) | sj | 21/30 | 70.0% (52%–83%) | 56,434/135,824 | 0 | $0.0000 | $1.0166 | $0.0484 | 6,160 |
+| Arm | Ladder | Triage | Pass | Rate (95% CI) | Solver tok (in/out) | Triage tok | Triage $ | Total $ | $/solved | Repair-channel chars | ctx get hops |
+|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| `cascade_llm` | 3.5-flash-lite -> 3.6-flash(low) | llm | 21/30 | 70.0% (52%–83%) | 37,843/65,974 | 23,963 | $0.0172 | $0.4611 | $0.0220 | 20,237 | 0 |
+| `cascade_raw` | 3.5-flash-lite -> 3.6-flash(low) | raw | 20/30 | 66.7% (49%–81%) | 49,985/57,253 | 0 | $0.0000 | $0.3953 | $0.0198 | 18,203 | 0 |
+| `cascade_sj` | 3.5-flash-lite -> 3.6-flash(low) | sj | 19/30 | 63.3% (46%–78%) | 39,554/65,331 | 0 | $0.0000 | $0.4376 | $0.0230 | 8,822 | 0 |
+| `cascade_sjhop` | 3.5-flash-lite -> 3.6-flash(low) | sj_hop | 21/30 | 70.0% (52%–83%) | 46,523/66,575 | 0 | $0.0000 | $0.4612 | $0.0220 | 6,725 | 19 |
+| `smart_llm` | 3.6-flash(low) -> 3.5-flash-lite -> 3.6-flash(medium) | llm | 24/30 | 80.0% (63%–90%) | 49,083/109,221 | 37,928 | $0.0256 | $0.8342 | $0.0348 | 17,808 | 0 |
+| `smart_raw` | 3.6-flash(low) -> 3.5-flash-lite -> 3.6-flash(medium) | raw | 22/30 | 73.3% (56%–86%) | 68,355/133,697 | 0 | $0.0000 | $1.0123 | $0.0460 | 10,993 | 0 |
+| `smart_sj` | 3.6-flash(low) -> 3.5-flash-lite -> 3.6-flash(medium) | sj | 21/30 | 70.0% (52%–83%) | 56,434/135,824 | 0 | $0.0000 | $1.0166 | $0.0484 | 6,160 | 0 |
 
 ## Run health (excluded and degraded tasks are counted, never dropped silently)
 
@@ -23,6 +24,7 @@
 | `cascade_llm` | 21 | 7 | 2 | 0 | 28 | 0 | 521 |
 | `cascade_raw` | 20 | 8 | 2 | 0 | 28 | 0 | 453 |
 | `cascade_sj` | 19 | 10 | 1 | 0 | 29 | 1 | 635 |
+| `cascade_sjhop` | 21 | 8 | 1 | 0 | 29 | 0 | 667 |
 | `smart_llm` | 24 | 5 | 1 | 0 | 29 | 1 | 744 |
 | `smart_raw` | 22 | 7 | 1 | 0 | 29 | 3 | 852 |
 | `smart_sj` | 21 | 9 | 0 | 0 | 30 | 3 | 876 |
@@ -35,7 +37,10 @@ Same tasks, same ladder, same prompts — only the triage channel differs.
 |---|---|---|---:|---:|---:|---:|---:|
 | cascade | `llm` | `raw` | 2 | 1 | 19 | 8 | 1.000 |
 | cascade | `llm` | `sj` | 4 | 2 | 17 | 7 | 0.688 |
+| cascade | `llm` | `sj_hop` | 3 | 3 | 18 | 6 | 1.000 |
 | cascade | `raw` | `sj` | 3 | 2 | 17 | 8 | 1.000 |
+| cascade | `raw` | `sj_hop` | 1 | 2 | 19 | 8 | 1.000 |
+| cascade | `sj` | `sj_hop` | 1 | 3 | 18 | 8 | 0.625 |
 | smart_repair | `llm` | `raw` | 2 | 0 | 22 | 6 | 0.500 |
 | smart_repair | `llm` | `sj` | 3 | 0 | 21 | 6 | 0.250 |
 | smart_repair | `raw` | `sj` | 2 | 1 | 20 | 7 | 1.000 |
