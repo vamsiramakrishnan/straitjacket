@@ -206,19 +206,25 @@ def _write_program(workdir: pathlib.Path, problem: dict, solution: str) -> pathl
     return path
 
 
-def evaluate(problem: dict, solution: str, sandbox_python: str, use_ctx: bool) -> dict:
+def evaluate(problem: dict, solution: str, sandbox_python: str, use_ctx: bool, workdir: pathlib.Path) -> dict:
     """Run the task's unittest suite. Returns pass/fail plus the failure channel.
 
     `use_ctx=True` executes through the real `ctx run` CLI and returns its digest.
     Pass/fail comes from the child's own exit code in both paths, so the arms are
     scored identically no matter which channel produced the failure text.
+
+    `workdir` PERSISTS across the rungs of one task. That is load-bearing, not
+    tidiness: straitjacket's store lives in the workspace, so a per-call temp dir
+    would (a) delete the artifact the digest's retrieval addresses point at
+    before anyone could resolve them, and (b) hide the fact that the repair
+    attempt re-runs the same command, which is what arms the reflex arc's
+    densify-on-re-run. A fresh dir per call measures the digest with its store
+    amputated -- a false negative for the sj arm.
     """
-    workdir = pathlib.Path(tempfile.mkdtemp(prefix="bcb_"))
     try:
         _write_program(workdir, problem, solution)
         env = {**os.environ, "MPLBACKEND": "Agg"}
         if use_ctx:
-            subprocess.run(["git", "init", "-q", "."], cwd=workdir, capture_output=True)
             r = subprocess.run(
                 ["ctx", "run", "--", sandbox_python, "prog.py"],
                 capture_output=True,
@@ -247,8 +253,6 @@ def evaluate(problem: dict, solution: str, sandbox_python: str, use_ctx: bool) -
         return {"passed": False, "channel": (r.stderr.strip() or "test failed")[-4000:], "digest_ok": True}
     except subprocess.TimeoutExpired:
         return {"passed": False, "channel": "timeout: execution exceeded 120s", "digest_ok": True}
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
 
 
 INFRA_RE = re.compile(r"ModuleNotFoundError|ImportError: cannot import name|No module named")
@@ -259,6 +263,23 @@ def solve_task(problem: dict, arm: dict, sandbox_python: str) -> dict:
     calls: list[dict] = []
     triage_calls: list[dict] = []
     use_ctx = arm["triage"] == "sj"
+    prompt = SOLVER_ROLE + problem["complete_prompt"]
+    code = ""
+    outcome = None
+
+    # One workspace for the whole repair loop -- see evaluate(). For the sj arm
+    # this is what lets the store survive between attempts and lets ctx see the
+    # repair as a re-run of the same command.
+    workdir = pathlib.Path(tempfile.mkdtemp(prefix="bcb_"))
+    if use_ctx:
+        subprocess.run(["git", "init", "-q", "."], cwd=workdir, capture_output=True)
+    try:
+        return _run_ladder(problem, arm, sandbox_python, workdir, use_ctx, calls, triage_calls)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _run_ladder(problem, arm, sandbox_python, workdir, use_ctx, calls, triage_calls) -> dict:
     prompt = SOLVER_ROLE + problem["complete_prompt"]
     code = ""
     outcome = None
@@ -277,7 +298,7 @@ def solve_task(problem: dict, arm: dict, sandbox_python: str) -> dict:
         calls.append({k: v for k, v in call.items() if k != "text"})
         code = extract_code(call["text"])
 
-        outcome = evaluate(problem, code, sandbox_python, use_ctx)
+        outcome = evaluate(problem, code, sandbox_python, use_ctx, workdir)
         if outcome["passed"]:
             return {
                 "status": "passed",
