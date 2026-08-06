@@ -1,0 +1,1167 @@
+{
+ "schema": "tokenomics.arm/v1",
+ "arm": "smart_llm",
+ "family": "smart_repair",
+ "ladder": [
+  {
+   "model": "gemini-3.6-flash",
+   "thinking": "LOW"
+  },
+  {
+   "model": "gemini-3.5-flash-lite",
+   "thinking": null
+  },
+  {
+   "model": "gemini-3.6-flash",
+   "thinking": "MEDIUM"
+  }
+ ],
+ "triage": "llm",
+ "n": 30,
+ "task_ids": [
+  "BigCodeBench/13",
+  "BigCodeBench/15",
+  "BigCodeBench/17",
+  "BigCodeBench/19",
+  "BigCodeBench/34",
+  "BigCodeBench/37",
+  "BigCodeBench/82",
+  "BigCodeBench/89",
+  "BigCodeBench/92",
+  "BigCodeBench/93",
+  "BigCodeBench/99",
+  "BigCodeBench/100",
+  "BigCodeBench/101",
+  "BigCodeBench/108",
+  "BigCodeBench/120",
+  "BigCodeBench/123",
+  "BigCodeBench/124",
+  "BigCodeBench/129",
+  "BigCodeBench/139",
+  "BigCodeBench/147",
+  "BigCodeBench/161",
+  "BigCodeBench/162",
+  "BigCodeBench/177",
+  "BigCodeBench/184",
+  "BigCodeBench/187",
+  "BigCodeBench/199",
+  "BigCodeBench/208",
+  "BigCodeBench/211",
+  "BigCodeBench/214",
+  "BigCodeBench/227"
+ ],
+ "provenance": "live",
+ "simulated": false,
+ "prices_usd_per_mtok": {
+  "gemini-3.6-flash": {
+   "input": 1.5,
+   "output": 7.5
+  },
+  "gemini-3.5-flash-lite": {
+   "input": 0.3,
+   "output": 2.5
+  }
+ },
+ "price_provenance": "Unverified: carried over from tokenomics-benchmark-multi-llms/src/config.py. Re-price with report.py --prices before quoting USD.",
+ "sandbox_python": "/tmp/claude-0/-home-user-straitjacket/e913754c-4b2d-5b7f-98b1-b17d2ff117a4/scratchpad/bench-env/bin/python",
+ "wall_seconds": 744.5,
+ "results": [
+  {
+   "status": "passed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 475,
+     "output_tokens": 803,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.82
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1298,
+     "output_tokens": 876,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.37
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1484,
+     "output_tokens": 6643,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 32.02
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 143,
+     "output_tokens": 9,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.03
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 390,
+     "output_tokens": 122,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.39
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/13",
+   "seconds": 183.0
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 407,
+     "output_tokens": 713,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 5.24
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/15",
+   "seconds": 5.3
+  },
+  {
+   "status": "passed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 294,
+     "output_tokens": 424,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.49
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 924,
+     "output_tokens": 470,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.53
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 964,
+     "output_tokens": 3829,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 19.91
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 901,
+     "output_tokens": 195,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.86
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 594,
+     "output_tokens": 189,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.81
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/17",
+   "seconds": 25.9
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 258,
+     "output_tokens": 1327,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 7.0
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/19",
+   "seconds": 7.1
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 358,
+     "output_tokens": 1630,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 8.89
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/34",
+   "seconds": 9.9
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 450,
+     "output_tokens": 541,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.71
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/37",
+   "seconds": 6.6
+  },
+  {
+   "status": "failed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 487,
+     "output_tokens": 807,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 4.02
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1380,
+     "output_tokens": 849,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.4
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1435,
+     "output_tokens": 6733,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 33.28
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1751,
+     "output_tokens": 75,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.68
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 289,
+     "output_tokens": 88,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.6
+    }
+   ],
+   "channel_chars": 677,
+   "last_channel": "======================================================================\nFAIL: test_logout_route_redirects_to_login (__main__.TestCases.test_logout_route_redirects_to_login)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/bcb_q6ltdpxp/prog.py\", line 181, in test_logout_route_redirects_to_login\n    self.assertIn('Logged in as: testuser', response.data.decode())\nAssertionError: 'Logged in as: testuser' not found in \"Logged in as: <MagicMock name='_get_user().username' id='140242473740752'>\"\n\n------------------------------------",
+   "task_id": "BigCodeBench/82",
+   "seconds": 46.4
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 504,
+     "output_tokens": 862,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 4.05
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1505,
+     "output_tokens": 860,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.23
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 592,
+     "output_tokens": 128,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.71
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/89",
+   "seconds": 11.7
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 379,
+     "output_tokens": 708,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.48
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/92",
+   "seconds": 5.4
+  },
+  {
+   "status": "failed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 306,
+     "output_tokens": 471,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.41
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1069,
+     "output_tokens": 500,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.41
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1035,
+     "output_tokens": 3925,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 18.68
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 485,
+     "output_tokens": 281,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.02
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 493,
+     "output_tokens": 218,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.88
+    }
+   ],
+   "channel_chars": 1131,
+   "last_channel": "======================================================================\nFAIL: test_values (__main__.TestCases.test_values)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/bcb_9y_e0hbc/prog.py\", line 96, in test_values\n    self.assertAlmostEqual(actual[0], expected[0], places=7, msg=\"DataFrame contents should match the expected output\")\nAssertionError: -0.1594112475324891 != -0.36270132751314693 within 7 places (0.20329007998065785 difference) : DataFrame contents should match the expected output\n\nDuring handling of the above",
+   "task_id": "BigCodeBench/93",
+   "seconds": 29.4
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 329,
+     "output_tokens": 395,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.37
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/99",
+   "seconds": 10.9
+  },
+  {
+   "status": "passed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 344,
+     "output_tokens": 476,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.28
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1595,
+     "output_tokens": 483,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.62
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1602,
+     "output_tokens": 2558,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 11.23
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1246,
+     "output_tokens": 764,
+     "finish_reason": "FinishReason.MAX_TOKENS",
+     "seconds": 2.08
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1209,
+     "output_tokens": 764,
+     "finish_reason": "FinishReason.MAX_TOKENS",
+     "seconds": 2.03
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/100",
+   "seconds": 23.0
+  },
+  {
+   "status": "failed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 291,
+     "output_tokens": 657,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 4.0
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1200,
+     "output_tokens": 713,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.17
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1469,
+     "output_tokens": 7684,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 37.59
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1518,
+     "output_tokens": 241,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.03
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1254,
+     "output_tokens": 454,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.49
+    }
+   ],
+   "channel_chars": 4000,
+   "last_channel": " none of the following families were found: Arial\nfindfont: Generic family 'sans-serif' not found because none of the following families were found: Arial\nfindfont: Generic family 'sans-serif' not found because none of the following families were found: Arial\nfindfont: Generic family 'sans-serif' not found because none of the following families were found: Arial\nfindfont: Generic family 'sans-serif' not found because none of the following families were found: Arial\nfindfont: Generic family 'sans-serif' not found because none of the following families were found: Arial\nfindfont: Generic family ",
+   "task_id": "BigCodeBench/101",
+   "seconds": 57.5
+  },
+  {
+   "status": "failed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 681,
+     "output_tokens": 685,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.67
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1537,
+     "output_tokens": 736,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.97
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1582,
+     "output_tokens": 12283,
+     "finish_reason": "FinishReason.MAX_TOKENS",
+     "seconds": 52.89
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1721,
+     "output_tokens": 160,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.82
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1723,
+     "output_tokens": 154,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.74
+    }
+   ],
+   "channel_chars": 4000,
+   "last_channel": "home-user-straitjacket/e913754c-4b2d-5b7f-98b1-b17d2ff117a4/scratchpad/bench-env/lib/python3.11/site-packages/pandas/core/indexing.py\", line 1953, in _setitem_with_indexer\n    self._setitem_with_indexer_split_path(indexer, value, name)\n  File \"/tmp/claude-0/-home-user-straitjacket/e913754c-4b2d-5b7f-98b1-b17d2ff117a4/scratchpad/bench-env/lib/python3.11/site-packages/pandas/core/indexing.py\", line 2044, in _setitem_with_indexer_split_path\n    self._setitem_single_column(loc, value, pi)\n  File \"/tmp/claude-0/-home-user-straitjacket/e913754c-4b2d-5b7f-98b1-b17d2ff117a4/scratchpad/bench-env/lib/py",
+   "task_id": "BigCodeBench/108",
+   "seconds": 66.3
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 637,
+     "output_tokens": 790,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 4.16
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1601,
+     "output_tokens": 737,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.11
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 3079,
+     "output_tokens": 163,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.91
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/120",
+   "seconds": 8.1
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 404,
+     "output_tokens": 606,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.3
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1132,
+     "output_tokens": 1568,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 4.88
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 384,
+     "output_tokens": 111,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.7
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/123",
+   "seconds": 9.7
+  },
+  {
+   "status": "passed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 588,
+     "output_tokens": 804,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.73
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1629,
+     "output_tokens": 816,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.18
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1846,
+     "output_tokens": 8522,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 41.84
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1847,
+     "output_tokens": 226,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.99
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1847,
+     "output_tokens": 431,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.25
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/124",
+   "seconds": 52.0
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 455,
+     "output_tokens": 853,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 4.28
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/129",
+   "seconds": 4.8
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 328,
+     "output_tokens": 432,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.51
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/139",
+   "seconds": 3.4
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 319,
+     "output_tokens": 447,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 6.39
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/147",
+   "seconds": 6.6
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 308,
+     "output_tokens": 1733,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 8.25
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/161",
+   "seconds": 8.8
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 310,
+     "output_tokens": 413,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.41
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/162",
+   "seconds": 3.1
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 320,
+     "output_tokens": 1951,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 9.42
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 903,
+     "output_tokens": 442,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.37
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 361,
+     "output_tokens": 129,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.79
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/177",
+   "seconds": 15.9
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 681,
+     "output_tokens": 773,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.0
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/184",
+   "seconds": 4.3
+  },
+  {
+   "status": "passed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 378,
+     "output_tokens": 1455,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 7.25
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 960,
+     "output_tokens": 565,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.79
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1603,
+     "output_tokens": 3782,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 15.12
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 188,
+     "output_tokens": 55,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.53
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 900,
+     "output_tokens": 649,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.5
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/187",
+   "seconds": 33.6
+  },
+  {
+   "status": "passed",
+   "loops": 0,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 764,
+     "output_tokens": 1079,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 3.95
+    }
+   ],
+   "triage_calls": [],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/199",
+   "seconds": 5.7
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 461,
+     "output_tokens": 1658,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 6.91
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1091,
+     "output_tokens": 556,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.61
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 261,
+     "output_tokens": 74,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.68
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/208",
+   "seconds": 11.2
+  },
+  {
+   "status": "passed",
+   "loops": 1,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 290,
+     "output_tokens": 472,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.2
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1206,
+     "output_tokens": 445,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.48
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1297,
+     "output_tokens": 433,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.29
+    }
+   ],
+   "channel_chars": 0,
+   "task_id": "BigCodeBench/211",
+   "seconds": 5.4
+  },
+  {
+   "status": "failed",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 355,
+     "output_tokens": 419,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.16
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 843,
+     "output_tokens": 420,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.47
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 977,
+     "output_tokens": 8916,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 35.54
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 3310,
+     "output_tokens": 58,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.67
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 3323,
+     "output_tokens": 191,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.96
+    }
+   ],
+   "channel_chars": 4000,
+   "last_channel": " 84],\n+   [131, 246, 151],\n+   [173, 58, 239],\n+   [38, 72, 115],\n+   [203, 187, 46],\n-   [232, 37, 232],\n?     ^   -   ^ ^\n\n+   [202, 7, 135],\n?     ^      ^ ^\n\n-   [44, 92, 224],\n-   [117, 128, 28],\n+   [63, 232, 188],\n+   [134, 195, 190],\n+   [55, 119, 241],\n+   [12, 167, 113]],\n+  [[32, 237, 154],\n+   [209, 59, 71],\n+   [23, 19, 155],\n+   [252, 59, 49],\n-   [120, 69, 170],\n?              ^^\n\n+   [120, 69, 198],\n?              ^^\n\n-   [58, 89, 245],\n-   [207, 5, 26],\n-   [239, 189, 165],\n?      ^        ^^\n\n+   [232, 189, 214],\n?      ^       + ^\n\n+   [79, 212, 50],\n+   [250, 208, 143],\n-  ",
+   "task_id": "BigCodeBench/214",
+   "seconds": 45.6
+  },
+  {
+   "status": "infra_error",
+   "loops": 2,
+   "calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "LOW",
+     "input_tokens": 494,
+     "output_tokens": 725,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 2.95
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 1271,
+     "output_tokens": 731,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 1.92
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.6-flash",
+     "thinking": "MEDIUM",
+     "input_tokens": 1287,
+     "output_tokens": 7470,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 29.79
+    }
+   ],
+   "triage_calls": [
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 184,
+     "output_tokens": 41,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.56
+    },
+    {
+     "provenance": "live",
+     "model": "gemini-3.5-flash-lite",
+     "thinking": null,
+     "input_tokens": 184,
+     "output_tokens": 51,
+     "finish_reason": "FinishReason.STOP",
+     "seconds": 0.56
+    }
+   ],
+   "channel_chars": 4000,
+   "last_channel": "=========\nERROR: test_empty_list_input (__main__.TestCases.test_empty_list_input)\nTest handling of an empty list which should raise an error during reshaping.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/usr/lib/python3.11/unittest/mock.py\", line 1378, in patched\n    return func(*newargs, **newkeywargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/bcb_fx1iou9e/prog.py\", line 91, in test_empty_list_input\n    task_func([], 2, 5, 'audio.wav')\n  File \"/tmp/bcb_fx1iou9e/prog.py\", line 50, in task_func\n    raise FileNotFo",
+   "task_id": "BigCodeBench/227",
+   "seconds": 37.8
+  }
+ ]
+}

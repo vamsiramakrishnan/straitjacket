@@ -1,0 +1,5 @@
+# Fetched instance metadata and per-run agent workspaces/logs.
+_cache/
+results/work/
+results/cfg/
+results/logs/
