@@ -188,14 +188,22 @@ def main() -> int:
     L.append(
         "The triage channel is the only manipulated variable inside a family. `raw` forwards the "
         "unittest stderr verbatim, `llm` pays a model to compress it, `sj` forwards the digest "
-        "emitted by the real `ctx run` CLI. Pass-rate differences inside a family are attributable "
-        "to that channel; differences across families are not (the ladder changes too)."
+        "emitted by the real `ctx run` CLI, and `sj_hop` forwards that digest plus the spans it "
+        "cites, resolved locally with `ctx get`. Pass-rate differences inside a family are "
+        "attributable to that channel; differences across families are not (the ladder changes too)."
     )
     L.append(
-        "\nThe triage-cost column is the mechanical claim and it is exact: `sj` and `raw` make no "
-        "triage API call, so their triage cost is $0.0000 by construction. `llm` pays per repair "
-        "loop. Pass rate is the gate — a cheaper channel is only interesting if accuracy holds, and "
-        "at this N the confidence intervals are wide enough that small differences are not resolved."
+        "\nThe triage-cost column is the mechanical claim and it is exact: `raw`, `sj` and `sj_hop` "
+        "make no triage API call, so their triage cost is $0.0000 by construction — `ctx get` reads "
+        "the local store. `llm` pays per repair loop. Pass rate is the gate — a cheaper channel is "
+        "only interesting if accuracy holds, and at this N the confidence intervals are wide enough "
+        "that small differences are not resolved."
+    )
+    L.append(
+        "\n**Caveat on `Repair-channel chars`:** it sums the final channel of FAILED tasks only, so "
+        "an arm that passes more tasks scores lower for free. It mixes channel size with failure "
+        "count and is NOT a clean bytes-per-repair comparison across arms; measuring that properly "
+        "needs a per-repair-loop metric the runner does not yet record."
     )
 
     text = "\n".join(L) + "\n"
