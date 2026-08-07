@@ -57,6 +57,10 @@ def summarise(records: list[dict], arm: str) -> dict:
         "cache_hit_pct": _median([r.get("cache_hit_pct") for r in rows]),
         "output_tokens": sum(r.get("output_tokens") or 0 for r in rows),
         "uncached_in": sum(r.get("uncached_in") or 0 for r in rows),
+        # Total input is what the transcript actually costs. `uncached_in` alone
+        # is near-zero once prompt caching engages and reads as "no context used".
+        "total_in": sum((r.get("cache_read") or 0) + (r.get("cache_write") or 0)
+                        + (r.get("uncached_in") or 0) for r in rows),
         "wall_s": _median([r.get("wall_s") for r in rows]),
         "timed_out": sum(1 for r in rows if r.get("timed_out")),
         "session_errors": sum(1 for r in rows if r.get("session_error")),
@@ -90,13 +94,13 @@ def main() -> int:
 
         summaries = {a: summarise(records, a) for a in arms}
 
-        L.append("| Arm | Resolved | Median turns | Median cache hit | Uncached in | Output tok | Cost $ | Median wall s | Timeouts |")
+        L.append("| Arm | Resolved | Median turns | Median cache hit | Total input tok | Output tok | Cost $ | Median wall s | Timeouts |")
         L.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
         for a in arms:
             s = summaries[a]
             L.append(
                 f"| `{a}` | {s['resolved']}/{s['tasks']} | {s['turns']} | "
-                f"{s['cache_hit_pct']}% | {s['uncached_in']:,} | {s['output_tokens']:,} | "
+                f"{s['cache_hit_pct']}% | {s['total_in']:,} | {s['output_tokens']:,} | "
                 f"${s['cost_usd']:.4f} | {s['wall_s']} | {s['timed_out']} |"
             )
 
