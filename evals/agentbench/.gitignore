@@ -3,3 +3,5 @@ _cache/
 results/work/
 results/cfg/
 results/logs/
+# In-flight run output; renamed to <adapter>.json when every arm has landed.
+results/*.partial.json

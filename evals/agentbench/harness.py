@@ -220,10 +220,18 @@ def main() -> int:
                     "work_root": str(work_root),
                     "results": records,
                 }
-                (args.out / f"{args.adapter}.json").write_text(
+                # In-flight runs write to a .partial file: a results file
+                # named like a finished one, holding half the arms, reads as a
+                # complete eval to anything that globs the directory -- report.py
+                # included. Renamed to the real name only once every arm lands.
+                (args.out / f"{args.adapter}.partial.json").write_text(
                     json.dumps(payload, indent=1), encoding="utf-8")
 
-    print(f"-> {args.out / f'{args.adapter}.json'}", flush=True)
+    partial = args.out / f"{args.adapter}.partial.json"
+    final = args.out / f"{args.adapter}.json"
+    if partial.exists():
+        partial.replace(final)
+    print(f"-> {final}", flush=True)
     return 0
 
 
