@@ -2221,20 +2221,45 @@ def _grep_symbol(command: str) -> str | None:
     return None
 
 
-def _navigation_nudge(payload: dict[str, Any]) -> str | None:
-    """Fire once when the session has grepped for >= _NAV_THRESHOLD distinct
-    bare identifiers — the hand-traced-call-graph pattern. Fail-open."""
-    try:
-        tool = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
-        if "bash" not in tool and "command" not in tool:
-            return None
-        ti = payload.get("tool_input") or payload.get("toolInput") or {}
-        command = ""
+def _search_symbol(tool: str, ti: dict[str, Any]) -> str | None:
+    """The bare identifier this tool call is tracing, from EITHER search path.
+
+    Two paths reach here, and for a long time only one was inspected. A shell
+    ``grep``/``rg`` arrives as a command string that has to be parsed. The
+    host's own search tool (Claude Code ``Grep``, and the same shape elsewhere)
+    arrives as a structured ``pattern`` and needs no parsing at all — and it is
+    the DEFAULT path, so on a navigation-heavy repository it is most of the
+    population. The PostToolUse matcher already routed those events here; the
+    governor then discarded them for not being Bash, and the call-graph verbs
+    were never offered to an agent that never shelled out.
+    """
+    if "bash" in tool or "command" in tool:
         for k in ("command", "Command", "CommandLine", "cmd"):
             if isinstance(ti.get(k), str):
-                command = ti[k]
-                break
-        symbol = _grep_symbol(command)
+                return _grep_symbol(ti[k])
+        return None
+    # Structured search tools: the pattern is already isolated, so apply the
+    # same bare-identifier test the command parser applies to its first
+    # positional. A regex or a multi-word phrase is not symbol-tracing.
+    if "grep" in tool or "search" in tool:
+        for k in ("pattern", "Pattern", "query", "regex"):
+            v = ti.get(k)
+            if isinstance(v, str):
+                term = v.strip("'\"")
+                return term if _IDENT_RE.match(term) else None
+    return None
+
+
+def _navigation_nudge(payload: dict[str, Any]) -> str | None:
+    """Fire once when the session has traced >= _NAV_THRESHOLD distinct bare
+    identifiers — the hand-traced-call-graph pattern — whether it did so with a
+    shell grep or with the host's own search tool. Fail-open."""
+    try:
+        tool = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+        ti = payload.get("tool_input") or payload.get("toolInput") or {}
+        if not isinstance(ti, dict):
+            return None
+        symbol = _search_symbol(tool, ti)
         if not symbol:
             return None
         workspace_root = _resolve_workspace_root(payload)

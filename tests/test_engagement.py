@@ -267,3 +267,57 @@ def test_navigation_governor_ignores_non_symbol_greps(ws):
             {"tool_name": "Bash",
              "tool_input": {"command": "grep -rn 'TODO fix' src/"}, "cwd": str(ws)}
         ) is None  # multi-word pattern is not symbol-tracing
+
+
+def test_navigation_governor_sees_native_search_tools(ws):
+    """The host's own Grep tool is symbol-tracing too, and it is the DEFAULT path.
+
+    The PostToolUse matcher already routes Grep here, so an agent that never
+    shells out was invoking this hook and having every event discarded: the
+    governor only inspected Bash command strings. On a navigation-heavy repo
+    that is the whole population, and the call-graph verbs never got offered.
+    """
+    from ctx.hook import _navigation_nudge
+
+    def call(sym):
+        return _navigation_nudge(
+            {"tool_name": "Grep",
+             "tool_input": {"pattern": sym, "path": "src/"}, "cwd": str(ws)}
+        )
+
+    assert call("alpha") is None
+    assert call("beta") is None
+    n = call("gamma")
+    assert n is not None and "CTX_NAV_GOVERNOR" in n and "ctx impact gamma" in n
+    assert call("delta") is None  # fires once per session, as with Bash
+
+
+def test_navigation_governor_native_tool_ignores_non_symbol_patterns(ws):
+    from ctx.hook import _navigation_nudge
+
+    for pat in ("def ", "TODO fix", "foo.bar", r"\bclass\b"):
+        for _ in range(3):
+            assert _navigation_nudge(
+                {"tool_name": "Grep",
+                 "tool_input": {"pattern": pat, "path": "src/"}, "cwd": str(ws)}
+            ) is None
+
+
+def test_navigation_governor_counts_bash_and_native_together(ws):
+    """One session, one budget: the two paths must share the distinct-symbol
+    count rather than each keeping its own."""
+    from ctx.hook import _navigation_nudge
+
+    assert _navigation_nudge(
+        {"tool_name": "Bash",
+         "tool_input": {"command": "grep -rn alpha src/"}, "cwd": str(ws)}
+    ) is None
+    assert _navigation_nudge(
+        {"tool_name": "Grep",
+         "tool_input": {"pattern": "beta", "path": "src/"}, "cwd": str(ws)}
+    ) is None
+    n = _navigation_nudge(
+        {"tool_name": "Grep",
+         "tool_input": {"pattern": "gamma", "path": "src/"}, "cwd": str(ws)}
+    )
+    assert n is not None and "CTX_NAV_GOVERNOR" in n
