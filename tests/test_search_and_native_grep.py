@@ -156,3 +156,58 @@ def test_end_to_end_grep_digest(tmp_path, monkeypatch):
     digest, manifest = render_run_digest(store, ws, cap.manifest)
     assert manifest["digest"]["profile"] == "search/v1"
     assert "matches (exact): 36" in digest
+
+
+# ---------------------------------------------------- structural routing
+# A search whose results are DEFINITIONS, or which is smeared across many
+# files, is not asking "show me this line" -- it is asking for the shape of
+# the codebase. Narrowing the grep answers a different question than the one
+# posed, so the digest should offer the structural index instead. Before this,
+# `ctx map` / `ctx def` / `ctx refs` appeared in exactly one place in the whole
+# codebase (the navigation nudge), so a structural query never reached them
+# however large its result.
+
+DEF_SWEEP = "\n".join(
+    f"src/pkg/mod{i}.py:{i * 7 + 3}:def handler_{i}(request, *, retries=0):"
+    for i in range(60)
+)
+
+NARROW_HITS = "\n".join(
+    f"src/pkg/one.py:{i + 10}:    total += weight * factor  # {i}" for i in range(12)
+)
+
+
+def test_search_offers_structural_verb_on_definition_sweep(tmp_path):
+    from ctx.digest.searchprof import SearchProfile
+
+    p = SearchProfile()
+    ctx = _ctx_for(tmp_path, DEF_SWEEP, ["Grep"])
+    assert p.detect(ctx)
+    body = p.render(ctx)
+    assert "ctx map" in body, "a sweep of definitions should route to the codebase map"
+
+
+def test_search_offers_structural_verb_when_dispersed(tmp_path):
+    from ctx.digest.searchprof import SearchProfile
+
+    # Not definitions, but smeared across many files: still a shape question.
+    text = "\n".join(
+        f"src/pkg/mod{i}.py:{i + 1}:    value = lookup(key_{i})" for i in range(40)
+    )
+    p = SearchProfile()
+    ctx = _ctx_for(tmp_path, text, ["grep", "-rn", "lookup", "src"])
+    assert p.detect(ctx)
+    assert "ctx map" in p.render(ctx)
+
+
+def test_search_keeps_retrieval_suggestions_when_narrow(tmp_path):
+    from ctx.digest.searchprof import SearchProfile
+
+    # One file, ordinary call sites: narrowing IS the right next step, and the
+    # structural verb would be noise. Guards against the fix over-firing.
+    p = SearchProfile()
+    ctx = _ctx_for(tmp_path, NARROW_HITS, ["grep", "-rn", "factor", "src"])
+    assert p.detect(ctx)
+    body = p.render(ctx)
+    assert "ctx map" not in body
+    assert "ctx get" in body and "ctx search" in body

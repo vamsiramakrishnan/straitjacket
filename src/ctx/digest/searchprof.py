@@ -25,6 +25,15 @@ from ctx.textutil import fmt_int, short_path
 _MATCH_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<content>.*)$")
 _MIN_MATCHES = 12  # below this the text profile / inline path is fine
 
+# A hit that IS a declaration, in the languages the repo map understands.
+_DEF_RE = re.compile(
+    r"^\s*(?:(?:public|private|protected|static|final|export|pub|async)\s+)*"
+    r"(?:def|class|func|function|fn|type|struct|interface|trait|impl)\s+"
+    r"[A-Za-z_]\w*"
+)
+# Matches smeared this widely are a question about shape, not about a line.
+_DISPERSED_FILES = 12
+
 
 def _parse(lines: list[str]) -> list[tuple[str, int, str, int]]:
     """(file, file_line, content, STDOUT_LINE).
@@ -119,6 +128,21 @@ class SearchProfile(Profile):
             f"ctx get {rid}#stdout --lines 1:{min(len(matches), 60)}",
             f"ctx search {rid} '<narrower>' --glob '{short_path(top_file)}'",
         ]
+
+        # Route to the structural index when the RESULTS say the question was
+        # about shape rather than about a line: the hits are declarations, or
+        # they are smeared across more files than anyone reads one at a time.
+        # Narrowing such a search answers a different question than the one
+        # posed, and it is the answer both existing suggestions give. Decided
+        # from the result set, not from the query string, so it works
+        # identically for a shell grep and for a host search tool whose pattern
+        # never reaches this profile.
+        defs = sum(1 for _, _, content, _ in matches if _DEF_RE.match(content))
+        structural = defs >= max(3, len(matches) // 2)
+        if structural or len(by_file) >= _DISPERSED_FILES:
+            # First: `next_lines` caps at three, and this is the one that can
+            # end the search rather than iterate it.
+            suggestions.insert(0, "ctx map")
         return "\n".join(
             ctx.header_lines()
             + body
