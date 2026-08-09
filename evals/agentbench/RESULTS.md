@@ -25,6 +25,40 @@
 | A | B | A only | B only | both | neither | p |
 |---|---|---:|---:|---:|---:|---:|
 | `naive` | `sj` | 0 | 0 | 3 | 0 | 1.000 |
+## adapter: `dogfood`
+
+- Tasks: **1** · repeats: **1** · max turns: 40 · model: host default
+- Arms differ only in the wrapper: `claude` vs `ctx wrap claude --proxy`
+- Provenance: **live agent sessions** (simulated runs are refused)
+
+| Arm | Resolved | Median turns | Median cache hit | Total input tok | Output tok | Cost $ | Median wall s | Timeouts |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `naive` | 1/1 | 41 | 98.1% | 3,406,175 | 22,505 | $10.6755 | 703.9 | 0 |
+| `sj` | 1/1 | 41 | 99.0% | 4,003,068 | 17,189 | $13.7022 | 1107.7 | 0 |
+
+### Yield (open-ended mission: count, not pass/fail)
+
+`resolved` only asks whether an arm produced ANY result. For a mission with an open-ended count, that collapses very different outcomes into the same cell.
+
+| Arm | Defects reproduced | Cost per reproduction |
+|---|---:|---:|
+| `naive` | 8 | $1.33 |
+| `sj` | 5 | $2.74 |
+
+### Evidence-preservation gate
+
+`solved_arm / solved_naive` must hold at ~1.0. Nothing below is reportable otherwise.
+
+| Arm | Resolved | Ratio vs naive | Gate |
+|---|---:|---:|---|
+| `naive` | 1/1 | 1.00 | baseline |
+| `sj` | 1/1 | 1.00 | PASS |
+
+### Paired outcome (McNemar, exact)
+
+| A | B | A only | B only | both | neither | p |
+|---|---|---:|---:|---:|---:|---:|
+| `naive` | `sj` | 0 | 0 | 1 | 0 | 1.000 |
 
 ## Reading this
 
@@ -32,45 +66,44 @@ Resolve rate is a gate, not a headline: the claim this harness can support is *m
 
 ---
 
-## Validity of this run: the flood fixture does not test containment
+## Reading the dogfood run
 
-Do **not** read the token or cost columns above as a containment result. The
-`flood` fixture is defeated by a one-line shell idiom, and the agent used it.
+**This is N=1, one mission, one repeat, and both arms hit the 40-turn cap.**
+Neither finished. The metric is defects-per-40-turns, not defects.
 
-An instrumented session (`--output-format stream-json`) on the same fixture
-shows the agent's own defence:
+Containment was demonstrably active in the `sj` arm — `ctx gain` on its
+workspace reports 13.3 MiB raw reduced to 1.0 MiB emitted (12.9x), roughly
+3.2M tokens kept out of context across 260 `run` / 210 `get` / 36 `search`
+interceptions. The mechanism did what it claims. It did not help here.
 
-```
-python3 -m pytest tests/ -v 2>&1 | tail -30
-```
+### `ctx gain` overstates savings by about 10x in exactly these sessions
 
-The suite emits 4,016 lines / 177 KB in the failing state, but that command
-returned a **1,442-char** tool result. The flood never entered the transcript.
-Corroborating evidence in the table's own data: `naive/flood` consumed 316,245
-input tokens against `naive/quiet`'s 317,366 — indistinguishable, despite 177 KB
-more output being available to consume.
+The same `ctx gain` output reports **~$9.67 spend avoided**. The session
+measured **$3.02 more expensive** than naive. Both cannot be true, and the
+arithmetic shows which is wrong:
 
-So on all three fixtures there was nothing to contain, and the `sj` arm paid
-wrapper overhead against a baseline that was never harmed. Its 1.45–1.65x input
-and ~38% higher cost measure that overhead, not a containment failure.
+    3,224,906 tokens kept out of context
+      priced at input rate  $3.00/Mtok  ->  $9.67   what gain reports
+      priced at cache read  $0.30/Mtok  ->  $0.97   realistic at 99% cache hit
 
-This is the regime `evals/BENCHMARK.md` calls the low-output control, and the
-regression it predicts is the one that produced graduated engagement. The
-result is consistent with doctrine; it just is not evidence about floods.
+`pricing.py` already carries the tiers (`cache_read: 0.30`) and its docstring
+says cache reads are cheap "exactly as the vendors bill them" — but the gain
+calculation prices avoided bytes as though every one would have been paid
+fresh. A session running at 98–99% cache hit would have re-read them at a
+tenth of that. The overstatement is largest precisely where straitjacket
+performs best, which is the worst place for a metric to be optimistic.
 
-### What a fixture must do to test containment
+### Why the run cost more
 
-Piping to `tail`/`head`/`grep` must not be able to win. That means the evidence
-the agent needs has to be **dispersed through** the noise rather than sitting at
-one end of it:
+Containment forces retrieval hops: 210 `get` events against 260 `run` events.
+Under a FIXED turn budget, a turn spent re-fetching a bounded slice is a turn
+not spent finding a defect. The tokens saved were already cheap (cache reads),
+and the turns spent were the binding constraint.
 
-- failures interleaved across the output, not clustered at the tail
-- the decisive assertion in the middle (`headroom_needle_v2.py` and
-  `field_needle.py` already exercise this shape model-free)
-- several failing tests whose messages differ, so a fixed window loses some
-- output that is not line-greppable for a single obvious token
+### What this does not establish
 
-Until the fixture has that property, this adapter validates the harness
-end-to-end — arms, grading, isolation, metrics — and nothing more. That is what
-it was built for; the containment question needs SWE-bench Verified or
-Terminal-Bench, where the floods are real and not of our own construction.
+Not that containment is worthless — that it did not pay for itself on a
+navigation-heavy hunt, with a turn cap, against a hot cache. The confound is
+explicit: turn cost and quality cost are not separated by this design. A rerun
+with the cap raised well above the point where either arm stops would separate
+them, and is the honest next experiment.

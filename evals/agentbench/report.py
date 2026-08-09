@@ -65,6 +65,12 @@ def summarise(records: list[dict], arm: str) -> dict:
         "timed_out": sum(1 for r in rows if r.get("timed_out")),
         "session_errors": sum(1 for r in rows if r.get("session_error")),
         "tampered": sum(1 for r in rows if r.get("tests_tampered")),
+        # Open-ended missions have a YIELD, not just a pass/fail. `resolved`
+        # for the bugbash means "at least one defect reproduced", so two arms
+        # finding 8 and 5 both score 1/1 and the report calls it a tie. Carry
+        # the count so the headline cannot hide the difference.
+        "reproduced": sum(r.get("reproduced") or 0 for r in rows),
+        "has_yield": any("reproduced" in r for r in rows),
     }
 
 
@@ -103,6 +109,18 @@ def main() -> int:
                 f"{s['cache_hit_pct']}% | {s['total_in']:,} | {s['output_tokens']:,} | "
                 f"${s['cost_usd']:.4f} | {s['wall_s']} | {s['timed_out']} |"
             )
+
+        if any(s["has_yield"] for s in summaries.values()):
+            L.append("\n### Yield (open-ended mission: count, not pass/fail)\n")
+            L.append("`resolved` only asks whether an arm produced ANY result. For a mission "
+                     "with an open-ended count, that collapses very different outcomes into "
+                     "the same cell.\n")
+            L.append("| Arm | Defects reproduced | Cost per reproduction |")
+            L.append("|---|---:|---:|")
+            for a in arms:
+                sm = summaries[a]
+                per = (sm["cost_usd"] / sm["reproduced"]) if sm["reproduced"] else float("nan")
+                L.append(f"| `{a}` | {sm['reproduced']} | ${per:.2f} |")
 
         if "naive" in summaries:
             base = summaries["naive"]["resolved"]

@@ -1,0 +1,73 @@
+{
+ "schema": "agentbench.run/v1",
+ "adapter": "dogfood",
+ "arms": [
+  "naive",
+  "sj"
+ ],
+ "model": null,
+ "max_turns": 40,
+ "repeats": 1,
+ "task_ids": [
+  "dogfood/bugbash"
+ ],
+ "provenance": "live",
+ "simulated": false,
+ "work_root": "/tmp/agentbench_work_6raocpfc",
+ "results": [
+  {
+   "task_id": "dogfood/bugbash",
+   "arm": "naive",
+   "repeat": 1,
+   "timed_out": false,
+   "provenance": "live",
+   "turns": 41,
+   "cost_usd": 10.6755,
+   "api_duration_s": 280.9,
+   "wall_s": 703.9,
+   "cache_hit_pct": 98.1,
+   "cache_read": 3343128,
+   "cache_write": 62967,
+   "uncached_in": 80,
+   "output_tokens": 22505,
+   "session_error": false,
+   "resolved": true,
+   "reproduced": 8,
+   "claimed_tests": 8,
+   "invalid": 0,
+   "src_modified": 0,
+   "existing_tests_modified": 0,
+   "tests_tampered": false,
+   "findings_written": true,
+   "errored_tests": 0,
+   "diff_stat": ""
+  },
+  {
+   "task_id": "dogfood/bugbash",
+   "arm": "sj",
+   "repeat": 1,
+   "timed_out": false,
+   "provenance": "live",
+   "turns": 41,
+   "cost_usd": 13.7022,
+   "api_duration_s": 274.0,
+   "wall_s": 1107.7,
+   "cache_hit_pct": 99.0,
+   "cache_read": 3962861,
+   "cache_write": 40127,
+   "uncached_in": 80,
+   "output_tokens": 17189,
+   "session_error": false,
+   "resolved": true,
+   "reproduced": 5,
+   "claimed_tests": 5,
+   "invalid": 0,
+   "src_modified": 0,
+   "existing_tests_modified": 0,
+   "tests_tampered": false,
+   "findings_written": true,
+   "errored_tests": 0,
+   "diff_stat": ""
+  }
+ ]
+}
