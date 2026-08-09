@@ -109,6 +109,52 @@ JSON, ANSI noise, mixed streams, long-runners), not by topic.
 function, no repo, no navigation, tiny outputs — almost nothing to contain. Its
 place is the low-output control stratum.
 
+## Measurement caveat: the `sj` arm exercises containment, not navigation
+
+straitjacket has two halves. The **emission gate** contains whatever a tool
+returned; the **code verbs** (`ctx map` / `def` / `refs` / `callers` / `impact`)
+replace the search entirely, so the flood is never produced. On a navigation-
+heavy corpus the second half is the more valuable one — and the `sj` arm barely
+reaches it.
+
+The only automatic bridge from grepping to the call graph is
+`_navigation_nudge` (`src/ctx/hook.py`), and it is heavily gated. Measured by
+driving the hook directly, not by reading the source:
+
+| Scenario | Result |
+|---|---|
+| `bash grep` for 3 distinct **bare identifiers** | nudge fires on the 3rd |
+| native **`Grep` tool**, 5 distinct symbols | **silent** — never fires |
+| `bash grep -rn 'def '` (a 96 KB flood here) | **silent** |
+
+Four gates:
+
+1. **It is a nudge, not a route.** Nothing invokes the call graph
+   automatically; the agent is handed an advisory string and has to take the
+   hint.
+2. **It only watches Bash.** The handler early-returns unless the tool name
+   contains `bash`/`command`, but Claude Code's *native* `Grep`/`Glob` tools are
+   the default path. The PostToolUse matcher **does** include `Grep`, so the
+   hook is invoked and then discards the event — matcher and handler disagree.
+3. **It requires a bare identifier.** `grep -rn 'def '` has a non-identifier
+   pattern and is invisible to the detector, though it is the largest flood in
+   this repository.
+4. **Threshold 3, fires once per session.** Best case: one advisory line.
+
+So an `sj` number from this adapter understates what the tool can do, and must
+not be read as "straitjacket on a navigation task". Reading it as a verdict on
+the whole system would repeat the mistake this eval suite was built to correct.
+
+The fix for the eval is a third arm, `sj_verbs`: same wrapper plus one line of
+doctrine naming the code verbs — the pattern `evals/ab_eval_live.py` already
+uses. That yields the B-vs-C split `BENCHMARK.md` asks for, separating *does
+containment work* from *do the retrieval verbs help*, instead of conflating
+them. It is the same shape that made `sj_hop` informative in
+`evals/tokenomics/`: the digest was not lossy, the consumer simply could not
+retrieve.
+
+Gate 2 is separately a defect in the hook rather than a property of the eval.
+
 ## What gets reported
 
 Resolve rate is the **gate, not the headline**. Per `BENCHMARK.md`, evidence
