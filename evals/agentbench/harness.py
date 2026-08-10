@@ -34,6 +34,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import tempfile
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -97,10 +98,13 @@ def session_metrics(doc: dict, wall: float) -> dict:
 
 
 def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
-            max_turns: int, repeat: int) -> dict:
+            max_turns: int, repeat: int, work_root: pathlib.Path) -> dict:
     """One (task, arm, repeat): materialize, run the agent, grade."""
     tag = f"{task['id']}_{arm}_r{repeat}".replace("/", "_")
-    workdir = out / "work" / tag
+    # Fixtures live OUTSIDE the repository under test. An agent whose cwd sits
+    # inside straitjacket's own tree can walk up into it; keeping the sandbox
+    # elsewhere makes that impossible rather than merely unlikely.
+    workdir = (work_root / tag).resolve()
     if workdir.exists():
         shutil.rmtree(workdir)
     workdir.mkdir(parents=True)
@@ -108,7 +112,10 @@ def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
     prompt = adapter.prepare(task, workdir)
 
     # Isolated agent config per run, so one arm cannot warm another's state.
-    cfg = out / "cfg" / tag
+    # MUST be absolute: the child runs with cwd=workdir, so a relative
+    # CLAUDE_CONFIG_DIR resolves against the FIXTURE and the agent's own config
+    # tree materializes inside the workspace being graded.
+    cfg = (out / "cfg" / tag).resolve()
     cfg.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg), "PIP_REQUIRE_VIRTUALENV": "1"}
 
@@ -157,6 +164,9 @@ def main() -> int:
     ap.add_argument("--model", default=None, help="passed to --model; default = host default")
     ap.add_argument("--max-turns", type=int, default=MAX_TURNS)
     ap.add_argument("--out", type=pathlib.Path, default=HERE / "results")
+    ap.add_argument("--work-root", type=pathlib.Path, default=None,
+                    help="where fixtures are materialized; defaults to a temp dir "
+                         "OUTSIDE this repo so an agent cannot reach the repo under test")
     ap.add_argument("--adapter-arg", action="append", default=[],
                     help="key=value passed through to the adapter's load()")
     args = ap.parse_args()
@@ -173,7 +183,14 @@ def main() -> int:
     if not tasks:
         raise SystemExit("adapter returned no tasks")
 
+    # Absolute from here on: these paths are handed to a child whose cwd is the
+    # fixture, where a relative path means something else entirely.
+    args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
+    work_root = (args.work_root.resolve() if args.work_root
+                 else pathlib.Path(tempfile.mkdtemp(prefix="agentbench_work_")))
+    work_root.mkdir(parents=True, exist_ok=True)
+    print(f"work root: {work_root}", flush=True)
     print(f"adapter={args.adapter} tasks={len(tasks)} arms={args.arms} repeats={args.repeats}",
           flush=True)
 
@@ -182,7 +199,7 @@ def main() -> int:
         for task in tasks:
             for arm in args.arms:
                 rec = run_one(adapter, task, arm, args.model, args.out,
-                              args.max_turns, repeat)
+                              args.max_turns, repeat, work_root)
                 records.append(rec)
                 print(
                     f"  [{arm}] r{repeat} {task['id']:44s} "
@@ -200,12 +217,21 @@ def main() -> int:
                     "task_ids": [t["id"] for t in tasks],
                     "provenance": "live",
                     "simulated": False,
+                    "work_root": str(work_root),
                     "results": records,
                 }
-                (args.out / f"{args.adapter}.json").write_text(
+                # In-flight runs write to a .partial file: a results file
+                # named like a finished one, holding half the arms, reads as a
+                # complete eval to anything that globs the directory -- report.py
+                # included. Renamed to the real name only once every arm lands.
+                (args.out / f"{args.adapter}.partial.json").write_text(
                     json.dumps(payload, indent=1), encoding="utf-8")
 
-    print(f"-> {args.out / f'{args.adapter}.json'}", flush=True)
+    partial = args.out / f"{args.adapter}.partial.json"
+    final = args.out / f"{args.adapter}.json"
+    if partial.exists():
+        partial.replace(final)
+    print(f"-> {final}", flush=True)
     return 0
 
 

@@ -57,10 +57,20 @@ def summarise(records: list[dict], arm: str) -> dict:
         "cache_hit_pct": _median([r.get("cache_hit_pct") for r in rows]),
         "output_tokens": sum(r.get("output_tokens") or 0 for r in rows),
         "uncached_in": sum(r.get("uncached_in") or 0 for r in rows),
+        # Total input is what the transcript actually costs. `uncached_in` alone
+        # is near-zero once prompt caching engages and reads as "no context used".
+        "total_in": sum((r.get("cache_read") or 0) + (r.get("cache_write") or 0)
+                        + (r.get("uncached_in") or 0) for r in rows),
         "wall_s": _median([r.get("wall_s") for r in rows]),
         "timed_out": sum(1 for r in rows if r.get("timed_out")),
         "session_errors": sum(1 for r in rows if r.get("session_error")),
         "tampered": sum(1 for r in rows if r.get("tests_tampered")),
+        # Open-ended missions have a YIELD, not just a pass/fail. `resolved`
+        # for the bugbash means "at least one defect reproduced", so two arms
+        # finding 8 and 5 both score 1/1 and the report calls it a tie. Carry
+        # the count so the headline cannot hide the difference.
+        "reproduced": sum(r.get("reproduced") or 0 for r in rows),
+        "has_yield": any("reproduced" in r for r in rows),
     }
 
 
@@ -90,15 +100,27 @@ def main() -> int:
 
         summaries = {a: summarise(records, a) for a in arms}
 
-        L.append("| Arm | Resolved | Median turns | Median cache hit | Uncached in | Output tok | Cost $ | Median wall s | Timeouts |")
+        L.append("| Arm | Resolved | Median turns | Median cache hit | Total input tok | Output tok | Cost $ | Median wall s | Timeouts |")
         L.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
         for a in arms:
             s = summaries[a]
             L.append(
                 f"| `{a}` | {s['resolved']}/{s['tasks']} | {s['turns']} | "
-                f"{s['cache_hit_pct']}% | {s['uncached_in']:,} | {s['output_tokens']:,} | "
+                f"{s['cache_hit_pct']}% | {s['total_in']:,} | {s['output_tokens']:,} | "
                 f"${s['cost_usd']:.4f} | {s['wall_s']} | {s['timed_out']} |"
             )
+
+        if any(s["has_yield"] for s in summaries.values()):
+            L.append("\n### Yield (open-ended mission: count, not pass/fail)\n")
+            L.append("`resolved` only asks whether an arm produced ANY result. For a mission "
+                     "with an open-ended count, that collapses very different outcomes into "
+                     "the same cell.\n")
+            L.append("| Arm | Defects reproduced | Cost per reproduction |")
+            L.append("|---|---:|---:|")
+            for a in arms:
+                sm = summaries[a]
+                per = (sm["cost_usd"] / sm["reproduced"]) if sm["reproduced"] else float("nan")
+                L.append(f"| `{a}` | {sm['reproduced']} | ${per:.2f} |")
 
         if "naive" in summaries:
             base = summaries["naive"]["resolved"]
