@@ -202,6 +202,37 @@ evidence should retrieve before escalating; incomplete contracts and failed
 verification should replan. Among correct recoveries, minimize added actual or
 estimated dollars, model attempts, and latency.
 
+### 8. Orchestration wave scheduling
+
+Choose a bounded ready-node wave from dependency state, provider limits, worker
+capacity, and mutation presence. Independent read-only nodes can run in
+parallel; mixed frontiers run reads before writes; shared-workspace mutations
+never overlap. This turns parallel Antigravity, Claude Code, and Codex capacity
+into measured latency reduction without treating concurrent writes as safe.
+
+### 9. Mutation isolation
+
+Choose shared read execution, serialized workspace mutation, or parallel
+worktrees. Parallel mutation is admissible only when every writer has an
+isolated worktree and declared, disjoint write targets. The current production
+orchestrator deliberately supplies `isolated_worktrees=false`, so the modeled
+parallel-worktree gain is not presented as shipped behavior.
+
+### 10. Evidence-budgeted handoff
+
+Choose address-only, compact, standard, or expanded checkpoint state. Terminal
+successes retain the exact artifact address without replaying output; dependent
+reads get a compact summary; mutation and verification steps retain decision
+evidence; failures preserve bounded head-and-tail diagnostics plus the exact
+blob address.
+
+### 11. Risk-adjusted verification routing
+
+All mutations remain verified. High-risk work selects an independent
+review-capable host when one is available; complex changes prefer independent
+economy verification; small low-risk changes avoid redundant cross-host cost.
+Explicit user host/model pins remain authoritative.
+
 ## Search and spend bounds
 
 - Python only, one `EVOLVE-BLOCK` per experiment.

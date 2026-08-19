@@ -6,7 +6,18 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
-AlphaEvolve now covers setup DevEx and command-span expansion. `ctx setup` is
+## [0.33.0] - 2026-08-19
+
+AlphaEvolve now covers setup DevEx, command-span expansion, and four
+orchestration policies. Read-only DAG nodes run in bounded parallel waves,
+shared-workspace mutations serialize, high-risk verification moves to an
+independent capable host when available, and checkpoint handoffs scale from an
+exact address to bounded diagnostic evidence. A 269,696-case generated matrix
+completed with zero policy failures. The managed setup now has a dedicated
+generative-chat engine and assistant; multiple bounded campaigns are recorded
+in the dated orchestration receipt. Automatic command capture also preserves
+`env`, timeout, and other launcher wrappers instead of dropping their execution
+semantics. `ctx setup` is
 the short human front door,
 and a successful doctor pass records a privacy-safe managed-config fingerprint.
 An unchanged repeat takes a verified no-op; upgrades, failures, host changes,
@@ -16,8 +27,8 @@ zero repeat host-config rewrites across 11/11 successful pairs. The guard now
 runs bounded/structured queries directly, captures known noisy reads, and keeps
 unknown or mutating commands at the permission boundary. Its 57,313-case
 generated matrix found and closed a compound-command rewrite bypass, then
-completed with zero classification failures. The portfolio now spans 27 levers
-and 16 experiment families.
+completed with zero classification failures. The portfolio now spans 31 levers
+and 20 experiment families.
 
 ## [0.32.1] - 2026-08-19
 

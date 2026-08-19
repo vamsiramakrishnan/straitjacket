@@ -17,6 +17,14 @@ The workflow uses GitHub OIDC and deliberately has no token secret. Protect the
 `pypi` GitHub environment with required reviewers if the repository has more
 than one release operator.
 
+For a project that does not exist on PyPI yet, create that pending publisher at
+<https://pypi.org/manage/account/publishing/> **before** publishing the GitHub
+release. An `invalid-publisher` exchange failure means GitHub supplied a valid
+OIDC token but PyPI found no publisher with matching owner, repository,
+workflow, and environment claims. Retrying unchanged cannot repair that
+account-side configuration; correct the pending publisher, then re-run the
+failed GitHub Actions job.
+
 ## Release gate
 
 From a clean checkout of the intended release commit:
@@ -37,7 +45,7 @@ temporary virtual environment, exercises `ctx --version`, renders every host
 configuration, and probes the packaged Antigravity shim.
 
 Confirm that `CHANGELOG.md` describes the version and that the tag exactly
-matches `ctx --version` (`v0.32.1` for version `0.32.1`). Publish a GitHub
+matches `ctx --version` (`v0.33.0` for version `0.33.0`). Publish a GitHub
 release for that tag. The release event checks out the tag, rebuilds and
 smoke-tests both artifacts, checks the tag/version match, and only then asks
 PyPI to mint a short-lived publishing credential.

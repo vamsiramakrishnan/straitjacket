@@ -99,7 +99,10 @@ def score_choice_policy(
         if not isinstance(selected_id, str) or selected_id not in by_id:
             return {
                 "score": INVALID_SCORE,
-                "error": f"{row['name']}: invalid option {selected_id!r}",
+                "error": (
+                    f"{row['name']}: candidate must return one string option id; "
+                    f"got {selected_id!r}"
+                ),
                 "cases": {},
             }
         selected_option = by_id[selected_id]

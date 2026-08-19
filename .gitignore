@@ -36,3 +36,6 @@ evals/_runs/
 
 # generated capability-surface state (gateway state, shadow ledger, compiled configs)
 .ctx-surface/
+
+# Machine/project-specific AlphaEvolve connection (resource IDs, no credentials).
+/.alphaevolve.env

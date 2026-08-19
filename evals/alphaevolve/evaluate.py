@@ -165,6 +165,7 @@ _BLOCKED_NAMES = {
     "exec",
     "getattr",
     "globals",
+    "hasattr",
     "help",
     "input",
     "locals",

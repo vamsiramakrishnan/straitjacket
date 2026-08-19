@@ -22,9 +22,16 @@ from evals.alphaevolve.portfolio import (
     shadow_report,
 )
 from evals.alphaevolve.registry import LEVERS, experiment_fingerprint, registry_document
+from evals.alphaevolve.sandbox import validate_block
 
 
 ALL_EXPERIMENTS = tuple(load_experiment(name) for name in EXPERIMENTS)
+
+
+@pytest.mark.parametrize("name", ("getattr", "hasattr"))
+def test_shared_candidate_sandbox_rejects_reflection(name):
+    with pytest.raises(ValueError, match=f"blocked name: {name}"):
+        validate_block(f"def choose(state, options):\n    return {name}(state, 'x')")
 
 
 @pytest.mark.parametrize(

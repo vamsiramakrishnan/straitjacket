@@ -38,7 +38,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ctx.hosts import (
@@ -49,7 +49,11 @@ from ctx.hosts import (
     pick_model,
     tier_rank,
 )
+from ctx.handoff_policy import choose_handoff
+from ctx.mutation_policy import choose_mutation_isolation
 from ctx.usage import ActualUsage, coerce_usage, parse_host_output, summarize_usage
+from ctx.verification_policy import choose_verification
+from ctx.wave_policy import choose_wave
 
 # Parallel wave nodes launch concurrently (the expensive part), but their store
 # writes — blob + checkpoint manifest into one SQLite catalog — must be
@@ -166,6 +170,7 @@ class AssignedNode:
     model: ModelChoice
     est_cost_usd: float
     tier_met: bool  # False when no installed model met min_tier (assigned strongest)
+    verification_policy: str = ""
 
 
 @dataclass
@@ -275,6 +280,72 @@ def _assign_host(
     )
 
 
+def _is_mutation_node(node: RouteNode) -> bool:
+    return node.role == "implement" or "edit" in node.need_tags
+
+
+def _is_verification_node(node: RouteNode) -> bool:
+    return node.role in {"verify", "test"} or bool(
+        {"verify", "test"} & set(node.need_tags)
+    )
+
+
+def _apply_verification_policy(
+    task: str,
+    assigned: list[AssignedNode],
+    hosts: list[DetectedHost],
+) -> list[AssignedNode]:
+    """Route verification independently when risk justifies the extra host."""
+    by_id = {item.node.id: item for item in assigned}
+    available = [host for host in hosts if host.installed and host.spec.unattended]
+    host_names = {host.name for host in available}
+    kind = _fallback_task_kind(task)
+    complexity = {
+        "answer": 1,
+        "inspect": 1,
+        "review": 2,
+        "test": 1,
+        "simple_edit": 1,
+        "bounded_feature": 3,
+        "general": 4,
+    }.get(kind, 4)
+    high_risk = bool(_HIGH_RISK_SCOPE.search(task))
+    routed: list[AssignedNode] = []
+    for item in assigned:
+        node = item.node
+        if not _is_verification_node(node):
+            routed.append(item)
+            continue
+        mutation_hosts = {
+            by_id[dep].host.name
+            for dep in node.deps
+            if dep in by_id and _is_mutation_node(by_id[dep].node)
+        }
+        alternate = bool(host_names - mutation_hosts) and bool(mutation_hosts)
+        strategy = choose_verification(
+            {
+                "mutation": bool(mutation_hosts),
+                "complexity": complexity,
+                "high_risk": high_risk,
+                "alternate_host": alternate,
+            }
+        )
+        selected = item
+        if strategy.startswith("independent_") and alternate and not (
+            node.host_pin or node.model_pin
+        ):
+            eligible = [host for host in available if host.name not in mutation_hosts]
+            target_tier = "standard" if strategy.endswith("standard") else "economy"
+            candidate_node = replace(node, min_tier=target_tier)
+            try:
+                selected = _assign_host(candidate_node, eligible)
+            except RouteError:
+                strategy += "_fallback"
+        selected.verification_policy = strategy
+        routed.append(selected)
+    return routed
+
+
 def _coerce_node(raw: dict, i: int) -> RouteNode:
     """One raw JSON node -> RouteNode, tolerant of missing/loose fields."""
     nid = str(raw.get("id") or f"n{i}").strip()
@@ -329,6 +400,7 @@ def build_route_plan(
         _assign_host(n, hosts, allow_interactive_pin=allow_interactive_pins)
         for n in nodes
     ]
+    assigned = _apply_verification_policy(task, assigned, hosts)
     plan = RoutePlan(
         task=task,
         hosts=tuple(hosts),
@@ -543,7 +615,9 @@ def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
     unattended = [host for host in hosts if host.spec.unattended]
     coordinator_hosts = unattended
     if fast_nodes is not None:
-        assigned = [_assign_host(node, hosts) for node in fast_nodes]
+        assigned = _apply_verification_policy(
+            task, [_assign_host(node, hosts) for node in fast_nodes], hosts
+        )
         return RoutePlan(
             task=task,
             hosts=tuple(hosts),
@@ -590,7 +664,9 @@ def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
             cfg.review_input_tokens, cfg.review_output_tokens,
         ),
     ]
-    assigned = [_assign_host(n, hosts) for n in nodes]
+    assigned = _apply_verification_policy(
+        task, [_assign_host(n, hosts) for n in nodes], hosts
+    )
     return RoutePlan(
         task=task, hosts=tuple(hosts),
         coordinator=pick_coordinator(coordinator_hosts), assigned=assigned,
@@ -842,6 +918,7 @@ class NodeOutcome:
     escalated_to: str | None = None
     exit_code: int | None = None
     usage_attempts: tuple[ActualUsage | None, ...] = ()
+    handoff_policy: str = ""
 
 
 @dataclass
@@ -853,6 +930,7 @@ class RouteResult:
     estimated_spend_usd: float = 0.0
     duration_ms: float = 0.0
     actual_usage: dict = field(default_factory=lambda: summarize_usage([]))
+    wave_policies: tuple[str, ...] = ()
 
 
 def _task_profile(task: str, kind: str) -> dict[str, object]:
@@ -917,6 +995,7 @@ def _append_route_receipt(ws, result: RouteResult, nodes: list[AssignedNode]) ->
                         "deps": list(assigned.node.deps),
                         "host": assigned.host.name,
                         "model": assigned.model.id,
+                        "verification_policy": assigned.verification_policy or None,
                         "estimated_input_tokens": assigned.node.est_input_tokens,
                         "estimated_output_tokens": assigned.node.est_output_tokens,
                         "estimated_cost_usd": assigned.est_cost_usd,
@@ -924,11 +1003,16 @@ def _append_route_receipt(ws, result: RouteResult, nodes: list[AssignedNode]) ->
                     for assigned in nodes
                 ],
             },
+            "orchestration_policy": {
+                "wave_policies": list(result.wave_policies),
+                "shared_workspace_mutations_serialized": True,
+            },
             "outcomes": [
                 {
                     "node_id": outcome.node_id,
                     "status": outcome.status,
                     "host_model": outcome.host_name,
+                    "handoff_policy": outcome.handoff_policy or None,
                     "exit_code": outcome.exit_code,
                     "escalated": outcome.escalated_to is not None,
                     "checkpoint": outcome.checkpoint_ref is not None,
@@ -956,7 +1040,40 @@ def _append_route_receipt(ws, result: RouteResult, nodes: list[AssignedNode]) ->
         pass
 
 
-def _checkpoint_node(ws, node: RouteNode, task: str, stdout: str, stderr: str) -> str | None:
+_HANDOFF_LIMITS = {
+    "address_only": 0,
+    "compact": 600,
+    "standard": 1200,
+    "expanded": 2400,
+}
+
+
+def _bounded_handoff_state(node: RouteNode, text: str, strategy: str) -> str:
+    """Render deterministic head/tail evidence while the blob keeps every byte."""
+    limit = _HANDOFF_LIMITS.get(strategy, _HANDOFF_LIMITS["compact"])
+    if limit <= 0:
+        return f"node {node.id}: full output stored at the checkpoint evidence address"
+    cleaned = text.strip()
+    if not cleaned:
+        return f"node {node.id}: no output"
+    if len(cleaned) <= limit:
+        return cleaned
+    marker = "\n... [bounded handoff; resolve blob: evidence for omitted bytes] ...\n"
+    available = max(2, limit - len(marker))
+    head = max(1, available * 2 // 3)
+    tail = max(1, available - head)
+    return cleaned[:head] + marker + cleaned[len(cleaned) - tail :]
+
+
+def _checkpoint_node(
+    ws,
+    node: RouteNode,
+    task: str,
+    stdout: str,
+    stderr: str,
+    *,
+    handoff_strategy: str | None = None,
+) -> str | None:
     """Freeze a node's captured output into a checkpoint citing a blob of the
     full output — the addressed handoff to its dependents. Fail-open.
 
@@ -969,7 +1086,17 @@ def _checkpoint_node(ws, node: RouteNode, task: str, stdout: str, stderr: str) -
         from ctx.textutil import short_id
 
         payload = (stdout or stderr or "").encode("utf-8", "replace")
-        state = (stdout or stderr or "").strip()[:600] or f"node {node.id}: no output"
+        text = stdout or stderr or ""
+        strategy = handoff_strategy or choose_handoff(
+            {
+                "failed": bool(stderr and not stdout),
+                "mutation": _is_mutation_node(node),
+                "verification": _is_verification_node(node),
+                "has_dependents": True,
+                "output_bytes": len(payload),
+            }
+        )
+        state = _bounded_handoff_state(node, text, strategy)
         # Serialize the store mutation across parallel-wave threads (see the
         # module comment on _CHECKPOINT_LOCK). Own Store per call so the sqlite
         # connection is never shared across threads.
@@ -1082,6 +1209,49 @@ def _actual_cost(assigned, outcome) -> float:
     return est * 3
 
 
+def _select_wave(
+    ready: list[AssignedNode], max_workers: int, *, final_wave: bool = False
+) -> tuple[list[AssignedNode], int, str]:
+    """Apply evolved wave and mutation policies to one topological frontier."""
+    mutations = [item for item in ready if _is_mutation_node(item.node)]
+    readonly = [item for item in ready if not _is_mutation_node(item.node)]
+    isolation = choose_mutation_isolation(
+        {
+            "mutation_count": len(mutations),
+            "shared_workspace": True,
+            "isolated_worktrees": False,
+            "targets_declared": False,
+            "target_overlap": len(mutations) > 1,
+        }
+    )
+    action = choose_wave(
+        {
+            "ready_count": len(ready),
+            "mutation_count": len(mutations),
+            "readonly_count": len(readonly),
+            # ``max_workers=1`` is the caller's bounded back-pressure signal;
+            # do not classify that frontier as parallel even though the
+            # executor cap would ultimately serialize it.
+            "provider_rate_limited": max_workers <= 1,
+            "isolation": isolation,
+        }
+    )
+    if mutations and isolation == "serial_workspace":
+        if final_wave:
+            return ready, 1, f"mutation_serial/{isolation}"
+        if action == "readonly_first" and readonly:
+            workers = min(max_workers, 4, len(readonly))
+            return readonly, max(1, workers), f"{action}/{isolation}"
+        # Keep the whole logical frontier in one configured wave, but execute
+        # its nodes with one worker so multiple writers never overlap.
+        return ready, 1, f"mutation_serial/{isolation}"
+    if action == "serial":
+        return ready, 1, f"{action}/{isolation}"
+    cap = 2 if action == "parallel_two" else 4
+    workers = min(max_workers, cap, len(ready))
+    return ready, max(1, workers), f"{action}/{isolation}"
+
+
 def run_route(
     ws,
     plan: RoutePlan,
@@ -1116,6 +1286,7 @@ def run_route(
     timeout = float(getattr(cfg, "node_timeout", 900.0) or 900.0)
     spent_est = 0.0
     waves_run = 0
+    wave_policies: list[str] = []
     replans_done = 0
     usage_attempts = (
         prior_usage_attempts if prior_usage_attempts is not None else []
@@ -1158,7 +1329,24 @@ def run_route(
                 node_usage.append(usage)
                 if _execution_contract_failed(code, out, err):
                     code = code or 1
-        ref = _checkpoint_node(ws, a.node, plan.task, out, err)
+        has_dependents = any(a.node.id in item.node.deps for item in nodes)
+        handoff_strategy = choose_handoff(
+            {
+                "failed": code != 0,
+                "mutation": _is_mutation_node(a.node),
+                "verification": _is_verification_node(a.node),
+                "has_dependents": has_dependents,
+                "output_bytes": len((out or err or "").encode("utf-8", "replace")),
+            }
+        )
+        ref = _checkpoint_node(
+            ws,
+            a.node,
+            plan.task,
+            out,
+            err,
+            handoff_strategy=handoff_strategy,
+        )
         tail = (out or err or "").strip().splitlines()
         return NodeOutcome(
             node_id=a.node.id,
@@ -1169,6 +1357,7 @@ def run_route(
             escalated_to=escalated,
             exit_code=code,
             usage_attempts=tuple(node_usage),
+            handoff_policy=handoff_strategy,
         )
 
     while waves_run < max_waves:
@@ -1197,10 +1386,14 @@ def run_route(
                     replans_done += 1
                     continue
             break
+        selected, workers, wave_policy = _select_wave(
+            ready, max_workers, final_wave=waves_run + 1 >= max_waves
+        )
+        wave_policies.append(wave_policy)
         waves_run += 1
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(ready))) as pool:
-            results = list(pool.map(run_one, ready))
-        for a, o in zip(ready, results):
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(run_one, selected))
+        for a, o in zip(selected, results):
             state[a.node.id] = o.status
             outcomes[a.node.id] = o
             usage_attempts.extend(o.usage_attempts)
@@ -1236,6 +1429,7 @@ def run_route(
         estimated_spend_usd=spent_est,
         duration_ms=(time.monotonic() - started) * 1000.0,
         actual_usage=summarize_usage(usage_attempts),
+        wave_policies=tuple(wave_policies),
     )
     _append_route_receipt(ws, result, nodes)
     return result

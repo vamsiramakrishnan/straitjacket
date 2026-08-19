@@ -1098,7 +1098,13 @@ def _deny_cmd(
     if has_meta and original:
         cmd = f"ctx run{bg} --shell -- " + shlex.quote(original)
     else:
-        cmd = f"ctx run{bg} -- " + " ".join(shlex.quote(a) for a in argv)
+        # Classification deliberately unwraps ``env``, ``timeout``, ``nice``
+        # and similar launchers to see the real program. Execution must retain
+        # those wrappers: they carry credentials, limits, buffering, and other
+        # semantics. Reparse the already validated original string only for a
+        # metacharacter-free direct argv rewrite.
+        routed_argv = shlex.split(original) if original else argv
+        cmd = f"ctx run{bg} -- " + " ".join(shlex.quote(a) for a in routed_argv)
     reason = _REWRITE_REASON
     if bg:
         reason = (
@@ -1445,7 +1451,9 @@ def _classify_command_inner(
         return classify_command(argv[2], policy, _depth + 1, cwd=cwd)
 
     if prog == "xargs":
-        return _deny_cmd(argv, policy)  # stdin consumer: never rewritten
+        return _deny_cmd(
+            argv, policy, original=stripped, has_meta=has_meta
+        )  # stdin consumer: never rewritten
 
     if has_meta:
         # A pipeline containing head is not automatically safe (SPEC §11.2).
@@ -1511,14 +1519,14 @@ def _classify_command_inner(
     if prog == "git":
         sub, _git_rest = git_subcommand(argv)
         if sub in _GIT_UNBOUNDED:
-            return _deny_cmd(argv, policy)
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
         if sub == "status" and not ("--short" in argv or "-s" in argv or "--porcelain" in argv):
-            return _deny_cmd(argv, policy)
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
         return dict(DECISION_ALLOW)
 
     if prog == "ls":
         if any(a.startswith("-") and "R" in a for a in argv[1:]):
-            return _deny_cmd(argv, policy)
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
         return dict(DECISION_ALLOW)
 
     if prog in ("python", "python3", "node", "ruby", "perl", "deno"):
@@ -1526,7 +1534,7 @@ def _classify_command_inner(
         # and emit anything; route through ctx.
         if len(argv) == 1:
             return _deny(_remediation(argv))  # bare REPL: interactive-suspect
-        return _deny_cmd(argv, policy)
+        return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
 
     if prog in _BOUNDED_CMDS:
         if choose_guard({"bounded_command": True}) == "allow":
@@ -1556,18 +1564,20 @@ def _classify_command_inner(
                 "(previewed, generation-guarded, transactional); for plain-text "
                 f"targets, capture it: ctx run -- {' '.join(shlex.quote(a) for a in argv)}"
             )
-        return _deny_cmd(argv, policy)  # read-only: bounded capture via ctx run
+        return _deny_cmd(
+            argv, policy, original=stripped, has_meta=has_meta
+        )  # read-only: bounded capture via ctx run
 
     if prog in _UNBOUNDED_CMDS:
         if choose_guard({"flood_command": True}) == "rewrite_command":
-            return _deny_cmd(argv, policy)
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
 
     # Unknown command → configured policy.
     unknown = policy.get("unknown_command", "force_ask")
     if unknown == "allow" or policy.get("mode") == "advisory":
         return dict(DECISION_ALLOW)
     if unknown == "deny":
-        return _deny_cmd(argv, policy)
+        return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
     return _force_ask(
         f"CTX_CONTEXT_GUARD: unknown output bound for {prog!r}. "
         f"If output may be large, run: ctx run -- {' '.join(shlex.quote(a) for a in argv)}"

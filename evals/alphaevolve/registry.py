@@ -30,6 +30,10 @@ EXPERIMENT_MODULES: dict[str, str] = {
     "context-policy": "evals.alphaevolve.context_policy.evaluate",
     "execution-policy": "evals.alphaevolve.execution_policy.evaluate",
     "setup-policy": "evals.alphaevolve.setup_policy.evaluate",
+    "wave-policy": "evals.alphaevolve.wave_policy.evaluate",
+    "mutation-policy": "evals.alphaevolve.mutation_policy.evaluate",
+    "handoff-policy": "evals.alphaevolve.handoff_policy.evaluate",
+    "verification-policy": "evals.alphaevolve.verification_policy.evaluate",
 }
 
 
@@ -87,6 +91,10 @@ LEVERS: tuple[LeverSpec, ...] = (
     _lever("model-route", "route-replay", "orchestration", "high", "actual-usage", "canary", "src/ctx/orchestrator.py:fallback_route", "choose_route(profile, routes)"),
     _lever("dag-construction", "route-policy", "orchestration", "high", "simulator", "canary", "src/ctx/orchestrator.py:build_route_plan", "choose_route(task, routes)"),
     _lever("recovery-escalation", "escalation-policy", "orchestration", "high", "actual-usage", "canary", "src/ctx/orchestrator.py:run_route", "choose_recovery(state)"),
+    _lever("wave-scheduler", "wave-policy", "orchestration", "high", "route-replay", "shadow", "src/ctx/orchestrator.py:run_route", "choose_wave(state, options)"),
+    _lever("mutation-isolation", "mutation-policy", "orchestration", "high", "adversarial", "shadow", "src/ctx/orchestrator.py:run_route", "choose_mutation_isolation(state, options)"),
+    _lever("handoff-budget", "handoff-policy", "orchestration", "medium", "route-replay", "shadow", "src/ctx/orchestrator.py:_checkpoint_node", "choose_handoff(state, options)"),
+    _lever("verification-route", "verification-policy", "orchestration", "high", "actual-usage", "shadow", "src/ctx/orchestrator.py:build_route_plan", "choose_verification(state, options)"),
     _lever("backgrounding", "execution-policy", "execution", "medium", "replay", "shadow", "src/ctx/jobs.py;src/ctx/execution.py", "choose_execution(state, options)"),
     _lever("cache-materialization", "execution-policy", "execution", "high", "adversarial", "shadow", "src/ctx/store.py;src/ctx/skeleton.py", "choose_execution(state, options)"),
     _lever("setup-fast-noop", "setup-policy", "devex", "low", "setup-receipt", "canary", "src/ctx/wrap.py:guided_setup;src/ctx/setup_telemetry.py", "choose_setup(state, options)"),

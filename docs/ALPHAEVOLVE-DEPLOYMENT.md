@@ -9,8 +9,8 @@ safety or measurement rules used to judge it.
 
 The versioned registry in `evals/alphaevolve/registry.py` currently contains:
 
-- 27 production levers;
-- 24 mutable levers mapped to 16 experiment families;
+- 31 production levers;
+- 28 mutable levers mapped to 20 experiment families;
 - three immutable oracle planes: actual-usage accounting, secret/workspace
   guards, and receipt integrity.
 
@@ -19,6 +19,8 @@ policy, routing, naive fast paths, receipt replay, recovery, capability
 surfaces, profile detection, output delivery, retrieval, birth-gate policy,
 engagement/reflex behavior, plan compilation, repository context, background
 execution, and cache materialization.
+The four newest families optimize orchestration waves, mutation isolation,
+checkpoint handoff budgets, and verification routing.
 
 Each registry entry names its production seam, candidate API, evidence class,
 risk, deployment wave, and strongest permitted rollout stage. Dataset files are
@@ -98,6 +100,8 @@ python -m evals.alphaevolve.portfolio --all-local
 python -m evals.alphaevolve.portfolio --wave containment --all-local
 python -m evals.alphaevolve.portfolio --wave retrieval --all-local
 python -m evals.alphaevolve.guard_policy.command_matrix
+python -m evals.alphaevolve.orchestration_matrix
+python -m evals.alphaevolve.portfolio --wave orchestration --all-local
 ```
 
 Ask which experiments may enter managed search. `ready` means only that local
@@ -139,6 +143,12 @@ python -m evals.alphaevolve.portfolio retrieval-policy \
 | context | repository fileset/context selection | shadow |
 | execution | backgrounding and cache freshness | shadow |
 | orchestration | fast paths, routes, DAGs, recovery | matched live canary |
+
+Within the orchestration wave, production now parallelizes independent
+read-only frontier nodes up to the configured worker/provider limit. It
+serializes mutations in a shared workspace. The experiment can model parallel
+isolated worktrees, but that arm is not active in production until worktree
+creation, merge-conflict handling, cleanup, and acceptance coverage exist.
 
 ## Promotion lifecycle
 

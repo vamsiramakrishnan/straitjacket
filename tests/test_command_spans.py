@@ -34,6 +34,16 @@ def test_readonly_noisy_spans_are_transparent_capture_candidates():
         assert decision["_rewrite"]["command"].startswith("ctx run"), command
 
 
+def test_transparent_capture_preserves_env_and_launcher_wrappers():
+    command = (
+        "env GE_APP_ID=alpha-evolve-straitjacket "
+        "timeout 30 python -m evals.alphaevolve.portfolio wave-policy --run"
+    )
+    decision = classify_command(command, _policy())
+    assert decision["decision"] == "deny"
+    assert decision["_rewrite"]["command"] == f"ctx run -- {command}"
+
+
 def test_github_mutations_keep_permission_boundary():
     for command in ("gh run rerun 123", "gh pr merge 123", "gh issue create"):
         decision = classify_command(command, _policy())

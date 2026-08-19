@@ -56,6 +56,11 @@ The fleet-wide registry, nine newly covered policy families, protected oracle
 planes, and local gate result are recorded in
 [`2026-08-18-fleet-deployment.md`](2026-08-18-fleet-deployment.md).
 
+The orchestration expansion—parallel read waves, safe mutation isolation,
+bounded evidence handoffs, independent risk-adjusted verification, the
+269,696-case promotion matrix, and managed campaign receipts—is recorded in
+[`2026-08-19-orchestration-policy-fleet.md`](2026-08-19-orchestration-policy-fleet.md).
+
 The first reviewed product canary from those findings—the guarded native path
 for one named pytest node—is recorded in
 [`2026-08-18-speculative-native.md`](2026-08-18-speculative-native.md). It
@@ -97,7 +102,7 @@ python -m evals.alphaevolve.portfolio route-replay --local
 python -m evals.alphaevolve.portfolio escalation-policy --local
 ```
 
-The complete registry now spans 27 production levers and 16 experiment
+The complete registry now spans 31 production levers and 20 experiment
 families. Use the registry and wave commands instead of maintaining a manual
 command list:
 
@@ -107,6 +112,8 @@ python -m evals.alphaevolve.portfolio --wave containment --all-local
 python -m evals.alphaevolve.portfolio --ready-for-managed
 python -m evals.alphaevolve.portfolio --promotion-report
 python -m evals.alphaevolve.guard_policy.command_matrix
+python -m evals.alphaevolve.orchestration_matrix
+python -m evals.alphaevolve.portfolio --wave orchestration --all-local
 ```
 
 See the [deployment plane](../../docs/ALPHAEVOLVE-DEPLOYMENT.md) for the shared
