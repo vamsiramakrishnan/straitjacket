@@ -6,6 +6,14 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.32.1] - 2026-08-19
+
+The PyPI release workflow now reads the version source with `runpy` instead of
+importing `ctx` from an uninstalled `src/` checkout. The first `v0.32.0`
+GitHub release proved both artifacts but stopped at that pre-publish tag check;
+no files reached PyPI. This patch preserves that public tag and retries the
+same verified package through Trusted Publishing.
+
 ## [0.32.0] - 2026-08-19
 
 Codex integration now follows the live host contracts exactly. The MCP stdio

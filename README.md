@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.32.0 (pre-1.0, minor bump per mechanism) · 1,689 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.32.1 (pre-1.0, minor bump per mechanism) · 1,689 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 

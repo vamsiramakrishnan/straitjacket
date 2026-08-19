@@ -37,7 +37,7 @@ temporary virtual environment, exercises `ctx --version`, renders every host
 configuration, and probes the packaged Antigravity shim.
 
 Confirm that `CHANGELOG.md` describes the version and that the tag exactly
-matches `ctx --version` (`v0.32.0` for version `0.32.0`). Publish a GitHub
+matches `ctx --version` (`v0.32.1` for version `0.32.1`). Publish a GitHub
 release for that tag. The release event checks out the tag, rebuilds and
 smoke-tests both artifacts, checks the tag/version match, and only then asks
 PyPI to mint a short-lived publishing credential.
