@@ -29,6 +29,7 @@ EXPERIMENT_MODULES: dict[str, str] = {
     "plan-policy": "evals.alphaevolve.plan_policy.evaluate",
     "context-policy": "evals.alphaevolve.context_policy.evaluate",
     "execution-policy": "evals.alphaevolve.execution_policy.evaluate",
+    "setup-policy": "evals.alphaevolve.setup_policy.evaluate",
 }
 
 
@@ -87,6 +88,8 @@ LEVERS: tuple[LeverSpec, ...] = (
     _lever("recovery-escalation", "escalation-policy", "orchestration", "high", "actual-usage", "canary", "src/ctx/orchestrator.py:run_route", "choose_recovery(state)"),
     _lever("backgrounding", "execution-policy", "execution", "medium", "replay", "shadow", "src/ctx/jobs.py;src/ctx/execution.py", "choose_execution(state, options)"),
     _lever("cache-materialization", "execution-policy", "execution", "high", "adversarial", "shadow", "src/ctx/store.py;src/ctx/skeleton.py", "choose_execution(state, options)"),
+    _lever("setup-fast-noop", "setup-policy", "devex", "low", "setup-receipt", "canary", "src/ctx/wrap.py:guided_setup;src/ctx/setup_telemetry.py", "choose_setup(state, options)"),
+    _lever("setup-repair", "setup-policy", "devex", "medium", "adversarial", "canary", "src/ctx/installer.py;src/ctx/wrap.py:guided_setup", "choose_setup(state, options)"),
     _lever("actual-usage-accounting", None, "protected", "protected", "wire-truth", "immutable", "src/ctx/usage.py", "measurement oracle", mutable=False),
     _lever("secret-workspace-guards", None, "protected", "protected", "security", "immutable", "src/ctx/config.py;src/ctx/hook.py", "safety oracle", mutable=False),
     _lever("receipt-integrity", None, "protected", "protected", "schema", "immutable", "src/ctx/route_telemetry.py;src/ctx/store.py", "promotion oracle", mutable=False),

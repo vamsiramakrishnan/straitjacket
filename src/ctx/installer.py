@@ -390,7 +390,7 @@ def _refusal(path: Path, err: Exception, *, what: str) -> str:
             f"cannot set up {what}: {err}",
             f"ctx did not modify {path} — merging into it means writing the whole",
             "file back, which would have discarded everything already in it.",
-            "fix the JSON (or move the file aside) and re-run: ctx wrap setup",
+            "fix the JSON (or move the file aside) and re-run: ctx setup",
         ]
     )
 
@@ -405,7 +405,7 @@ def _iter_hook_commands(settings: object):
     (``settings["hooks"].values()`` → iterate → ``group["hooks"]``) makes three
     unchecked shape assumptions, and a bug bash confirmed that any of them
     raises instead of refusing: ``hooks`` as a list gave an AttributeError out
-    of ``ctx wrap setup``, not the documented message.
+    of ``ctx setup``, not the documented message.
 
     Being shape-tolerant here, once, is the mechanism. Callers get "no ctx
     hook found" for a malformed document and go on to the normal refusal path,
@@ -532,6 +532,73 @@ def _managed_codex_config(text: str) -> bool:
     return text.startswith("# ctx-harness — straitjacket context containment for Codex CLI.")
 
 
+def _codex_mcp_contract(path: Path, exe: str) -> tuple[bool, str]:
+    """Validate the exact stdio launch contract Codex must be able to start.
+
+    In particular, ``command`` is one executable and ``args`` carries
+    ``-m ctx mcp --bounded-only`` when the Python fallback is in use.  Treating
+    the whole shell command as ``command`` is the ENOENT failure this check is
+    designed to catch before setup can mint a ready receipt.
+    """
+    import tomllib
+
+    if not path.is_file():
+        return False, ".codex/config.toml is missing"
+    try:
+        doc = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        return False, f".codex/config.toml is unreadable: {exc}"
+    servers = doc.get("mcp_servers")
+    actual = servers.get("ctx-harness") if isinstance(servers, dict) else None
+    if not isinstance(actual, dict):
+        return False, ".codex/config.toml has no mcp_servers.ctx-harness table"
+
+    expected_doc = tomllib.loads(_render_codex_file("config.toml", exe))
+    expected = expected_doc["mcp_servers"]["ctx-harness"]
+    if actual.get("command") != expected["command"]:
+        return False, "ctx-harness MCP command is stale or contains arguments"
+    if actual.get("args") != expected["args"]:
+        return False, "ctx-harness MCP args are stale or incomplete"
+    return True, ".codex/config.toml launches the bounded ctx MCP server"
+
+
+def _render_codex_mcp_snippet(exe: str) -> str:
+    """Render only the table safe to append to user-owned Codex TOML."""
+    import tomllib
+
+    expected = tomllib.loads(_render_codex_file("config.toml", exe))["mcp_servers"][
+        "ctx-harness"
+    ]
+    return "\n".join(
+        (
+            "[mcp_servers.ctx-harness]",
+            f'command = {json.dumps(expected["command"])}',
+            f'args = {json.dumps(expected["args"])}',
+        )
+    )
+
+
+def setup_conflicts(ws: Workspace, hosts: "list[str]") -> list[str]:
+    """Return user-owned setup state that cannot be rewritten safely."""
+    if "codex" not in hosts:
+        return []
+    cfg = ws.root / ".codex" / "config.toml"
+    if not cfg.is_file():
+        return []
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f".codex/config.toml cannot be read: {exc}"]
+    ok, detail = _codex_mcp_contract(cfg, _ctx_executable())
+    if ok or _managed_codex_config(text):
+        return []
+    snippet = _render_codex_mcp_snippet(_ctx_executable())
+    return [
+        f"{detail}. ctx will not rewrite user-owned TOML. Add this reviewed "
+        f"entry, then rerun `ctx setup`:\n{snippet}"
+    ]
+
+
 def _render_claude_md(exe: str) -> str:
     """The compact ctx verb card for a Claude Code session's CLAUDE.md —
     the vocabulary the wrap/settings path does not otherwise surface
@@ -594,18 +661,25 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
     if not cfg.is_file():
         cfg.write_text(cfg_snippet, encoding="utf-8")
         lines.append("wrote .codex/config.toml")
-    elif "mcp_servers.ctx-harness" in (cfg_text := cfg.read_text(encoding="utf-8")):
-        if _managed_codex_config(cfg_text) and cfg_text != cfg_snippet:
-            cfg.write_text(cfg_snippet, encoding="utf-8")
-            lines.append("refreshed managed .codex/config.toml")
-        else:
-            lines.append(".codex/config.toml already registers ctx-harness; unchanged")
     else:
-        # Never rewrite a user's TOML in place (duplicate-table hazard).
-        lines.append(
-            ".codex/config.toml exists — add these lines to enable ctx-harness:\n"
-            + "\n".join("    " + ln for ln in cfg_snippet.strip().splitlines())
-        )
+        cfg_text = cfg.read_text(encoding="utf-8")
+        if _managed_codex_config(cfg_text):
+            if cfg_text == cfg_snippet:
+                lines.append(".codex/config.toml already registers ctx-harness; unchanged")
+            else:
+                cfg.write_text(cfg_snippet, encoding="utf-8")
+                lines.append("refreshed managed .codex/config.toml")
+        elif "mcp_servers.ctx-harness" in cfg_text:
+            lines.append(".codex/config.toml already registers ctx-harness; unchanged")
+        else:
+            # Never rewrite a user's TOML in place (duplicate-table hazard).
+            lines.append(
+                ".codex/config.toml exists — add these lines to enable ctx-harness:\n"
+                + "\n".join(
+                    "    " + ln
+                    for ln in _render_codex_mcp_snippet(exe).splitlines()
+                )
+            )
 
     hooks_path = codex_dir / "hooks.json"
     hooks_rendered = _render_codex_file("hooks.json", exe)
@@ -655,12 +729,12 @@ def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
 # and the name→installer mapping used to be hand-maintained here as well, a
 # second copy of what every HostSpec already declares via `installer`.
 def _setup_hosts_tuple() -> tuple[str, ...]:
-    """The hosts `ctx wrap setup` configures by default.
+    """The hosts `ctx setup` configures by default.
 
     Self-hosted hosts are excluded on purpose. Setup harnesses the agents you
     already have by writing config into them; building a virtualenv and pulling
     a vendor SDK off the network is a different kind of act, and it should be an
-    explicit `ctx wrap antigravity-sdk`, never a side effect of `ctx wrap setup`.
+    explicit `ctx wrap antigravity-sdk`, never a side effect of `ctx setup`.
     """
     from ctx.hosts import harnessable_hosts
 
@@ -764,7 +838,7 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
             "plugin and standalone skill are both installed — remove one (SPEC §4.3)" if dup else "",
         )
 
-    # What `ctx wrap setup` actually wrote. Until now doctor never opened
+    # What `ctx setup` actually wrote. Until now doctor never opened
     # these files, so it happily printed OK for a workspace where the hooks
     # had never been installed, or had been clobbered — the one question the
     # command exists to answer.
@@ -779,22 +853,26 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         try:
             data = _read_settings_object(path)
         except SettingsUnreadable as e:
-            check(label, False, f"{e} — fix the file, then re-run: ctx wrap setup")
+            check(label, False, f"{e} — fix the file, then re-run: ctx setup")
             continue
         hooked = present_fn(data, exe or "")
         check(
             label,
             hooked,
-            rel if hooked else f"{rel} has no ctx hook entry — run: ctx wrap setup",
+            rel if hooked else f"{rel} has no ctx hook entry — run: ctx setup",
         )
         if hooked:
             wrapped.append(label.split()[0])
+    codex_cfg = ws.root / ".codex" / "config.toml"
+    if codex_cfg.is_file():
+        mcp_ok, mcp_detail = _codex_mcp_contract(codex_cfg, _ctx_executable())
+        check("codex MCP", mcp_ok, mcp_detail)
     if plugin_dir.is_dir():
         wrapped.append("antigravity")
     check(
         "an agent is wrapped",
         bool(wrapped),
-        " + ".join(wrapped) if wrapped else "nothing is hooked yet — run: ctx wrap setup",
+        " + ".join(wrapped) if wrapped else "nothing is hooked yet — run: ctx setup",
     )
 
     rg = shutil.which("rg")

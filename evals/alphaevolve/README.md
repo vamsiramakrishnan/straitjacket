@@ -97,7 +97,7 @@ python -m evals.alphaevolve.portfolio route-replay --local
 python -m evals.alphaevolve.portfolio escalation-policy --local
 ```
 
-The complete registry now spans 24 production levers and 15 experiment
+The complete registry now spans 26 production levers and 16 experiment
 families. Use the registry and wave commands instead of maintaining a manual
 command list:
 

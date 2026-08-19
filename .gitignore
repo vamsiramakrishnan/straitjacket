@@ -28,7 +28,7 @@ evals/_runs/
 # definitions written by `ctx wrap claude`) — never source.
 .claude/
 
-# Codex and host instruction files rendered by `ctx wrap setup` contain
+# Codex and host instruction files rendered by `ctx setup` contain
 # machine-local executable paths. They are runtime wiring, not source.
 .codex/
 /AGENTS.md

@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.32.1 (pre-1.0, minor bump per mechanism) · 1,689 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.32.1 (pre-1.0, minor bump per mechanism) · 1,698 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -81,16 +81,17 @@ From a clone to a harnessed agent:
 python -m pip install -e .  # PyPI release pending; Python 3.11+
 ctx --version
 cd your-repo
-ctx wrap setup      # done — Antigravity, Claude Code, and Codex are harnessed
+ctx setup      # done — Antigravity, Claude Code, and Codex are harnessed
 ```
 
-`ctx wrap setup` is idempotent and non-destructive: it merges into existing
-config, never clobbers it, and re-running is a no-op. From the next agent
+`ctx setup` is idempotent and non-destructive: it merges into existing
+config, never clobbers it, and an unchanged re-run is a receipt-verified no-op.
+From the next agent
 session on, flooding tool output is captured into a local store and your
 agent sees a small digest with exact retrieval addresses instead.
 
-It also walks you through it rather than dumping paths — four steps, about five
-seconds:
+The first run walks you through it rather than dumping paths — four steps,
+about five seconds. A verified repeat returns a three-line ready result:
 
 1. **What you have** — which agent CLIs were found, which will be harnessed,
    which were skipped and why, and which are optional (never configured behind
@@ -140,7 +141,7 @@ through the whole system in plain language.
 Plain-language highlights from recent releases; full detail in
 [`CHANGELOG.md`](CHANGELOG.md).
 
-- **One-command, three-host setup.** `ctx wrap setup` harnesses Antigravity,
+- **One-command, three-host setup.** `ctx setup` harnesses Antigravity,
   Claude Code, *and Codex* (with real enforcement, not just advice) in a
   single idempotent command.
 - **Harness collaboration by capability × price, per model.** `ctx wrap detect`
@@ -193,6 +194,13 @@ Plain-language highlights from recent releases; full detail in
   decision about *when to contain*, not just the compression ratio after the
   fact. The 20.15% figure is for this measured path, not a blanket product-wide
   speed claim.
+- **AlphaEvolve removed repeat-setup churn.** The new human front door is
+  `ctx setup`. After one real doctor-verified setup, a versioned managed-config
+  receipt makes an unchanged repeat **4.42× faster** with **8.17× less output**
+  and zero host-config rewrites in 11/11 paired local runs. Any upgrade, failed
+  check, host change, config drift, or `--repair` request returns to the full
+  idempotent installer and verification path
+  ([receipt](evals/alphaevolve/2026-08-19-setup-devex.md)).
 
 ## 📊 What's measured (and what isn't yet)
 
@@ -531,7 +539,7 @@ The **Plugin** (enforced) mode is delivered across all three hosts by the same
 canonical hook decision, translated to each host's dialect: Antigravity's plugin
 `hooks.json`, Claude Code's `.claude/settings.json`, and Codex's `.codex/hooks.json`
 (`hookSpecificOutput` PreToolUse + `decision:block` PostToolUse substitution).
-One classifier, three emitters — `ctx wrap setup` wires all three at once.
+One classifier, three emitters — `ctx setup` wires all three at once.
 
 The **birth-gate** decision (PreToolUse: contain flooding commands, steer native
 and semantic search to bounded `ctx` ops) fires on all three, but it is applied
@@ -605,7 +613,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,689 acceptance-oriented determinism & security test functions
+└── tests/             # 1,698 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -787,7 +795,7 @@ engine disclosed in headers.
 
 ```bash
 pip install -e .                            # from a clone (not yet on PyPI)
-ctx wrap setup                              # harness Antigravity + Claude Code + Codex
+ctx setup                              # harness Antigravity + Claude Code + Codex
 # ...or one host at a time:
 ctx wrap antigravity                        # persistent workspace plugin
 ctx wrap codex                              # .codex/ MCP + hooks + AGENTS.md
@@ -806,7 +814,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 1,689 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,698 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

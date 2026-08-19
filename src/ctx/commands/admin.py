@@ -15,7 +15,7 @@ def cmd_init(ws, ns) -> int:
     print()
     print("This repo now has ctx settings (edit ctx.toml to tune budgets).")
     print("Next:")
-    print("  ctx wrap setup        hook ctx into the agents you have installed")
+    print("  ctx setup        hook ctx into the agents you have installed")
     print("  ctx run -- pytest -q  try it on something noisy")
     return 0
 
@@ -150,7 +150,7 @@ def cmd_gain(ws, ns=None) -> int:
             "  Most often this means no agent is hooked, not that nothing ran —\n"
             "  commands went straight to the shell and ctx never saw them.\n"
             "  Check:  ctx doctor        (look for 'an agent is wrapped')\n"
-            "  Fix:    ctx wrap setup    (hook the agents you have installed)",
+            "  Fix:    ctx setup    (hook the agents you have installed)",
             file=sys.stderr,
         )
         return 1

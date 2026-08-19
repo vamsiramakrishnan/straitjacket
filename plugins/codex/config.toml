@@ -1,7 +1,7 @@
 # ctx-harness — straitjacket context containment for Codex CLI.
 # Registers the bounded `ctx` MCP retrieval tool and enables the lifecycle
 # hooks that route flooding command/file output through `ctx run`.
-# Rendered by `ctx wrap codex` / `ctx wrap setup`; remove this file to uninstall.
+# Rendered by `ctx wrap codex` / `ctx setup`; remove this file to uninstall.
 
 [features]
 hooks = true

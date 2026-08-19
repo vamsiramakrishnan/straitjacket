@@ -187,6 +187,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "policy": ("admin", "cmd_policy", True),
     "ladders": ("admin", "cmd_ladders", True),
     "orchestrate": ("hosts", "cmd_orchestrate", True),
+    "setup": ("hosts", "cmd_setup", False),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
     "antigravity": ("hosts", "cmd_antigravity", False),
@@ -342,6 +343,23 @@ def _build_parser():
         help="repo to work in (default: the git root above the current directory)",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_setup = sub.add_parser(
+        "setup", prog="ctx setup",
+        help="detect, configure, and verify installed agents",
+    )
+    p_setup.add_argument(
+        "--host", dest="hosts", action="append",
+        help="configure one host (repeatable; default: detect installed hosts)",
+    )
+    p_setup.add_argument(
+        "--all", action="store_true",
+        help="configure every supported host even when its CLI is not installed",
+    )
+    p_setup.add_argument(
+        "--repair", action="store_true",
+        help="bypass the ready receipt, refresh managed config, and verify again",
+    )
 
     p_run = sub.add_parser("run", help="execute a command with birth-time capture")
     p_run.add_argument("--focus", help="deterministic evidence-selection query")

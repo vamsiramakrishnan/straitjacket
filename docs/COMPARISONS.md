@@ -47,7 +47,7 @@ panel, wozcode's zero-signup install.
 
 **Distribution.** rtk is `cargo install`. Headroom is `headroom wrap claude`.
 wozcode installs in seconds with no signup. We are `git clone` →
-`pip install -e .` → `ctx wrap setup`. Step three is the best in the field —
+`pip install -e .` → `ctx setup`. Step three is the best in the field —
 idempotent, non-destructive, self-verifying, exits non-zero rather than
 claiming a success it didn't achieve. Steps one and two are the worst. That is
 a release we have not cut, not a design position.

@@ -69,7 +69,7 @@ def test_workspace_free_commands_are_exactly_the_self_resolving_ones():
     from ctx import cli
 
     free = {n for n, (_, _, ws) in cli._COMMANDS.items() if not ws}
-    assert free == {"wrap", "antigravity", "proxy", "replay"}
+    assert free == {"setup", "wrap", "antigravity", "proxy", "replay"}
 
 
 # --------------------------------------------------------- the front door

@@ -119,7 +119,7 @@ def ensure_venv(*, upgrade: bool = False, quiet: bool = True) -> tuple[bool, str
     Idempotent: an existing working environment is left alone unless
     ``upgrade``. Returns ``(ok, message)`` and never raises — a machine without
     network, or with a broken Python, must degrade to "this host is not
-    available" rather than breaking `ctx wrap setup` for the other hosts.
+    available" rather than breaking `ctx setup` for the other hosts.
     """
     if shim_source().is_file() is False:
         return False, f"shim not found at {shim_source()}"

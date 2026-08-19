@@ -192,7 +192,7 @@ def _harness_segment(workspace_root: Path | str | None) -> str | None:
 
         ctx◇ 12K kept out   the harness is working, here is the number
         ctx◇ idle           hooked, nothing contained yet this session
-        ctx◇ off            nothing is hooked — run `ctx wrap setup`
+        ctx◇ off            nothing is hooked — run `ctx setup`
 
     None only when there is no workspace to speak about at all."""
     if workspace_root is None:

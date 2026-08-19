@@ -61,7 +61,7 @@ def test_front_door_is_only_what_a_human_needs():
     """A person sets it up, checks it, and looks at what it saved. The agent
     runs everything else. If this grows, someone has confused the audiences."""
     visible = [c for _, items in cliux.GROUPS for c, _ in items]
-    assert visible == ["wrap", "doctor", "gain"], visible
+    assert visible == ["setup", "doctor", "gain"], visible
     # the verbs the agent drives must NOT be on the human's first screen
     for agent_verb in ("run", "get", "search", "ask", "refs", "orchestrate"):
         assert agent_verb not in visible
@@ -92,7 +92,7 @@ def test_help_is_grouped_and_has_a_next_step():
     for title, _ in cliux.GROUPS:
         assert f"{title}:" in out
     assert "Getting started:" in out
-    assert "ctx wrap setup" in out
+    assert "ctx setup" in out
     assert "ctx help --all" in out
 
 

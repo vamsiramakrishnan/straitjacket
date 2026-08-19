@@ -48,7 +48,7 @@ GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "You run these",
         (
-            ("wrap", "hook ctx into your coding agent — then forget it"),
+            ("setup", "detect, configure, and verify your coding agents — one command"),
             ("doctor", "check it is working: hooks, storage, which agents are set up"),
             ("gain", "see what it has kept out of your context, and what that saved"),
         ),
@@ -128,6 +128,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("pin", "keep one artifact forever"),
             ("proxy", "watch API traffic to measure what a session really spent"),
             ("antigravity", "install the Antigravity workspace plugin"),
+            ("wrap", "advanced per-host setup and ephemeral launch modes"),
         ),
     ),
 )
@@ -140,7 +141,7 @@ ADVANCED: tuple[tuple[str, str], ...] = tuple(
 
 QUICKSTART = (
     "Getting started:\n"
-    "  ctx wrap setup    hook ctx into the agents you have installed — that is the whole setup\n"
+    "  ctx setup         detect, configure, and verify the agents you have installed\n"
     "\n"
     "From then on your agent runs the rest itself. Watch the status line in your\n"
     "agent for `ctx NN%` (window used) and `ctx\u25c7 NNk kept out` (what never\n"

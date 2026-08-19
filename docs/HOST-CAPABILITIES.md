@@ -169,7 +169,7 @@ ctx wrap detect     # which hosts are installed, and their models/prices
 ctx doctor          # is the harness actually wired up here
 ```
 
-`ctx wrap setup` verifies itself with these same checks and tells you if one
+`ctx setup` verifies itself with these same checks and tells you if one
 fails.
 
 ## Where the truth lives

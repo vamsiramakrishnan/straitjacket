@@ -463,7 +463,7 @@ def render_detect_table(detected: list) -> str:
     if installed_wrappable:
         names = ", ".join(d.name for d in installed_wrappable)
         out.append(f"harnessable now: {names}")
-        out.append("  ctx wrap setup           # configure the installed hosts")
+        out.append("  ctx setup           # configure the installed hosts")
         out.append("  ctx orchestrate \"<task>\"  # route work across them by cost")
     else:
         out.append(
@@ -519,8 +519,14 @@ def _guided_step(n: int, total: int, title: str) -> None:
     print("─" * (len(title) + 6))
 
 
-def guided_setup(ws, hosts: list[str] | None = None, *, force_all: bool = False) -> int:
-    """`ctx wrap setup`, narrated: survey → harness → verify → what next.
+def guided_setup(
+    ws,
+    hosts: list[str] | None = None,
+    *,
+    force_all: bool = False,
+    force_repair: bool = False,
+) -> int:
+    """`ctx setup`, narrated: survey → harness → verify → what next.
 
     The old flow printed each installer's output and stopped, which left a
     developer with a wall of paths and no answer to "did that work, and what do
@@ -529,10 +535,69 @@ def guided_setup(ws, hosts: list[str] | None = None, *, force_all: bool = False)
     doctor's checks, and ends with one concrete next action — including when
     something failed.
     """
-    from ctx.installer import SETUP_HOSTS, doctor_checks, setup_hosts
+    from ctx.installer import SETUP_HOSTS, doctor_checks, setup_conflicts, setup_hosts
+    from ctx import __version__
+    from ctx.setup_policy import choose_setup
+    from ctx.setup_telemetry import (
+        load_setup_receipt,
+        record_setup,
+        setup_is_current,
+    )
 
+    started = time.perf_counter()
     will, skipped, optional = _guided_survey(ws)
     explicit = hosts is not None or force_all
+    target = (list(hosts) if hosts is not None
+              else ([d.name for d in will] if (will and not force_all)
+                    else list(SETUP_HOSTS)))
+    prior = load_setup_receipt(ws.root)
+    conflicts = setup_conflicts(ws, target)
+    strategy = choose_setup(
+        {
+            "unmanaged_conflict": bool(conflicts),
+            "receipt_current": setup_is_current(ws.root, target),
+            "force_repair": force_repair,
+            "had_receipt": prior is not None,
+            "explicit": explicit,
+            "installed_hosts": [d.name for d in will],
+        }
+    )
+
+    if strategy == "refuse_unmanaged":
+        print("ctx setup — one reviewed edit needed")
+        for conflict in conflicts:
+            for line in conflict.splitlines():
+                print(f"  {line}")
+        print("  managed files were not changed")
+        record_setup(
+            ws.root,
+            target,
+            strategy=strategy,
+            success=False,
+            checks_total=1,
+            checks_passed=0,
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
+        return 1
+
+    if strategy == "ready_noop":
+        elapsed = (time.perf_counter() - started) * 1000
+        print("ctx setup — already ready")
+        print(
+            f"  ✓ ctx {__version__}; "
+            f"{', '.join(target)}; managed config unchanged"
+        )
+        print("  next: start your agent (use `ctx setup --repair` to force verification)")
+        record_setup(
+            ws.root,
+            target,
+            strategy=strategy,
+            success=True,
+            checks_total=int(prior.get("checks_total", 0)) if prior else 0,
+            checks_passed=int(prior.get("checks_passed", 0)) if prior else 0,
+            duration_ms=elapsed,
+        )
+        return 0
 
     # ---------------------------------------------------------------- survey
     _guided_step(1, 4, "What you have")
@@ -556,8 +621,6 @@ def guided_setup(ws, hosts: list[str] | None = None, *, force_all: bool = False)
 
     # --------------------------------------------------------------- harness
     _guided_step(2, 4, "Harnessing")
-    target = (list(hosts) if hosts is not None
-              else ([d.name for d in will] if (will and not force_all) else None))
     # Indented so the per-host detail reads as evidence *under* this step
     # rather than as the whole output. It is kept in full on purpose: these
     # lines name every file written, which is what makes the undo note true.
@@ -598,11 +661,24 @@ def guided_setup(ws, hosts: list[str] | None = None, *, force_all: bool = False)
     print()
     print("  undo: the per-host lines above name every file written; removing the")
     print("        ctx entries from them fully uninstalls. Nothing else was touched.")
+    record_setup(
+        ws.root,
+        target,
+        strategy=strategy,
+        success=not failed,
+        checks_total=len(checks),
+        checks_passed=len(checks) - len(failed),
+        duration_ms=(time.perf_counter() - started) * 1000,
+    )
     return 1 if failed else 0
 
 
 def wrap_setup(
-    workspace_root: Path, hosts: list[str] | None = None, *, force_all: bool = False
+    workspace_root: Path,
+    hosts: list[str] | None = None,
+    *,
+    force_all: bool = False,
+    force_repair: bool = False,
 ) -> int:
     """Single-command multi-host setup. By default this now *detects* which
     coding-agent CLIs are installed and configures exactly those (reporting the
@@ -622,7 +698,9 @@ def wrap_setup(
     ws = resolve_workspace(str(workspace_root))
 
     if os.environ.get("CTX_SETUP_PLAIN") != "1":
-        return guided_setup(ws, hosts, force_all=force_all)
+        return guided_setup(
+            ws, hosts, force_all=force_all, force_repair=force_repair
+        )
 
     if hosts is None and not force_all:
         from ctx.hosts import detect_all

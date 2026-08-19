@@ -6,6 +6,14 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+AlphaEvolve now covers setup DevEx. `ctx setup` is the short human front door,
+and a successful doctor pass records a privacy-safe managed-config fingerprint.
+An unchanged repeat takes a verified no-op; upgrades, failures, host changes,
+drift, or `--repair` return to idempotent repair and full verification. The
+paired local receipt measured 4.42× lower repeat latency, 8.17× less output, and
+zero repeat host-config rewrites across 11/11 successful pairs. The portfolio
+now spans 26 levers and 16 experiment families.
+
 ## [0.32.1] - 2026-08-19
 
 The PyPI release workflow now reads the version source with `runpy` instead of

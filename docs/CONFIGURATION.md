@@ -3,7 +3,7 @@
 # Configuration reference
 
 Everything straitjacket reads from `ctx.toml`, in one place. New here? You
-don't need any of this to start — `ctx wrap setup` writes sensible defaults and
+don't need any of this to start — `ctx setup` writes sensible defaults and
 most workspaces never touch them. Reach for this page when you want to tune a
 budget, tighten the guard, or add a monorepo scope.
 
@@ -11,7 +11,7 @@ budget, tighten the guard, or add a monorepo scope.
 
 straitjacket reads **exactly one file: `ctx.toml` at the workspace root.** There
 is no upward search and no user-global or machine-global config — configuration
-is per-workspace and committed with the repo. `ctx init` (or `ctx wrap setup`)
+is per-workspace and committed with the repo. `ctx init` (or `ctx setup`)
 writes a starter `ctx.toml` and a `.ctxignore`.
 
 The workspace root is resolved in this order: an explicit `--workspace` flag →

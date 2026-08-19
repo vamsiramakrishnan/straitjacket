@@ -214,7 +214,7 @@ only recommend.
 ```bash
 pip install -e .    # from a clone (PyPI release pending); Python 3.11+
 cd your-repo
-ctx wrap setup      # Antigravity, Claude Code and Codex are now harnessed
+ctx setup           # Antigravity, Claude Code and Codex are now harnessed
 ```
 
 Then run anything noisy through it — no agent needed to see the difference:
@@ -223,9 +223,10 @@ Then run anything noisy through it — no agent needed to see the difference:
 ctx run -- pytest -q
 ```
 
-`ctx wrap setup` is idempotent and non-destructive: it merges into your
-existing config, names every file it writes, verifies itself, and exits
-non-zero if anything is wrong rather than claiming success.
+`ctx setup` is idempotent and non-destructive: it merges safe hook structures,
+never rewrites user-owned TOML, names every file it writes, verifies the hooks
+and bounded MCP launch contract, and exits non-zero if anything is wrong rather
+than claiming success.
 
 ## Then, how it actually works
 

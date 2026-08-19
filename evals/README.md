@@ -43,8 +43,8 @@ Others in this class: `evalset_collapse.py`, `corpus_scoped_scan.py`,
 fetches SWE instances and reproduces failures in a venv, so it needs network and
 build toolchains.
 
-`alphaevolve/` is the bounded optimization portfolio for 24 named production
-levers across 15 experiment families. Local search, holdout, adversarial, and
+`alphaevolve/` is the bounded optimization portfolio for 26 named production
+levers across 16 experiment families. Local search, holdout, adversarial, and
 shadow evaluation is deterministic; only explicitly confirmed controller mode
 uses Google's billed AlphaEvolve service. Generated programs stay quarantined
 until a maintainer translates a passing policy into reviewed source. The first

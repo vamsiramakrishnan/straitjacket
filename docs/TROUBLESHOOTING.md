@@ -217,7 +217,7 @@ active.
 
 **How do I set up just one host?**
 `ctx wrap antigravity`, `ctx wrap claude`, `ctx wrap codex`, or
-`ctx wrap antigravity-sdk` each set up exactly one. `ctx wrap setup` detects
+`ctx wrap antigravity-sdk` each set up exactly one. `ctx setup` detects
 which agent CLIs you have and configures those, then verifies the result and
 tells you what to run next; hosts it would have to *build* rather than detect
 (`antigravity-sdk`) are offered, never configured implicitly.

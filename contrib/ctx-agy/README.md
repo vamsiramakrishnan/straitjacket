@@ -90,5 +90,5 @@ ctx wrap antigravity-sdk
 ```
 
 This never replaces the vendor `agy` CLI and is intentionally excluded from
-`ctx wrap setup`, because creating a virtualenv and downloading an SDK is an
+`ctx setup`, because creating a virtualenv and downloading an SDK is an
 explicit networked action.

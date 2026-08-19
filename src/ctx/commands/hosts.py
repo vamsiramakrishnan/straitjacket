@@ -120,6 +120,31 @@ def cmd_wrap(ns) -> int:
     return wrapper(ws.root)
 
 
+def cmd_setup(ns) -> int:
+    """`ctx setup` — the short, human-facing alias for guided host setup."""
+    import sys
+
+    from ctx.installer import SETUP_HOSTS
+    from ctx.wrap import wrap_setup
+    from ctx.workspace import resolve_workspace
+
+    hosts = list(ns.hosts or [])
+    unknown = sorted(set(hosts) - set(SETUP_HOSTS))
+    if unknown:
+        print(
+            f"ctx setup: unknown host(s): {', '.join(unknown)}; "
+            f"choose from {', '.join(SETUP_HOSTS)}",
+            file=sys.stderr,
+        )
+        return 2
+    return wrap_setup(
+        resolve_workspace(ns.workspace).root,
+        hosts or None,
+        force_all=bool(ns.all),
+        force_repair=bool(ns.repair),
+    )
+
+
 def cmd_orchestrate(ws, ns) -> int:
     """`ctx orchestrate` — route a task's phases across installed harnesses
     by model cost. Usually a wrap mode rather than something a human types."""

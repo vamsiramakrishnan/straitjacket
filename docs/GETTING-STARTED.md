@@ -31,7 +31,7 @@ structure remain available without it.
 python -m pip install -e .
 ctx --version
 cd your-repo
-ctx wrap setup
+ctx setup
 ```
 
 The editable install is the contributor path from a clone. For a durable,
@@ -48,8 +48,8 @@ ctx --version
 outside the checkout, including all three host renderers and the managed
 Antigravity SDK shim.
 
-`ctx wrap setup` writes the workspace configuration (`ctx.toml`,
-`.ctxignore`) and installs the harness for every host it supports —
+`ctx setup` writes the workspace configuration (`ctx.toml`,
+`.ctxignore`) and installs the harness for each detected host it supports —
 Antigravity, Claude Code, and Codex — in one idempotent command. It detects the
 CLIs already on `PATH`; if none are found, it prepares all three configurations
 for later. Existing
@@ -60,6 +60,14 @@ ctx doctor                      # validate the install, store, hooks, and classi
 ctx doctor --antigravity        # also validate the Antigravity plugin files
 ctx wrap codex --print-config   # preview any host's config without writing
 ```
+
+After a successful doctor pass, setup records a privacy-safe fingerprint of the
+managed configuration. An unchanged repeat takes a tiny verified no-op path;
+an upgrade, failed prior setup, selected-host change, or config drift
+automatically runs the idempotent installers and doctor checks again. Use
+`ctx setup --repair` to bypass the receipt deliberately, or `ctx setup --all`
+to prepare every supported host before its CLI is installed. The receipt stores
+hashes and counters, never configuration contents or paths.
 
 Each check prints a `✓` or `✗`; a non-zero exit means something needs
 attention. [Troubleshooting](TROUBLESHOOTING.md) explains every failing check.

@@ -9,8 +9,8 @@ safety or measurement rules used to judge it.
 
 The versioned registry in `evals/alphaevolve/registry.py` currently contains:
 
-- 24 production levers;
-- 21 mutable levers mapped to 15 experiment families;
+- 26 production levers;
+- 23 mutable levers mapped to 16 experiment families;
 - three immutable oracle planes: actual-usage accounting, secret/workspace
   guards, and receipt integrity.
 

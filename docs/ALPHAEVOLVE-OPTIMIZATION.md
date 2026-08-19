@@ -46,6 +46,21 @@ the proven-small path and restored automatically for a signature once it has
 flooded. This is why the improvement is algorithmic rather than a narrower
 formatting or implementation-speed tweak.
 
+The second reviewed product integration applies the same principle to setup.
+AlphaEvolve's setup-policy family chooses among ready no-op, detected-only
+configuration, explicit/all-host configuration, managed repair, and safe
+refusal. A successful doctor-verified setup records a versioned fingerprint;
+only an exact match may skip repeat writes. In 11 paired local runs, the repeat
+path improved from 12.897 ms to 2.917 ms (**4.42× faster**) and from 1,242 to
+152 visible bytes (**8.17× smaller**), while eliminating host-config rewrites.
+Drift, upgrades, failures, host changes, and `ctx setup --repair` return to full
+verification. See the [setup receipt](../evals/alphaevolve/2026-08-19-setup-devex.md).
+
+This does not prove a 100× end-to-end DevEx gain. It establishes the measurement
+and policy seam needed to pursue one across acquisition/cache time, host-probe
+scheduling, selective verification, and recovery-turn elimination without
+trading away completion, idempotency, or user-config preservation.
+
 This is a shipped, reversible, instrumented canary controlled by
 `[guard].speculative_native`. It fixes the known local wrapper-tax regression;
 it is **not yet evidence of lower billed end-to-end production cost**. That

@@ -83,7 +83,7 @@ It also means two runs of the same failing test look the same, so the
 
 ## How it hooks into your agent
 
-You never call `ctx run` yourself in normal use. `ctx wrap setup` registers
+You never call `ctx run` yourself in normal use. `ctx setup` registers
 the harness with your agent host:
 
 - **Before a tool call runs** (PreToolUse): a fast classifier looks at the
