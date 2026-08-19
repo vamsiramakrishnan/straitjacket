@@ -179,3 +179,22 @@ def test_scip_absent_runtime_degrades(state_home, workspace_dir, monkeypatch):
     # ladder still resolves (via jedi/ast over the real source)
     _sites, engine = codeverbs.resolve_refs(store, ws, "helper")
     assert engine in ("jedi", "ast (textual)")
+
+
+def test_scip_extra_matches_the_vendored_gencode_floor():
+    """A declared-compatible install must not be rejected by pb2's guard."""
+    import re
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    requirement = pyproject["project"]["optional-dependencies"]["scip"][0]
+    declared = tuple(map(int, re.search(r">=(\d+)\.(\d+)", requirement).groups()))
+    generated = (root / "src" / "ctx" / "_vendor" / "scip_pb2.py").read_text(
+        encoding="utf-8"
+    )
+    gencode = tuple(
+        map(int, re.search(r"Protobuf Python Version: (\d+)\.(\d+)", generated).groups())
+    )
+    assert declared >= gencode

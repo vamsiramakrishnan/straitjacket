@@ -15,6 +15,7 @@ import pytest
 from ctx import hosts
 from ctx.orchestrator import (
     RouteError,
+    _launch_host,
     _extract_json,
     build_menu,
     build_route_plan,
@@ -26,6 +27,7 @@ from ctx.orchestrator import (
 )
 
 from conftest import make_ws
+from ctx.sessiondir import session_reads_path
 
 
 def _hosts(*installed):
@@ -39,31 +41,188 @@ def _ok_launch(host, root, prompt, exe, *, timeout, model=""):
     return 0, f"{host.name} ok at repo:x.py:1", ""
 
 
+def test_antigravity_launch_adapts_model_id_and_required_effort(monkeypatch, tmp_path):
+    host = next(h for h in _hosts("antigravity") if h.name == "antigravity")
+    seen = {}
+
+    class Completed:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return Completed()
+
+    monkeypatch.setattr("ctx.orchestrator.subprocess.run", fake_run)
+    code, out, err, usage = _launch_host(
+        host,
+        tmp_path,
+        "task",
+        "ctx",
+        timeout=5,
+        model="gemini-3.5-flash-lite",
+    )
+    assert (code, out, err, usage) == (0, "ok", "", None)
+    assert seen["argv"][:5] == [
+        host.path,
+        "--model",
+        "gemini-3.5-flash",
+        "--effort",
+        "low",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("binary", "host_name", "model", "stdout", "flag"),
+    [
+        (
+            "claude",
+            "claude",
+            "haiku",
+            json.dumps(
+                {
+                    "result": "claude done",
+                    "total_cost_usd": 0.01,
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                }
+            ),
+            "--output-format",
+        ),
+        (
+            "codex",
+            "codex",
+            "gpt-5.6-luna",
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {
+                                "type": "agent_message",
+                                "text": "codex done",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "turn.completed",
+                            "usage": {"input_tokens": 10, "output_tokens": 2},
+                        }
+                    ),
+                ]
+            ),
+            "--json",
+        ),
+        (
+            "ctx-agy",
+            "antigravity-sdk",
+            "gemini-3.6-flash",
+            'sdk done\n{"input_tokens": 10, "output_tokens": 2}',
+            "--json",
+        ),
+    ],
+)
+def test_structured_host_launches_return_clean_text_and_actual_usage(
+    monkeypatch, tmp_path, binary, host_name, model, stdout, flag
+):
+    host = next(h for h in _hosts(binary) if h.name == host_name)
+    seen = {}
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+
+    Completed.stdout = stdout
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return Completed()
+
+    monkeypatch.setattr("ctx.orchestrator.subprocess.run", fake_run)
+    code, out, err, usage = _launch_host(
+        host, tmp_path, "task", "ctx", timeout=5, model=model
+    )
+    assert code == 0 and err == ""
+    assert out in {"claude done", "codex done", "sdk done"}
+    assert usage is not None and usage.total_tokens == 12
+    assert flag in seen["argv"]
+
+
+def test_coordinator_pin_cannot_bypass_unattended_host_gate():
+    hosts_ = _hosts("claude", "codex", "antigravity")
+    automatic = fallback_route("Run the named pytest test", hosts_, _POLICY())
+    assert automatic.assigned[0].host.name != "antigravity"
+
+    pinned = build_route_plan(
+        "Run the named pytest test",
+        {
+            "nodes": [
+                {
+                    "id": "verify",
+                    "role": "verify",
+                    "min_tier": "economy",
+                    "needs": ["verify"],
+                    "deps": [],
+                    "host": "antigravity",
+                }
+            ]
+        },
+        hosts_,
+        _POLICY(),
+    )
+    assert pinned.assigned[0].host.name != "antigravity"
+
+
+def test_explicitly_approved_interactive_pin_is_honored():
+    pinned = build_route_plan(
+        "Run the named pytest test",
+        {
+            "nodes": [
+                {
+                    "id": "verify",
+                    "role": "verify",
+                    "min_tier": "economy",
+                    "needs": ["verify"],
+                    "deps": [],
+                    "host": "antigravity",
+                }
+            ]
+        },
+        _hosts("claude", "codex", "antigravity"),
+        _POLICY(),
+        allow_interactive_pins=True,
+    )
+    assert pinned.assigned[0].host.name == "antigravity"
+
+
 # --------------------------------------------------------------- fallback route
 
 
-def test_fallback_route_plan_is_opus_implement_is_flash():
+def test_fallback_route_uses_unattended_models_and_flagship_planner():
     plan = fallback_route("t", _hosts("claude", "antigravity"), _POLICY())
     by_id = {a.node.id: a for a in plan.assigned}
     # plan takes the frontier FLAGSHIP (Opus), not the cheapest frontier model.
     assert by_id["plan"].node.prefer == "strong"
     assert by_id["plan"].host.name == "claude" and by_id["plan"].model.id == "claude-opus-4.8"
-    # complex implementation (default standard tier) -> the cheap standard flash.
-    assert by_id["implement"].model.id == "gemini-3.6-flash"
+    # Interactive-only Antigravity is excluded from automatic execution.
+    assert by_id["implement"].model.id == "claude-sonnet-4.6"
     assert by_id["explore"].model.tier == "economy"
     assert by_id["verify"].model.tier == "economy"
 
 
-def test_implement_tier_is_complexity_adaptive():
+def test_economy_tier_does_not_undercut_required_implementation_capability():
     from dataclasses import replace
 
     hosts = _hosts("claude", "codex", "antigravity")
     complex_ = fallback_route("t", hosts, _POLICY())
     simple = fallback_route("t", hosts, replace(_POLICY(), implement_tier="economy"))
     impl = lambda p: next(a for a in p.assigned if a.node.id == "implement")  # noqa: E731
-    # complex -> standard Gemini flash; simple -> economy Gemini flash-lite
-    assert impl(complex_).model.id == "gemini-3.6-flash"
-    assert impl(simple).model.id == "gemini-3.5-flash-lite"
+    # No unattended economy model declares implement/edit. Coverage is primary,
+    # so both routes select the cheapest capable standard model instead of a
+    # cheaper model that cannot complete the node.
+    assert impl(complex_).model.id == "gpt-5.6-terra"
+    assert impl(simple).model.id == "gpt-5.6-terra"
 
 
 def test_fallback_route_beats_single_premium():
@@ -81,6 +240,183 @@ def test_single_host_routes_across_its_own_models():
     assert plan.est_total_usd < plan.est_single_premium_usd
 
 
+@pytest.mark.parametrize(
+    ("task", "node_ids", "tiers"),
+    [
+        ("Run the named pytest test tests/test_cli.py::test_help", ["verify"], ["economy"]),
+        ("Review the current diff", ["review"], ["standard"]),
+        ("Explain the following code", ["answer"], ["standard"]),
+        ("Inspect the named function", ["answer"], ["standard"]),
+        ("Fix a one-line typo in README.md", ["implement", "verify"], ["economy", "economy"]),
+        (
+            "Implement normalize_whitespace in sample/__init__.py. It must collapse whitespace; add pytest tests",
+            ["explore", "implement", "verify"],
+            ["economy", "standard", "economy"],
+        ),
+    ],
+)
+def test_fallback_route_uses_smallest_completing_fast_path(task, node_ids, tiers):
+    plan = fallback_route(task, _hosts("claude", "codex", "antigravity"), _POLICY())
+    assert [assigned.node.id for assigned in plan.assigned] == node_ids
+    assert [assigned.node.min_tier for assigned in plan.assigned] == tiers
+
+
+def test_bounded_feature_uses_live_proven_implementer():
+    task = (
+        "Implement normalize_whitespace in sample/__init__.py. It must collapse "
+        "whitespace; add pytest tests"
+    )
+    plan = fallback_route(task, _hosts("claude", "codex", "antigravity"), _POLICY())
+    implement = next(node for node in plan.assigned if node.node.id == "implement")
+    assert implement.host.name == "claude"
+    assert implement.model.id == "claude-sonnet-4.6"
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "Implement normalize_whitespace in sample/__init__.py and add pytest tests",
+        "Implement authorization in sample/__init__.py. It must be secure; add pytest tests",
+    ],
+)
+def test_bounded_feature_keeps_full_route_when_contract_or_risk_gate_fails(task):
+    plan = fallback_route(task, _hosts("claude", "codex", "antigravity"), _POLICY())
+    assert [assigned.node.id for assigned in plan.assigned] == [
+        "explore",
+        "plan",
+        "implement",
+        "verify",
+    ]
+
+
+def test_fallback_fast_path_costs_less_than_general_route():
+    hosts_ = _hosts("claude", "codex", "antigravity")
+    general = fallback_route("Migrate the authorization architecture", hosts_, _POLICY())
+    simple = fallback_route("Fix a typo in README.md", hosts_, _POLICY())
+    assert len(general.assigned) == 4
+    assert len(simple.assigned) == 2
+    assert simple.est_total_usd < general.est_total_usd
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "Summarize the latest release from the supplied context",
+        "Summarize the customer testimony",
+    ],
+)
+def test_fallback_fast_path_does_not_substring_match_test(task):
+    plan = fallback_route(task, _hosts("claude", "codex", "antigravity"), _POLICY())
+    assert [assigned.node.id for assigned in plan.assigned] == ["answer"]
+
+
+def test_route_execution_appends_privacy_safe_receipt(state_home, git_workspace):
+    ws = make_ws(git_workspace)
+    secret_task = "Fix a typo in README.md secret-customer-text"
+    plan = fallback_route(secret_task, _hosts("claude", "antigravity"), _POLICY())
+    result = run_route(ws, plan, _POLICY(), launch=_ok_launch)
+
+    ledger = session_reads_path(ws.root, "route.jsonl")
+    receipt = json.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+    assert receipt["schema"] == "ctx.route-run/v1"
+    assert receipt["task_profile"]["kind"] == "simple_edit"
+    assert receipt["task_profile"]["named_target"] is True
+    assert receipt["task_profile"]["named_acceptance"] is False
+    assert receipt["task_profile"]["high_risk_scope"] is False
+    assert receipt["route"]["source"] == "deterministic_fast"
+    assert [node["id"] for node in receipt["route"]["nodes"]] == [
+        "implement",
+        "verify",
+    ]
+    assert receipt["measurement"]["route_completed"] is True
+    assert receipt["measurement"]["task_success"] == "unmeasured"
+    assert receipt["measurement"]["verification_passed"] is True
+    assert receipt["measurement"]["estimated_spend_usd"] == pytest.approx(
+        result.estimated_spend_usd
+    )
+    assert receipt["measurement"]["actual_usage"]["status"] == "unavailable"
+    assert receipt["measurement"]["actual_usage"]["attempts_total"] == 2
+    assert secret_task not in ledger.read_text(encoding="utf-8")
+
+
+def test_route_aggregates_actual_usage_without_hiding_missing_attempts(
+    state_home, git_workspace
+):
+    ws = make_ws(git_workspace)
+    plan = fallback_route(
+        "Fix a one-line typo in README.md", _hosts("claude"), _POLICY()
+    )
+    calls = 0
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 0, "implemented", "", {
+                "input_tokens": 100,
+                "cache_read_tokens": 50,
+                "output_tokens": 25,
+                "cost_usd": 0.004,
+                "cost_basis": "priced_tokens",
+                "source": "test_json",
+            }
+        return 0, "verified", ""
+
+    result = run_route(ws, plan, _POLICY(), launch=launch)
+    assert result.actual_usage == {
+        "status": "partial",
+        "attempts_total": 2,
+        "attempts_measured": 1,
+        "input_tokens": 100,
+        "cache_read_tokens": 50,
+        "cache_write_tokens": 0,
+        "output_tokens": 25,
+        "total_tokens": 175,
+        "cost_usd": pytest.approx(0.004),
+        "cost_complete": False,
+        "cost_basis": "priced_tokens",
+        "sources": ["test_json"],
+    }
+
+    receipt = json.loads(
+        session_reads_path(ws.root, "route.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[-1]
+    )
+    assert receipt["measurement"]["actual_usage"]["status"] == "partial"
+    assert receipt["outcomes"][0]["actual_usage"]["status"] == "available"
+    assert receipt["outcomes"][1]["actual_usage"]["status"] == "unavailable"
+
+
+def test_route_counts_failed_and_escalated_attempt_usage(state_home, git_workspace):
+    ws = make_ws(git_workspace)
+    raw = {
+        "nodes": [
+            {"id": "a", "goal": "x", "min_tier": "economy", "deps": []}
+        ]
+    }
+    plan = build_route_plan("t", raw, _hosts("claude"), _POLICY())
+    calls = 0
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        nonlocal calls
+        calls += 1
+        usage = {
+            "input_tokens": 10 * calls,
+            "output_tokens": calls,
+            "cost_usd": 0.001 * calls,
+            "source": "test_json",
+        }
+        return ((1, "", "failed", usage) if calls == 1 else (0, "ok", "", usage))
+
+    result = run_route(ws, plan, _POLICY(), launch=launch)
+    assert result.outcomes[0].escalated_to
+    assert result.actual_usage["attempts_total"] == 2
+    assert result.actual_usage["attempts_measured"] == 2
+    assert result.actual_usage["total_tokens"] == 33
+    assert result.actual_usage["cost_usd"] == pytest.approx(0.003)
+
+
 # --------------------------------------------------------------- route IR
 
 
@@ -89,6 +425,7 @@ def _plan_raw(**over):
         "nodes": [
             {"id": "a", "goal": "x", "min_tier": "economy", "needs": ["search"], "deps": []},
             {"id": "b", "goal": "y", "min_tier": "frontier", "needs": ["edit"], "deps": ["a"]},
+            {"id": "c", "goal": "check y", "role": "verify", "min_tier": "economy", "needs": ["verify", "test"], "deps": ["b"]},
         ]
     }
     base.update(over)
@@ -116,6 +453,45 @@ def test_model_pin_is_honored():
     plan = build_route_plan("t", raw, _hosts("claude", "antigravity"), _POLICY())
     assert plan.assigned[0].host.name == "claude"
     assert plan.assigned[0].model.id == "claude-opus-4.8"
+
+
+def test_coordinator_mutation_requires_a_downstream_verifier():
+    raw = {
+        "nodes": [
+            {
+                "id": "implement",
+                "role": "implement",
+                "min_tier": "standard",
+                "needs": ["implement", "edit", "test"],
+                "deps": [],
+            }
+        ]
+    }
+    with pytest.raises(RouteError, match="no downstream verification"):
+        build_route_plan("add feature", raw, _hosts("claude", "codex"), _POLICY())
+
+
+def test_coordinator_mutation_accepts_dependent_verifier():
+    raw = {
+        "nodes": [
+            {
+                "id": "implement",
+                "role": "implement",
+                "min_tier": "standard",
+                "needs": ["implement", "edit"],
+                "deps": [],
+            },
+            {
+                "id": "verify",
+                "role": "verify",
+                "min_tier": "economy",
+                "needs": ["verify", "test"],
+                "deps": ["implement"],
+            },
+        ]
+    }
+    plan = build_route_plan("add feature", raw, _hosts("claude", "codex"), _POLICY())
+    assert [assigned.node.id for assigned in plan.assigned] == ["implement", "verify"]
 
 
 def test_cycle_is_rejected():
@@ -249,6 +625,39 @@ def test_failed_node_escalates_to_stronger_model(state_home, git_workspace):
     assert o.escalated_to and "/" in o.escalated_to   # escalated to a stronger (host, model)
 
 
+@pytest.mark.parametrize(
+    "false_success",
+    [
+        "jetski: no output produced; permission auto-denied",
+        "Blocked by the read-only workspace: no source or test files could be modified.",
+        "VERIFICATION RESULT: Implementation incomplete. The task is **NOT COMPLETE**.",
+    ],
+)
+def test_zero_exit_explicit_failure_escalates_instead_of_counting_as_ok(
+    state_home, git_workspace, false_success
+):
+    ws = make_ws(git_workspace)
+    raw = {
+        "nodes": [
+            {"id": "a", "goal": "x", "min_tier": "economy", "deps": []}
+        ]
+    }
+    plan = build_route_plan("t", raw, _hosts("claude", "codex"), ws.config.orchestrate)
+    calls = 0
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 0, false_success, ""
+        return 0, "recovered with a real result", ""
+
+    result = run_route(ws, plan, ws.config.orchestrate, launch=launch)
+    assert calls == 2
+    assert result.outcomes[0].status == "ok"
+    assert result.outcomes[0].escalated_to
+
+
 def test_dependent_skipped_when_upstream_fails(state_home, git_workspace):
     ws = make_ws(git_workspace)
     raw = {"nodes": [
@@ -298,6 +707,19 @@ def test_orchestrate_no_host_errors(state_home, git_workspace, monkeypatch):
     assert code == 1 and "no installed harnessable" in text
 
 
+def test_orchestrate_rejects_only_interactive_host(
+    state_home, git_workspace, monkeypatch
+):
+    ws = make_ws(git_workspace)
+    monkeypatch.setattr(
+        "ctx.orchestrator.installed_harnessable",
+        lambda **kw: _hosts("antigravity"),
+    )
+    code, text = orchestrate(ws, "Run the named pytest test", dry_run=True)
+    assert code == 1
+    assert "no installed host can run unattended" in text
+
+
 def test_orchestrate_dry_run_uses_fallback_and_does_not_execute(state_home, git_workspace, monkeypatch):
     ws = make_ws(git_workspace)
     monkeypatch.setattr("ctx.orchestrator.installed_harnessable",
@@ -308,6 +730,23 @@ def test_orchestrate_dry_run_uses_fallback_and_does_not_execute(state_home, git_
     assert code == 0
     assert "dry run" in text and "estimated total" in text
     assert "run complete" not in text
+
+
+def test_orchestrate_fast_path_skips_coordinator(state_home, git_workspace, monkeypatch):
+    ws = make_ws(git_workspace)
+    monkeypatch.setattr(
+        "ctx.orchestrator.installed_harnessable",
+        lambda **kw: _hosts("claude", "antigravity"),
+    )
+
+    def unexpected_coordinator(*args, **kwargs):
+        raise AssertionError("simple task must not spend a coordinator turn")
+
+    monkeypatch.setattr("ctx.orchestrator.invoke_coordinator", unexpected_coordinator)
+    code, text = orchestrate(ws, "Run the named pytest test", dry_run=True)
+    assert code == 0
+    assert "routing (1 nodes, 1 waves)" in text
+    assert "coordinator skipped" in text
 
 
 def test_orchestrate_confirm_gate(state_home, git_workspace, monkeypatch):

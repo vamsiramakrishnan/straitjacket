@@ -329,6 +329,14 @@ def _build_parser():
         epilog=cliux.QUICKSTART,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    from ctx import __version__
+
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="print the installed ctx-harness version and exit",
+    )
     parser.add_argument(
         "--workspace", metavar="PATH",
         help="repo to work in (default: the git root above the current directory)",

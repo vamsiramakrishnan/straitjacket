@@ -43,6 +43,20 @@ Others in this class: `evalset_collapse.py`, `corpus_scoped_scan.py`,
 fetches SWE instances and reproduces failures in a venv, so it needs network and
 build toolchains.
 
+`alphaevolve/` is the bounded optimization portfolio for 24 named production
+levers across 15 experiment families. Local search, holdout, adversarial, and
+shadow evaluation is deterministic; only explicitly confirmed controller mode
+uses Google's billed AlphaEvolve service. Generated programs stay quarantined
+until a maintainer translates a passing policy into reviewed source. The first
+such integration fixes the named-test wrapper-tax regression; see the
+[`AlphaEvolve guide`](alphaevolve/README.md) and its
+[`dated receipt`](alphaevolve/2026-08-18-speculative-native.md).
+
+Route-replay snapshots carry the receipt's structured `actual_usage` field when
+available. Provider-reported cost is retained; otherwise measured token
+categories are priced through the repository price table. Older or unsupported
+host runs remain explicitly `unavailable` rather than being treated as zero.
+
 ### Live — needs an agent and an API key
 
 These spawn a real agent subprocess per (scenario, arm, repeat) and drive a full

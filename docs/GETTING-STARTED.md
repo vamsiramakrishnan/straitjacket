@@ -25,17 +25,34 @@ python -m pip install -e '.[image]'
 Magic-byte detection, exact hashing, common image dimensions, and labelled PDF
 structure remain available without it.
 
-## Install and set up (one command)
+## Install and set up
 
 ```bash
 python -m pip install -e .
+ctx --version
 cd your-repo
 ctx wrap setup
 ```
 
+The editable install is the contributor path from a clone. For a durable,
+isolated command on a workstation, build a wheel and install it as a tool:
+
+```bash
+python -m pip install build
+python -m build
+pipx install dist/ctx_harness-*.whl   # or: uv tool install dist/ctx_harness-*.whl
+ctx --version
+```
+
+`ctx --version` should match the wheel name. The release build is smoke-tested
+outside the checkout, including all three host renderers and the managed
+Antigravity SDK shim.
+
 `ctx wrap setup` writes the workspace configuration (`ctx.toml`,
 `.ctxignore`) and installs the harness for every host it supports —
-Antigravity, Claude Code, and Codex — in one idempotent command. Existing
+Antigravity, Claude Code, and Codex — in one idempotent command. It detects the
+CLIs already on `PATH`; if none are found, it prepares all three configurations
+for later. Existing
 host config is merged, never clobbered; re-running is a no-op. Verify:
 
 ```bash

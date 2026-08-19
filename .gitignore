@@ -28,5 +28,11 @@ evals/_runs/
 # definitions written by `ctx wrap claude`) — never source.
 .claude/
 
+# Codex and host instruction files rendered by `ctx wrap setup` contain
+# machine-local executable paths. They are runtime wiring, not source.
+.codex/
+/AGENTS.md
+/CLAUDE.md
+
 # generated capability-surface state (gateway state, shadow ledger, compiled configs)
 .ctx-surface/

@@ -55,8 +55,22 @@ def launcher_path() -> Path:
 
 
 def shim_source() -> Path:
-    """The shim implementation shipped in the repo."""
-    return Path(__file__).resolve().parent.parent.parent / "contrib" / "ctx-agy" / "ctx_agy.py"
+    """The shim implementation shipped in a checkout or installed wheel.
+
+    The managed SDK environment runs this file with its own interpreter, so
+    the implementation must be real package data rather than a repository-only
+    path. Prefer the checkout copy while developing; wheels carry the same
+    source under ``ctx/data``.
+    """
+    package_dir = Path(__file__).resolve().parent
+    for candidate in (
+        package_dir.parent.parent / "contrib" / "ctx-agy" / "ctx_agy.py",
+        package_dir / "data" / "ctx_agy.py",
+    ):
+        if candidate.is_file():
+            return candidate
+    # Keep the error from ensure_venv actionable and deterministic.
+    return package_dir / "data" / "ctx_agy.py"
 
 
 def sdk_present(python: Path | None = None) -> bool:

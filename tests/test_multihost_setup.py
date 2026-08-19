@@ -34,12 +34,51 @@ def test_install_codex_writes_valid_config(workspace_dir):
     data = tomllib.loads(cfg.read_text(encoding="utf-8"))
     assert data["features"]["hooks"] is True
     assert data["mcp_servers"]["ctx-harness"]["args"] == ["mcp", "--bounded-only"]
+    assert " " not in data["mcp_servers"]["ctx-harness"]["command"]
 
     hj = json.loads(hooks.read_text(encoding="utf-8"))
     assert {"PreToolUse", "PostToolUse"} <= set(hj["hooks"])
     cmd = hj["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert "hook codex pre-tool-use" in cmd
     assert "<!-- ctx-harness:start -->" in agents.read_text(encoding="utf-8")
+
+
+def test_install_codex_splits_python_module_fallback(monkeypatch, workspace_dir):
+    import ctx.installer as installer
+
+    monkeypatch.setattr(installer.shutil, "which", lambda _name: None)
+    installer.install_codex(make_ws(workspace_dir))
+
+    data = tomllib.loads(
+        (workspace_dir / ".codex" / "config.toml").read_text(encoding="utf-8")
+    )
+    server = data["mcp_servers"]["ctx-harness"]
+    assert server["command"] == sys.executable
+    assert server["args"] == ["-m", "ctx", "mcp", "--bounded-only"]
+
+
+def test_install_codex_repairs_its_managed_legacy_mcp_command(
+    monkeypatch, workspace_dir
+):
+    import ctx.installer as installer
+
+    codex_dir = workspace_dir / ".codex"
+    codex_dir.mkdir(parents=True)
+    (codex_dir / "config.toml").write_text(
+        "# ctx-harness — straitjacket context containment for Codex CLI.\n"
+        "[mcp_servers.ctx-harness]\n"
+        f'command = "{sys.executable} -m ctx"\n'
+        'args = ["mcp", "--bounded-only"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(installer.shutil, "which", lambda _name: None)
+
+    report = installer.install_codex(make_ws(workspace_dir))
+    data = tomllib.loads((codex_dir / "config.toml").read_text(encoding="utf-8"))
+    server = data["mcp_servers"]["ctx-harness"]
+    assert server["command"] == sys.executable
+    assert server["args"] == ["-m", "ctx", "mcp", "--bounded-only"]
+    assert "refreshed managed .codex/config.toml" in report
 
 
 def test_install_codex_idempotent_and_nondestructive(workspace_dir):
@@ -211,8 +250,9 @@ def test_codex_pre_tool_use_allows_bounded(workspace_dir):
         },
         "codex",
     )
-    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert "updatedInput" not in out["hookSpecificOutput"]
+    # Codex treats a successful empty response as pass-through.  Its explicit
+    # `allow` value is reserved for responses that also carry `updatedInput`.
+    assert out == {}
 
 
 def test_codex_post_tool_use_substitutes_flood(state_home, workspace_dir):

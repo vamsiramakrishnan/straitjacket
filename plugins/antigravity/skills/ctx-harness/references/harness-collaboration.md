@@ -94,7 +94,9 @@ node's `min_tier` is the *weakest* tier that can do it; the router picks the
 cheapest `(harness, model)` at or above that tier that covers the node's roles.
 To get the flagship instead of the cheapest at a tier (Opus for a plan), set
 `"prefer": "strong"`. Pin `"model"` only for a hard requirement on a *specific*
-model (a known-good version, or a vendor a phase must use).
+model (a known-good version, or a vendor a phase must use). Coordinator-authored
+pins are advisory and never bypass unattended eligibility; only an explicitly
+approved API call may opt into an interactive host.
 
 ## The output contract — `ctx.route/v1`
 
@@ -120,6 +122,9 @@ Output **only** a JSON object, no prose:
   ]
 }
 ```
+
+Every mutation node must have a separate downstream `verify` or `test` node.
+Combining implementation and claimed verification in one node is rejected.
 
 (This is a *complex* change, so `impl` is `standard` and its `needs` include
 `code`. A one-line edit would instead be `economy` with lighter needs like

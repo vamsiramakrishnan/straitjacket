@@ -7,8 +7,8 @@
 hooks = true
 
 [mcp_servers.ctx-harness]
-command = "{{CTX_EXECUTABLE}}"
-args = ["mcp", "--bounded-only"]
+command = {{CTX_MCP_COMMAND}}
+args = {{CTX_MCP_ARGS}}
 
 # Status line. Codex renders a fixed set of built-in items (it does not shell
 # out to a command like Claude Code / Antigravity), so we select the useful

@@ -138,11 +138,11 @@ tool.
 **interactive OAuth browser login** and ignores `GEMINI_API_KEY`, so it cannot
 run unattended — not in CI, not from cron.
 
-This has a consequence worth knowing before it bites you: `ctx orchestrate` will
-still *assign* nodes to the `antigravity` host, because the two Gemini hosts tie
-on price and the tie breaks by registry order. Those nodes run fine while you are
-at the keyboard and fail without a browser. If you orchestrate unattended, pin
-`antigravity-sdk` — see [Routing](ROUTING.md#pinning-a-host-or-model).
+`ctx orchestrate` treats that limitation as a hard routing capability. Automatic
+assignment, escalation, and coordination exclude `antigravity`; an explicit
+host pin can still select it for an attended run. Use `antigravity-sdk` when the
+same Gemini route must run headlessly — see
+[Routing](ROUTING.md#pinning-a-host-or-model).
 
 `antigravity-sdk` is ctx's own agent built on the `google-antigravity` SDK. It is
 a **separate host**, not a replacement: your `agy` install is untouched, and both

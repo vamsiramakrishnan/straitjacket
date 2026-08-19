@@ -1,0 +1,604 @@
+{
+  "observations": [
+    {
+      "label": {
+        "evidence_kind": "known_failure",
+        "task_success": false
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 5002.415448994725,
+        "estimated_spend_usd": 0.043750000000000004,
+        "replans": 0,
+        "route_completed": false,
+        "waves": 1
+      },
+      "profile": {
+        "characters": 107,
+        "explicit_contract": null,
+        "high_confidence": true,
+        "high_risk_scope": null,
+        "kind": "test",
+        "multiline": false,
+        "mutation": false,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": false,
+        "words": 6
+      },
+      "route": [
+        {
+          "host": "antigravity",
+          "model": "gemini-3.5-flash-lite",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18ccc40fa5d04b46"
+    },
+    {
+      "label": {
+        "evidence_kind": "named_test",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 10677.545301005011,
+        "estimated_spend_usd": 0.0325,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 1
+      },
+      "profile": {
+        "characters": 107,
+        "explicit_contract": null,
+        "high_confidence": true,
+        "high_risk_scope": null,
+        "kind": "test",
+        "multiline": false,
+        "mutation": false,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": false,
+        "words": 6
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18ccc49db7d6057c"
+    },
+    {
+      "label": {
+        "evidence_kind": "reviewed_output",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 53407.09710899682,
+        "estimated_spend_usd": 0.075,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 1
+      },
+      "profile": {
+        "characters": 77,
+        "explicit_contract": null,
+        "high_confidence": true,
+        "high_risk_scope": null,
+        "kind": "answer",
+        "multiline": false,
+        "mutation": false,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": false,
+        "words": 7
+      },
+      "route": [
+        {
+          "host": "codex",
+          "model": "gpt-5.6-terra",
+          "role": "answer"
+        }
+      ],
+      "run_id": "route-18ccc8cd9cb7cb3a"
+    },
+    {
+      "label": {
+        "evidence_kind": "reviewed_output",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 33253.63444900722,
+        "estimated_spend_usd": 0.075,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 1
+      },
+      "profile": {
+        "characters": 100,
+        "explicit_contract": null,
+        "high_confidence": true,
+        "high_risk_scope": null,
+        "kind": "inspect",
+        "multiline": false,
+        "mutation": false,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": false,
+        "words": 12
+      },
+      "route": [
+        {
+          "host": "codex",
+          "model": "gpt-5.6-terra",
+          "role": "answer"
+        }
+      ],
+      "run_id": "route-18ccc8d8d4f77a7a"
+    },
+    {
+      "label": {
+        "evidence_kind": "reviewed_output",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 89391.16075499624,
+        "estimated_spend_usd": 0.0975,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 1
+      },
+      "profile": {
+        "characters": 46,
+        "explicit_contract": null,
+        "high_confidence": true,
+        "high_risk_scope": null,
+        "kind": "review",
+        "multiline": false,
+        "mutation": false,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": true,
+        "verification_required": false,
+        "words": 7
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-sonnet-4.6",
+          "role": "review"
+        }
+      ],
+      "run_id": "route-18ccc8f1fcda641f"
+    },
+    {
+      "label": {
+        "evidence_kind": "acceptance_check",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 39600.51499900874,
+        "estimated_spend_usd": 0.16,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 2
+      },
+      "profile": {
+        "characters": 36,
+        "explicit_contract": null,
+        "high_confidence": true,
+        "high_risk_scope": null,
+        "kind": "simple_edit",
+        "multiline": false,
+        "mutation": true,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": true,
+        "words": 8
+      },
+      "route": [
+        {
+          "host": "codex",
+          "model": "gpt-5.6-terra",
+          "role": "implement"
+        },
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18ccc8ff2d10f4ec"
+    },
+    {
+      "label": {
+        "evidence_kind": "known_failure",
+        "task_success": false
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 47746.58976000501,
+        "estimated_spend_usd": 0.0024000000000000002,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 2
+      },
+      "profile": {
+        "characters": 118,
+        "explicit_contract": null,
+        "high_confidence": false,
+        "high_risk_scope": null,
+        "kind": "general",
+        "multiline": false,
+        "mutation": true,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": true,
+        "words": 16
+      },
+      "route": [
+        {
+          "host": "antigravity",
+          "model": "gemini-3.5-flash-lite",
+          "role": "explore"
+        },
+        {
+          "host": "antigravity",
+          "model": "gemini-3.5-flash-lite",
+          "role": "implement"
+        }
+      ],
+      "run_id": "route-18ccc9107c176ad8"
+    },
+    {
+      "label": {
+        "evidence_kind": "acceptance_check",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 202687.1944279992,
+        "estimated_spend_usd": 0.7915,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 4
+      },
+      "profile": {
+        "characters": 118,
+        "explicit_contract": null,
+        "high_confidence": false,
+        "high_risk_scope": null,
+        "kind": "general",
+        "multiline": false,
+        "mutation": true,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": true,
+        "words": 16
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "explore"
+        },
+        {
+          "host": "claude",
+          "model": "claude-opus-4.8",
+          "role": "plan"
+        },
+        {
+          "host": "codex",
+          "model": "gpt-5.6-terra",
+          "role": "implement"
+        },
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18ccc95a65d230df"
+    },
+    {
+      "label": {
+        "evidence_kind": "known_failure",
+        "task_success": false
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 80306.8770240061,
+        "estimated_spend_usd": 0.218,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 3
+      },
+      "profile": {
+        "characters": 118,
+        "explicit_contract": null,
+        "high_confidence": false,
+        "high_risk_scope": null,
+        "kind": "general",
+        "multiline": false,
+        "mutation": true,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": true,
+        "words": 16
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "explore"
+        },
+        {
+          "host": "codex",
+          "model": "gpt-5.6-terra",
+          "role": "implement"
+        },
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18ccc983d7c00c00"
+    },
+    {
+      "label": {
+        "evidence_kind": "acceptance_check",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 95790.41777399834,
+        "estimated_spend_usd": 0.23399999999999999,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 3
+      },
+      "profile": {
+        "characters": 118,
+        "explicit_contract": null,
+        "high_confidence": false,
+        "high_risk_scope": null,
+        "kind": "general",
+        "multiline": false,
+        "mutation": true,
+        "named_acceptance": null,
+        "named_target": null,
+        "review": false,
+        "verification_required": true,
+        "words": 16
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "explore"
+        },
+        {
+          "host": "claude",
+          "model": "claude-sonnet-4.6",
+          "role": "implement"
+        },
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18ccc9a8eb94bce0"
+    },
+    {
+      "label": {
+        "evidence_kind": "known_failure",
+        "task_success": false
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 72428.0917700089,
+        "estimated_spend_usd": 0.23399999999999999,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 3
+      },
+      "profile": {
+        "characters": 134,
+        "explicit_contract": null,
+        "high_confidence": false,
+        "high_risk_scope": false,
+        "kind": "general",
+        "multiline": false,
+        "mutation": true,
+        "named_acceptance": true,
+        "named_target": true,
+        "review": false,
+        "verification_required": true,
+        "words": 16
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "explore"
+        },
+        {
+          "host": "claude",
+          "model": "claude-sonnet-4.6",
+          "role": "implement"
+        },
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18ccc9ca2a2fb107"
+    },
+    {
+      "label": {
+        "evidence_kind": "acceptance_check",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": "unavailable",
+        "duration_ms": 65688.5348400101,
+        "estimated_spend_usd": 0.23399999999999999,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 3
+      },
+      "profile": {
+        "characters": 229,
+        "explicit_contract": true,
+        "high_confidence": false,
+        "high_risk_scope": false,
+        "kind": "general",
+        "multiline": false,
+        "mutation": true,
+        "named_acceptance": true,
+        "named_target": true,
+        "review": false,
+        "verification_required": true,
+        "words": 31
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "explore"
+        },
+        {
+          "host": "claude",
+          "model": "claude-sonnet-4.6",
+          "role": "implement"
+        },
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18ccc9e16e940de5"
+    },
+    {
+      "label": {
+        "evidence_kind": "named_test",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": {
+          "attempts_measured": 1,
+          "attempts_total": 1,
+          "cache_read_tokens": 26018,
+          "cache_write_tokens": 26619,
+          "cost_basis": "host_reported",
+          "cost_complete": true,
+          "cost_usd": 0.038451549999999994,
+          "input_tokens": 16,
+          "output_tokens": 512,
+          "sources": [
+            "claude_json"
+          ],
+          "status": "available",
+          "total_tokens": 53165
+        },
+        "duration_ms": 9248.956644005375,
+        "estimated_spend_usd": 0.0325,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 1
+      },
+      "profile": {
+        "characters": 45,
+        "explicit_contract": false,
+        "high_confidence": true,
+        "high_risk_scope": false,
+        "kind": "test",
+        "multiline": false,
+        "mutation": false,
+        "named_acceptance": true,
+        "named_target": true,
+        "review": false,
+        "verification_required": false,
+        "words": 6
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18cccb9bca2429f7"
+    },
+    {
+      "label": {
+        "evidence_kind": "named_test",
+        "task_success": true
+      },
+      "measurement": {
+        "actual_usage": {
+          "attempts_measured": 1,
+          "attempts_total": 1,
+          "cache_read_tokens": 47119,
+          "cache_write_tokens": 5509,
+          "cost_basis": "host_reported",
+          "cost_complete": true,
+          "cost_usd": 0.014094150000000001,
+          "input_tokens": 16,
+          "output_tokens": 496,
+          "sources": [
+            "claude_json"
+          ],
+          "status": "available",
+          "total_tokens": 53140
+        },
+        "duration_ms": 6993.693677010015,
+        "estimated_spend_usd": 0.0325,
+        "replans": 0,
+        "route_completed": true,
+        "waves": 1
+      },
+      "profile": {
+        "characters": 45,
+        "explicit_contract": false,
+        "high_confidence": true,
+        "high_risk_scope": false,
+        "kind": "test",
+        "multiline": false,
+        "mutation": false,
+        "named_acceptance": true,
+        "named_target": true,
+        "review": false,
+        "verification_required": false,
+        "words": 6
+      },
+      "route": [
+        {
+          "host": "claude",
+          "model": "claude-haiku-4.5",
+          "role": "verify"
+        }
+      ],
+      "run_id": "route-18cccc1fce0ddc52"
+    }
+  ],
+  "schema": "ctx.route-replay-observations/v1"
+}

@@ -40,34 +40,66 @@ A typical plan:
 
 ```
 routing (4 nodes, 4 waves):
-  explore    → antigravity/gemini-3.5-flash-lite (economy)   est ~$0.01
-  plan       → claude/claude-opus-4.8            (frontier)  est ~$0.47  ⇐ explore
-  implement  → antigravity/gemini-3.6-flash      (standard)  est ~$0.13  ⇐ plan
-  verify     → antigravity/gemini-3.5-flash-lite (economy)   est ~$0.01  ⇐ implement
+  explore    → claude/claude-haiku-4.5   (economy)
+  plan       → codex/gpt-5.6-sol          (frontier) ⇐ explore
+  implement  → codex/gpt-5.6-terra        (standard) ⇐ plan
+  verify     → claude/claude-haiku-4.5   (economy)  ⇐ implement
 ```
+
+Before paying for coordination, a high-confidence ordinary request compiles
+directly to the smallest deterministic route that can complete it. The same
+compiler is the fallback when a coordinator is unavailable or its plan is
+rejected:
+
+| Request shape | Fallback DAG |
+|---|---|
+| explain or inspect | `answer` |
+| run a named test | `verify` |
+| review a diff | `review` |
+| explicitly small edit | `implement → verify` |
+| explicit low-risk feature with named target and tests | `explore → implement → verify` |
+| ambiguous or complex | `explore → plan → implement → verify` |
+
+Classification uses anchored, whole-word request shapes. It never searches
+arbitrary strings for fragments such as `test`; phrases containing `latest` or
+`testimony` therefore cannot be mistaken for test requests. Mutations always
+retain verification, and uncertainty always falls back to the full route. The
+three-stage feature route requires all four signals: a named source target,
+named acceptance tests, an explicit behavioral contract, and no architecture,
+authorization, security, migration, schema, deployment, production, or breaking
+scope marker. Its implementer is the live-proven Claude/Sonnet arm; missing or
+underspecified signals keep the frontier planning turn.
+
+Prices depend on the unattended hosts installed on the current machine and are
+printed before execution. They are estimates, not claims about final wire cost
+or task success. Simple routes also avoid a coordinator model turn; that avoided
+call is not included in route-node estimates.
 
 Note that the *cheap* model does the coordinating and the *expensive* one does
 the thinking. Deciding who should do the work is much easier than doing it.
 
-> **Two caveats about that plan, both real today.**
->
-> **It routes to a host that cannot run unattended.** The `antigravity` host is
-> Google's `agy` CLI, which authenticates by interactive OAuth — so those three
-> nodes launch fine while you are at the keyboard and fail in CI or cron. The two
-> Gemini hosts tie on price and the router breaks the tie by registry order, so
-> it currently picks `agy` rather than the scriptable `antigravity-sdk`.
-> Preferring a launchable host is a routing-policy change that would move
-> everyone's cost estimates, so it has not been made silently. **If you are
-> running unattended, pin `antigravity-sdk`** (see [Pinning](#pinning-a-host-or-model)).
->
-> **It puts the least flood-disciplined model on the host with no output gate.**
-> `gemini-3.5-flash-lite` is the model that dumped 7.8 MB on a task where its
-> sibling used 812 bytes (below), and `antigravity` has no output-side safety net
-> ([Host capabilities](HOST-CAPABILITIES.md)). That pairing leans entirely on the
-> birth gate. It is a defensible default — the birth gate is the primary
-> mechanism, and flash-lite is genuinely the right tier for `explore` — but if
-> those nodes will touch large logs, pin them to `antigravity-sdk`, where
-> containment is inside the tools.
+Automatic orchestration excludes hosts that cannot complete a one-shot run
+unattended. Google's interactive `agy` CLI therefore remains available through
+an explicit host pin, but it is not selected by normal assignment, escalation,
+or coordination. `antigravity-sdk` remains the headless Gemini alternative. If
+you explicitly pin `agy`, its lack of an output gate and flash-lite's measured
+flood behavior still apply; see [Host capabilities](HOST-CAPABILITIES.md).
+
+Every executed route appends a prompt-free receipt to
+`.ctx-session-reads/route.jsonl`: task shape, selected host/model, estimated
+tokens and spend, actual usage when the host exposes it, wall time, waves,
+replans, exit status, and verification state. Actual usage comes only from
+machine-readable host records: Claude's JSON result (including its reported
+dollar cost), Codex JSONL turn usage, or the ctx-owned Antigravity SDK usage
+record. Dollar cost is priced from measured tokens when the host does not
+report dollars. Failed attempts, escalations, coordinator calls, and replans
+all count. A receipt says `partial` or `unavailable` when any corresponding
+host attempt lacks trustworthy usage; missing observations never become zero.
+
+Process exit does **not** become a task-success claim. Explicit evidence labels
+live separately in `route-labels.jsonl`; the two ledgers can be joined and
+exported as a frozen AlphaEvolve replay corpus without task text, model output,
+or checkpoint content.
 
 ## The unit of routing is the model
 

@@ -255,22 +255,18 @@ class Workspace:
 def stat_fingerprint(root: Path | str, rels, h) -> None:
     """Fold the on-disk state of ``rels`` (repo-relative) into ``h``.
 
-    The one stat-based cache-invalidation basis in the harness. Three caches
-    (``repomap``, ``callgraph``, ``plan_exec``'s node cache) key on file
-    metadata rather than content because hashing every file on every lookup
-    is the thing they exist to avoid; ``skeleton`` keys on the source blob
-    hash and deliberately does not use this — content is the stronger basis
-    and it already has the hash in hand. ``astgrep``'s rewrite guard is the
-    fourth caller and the one that is not a cache: it had hand-rolled a
-    weaker ``(rel, size, mtime_ns)`` fold of its own, which is how a guard
-    ended up trusting less evidence than the caches it sits beside.
+    The shared cache/guard invalidation basis in the harness. Metadata remains
+    part of the key, but it is not sufficient evidence of identity: overlay
+    and network filesystems can expose coarse or unchanged ctime values across
+    a same-size edit whose mtime is restored. That made a nominally stronger
+    ``(size, mtime, ctime)`` key serve stale maps and, worse, let the rewrite
+    guard trust changed source.
 
-    The basis is ``(rel, size, mtime_ns, ctime_ns)``. ``ctime_ns`` is not
-    redundant: mtime is settable from userspace, so a same-length edit whose
-    mtime is put back (``os.utime``, ``rsync -t``, ``tar -p``, editors that
-    save-and-restore timestamps) is invisible to size+mtime alone and used
-    to serve a stale map/graph/node result. ctime is bumped by the write and
-    by the utime call itself and cannot be moved backwards.
+    The basis is therefore ``(rel, size, mtime_ns, ctime_ns, sha256(bytes))``.
+    Reading source is more work than a stat-only key, but correctness and the
+    rewrite guard's safety boundary cannot depend on filesystem timestamp
+    resolution. Callers that already own a content hash (``skeleton``) retain
+    their direct content-addressed key and do not use this helper.
 
     An unstattable path folds in as ``missing`` rather than being skipped.
     Skipping made a vanished file hash identically to a workspace where it
@@ -286,8 +282,15 @@ def stat_fingerprint(root: Path | str, rels, h) -> None:
         except OSError:
             h.update(f"{rel}|missing\n".encode("utf-8"))
             continue
+        try:
+            content_id = hashlib.sha256((base / rel).read_bytes()).hexdigest()
+        except OSError:
+            h.update(f"{rel}|unreadable\n".encode("utf-8"))
+            continue
         h.update(
-            f"{rel}|{st.st_size}|{st.st_mtime_ns}|{st.st_ctime_ns}\n".encode("utf-8")
+            f"{rel}|{st.st_size}|{st.st_mtime_ns}|{st.st_ctime_ns}|{content_id}\n".encode(
+                "utf-8"
+            )
         )
 
 

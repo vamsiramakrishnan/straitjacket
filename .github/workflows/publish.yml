@@ -1,0 +1,43 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build, verify, and publish
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ctx-harness/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build and verify release artifacts
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python -m pip install build twine
+          python -m build
+          python scripts/check_distribution.py dist/*.whl dist/*.tar.gz
+          python -m twine check dist/*
+          PACKAGE_VERSION="$(python -c 'from ctx import __version__; print(__version__)')"
+          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
+
+      # Pinned release/v1 (2026-08-17). Authentication is PyPI Trusted
+      # Publishing via GitHub OIDC; this workflow accepts no long-lived token.
+      - name: Publish verified artifacts
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33

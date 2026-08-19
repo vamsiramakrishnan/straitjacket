@@ -32,9 +32,11 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +49,7 @@ from ctx.hosts import (
     pick_model,
     tier_rank,
 )
+from ctx.usage import ActualUsage, coerce_usage, parse_host_output, summarize_usage
 
 # Parallel wave nodes launch concurrently (the expensive part), but their store
 # writes — blob + checkpoint manifest into one SQLite catalog — must be
@@ -56,6 +59,50 @@ from ctx.hosts import (
 _CHECKPOINT_LOCK = threading.Lock()
 
 ROUTE_SCHEMA = "ctx.route/v1"
+ROUTE_RUN_SCHEMA = "ctx.route-run/v1"
+
+_TASK_CLASSIFIER_LOOKAHEAD_CHARS = 128
+_POLITE_TASK_PREFIX = re.compile(
+    r"^(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+)",
+    re.IGNORECASE,
+)
+_TEST_TASK = re.compile(
+    rf"^(?:(?:run|rerun|execute)\b.{{0,{_TASK_CLASSIFIER_LOOKAHEAD_CHARS}}}"
+    r"\b(?:pytest|tests?|unittest|specs?)\b|(?:pytest|python\s+-m\s+pytest)\b)",
+    re.IGNORECASE,
+)
+_REVIEW_TASK = re.compile(
+    r"^(?:review|summarize|inspect)\b.{0,80}\b(?:diff|patch|changes)\b",
+    re.IGNORECASE,
+)
+_SIMPLE_EDIT_TASK = re.compile(
+    r"^(?:fix|edit|update|change|rename|replace)\b",
+    re.IGNORECASE,
+)
+_SIMPLE_EDIT_MARKER = re.compile(
+    r"\b(?:typo|spelling|one[- ]line|single[- ]line|known file)\b",
+    re.IGNORECASE,
+)
+_BOUNDED_FEATURE_TASK = re.compile(
+    r"^(?:add|implement|create)\b", re.IGNORECASE
+)
+_ANSWER_TASK = re.compile(r"^(?:explain|describe|summarize)\b", re.IGNORECASE)
+_INSPECT_TASK = re.compile(r"^(?:inspect|read|show)\b", re.IGNORECASE)
+_NAMED_TARGET = re.compile(
+    r"(?:^|\s)[\w./-]+\.(?:py|js|ts|tsx|jsx|go|rs|java|md|toml|ya?ml)(?:\b|$)",
+    re.IGNORECASE,
+)
+_NAMED_ACCEPTANCE = re.compile(
+    r"\b(?:pytest|tests?|specs?|acceptance checks?)\b", re.IGNORECASE
+)
+_HIGH_RISK_SCOPE = re.compile(
+    r"\b(?:architecture|authorization|authentication|security|migration|migrate|"
+    r"database|schema|deploy|production|breaking)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_CONTRACT = re.compile(
+    r"\b(?:must|returns?|expected|acceptance criteria)\b", re.IGNORECASE
+)
 
 # The contract handed to the coordinator model. Kept in lockstep with the skill
 # reference plugins/*/skills/ctx-harness/references/harness-collaboration.md so
@@ -71,7 +118,8 @@ Rules:
   subtasks are genuinely independent or form a real dependency chain.
 - Each node: {"id","goal","role","min_tier","needs":[tags],"deps":[ids],
   "est_input_tokens","est_output_tokens"}. Optionally pin "host":"<name>",
-  "model":"<model id from the menu>", and/or "prefer":"strong".
+  "model":"<model id from the menu>", and/or "prefer":"strong". Pins are
+  advisory and never bypass unattended eligibility.
 - min_tier is the weakest capability that can do the node: economy < standard <
   frontier. Route by MODEL, not just harness:
     * exploration / search / triage / verify -> economy
@@ -86,7 +134,9 @@ Rules:
   The router picks the model that meets the tier and covers the roles; "prefer":
   "cheap" (default) takes the cheapest, "strong" takes the flagship.
 - deps make a node wait for others; their evidence (a checkpoint:) is handed to
-  it. Keep the graph acyclic.
+  it. Keep the graph acyclic. Every mutation node MUST have a separate
+  downstream verify/test node; combining implementation and claimed
+  verification into one node is rejected.
 Return: {"schema":"ctx.route/v1","nodes":[ ... ]}
 """
 
@@ -124,6 +174,8 @@ class RoutePlan:
     hosts: tuple[DetectedHost, ...]
     coordinator: DetectedHost | None
     assigned: list[AssignedNode] = field(default_factory=list)
+    source: str = "coordinator"
+    task_kind: str = "general"
 
     @property
     def est_total_usd(self) -> float:
@@ -181,7 +233,12 @@ class RouteError(Exception):
     """A coordinator plan that could not be validated into a runnable DAG."""
 
 
-def _assign_host(node: RouteNode, hosts: list[DetectedHost]) -> AssignedNode:
+def _assign_host(
+    node: RouteNode,
+    hosts: list[DetectedHost],
+    *,
+    allow_interactive_pin: bool = False,
+) -> AssignedNode:
     """Resolve a node to a (harness, model): honour explicit host/model pins when
     valid, else pick the cheapest model that meets the tier and covers the roles
     across all harnesses (pick_model). Price the node on the chosen model."""
@@ -189,6 +246,8 @@ def _assign_host(node: RouteNode, hosts: list[DetectedHost]) -> AssignedNode:
     model: ModelChoice | None = None
     if node.host_pin:
         host = next((h for h in hosts if h.installed and h.name == node.host_pin), None)
+        if host is not None and not host.spec.unattended and not allow_interactive_pin:
+            host = None
         if host is not None and node.model_pin:
             model = host.spec.model(node.model_pin)
     if host is not None and model is None:
@@ -196,7 +255,13 @@ def _assign_host(node: RouteNode, hosts: list[DetectedHost]) -> AssignedNode:
         got1 = pick_model([host], min_tier=node.min_tier, need_tags=node.need_tags, prefer=node.prefer)
         model = got1[1] if got1 else None
     if host is None or model is None:
-        got = pick_model(hosts, min_tier=node.min_tier, need_tags=node.need_tags, prefer=node.prefer)
+        unattended = [h for h in hosts if h.spec.unattended]
+        got = pick_model(
+            unattended,
+            min_tier=node.min_tier,
+            need_tags=node.need_tags,
+            prefer=node.prefer,
+        )
         if got is None:
             raise RouteError("no installed harness/model to assign a node to")
         host, model = got
@@ -236,6 +301,7 @@ def build_route_plan(
     cfg,
     *,
     coordinator: DetectedHost | None = None,
+    allow_interactive_pins: bool = False,
 ) -> RoutePlan:
     """Validate a coordinator-emitted ``ctx.route/v1`` object into a priced DAG.
     Raises RouteError on anything unrunnable (no nodes, unknown deps, a cycle,
@@ -258,9 +324,18 @@ def build_route_plan(
             if d not in idset:
                 raise RouteError(f"node {n.id!r} depends on unknown node {d!r}")
     _assert_acyclic(nodes)
-    assigned = [_assign_host(n, hosts) for n in nodes]
+    _assert_mutations_have_downstream_verification(nodes)
+    assigned = [
+        _assign_host(n, hosts, allow_interactive_pin=allow_interactive_pins)
+        for n in nodes
+    ]
     plan = RoutePlan(
-        task=task, hosts=tuple(hosts), coordinator=coordinator, assigned=assigned
+        task=task,
+        hosts=tuple(hosts),
+        coordinator=coordinator,
+        assigned=assigned,
+        source="coordinator",
+        task_kind=_fallback_task_kind(task),
     )
     budget = float(getattr(cfg, "budget_usd", 0.0) or 0.0)
     if budget > 0 and plan.est_total_usd > budget:
@@ -280,15 +355,204 @@ def _assert_acyclic(nodes: list[RouteNode]) -> None:
         done.update(ready)
 
 
+def _assert_mutations_have_downstream_verification(nodes: list[RouteNode]) -> None:
+    """Reject coordinator plans that can mutate without a later check."""
+    by_id = {node.id: node for node in nodes}
+
+    def depends_on(node: RouteNode, target: str, seen: set[str]) -> bool:
+        if target in node.deps:
+            return True
+        return any(
+            dep not in seen
+            and dep in by_id
+            and depends_on(by_id[dep], target, seen | {dep})
+            for dep in node.deps
+        )
+
+    mutations = [
+        node
+        for node in nodes
+        if node.role == "implement" or "edit" in node.need_tags
+    ]
+    verifiers = [
+        node
+        for node in nodes
+        if node.role in {"verify", "test"}
+        or bool({"verify", "test"} & set(node.need_tags))
+    ]
+    for mutation in mutations:
+        if not any(
+            verifier.id != mutation.id
+            and depends_on(verifier, mutation.id, {verifier.id})
+            for verifier in verifiers
+        ):
+            raise RouteError(
+                f"mutation node {mutation.id!r} has no downstream verification"
+            )
+
+
+def _fallback_task_kind(task: str) -> str:
+    """Normalize only high-confidence simple-task shapes.
+
+    This deliberately avoids free-text substring inference. In particular,
+    words such as ``latest`` and ``testimony`` are not test requests. Unknown
+    or potentially complex work stays on the complete four-stage route.
+    """
+    normalized = " ".join(task.split())
+    while True:
+        stripped = _POLITE_TASK_PREFIX.sub("", normalized, count=1)
+        if stripped == normalized:
+            break
+        normalized = stripped.lstrip()
+    if _TEST_TASK.search(normalized):
+        return "test"
+    if _REVIEW_TASK.search(normalized):
+        return "review"
+    if _SIMPLE_EDIT_TASK.search(normalized) and _SIMPLE_EDIT_MARKER.search(normalized):
+        return "simple_edit"
+    if (
+        _BOUNDED_FEATURE_TASK.search(normalized)
+        and _NAMED_TARGET.search(normalized)
+        and _NAMED_ACCEPTANCE.search(normalized)
+        and _EXPLICIT_CONTRACT.search(normalized)
+        and not _HIGH_RISK_SCOPE.search(normalized)
+    ):
+        return "bounded_feature"
+    if _ANSWER_TASK.search(normalized):
+        return "answer"
+    if _INSPECT_TASK.search(normalized):
+        return "inspect"
+    return "general"
+
+
+def _fast_fallback_nodes(task: str, cfg) -> list[RouteNode] | None:
+    """Compile a high-confidence task shape to its smallest completing DAG."""
+    kind = _fallback_task_kind(task)
+    if kind in {"answer", "inspect"}:
+        return [
+            RouteNode(
+                "answer",
+                "complete the task directly; retrieve only focused evidence if needed",
+                "answer",
+                "standard",
+                ("summarize", "explore"),
+                (),
+                max(1, cfg.explore_input_tokens // 2),
+                cfg.explore_output_tokens,
+            )
+        ]
+    if kind == "review":
+        return [
+            RouteNode(
+                "review",
+                "inspect only the requested diff or changes and return the review",
+                "review",
+                "standard",
+                ("review", "summarize"),
+                (),
+                cfg.review_input_tokens,
+                cfg.review_output_tokens,
+            )
+        ]
+    if kind == "test":
+        return [
+            RouteNode(
+                "verify",
+                "run only the requested test target and report the result",
+                "verify",
+                "economy",
+                ("verify", "test"),
+                (),
+                cfg.review_input_tokens,
+                cfg.review_output_tokens,
+            )
+        ]
+    if kind == "simple_edit":
+        return [
+            RouteNode(
+                "implement",
+                "make the small, explicitly targeted edit",
+                "implement",
+                "economy",
+                ("implement", "edit"),
+                (),
+                max(1, cfg.implement_input_tokens // 2),
+                max(1, cfg.implement_output_tokens // 2),
+            ),
+            RouteNode(
+                "verify",
+                "run the focused acceptance check and inspect the diff",
+                "verify",
+                "economy",
+                ("verify", "test"),
+                ("implement",),
+                cfg.review_input_tokens,
+                cfg.review_output_tokens,
+            ),
+        ]
+    if kind == "bounded_feature":
+        return [
+            RouteNode(
+                "explore",
+                "inspect only the named target and its focused test surface",
+                "explore",
+                "economy",
+                ("search", "explore"),
+                (),
+                12000,
+                2000,
+            ),
+            RouteNode(
+                "implement",
+                "implement the explicit behavioral contract and focused tests",
+                "implement",
+                "standard",
+                # `review` makes the live-proven Claude/Sonnet arm outrank the
+                # Codex/Terra arm that explicitly reported a read-only block.
+                ("implement", "edit", "code", "review"),
+                ("explore",),
+                32000,
+                6000,
+            ),
+            RouteNode(
+                "verify",
+                "run the named acceptance tests and inspect the diff",
+                "verify",
+                "economy",
+                ("verify", "test"),
+                ("implement",),
+                16000,
+                2000,
+            ),
+        ]
+    return None
+
+
 def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
-    """Deterministic model-routed DAG for when no coordinator can run:
-    explore (economy) -> plan (frontier, prefer STRONG) -> implement -> verify
-    (economy). Planning takes the frontier *flagship* (Opus when Claude is
-    installed), because a good plan is worth the strong model. Implementation is
-    complexity-adaptive: ``[orchestrate] implement_tier`` (default ``standard`` =
-    Gemini-3.6-flash) for real work, set ``economy`` (Gemini-3.5-flash-lite) for
-    simple edits. A live coordinator makes this call per task; the fallback uses
-    the configured default. Same handoff/pricing as a coordinator plan."""
+    """Deterministic model-routed DAG for when no coordinator can run.
+
+    High-confidence answer, inspect, review, test, and explicitly small-edit
+    tasks take a one- or two-node completion-gated fast path. Ambiguous work
+    retains the complete explore (economy) -> plan (frontier, prefer STRONG) ->
+    implement -> verify (economy) route. Planning takes the frontier *flagship*
+    (Opus when Claude is installed), because a good plan is worth the strong
+    model. Implementation is complexity-adaptive via
+    ``[orchestrate] implement_tier``. Same handoff/pricing as a coordinator
+    plan."""
+    fast_nodes = _fast_fallback_nodes(task, cfg)
+    unattended = [host for host in hosts if host.spec.unattended]
+    coordinator_hosts = unattended
+    if fast_nodes is not None:
+        assigned = [_assign_host(node, hosts) for node in fast_nodes]
+        return RoutePlan(
+            task=task,
+            hosts=tuple(hosts),
+            coordinator=pick_coordinator(coordinator_hosts),
+            assigned=assigned,
+            source="deterministic_fast",
+            task_kind=_fallback_task_kind(task),
+        )
+
     plan_in = max(1, cfg.implement_input_tokens // 3)
     impl_tier = getattr(cfg, "implement_tier", "standard") or "standard"
     # A simple (economy) edit needs less than heavy code-gen: lighter role needs
@@ -329,7 +593,8 @@ def fallback_route(task: str, hosts: list[DetectedHost], cfg) -> RoutePlan:
     assigned = [_assign_host(n, hosts) for n in nodes]
     return RoutePlan(
         task=task, hosts=tuple(hosts),
-        coordinator=pick_coordinator(hosts), assigned=assigned,
+        coordinator=pick_coordinator(coordinator_hosts), assigned=assigned,
+        source="deterministic_fallback", task_kind="general",
     )
 
 
@@ -406,7 +671,7 @@ def _launch_host(
     *,
     timeout: float,
     model: str = "",
-) -> tuple[int, str, str]:
+) -> tuple[int, str, str, ActualUsage | None]:
     """Run one harness in print mode with captured output, inside the harnessed
     workspace. Claude gets the ephemeral --settings hook injection; Codex /
     Antigravity discover their hooks from the workspace tree. ``model`` pins the
@@ -416,7 +681,25 @@ def _launch_host(
     path = host.path or spec.cli_bins[0]
     argv = [path, *spec.print_flag, prompt]
     if model and spec.model_flag:
-        argv = [path, spec.model_flag, model, *spec.print_flag, prompt]
+        if spec.name == "antigravity":
+            # Current agy exposes a base Gemini id plus a mandatory effort
+            # flag. Keep the internal canonical/pricing ids stable while
+            # adapting them at the vendor CLI boundary.
+            launch_model = model.removesuffix("-preview").removesuffix("-lite")
+            effort = "high" if "pro" in launch_model else (
+                "medium" if "3.6" in launch_model else "low"
+            )
+            argv = [
+                path,
+                spec.model_flag,
+                launch_model,
+                "--effort",
+                effort,
+                *spec.print_flag,
+                prompt,
+            ]
+        else:
+            argv = [path, spec.model_flag, model, *spec.print_flag, prompt]
     settings_tmp: str | None = None
     try:
         if spec.name == "claude":
@@ -429,20 +712,52 @@ def _launch_host(
             tmp.close()
             settings_tmp = tmp.name
             head = [path, "--settings", settings_tmp]
-            argv = ([*head, spec.model_flag, model, *spec.print_flag, prompt]
+            structured = ["--output-format", "json"]
+            argv = ([*head, spec.model_flag, model, *structured, *spec.print_flag, prompt]
                     if model and spec.model_flag
-                    else [*head, *spec.print_flag, prompt])
+                    else [*head, *structured, *spec.print_flag, prompt])
+        elif spec.name == "codex":
+            prefix = [path, spec.model_flag, model] if model and spec.model_flag else [path]
+            argv = [*prefix, "exec", "--json", prompt]
+        elif spec.name == "antigravity-sdk":
+            prefix = [path, spec.model_flag, model] if model and spec.model_flag else [path]
+            argv = [*prefix, "--json", *spec.print_flag, prompt]
         proc = subprocess.run(
             argv, cwd=ws_root, capture_output=True, text=True,
             timeout=timeout, env={**os.environ},
         )
-        return proc.returncode, proc.stdout or "", proc.stderr or ""
+        stdout, usage = parse_host_output(
+            spec.name,
+            proc.stdout or "",
+            model=model or spec.default_model,
+            workspace_root=ws_root,
+        )
+        return proc.returncode, stdout, proc.stderr or "", usage
     except (OSError, subprocess.SubprocessError) as e:
-        return 127, "", f"{type(e).__name__}: {e}"
+        return 127, "", f"{type(e).__name__}: {e}", None
     finally:
         if settings_tmp:
             with contextlib.suppress(OSError):
                 os.unlink(settings_tmp)
+
+
+def _launch_result(value) -> tuple[int, str, str, ActualUsage | None]:
+    """Normalise launch adapters while retaining the original 3-tuple API."""
+    try:
+        if len(value) == 3:
+            code, stdout, stderr = value
+            return int(code), str(stdout or ""), str(stderr or ""), None
+        if len(value) == 4:
+            code, stdout, stderr, usage = value
+            return (
+                int(code),
+                str(stdout or ""),
+                str(stderr or ""),
+                coerce_usage(usage),
+            )
+    except (TypeError, ValueError):
+        pass
+    raise ValueError("launch adapter must return (code, stdout, stderr[, usage])")
 
 
 def _extract_json(text: str) -> dict | None:
@@ -479,6 +794,7 @@ def invoke_coordinator(
     extra: str = "",
     launch=_launch_host,
     timeout: float = 300.0,
+    usage_sink: list[ActualUsage | None] | None = None,
 ) -> dict | None:
     """Ask the cheapest harness to emit a ctx.route/v1 plan. Returns the parsed
     dict, or None if no coordinator is available or it produced no parseable
@@ -489,10 +805,23 @@ def invoke_coordinator(
     prompt = (
         ROUTING_CONTRACT + "\n\n" + build_menu(hosts) + f"\n\nTask: {task}\n" + extra
     )
+    usage_index: int | None = None
+    if usage_sink is not None:
+        usage_index = len(usage_sink)
+        usage_sink.append(None)
     try:
-        code, out, _err = launch(
-            coord, ws.root, prompt, exe, timeout=timeout, model=coord.spec.coord_model
+        code, out, _err, usage = _launch_result(
+            launch(
+                coord,
+                ws.root,
+                prompt,
+                exe,
+                timeout=timeout,
+                model=coord.spec.coord_model,
+            )
         )
+        if usage_sink is not None and usage_index is not None:
+            usage_sink[usage_index] = usage
     except Exception:
         return None
     if code != 0:
@@ -512,6 +841,7 @@ class NodeOutcome:
     detail: str
     escalated_to: str | None = None
     exit_code: int | None = None
+    usage_attempts: tuple[ActualUsage | None, ...] = ()
 
 
 @dataclass
@@ -520,6 +850,110 @@ class RouteResult:
     outcomes: list[NodeOutcome]
     waves_run: int
     replans: int
+    estimated_spend_usd: float = 0.0
+    duration_ms: float = 0.0
+    actual_usage: dict = field(default_factory=lambda: summarize_usage([]))
+
+
+def _task_profile(task: str, kind: str) -> dict[str, object]:
+    """Privacy-safe structural task profile; raw task text never enters telemetry."""
+    return {
+        "kind": kind,
+        "high_confidence": kind != "general",
+        "mutation": kind == "simple_edit",
+        "review": kind == "review",
+        "verification_required": kind == "simple_edit",
+        "characters": len(task),
+        "words": len(task.split()),
+        "multiline": "\n" in task,
+        "named_target": bool(_NAMED_TARGET.search(task)),
+        "named_acceptance": bool(_NAMED_ACCEPTANCE.search(task)),
+        "high_risk_scope": bool(_HIGH_RISK_SCOPE.search(task)),
+        "explicit_contract": bool(_EXPLICIT_CONTRACT.search(task)),
+    }
+
+
+def _append_route_receipt(ws, result: RouteResult, nodes: list[AssignedNode]) -> None:
+    """Append one fail-open, privacy-safe route execution receipt."""
+    try:
+        from ctx.sessiondir import session_reads_path
+
+        node_by_id = {assigned.node.id: assigned.node for assigned in nodes}
+        verification_required = any(
+            node.role == "implement" or "edit" in node.need_tags
+            for node in node_by_id.values()
+        )
+        verification_passed = any(
+            node_by_id.get(outcome.node_id)
+            and (
+                node_by_id[outcome.node_id].role in {"verify", "test"}
+                or bool(
+                    {"verify", "test"}
+                    & set(node_by_id[outcome.node_id].need_tags)
+                )
+            )
+            and outcome.status == "ok"
+            for outcome in result.outcomes
+        )
+        route_completed = bool(result.outcomes) and all(
+            outcome.status == "ok" for outcome in result.outcomes
+        )
+        task_profile = _task_profile(result.plan.task, result.plan.task_kind)
+        task_profile["mutation"] = verification_required
+        task_profile["verification_required"] = verification_required
+        receipt = {
+            "schema": ROUTE_RUN_SCHEMA,
+            "run_id": f"route-{time.time_ns():x}",
+            "recorded_at_unix": time.time(),
+            "task_profile": task_profile,
+            "route": {
+                "source": result.plan.source,
+                "nodes": [
+                    {
+                        "id": assigned.node.id,
+                        "role": assigned.node.role,
+                        "min_tier": assigned.node.min_tier,
+                        "need_tags": list(assigned.node.need_tags),
+                        "deps": list(assigned.node.deps),
+                        "host": assigned.host.name,
+                        "model": assigned.model.id,
+                        "estimated_input_tokens": assigned.node.est_input_tokens,
+                        "estimated_output_tokens": assigned.node.est_output_tokens,
+                        "estimated_cost_usd": assigned.est_cost_usd,
+                    }
+                    for assigned in nodes
+                ],
+            },
+            "outcomes": [
+                {
+                    "node_id": outcome.node_id,
+                    "status": outcome.status,
+                    "host_model": outcome.host_name,
+                    "exit_code": outcome.exit_code,
+                    "escalated": outcome.escalated_to is not None,
+                    "checkpoint": outcome.checkpoint_ref is not None,
+                    "actual_usage": summarize_usage(outcome.usage_attempts),
+                }
+                for outcome in result.outcomes
+            ],
+            "measurement": {
+                "route_completed": route_completed,
+                "task_success": "unmeasured",
+                "verification_required": verification_required,
+                "verification_passed": verification_passed,
+                "waves": result.waves_run,
+                "replans": result.replans,
+                "duration_ms": result.duration_ms,
+                "estimated_spend_usd": result.estimated_spend_usd,
+                "actual_usage": result.actual_usage,
+            },
+        }
+        path = session_reads_path(ws.root, "route.jsonl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(receipt, sort_keys=True) + "\n")
+    except Exception:
+        pass
 
 
 def _checkpoint_node(ws, node: RouteNode, task: str, stdout: str, stderr: str) -> str | None:
@@ -555,7 +989,11 @@ def _checkpoint_node(ws, node: RouteNode, task: str, stdout: str, stderr: str) -
         return None
 
 
-def _node_prompt(node: RouteNode, task: str, dep_docs: list[str]) -> str:
+def _node_prompt(
+    node: RouteNode,
+    task: str,
+    dep_docs: list[str],
+) -> str:
     p = (
         f"You are node '{node.id}' ({node.role}) of a multi-harness collaboration "
         f"under the ctx harness.\nOverall task: {task}\n"
@@ -571,13 +1009,36 @@ def _node_prompt(node: RouteNode, task: str, dep_docs: list[str]) -> str:
     return p
 
 
+def _execution_contract_failed(code: int, stdout: str, stderr: str) -> bool:
+    """Detect a host that exited zero without completing a one-shot contract."""
+    if code != 0:
+        return True
+    combined = "\n".join((stdout, stderr)).strip().lower()
+    if not combined:
+        return True
+    if "no output produced" in combined and "auto-denied" in combined:
+        return True
+    plain = combined.replace("*", "")
+    return any(
+        marker in plain
+        for marker in (
+            "task is not complete",
+            "verification result: implementation incomplete",
+            "blocked by the read-only workspace",
+            "no source or test files could be modified",
+            "unable to make changes due to workspace constraints",
+        )
+    )
+
+
 def _escalate(
     cur_model: ModelChoice, hosts: list[DetectedHost]
 ) -> tuple[DetectedHost, ModelChoice] | None:
     """The cheapest (host, model) strictly more capable than the failed node's
     model — the escalation target. One tier up, cheapest, across all harnesses."""
+    unattended = [h for h in hosts if h.spec.unattended]
     better = [
-        (h, m) for h in hosts if h.installed for m in h.models
+        (h, m) for h in unattended if h.installed for m in h.models
         if tier_rank(m.tier) > tier_rank(cur_model.tier)
     ]
     if not better:
@@ -588,11 +1049,11 @@ def _escalate(
 
 
 def _actual_cost(assigned, outcome) -> float:
-    """What this node cost, preferring the model that ran over the one planned.
+    """Conservative estimate for every model attempt made by this node.
 
     Derived state must not outlive its source: an escalation changes the
-    model, so it changes the price, and a bound computed from the old one is
-    not a bound.
+    model, so it changes the price.  The failed original attempt was still
+    billed, so escalation adds its estimate rather than replacing it.
     """
     est = float(getattr(assigned, "est_cost_usd", 0.0) or 0.0)
     # `escalated_to` is host-qualified ("antigravity/gemini-3.6-flash"); the
@@ -610,7 +1071,7 @@ def _actual_cost(assigned, outcome) -> float:
         old_rate = float(getattr(old_p, "output", 0.0) or 0.0)
         new_rate = float(getattr(new_p, "output", 0.0) or 0.0)
         if old_rate > 0 and new_rate > 0 and new_rate > old_rate:
-            return est * (new_rate / old_rate)
+            return est + est * (new_rate / old_rate)
     except Exception:
         pass
     # The escalation HAPPENED -- we are here only because a different model
@@ -618,7 +1079,7 @@ def _actual_cost(assigned, outcome) -> float:
     # on the vendor-neutral fallback). Charging the original estimate would
     # say the escalation was free. A bound that guesses low is the direction
     # that overruns, which is the defect being fixed, so guess high.
-    return est * 2
+    return est * 3
 
 
 def run_route(
@@ -630,6 +1091,7 @@ def run_route(
     launch=_launch_host,
     coordinate=None,
     max_workers: int = 4,
+    prior_usage_attempts: list[ActualUsage | None] | None = None,
 ) -> RouteResult:
     """Coordinate the DAG closed-loop. Ready nodes (deps satisfied) run in
     parallel; each sees its deps' checkpoints; a failed node escalates once to a
@@ -639,6 +1101,7 @@ def run_route(
     from ctx.installer import _ctx_executable
     from ctx.store import Store
 
+    started = time.monotonic()
     resolved_exe = exe or _ctx_executable()
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     nodes: list[AssignedNode] = list(plan.assigned)
@@ -654,19 +1117,47 @@ def run_route(
     spent_est = 0.0
     waves_run = 0
     replans_done = 0
+    usage_attempts = (
+        prior_usage_attempts if prior_usage_attempts is not None else []
+    )
 
     def run_one(a: AssignedNode) -> NodeOutcome:
         dep_docs = [docs[d] for d in a.node.deps if d in docs]
         prompt = _node_prompt(a.node, plan.task, dep_docs)
         host, model = a.host, a.model
-        code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout, model=model.launch_id)
+        node_usage: list[ActualUsage | None] = []
+        code, out, err, usage = _launch_result(
+            launch(
+                host,
+                ws.root,
+                prompt,
+                resolved_exe,
+                timeout=timeout,
+                model=model.launch_id,
+            )
+        )
+        node_usage.append(usage)
+        if _execution_contract_failed(code, out, err):
+            code = code or 1
         escalated = None
         if code != 0:
             target = _escalate(a.model, hosts)
             if target is not None:
                 host, model = target
                 escalated = f"{host.name}/{model.id}"
-                code, out, err = launch(host, ws.root, prompt, resolved_exe, timeout=timeout, model=model.launch_id)
+                code, out, err, usage = _launch_result(
+                    launch(
+                        host,
+                        ws.root,
+                        prompt,
+                        resolved_exe,
+                        timeout=timeout,
+                        model=model.launch_id,
+                    )
+                )
+                node_usage.append(usage)
+                if _execution_contract_failed(code, out, err):
+                    code = code or 1
         ref = _checkpoint_node(ws, a.node, plan.task, out, err)
         tail = (out or err or "").strip().splitlines()
         return NodeOutcome(
@@ -677,6 +1168,7 @@ def run_route(
             detail=(tail[-1][:200] if tail else "(no output)"),
             escalated_to=escalated,
             exit_code=code,
+            usage_attempts=tuple(node_usage),
         )
 
     while waves_run < max_waves:
@@ -711,17 +1203,19 @@ def run_route(
         for a, o in zip(ready, results):
             state[a.node.id] = o.status
             outcomes[a.node.id] = o
+            usage_attempts.extend(o.usage_attempts)
             if o.checkpoint_ref:
                 cp[a.node.id] = o.checkpoint_ref
                 with contextlib.suppress(Exception):
                     from ctx.checkpoint import show_checkpoint
 
                     docs[a.node.id] = show_checkpoint(store, ws, o.checkpoint_ref)
-            # The cost of the model that actually RAN. a.est_cost_usd is
+            # The estimated cost of every model attempt that actually ran.
+            # a.est_cost_usd is
             # computed once at plan-build time from the originally assigned
             # model, so when a node failed and run_one escalated it to a
-            # stronger, pricier one, the loop kept charging itself the cheap
-            # estimate -- and budget_usd, documented as one of this loop's
+            # stronger, pricier one, the loop kept charging itself only the
+            # cheap estimate -- and budget_usd, documented as one of this loop's
             # bounds, could be overrun without ever appearing to be.
             spent_est += _actual_cost(a, o)
         if budget > 0 and spent_est >= budget:
@@ -734,7 +1228,17 @@ def run_route(
             NodeOutcome(a.node.id, a.host.name, "skipped", None, "not reached (bounds)"),
         )
     ordered = [outcomes[a.node.id] for a in nodes]
-    return RouteResult(plan=plan, outcomes=ordered, waves_run=waves_run, replans=replans_done)
+    result = RouteResult(
+        plan=plan,
+        outcomes=ordered,
+        waves_run=waves_run,
+        replans=replans_done,
+        estimated_spend_usd=spent_est,
+        duration_ms=(time.monotonic() - started) * 1000.0,
+        actual_usage=summarize_usage(usage_attempts),
+    )
+    _append_route_receipt(ws, result, nodes)
+    return result
 
 
 def _replan_context(task: str, outcomes: dict[str, NodeOutcome]) -> str:
@@ -783,6 +1287,15 @@ def render_result(result: RouteResult) -> str:
         f"nodes ok: {ok}/{len(result.outcomes)} · waves {result.waves_run} · "
         f"replans {result.replans} · resolve handles with `ctx get`"
     )
+    usage = result.actual_usage
+    if usage.get("status") != "unavailable":
+        cost = usage.get("cost_usd")
+        cost_text = f" · {_usd(float(cost))}" if cost is not None else ""
+        lines.append(
+            f"actual usage: {usage['total_tokens']:,} tokens{cost_text} "
+            f"({usage['status']}, {usage['attempts_measured']}/"
+            f"{usage['attempts_total']} attempts measured)"
+        )
     return "\n".join(lines)
 
 
@@ -810,22 +1323,47 @@ def orchestrate(
             "ctx orchestrate: no installed harnessable CLI to orchestrate across.\n"
             "Install a supported CLI (claude, codex, antigravity); see `ctx wrap detect`."
         )
-
-    coordinator = pick_coordinator(hosts)
-    raw = None
-    if not getattr(cfg, "fallback_only", False):
-        raw = invoke_coordinator(ws, task, hosts, cfg, exe=resolved_exe, launch=launch)
+    if not any(h.installed and h.spec.unattended for h in hosts):
+        return 1, (
+            "ctx orchestrate: no installed host can run unattended.\n"
+            "Install or enable claude, codex, or antigravity-sdk; interactive "
+            "agy remains available only through an explicitly pinned route."
+        )
 
     note = ""
+    coordinator_usage: list[ActualUsage | None] = []
     plan: RoutePlan
-    if raw is not None:
-        try:
-            plan = build_route_plan(task, raw, hosts, cfg, coordinator=coordinator)
-        except RouteError as e:
-            note = f"coordinator plan rejected ({e}); using deterministic route"
-            plan = fallback_route(task, hosts, cfg)
-    else:
+    fast_kind = _fallback_task_kind(task)
+    if fast_kind != "general":
         plan = fallback_route(task, hosts, cfg)
+        note = f"deterministic {fast_kind} fast path; coordinator skipped"
+    else:
+        unattended = [host for host in hosts if host.spec.unattended]
+        coordinator = pick_coordinator(unattended)
+        raw = None
+        if not getattr(cfg, "fallback_only", False):
+            raw = invoke_coordinator(
+                ws,
+                task,
+                hosts,
+                cfg,
+                exe=resolved_exe,
+                launch=launch,
+                usage_sink=coordinator_usage,
+            )
+        if raw is not None:
+            try:
+                plan = build_route_plan(
+                    task, raw, hosts, cfg, coordinator=coordinator
+                )
+            except RouteError as error:
+                note = (
+                    f"coordinator plan rejected ({error}); "
+                    "using deterministic route"
+                )
+                plan = fallback_route(task, hosts, cfg)
+        else:
+            plan = fallback_route(task, hosts, cfg)
 
     out = [render_route_plan(plan)]
     if note:
@@ -839,10 +1377,25 @@ def orchestrate(
 
     def coordinate(extra: str) -> dict | None:
         return invoke_coordinator(
-            ws, task, hosts, cfg, exe=resolved_exe, extra=extra, launch=launch
+            ws,
+            task,
+            hosts,
+            cfg,
+            exe=resolved_exe,
+            extra=extra,
+            launch=launch,
+            usage_sink=coordinator_usage,
         )
 
-    result = run_route(ws, plan, cfg, exe=resolved_exe, launch=launch, coordinate=coordinate)
+    result = run_route(
+        ws,
+        plan,
+        cfg,
+        exe=resolved_exe,
+        launch=launch,
+        coordinate=coordinate,
+        prior_usage_attempts=coordinator_usage,
+    )
     out.append("")
     out.append(render_result(result))
     return 0, "\n".join(out)
@@ -850,6 +1403,7 @@ def orchestrate(
 
 __all__ = [
     "ROUTE_SCHEMA",
+    "ROUTE_RUN_SCHEMA",
     "ROUTING_CONTRACT",
     "RouteNode",
     "AssignedNode",

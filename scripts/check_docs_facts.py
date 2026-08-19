@@ -8,7 +8,7 @@ another). This guard derives each fact from its authoritative source and
 asserts the prose agrees — so a number can only be wrong if the code is too.
 
 Authoritative sources:
-  - product version   -> pyproject.toml  [project].version
+  - product version   -> Hatch's configured version source
   - ctx ask intents   -> src/ctx/ask.py  INTENTS dict (counted via AST)
   - test total        -> tests/**/*.py   test functions (counted via AST)
 
@@ -39,7 +39,20 @@ def _read(root: Path, rel: str) -> str:
 
 def product_version(root: Path) -> str:
     data = tomllib.loads(_read(root, "pyproject.toml"))
-    return data["project"]["version"]
+    static = data["project"].get("version")
+    if static:
+        return str(static)
+
+    version_path = data.get("tool", {}).get("hatch", {}).get("version", {}).get("path")
+    if not version_path:
+        raise RuntimeError("pyproject.toml declares no static or Hatch version source")
+    tree = ast.parse(_read(root, str(version_path)))
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets):
+                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    return node.value.value
+    raise RuntimeError(f"could not read __version__ from {version_path}")
 
 
 def intent_count(root: Path) -> int:
@@ -108,7 +121,7 @@ def main() -> int:
     if f"v{version}" not in readme:
         failures.append(
             f"README.md does not mention the current version v{version} "
-            f"(pyproject.toml says {version}); update the Status line."
+            f"(the package version is {version}); update the Status line."
         )
 
     # 2. Any doc that states an intent count must state the right one.

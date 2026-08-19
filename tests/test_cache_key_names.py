@@ -11,14 +11,12 @@ single shared ``ctx.textutil.short_path``.
 
 **Four ``_cache_key``s, two invalidation bases.** ``skeleton`` keys on the
 source blob *hash* (content). ``repomap``, ``callgraph`` and ``plan_exec``
-key on file *stat* metadata. The stat-based keys used ``(path, size,
-mtime_ns)`` only — a basis a caller can defeat with ``os.utime``, and one
-that any tool restoring mtimes (rsync -t, tar -p, some editors' atomic
-save-and-restore) defeats routinely. The regression test below rewrites a
-file with same-length different content and puts the old mtime back: the
-content-keyed cache correctly sees a new file, the stat-keyed caches used
-to see the identical one. ``st_ctime_ns`` closes it — it is bumped by every
-write and by ``utime`` itself, and cannot be set backwards from userspace.
+key on one shared invalidation fingerprint. Its original ``(path, size,
+mtime_ns)`` basis was defeated by ``os.utime`` and timestamp-preserving tools.
+Adding ``st_ctime_ns`` still was not portable: an overlay or network filesystem
+can report the same nanosecond ctime for both states. The shared basis now
+includes a content digest, so caches and the rewrite guard agree on actual
+bytes rather than timestamp behavior.
 """
 
 import hashlib

@@ -26,6 +26,7 @@ def test_default_policy_matches_typed_config():
     assert pol["internal_error"] == cfg.guard.internal_error
     assert pol["steering"] == cfg.guard.steering
     assert pol["collapse"] == cfg.guard.collapse
+    assert pol["speculative_native"] == cfg.guard.speculative_native
     assert list(pol["allow_commands"]) == list(cfg.guard.allow_commands)
     assert list(pol["deny_commands"]) == list(cfg.guard.deny_commands)
 
@@ -48,6 +49,7 @@ def test_typed_config_models_every_key_the_hot_path_reads(tmp_path):
             """
             [guard]
             collapse = false
+            speculative_native = false
             allow_commands = ["mytool", "safebin"]
             deny_commands = ["dangerbin"]
 
@@ -65,6 +67,7 @@ def test_typed_config_models_every_key_the_hot_path_reads(tmp_path):
 
     # Keys the typed loader used to silently drop:
     assert cfg.guard.collapse is False
+    assert cfg.guard.speculative_native is False
     assert cfg.guard.allow_commands == ("mytool", "safebin")
     assert cfg.guard.deny_commands == ("dangerbin",)
     assert cfg.engagement.emission_nudge_tokens == 12345
@@ -72,6 +75,7 @@ def test_typed_config_models_every_key_the_hot_path_reads(tmp_path):
     # And they match what the hot-path parser reads from the same file.
     pol = _load_guard_policy(str(tmp_path))
     assert pol["collapse"] == cfg.guard.collapse
+    assert pol["speculative_native"] == cfg.guard.speculative_native
     assert list(pol["allow_commands"]) == list(cfg.guard.allow_commands)
     assert list(pol["deny_commands"]) == list(cfg.guard.deny_commands)
     assert pol["max_inline_bytes"] == cfg.budgets.max_inline_bytes

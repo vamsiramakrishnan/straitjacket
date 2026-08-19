@@ -49,7 +49,9 @@ GEMINI_API_KEY=... /tmp/agy-venv/bin/python contrib/ctx-agy/ctx_agy.py \
 ```
 
 It lives in `contrib/` and runs from its own venv because the SDK conflicts with
-the system PyJWT — it is deliberately not imported by `ctx` itself.
+the system PyJWT — it is deliberately not imported by `ctx` itself. Release
+wheels also carry this shim as package data so the managed launcher does not
+depend on a source checkout.
 
 `--no-contain` runs the same agent with the native builtins instead, which is
 the A/B baseline.
@@ -78,9 +80,15 @@ The durable result is not the 17%. It is that this makes Antigravity
 cron trigger can drive it, which OAuth-only `agy` forbids — and that it is the
 only configuration in which that host has an output-side gate.
 
-## Status
+## Managed install
 
-Proof-of-concept, not wired into `ctx.hosts`. Registering it as a first-class
-host means deciding how `ctx` locates the SDK venv (`CTX_AGY_PYTHON` today) and
-how `ctx wrap` reports a host whose harnessing is "use this shim instead of your
-CLI" — a design question, not a coding one.
+The shim is wired as the distinct, first-class `antigravity-sdk` host. Install
+or repair its isolated environment with:
+
+```bash
+ctx wrap antigravity-sdk
+```
+
+This never replaces the vendor `agy` CLI and is intentionally excluded from
+`ctx wrap setup`, because creating a virtualenv and downloading an SDK is an
+explicit networked action.

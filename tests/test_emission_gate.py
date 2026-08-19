@@ -123,6 +123,56 @@ def test_error_result_gets_larger_budget(ws):
     assert len(err_uto) >= len(ok_uto)
 
 
+def test_named_test_flood_is_typed_and_disables_next_speculation(ws):
+    """PostToolUse closes the speculative-native loop with wire truth."""
+    from ctx import reflex
+
+    command = "pytest tests/test_api.py::test_health -q"
+    failure = "\n".join(
+        [
+            "============================= test session starts =============================",
+            "_______________________________ test_health ________________________________",
+            "E   AssertionError: unhealthy",
+            "tests/test_api.py:42: AssertionError",
+            "=========================== short test summary info ===========================",
+            "FAILED tests/test_api.py::test_health - AssertionError: unhealthy",
+            "============================== 1 failed in 0.01s ==============================",
+        ]
+        + [f"diagnostic filler {i}: {'x' * 80}" for i in range(400)]
+    )
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": str(ws),
+        "is_error": True,
+        "tool_response": {"stdout": failure, "stderr": ""},
+    }
+    d = _run_post(payload)
+    rendered = d["hookSpecificOutput"]["updatedToolOutput"]
+    assert "profile=pytest/" in rendered
+    assert "test_api.py::test_health" in rendered
+    assert reflex.steering_would_bypass(ws, command) is False
+
+
+def test_small_named_test_result_remains_byte_identical(ws):
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "pytest tests/test_api.py::test_health -q"},
+        "cwd": str(ws),
+        "tool_response": {"stdout": "1 passed in 0.01s\n", "stderr": ""},
+    }
+    assert _run_post(payload) == {}
+    rows = [
+        json.loads(line)
+        for line in (ws / ".ctx-session-reads" / "steering-decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert rows[-1]["event"] == "steering_result"
+    assert rows[-1]["gated"] is False
+    assert rows[-1]["raw_bytes"] == len("1 passed in 0.01s\n".encode())
+
+
 def test_mixed_content_blocks_persisted_losslessly(ws):
     # A mixed [big text + image] result must not silently drop the image:
     # the persisted artifact must contain it (lossless-on-disk). Regression

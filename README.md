@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.31.0 (pre-1.0, minor bump per mechanism) · 1,616 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.32.0 (pre-1.0, minor bump per mechanism) · 1,689 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -75,10 +75,11 @@ address resolves back to the exact original bytes at any later turn.
 
 ## ⚡ Quickstart
 
-Three commands, from zero to a harnessed agent:
+From a clone to a harnessed agent:
 
 ```bash
-pip install -e .    # from a clone (PyPI release pending); Python 3.11+
+python -m pip install -e .  # PyPI release pending; Python 3.11+
+ctx --version
 cd your-repo
 ctx wrap setup      # done — Antigravity, Claude Code, and Codex are harnessed
 ```
@@ -144,11 +145,11 @@ Plain-language highlights from recent releases; full detail in
   single idempotent command.
 - **Harness collaboration by capability × price, per model.** `ctx wrap detect`
   finds every coding-agent CLI on PATH and prices it by its model;
-  `ctx orchestrate "<task>"` then has a cheap coordinator (Gemini-flash-lite)
-  split the task into a `ctx.route/v1` DAG and route each node to the right
-  *(harness, model)*: **planning → the flagship (Opus)**, **implementation →
-  complexity-adaptive** (Gemini 3.6 Flash for real work, 3.5 Flash-lite for a
-  simple edit), explore/verify → an economy model — even within one harness. A
+  `ctx orchestrate "<task>"` sends high-confidence ordinary requests directly
+  to a one- or two-node fast path and uses the cheapest unattended coordinator
+  only for ambiguous work. Each node goes to the right *(harness, model)*:
+  **planning → an available flagship**, **implementation →
+  complexity-adaptive**, explore/verify → an economy model. A
   **closed loop** runs it: parallel waves, addressed-evidence handoff (not
   bytes), failure escalation to a stronger model, bounded re-planning. The point
   is **allocation, not raw savings**: it spends the flagship (Opus) only on the
@@ -176,6 +177,22 @@ Plain-language highlights from recent releases; full detail in
   −30% billed tokens, 152× less tool output at equal correctness on an
   unavoidable flood — and the regime where naive wins is published too
   ([receipt](evals/antigravity-gemini-2026-07-19.md)).
+- **AlphaEvolve fixed a measured naive regression.** A live actual-usage probe
+  found that always wrapping one already-small named pytest target cost 8.55%
+  more than running it directly. The AlphaEvolve emission and engagement
+  experiments converged on the missing conditional policy: pass through the
+  small case, retain the output gate, and stop speculating after a flood. The
+  reviewed product integration is now 20.15% faster locally with 46.67% fewer
+  tool-result bytes on that exact path; a synthetic failure still collapses
+  48.15× with a working address
+  ([case study and receipt](evals/alphaevolve/2026-08-18-speculative-native.md)).
+
+  **Practical benefit:** straitjacket no longer charges a capture/digest tax
+  when a narrowly identified task is already small, but it still contains the
+  same command if the output unexpectedly floods. AlphaEvolve improved the
+  decision about *when to contain*, not just the compression ratio after the
+  fact. The 20.15% figure is for this measured path, not a blanket product-wide
+  speed claim.
 
 ## 📊 What's measured (and what isn't yet)
 
@@ -189,6 +206,7 @@ The quick map:
 | Does it ever drop the decisive line? | needle-drop + evidence conformance tests | 0% dropped (vs 100% for a rewriting proxy) |
 | Is each digest near-optimal? | `ctx replay --regret` per profile | pytest/v1 frontier 0.17, 199/199 facts preserved |
 | Hook latency on the hot path? | hot-path profile | ~29 ms Python / ~3 ms native Rust per intercepted call |
+| Did AlphaEvolve improve a losing small-task path? | 11-repeat local named-test comparison plus real emission gate | 20.15% lower median latency, 46.67% fewer tool-result bytes; fallback failure contained 48.15×. Local path evidence, not billed production proof. |
 
 **Honestly not yet measured:** a full Terminal-Bench (or similar)
 agent-driving run. The static half exists — the coverage corpus above
@@ -551,7 +569,10 @@ happens to a command you type:
 Under default `steering = "auto"` it **rewrites instead of denying**:
 
 - **Untouched**: ctx-routed calls, bounded commands and all-bounded chains,
-  small reads, redirections to real files.
+  small reads, redirections to real files. On Claude Code and Codex, one
+  explicitly named pytest node also runs untouched while the session is
+  passive and that signature has not flooded; the PostToolUse gate remains
+  its fail-closed safety net.
 - **Silently rewritten**: framework suites, raw `cat`/`find`/`git diff`,
   unbounded package/cloud commands → `ctx run`; oversized reads → bounded
   limit windows; unbounded native `Grep` → capped with a pointer to the
@@ -566,6 +587,8 @@ PostToolUse gate replaces any tool result over 16 KiB — from any faucet, MCP
 included — with a digest carrying a working `ctx get` ref, raw bytes
 persisted losslessly first. Strict installs set `steering = "deny"`;
 fail-open on internal error is the default, fail-closed is one config line.
+If a speculative named test crosses the gate, Straitjacket records the flood
+and captures the next same-signature run at birth instead of speculating again.
 
 ### Source layout
 
@@ -582,7 +605,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,616 acceptance-oriented determinism & security test functions
+└── tests/             # 1,689 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -609,7 +632,7 @@ Full flags and when-to-use detail:
 | `debt` | declared-omission ledger for deferred engineering decisions (`add`/`list`/`resolve`) |
 | `policy` | compiled steering policy from telemetry (`compile`/`show`) |
 | `wrap` / `proxy` / `hook` | session harness · Tier-0 observer (opt-in Tier-1 `--rescue-pct`) · host hook stages; `wrap detect` lists installed CLIs priced by model, `wrap setup` harnesses the ones it finds |
-| `orchestrate` | harness collaboration: a cheap coordinator (Gemini-flash-lite) splits a task into a `ctx.route/v1` DAG and routes each node to the cheapest **(harness, model)** that clears its tier — implement on a cheap standard model, plan on a frontier one — then a closed loop runs it: parallel waves, `checkpoint:` handoff (evidence, not bytes), failure escalation to a stronger model, bounded re-planning; prices the plan, then runs it |
+| `orchestrate` | harness collaboration: ordinary requests compile directly to completion-gated fast paths; ambiguous work uses the cheapest unattended coordinator for a `ctx.route/v1` DAG. Nodes route to the cheapest unattended **(harness, model)** that clears their tier, then run in parallel waves with `checkpoint:` handoff, bounded escalation/re-planning, prompt-free receipts, and separate semantic labels |
 | `init` / `doctor` | write `ctx.toml` + `.ctxignore` · validate hooks, manifests, store, classifier |
 
 Examples:
@@ -783,7 +806,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 1,616 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,689 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

@@ -229,3 +229,35 @@ def test_claude_code_flavor_allow_is_valid():
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
     out2 = _to_claude_code_schema({"decision": "force_ask", "reason": "why"})
     assert out2["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_codex_plain_allow_emits_no_unsupported_decision():
+    from ctx.hook import _to_codex_schema
+
+    assert _to_codex_schema({"decision": "allow"}) == {}
+
+
+def test_codex_rewrite_is_allow_with_updated_input():
+    from ctx.hook import _to_codex_schema
+
+    out = _to_codex_schema(
+        {
+            "decision": "allow",
+            "rewrite": {
+                "updatedInput": {"command": "ctx run -- pytest -q"},
+                "reason": "contain output",
+            },
+        }
+    )
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["updatedInput"] == {"command": "ctx run -- pytest -q"}
+
+
+def test_codex_force_ask_degrades_safely_to_deny():
+    from ctx.hook import _to_codex_schema
+
+    out = _to_codex_schema({"decision": "force_ask", "reason": "review this"})
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert hso["permissionDecisionReason"] == "review this"

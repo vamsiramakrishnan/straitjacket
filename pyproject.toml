@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ctx-harness"
-version = "0.31.0"
+dynamic = ["version"]
 description = "straitjacket: artifact-backed, repository-aware context containment harness for Antigravity. Unbounded tool output becomes an immutable artifact plus a bounded deterministic digest."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -54,7 +54,9 @@ code = ["jedi>=0.20", "tree-sitter>=0.25", "tree-sitter-python>=0.25",
         "tree-sitter-javascript>=0.25", "tree-sitter-typescript>=0.23",
         "tree-sitter-go>=0.25", "tree-sitter-rust>=0.24",
         "ast-grep-py>=0.45"]
-# The vendored scip_pb2 uses protobuf's runtime_version guard (5.26+). A
+# The vendored scip_pb2 is generated with protoc 3.20 so it remains compatible
+# with the protobuf 5.x+ runtimes exercised in CI and does not force upgrades
+# that conflict with Google client libraries. A
 # mismatched/absent runtime raises on import and the ingester degrades to
 # None — SCIP is skipped, never an error.
 scip = ["protobuf>=5.26"]
@@ -69,10 +71,14 @@ packages = ["src/ctx"]
 [tool.hatch.build.targets.wheel.force-include]
 "plugins/antigravity" = "ctx/data/antigravity"
 "plugins/codex" = "ctx/data/codex"
+"contrib/ctx-agy/ctx_agy.py" = "ctx/data/ctx_agy.py"
 "src/ctx/data/model-prices.json" = "ctx/data/model-prices.json"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/ctx", "plugins", "README.md", "LICENSE"]
+include = ["src/ctx", "plugins", "contrib/ctx-agy", "README.md", "LICENSE"]
+
+[tool.hatch.version]
+path = "src/ctx/__init__.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

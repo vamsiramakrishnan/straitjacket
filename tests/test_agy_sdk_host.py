@@ -46,6 +46,15 @@ def test_installer_and_wrapper_resolve():
     assert wrapper_for(spec) is not None
 
 
+def test_sdk_shim_is_a_packaged_runtime_asset():
+    """The managed launcher must work from a wheel, not only a checkout."""
+    from ctx.agysdk import shim_source
+
+    source = shim_source()
+    assert source.is_file()
+    assert source.name in {"ctx_agy.py"}
+
+
 def test_detection_ignores_path_and_reports_missing_when_absent(monkeypatch, tmp_path):
     """A self-hosted host is located in the state root, not on PATH. With no
     managed venv it must read as not-installed rather than raising."""

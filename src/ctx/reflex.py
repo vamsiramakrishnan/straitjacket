@@ -110,13 +110,14 @@ nothing — ctx verbs other than ``run`` had no signature. Now:
   pipelines accumulate — rare, positive-class only, accepted.
 
 --------------------------------------------------------------------------
-Controller State wave (EDC §7–§10 + phase 6b) — everything below ships in
-SHADOW MODE: the new detectors and the circuit state machine RECORD, they
-never change behavior. The v2 live loop above (event-armed starvation →
-densify latch → dense rendering) is byte-for-byte unchanged; rendering is
-still driven exclusively by the ``densify`` latch. Shadow output validates
-against the archived spec3 transcripts (``evals/replay_detectors.py``)
-before anything graduates to live.
+Controller State wave (EDC §7–§10 + phase 6b). The new detectors and circuit
+state machine below remain SHADOW: they record and never change rendering.
+Phase 6b has one narrowly graduated live arm: an explicitly named pytest node
+may bypass birth capture on an output-substituting host while the session is
+passive and the signature has no prior flood. Its PostToolUse result remains
+fail-closed and feeds the same intervention state. Shadow output continues to
+validate broader candidates against archived spec3 transcripts
+(``evals/replay_detectors.py``) before they graduate.
 
 v2 intervention ledger: append-only
 ``.ctx-session-reads/interventions.jsonl`` — DUAL-WRITTEN alongside the v1
@@ -156,10 +157,10 @@ event-disarmed (the ``sed -i`` blind spot); different hash → verification
 regardless of arming; unknown → provisional, classified by the armed bit
 and marked ``confirmed: false``.
 
-Steering shadow (EDC phase 6b): ``note_steer_shadow`` records, per
-would-be command rewrite, whether the graduated-steering null plan WOULD
-have bypassed it — ``.ctx-session-reads/steering-shadow.jsonl`` lines
-follow the adoption-ledger pattern. No rewrite behavior changes this wave.
+Steering shadow (EDC phase 6b): ``note_steer_shadow`` records, per would-be
+command rewrite, whether the graduated-steering null plan would have bypassed
+it. The live named-pytest arm writes privacy-safe decisions and results to
+``steering-decisions.jsonl``; all broader rewrite classes remain shadow-only.
 """
 
 from __future__ import annotations
@@ -190,6 +191,7 @@ _STATE_NAME = "reflex.json"
 _OUTCOMES_NAME = "reflex-outcomes.jsonl"
 _INTERVENTIONS_NAME = "interventions.jsonl"  # v2 ledger (EDC §9, shadow wave)
 _STEER_SHADOW_NAME = "steering-shadow.jsonl"  # phase 6b shadow ledger
+_STEER_DECISIONS_NAME = "steering-decisions.jsonl"
 _Q_DRY_STATE_NAME = "q-dry.json"  # q-dry ledger state (query engine writes)
 _Q_DRY_OPS_NAME = "q-dry.jsonl"  # q-dry ledger op lines (query engine writes)
 
@@ -1321,8 +1323,99 @@ def densify_latched(ws_root: Path | str | None, signature: str | None) -> bool:
         return False
 
 
+def steering_would_bypass(ws_root: Path | str | None, command: str) -> bool:
+    """Live-readable form of the graduated-steering shadow predicate.
+
+    True means the session is passive and this normalized command signature
+    has not previously produced a digest with omissions. Fail closed to False
+    for the optimization: uncertainty keeps the proven capture path.
+    """
+    if ws_root is None:
+        return False
+    try:
+        sig = command_signature(command) or ""
+        if not sig:
+            return False
+        from ctx.engagement import read_state as _eng_read
+
+        passive = str(_eng_read(ws_root).get("level") or "passive") != "active"
+        prior_flood = isinstance(
+            _normalized(read_state(ws_root))["interventions"].get(sig), dict
+        )
+        return bool(passive and not prior_flood)
+    except Exception:
+        return False
+
+
+def note_steer_decision(
+    ws_root: Path | str | None,
+    command: str,
+    *,
+    action: str,
+    reason: str,
+) -> None:
+    """Append one privacy-safe live graduated-steering decision."""
+    if ws_root is None:
+        return
+    try:
+        sig = command_signature(command)
+        if not sig:
+            return
+        _append_jsonl(
+            ws_root,
+            _STEER_DECISIONS_NAME,
+            {
+                "schema": "ctx.steering-decision/v1",
+                "event": "steering_decision",
+                "signature": sig,
+                "action": str(action),
+                "reason": str(reason),
+                "ts": time.time(),
+            },
+        )
+    except Exception:
+        pass
+
+
+def note_steer_result(
+    ws_root: Path | str | None,
+    command: str,
+    *,
+    raw_bytes: int,
+    gated: bool,
+    is_error: bool,
+) -> None:
+    """Record the model-visible outcome of a speculative-native command.
+
+    No output text or raw command is retained here—only the normalized
+    signature and measurements needed to decide whether this optimization
+    beats capture on real workloads.
+    """
+    if ws_root is None:
+        return
+    try:
+        sig = command_signature(command)
+        if not sig:
+            return
+        _append_jsonl(
+            ws_root,
+            _STEER_DECISIONS_NAME,
+            {
+                "schema": "ctx.steering-result/v1",
+                "event": "steering_result",
+                "signature": sig,
+                "raw_bytes": max(0, int(raw_bytes)),
+                "gated": bool(gated),
+                "is_error": bool(is_error),
+                "ts": time.time(),
+            },
+        )
+    except Exception:
+        pass
+
+
 def note_steer_shadow(ws_root: Path | str | None, command: str) -> None:
-    """Graduated steering — the null plan (EDC phase 6b) — in SHADOW mode.
+    """Graduated steering's broad counterfactual shadow record.
 
     Called by the guard when steering is about to rewrite an unbounded
     command. Records what the graduated regime WOULD have done:
@@ -1335,38 +1428,23 @@ def note_steer_shadow(ws_root: Path | str | None, command: str) -> None:
         {"op": "steer_shadow", "signature": str, "would_bypass": bool,
          "ts": float}
 
-    NO behavior change this wave — the caller still applies the rewrite.
-    The PostToolUse emission gate (``ctx.hook._emission_gate``) is the
-    safety net that makes the eventual relaxation safe: even a bypassed
-    unbounded command's output is bounded at emission time, so the null
-    plan can only ever cost one bounded flood, never a transcript flood.
-    Fail-open: any error records nothing and never touches a decision."""
+    This function itself never changes behavior. The hook separately promotes
+    only the single-named-pytest case when its stricter live gates pass. The
+    PostToolUse emission gate is that arm's safety net: even an unexpected
+    flood becomes one bounded digest, never a transcript flood. Fail-open: any
+    error records nothing and never touches a decision."""
     if ws_root is None:
         return
     try:
         sig = command_signature(command) or ""
-        passive = True
-        try:
-            from ctx.engagement import read_state as _eng_read
-
-            passive = str(_eng_read(ws_root).get("level") or "passive") != "active"
-        except Exception:
-            passive = True  # sessions start passive; unreadable state = prior
-        prior_flood = False
-        try:
-            if sig:
-                prior_flood = isinstance(
-                    _normalized(read_state(ws_root))["interventions"].get(sig), dict
-                )
-        except Exception:
-            prior_flood = False
+        would_bypass = steering_would_bypass(ws_root, command)
         _append_jsonl(
             ws_root,
             _STEER_SHADOW_NAME,
             {
                 "op": "steer_shadow",
                 "signature": sig,
-                "would_bypass": bool(passive and not prior_flood),
+                "would_bypass": would_bypass,
                 "ts": time.time(),
             },
         )

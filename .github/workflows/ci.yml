@@ -9,6 +9,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  package:
+    name: built wheel (self-contained)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel and source distribution
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Validate source distribution and smoke-test installed wheel
+        run: python scripts/check_distribution.py dist/*.whl dist/*.tar.gz
+
   test:
     name: full (py${{ matrix.python-version }})
     runs-on: ubuntu-latest

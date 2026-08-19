@@ -52,6 +52,24 @@ data-loss hazard). If the file exists but doesn't yet register `ctx-harness`,
 setup prints the exact `[mcp_servers.ctx-harness]` snippet for you to paste.
 Add it and you're done.
 
+### Codex: `MCP client for ctx-harness failed to start: No such file or directory`
+
+**Cause:** an older generated fallback put the whole `python -m ctx` invocation
+in the MCP `command` field. Codex launches that field directly, without a
+shell, so the executable and its arguments must be separate. **Fix:** upgrade
+`ctx-harness`, run `ctx wrap codex` once to refresh a ctx-managed config, and
+restart Codex. The corrected block has `command = "/path/to/python"` and begins
+`args` with `"-m", "ctx"`. If your `.codex/config.toml` is user-managed, setup
+will print the corrected snippet instead of rewriting the file.
+
+### Codex: `PreToolUse hook returned unsupported permissionDecision:allow`
+
+**Cause:** an older hook emitted an explicit `allow` for ordinary pass-through
+calls. Codex reserves that decision for input rewrites that also contain
+`updatedInput`. **Fix:** upgrade `ctx-harness` and restart Codex. The current
+hook emits `{}` for pass-through, `allow` plus `updatedInput` for transparent
+containment, and `deny` for blocked calls.
+
 ### `--workspace is not a directory: <path>` (exit 2)
 
 **Cause:** the `--workspace` you passed doesn't point at a directory.

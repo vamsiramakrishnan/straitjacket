@@ -419,15 +419,24 @@ _POLICY_CACHE_NAME = "guard-policy-cache.json"
 
 
 def _policy_cache_key(paths: list[str]) -> list[list[Any]]:
-    """(path, mtime_ns, size) triples for every policy source file; a missing
-    file contributes a zero row so appearing/disappearing invalidates too."""
+    """Content-addressed rows for every policy source file.
+
+    A missing file contributes a zero row so appearing/disappearing
+    invalidates too.  Timestamps are retained as a cheap diagnostic, but the
+    digest is authoritative: some filesystems can preserve all stat fields
+    across a same-size edit made within one clock tick.
+    """
+    import hashlib
+
     key: list[list[Any]] = []
     for p in paths:
         try:
             st = os.stat(p)
-            key.append([p, st.st_mtime_ns, st.st_size])
+            with open(p, "rb") as fh:
+                content_id = hashlib.sha256(fh.read()).hexdigest()
+            key.append([p, st.st_mtime_ns, st.st_ctime_ns, st.st_size, content_id])
         except OSError:
-            key.append([p, 0, 0])
+            key.append([p, 0, 0, 0, ""])
     return key
 
 
@@ -436,8 +445,9 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     ctx-policy.toml learned-policy epoch. Never raises.
 
     The parsed result is cached as JSON in the session ledger keyed by the
-    (mtime_ns, size) of both source files: TOML parsing (and the tomllib
-    import itself, ~5ms) runs only when a source file actually changed.
+    content digest of both source files: TOML parsing (and the tomllib import
+    itself, ~5ms) runs only when a source file actually changed.  Reading and
+    hashing the small policy sources is the correctness cost on cache hits.
     The cache is a pure derivation of the TOMLs — deleting it is always safe.
     """
     policy: dict[str, Any] = {
@@ -446,6 +456,10 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "internal_error": "allow",
         "steering": "auto",
         "collapse": True,  # replacement surface (default posture): substitute loop-shapes with collapsed ctx ops; set guard.collapse=false to break-glass off
+        # Graduated null plan: a single explicitly named pytest node may run
+        # without the ctx capture wrapper on dialects whose PostToolUse hook
+        # can replace an unexpected flood. Antigravity can never take it.
+        "speculative_native": True,
         "max_inline_bytes": _MAX_INLINE_BYTES_DEFAULT,
         "max_inline_lines": _MAX_INLINE_LINES_DEFAULT,
         "session_read_budget_bytes": _SESSION_READ_BUDGET_DEFAULT,
@@ -499,6 +513,11 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             policy["internal_error"] = str(guard.get("internal_error", policy["internal_error"]))
             policy["steering"] = str(guard.get("steering", policy["steering"]))
             policy["collapse"] = bool(guard.get("collapse", policy["collapse"]))
+            speculative = guard.get(
+                "speculative_native", policy["speculative_native"]
+            )
+            if isinstance(speculative, bool):
+                policy["speculative_native"] = speculative
             policy["max_inline_bytes"] = int(
                 budgets.get("max_inline_bytes", policy["max_inline_bytes"])
             )
@@ -686,6 +705,33 @@ def _remediation(argv: list[str]) -> str:
 
 def _steering_allows(policy: dict[str, Any]) -> bool:
     return str(policy.get("steering", "auto")) in ("auto", "rewrite")
+
+
+def _single_named_pytest(command: str) -> bool:
+    """Whether ``command`` runs one explicit pytest node id.
+
+    This is deliberately much narrower than "a pytest command": a file,
+    directory, ``-k`` expression, or whole suite may be cheap sometimes but
+    has no structural upper bound on work or output. A ``path::node`` target
+    is the measured naive-friendly case. Shell expressions are excluded so
+    the output-substitution safety net remains attached to one tool result.
+    """
+    try:
+        if not command.strip() or _SHELL_META_RE.search(command):
+            return False
+        argv = _unwrap(shlex.split(command))
+        if not argv:
+            return False
+        prog = os.path.basename(argv[0])
+        if prog in ("python", "python3") and len(argv) >= 3 and argv[1] == "-m":
+            argv = argv[2:]
+            prog = os.path.basename(argv[0])
+        if prog not in ("pytest", "py.test"):
+            return False
+        targets = [str(arg) for arg in argv[1:] if "::" in str(arg) and not str(arg).startswith("-")]
+        return len(targets) == 1
+    except Exception:
+        return False
 
 
 # ------------------------------------------------- eval teaching surface
@@ -1948,22 +1994,35 @@ def classify(
                 reflex.check_command(workspace_root, command)
         except Exception:
             pass
-        # Graduated steering — the null plan (EDC phase 6b) — SHADOW ONLY
-        # this wave: when steering is about to rewrite this command (a
-        # command-substitution `_rewrite`, i.e. an unbounded/compound
-        # command being routed through ctx), record whether the graduated
-        # regime WOULD have bypassed the rewrite (engagement still passive
-        # AND no prior flood for the signature). NO behavior change: the
-        # rewrite below is applied exactly as before. The PostToolUse
-        # emission gate (`_emission_gate`) is the safety net that will make
-        # the eventual relaxation safe — even a bypassed unbounded command
-        # is bounded at emission time, so the null plan risks one bounded
-        # digest, never a transcript flood. Fail-open by contract.
+        # Graduated steering — the null plan. Every would-be command rewrite
+        # remains shadow-recorded. The one live arm is intentionally narrow:
+        # one explicit pytest node, a passive session, no prior flood for its
+        # signature, rewrite steering enabled, and a dialect with fail-closed
+        # PostToolUse output substitution. This is the measured small-task
+        # case where ctx's capture wrapper cost more than naive execution.
+        # An unexpected flood is still persisted and replaced by
+        # `_emission_gate`, which then records an intervention so this
+        # signature does not speculate again in the session.
         if isinstance(decision.get("_rewrite"), dict) and "command" in decision["_rewrite"]:
             try:
                 from ctx import reflex
 
                 reflex.note_steer_shadow(workspace_root, command)
+                if (
+                    bool(policy.get("speculative_native", True))
+                    and bool(policy.get("_output_substitution"))
+                    and _steering_allows(policy)
+                    and not decision.get("_safety")
+                    and _single_named_pytest(command)
+                    and reflex.steering_would_bypass(workspace_root, command)
+                ):
+                    reflex.note_steer_decision(
+                        workspace_root,
+                        command,
+                        action="native",
+                        reason="single_named_test",
+                    )
+                    decision = dict(DECISION_ALLOW)
             except Exception:
                 pass
         return _apply_rewrite(decision, tool_input, command_key)
@@ -2094,6 +2153,43 @@ def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
     if decision.get("reason"):
         out["hookSpecificOutput"]["permissionDecisionReason"] = decision["reason"]
     return out
+
+
+def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
+    """Translate the canonical decision into Codex's PreToolUse schema.
+
+    Codex accepts ``permissionDecision: allow`` only for an input rewrite that
+    also supplies ``updatedInput``.  A normal pass-through therefore emits an
+    empty JSON object.  Codex does not currently support ``ask`` at this hook,
+    so a canonical ask degrades safely to a deny carrying the reason.
+    """
+    rewrite = decision.get("rewrite")
+    if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": rewrite["updatedInput"],
+                "permissionDecisionReason": str(rewrite.get("reason", "")),
+            }
+        }
+
+    raw = decision.get("decision", "allow")
+    if raw in ("deny", "ask", "force_ask"):
+        reason = str(decision.get("reason", "")).strip()
+        if raw in ("ask", "force_ask") and not reason:
+            reason = "ctx requires confirmation before this tool call"
+        out: dict[str, Any] = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+            }
+        }
+        if reason:
+            out["hookSpecificOutput"]["permissionDecisionReason"] = reason
+        return out
+
+    return {}
 
 
 # The published Antigravity PreToolUse output contract
@@ -2310,6 +2406,29 @@ def _normalize_tool_response(tr: Any) -> tuple[str, str]:
     return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
 
 
+def _tool_command(payload: dict[str, Any]) -> str | None:
+    """Return the shell command attached to a command-tool event, if any."""
+    ti = payload.get("tool_input") or payload.get("toolInput") or {}
+    if not isinstance(ti, dict):
+        return None
+    for key in ("CommandLine", "command", "Command", "cmd"):
+        value = ti.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _command_argv(command: str | None) -> list[str] | None:
+    """Losslessly recover argv only for a simple, non-shell expression."""
+    if not command or _SHELL_META_RE.search(command):
+        return None
+    try:
+        argv = shlex.split(command)
+        return argv or None
+    except ValueError:
+        return None
+
+
 def _coerce_text(value: Any) -> str:
     """Last-resort text for a tool_response shape ``_normalize_tool_response``
     could not handle. Never raises; returns "" only if even ``repr`` fails."""
@@ -2484,17 +2603,31 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         size = len(stdout.encode("utf-8")) + len(stderr.encode("utf-8"))
     except Exception:
         size = threshold + 1  # cannot measure → treat as over budget
+    command = _tool_command(payload)
+    is_error = bool(
+        payload.get("is_error")
+        or payload.get("isError")
+        or (isinstance(tr, dict) and tr.get("is_error"))
+    )
     if size <= threshold:
+        if can_substitute and _single_named_pytest(command or ""):
+            try:
+                from ctx import reflex
+
+                reflex.note_steer_result(
+                    ws_root,
+                    command or "",
+                    raw_bytes=size,
+                    gated=False,
+                    is_error=is_error,
+                )
+            except Exception:
+                pass
         return None  # under budget → byte-identical pass-through
 
     # -- phase 3: over budget. From here None would mean "emit everything
     # raw", so every failure degrades to the bounded fallback instead.
     try:
-        is_error = bool(
-            payload.get("is_error")
-            or payload.get("isError")
-            or (isinstance(tr, dict) and tr.get("is_error"))
-        )
         # Lazy: only pay the Store/digest import cost on the over-budget path.
         from ctx.digest import digest_output
         from ctx.store import Store
@@ -2502,10 +2635,37 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
 
         ws = resolve_workspace(ws_root or ".")
         store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-        text, _short = digest_output(store, ws, tool_name, stdout, stderr,
-                                     is_error=is_error, contained=can_substitute)
+        text, _short = digest_output(
+            store,
+            ws,
+            tool_name,
+            stdout,
+            stderr,
+            is_error=is_error,
+            argv=_command_argv(command),
+            contained=can_substitute,
+        )
         if not isinstance(text, str) or not text.strip():
             raise ValueError("digest produced no text")
+        # A speculative-native result that crossed the gate is now a proven
+        # flood for this signature. Feed that wire truth back into the reflex
+        # state so the next same-signature call is captured at birth.
+        if command and _single_named_pytest(command):
+            try:
+                from ctx import reflex
+
+                reflex.note_intervention(
+                    ws.root, reflex.command_signature(command), _short
+                )
+                reflex.note_steer_result(
+                    ws.root,
+                    command,
+                    raw_bytes=size,
+                    gated=True,
+                    is_error=is_error,
+                )
+            except Exception:
+                pass
         # digest_output has now persisted the raw bytes. A host that cannot
         # substitute gets None — the transcript keeps the raw result, but the
         # artifact exists and is addressable.
@@ -2741,6 +2901,10 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             # Loaded ONCE per hook call and threaded into classify(), which
             # used to load it a second time from the same cache.
             policy = _load_guard_policy(ws_root)
+            # Runtime dialect capability, never cached in the repo policy.
+            # Only hosts that can replace PostToolUse output may take the
+            # speculative-native fast path.
+            policy["_output_substitution"] = can_substitute_output(flavor)
         except Exception as exc:
             decision = _internal_error_decision(ws_root, None, "policy", exc)
 
@@ -2749,14 +2913,12 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             decision = classify(payload, policy)
         except Exception as exc:
             decision = _internal_error_decision(ws_root, policy, "classify", exc)
-    # Codex uses Claude Code's PreToolUse contract verbatim
-    # (hookSpecificOutput.permissionDecision + updatedInput), per
-    # https://learn.chatgpt.com/docs/hooks.
-    emitted: dict[str, Any] = (
-        _to_claude_code_schema(decision)
-        if flavor in ("claude-code", "codex")
-        else _to_antigravity_schema(decision)
-    )
+    if flavor == "codex":
+        emitted = _to_codex_schema(decision)
+    elif flavor == "claude-code":
+        emitted = _to_claude_code_schema(decision)
+    else:
+        emitted = _to_antigravity_schema(decision)
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
     sys.stdout.flush()

@@ -389,8 +389,14 @@ class _RelayHandler(BaseHTTPRequestHandler):
             pass  # client went away mid-stream; nothing to salvage
         finally:
             if upstream_done and not resp.will_close:
+                # ``read1()`` reaching EOF does not perform the response
+                # cleanup that ``read()`` does.  Close its file wrapper before
+                # pooling the HTTPConnection; otherwise a later response
+                # finalizer can close the socket after it has been released.
+                resp.close()
                 self._release(server, conn)
             else:
+                resp.close()
                 conn.close()
         total_ms = (time.monotonic() - t_start) * 1000
 

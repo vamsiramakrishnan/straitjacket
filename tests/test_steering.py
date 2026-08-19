@@ -88,6 +88,61 @@ def test_pytest_rewrite_claude_code_dialect(tmp_path):
     assert "bounded capture" in hso["permissionDecisionReason"]
 
 
+def test_single_named_pytest_uses_guarded_native_fast_path(tmp_path):
+    """The measured naive-friendly case avoids ctx's fixed capture tax.
+
+    Claude/Codex can still replace an unexpected PostToolUse flood, so one
+    explicit node runs unchanged while a broad suite keeps the capture path.
+    """
+    out = _invoke_hook(
+        _payload(
+            {"command": "pytest tests/test_api.py::test_health -q", "Cwd": str(tmp_path)},
+            tmp_path,
+            tool_name="Bash",
+        ),
+        flavor="claude-code",
+    )
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "updatedInput" not in hso
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / ".ctx-session-reads" / "steering-decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert rows[-1]["action"] == "native"
+    assert rows[-1]["signature"] == "pytest tests/test_api.py::test_health"
+
+
+def test_single_named_pytest_stays_captured_without_output_substitution(tmp_path):
+    out = _invoke_hook(
+        _payload(
+            {"CommandLine": "pytest tests/test_api.py::test_health -q", "Cwd": str(tmp_path)},
+            tmp_path,
+        ),
+        flavor="antigravity",
+    )
+    assert out["decision"] == "deny"
+    assert "ctx run -- pytest" in out["reason"]
+
+
+def test_speculative_native_can_be_disabled(tmp_path):
+    (tmp_path / "ctx.toml").write_text(
+        'version = 1\n[guard]\nspeculative_native = false\n', encoding="utf-8"
+    )
+    out = _invoke_hook(
+        _payload(
+            {"command": "pytest tests/test_api.py::test_health -q", "Cwd": str(tmp_path)},
+            tmp_path,
+            tool_name="Bash",
+        ),
+        flavor="claude-code",
+    )
+    assert "ctx run -- pytest" in out["hookSpecificOutput"]["updatedInput"]["command"]
+
+
 def test_original_command_key_name_preserved(tmp_path):
     for key in ("CommandLine", "command"):
         d = _classify("run_command", {key: "pytest -q", "Cwd": str(tmp_path)}, tmp_path)

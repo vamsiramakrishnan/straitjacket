@@ -46,7 +46,10 @@ def test_a_substituted_flood_passes_too(state_home, workspace_dir, monkeypatch):
     monkeypatch.setattr(
         hook, "classify",
         lambda _p: {"decision": "allow",
-                    "_rewrite": {"command": "ctx q 'fails'", "reason": "collapsed"}},
+                    "rewrite": {
+                        "updatedInput": {"CommandLine": "ctx q 'fails'"},
+                        "reason": "collapsed",
+                    }},
     )
     ok, detail = _hook_line(make_ws(workspace_dir))
     assert ok, detail

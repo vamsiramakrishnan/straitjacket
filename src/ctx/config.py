@@ -75,6 +75,12 @@ class Guard:
     # Replacement surface (default posture): substitute loop-shapes with
     # collapsed ctx ops; set collapse=false to break-glass off.
     collapse: bool = True
+    # On hosts with a fail-closed PostToolUse substitution field, let one
+    # explicitly named pytest node run natively while the session is still
+    # passive. Unexpectedly large output is still captured and replaced by
+    # the emission gate. This removes ctx's fixed capture tax from the small
+    # named-test case without relaxing Antigravity or broad-suite safety.
+    speculative_native: bool = True
     # Repo-tunable classification: prefix matches against the canonical argv.
     allow_commands: tuple[str, ...] = ()
     deny_commands: tuple[str, ...] = ()
@@ -295,6 +301,10 @@ def load_config(workspace_root: Path | None) -> Config:
         # `bool()` on a non-bool is a SILENT reinterpretation, not a
         # coercion: `collapse = "no"` is truthy and turns the flag ON.
         collapse=_coerce_like(gd.collapse, guard_raw.get("collapse", gd.collapse)),
+        speculative_native=_coerce_like(
+            gd.speculative_native,
+            guard_raw.get("speculative_native", gd.speculative_native),
+        ),
         # _str_tuple, not a bare generator: `deny_commands = 42` iterated an
         # int and crashed load_config -- and load_config is on the path of
         # every command, so one typo in ctx.toml broke the whole tool.

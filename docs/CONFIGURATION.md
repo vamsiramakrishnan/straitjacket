@@ -84,9 +84,18 @@ before it runs.
 | `internal_error` | `"allow"` | What to do if the guard itself errors. The default is availability-safe (fail-open); set `"deny"` to fail-closed. |
 | `steering` | `"auto"` | `auto` \| `rewrite` \| `deny`. `deny` disables all transparent rewrites, so you see plain denials instead of substitutions. |
 | `collapse` | `true` | Master switch for the transparent command-substitution surface. Set `collapse = false` to break-glass it off. |
+| `speculative_native` | `true` | On Claude Code and Codex only, let one explicitly named pytest node run without the `ctx run` wrapper while the session is passive and that signature has not flooded. The fail-closed PostToolUse gate still captures any result over `max_tool_output_bytes`. Set `false` to always capture tests at birth. |
 
 Secret-bearing paths and outside-workspace access are **always** force-asked and
 **never** rewritten, regardless of `steering` or `collapse`.
+
+The speculative-native fast path never applies to whole suites, directories,
+file-only pytest targets, shell expressions, active/high-pressure sessions, or
+hosts without output substitution. An unexpected flood is digested once and
+marks that signature so subsequent calls return to birth-time capture.
+This policy is the first reviewed AlphaEvolve product canary; its measured
+tradeoffs and remaining proof boundary are documented in the
+[optimization guide](ALPHAEVOLVE-OPTIMIZATION.md#what-alphaevolve-has-changed-in-the-product).
 
 **To make the harness stricter,** `mode` and `steering` are different axes:
 `mode` sets *how much* is classified (`advisory` off → `guarded` → `strict`),

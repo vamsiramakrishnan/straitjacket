@@ -114,6 +114,10 @@ class HostSpec:
     self_hosted: bool = False
     supports_mcp: bool = False
     supports_hooks: bool = False
+    # Can the vendor CLI complete a non-interactive one-shot invocation without
+    # a person at the keyboard? Orchestration treats this as a hard capability
+    # unless a route explicitly pins the host.
+    unattended: bool = True
     print_flag: tuple[str, ...] = ("-p",)   # one-shot / non-interactive run
     model_flag: str = "--model"             # flag that pins the model, if any
     vendor_hint: str = "unknown"
@@ -186,6 +190,7 @@ _REGISTRY: tuple[HostSpec, ...] = (
         input_substitution=False,   # no updatedInput in the PreToolUse schema
         supports_mcp=True,
         supports_hooks=True,
+        unattended=False,
         vendor_hint="google",
         # Antigravity runs Gemini across tiers (it can also BYO Claude/GPT, not
         # modeled here). Flash is a capable *implementation* model, not just

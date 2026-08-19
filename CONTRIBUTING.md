@@ -6,6 +6,13 @@
 pip install -e '.[dev]'
 ```
 
+Confirm that you are exercising this checkout, not another `ctx` on `PATH`:
+
+```bash
+ctx --version
+python -c 'import ctx; print(ctx.__file__)'
+```
+
 That is the whole baseline: Python ≥ 3.11, `pathspec` (the one runtime
 dependency), plus `pytest` and `jsonschema` from the dev extra. Optional
 extras unlock faster or richer engines but are never required:
@@ -110,6 +117,25 @@ These are the invariants every change is reviewed against:
 green suite is the merge gate. New mechanisms inherit the invariants
 (determinism, budgets, declared omission, telemetry) or they don't merge —
 ship the acceptance tests in the same change as the mechanism.
+
+## Building the release artifact
+
+Editable installs can accidentally borrow files from the checkout. Before a
+release, build the artifacts and run the wheel in an empty directory:
+
+```bash
+python -m pip install build
+python -m build
+python scripts/check_distribution.py dist/*.whl
+```
+
+For a public release, follow [`docs/RELEASING.md`](docs/RELEASING.md). PyPI
+publishing is performed from a tagged GitHub release through Trusted Publishing,
+not from a developer machine with a long-lived token.
+
+The distribution check verifies the runtime version, the `ctx` entrypoint,
+all Antigravity/Claude/Codex configuration renderers, and the managed
+Antigravity SDK shim. CI runs the same check in the `built wheel` job.
 
 ## Engine disclosure convention
 
