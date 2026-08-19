@@ -74,6 +74,7 @@ LEVERS: tuple[LeverSpec, ...] = (
     _lever("delivery-budget", "emission-policy", "containment", "medium", "replay", "shadow", "src/ctx/resolver.py:resolve_delivery", "choose_emission(state, options)"),
     _lever("retrieval-budget", "retrieval-policy", "retrieval", "medium", "replay", "shadow", "src/ctx/resolver.py:resolve_retrieval_budget", "choose_retrieval(state, options)"),
     _lever("retrieval-strategy", "retrieval-policy", "retrieval", "medium", "replay", "shadow", "src/ctx/_retrieval", "choose_retrieval(state, options)"),
+    _lever("command-span-registry", "guard-policy", "birth-gate", "high", "generated-matrix", "shadow", "src/ctx/command_spans.py:classify_command_span", "choose_guard(state, options)"),
     _lever("command-rewrite", "guard-policy", "birth-gate", "high", "adversarial", "shadow", "src/ctx/hook.py:classify_command", "choose_guard(state, options)"),
     _lever("read-pressure", "guard-policy", "birth-gate", "high", "replay", "shadow", "src/ctx/hook.py:classify_read", "choose_guard(state, options)"),
     _lever("graduated-engagement", "engagement-policy", "behavior", "medium", "ledger", "shadow", "src/ctx/engagement.py", "choose_engagement(state, options)"),

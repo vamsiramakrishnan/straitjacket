@@ -133,10 +133,13 @@ routine for your setup.
 ### "unknown output bound for '`<prog>`'"
 
 **Cause:** under `guarded` mode, a command the classifier doesn't recognize is
-force-asked in case its output is large. **Fix:** if it's safe and bounded, run
-it directly and confirm; if it can flood, run it through `ctx run -- …`. To
-change the default disposition, set `[guard] unknown_command` (`allow` / `deny`
-/ `ask` / `force_ask`).
+force-asked in case its output is large or it mutates state. Known bounded and
+structured queries already run directly; known read-only noisy commands are
+captured automatically on hosts that support substitution. **Fix:** confirm a
+genuinely safe unknown command, or use `ctx run -- …` when it can flood. You can
+change `[guard] unknown_command` (`allow` / `deny` / `ask` / `force_ask`), but a
+blanket `allow` removes the review boundary for both unclassified reads and
+unclassified mutations.
 
 ### "in-place sed/awk" or "deeply nested shell" prompts
 

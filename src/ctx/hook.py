@@ -132,6 +132,10 @@ import sys
 # costs nothing here. The Rust shim names it again in its own language; the
 # two are pinned equal by tests/test_cross_language_constants.py.
 from ctx.engagement import EMISSION_NUDGE_TOKENS_DEFAULT
+from ctx.command_spans import ALLOW as SPAN_ALLOW
+from ctx.command_spans import CAPTURE as SPAN_CAPTURE
+from ctx.command_spans import classify_command_span, git_subcommand
+from ctx.guard_policy import choose_guard
 
 # The house ledger directory, named and joined in exactly one place
 # (ctx.sessiondir). That module imports `os` only, for this contract.
@@ -401,6 +405,10 @@ def _follows_forever(argv: list[str]) -> bool:
         return False
     prog = os.path.basename(argv[0])
     rest = argv[1:]
+    if prog == "gh" and (
+        rest[:2] == ["run", "watch"] or "--watch" in rest
+    ):
+        return True
     if any(a == "--follow" or a.startswith("--follow=") for a in rest):
         return True
     short_means_follow = prog in _FOLLOW_PROGS or (
@@ -1103,6 +1111,20 @@ def _deny_cmd(
     return decision
 
 
+def _safety_deny_cmd(
+    argv: list[str],
+    policy: dict[str, Any],
+    *,
+    original: str | None = None,
+    has_meta: bool = False,
+) -> dict[str, Any]:
+    """A repository-committed deny is never eligible for input substitution."""
+    decision = _deny_cmd(argv, policy, original=original, has_meta=has_meta)
+    decision.pop("_rewrite", None)
+    decision["_safety"] = "1"
+    return decision
+
+
 def _inplace_text_edit_in(stripped: str) -> bool:
     """Conservative token scan for an in-place sed/awk-family invocation
     anywhere in a compound expression. False positives only force_ask."""
@@ -1305,22 +1327,41 @@ def _classify_command_inner(
                 # committed on purpose just by adding a redirect.
                 denied = _deny_commands_match(redir.group("cmd") or "", policy)
                 if denied is not None:
-                    d = _deny_cmd(
+                    return _safety_deny_cmd(
                         denied, policy, original=stripped, has_meta=has_meta
                     )
-                    d["_safety"] = "1"
-                    return d
                 return dict(DECISION_ALLOW)
         # Bounded chain: `a; b && c` with no other metacharacters. Each
         # segment is classified independently; the chain is allowed only if
         # every segment is independently allowed. Any deny/force_ask segment
         # falls through to the compound-expression handling below.
         segments = _split_simple_chain(stripped)
-        if segments and all(
-            classify_command(seg, policy, _depth + 1, cwd=cwd).get("decision") == "allow"
-            for seg in segments
-        ):
-            return dict(DECISION_ALLOW)
+        if segments:
+            segment_decisions = [
+                classify_command(seg, policy, _depth + 1, cwd=cwd)
+                for seg in segments
+            ]
+            if all(d.get("decision") == "allow" for d in segment_decisions):
+                return dict(DECISION_ALLOW)
+            # A compound capture is safe only when every non-allow segment is
+            # itself eligible for transparent capture. Unknown commands,
+            # secrets, interactive tools, and repository-committed denies must
+            # retain their visible permission boundary; wrapping the whole
+            # shell would otherwise execute them as a side effect.
+            boundary = next(
+                (
+                    d
+                    for d in segment_decisions
+                    if d.get("_safety")
+                    or (
+                        d.get("decision") in ("deny", "force_ask")
+                        and not d.get("_rewrite")
+                    )
+                ),
+                None,
+            )
+            if boundary is not None:
+                return boundary
 
     try:
         argv = shlex.split(stripped)
@@ -1349,9 +1390,9 @@ def _classify_command_inner(
             # Safety class: a rule the repo committed on purpose. Its wording is
             # frozen by the rule-7 invariant (tests/test_safety_invariant.py) —
             # no adaptive state may reword it, so mark it and never decay it.
-            d = _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
-            d["_safety"] = "1"
-            return d
+            return _safety_deny_cmd(
+                argv, policy, original=stripped, has_meta=has_meta
+            )
 
     # One guard, every door. docs/TROUBLESHOOTING.md promises a BLANKET
     # guarantee that secret-bearing paths always force-ask, but the check
@@ -1453,8 +1494,22 @@ def _classify_command_inner(
                 decision["_rewrite"]["reason"] += note
         return decision
 
+    span = classify_command_span(argv)
+    if span in (SPAN_ALLOW, SPAN_CAPTURE):
+        guard_action = choose_guard(
+            {
+                "bounded_command": span == SPAN_ALLOW,
+                "structured_result": span == SPAN_ALLOW,
+                "readonly_noisy": span == SPAN_CAPTURE,
+            }
+        )
+        if guard_action == "allow":
+            return dict(DECISION_ALLOW)
+        if guard_action == "rewrite_command":
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+
     if prog == "git":
-        sub = next((a for a in argv[1:] if not a.startswith("-")), "")
+        sub, _git_rest = git_subcommand(argv)
         if sub in _GIT_UNBOUNDED:
             return _deny_cmd(argv, policy)
         if sub == "status" and not ("--short" in argv or "-s" in argv or "--porcelain" in argv):
@@ -1474,7 +1529,8 @@ def _classify_command_inner(
         return _deny_cmd(argv, policy)
 
     if prog in _BOUNDED_CMDS:
-        return dict(DECISION_ALLOW)
+        if choose_guard({"bounded_command": True}) == "allow":
+            return dict(DECISION_ALLOW)
 
     if prog == "grep" and _steering_allows(policy):
         # Single-file grep gets a match cap injected instead of a reroute.
@@ -1503,7 +1559,8 @@ def _classify_command_inner(
         return _deny_cmd(argv, policy)  # read-only: bounded capture via ctx run
 
     if prog in _UNBOUNDED_CMDS:
-        return _deny_cmd(argv, policy)
+        if choose_guard({"flood_command": True}) == "rewrite_command":
+            return _deny_cmd(argv, policy)
 
     # Unknown command → configured policy.
     unknown = policy.get("unknown_command", "force_ask")

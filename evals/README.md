@@ -43,14 +43,16 @@ Others in this class: `evalset_collapse.py`, `corpus_scoped_scan.py`,
 fetches SWE instances and reproduces failures in a venv, so it needs network and
 build toolchains.
 
-`alphaevolve/` is the bounded optimization portfolio for 26 named production
+`alphaevolve/` is the bounded optimization portfolio for 27 named production
 levers across 16 experiment families. Local search, holdout, adversarial, and
 shadow evaluation is deterministic; only explicitly confirmed controller mode
 uses Google's billed AlphaEvolve service. Generated programs stay quarantined
 until a maintainer translates a passing policy into reviewed source. The first
 such integration fixes the named-test wrapper-tax regression; see the
 [`AlphaEvolve guide`](alphaevolve/README.md) and its
-[`dated receipt`](alphaevolve/2026-08-18-speculative-native.md).
+[`dated receipt`](alphaevolve/2026-08-18-speculative-native.md). The command-span
+family adds a deterministic 57,313-case generated matrix; see its
+[`receipt`](alphaevolve/2026-08-19-command-spans.md).
 
 Route-replay snapshots carry the receipt's structured `actual_usage` field when
 available. Provider-reported cost is retained; otherwise measured token

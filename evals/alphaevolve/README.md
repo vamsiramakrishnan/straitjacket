@@ -97,7 +97,7 @@ python -m evals.alphaevolve.portfolio route-replay --local
 python -m evals.alphaevolve.portfolio escalation-policy --local
 ```
 
-The complete registry now spans 26 production levers and 16 experiment
+The complete registry now spans 27 production levers and 16 experiment
 families. Use the registry and wave commands instead of maintaining a manual
 command list:
 
@@ -106,6 +106,7 @@ python -m evals.alphaevolve.portfolio --list-levers
 python -m evals.alphaevolve.portfolio --wave containment --all-local
 python -m evals.alphaevolve.portfolio --ready-for-managed
 python -m evals.alphaevolve.portfolio --promotion-report
+python -m evals.alphaevolve.guard_policy.command_matrix
 ```
 
 See the [deployment plane](../../docs/ALPHAEVOLVE-DEPLOYMENT.md) for the shared

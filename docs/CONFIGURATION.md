@@ -89,6 +89,13 @@ before it runs.
 Secret-bearing paths and outside-workspace access are **always** force-asked and
 **never** rewritten, regardless of `steering` or `collapse`.
 
+Before `unknown_command` is consulted, the command-span registry recognizes
+bounded/structured queries for direct execution and known read-only noisy
+commands for capture. Unknown and mutation-shaped commands intentionally remain
+at the configured permission boundary. On hosts without input substitution,
+capture is emitted as an exact bounded rerun instruction rather than being
+executed transparently.
+
 The speculative-native fast path never applies to whole suites, directories,
 file-only pytest targets, shell expressions, active/high-pressure sessions, or
 hosts without output substitution. An unexpected flood is digested once and

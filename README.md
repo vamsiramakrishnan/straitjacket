@@ -11,7 +11,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.32.1 (pre-1.0, minor bump per mechanism) · 1,698 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** v0.32.1 (pre-1.0, minor bump per mechanism) · 1,704 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -201,6 +201,13 @@ Plain-language highlights from recent releases; full detail in
   check, host change, config drift, or `--repair` request returns to the full
   idempotent installer and verification path
   ([receipt](evals/alphaevolve/2026-08-19-setup-devex.md)).
+- **AlphaEvolve expanded the command guard without making unknown commands
+  implicitly safe.** Bounded Git/GitHub/GitLab and low-output queries now run
+  directly; known noisy reads are captured; mutations and unknowns retain an
+  approval boundary. A generated matrix exercised **57,313** wrapped, bounded,
+  structured, compound, noisy, and mutation-shaped cases with zero
+  classification failures, and found a compound-command safety bug before the
+  clean run ([receipt](evals/alphaevolve/2026-08-19-command-spans.md)).
 
 ## 📊 What's measured (and what isn't yet)
 
@@ -613,7 +620,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,698 acceptance-oriented determinism & security test functions
+└── tests/             # 1,704 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -814,7 +821,7 @@ Development:
 
 ```bash
 pip install -e '.[dev]'
-pytest        # 1,698 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,704 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

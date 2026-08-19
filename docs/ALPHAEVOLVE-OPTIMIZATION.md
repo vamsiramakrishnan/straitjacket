@@ -61,6 +61,23 @@ and policy seam needed to pursue one across acquisition/cache time, host-probe
 scheduling, selective verification, and recovery-turn elimination without
 trading away completion, idempotency, or user-config preservation.
 
+The third reviewed integration expands the command guard. AlphaEvolve's
+`guard-policy` now optimizes a three-way decision: direct execution for known
+bounded or structured queries, transparent capture for known read-only commands
+that may flood, and a visible permission boundary for unknown or mutating
+commands. A deterministic generated matrix covers 57,313 wrapper, limit,
+structured-field, compound, noisy-read, deny, and mutation combinations with
+zero classification failures. Its first broad run exposed a compound rewrite
+bypass; the production integration now requires every segment to be
+capture-eligible before rewriting the whole shell expression. See the
+[command-span receipt](../evals/alphaevolve/2026-08-19-command-spans.md).
+
+In the frozen guard evaluator, the reviewed policy reduces modeled dollars by
+33.33%, model turns by 66.67%, and visible tokens by 41.75% versus its naive
+baseline. It also adds capture latency and tool work, so this is not a claim of
+Pareto dominance or provider-billed savings. The valuable result is the larger
+safe span plus the counterexample that hardened the permission boundary.
+
 This is a shipped, reversible, instrumented canary controlled by
 `[guard].speculative_native`. It fixes the known local wrapper-tax regression;
 it is **not yet evidence of lower billed end-to-end production cost**. That

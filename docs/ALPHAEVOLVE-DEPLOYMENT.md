@@ -9,8 +9,8 @@ safety or measurement rules used to judge it.
 
 The versioned registry in `evals/alphaevolve/registry.py` currently contains:
 
-- 26 production levers;
-- 23 mutable levers mapped to 16 experiment families;
+- 27 production levers;
+- 24 mutable levers mapped to 16 experiment families;
 - three immutable oracle planes: actual-usage accounting, secret/workspace
   guards, and receipt integrity.
 
@@ -97,6 +97,7 @@ gates:
 python -m evals.alphaevolve.portfolio --all-local
 python -m evals.alphaevolve.portfolio --wave containment --all-local
 python -m evals.alphaevolve.portfolio --wave retrieval --all-local
+python -m evals.alphaevolve.guard_policy.command_matrix
 ```
 
 Ask which experiments may enter managed search. `ready` means only that local
@@ -158,9 +159,11 @@ alter the usage/accounting oracle.
 ## Current boundary
 
 The fleet is complete through managed-search readiness and offline
-counterfactual shadow reports. One low-risk, reversible named-test policy has
-advanced to an instrumented product canary after reviewed translation, full
-tests, and a matched local path measurement. Every broader birth-gate,
+counterfactual shadow reports. The reversible named-test policy has advanced to
+an instrumented product canary after reviewed translation, full tests, and a
+matched local path measurement. The command-span registry is integrated behind
+the existing guard boundary after a 57,313-case deterministic matrix; unknown
+and mutating commands remain approval events. Every broader birth-gate,
 retrieval, context, execution, and routing mutation remains shadow or canary
 only according to the table above.
 

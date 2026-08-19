@@ -1,10 +1,16 @@
-"""Production-shaped birth-gate policy."""
+"""Small production policy seam evolved by the AlphaEvolve guard family.
 
-from typing import Any, Mapping, Sequence
+This module stays stdlib-free beyond annotations because ``ctx.hook`` imports
+it on every PreToolUse process startup.
+"""
+
+from __future__ import annotations
 
 # EVOLVE-BLOCK-START
 
-def choose_guard(state: Mapping[str, Any], options: Sequence[Mapping[str, Any]]) -> str:
+
+def choose_guard(state: dict, options: tuple = ()) -> str:
+    """Choose the least-friction action that preserves containment and safety."""
     if state.get("secret") or state.get("outside_root"):
         return "force_ask"
     if state.get("explicit_deny") or state.get("destructive"):
@@ -18,5 +24,6 @@ def choose_guard(state: Mapping[str, Any], options: Sequence[Mapping[str, Any]])
     if state.get("unknown_command"):
         return "force_ask"
     return "allow"
+
 
 # EVOLVE-BLOCK-END
