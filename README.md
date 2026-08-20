@@ -12,7 +12,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** source v0.33.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,712 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** source v0.33.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,717 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -836,7 +836,7 @@ Development:
 git clone https://github.com/vamsiramakrishnan/straitjacket.git
 cd straitjacket
 pip install -e '.[dev]'
-pytest        # 1,712 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,717 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper
