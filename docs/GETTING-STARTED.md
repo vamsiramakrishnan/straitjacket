@@ -28,19 +28,21 @@ structure remain available without it.
 ## Install and set up
 
 ```bash
-python -m pip install -e .
+python -m pip install --upgrade ctx-harness
 ctx --version
 cd your-repo
 ctx setup
 ```
 
-The editable install is the contributor path from a clone. For a durable,
-isolated command on a workstation, build a wheel and install it as a tool:
+`ctx-harness` is published on PyPI; it installs the `ctx` command. `pipx install
+ctx-harness` and `uv tool install ctx-harness` are equivalent isolated-tool
+installs. Contributors who need the unreleased source version can use an
+editable checkout:
 
 ```bash
-python -m pip install build
-python -m build
-pipx install dist/ctx_harness-*.whl   # or: uv tool install dist/ctx_harness-*.whl
+git clone https://github.com/vamsiramakrishnan/straitjacket.git
+cd straitjacket
+python -m pip install -e '.[dev]'
 ctx --version
 ```
 

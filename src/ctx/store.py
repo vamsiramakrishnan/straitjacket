@@ -15,7 +15,10 @@ catalog and never participates in content identity.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ctx import bounds
+from ctx.sessiondir import session_reads_path
 
 import array
 import hashlib
@@ -98,6 +101,150 @@ def default_state_root() -> Path:
     xdg = os.environ.get("XDG_STATE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "state"
     return base / "ctx"
+
+
+@dataclass(frozen=True)
+class StoreLocation:
+    """Resolved store placement for one workspace.
+
+    ``backend`` is deliberately user-facing and path-free: doctor and receipts
+    can explain why a fallback was selected without leaking a home-directory
+    path into model-visible output.
+    """
+
+    root: Path
+    backend: str
+    requested_backend: str
+    sticky: bool = False
+
+    @property
+    def detail(self) -> str:
+        if self.backend == "workspace-local-fallback":
+            suffix = "; sticky for retrieval continuity" if self.sticky else ""
+            return f"workspace-local fallback{suffix}"
+        if self.backend == "workspace-local":
+            return "workspace-local backend"
+        if self.backend == "explicit":
+            return "explicit state backend"
+        return "user-state backend"
+
+
+_STORE_POLICIES: dict[str, tuple[Path, str]] = {}
+_STORE_LOCATIONS: dict[str, StoreLocation] = {}
+_FALLBACK_MARKER = "store-backend.json"
+
+
+def register_workspace_store(workspace_id: str, workspace_root: Path, backend: str) -> None:
+    """Register enough workspace context for lazy, writable store selection.
+
+    Workspace resolution stays read-only.  The first operation that actually
+    needs a Store performs the write probe and, if needed, records a sticky
+    workspace-local fallback so future processes keep resolving run handles.
+    """
+
+    # Always invalidate the process-local choice: test runners, embedded hosts,
+    # and long-lived MCP servers can change CTX_STATE_HOME between independent
+    # workspace resolutions while retaining the same stable workspace id.
+    _STORE_LOCATIONS.pop(workspace_id, None)
+    _STORE_POLICIES[workspace_id] = (workspace_root.resolve(), backend)
+
+
+def _probe_writable(root: Path) -> None:
+    """Prove writes work at *root*; mode bits and ``os.access`` are insufficient
+    under managed sandboxes and network filesystems."""
+
+    root.mkdir(parents=True, exist_ok=True)
+    fd, probe = tempfile.mkstemp(dir=root, prefix=".ctx-write-probe-")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(b"ctx")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.unlink(probe)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(probe)
+        except OSError:
+            pass
+        raise
+
+
+def _workspace_store_root(workspace_root: Path) -> Path:
+    return session_reads_path(workspace_root, "store")
+
+
+def _fallback_marker(workspace_root: Path) -> Path:
+    return session_reads_path(workspace_root, _FALLBACK_MARKER)
+
+
+def _marker_requests_fallback(workspace_root: Path) -> bool:
+    marker = _fallback_marker(workspace_root)
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return value.get("version") == 1 and value.get("backend") == "workspace-local-fallback"
+
+
+def _record_fallback(workspace_root: Path) -> None:
+    marker = _fallback_marker(workspace_root)
+    _atomic_write(
+        marker,
+        canonical_json({"backend": "workspace-local-fallback", "version": 1}) + b"\n",
+    )
+
+
+def _resolve_store_location(workspace_id: str) -> StoreLocation:
+    cached = _STORE_LOCATIONS.get(workspace_id)
+    if cached is not None:
+        return cached
+
+    policy = _STORE_POLICIES.get(workspace_id)
+    if policy is None:
+        location = StoreLocation(default_state_root(), "user-state", "user-state")
+        _STORE_LOCATIONS[workspace_id] = location
+        return location
+
+    workspace_root, requested = policy
+    local_root = _workspace_store_root(workspace_root)
+    local_workspace_root = local_root / "workspaces" / workspace_id
+    if requested == "local":
+        _probe_writable(local_workspace_root)
+        location = StoreLocation(local_root, "workspace-local", requested)
+    elif _marker_requests_fallback(workspace_root):
+        _probe_writable(local_workspace_root)
+        location = StoreLocation(
+            local_root, "workspace-local-fallback", requested, sticky=True
+        )
+    else:
+        user_root = default_state_root()
+        try:
+            _probe_writable(user_root / "workspaces" / workspace_id)
+            location = StoreLocation(user_root, "user-state", requested)
+        except OSError as user_state_error:
+            try:
+                _probe_writable(local_workspace_root)
+                _record_fallback(workspace_root)
+            except OSError as local_error:
+                raise StoreError(
+                    "no writable ctx store backend: user-state and workspace-local "
+                    f"both failed ({type(user_state_error).__name__}, "
+                    f"{type(local_error).__name__})"
+                ) from local_error
+            location = StoreLocation(local_root, "workspace-local-fallback", requested)
+
+    _STORE_LOCATIONS[workspace_id] = location
+    return location
+
+
+def effective_store_location(workspace_id: str) -> StoreLocation:
+    """Return the effective location, resolving it on first use."""
+
+    return _resolve_store_location(workspace_id)
 
 
 def canonical_json(obj: Any) -> bytes:
@@ -188,7 +335,11 @@ class Store:
     ):
         self.workspace_id = workspace_id
         self.retention_days = retention_days
-        self.root = (state_root or default_state_root()) / "workspaces" / workspace_id
+        if state_root is not None:
+            self.location = StoreLocation(state_root, "explicit", "explicit")
+        else:
+            self.location = effective_store_location(workspace_id)
+        self.root = self.location.root / "workspaces" / workspace_id
         self.blob_dir = self.root / "blobs" / "sha256"
         self.manifest_dir = self.root / "manifests"
         self.audit_dir = self.root / "audit"
@@ -209,11 +360,26 @@ class Store:
     @property
     def db(self) -> sqlite3.Connection:
         if self._db is None:
-            conn = sqlite3.connect(self._db_path, timeout=10)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.executescript(_SCHEMA)
-            self._db = conn
+            # Several agent branches can touch the same catalog at once.  The
+            # sqlite busy timeout covers ordinary statements, but WAL/schema
+            # initialization can still race before that connection is fully
+            # configured.  Retry only the explicit lock class; every other
+            # database error remains immediate and visible.
+            for attempt in range(5):
+                conn = sqlite3.connect(self._db_path, timeout=10)
+                try:
+                    conn.execute("PRAGMA busy_timeout=10000")
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.executescript(_SCHEMA)
+                except sqlite3.OperationalError as error:
+                    conn.close()
+                    if "locked" not in str(error).lower() or attempt == 4:
+                        raise
+                    time.sleep(0.025 * (2**attempt))
+                    continue
+                self._db = conn
+                break
         return self._db
 
     def close(self) -> None:

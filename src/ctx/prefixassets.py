@@ -36,7 +36,7 @@ from pathlib import Path
 # v6: MCP tool description now glosses all 14 declared ops (callers, callees,
 # impact, diff, investigate were callable but absent from the prose catalogue,
 # so a model could not discover them).
-PREFIX_VERSION = 9
+PREFIX_VERSION = 10
 
 _MANIFEST_NAME = "prefix-manifest.json"
 

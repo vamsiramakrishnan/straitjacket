@@ -251,6 +251,14 @@ are injected for the child process only and removed on exit.
 `ctx gc` mark-and-sweeps expired artifacts (retention is `[store] retention_days`,
 default 30); `ctx pin` protects an artifact from collection.
 
+**Why does doctor say `workspace-local fallback`?**
+The configured user-state directory rejected a real write (common in managed
+sandboxes), so ctx selected `.ctx-session-reads/store`. The choice is sticky to
+keep every emitted `run:`/`blob:` handle retrievable across later commands.
+This is healthy, not a degraded capture mode. Delete
+`.ctx-session-reads/store-backend.json` only when the user-state directory is
+writable again and you intentionally accept starting a separate store lineage.
+
 **Where do I change budgets, scopes, or redaction?**
 All in `ctx.toml` — see the [Configuration reference](CONFIGURATION.md).
 

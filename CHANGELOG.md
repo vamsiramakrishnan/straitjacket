@@ -6,6 +6,15 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- The artifact store now proves backend writability and uses a sticky,
+  doctor-visible workspace-local fallback when managed sandboxes make the
+  default user-state directory read-only. Parallel catalog initialization
+  retries lock races without masking other database errors. Published install
+  docs now use `pip install ctx-harness`, and the field comparison includes a
+  dated TokenSave/WozCode/rtk integration-gap ledger. Generated host guidance
+  now states the exact `ctx ask` symbol and run-receipt contracts; this
+  intentional prefix change bumps `PREFIX_VERSION` to 10.
+
 ## [0.33.0] - 2026-08-19
 
 AlphaEvolve now covers setup DevEx, command-span expansion, and four

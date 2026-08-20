@@ -616,7 +616,9 @@ captured at the source and returned as a bounded, addressable digest — work
   locate|impact|diagnose` — one bounded evidence view instead of a
   search/read/search loop. `diagnose` reads the last captured run's failure
   facts and names the culprit symbol; it never reruns tests. `locate` =
-  where is X defined/used; `impact` = what breaks if X changes.
+  where is X defined/used; `impact` = what breaks if X changes. Pass
+  `--symbol X` for locate/impact unless the question has one unambiguous
+  identifier.
 - Compose typed facts with `ctx q '<stage> | <stage>'` (bounded, total)
   instead of piping through grep/awk/jq: `refs X | group file | top 3 | get`,
   `fails last | in-changed` (failing tests in changed symbols),
@@ -797,7 +799,7 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         store = Store(ws.workspace_id)
         probe = store.put_blob(b"ctx-doctor-probe")
         store.get_blob(probe)
-        check("store writable", True, "user-state backend")
+        check("store writable", True, store.location.detail)
     except Exception as e:
         check("store writable", False, str(e))
 

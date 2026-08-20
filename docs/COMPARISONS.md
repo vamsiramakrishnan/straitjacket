@@ -2,11 +2,11 @@
 
 # Comparisons
 
-How straitjacket relates to the other tools in this space. Each neighbour
-does one thing well; we benchmarked or stress-tested each, took the good
-idea without its cost, and recorded what each still does better. All data
-lives in [`evals/`](../evals/). The amber strip on each treemap tile is the
-idea the harness kept — losslessly.
+How straitjacket relates to the other tools in this space. We benchmarked the
+mechanisms we could reproduce and desk-researched the others against their
+public contracts. Measured claims live in [`evals/`](../evals/); vendor claims
+are labelled and never move a straitjacket performance number. We record both
+what was integrated and what still beats us.
 
 <div align="center">
 
@@ -23,34 +23,30 @@ idea the harness kept — losslessly.
 |---|---|---|---|
 | Post-hoc compaction / summarization | reclaim a bloated window | rewrites history; evidence irrecoverable, prefix cache invalidated | checkpoint-then-rescue: secure handles first, then clearing is lossless |
 | RAG / vector memory | recall without resending | probabilistic, no provenance | deterministic addresses: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever |
-| **Headroom** (rewriting wire proxy) | rescue an already-bloated transcript | silent evidence drops (347,595→68 tok, no trace); cache hit 80.6–84.2% vs our 96.5–98.1%; 3–6× cache-write churn | v0.10 epoch-latched lossless rescue: ~18× less cache churn, every elided byte file-backed and addressed |
-| **rtk** (bash-hook filter binary) | filter floods at the source, across 100+ commands | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` — and the *breadth* idea vendored: the replacement surface now covers 8 command shapes (grep-family, `cat`, `pytest`, `head`, `sed -n A,Bp`, `wc -l`, `find -name`, `ls -R`/`tree`), each substituted only where a bounded `ctx` op means the **same** thing |
-| **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
-| **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
-| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
-| **TokenSave** (code-intelligence MCP server) | pre-indexed symbol graph answers instead of file reads; savings metered on every call | 40+ tool schemas is 40+ tool definitions of prompt prefix, re-paid every request and churned on release | one stable `ctx` tool with an `op` discriminator — prefix never churns (96.5–98.1% cache hit); per-call savings already in the digest header |
-| **wozcode** (Claude Code plugin) | replaces built-in file tools with purpose-built agents; installs in seconds, no signup | plugin-scoped to one host; no addressing story published | `ctx wrap` targets three hosts and merges non-destructively — but see the setup-friction note below, where they beat us outright |
+| [**Headroom**](https://github.com/headroomlabs-ai/headroom) (wire proxy/library/MCP) | broad, low-integration transcript optimization; current releases advertise reversible originals | our reproducible 0.32.1 path dropped a quiet needle and churned cache; this is a dated benchmark, not a claim about current upstream | epoch-latched lossless rescue, exact addresses and prefix-stability gates; rerun current upstream before making a new comparison |
+| [**rtk**](https://github.com/rtk-ai/rtk) (native command filter) | fast, wide command and host coverage; project-defined filters | filtered success output has no exact address for each omitted byte | safe equivalence substitutions plus structured command spans for git/GitHub/build/test families; unknown or mutating shapes remain fail-closed |
+| [**Ponytail**](https://github.com/DietrichGebert/ponytail) (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
+| [**Caveman**](https://github.com/juliusbrussee/caveman) (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
+| [**Maki**](https://maki.sh/) (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+| [**TokenSave**](https://tokensave.dev/) (semantic code graph) | one-call context, per-branch indexes, 50+ languages, broad editor reach and ambient savings ledger | semantic ranking is probabilistic; 80+ MCP operations require dynamic disclosure to avoid a large stable prefix | one stable `ctx` op surface, typed symbol/call/impact facts and billed-token accounting; branch graphs and semantic ranking remain gaps |
+| [**WozCode**](https://www.wozcode.com/how-it-works) (Claude Code plugin) | combines glob/regex/read into ranked snippets; fuzzy batch edits with post-write syntax checks; SQL graph and session recall | host-specific; no exact omitted-byte address is publicly documented | compiled evidence plans and addressable AST rewrites; batch edit/validate and SQL graph workflows remain gaps |
 
-*Rows for TokenSave and wozcode are desk research, not head-to-head runs —
+*Rows for TokenSave and WozCode are desk research, not head-to-head runs —
 their figures are their own claims. Marked as such in
 [`evals/field-devex-2026-08-02.md`](../evals/field-devex-2026-08-02.md), which
 is the receipt for this section and is explicitly not allowed to move any
 performance number we publish.*
 
-What each still does better than us, by design: Headroom's zero-integration
-generality, rtk's 15-host reach and <10ms single binary, Ponytail's 20-host
-rule files, Maki's OS-level sandbox (ours arrives with the broker, Phase 3)
-and its user-space `init.lua` plugin model, TokenSave's ambient session cost
-panel, wozcode's zero-signup install.
+What each still does better than us is listed explicitly below; these are
+product gaps, not design victories.
 
 ### Two places the field beats us on devex, stated plainly
 
-**Distribution.** rtk is `cargo install`. Headroom is `headroom wrap claude`.
-wozcode installs in seconds with no signup. We are `git clone` →
-`pip install -e .` → `ctx setup`. Step three is the best in the field —
-idempotent, non-destructive, self-verifying, exits non-zero rather than
-claiming a success it didn't achieve. Steps one and two are the worst. That is
-a release we have not cut, not a design position.
+**Distribution.** This gap is now closed: `pip install ctx-harness` installs the
+published `ctx` CLI, then `ctx setup` performs the idempotent, non-destructive,
+self-verifying host integration. Source `main` may be ahead of the PyPI badge;
+the README states both rather than pretending an unreleased source version is
+already published.
 
 **Malleability.** Maki's users shape the agent from `init.lua` in user space.
 Ours must edit `src/ctx/digest/<family>prof.py` and append to the `_PROFILES`
@@ -60,11 +56,42 @@ output families are diverse and deserve typed treatment, a closed profile
 registry caps the system at the families we personally got around to writing.
 Opening it is backlog item 2 in the scan above.
 
+## Integration gap ledger (2026-08-20)
+
+This is the durable output of the field scan. “Integrated” means a mechanism is
+in code and tests; “partial” means straitjacket has the primitive but not the
+neighbour's reach or UX. Claims about neighbours below come from their public
+documentation and still need local, version-pinned reproduction before they
+become benchmark claims.
+
+| Source | Integrated now | Still missing | Next falsifiable mechanism |
+|---|---|---|---|
+| **rtk** | birth-gate interception, failure-asymmetric profiles, safe command equivalences, command-span capture | native single binary/Windows path, wider host adapters, user TOML filter packs, hook-integrity hash, deeper adoption analytics | load signed project filter packs through the profile registry; prove semantic equivalence and exact fallback on a frozen command corpus |
+| **TokenSave** | one-call `ctx ask`, symbol/caller/callee/impact facts, incremental fingerprints, one dynamically dispatched tool, billed-token scorecards | semantic ranking, branch-local graph databases, cross-branch search/diff, background catch-up sync, cross-session code memory, editor breadth | key code-index generations by branch lineage and evaluate semantic candidate ranking behind exact file/symbol coordinates |
+| **WozCode** | compiled multi-step evidence plans, addressable AST rewrite previews, syntax-aware analysis | combined find/read ranking, fuzzy multi-file edit + automatic syntax validation, SQL schema/FK graph, session recall, summarized subagent output | add an addressable edit transaction: preview → fuzzy apply → parser check → rollback receipt, measured against read/edit/verify loops |
+| **Headroom** | lossless rescue, wire observer, prompt-prefix stability, addressed originals | a current version-pinned rematch, effort routing after routine outputs, learned compression policy, general proxy reach | rerun the quiet-needle/cache suite against current upstream before changing this comparison |
+| **Ponytail** | measured solution ladders and enforced debt ledger | role-scoped injection, user-selectable policy intensity, broader host rules | compile host/role-specific minimal instruction cards and A/B prompt-prefix cost plus task completion |
+| **Caveman** | cite-don't-quote narration while evidence stays exact | user verbosity levels for prose-only output | add a response-style dial that golden-tests code, commands and errors as byte-exact invariants |
+| **Maki** | `ctx py`, provenance, bounded streams, declared orchestration, surface gateway | OS sandbox, resource caps, asynchronous tool gather, user-space plugin API | broker `ctx py` with CPU/memory/network policy and an addressable execution receipt |
+
+### Friction found by using ctx on this change
+
+The harness should learn from its own operator loop, not only other products.
+
+| Observation | Cost | Durable response |
+|---|---|---|
+| A read-only `~/.local/state/ctx` made harmless commands fail before execution | every repository read required an approval/escalation retry | **fixed in source v0.33:** prove writability, select a sticky workspace-local fallback, expose it in `ctx doctor`, and test retrieval continuity |
+| Four parallel retrievals raced catalog initialization with `database is locked` | parallel orchestration became less reliable than serial work | **fixed in source v0.33:** WAL initialization now has a bounded lock-only retry; non-lock database errors still fail immediately |
+| `ctx ask` accepted a natural question but `impact` then demanded a subject; `compare` meant run receipts, not concept comparison | one avoidable tool round and misleading intent choice | **fixed in generated host guidance:** symbol-requiring intents and receipt-only compare semantics are explicit; natural-language guessing remains intentionally prohibited |
+| A nested web/MCP call returned a ctx digest as a tool error despite the captured command exiting 0, and its run handle was not visible to the next CLI process | successful external evidence looked failed and could not be retrieved | **open, P0:** add a structured-tool adapter that preserves the host's success envelope while storing raw content, then prove cross-process handle resolution |
+| Product/profile families are source-registered | teams must carry a fork for an internal log grammar | **open, P1:** signed declarative profile packs with deterministic golden fixtures and fail-open raw capture |
+
 ## How each neighbour is built — and where the harness diverges
 
 The neighbours split into two architectural families. **Headroom** sits on the
-wire and rewrites transcript history on every request — compression happens
-_after_ the bytes are already resident, and the original is gone. **rtk** and
+wire and optimizes transcript history after bytes are already resident; current
+upstream advertises reversible originals, while our pinned 0.32.1 benchmark did
+not preserve the quiet needle through the exercised path. **rtk** and
 **Caveman** cut earlier, at the shell hook or in the prompt, but throw the cut
 bytes away. The harness's move is orthogonal to all three: capture at the
 source into an immutable, addressable store, and put only a bounded digest —
@@ -237,13 +264,15 @@ less tool-output on an unavoidable flood, honest parity-loss on the greppable on
 - **Maki** → the interpreter collapse generalized (`ctx seq` declared → `ctx
   eval` computed) with the provenance a raw sandbox drops. Still owed: its
   user-space extension model — see the malleability note above.
-- **TokenSave** → the argument for keeping our surface at *one* tool got
-  sharper, not weaker: their 40+ schemas are the concrete cost of the
-  alternative. Taken: the instinct to meter savings where the user sees them.
+- **TokenSave** → the argument for keeping our stable prefix at *one* tool got
+  sharper, while the surface gateway lets operations be disclosed on demand
+  instead of paying for 80+ schemas on every request. Taken: one-call context,
+  typed code facts and the instinct to meter savings where the user sees them.
   Declined: metering *bytes avoided*, which is trivially inflatable — a
   savings counter here has to be billed-token delta against a measured naive
   arm, the distinction our own bug-bash A/B ran into when the harnessed arm
   won on bytes-per-result and lost on total billed tokens by taking more
   turns.
-- **wozcode** → nothing technical yet; it is on this list as a standing
-  reproach about install friction.
+- **WozCode** → compiled plans already share its collapse-N-reads instinct.
+  Still to take: addressable fuzzy edit transactions, parser validation and
+  rollback receipts; its install-friction reproach is closed by the PyPI release.

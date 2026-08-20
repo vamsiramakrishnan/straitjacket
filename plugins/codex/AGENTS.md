@@ -17,9 +17,10 @@ pre-filtering; the digest already selects the load-bearing evidence.
   file or tool output back into the conversation.
 - Answer repository questions with `ctx ask "<q>" --intent <intent>` — one
   bounded evidence view instead of a search/read/search loop. Intents:
-  `locate`/`impact`/`diagnose` (diagnose reads the last run's failure facts,
-  never reruns), `trace` (call path through X), `compare` (`--run A
-  --against B`), `verify`/`review` (run the tests — execute-class, CLI-only).
+  `locate`/`impact`/`trace` use `--symbol X` unless the question contains one
+  unambiguous identifier; `diagnose` reads the last run's failure facts and
+  never reruns; `compare` compares execution receipts (`--run A --against B`),
+  not arbitrary concepts; `verify`/`review` run tests (execute-class, CLI-only).
   For a multi-step investigation you can name, run a compiled `ctx.plan/v1`
   via the `investigate` op.
 - Compose typed facts with `ctx q '<stage> | <stage>'` (a bounded, total

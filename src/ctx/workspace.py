@@ -451,9 +451,16 @@ def resolve_workspace(
 
     config = load_config(root)
     git = _git_info(root)
+    workspace_id = stable_workspace_id(root, config, git)
+    # Store selection remains lazy (workspace discovery is read-only), but the
+    # Store now has enough context to honor [store].backend and negotiate a
+    # durable workspace-local fallback in restricted environments.
+    from ctx.store import register_workspace_store
+
+    register_workspace_store(workspace_id, root, config.store.backend)
     return Workspace(
         root=root,
-        workspace_id=stable_workspace_id(root, config, git),
+        workspace_id=workspace_id,
         config=config,
         ignore_globs=load_ctxignore(root),
         git=git,

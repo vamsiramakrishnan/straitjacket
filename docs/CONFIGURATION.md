@@ -135,13 +135,17 @@ steering, so small sessions aren't taxed.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `backend` | `"user-state"` | `user-state` \| `local` (advisory). |
+| `backend` | `"user-state"` | `user-state` \| `local`. |
 | `retention_days` | `30` | How long artifacts are kept before garbage collection is eligible. |
 
 The store lives outside the repo by default, under `~/.local/state/ctx` (or
-`$CTX_STATE_HOME` / `$XDG_STATE_HOME` if set) — never committed. A wrong or
-unwritable state-home override is the usual cause of "store" errors; see
-[Troubleshooting](TROUBLESHOOTING.md).
+`$CTX_STATE_HOME` / `$XDG_STATE_HOME` if set). `local` selects
+`.ctx-session-reads/store` and is now an effective backend, not an advisory
+hint. If user-state is read-only under a managed sandbox, ctx proves that with
+an actual write, falls back to the local backend, and records a path-free sticky
+route so later commands can still resolve the run handles already emitted.
+`ctx doctor` reports the effective backend. It fails only when neither location
+is writable; see [Troubleshooting](TROUBLESHOOTING.md).
 
 ## `[plan]` — bounds on compiled investigations
 

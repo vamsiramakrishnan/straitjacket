@@ -5,13 +5,14 @@
 </picture>
 
 [![Tests](https://github.com/vamsiramakrishnan/straitjacket/actions/workflows/ci.yml/badge.svg)](https://github.com/vamsiramakrishnan/straitjacket/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/ctx-harness)](https://pypi.org/project/ctx-harness/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-architecture-blue)](docs/README.md)
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** v0.33.0 (pre-1.0, minor bump per mechanism) · 1,712 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** source v0.33.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,712 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -72,7 +73,8 @@ transcript gets a small, deterministic digest instead — a fixed size no matter
 how much output the command produced. The digest carries addresses, and any
 address resolves back to the exact original bytes at any later turn.
 
-> **New here?** The CLI is `ctx`, installed from a clone (no PyPI release yet).
+> **New here?** The package is [`ctx-harness` on PyPI](https://pypi.org/project/ctx-harness/)
+> and the CLI is `ctx`.
 > The gentlest introduction is **[How it works](docs/HOW-IT-WORKS.md)** — one
 > command walked through the whole system in plain language, ten minutes. The
 > rest of this README is the reference tour; skip to [Quickstart](#-quickstart)
@@ -80,10 +82,10 @@ address resolves back to the exact original bytes at any later turn.
 
 ## ⚡ Quickstart
 
-From a clone to a harnessed agent:
+From PyPI to a harnessed agent:
 
 ```bash
-python -m pip install -e .  # PyPI release pending; Python 3.11+
+python -m pip install --upgrade ctx-harness  # Python 3.11+
 ctx --version
 cd your-repo
 ctx setup      # done — Antigravity, Claude Code, and Codex are harnessed
@@ -481,10 +483,11 @@ Concretely:
 
 ## 🧾 Comparisons
 
-Other tools in this space each do one thing well. We benchmarked or
-stress-tested each, took the good idea without its cost, and recorded what
-each still does better (all data in [`evals/`](evals/)). The amber strip on
-each tile below is the idea the harness kept — losslessly.
+Other tools in this space each do something well. We benchmarked the neighbours
+whose mechanisms we could reproduce, desk-researched the others against their
+current public contracts, and recorded both what we integrated and what still
+beats us. Measured rows link to [`evals/`](evals/); vendor claims never move a
+straitjacket performance number.
 
 <div align="center">
 
@@ -501,15 +504,20 @@ each tile below is the idea the harness kept — losslessly.
 |---|---|---|---|
 | Post-hoc compaction / summarization | reclaim a bloated window | rewrites history; evidence irrecoverable, prefix cache invalidated | checkpoint-then-rescue: secure handles first, then clearing is lossless |
 | RAG / vector memory | recall without resending | probabilistic, no provenance | deterministic addresses: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever |
-| **Headroom** (rewriting wire proxy) | rescue an already-bloated transcript | silent evidence drops (347,595→68 tok, no trace); cache hit 80.6–84.2% vs our 96.5–98.1%; 3–6× cache-write churn | v0.10 epoch-latched lossless rescue: ~18× less cache churn, every elided byte file-backed and addressed |
-| **rtk** (bash-hook filter binary) | filter floods at the source, across 100+ commands | lossy on success paths; no addresses, no cache-stability policy | failure-asymmetric budgets, `ctx gain`, structure-not-compression `lint/v1` — and the *breadth* idea vendored: the replacement surface now covers 8 command shapes (grep-family, `cat`, `pytest`, `head`, `sed -n A,Bp`, `wc -l`, `find -name`, `ls -R`/`tree`), each substituted only where a bounded `ctx` op means the **same** thing |
-| **Ponytail** (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
-| **Caveman** (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
-| **Maki** (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+| [**Headroom**](https://github.com/headroomlabs-ai/headroom) (wire proxy/library/MCP) | broad, low-integration transcript optimization; current releases advertise reversible originals | our reproducible 0.32.1 path dropped a quiet needle and churned cache; that is a dated benchmark, not a claim about current upstream | epoch-latched lossless rescue, file-backed addresses, prefix-stability tests; current upstream still needs a fresh rematch |
+| [**rtk**](https://github.com/rtk-ai/rtk) (native command filter) | fast, wide command and host coverage; project-defined filters | success filtering has no exact address for each omitted byte | safe equivalence substitutions plus structured command spans for git/GitHub/build/test families; unknown or mutating shapes remain fail-closed |
+| [**Ponytail**](https://github.com/DietrichGebert/ponytail) (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
+| [**Caveman**](https://github.com/juliusbrussee/caveman) (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
+| [**Maki**](https://maki.sh/) (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+| [**TokenSave**](https://tokensave.dev/) (semantic code graph) | one-call context, branch-aware indexes, broad language/editor reach, ambient savings ledger | semantic ranking is probabilistic; its 80+ MCP operations need dynamic disclosure to avoid a large stable prefix | one stable `ctx` op surface, typed symbol/call/impact facts, measured billed-token accounting; branch graphs and semantic ranking remain open gaps |
+| [**WozCode**](https://www.wozcode.com/how-it-works) (Claude Code plugin) | combines discovery + ranked reads, batches fuzzy edits, validates syntax after writes | host-specific and no exact omitted-byte address is publicly documented | compiled `ctx ask` plans and addressable AST rewrites; batched edit/validate and SQL graph workflows remain open gaps |
 
-What each still does better than us, by design: Headroom's zero-integration
-generality, rtk's 15-host reach and <10ms single binary, Ponytail's 20-host
-rule files, Maki's OS-level sandbox (ours arrives with the broker, Phase 3).
+What still beats us today: rtk's native binary, Windows path, filter packs and
+broader host reach; TokenSave's semantic per-branch graph and cross-session
+memory; WozCode's batched fuzzy edit + syntax-validation loop; Headroom's
+general proxy integration; Ponytail's broader role-scoped rules; Caveman's
+verbosity dial; and Maki's OS-level sandbox. The dated, prioritized integration
+ledger is in [`docs/COMPARISONS.md`](docs/COMPARISONS.md#integration-gap-ledger-2026-08-20).
 
 **Full detail lives in [`docs/COMPARISONS.md`](docs/COMPARISONS.md):** how each
 neighbour is architected and where the harness diverges, the model-free
@@ -806,7 +814,7 @@ transparent fallbacks — same output contract, same coordinates, the active
 engine disclosed in headers.
 
 ```bash
-pip install -e .                            # from a clone (not yet on PyPI)
+python -m pip install --upgrade ctx-harness # published stable CLI
 ctx setup                              # harness Antigravity + Claude Code + Codex
 # ...or one host at a time:
 ctx wrap antigravity                        # persistent workspace plugin
@@ -825,6 +833,8 @@ proxy fails to start, the session continues unproxied.
 Development:
 
 ```bash
+git clone https://github.com/vamsiramakrishnan/straitjacket.git
+cd straitjacket
 pip install -e '.[dev]'
 pytest        # 1,712 test functions: determinism, budgets, hook contract, escapes
 ```
