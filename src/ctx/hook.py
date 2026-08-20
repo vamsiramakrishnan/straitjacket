@@ -167,7 +167,7 @@ from ctx.sessiondir import session_reads_dir
 DIALECT_CAPS: dict[str, dict[str, bool]] = {
     "claude-code": {"input_substitution": True, "output_substitution": True},
     "codex": {"input_substitution": True, "output_substitution": True},
-    "antigravity": {"input_substitution": False, "output_substitution": False},
+    "antigravity": {"input_substitution": True, "output_substitution": False},
 }
 
 
@@ -1981,6 +1981,34 @@ def classify(
                 cwd = v
                 break
         decision = classify_command(command, policy, cwd=cwd or workspace_root)
+        # Antigravity exposes no PostToolUse result bytes and cannot replace a
+        # result after execution. Its only complete containment strategy is a
+        # birth gate: every executable command that is not already routed
+        # through ctx gets a capture rewrite. The dialect adapter turns that
+        # rewrite into a deny with an exact retry command because Antigravity
+        # also lacks updatedInput. Usually the agent retries inside the same
+        # turn; importantly, the unbounded native command never runs first.
+        if (
+            decision.get("decision") == "allow"
+            and policy.get("_output_substitution") is False
+            and command.strip()
+        ):
+            try:
+                original_argv = shlex.split(command)
+                inspected_argv = _unwrap(original_argv)
+                prog = os.path.basename(inspected_argv[0]) if inspected_argv else ""
+                if prog != "ctx":
+                    decision = _deny_cmd(
+                        inspected_argv or original_argv,
+                        policy,
+                        original=command,
+                        has_meta=bool(_SHELL_META_RE.search(command)),
+                    )
+            except ValueError:
+                decision = _force_ask(
+                    "CTX_CONTEXT_GUARD: Antigravity cannot contain output after "
+                    "execution. Re-run this through `ctx run --shell -- '<command>'`."
+                )
         # Replacement surface (docs/REPLACEMENT-SURFACE.md): when collapse is
         # enabled, a recognised navigation-loop shape — recursive grep, or a
         # whole-suite re-run after a captured failure — is transparently
@@ -2262,22 +2290,19 @@ def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
 # The published Antigravity PreToolUse output contract
 # (https://antigravity.google/docs/hooks) is exactly:
 #     {"decision": "allow"|"deny"|"ask"|"force_ask",
-#      "reason": str?, "permissionOverrides": [str]?}
-# There is no field for modified arguments, so this host cannot do input
-# substitution at all. Emitting anything else is out of contract.
+#      "reason": str?, "permissionOverrides": [str]?, "overwrite": object?}
+# Current Antigravity shallow-merges ``overwrite`` into the tool arguments.
 _AGY_PRE_DECISIONS = ("allow", "deny", "ask", "force_ask")
-_AGY_PRE_KEYS = ("decision", "reason", "permissionOverrides")
+_AGY_PRE_KEYS = ("decision", "reason", "permissionOverrides", "overwrite")
 
 
 def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
     """Layer 2 for the antigravity dialect, per the published hook contract.
 
-    Unlike Claude Code and Codex, Antigravity's PreToolUse schema carries no
-    ``updatedInput``: a hook can gate a call but cannot rewrite its arguments.
-    So a decision carrying a ``rewrite`` cannot be applied transparently here.
-    It degrades to a **deny whose reason names the contained command**, which
-    keeps the birth gate intact — the flood never happens — at the cost of one
-    extra turn, because the agent has to re-issue the command itself.
+    Antigravity names its shallow argument substitution field ``overwrite``;
+    Claude/Codex name the equivalent nested value ``updatedInput``. Translate
+    at this boundary so the same classifier can transparently install a bounded
+    command without an agent retry.
 
     This is the whole containment story on this host: with no output
     substitution either (PostToolUse's only legal output is ``{}``), the
@@ -2285,12 +2310,11 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
     """
     rewrite = decision.get("rewrite")
     if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
-        reason = str(rewrite.get("reason", "")).strip()
-        cmd = str(rewrite.get("command", "")).strip()
-        if cmd:
-            sep = "" if (not reason or reason[-1] in ".!?;:") else "."
-            reason = f"{reason}{sep} Re-run it as: {cmd}".strip()
-        return {"decision": "deny", "reason": reason or "run this through ctx"}
+        return {
+            "decision": "allow",
+            "reason": str(rewrite.get("reason", "")),
+            "overwrite": rewrite["updatedInput"],
+        }
     raw = decision.get("decision", "allow")
     out: dict[str, Any] = {
         "decision": raw if raw in _AGY_PRE_DECISIONS else "allow",
@@ -2299,6 +2323,26 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
         if decision.get(key):
             out[key] = decision[key]
     return {k: v for k, v in out.items() if k in _AGY_PRE_KEYS}
+
+
+def _normalize_antigravity_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Translate Antigravity's documented ``toolCall`` envelope to layer 1.
+
+    Antigravity sends ``toolCall.name`` and ``toolCall.args``; Claude/Codex use
+    top-level ``tool_name``/``tool_input`` variants. Keeping this translation at
+    the dialect boundary lets the classifier remain host-neutral.
+    """
+    tool_call = payload.get("toolCall")
+    if not isinstance(tool_call, dict):
+        return payload
+    normalized = dict(payload)
+    if not normalized.get("tool_name") and isinstance(tool_call.get("name"), str):
+        normalized["tool_name"] = tool_call["name"]
+    if not isinstance(normalized.get("tool_input"), dict):
+        args = tool_call.get("args")
+        if isinstance(args, dict):
+            normalized["tool_input"] = args
+    return normalized
 
 
 #: The emission-governor nudge, verbatim. Named because the Rust shim
@@ -2465,12 +2509,48 @@ def _normalize_tool_response(tr: Any) -> tuple[str, str]:
         return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
     if isinstance(tr, dict):
         if isinstance(tr.get("content"), list):
-            return _normalize_tool_response(tr["content"])
+            # A CallToolResult is a structured success/error envelope, not just
+            # its text blocks.  Persisting only ``content`` silently discarded
+            # ``isError``, ``structuredContent`` and provider metadata, so a
+            # later retrieval could not reconstruct what the caller received.
+            # The hook has a parsed JSON value rather than original wire bytes;
+            # canonical JSON is therefore the lossless representation of that
+            # value available at this boundary.
+            return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
         if isinstance(tr.get("stdout"), str):
             return tr["stdout"], tr.get("stderr") if isinstance(tr.get("stderr"), str) else ""
         if isinstance(tr.get("text"), str):
             return tr["text"], ""
     return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
+
+
+def _is_structured_tool_response(value: Any) -> bool:
+    """Whether *value* is a programmatic response rather than terminal text.
+
+    Codex currently cannot replace structured MCP output: its documented
+    ``updatedMCPToolOutput`` field is parsed but unsupported. Arbitrary local
+    function arrays/objects have the same type-preservation requirement. A
+    command capture's explicit ``{stdout,stderr}`` wrapper is the exception: it
+    represents terminal text and may safely become digest text.
+    """
+
+    if isinstance(value, list):
+        return True
+    if not isinstance(value, dict):
+        return False
+    return not isinstance(value.get("stdout"), str)
+
+
+# Some Codex local-function hooks expose a structured transport envelope even
+# though the callable's public code-mode return type is text. Those tools may
+# safely resolve ``continue:false`` with digest text. Keep this registry narrow
+# and contract-tested: an unknown object result must pass through unchanged.
+_CODEX_STRING_RESULT_TOOLS = {"webrun"}
+
+
+def _codex_returns_string(tool_name: str) -> bool:
+    canonical = re.sub(r"[^a-z0-9]", "", tool_name.lower())
+    return canonical in _CODEX_STRING_RESULT_TOOLS
 
 
 def _tool_command(payload: dict[str, Any]) -> str | None:
@@ -2507,6 +2587,75 @@ def _coerce_text(value: Any) -> str:
         return repr(value)
     except Exception:
         return ""
+
+
+_TOOL_RESPONSE_KEYS = (
+    "tool_response",
+    "toolResponse",
+    "tool_output",
+    "toolOutput",
+    "output",
+    "result",
+    "content",
+)
+
+
+def _payload_tool_response(payload: dict[str, Any]) -> Any:
+    """Return the host's tool result without guessing a missing value."""
+    for key in _TOOL_RESPONSE_KEYS:
+        if key in payload:
+            return payload[key]
+    return None
+
+
+def _claude_can_replace(tr: Any) -> bool:
+    """Whether ``updatedToolOutput`` can preserve this Claude result's shape.
+
+    Claude validates replacements for built-in tools and ignores a replacement
+    whose JSON type/shape differs from the original. We therefore substitute
+    only the public result forms we can reconstruct exactly enough: text, MCP
+    content blocks/envelopes, and the documented Bash result object.
+    """
+    if isinstance(tr, str):
+        return True
+    if isinstance(tr, list):
+        return bool(tr) and all(isinstance(block, dict) and "type" in block for block in tr)
+    if isinstance(tr, dict):
+        return isinstance(tr.get("content"), list) or "stdout" in tr
+    return False
+
+
+def _claude_updated_tool_output(tr: Any, replacement: str) -> Any:
+    """Put a digest back into Claude's original public tool-output shape."""
+    block = {"type": "text", "text": replacement}
+    if isinstance(tr, str):
+        return replacement
+    if isinstance(tr, list):
+        return [block]
+    if isinstance(tr, dict) and isinstance(tr.get("content"), list):
+        updated: dict[str, Any] = {"content": [block]}
+        for key in ("isError", "is_error"):
+            if key in tr:
+                updated[key] = bool(tr[key])
+        # These optional MCP fields may themselves hold the flood. Preserve
+        # their public JSON types, but replace their payload with a bounded,
+        # explicit marker; the lossless value is at the digest's ctx handle.
+        if "structuredContent" in tr:
+            updated["structuredContent"] = {"ctxContained": True}
+        if "_meta" in tr:
+            updated["_meta"] = {"ctxContained": True}
+        return updated
+    if isinstance(tr, dict) and "stdout" in tr:
+        # Claude's documented Bash result is an object, not a string. Keeping
+        # these four fields prevents the host from rejecting/ignoring the
+        # replacement while ensuring neither stream can re-flood context.
+        return {
+            "stdout": replacement,
+            "stderr": "",
+            "interrupted": bool(tr.get("interrupted", False)),
+            "isImage": bool(tr.get("isImage", False)),
+        }
+    raise ValueError("Claude tool output shape is not safely replaceable")
 
 
 def _gate_failure_digest(
@@ -2604,15 +2753,18 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     output. A broken *policy* read does not open the gate — the built-in
     default budget is used instead.
 
-    Claude Code (``updatedToolOutput``) and Codex (``decision:block`` + reason,
-    https://learn.chatgpt.com/docs/hooks) both have a substitution field.
+    Claude Code (``updatedToolOutput``) and Codex (``continue:false`` plus
+    ``stopReason``, https://developers.openai.com/codex/hooks/) both have a
+    substitution path. Claude replacements preserve each known public result
+    shape because the host rejects mismatched built-in output shapes. Codex
+    cannot currently replace a structured MCP result, so those envelopes are
+    captured but passed through byte-for-value; mutating their shape would
+    break code-mode callers.
     Antigravity's published PostToolUse contract has none — its only legal
-    output is ``{}`` (https://antigravity.google/docs/hooks) — so there the gate
-    **still persists** the over-budget result and then returns None. The raw
-    bytes reach the transcript on that host (nothing can stop them), but they
-    also reach the store, so the result keeps an address and ``ctx get`` can
-    resolve it afterwards. Capture is worth having even where substitution is
-    impossible; the alternative is bytes that flood *and* vanish.
+    output is ``{}`` (https://antigravity.google/docs/hooks), and its documented
+    input does not include result bytes. If a compatible runner adds them, ctx
+    persists them opportunistically without claiming containment; otherwise
+    containment on that host must happen before execution.
     """
     can_substitute = can_substitute_output(flavor)
 
@@ -2620,11 +2772,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     # here means we never saw a tool result, so there is nothing to bound.
     try:
         tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
-        tr = None
-        for k in ("tool_response", "toolResponse", "tool_output", "toolOutput", "output", "result", "content"):
-            if k in payload:
-                tr = payload[k]
-                break
+        tr = _payload_tool_response(payload)
         if tr is None:
             return None
     except Exception:
@@ -2671,10 +2819,17 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     except Exception:
         size = threshold + 1  # cannot measure → treat as over budget
     command = _tool_command(payload)
+    structured_response = _is_structured_tool_response(tr)
+    replaceable = can_substitute
+    if flavor == "claude-code":
+        replaceable = can_substitute and _claude_can_replace(tr)
+    elif flavor == "codex" and structured_response and not _codex_returns_string(tool_name):
+        replaceable = False
     is_error = bool(
         payload.get("is_error")
         or payload.get("isError")
         or (isinstance(tr, dict) and tr.get("is_error"))
+        or (isinstance(tr, dict) and tr.get("isError"))
     )
     if size <= threshold:
         if can_substitute and _single_named_pytest(command or ""):
@@ -2710,7 +2865,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
             stderr,
             is_error=is_error,
             argv=_command_argv(command),
-            contained=can_substitute,
+            contained=replaceable,
         )
         if not isinstance(text, str) or not text.strip():
             raise ValueError("digest produced no text")
@@ -2733,13 +2888,15 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
                 )
             except Exception:
                 pass
-        # digest_output has now persisted the raw bytes. A host that cannot
-        # substitute gets None — the transcript keeps the raw result, but the
-        # artifact exists and is addressable.
-        return text if can_substitute else None
+        # digest_output has now persisted the raw value. A host/result pair that
+        # cannot preserve the public return shape gets None. Codex structured
+        # arrays/objects pass through because replacing them with stop text
+        # would mutate the caller type. Plain strings safely resolve to a digest
+        # string through ``continue:false``.
+        return text if replaceable else None
     except Exception as exc:
         _note_guard_failure(ws_root, op="emission_gate", stage="digest", exc=exc)
-        if not can_substitute:
+        if not replaceable:
             # Nothing to fail closed *to*: this host has no substitution field,
             # so the raw result was always going to reach the transcript. The
             # failure is recorded above rather than dressed up as containment.
@@ -2815,6 +2972,8 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
         payload = parsed if isinstance(parsed, dict) else {}
+        if flavor == "antigravity":
+            payload = _normalize_antigravity_payload(payload)
     except Exception:
         payload = {}
     # Each stage gets its own block. The nudges are advisory; the emission
@@ -2840,18 +2999,22 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     if flavor == "claude-code":
         hso: dict[str, Any] = {"hookEventName": "PostToolUse"}
         if replacement is not None:
-            hso["updatedToolOutput"] = replacement
+            tr = _payload_tool_response(payload)
+            hso["updatedToolOutput"] = _claude_updated_tool_output(tr, replacement)
         if nudge is not None:
             hso["additionalContext"] = nudge
         emitted: dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
     elif flavor == "codex":
-        # Codex PostToolUse substitutes the model-visible result via
-        # {"decision":"block","reason":<text>}; additionalContext carries a
-        # non-substituting nudge (https://learn.chatgpt.com/docs/hooks).
+        # ``decision:block`` replaces text but rejects nested code-mode tool
+        # promises.  The documented PostToolUse success-preserving replacement
+        # is ``continue:false``: it suppresses the original textual result,
+        # resolves the promise with the stop text, and continues the model.
+        # Structured MCP envelopes never reach this branch (see
+        # _emission_gate) because Codex does not yet support replacing them.
         emitted = {}
         if replacement is not None:
-            emitted["decision"] = "block"
-            emitted["reason"] = replacement
+            emitted["continue"] = False
+            emitted["stopReason"] = replacement
         chso: dict[str, Any] = {"hookEventName": "PostToolUse"}
         if nudge is not None:
             chso["additionalContext"] = nudge
@@ -2860,9 +3023,8 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     else:
         # Antigravity's published PostToolUse contract has exactly one legal
         # output: {}. It can neither replace the result nor attach a nudge, so
-        # this hook is observational here — the bytes are still captured into
-        # the store above (that is what keeps `ctx get` able to resolve them
-        # later), but the transcript is left exactly as the host wrote it.
+        # this hook is observational. The official input carries no result
+        # bytes; compatible runners that append them get capture-only storage.
         # Containment on this host happens at PreToolUse or not at all.
         emitted = {}
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
@@ -2957,6 +3119,8 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
         payload = parsed if isinstance(parsed, dict) else {}
+        if flavor == "antigravity":
+            payload = _normalize_antigravity_payload(payload)
     except Exception as exc:
         # A payload we cannot read is still an internal error: route it
         # through the policy rather than assuming it was harmless.

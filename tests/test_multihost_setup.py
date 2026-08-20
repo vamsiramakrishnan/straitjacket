@@ -270,8 +270,9 @@ def test_codex_post_tool_use_substitutes_flood(state_home, workspace_dir):
         },
         "codex",
     )
-    assert out.get("decision") == "block"
-    assert out["reason"].lstrip().startswith("[ctx ")
+    assert out.get("continue") is False
+    assert out["stopReason"].lstrip().startswith("[ctx ")
+    assert "decision" not in out  # code-mode promise must not reject
 
 
 def test_codex_post_tool_use_small_noop(state_home, workspace_dir):

@@ -6,6 +6,22 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- Claude Code PostToolUse replacements now retain the host's documented Bash
+  and MCP result shapes instead of sending an invalid string for every tool.
+  Antigravity setup now registers the plugin with `agy`, installs its native
+  lifecycle hooks, validates the runtime hook shape that `agy plugin validate`
+  misses, normalizes the documented `toolCall.args` envelope, and uses the
+  current `overwrite` field for one-turn birth-gate substitution. Live 60 KB
+  probes return ctx digests on both Claude Code and Antigravity.
+
+- Codex PostToolUse containment no longer uses `decision:block`, which rejected
+  successful nested code-mode tool promises. Text floods now use the documented
+  `continue:false` + `stopReason` success path for registered string-result
+  tools. Unknown structured arrays/objects remain capture-only so nested
+  code-mode callers keep their return type. MCP CallToolResult envelopes are stored with `content`,
+  `isError`, `structuredContent`, and metadata intact; Codex does not yet
+  support `updatedMCPToolOutput`.
+
 - The artifact store now proves backend writability and uses a sticky,
   doctor-visible workspace-local fallback when managed sandboxes make the
   default user-state directory read-only. Parallel catalog initialization

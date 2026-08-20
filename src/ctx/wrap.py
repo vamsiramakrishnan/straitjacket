@@ -3,8 +3,8 @@
 Claude Code is wrapped ephemerally — hooks are passed via a temporary
 ``--settings`` file, the ctx-explorer agent definition is installed into
 ``.claude/agents/`` for the session, and nothing persists after exit.
-Antigravity discovers plugins from the workspace, so wrapping it delegates
-to the persistent installer.
+Antigravity wrapping renders a workspace plugin, registers it with `agy`, and
+installs its native lifecycle hooks.
 """
 
 from __future__ import annotations
@@ -359,7 +359,7 @@ def _wrap_claude_merged(
 
 
 def wrap_antigravity(workspace_root: Path, ctx_exe: str | None = None) -> int:
-    """Persistent install: Antigravity discovers plugins from the workspace."""
+    """Persistent install: render, register, and wire Antigravity hooks."""
     from ctx.installer import install_antigravity
     from ctx.workspace import resolve_workspace
 
@@ -368,9 +368,10 @@ def wrap_antigravity(workspace_root: Path, ctx_exe: str | None = None) -> int:
     print()
     print("Antigravity sessions in this workspace are now harnessed.")
     print(
-        "note: this install is persistent (Antigravity discovers plugins from "
-        "the workspace tree); `ctx wrap claude` is ephemeral by contrast — "
-        "remove .agents/plugins/ctx-harness to uninstall."
+        "note: this install is persistent; `ctx wrap claude` is ephemeral by "
+        "contrast. To fully uninstall, run `agy plugin uninstall ctx-harness`, "
+        "remove `.agents/plugins/ctx-harness`, and remove the named `ctx-harness` "
+        "entry from `~/.gemini/config/hooks.json`."
     )
     return 0
 

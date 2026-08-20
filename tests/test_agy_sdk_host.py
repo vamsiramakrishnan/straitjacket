@@ -28,7 +28,7 @@ def test_is_a_distinct_host_from_the_vendor_cli():
     # but not the same binary, and not the same capabilities
     assert sdk.cli_bins != vendor.cli_bins
     assert (sdk.input_substitution, sdk.output_substitution) == (True, True)
-    assert (vendor.input_substitution, vendor.output_substitution) == (False, False)
+    assert (vendor.input_substitution, vendor.output_substitution) == (True, False)
 
 
 def test_capabilities_are_honest_about_why_they_differ():

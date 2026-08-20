@@ -35,45 +35,29 @@ tool's arguments*; the output gate needs a way to *replace a tool's result*.
 | host | birth gate | output gate | how |
 |---|---|---|---|
 | **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `updatedToolOutput` |
-| **codex** (Codex CLI) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `decision:block` |
-| **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
+| **codex** (Codex CLI) | ✅ rewrites transparently | ✅ replaces registered string-result tools; captures unknown structured arrays/objects unchanged | `updatedInput` / `continue:false` + `stopReason` |
+| **antigravity** (`agy` CLI) | ✅ rewrites transparently | ❌ **none** | `overwrite` / see below |
 | **antigravity-sdk** (ctx's own agent) | ✅ bounded inside the tool | ✅ bounded inside the tool | see below |
 
-On Claude Code and Codex, containment is invisible: you type `pytest -q`, the
-hook silently substitutes `ctx run -- pytest -q`, and the agent never sees a
+On all three hook hosts, command containment is invisible: you type `pytest -q`,
+the hook silently substitutes `ctx run -- pytest -q`, and the agent never sees a
 refusal.
 
 ## Why Antigravity is different
 
-Antigravity's [published hook contract](https://antigravity.google/docs/hooks)
-permits exactly this for `PreToolUse`:
+Current Antigravity exposes a shallow argument merge on `PreToolUse`:
 
 ```json
-{"decision": "allow|deny|ask|force_ask", "reason": "…", "permissionOverrides": []}
+{"decision": "allow", "reason": "…", "overwrite": {"CommandLine": "ctx run -- pytest -q"}}
 ```
 
-There is **no field for modified arguments**. And `PostToolUse` has exactly one
+This is the host's equivalent of Claude/Codex `updatedInput`, so the birth gate
+is transparent and costs no retry turn. `PostToolUse` still has exactly one
 legal output:
 
 ```json
 {}
 ```
-
-So neither *tool* gate can alter a tool's input or its result. (The host can
-still inject context at other points — `PreInvocation` does exactly that, below —
-but nothing can bound a tool call.) Two consequences:
-
-**The birth gate denies instead of rewriting.** A flooding command is refused
-with a reason naming the contained form:
-
-```
-{"decision": "deny",
- "reason": "CTX_CONTEXT_GUARD: routed through ctx for bounded capture. Re-run it as: ctx run -- pytest -q"}
-```
-
-Containment holds — the flood never happens — but it costs one turn while the
-agent re-issues the command itself, and the refusal is visible where on other
-hosts it would be silent.
 
 **There is no output-side safety net at all.** If something gets past the birth
 gate, nothing downstream can shrink its result.
@@ -84,7 +68,7 @@ readers (`Read`/`read_file`/`view_file`), the directory and search tools
 (`list_dir`, `grep_search`, `find_by_name`, `glob_search`, `codebase_search`) and
 the edit tools. An oversized file read is caught, not just a noisy test run.
 
-The gap is **MCP and connector results**. They are not a command the birth gate
+The remaining gap is **MCP and connector results**. They are not a command the birth gate
 can inspect and bound ahead of time, so a verbose connector response lands in
 your transcript in full and nothing can trim it afterwards.
 
@@ -98,18 +82,18 @@ advisory rides `PreInvocation` instead, as an `injectSteps` *ephemeral* message 
 ephemeral because `PreInvocation` fires before every model call, so a persistent
 message would re-accumulate context on each one.
 
-## Capture happens even where substitution cannot
+## Capture-only compatibility payloads
 
-An important distinction: **the output gate not being able to substitute does not
-mean nothing happens.** On every host, an over-budget result is still persisted
-to the artifact store and keeps a retrieval address. On Antigravity the raw bytes
-reach the transcript *and* the store, so afterwards you can still do:
+Antigravity's documented PostToolUse input does not expose result bytes. If a
+compatible runner appends them, ctx stores them without claiming containment,
+so afterwards you can still do:
 
 ```bash
 ctx get run:7a139fe6ef06#stdout --lines 1:3
 ```
 
-The flood is not prevented, but the evidence is addressable rather than lost.
+The flood is not prevented, but the compatibility payload is addressable rather
+than lost.
 
 This is why **`ctx gain` reports differently on that host**. Where a digest was
 substituted, it books the saving. Where it was only stored, it books the event at
@@ -123,14 +107,9 @@ est tokens kept out of context: 0
 That is deliberate. A containment ledger that credited a saving which never
 happened would be worse than no ledger — you would budget against fiction.
 
-**This does not mean `ctx gain` is always 1.0× on Antigravity.** You will see a
-mix. When the birth gate denies a command and the agent re-issues it as
-`ctx run -- …`, that capture is real containment and books a real saving. It is
-only the results captured *after the fact* — the ones nothing could substitute —
-that book raw→raw. A 1.0× line is therefore a useful signal rather than a bug
-report: it tells you that specific payload got past the birth gate, which is your
-cue to route it through `ctx` explicitly or to retrieve it via the bounded MCP
-tool.
+Normal Antigravity command captures are real birth-gate containment and book a
+real saving. Only nonstandard result bytes captured after the fact book raw→raw;
+a 1.0× line is therefore a useful signal that a payload got past the birth gate.
 
 ## `antigravity-sdk` — the headless alternative
 

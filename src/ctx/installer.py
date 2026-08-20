@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -126,6 +127,29 @@ def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
     return dest
 
 
+def antigravity_hooks_path() -> Path:
+    """Native lifecycle-hook file loaded by the current Antigravity CLI."""
+    return Path.home() / ".gemini" / "config" / "hooks.json"
+
+
+def install_antigravity_hooks(ctx_exe: str, *, path: Path | None = None) -> str:
+    """Idempotently merge ctx's named hook into Antigravity's native config.
+
+    Imported plugins provide skills/MCP, but current ``agy`` releases load
+    lifecycle hooks from the native customization file. Keep the same rendered
+    source of truth and replace only the ``ctx-harness`` named entry.
+    """
+    target = path or antigravity_hooks_path()
+    current = _read_settings_object(target)
+    rendered = (_template_dir() / "hooks.json").read_text(encoding="utf-8")
+    rendered = rendered.replace("{{CTX_EXECUTABLE}}", ctx_exe)
+    named = json.loads(rendered)[PLUGIN_DIRNAME]
+    current[PLUGIN_DIRNAME] = named
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return f"installed Antigravity lifecycle hooks: {target}"
+
+
 def antigravity_settings_path() -> Path:
     """Global Antigravity CLI settings (where the status line is configured).
     Honours GEMINI_CLI_CONFIG_DIR / XDG-style overrides isn't documented, so
@@ -167,6 +191,44 @@ def install_antigravity(ws: Workspace, *, init_policy: bool = True) -> str:
     dest = render_plugin(ws.root)
     lines = [f"installed plugin: {dest}"]
     exe = _ctx_executable()
+    lines.append(install_antigravity_hooks(exe))
+    agy = shutil.which("agy") or shutil.which("antigravity")
+    if agy:
+        try:
+            proc = subprocess.run(
+                [agy, "plugin", "install", str(dest)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if proc.returncode == 0:
+                lines.append("registered plugin with Antigravity CLI")
+                enabled = subprocess.run(
+                    [agy, "plugin", "enable", PLUGIN_DIRNAME],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                if enabled.returncode == 0:
+                    lines.append("enabled Antigravity plugin")
+                else:
+                    detail = (enabled.stderr or enabled.stdout).strip().splitlines()
+                    lines.append(
+                        "WARNING: Antigravity plugin enable failed"
+                        + (f": {detail[-1]}" if detail else "")
+                    )
+            else:
+                detail = (proc.stderr or proc.stdout).strip().splitlines()
+                lines.append(
+                    "WARNING: Antigravity plugin registration failed"
+                    + (f": {detail[-1]}" if detail else "")
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            lines.append(f"WARNING: Antigravity plugin registration failed: {exc}")
+    else:
+        lines.append("Antigravity CLI not found; plugin rendered but not registered")
     lines.append(install_antigravity_statusline(exe))
     if init_policy:
         lines.extend(init_workspace(ws.root, quiet=True))
@@ -177,6 +239,55 @@ def install_antigravity(ws: Workspace, *, init_policy: bool = True) -> str:
     lines.append("")
     lines.append("validate with: ctx doctor --antigravity")
     return "\n".join(lines)
+
+
+def _antigravity_hooks_contract(data: dict) -> tuple[bool, str]:
+    """Validate the runtime shape that ``agy plugin validate`` misses."""
+    named = data.get(PLUGIN_DIRNAME)
+    if not isinstance(named, dict):
+        return False, f"missing top-level {PLUGIN_DIRNAME!r} hook"
+    for event in ("PreToolUse", "PostToolUse"):
+        groups = named.get(event)
+        if not isinstance(groups, list) or not groups:
+            return False, f"{event} must be a non-empty grouped list"
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                return False, f"{event} entry must contain hooks[]"
+            if not all(isinstance(h, dict) and h.get("command") for h in group["hooks"]):
+                return False, f"{event} command handler is missing command"
+    pre = named.get("PreInvocation")
+    if not isinstance(pre, list) or not pre or not all(
+        isinstance(handler, dict) and handler.get("command") for handler in pre
+    ):
+        return False, "PreInvocation must be a flat command-handler list"
+    return True, "runtime hook shape valid"
+
+
+def _antigravity_plugin_registered() -> tuple[bool, str]:
+    agy = shutil.which("agy") or shutil.which("antigravity")
+    if not agy:
+        return False, "Antigravity CLI not found"
+    try:
+        proc = subprocess.run(
+            [agy, "plugin", "list"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"could not query agy plugin list: {exc}"
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout).strip() or "agy plugin list failed"
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return False, "agy plugin list did not return JSON"
+    imports = data.get("imports") if isinstance(data, dict) else None
+    registered = isinstance(imports, list) and any(
+        isinstance(item, dict) and item.get("name") == PLUGIN_DIRNAME for item in imports
+    )
+    return registered, "registered in agy plugin list" if registered else "run: ctx setup"
 
 
 def init_workspace(root: Path, *, quiet: bool = False) -> list[str]:
@@ -805,6 +916,8 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
 
     plugin_dir = ws.root / ".agents" / "plugins" / PLUGIN_DIRNAME
     skill_dir = ws.root / ".agents" / "skills" / PLUGIN_DIRNAME
+    plugin_runtime_ok = False
+    registered = False
     if antigravity:
         check("plugin installed", plugin_dir.is_dir(), str(plugin_dir.relative_to(ws.root)) if plugin_dir.is_dir() else "run: ctx antigravity install")
         if plugin_dir.is_dir():
@@ -820,6 +933,11 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
                     except json.JSONDecodeError as e:
                         detail = f"invalid JSON: {e}"
                 check(f"plugin {name}", ok, detail)
+                if name == "hooks.json" and ok:
+                    plugin_runtime_ok, runtime_detail = _antigravity_hooks_contract(
+                        json.loads(p.read_text(encoding="utf-8"))
+                    )
+                    check("plugin hooks runtime contract", plugin_runtime_ok, runtime_detail)
             check(
                 "plugin embeds skill",
                 (plugin_dir / "skills" / PLUGIN_DIRNAME / "SKILL.md").is_file(),
@@ -839,6 +957,19 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
             not dup,
             "plugin and standalone skill are both installed — remove one (SPEC §4.3)" if dup else "",
         )
+        registered, registered_detail = _antigravity_plugin_registered()
+        check("plugin registered with agy", registered, registered_detail)
+        native_hooks = antigravity_hooks_path()
+        native_ok = False
+        native_detail = "run: ctx setup"
+        if native_hooks.is_file():
+            try:
+                native_ok, native_detail = _antigravity_hooks_contract(
+                    _read_settings_object(native_hooks)
+                )
+            except SettingsUnreadable as exc:
+                native_detail = str(exc)
+        check("Antigravity lifecycle hooks", native_ok, native_detail)
 
     # What `ctx setup` actually wrote. Until now doctor never opened
     # these files, so it happily printed OK for a workspace where the hooks
@@ -869,7 +1000,9 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     if codex_cfg.is_file():
         mcp_ok, mcp_detail = _codex_mcp_contract(codex_cfg, _ctx_executable())
         check("codex MCP", mcp_ok, mcp_detail)
-    if plugin_dir.is_dir():
+    if plugin_dir.is_dir() and (
+        not antigravity or (plugin_runtime_ok and registered and native_ok)
+    ):
         wrapped.append("antigravity")
     check(
         "an agent is wrapped",

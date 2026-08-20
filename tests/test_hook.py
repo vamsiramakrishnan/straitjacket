@@ -68,6 +68,41 @@ def test_allow_ctx_routed_command(tmp_path):
     assert d["decision"] == "allow"
 
 
+def test_antigravity_birth_gate_routes_unknown_command_before_it_runs(tmp_path):
+    payload = json.dumps(
+        {
+            "toolCall": {
+                "name": "run_command",
+                "args": {
+                    "CommandLine": "python -c \"print('x' * 60000)\"",
+                    "Cwd": str(tmp_path),
+                },
+            },
+            "workspacePaths": [str(tmp_path)],
+        }
+    )
+    d = _invoke_hook(payload)
+    assert d["decision"] == "allow"
+    assert d["overwrite"]["CommandLine"].startswith("ctx run --shell --")
+    assert d["overwrite"]["Cwd"] == str(tmp_path)
+
+
+def test_antigravity_birth_gate_allows_already_routed_command(tmp_path):
+    payload = json.dumps(
+        {
+            "toolCall": {
+                "name": "run_command",
+                "args": {
+                    "CommandLine": "ctx run -- python -c \"print('x' * 60000)\"",
+                    "Cwd": str(tmp_path),
+                },
+            },
+            "workspacePaths": [str(tmp_path)],
+        }
+    )
+    assert _invoke_hook(payload) == {"decision": "allow"}
+
+
 def test_allow_bounded_commands(tmp_path):
     for cmd in ("pwd", "git status --short", "head -n 40 file.txt", "echo hi"):
         d = _classify("run_command", {"CommandLine": cmd}, tmp_path)

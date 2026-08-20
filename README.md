@@ -12,7 +12,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** source v0.33.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,717 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** source v0.33.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,730 test cases · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -562,23 +562,18 @@ canonical hook decision, translated to each host's dialect: Antigravity's plugin
 One classifier, three emitters — `ctx setup` wires all three at once.
 
 The **birth-gate** decision (PreToolUse: contain flooding commands, steer native
-and semantic search to bounded `ctx` ops) fires on all three, but it is applied
-differently. Claude Code (`updatedInput`) and Codex rewrite the command
-*transparently* — the agent never sees a refusal. Antigravity's [published
-PreToolUse schema](https://antigravity.google/docs/hooks) carries no field for
-modified arguments, so there the same decision lands as a **deny whose reason
-names the contained command**: the flood is still prevented, but the agent
-spends a turn re-issuing it itself.
+and semantic search to bounded `ctx` ops) fires on all three. Claude Code and
+Codex call their replacement field `updatedInput`; current Antigravity calls its
+shallow argument merge `overwrite`. In every case `pytest -q` can become
+`ctx run -- pytest -q` transparently, without a denial/retry turn.
 
 The **output-side** gate (PostToolUse: replace an oversized tool result with a
 digest) needs a host field that can substitute output — Claude Code
 (`updatedToolOutput`) and Codex (`decision:block`) have one. Antigravity's
-published PostToolUse contract permits exactly one output, `{}`: it can neither
-replace a result nor attach a nudge, so on that host the PostToolUse hook is
-**observational** — it still captures the bytes into the store so `ctx get` can
-resolve them later, but it cannot shrink what already reached the transcript. A
-verbose MCP/connector result therefore lands in full on Antigravity; retrieve
-through the bounded `ctx` MCP tool to stay capped.
+published PostToolUse contract permits exactly one output, `{}` and does not
+expose result bytes, so it has no after-the-fact safety net. A verbose
+MCP/connector result therefore lands in full; retrieve through the bounded
+`ctx` MCP tool to stay capped.
 
 ### Steering policy (the hooks)
 
@@ -836,7 +831,7 @@ Development:
 git clone https://github.com/vamsiramakrishnan/straitjacket.git
 cd straitjacket
 pip install -e '.[dev]'
-pytest        # 1,717 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,730 test cases: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

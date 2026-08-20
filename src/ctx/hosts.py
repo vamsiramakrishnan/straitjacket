@@ -96,10 +96,8 @@ class HostSpec:
     wrapper: str = ""              # ctx.wrap.<wrapper>(...)
     output_substitution: bool = False  # PostToolUse can replace a result (enforced) vs nudge-only
     # PreToolUse can rewrite the tool's arguments before it runs. Claude Code
-    # and Codex both expose `updatedInput`; Antigravity's published PreToolUse
-    # schema has no field for modified arguments, so the birth gate there has
-    # to deny and name the contained command rather than substitute it
-    # transparently (https://antigravity.google/docs/hooks).
+    # and Codex expose `updatedInput`; current Antigravity exposes the
+    # equivalent shallow-merge field as `overwrite`.
     input_substitution: bool = False
     # The dialect name this host's hooks are invoked with
     # (`ctx hook <flavor> pre-tool-use`). Usually the host name; Claude Code's
@@ -182,12 +180,10 @@ _REGISTRY: tuple[HostSpec, ...] = (
         model_env=("ANTIGRAVITY_MODEL", "GEMINI_MODEL"),
         installer="install_antigravity",
         wrapper="wrap_antigravity",
-        # Neither gate can alter the transcript on this host: the published
-        # PostToolUse output schema is `{}` and PreToolUse carries no
-        # `updatedInput`. Containment is a PreToolUse deny that names the
-        # contained command (https://antigravity.google/docs/hooks).
+        # PostToolUse cannot replace output, but PreToolUse can shallow-merge
+        # argument `overwrite`, so command containment is transparent.
         output_substitution=False,  # PostToolUse output schema is {} only
-        input_substitution=False,   # no updatedInput in the PreToolUse schema
+        input_substitution=True,    # Antigravity calls this `overwrite`
         supports_mcp=True,
         supports_hooks=True,
         unattended=False,
@@ -206,8 +202,8 @@ _REGISTRY: tuple[HostSpec, ...] = (
         ),
         strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
         coordinator_model="gemini-3.5-flash-lite",
-        notes="built-for host; Gemini flash implements cheaply; no output gate "
-              "(PostToolUse can only emit {}), birth gate denies rather than rewrites",
+        notes="built-for host; Gemini flash implements cheaply; transparent "
+              "birth-gate overwrite; no output gate (PostToolUse can only emit {})",
     ),
     HostSpec(
         # The same vendor and models as `antigravity`, reached a different way:
@@ -283,7 +279,7 @@ _REGISTRY: tuple[HostSpec, ...] = (
         model_env=("CODEX_MODEL", "OPENAI_MODEL"),
         installer="install_codex",
         wrapper="wrap_codex",
-        output_substitution=True,   # decision:block substitution
+        output_substitution=True,   # continue:false text substitution; MCP capture-only
         input_substitution=True,    # updatedInput (Claude Code contract verbatim)
         supports_mcp=True,
         supports_hooks=True,

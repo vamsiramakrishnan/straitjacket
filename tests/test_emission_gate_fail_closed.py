@@ -73,6 +73,17 @@ def _mcp_payload(ws, text, tool="mcp__github__list_commits") -> dict:
     }
 
 
+def _updated_text(d: dict) -> str:
+    value = d["hookSpecificOutput"]["updatedToolOutput"]
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return value[0]["text"]
+    if "stdout" in value:
+        return value["stdout"]
+    return value["content"][0]["text"]
+
+
 def _failures(ws) -> list[dict]:
     path = ws / ".ctx-session-reads" / "guard-failures.jsonl"
     if not path.is_file():
@@ -91,7 +102,7 @@ def test_gate_internal_error_withholds_raw_output(ws, monkeypatch):
     monkeypatch.setattr(ctx.digest, "digest_output", boom)
     raw = _big()
     d = _run_post(_mcp_payload(ws, raw))
-    uto = d["hookSpecificOutput"]["updatedToolOutput"]
+    uto = _updated_text(d)
     assert raw not in uto                                  # raw withheld
     assert len(uto.encode()) < len(raw.encode()) // 2      # bounded
     assert "gate" in uto.lower()                           # says the gate failed
@@ -105,7 +116,7 @@ def test_gate_internal_error_carries_a_retrieval_handle(ws, monkeypatch):
         ctx.digest, "digest_output", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("nope"))
     )
     raw = _big()
-    uto = _run_post(_mcp_payload(ws, raw))["hookSpecificOutput"]["updatedToolOutput"]
+    uto = _updated_text(_run_post(_mcp_payload(ws, raw)))
     m = re.search(r"blob:([0-9a-f]{6,64})", uto)
     assert m, uto
 
@@ -148,7 +159,7 @@ def test_gate_falls_back_to_a_file_handle_when_the_store_is_broken(ws, monkeypat
     monkeypatch.setattr(ctx.digest, "digest_output", boom)
     monkeypatch.setattr(ctx.store, "Store", boom)
     raw = _big()
-    uto = _run_post(_mcp_payload(ws, raw))["hookSpecificOutput"]["updatedToolOutput"]
+    uto = _updated_text(_run_post(_mcp_payload(ws, raw)))
     assert raw not in uto
     spill = list((ws / ".ctx-session-reads" / "gate-fallback").glob("*.txt"))
     assert spill, "content must be retained somewhere retrievable"
@@ -193,5 +204,4 @@ def test_gate_runs_even_when_a_nudge_blows_up(ws, monkeypatch):
     raw = _big()
     d = _run_post(_mcp_payload(ws, raw))
     assert "updatedToolOutput" in d["hookSpecificOutput"]
-
 

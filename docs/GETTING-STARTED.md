@@ -78,27 +78,27 @@ Per host, what setup writes:
 
 | Host | Files | Enforcement |
 |---|---|---|
-| Antigravity | `.agents/plugins/ctx-harness/` (MCP tool + hooks) | birth-gate enforced by deny; no output-side gate |
+| Antigravity | `.agents/plugins/ctx-harness/` + native lifecycle hook registration | transparent birth gate; no output-side gate |
 | Claude Code | `.claude/settings.json` hooks + explorer agent | fully enforced (birth + output) |
 | Codex | `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` block | fully enforced (birth + output) |
 
 There are two honest per-host differences, both traceable to what each host's
 published hook contract actually permits.
 
-**The birth gate fires everywhere, but not the same way.** All three contain
-floods before they happen. Claude Code (`updatedInput`) and Codex rewrite the
-command *transparently* — `pytest -q` silently becomes `ctx run -- pytest -q`
-and the agent never sees a refusal. [Antigravity's PreToolUse
-schema](https://antigravity.google/docs/hooks) has no field for modified
-arguments (`decision`, `reason`, `permissionOverrides` and nothing else), so
-there the same decision is emitted as a **deny whose reason names the contained
-command**. The flood is still prevented — that's the load-bearing part — but it
-costs one extra turn while the agent re-issues the command itself.
+**The birth gate fires everywhere.** Claude Code and Codex use `updatedInput`;
+current Antigravity uses `overwrite`. All three transparently turn `pytest -q`
+into `ctx run -- pytest -q`, so the flood is prevented without spending a retry
+turn.
 
 **The output-side safety net does not exist on Antigravity.** The PostToolUse
 gate that replaces an oversized tool result with a digest needs a host API that
 can substitute a tool's output: Claude Code (`updatedToolOutput`) and Codex
-(`decision:block`) have one. Antigravity's published PostToolUse contract
+(`continue:false` + `stopReason`) have a textual path. Codex substitutes tools
+with a registered string-return contract—including `webrun`—without rejecting
+the nested promise. Unknown structured arrays/objects are captured but passed
+through unchanged because code-mode callers may consume their shape and
+`updatedMCPToolOutput` is not supported yet.
+Antigravity's PostToolUse contract
 permits exactly one output — `{}` — so the hook there can neither replace a
 result nor attach a nudge. It stays **observational**: the bytes are still
 captured into the store (so `ctx get` resolves them later), but nothing shrinks

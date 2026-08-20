@@ -107,7 +107,27 @@ def test_installer_renders_valid_plugin(workspace_dir):
     hooks = json.loads((dest / "hooks.json").read_text(encoding="utf-8"))
     cmd = hooks["ctx-harness"]["PreToolUse"][0]["hooks"][0]["command"]
     assert cmd.startswith("/opt/bin/ctx")  # absolute path, CWD-independent
+    pre_invocation = hooks["ctx-harness"]["PreInvocation"]
+    assert pre_invocation[0]["command"].startswith("/opt/bin/ctx")
+    assert "hooks" not in pre_invocation[0]  # Antigravity requires a flat list
     assert (dest / "skills" / "ctx-harness" / "SKILL.md").is_file()
+
+
+def test_installer_merges_native_antigravity_hooks_without_clobbering(tmp_path):
+    from ctx.installer import (
+        _antigravity_hooks_contract,
+        install_antigravity_hooks,
+    )
+
+    target = tmp_path / "hooks.json"
+    target.write_text(
+        json.dumps({"user-hook": {"enabled": False}}), encoding="utf-8"
+    )
+    install_antigravity_hooks("/opt/bin/ctx", path=target)
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["user-hook"] == {"enabled": False}
+    ok, detail = _antigravity_hooks_contract(data)
+    assert ok, detail
 
 
 def test_installer_refuses_duplicate_installation(workspace_dir):

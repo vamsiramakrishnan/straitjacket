@@ -67,7 +67,7 @@ def test_antigravity_is_the_one_host_without_an_output_gate():
     leaving it as prose: if a future release gives that host a substitution
     field, this test is where the claim gets revisited deliberately."""
     assert can_substitute_output("antigravity") is False
-    assert can_substitute_input("antigravity") is False
+    assert can_substitute_input("antigravity") is True
     assert can_substitute_output("claude-code") is True
     assert can_substitute_output("codex") is True
 
