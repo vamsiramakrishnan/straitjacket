@@ -6,6 +6,28 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+The hook now records what happened to the host's own edits. It has always seen
+every `Edit`/`Write`/`MultiEdit` — `_tool_kind` classifies them and PreToolUse
+allows them through — and never looked at whether they landed, so the rate of
+the field's most-cited harness failure was unknown here. A PostToolUse observer
+classifies each edit result into a closed vocabulary (`applied`, `not_found`,
+`not_unique`, `other_error`, `unknown`) and appends a privacy-safe row: outcome,
+tool, host, a path digest and string *lengths*, never the edited content.
+Unrecognised host wording stays `unknown` rather than being forced into a
+bucket, so a reworded error surfaces as drift instead of a silent mis-count.
+Hosts without a PostToolUse payload (Antigravity) contribute nothing, and the
+summary reports which hosts it heard from.
+
+A paired model-free receipt measures the ceiling that rate will be judged
+against: of failures where the model had the right region but reproduced its
+whitespace differently, a content-based repair resolves 76.1% unambiguously and
+refuses 21.5% as ambiguous; of the control failures where the model named
+different content, it resolves none; and across 1,669 resolutions it never
+landed on the wrong region. Arms are reported separately on purpose — how often
+each shape occurs is field data the ledger now collects, not something the
+simulation can know. No repair mechanism ships in this change; the instrument
+ships first and the mechanism waits on its numbers.
+
 ## [0.34.0] - 2026-08-20
 
 A `repo:` line address now names content rather than a position. Line numbers
