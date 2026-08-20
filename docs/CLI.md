@@ -162,6 +162,26 @@ transcript.
 A handle is an address today. It becomes an authorization capability only in the
 broker-era design; do not present current content identifiers as a sandbox boundary.
 
+### Line addresses into files you are editing
+
+A `run:` or `blob:` handle names frozen bytes, so its line numbers cannot go
+stale. A `repo:` handle names a live worktree file, where a line number is a
+position rather than an identity — insert two imports above it and the same
+address returns different code. Append a **content anchor** to say what was
+there:
+
+```bash
+ctx get repo:app/auth.py --lines 40:52@07407f1c
+ctx get repo:app/auth.py --lines 40:52 --hashlines   # L40:a3| … per-line tags
+```
+
+The anchor verifies silently when the content has not moved, **follows it** when
+it has (declaring `anchor: @07407f1c moved L40:52 → L42:54` and echoing the
+corrected address), and **refuses with exit 2** when the content is gone rather
+than returning whatever now sits at those coordinates. `ctx def` emits an
+anchored `live:` address for exactly this reason. Full mechanism:
+[ANCHORS.md](ANCHORS.md).
+
 ## Search captured artifacts: `ctx search`
 
 Use search when the evidence already exists in the store:

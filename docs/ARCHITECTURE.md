@@ -35,6 +35,7 @@ inherits that plane's invariants, and ships with a test.
 | add an evidence-plan operator | `src/ctx/plan_ops.py` (+ `plan_ir.py`, `plan_exec.py`) |
 | change how a digest is selected/sized | `src/ctx/resolver.py` (the Delivery Policy Resolver) |
 | change retrieval (`get`/`search`/spans) | `src/ctx/retrieval.py` + `src/ctx/_retrieval/` |
+| change how a `repo:` line address stays valid across edits | `src/ctx/anchors.py` |
 | change the artifact store | `src/ctx/store.py` |
 | change path confinement or secret redaction | `src/ctx/workspace.py` / `src/ctx/textutil.py` |
 | add a code-navigation verb (callers/refs/def) | `src/ctx/codeverbs.py` / `src/ctx/callgraph.py` |
@@ -111,6 +112,7 @@ This is the plane most contributions touch. The flow is
 | `digest/evidence_render.py` | The plan-obeying **pure** renderer for census-grade profiles: `(graph, contract, plan) → bytes`. |
 | `plan_ir.py`, `plan_ops.py`, `plan_exec.py` | The compiled evidence-plan IR (a total, bounded DAG), its logical operators, and the executor + `investigate/v1` digest. |
 | `ask.py` | `ctx ask` — intents as typed plan presets (the seven intents). |
+| `anchors.py` | Content anchors and line tags: the verify → relocate → refuse ladder that keeps a `repo:` line address meaningful after an edit. Pure and total ([ANCHORS.md](ANCHORS.md)). |
 | `retrieval.py`, `_retrieval/` | Bounded `ctx search` / `get` / `stats` / spans: deterministic, budget-capped, provenance-bearing (SPEC §6.3–6.5). |
 | `refs.py` | The reference/handle grammar (`run:…#stdout`, spans) (SPEC §6.1). |
 | `substitute.py` | The collapse substitution layer (the replacement surface). |

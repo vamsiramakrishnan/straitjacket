@@ -33,6 +33,7 @@ python evals/headroom_needle_v2.py     # needle-survival head-to-head vs Headroo
 python evals/field_needle.py           # seven strategies on identical hostile bytes
 python evals/coverage_corpus.py        # replay real hostile outputs through stub binaries
 python evals/plan_collapse.py          # rounds collapse, byte-stable digest
+python evals/anchor_drift.py           # how often a repo: address goes silently stale
 ```
 
 Others in this class: `evalset_collapse.py`, `corpus_scoped_scan.py`,

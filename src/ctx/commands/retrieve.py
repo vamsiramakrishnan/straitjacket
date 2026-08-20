@@ -33,7 +33,7 @@ def _fail(verb: str, e: BaseException) -> int:
 
 
 def _retrieval(ws, ns, verb: str) -> int:
-    from ctx.retrieval import Selector, _span, get, search, stats
+    from ctx.retrieval import Selector, _span, _span_anchored, get, search, stats
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
@@ -53,8 +53,14 @@ def _retrieval(ws, ns, verb: str) -> int:
                 max_matches=ns.max_matches,
             )
         elif verb == "get":
+            # One parse for the anchored grammar: the range and the anchor come
+            # out of the same match, so a selector can never carry a range from
+            # one spelling and an anchor from another.
+            la, lb, lanchor = _span_anchored(ns.lines) if ns.lines else (None, None, None)
             selector = Selector(
-                lines=_span(ns.lines) if ns.lines else None,
+                lines=(la, lb) if la is not None else None,
+                lines_anchor=lanchor,
+                hashlines=bool(getattr(ns, "hashlines", False)),
                 bytes=_span(ns.bytes) if ns.bytes else None,
                 records=_span(ns.records) if ns.records else None,
                 json_pointer=ns.json_pointer,

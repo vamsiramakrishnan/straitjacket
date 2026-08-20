@@ -14,6 +14,7 @@ import os
 import re
 from pathlib import Path
 
+from ctx import anchors
 from ctx.execution import snapshot_file
 from ctx.retrieval import (
     RetrievalError,
@@ -161,19 +162,37 @@ def cmd_def(store: Store, ws: Workspace, target: str) -> str:
     body = lines[a - 1 : b]
     n_lines = b - a + 1
 
+    # `ctx def` is the verb that runs immediately BEFORE an edit -- the model
+    # asks where a symbol lives, then changes it. That makes it the one place
+    # a bare line range is most likely to be handed back after the file has
+    # already moved under it, so this is where the anchor earns its nine
+    # characters. Listing verbs (`refs`, `diag`) pay it per row for addresses
+    # that mostly get navigated, not edited, and are deliberately left bare.
+    anch = anchors.anchor(body)
+    live = f"ctx get repo:{def_rel} --lines {anchors.format_span(a, b, anch)}"
+
     out = [f"[ctx def repo:{rel}:{symbol} · engine {engine}]"]
-    out.append(f"definition: repo:{def_rel} L{a}:{b} ({kind})")
+    out.append(f"definition: repo:{def_rel} L{a}:{b}@{anch} ({kind})")
     out.append(f"snapshot: snapshot:{snap_short}")
+    # Two addresses for two different questions, labelled so they cannot be
+    # confused. The span resolves against the snapshot this call froze, so it
+    # answers "what did I read" forever and keeps answering it after the file
+    # changes. The anchored range resolves against the worktree, so it answers
+    # "what is there now" and follows the definition if an edit moves it. The
+    # span alone used to be offered for both, which quietly returned the
+    # pre-edit body to a reader asking about current code.
     out.append(
-        f"span: {sid} (region L{a}:{b}) · resolve: ctx get repo:{def_rel} --span {sid}"
+        f"span: {sid} (region L{a}:{b}) · as captured: "
+        f"ctx get repo:{def_rel} --span {sid}"
     )
+    out.append(f"live: {live}")
     if n_lines <= budget.max_inline_lines:
         out.append("body (complete):")
         shown = body
     else:
         out.append(
             f"body: {fmt_int(n_lines)} lines — showing first 10 · "
-            f"full body: ctx get repo:{def_rel} --span {sid}"
+            f"full body: {live}"
         )
         shown = body[:10]
     out.extend(f"L{a + i}: {ln}" for i, ln in enumerate(shown))

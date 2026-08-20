@@ -12,7 +12,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** source v0.33.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,717 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** source v0.34.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,733 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -148,6 +148,17 @@ through the whole system in plain language.
 Plain-language highlights from recent releases; full detail in
 [`CHANGELOG.md`](CHANGELOG.md).
 
+- **Addresses that survive an edit.** A `repo:` line address used to be a
+  *position*, so an edit above it silently changed what it returned — same
+  address, different code, exit 0. `ctx get repo:f.py --lines 4:5@07407f1c`
+  names the **content** instead: it verifies silently, **follows the code if it
+  moved** (`anchor: @07407f1c moved L4:5 → L6:7`), and refuses rather than
+  answering a different question when the content is gone. `ctx def` hands the
+  editor one of these, and `--hashlines` tags individual lines. Replaying real
+  edits over this repo's own source, 99.9% of unanchored re-resolutions returned
+  different content silently; anchored ones answered correctly 75.8% of the time
+  — almost all by relocation — refused the rest, and were never wrong
+  ([receipt](evals/anchor-drift-2026-08-20.md), [design](docs/ANCHORS.md)).
 - **One-command, three-host setup.** `ctx setup` harnesses Antigravity,
   Claude Code, *and Codex* (with real enforcement, not just advice) in a
   single idempotent command.
@@ -836,7 +847,7 @@ Development:
 git clone https://github.com/vamsiramakrishnan/straitjacket.git
 cd straitjacket
 pip install -e '.[dev]'
-pytest        # 1,717 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,733 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper
