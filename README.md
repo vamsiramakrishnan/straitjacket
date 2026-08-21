@@ -7,6 +7,8 @@ Context containment for coding agents.
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](LICENSE)
 
+**Status:** v0.35.1 · pre-1.0 · Apache-2.0
+
 A coding agent can produce hundreds of thousands of tokens from one test run. That output enters the transcript, gets sent again on later turns, and eventually competes with the work itself.
 
 straitjacket changes the data path. It stores complete tool output locally. The model receives a small deterministic digest with exact retrieval addresses. Nothing omitted becomes unreachable.
