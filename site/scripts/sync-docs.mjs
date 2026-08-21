@@ -38,6 +38,7 @@ const PAGES = [
   ['TROUBLESHOOTING.md', 'guides/troubleshooting', 'Troubleshooting & FAQ', 'Symptom to cause to fix for setup, steering, permissions, the store, and the proxy.'],
   ['WHY-STRAITJACKET.md', 'guides/why-straitjacket', 'Why straitjacket', 'The context-cost, cache, latency, and quality thesis in one place.'],
   ['COMPARISONS.md', 'guides/comparisons', 'Comparisons', 'Head-to-head data versus Headroom, rtk, Ponytail, Caveman, Maki, and the field.'],
+  ['ALPHAEVOLVE-OPTIMIZATION.md', 'guides/alphaevolve-benefits', 'AlphaEvolve benefits', 'What AlphaEvolve measurably improved, what it made safer, and which results remain modeled or rejected.'],
   // Contributing
   ['ARCHITECTURE.md', 'contributing/architecture', 'Architecture & code map', 'Every src/ctx module mapped to its plane, with a which-file-do-I-touch table.'],
   ['WRITING-A-PROFILE.md', 'contributing/writing-a-profile', 'Writing a profile', 'Turn raw bytes into typed facts: the code, the registry, the contract, and the tests.'],
