@@ -1,52 +1,72 @@
 # straitjacket
 
-Context containment for coding agents.
+### Your agent does not need less evidence. It needs less evidence in the prompt.
 
 [![Tests](https://github.com/vamsiramakrishnan/straitjacket/actions/workflows/ci.yml/badge.svg)](https://github.com/vamsiramakrishnan/straitjacket/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ctx-harness)](https://pypi.org/project/ctx-harness/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](LICENSE)
 
-**Status:** v0.35.1 · pre-1.0 · Apache-2.0
+**v0.35.1 · pre-1.0 · Apache-2.0**
 
-A coding agent can produce hundreds of thousands of tokens from one test run. That output enters the transcript, gets sent again on later turns, and eventually competes with the work itself.
+A test run prints 300,000 tokens. The agent needs one failure.
 
-straitjacket changes the data path. It stores complete tool output locally. The model receives a small deterministic digest with exact retrieval addresses. Nothing omitted becomes unreachable.
+The usual fix is to truncate the log. That saves the window and destroys the evidence. The other fix is to keep the log. That preserves the evidence and makes every later turn carry it.
+
+Both choices are wrong for the same reason: they treat evidence and context as the same thing.
+
+straitjacket separates them.
 
 ```text
-command → local artifact → bounded digest → model
-              ↑                              │
-              └──────── exact retrieval ─────┘
+                         304,113 tokens
+pytest ────────────────→ local evidence store
+                               │
+                               │ extract failures, locations, coverage
+                               ▼
+                         ~210-token digest ──→ agent
+                               │
+                               └── exact address back to every omitted byte
 ```
 
-The package is `ctx-harness`. The command is `ctx`.
+The complete output stays local. The model sees a small deterministic digest. If it needs the missing traceback, it retrieves that traceback—not the other 303,900 tokens.
 
-## Install
+That is context containment.
+
+## Five lines to try it
 
 ```bash
 python -m pip install --upgrade ctx-harness
 cd your-repository
 ctx setup
 ctx doctor
+ctx run -- pytest -q
 ```
 
-Python 3.11 or newer is required. `ctx setup` detects Antigravity, Claude Code, and Codex. It merges the required configuration and verifies the result. Re-running it is safe.
+The package is `ctx-harness`. The command is `ctx`. Python 3.11 or newer is required.
 
-To preview a host configuration without writing it:
+## The expensive byte is the one that survives
 
-```bash
-ctx wrap codex --print-config
+People tend to price an agent session by what tools produce. The larger cost is what the transcript keeps.
+
+Suppose a tool emits (B) tokens on turn (k), and the task ends on turn (T). Without containment, those bytes can remain in the prompt for every later turn:
+
+```text
+resident cost ≈ B × (T - k + 1)
 ```
 
-## Try the core loop
+A 100,000-token build log produced early in a 20-turn debugging session is not a 100,000-token event. It is up to two million token-turns of residency.
 
-Capture a noisy command:
+The log is useful once. Its conclusions may be useful for several turns. Its raw bytes are almost never useful on every turn.
+
+Larger context windows do not change this. They raise the ceiling while preserving the bill, latency, cache churn, and eventual compaction problem.
+
+## One run, walked through
 
 ```bash
 ctx run -- pytest -q
 ```
 
-The full stdout and stderr remain in the local artifact store. The terminal receives a bounded result:
+straitjacket captures stdout and stderr before they enter model context. A pytest profile extracts the evidence the next decision needs:
 
 ```text
 [ctx run:8d8335db6848 profile=pytest/v2]
@@ -54,120 +74,177 @@ exit: 1
 stdout: 4,102 lines · 402.1 KiB · est 98,000 tokens
 failures:
   tests/test_auth.py::test_token_expiry  tests/test_auth.py:42
+coverage:
+  identities: 1/1
+  omitted: 4,098 lines
 next:
   ctx get run:8d8335db6848#stdout --lines 1280:1300
 ```
 
-Retrieve only the evidence you need:
+This is not a summary pretending to be the evidence. It is an index into the evidence.
+
+Need the traceback:
 
 ```bash
 ctx get run:8d8335db6848#stdout --lines 1280:1300
+```
+
+Need the exception:
+
+```bash
 ctx search run:8d8335db6848 "MissingTenantError"
 ```
 
-This is the entire mechanism: capture once, keep a bounded view in context, and retrieve exact bytes on demand.
+Need to know what changed after the fix:
 
-## What it does
+```bash
+ctx diff run:<before> run:<after>
+```
 
-- Contains large command output before it enters the transcript.
-- Preserves stdout, stderr, structured results, and derived evidence locally.
-- Produces deterministic digests for tests, diagnostics, logs, JSON, tables, searches, and generic text.
-- Keeps every omission behind a resolvable handle.
-- Bounds retrieval, so `ctx get` cannot become a second flood source.
-- Integrates with Antigravity, Claude Code, and Codex.
-- Measures containment, retrieval, reruns, cache behaviour, and intervention outcomes.
-- Supports repository maps, symbol navigation, call graphs, typed queries, and compiled investigations.
+Each answer stays bounded. Retrieval cannot become the second flood.
 
-It does not rewrite transcript history. It is not agent memory. It is not a complete process sandbox. Commands still run with the invoking user's authority.
+## Truncation is cheap because someone else pays
 
-## Choose the right command
+`head -100` looks efficient. It sends the loss to the next turn.
 
-| Need | Command |
+The failure may be on line 8,412. The anomaly may appear once in the middle of a repetitive log. A JSON response may contain 12,000 ordinary records and one object with the field that matters. Position is not relevance.
+
+straitjacket uses typed profiles:
+
+| Output | Evidence kept |
 |---|---|
-| Capture one command | `ctx run -- <command>` |
-| Capture a pipeline | `ctx run --shell '<pipeline>'` |
-| Run declared steps | `ctx seq` |
-| Run computed local control flow | `ctx py <script>` |
-| Continue a long-running command | `ctx run --bg-after 30 -- <command>` |
-| Inspect a background job | `ctx job <id>` |
-| Retrieve exact evidence | `ctx get <handle>` |
-| Search stored evidence | `ctx search <handle> <pattern>` |
-| Compare two runs | `ctx diff run:<before> run:<after>` |
-| Map a repository | `ctx map --budget 500` |
-| Find definitions or references | `ctx def`, `ctx refs`, `ctx callers` |
-| Ask a typed repository question | `ctx ask '<question>' --intent <intent>` |
-| Run a compiled investigation | `ctx plan run <plan.json>` |
-| Inspect session economics | `ctx stats --session` |
+| Tests | failed identities, locations, outcome census |
+| Diagnostics | severity, code, file, line |
+| Logs | rare templates, repeated families, head and tail |
+| JSON / JSONL | shape, counts, exceptional records |
+| Search | matches, files, coverage |
+| Generic text | bounded windows with addresses for the rest |
 
-Use the least expressive command that fits the job. Batch deterministic work. Return to the model when new evidence can change the hypothesis.
+Every profile declares what is required, what can contract, and what may remain out of context only when it is retrievable. Every digest carries a coverage receipt.
 
-## How containment works
+Short output is not automatically good output. The useful metric is task success at lower context residency.
 
-straitjacket acts at four points:
+## The invariant
 
-| Gate | Decision |
+> Potentially unbounded output must be captured before it reaches the model or rejected before execution.
+
+straitjacket applies that rule at four points:
+
+| Gate | Question |
 |---|---|
 | Birth | Can this operation flood before it runs? |
 | Entry | What crossed the tool or host boundary? |
-| Residence | What should remain in active context? |
-| Emission | What should the model send back out? |
+| Residence | What still deserves space in active context? |
+| Emission | Is stored evidence about to be pasted back into the answer? |
 
-The birth gate is the critical one. Known noisy commands are routed through capture. Small bounded commands can pass through directly. Unknown commands follow the configured guard policy.
+Birth is the load-bearing gate. It is cheaper to prevent a flood than to repair a transcript after one.
 
-Host capabilities differ. Claude Code and Codex can rewrite noisy calls before execution and replace oversized tool results after execution. Antigravity can stop a noisy call before execution, but its published hook contract cannot replace a completed tool result. See [host capabilities](docs/HOST-CAPABILITIES.md) for the exact matrix.
+`ctx setup` installs host-specific enforcement:
 
-## Evidence, not summaries
+| Host | Noisy command | Oversized returned result |
+|---|---|---|
+| Claude Code | rewritten through capture | replaced with a digest |
+| Codex | rewritten through capture | replaced with a digest |
+| Antigravity | denied with the bounded replacement command | observed, not replaceable |
 
-A digest is a typed view over immutable evidence. It reports:
+Antigravity's published hooks cannot mutate PreToolUse arguments or replace PostToolUse output. The limitation is in the host contract, so the documentation says so. See [Host capabilities](docs/HOST-CAPABILITIES.md).
 
-1. what ran;
-2. what failed or changed;
-3. what was shown;
-4. what was omitted;
-5. how to retrieve the omitted region.
+## Addresses are the product
 
-Specialized profiles extract identities such as failed tests, diagnostics, symbols, and log templates. Generic truncation is the fallback, not the design.
+Compression is easy if losing information is allowed. The hard part is omission without amnesia.
 
-For files that may change, line addresses can carry a content anchor:
+Frozen artifacts use immutable handles:
+
+```text
+run:8d8335db6848#stdout
+snapshot:fe21c91ad4e8
+blob:7bd91f2a4c3d
+```
+
+Repository files are harder. An agent edits them. Line 42 today may contain different code on the next turn.
+
+straitjacket can attach a content anchor:
 
 ```bash
 ctx get repo:src/auth.py --lines 40:52@07407f1c
 ```
 
-The anchor verifies the content. If the code moved, retrieval follows it. If the content no longer exists, retrieval refuses instead of returning unrelated lines.
+On retrieval, it follows a strict ladder:
 
-## Measured claims
+1. verify the content at the recorded position;
+2. relocate it if the same content moved;
+3. refuse if the content no longer exists.
 
-The repository keeps benchmarks and negative results in [`evals/`](evals/). Current receipts cover:
+It does not silently return whatever now occupies lines 40–52. A refusal is cheaper than false evidence.
 
-- containment across real command-output families;
-- prompt-cache stability;
-- agent A/B runs;
+## Use the smallest machine that fits the work
+
+| Work shape | Command |
+|---|---|
+| One noisy command | `ctx run -- <command>` |
+| Pipeline or shell syntax | `ctx run --shell '<pipeline>'` |
+| Known sequence | `ctx seq` |
+| Computed local control flow | `ctx py <script>` |
+| Work that may outlive the turn | `ctx run --bg-after 30 -- <command>` |
+| Exact retrieval | `ctx get <handle>` |
+| Search stored evidence | `ctx search <handle> <pattern>` |
+| Compare executions | `ctx diff run:<before> run:<after>` |
+| Map a repository | `ctx map --budget 500` |
+| Navigate symbols | `ctx def`, `ctx refs`, `ctx callers` |
+| Ask a typed question | `ctx ask '<question>' --intent <intent>` |
+| Compile an investigation | `ctx plan run <plan.json>` |
+| Inspect session economics | `ctx stats --session` |
+
+The operating rule is precise:
+
+> Batch deterministic fan-out. Return to the model at uncertainty boundaries.
+
+Do not make the model schedule five searches whose order is already known. Do not compile a fifty-step investigation while the first result could invalidate the hypothesis.
+
+## What it is not
+
+straitjacket is not:
+
+- a bigger context window;
+- agent memory;
+- a free-form summarizer;
+- transcript rewriting;
+- a process sandbox.
+
+Commands still run with the invoking user's authority. Mutation approvals remain mutation approvals. Context containment does not turn a dangerous command into a safe one.
+
+## Receipts, including the awkward ones
+
+The repository keeps evaluation code, fixtures, positive results, and negative results in [`evals/`](evals/).
+
+Measured surfaces include:
+
+- 8×–151× containment across real output families;
+- 304,113 raw tokens reduced to an approximately 210-token digest;
+- 96.5–98.1% prompt-cache hit rates in measured runs;
+- equal-correctness agent A/Bs;
 - decisive-evidence preservation;
-- hook latency;
-- compiled investigation turn reduction;
-- address stability across edits;
-- policy and routing counterexamples.
+- Python and native-hook latency;
+- six investigation rounds collapsed to one;
+- content-anchor behaviour across real edits;
+- policy candidates rejected when they cost more than the baseline.
 
-The project does not treat a smaller digest as success by itself. The target is lower context cost at matched or better task completion, with every omission declared and retrievable.
+The last item matters. A system that only publishes wins becomes a marketing harness. straitjacket uses failed experiments to delete mechanisms, narrow claims, and find the regime where the native path is better.
 
-## Documentation
+## Read next
 
-Start here:
+1. [How it works](docs/HOW-IT-WORKS.md) — the complete lifecycle of one byte.
+2. [Getting started](docs/GETTING-STARTED.md) — install, setup, capture, retrieval.
+3. [Core concepts](docs/CONCEPTS.md) — artifacts, handles, spans, contracts, plans.
+4. [CLI guide](docs/CLI.md) — the operational surface.
+5. [Architecture](docs/ARCHITECTURE.md) — source ownership and invariants.
 
-1. [How it works](docs/HOW-IT-WORKS.md)
-2. [Getting started](docs/GETTING-STARTED.md)
-3. [Core concepts](docs/CONCEPTS.md)
-4. [CLI reference](docs/CLI.md)
-5. [Configuration](docs/CONFIGURATION.md)
+Reference:
 
-Then use:
-
-- [Architecture and code map](docs/ARCHITECTURE.md)
-- [Host capability matrix](docs/HOST-CAPABILITIES.md)
+- [Documentation map](docs/README.md)
+- [Configuration](docs/CONFIGURATION.md)
 - [Use cases](docs/USE-CASES.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Design documentation](docs/README.md)
 - [Normative specifications](spec/)
 - [Evaluation receipts](evals/)
 - [Changelog](CHANGELOG.md)
@@ -182,8 +259,6 @@ python -m pip install -e '.[dev]'
 pytest
 ```
 
-Optional extras add code analysis, semantic search, faster serialization, image decoding, and graph support. See [Getting started](docs/GETTING-STARTED.md) and [`pyproject.toml`](pyproject.toml).
-
-Before changing a mechanism, read [CONTRIBUTING.md](CONTRIBUTING.md). New mechanisms need a clear owner plane, deterministic output, explicit degradation, and a named evaluation gate.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing a mechanism. New mechanisms need a clear owner plane, deterministic output, explicit degradation, and a named evaluation gate.
 
 Apache-2.0.
