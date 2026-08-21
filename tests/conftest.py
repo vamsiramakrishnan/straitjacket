@@ -34,6 +34,11 @@ def git_workspace(tmp_path):
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
     subprocess.run(["git", "init", "-q"], cwd=ws, check=True, env=env)
+    # Later test steps create additional commits without carrying this injected
+    # process environment. Persist fixture-local identity so hermetic CI hosts
+    # with no global Git config behave like developer machines.
+    subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
     (ws / "hello.py").write_text("print('hello')\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=ws, check=True, env=env)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=ws, check=True, env=env)
