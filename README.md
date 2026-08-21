@@ -12,7 +12,7 @@
 
 [Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** source v0.34.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,742 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** source v0.35.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,788 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -49,9 +49,10 @@ What that buys you:
 - **It works with the agent you already use.** Antigravity, Claude Code and
   Codex — one command, merged into your existing config, never clobbering it.
 - **Parallelism is earned, not guessed.** Independent read-only work can fan out
-  across capable hosts; shared-workspace mutations serialize, high-risk changes
-  get independent verification, and every handoff keeps an exact evidence
-  address. The policy fleet is optimized and counterexample-tested with
+  across capable hosts; opt-in disjoint mutations can use isolated Git
+  worktrees, while dirty, overlapping, or undeclared mutations serialize.
+  High-risk changes get independent verification, and every handoff keeps an
+  exact evidence address. The policy fleet is optimized and counterexample-tested with
   AlphaEvolve before maintainers translate it into production code.
 
 Every number above has a receipt in [`evals/`](evals/); the house rule is
@@ -644,7 +645,7 @@ straitjacket/
 ├── docs/              # design docs — EDC, reflex, ladders, priced context, rescue
 ├── evals/             # every measured claim in this README
 ├── assets/readme/     # README visuals (self-contained SVG, no remote fetches)
-└── tests/             # 1,712 acceptance-oriented determinism & security test functions
+└── tests/             # 1,788 acceptance-oriented determinism & security test functions
 ```
 
 ## 📖 Reference
@@ -847,7 +848,7 @@ Development:
 git clone https://github.com/vamsiramakrishnan/straitjacket.git
 cd straitjacket
 pip install -e '.[dev]'
-pytest        # 1,742 test functions: determinism, budgets, hook contract, escapes
+pytest        # 1,788 test functions: determinism, budgets, hook contract, escapes
 ```
 
 ## 📚 Going deeper

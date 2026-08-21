@@ -54,6 +54,17 @@ from ctx.mutation_policy import choose_mutation_isolation
 from ctx.usage import ActualUsage, coerce_usage, parse_host_output, summarize_usage
 from ctx.verification_policy import choose_verification
 from ctx.wave_policy import choose_wave
+from ctx.worker_yield import WorkerYieldSchemaError, check_schema, validate as validate_worker_yield
+from ctx.worktree_isolation import (
+    IsolatedWorktree,
+    WorktreeIsolationError,
+    WorktreePatch,
+    apply_patches,
+    clean_git_root,
+    normalize_targets,
+    preflight_patch,
+    targets_overlap,
+)
 
 # Parallel wave nodes launch concurrently (the expensive part), but their store
 # writes — blob + checkpoint manifest into one SQLite catalog — must be
@@ -124,6 +135,11 @@ Rules:
   "est_input_tokens","est_output_tokens"}. Optionally pin "host":"<name>",
   "model":"<model id from the menu>", and/or "prefer":"strong". Pins are
   advisory and never bypass unattended eligibility.
+- Mutation nodes may declare repository-relative "targets":[paths]. Independent
+  mutation nodes are eligible for isolated worktrees only when every target is
+  declared and the target sets do not overlap.
+- A node may request a typed final yield with "output_schema":{...} and opt into
+  fail-closed enforcement with "strict_output_schema":true.
 - min_tier is the weakest capability that can do the node: economy < standard <
   frontier. Route by MODEL, not just harness:
     * exploration / search / triage / verify -> economy
@@ -161,6 +177,12 @@ class RouteNode:
     host_pin: str = ""    # optional explicit harness name from the coordinator
     model_pin: str = ""   # optional explicit model id from the coordinator
     prefer: str = "cheap"  # "cheap" (default) | "strong" (flagship at the tier)
+    # Declared repository-relative mutation scope. Multiple ready mutation
+    # nodes are worktree-eligible only when every node declares disjoint paths.
+    targets: tuple[str, ...] = ()
+    # Optional dependency-free JSON-Schema subset for the worker's final yield.
+    output_schema: dict | None = None
+    strict_output_schema: bool = False
 
 
 @dataclass
@@ -350,6 +372,19 @@ def _coerce_node(raw: dict, i: int) -> RouteNode:
     """One raw JSON node -> RouteNode, tolerant of missing/loose fields."""
     nid = str(raw.get("id") or f"n{i}").strip()
     tier = str(raw.get("min_tier") or "standard").strip().lower()
+    raw_targets = raw.get("targets") or []
+    if isinstance(raw_targets, str):
+        raw_targets = [raw_targets]
+    try:
+        targets = normalize_targets(tuple(str(value) for value in raw_targets))
+    except WorktreeIsolationError as exc:
+        raise RouteError(f"node {nid!r} has invalid targets: {exc}") from exc
+    output_schema = raw.get("output_schema")
+    if output_schema is not None:
+        try:
+            check_schema(output_schema)
+        except WorkerYieldSchemaError as exc:
+            raise RouteError(f"node {nid!r} has invalid output_schema: {exc}") from exc
     return RouteNode(
         id=nid,
         goal=str(raw.get("goal") or raw.get("role") or "do the subtask"),
@@ -362,6 +397,9 @@ def _coerce_node(raw: dict, i: int) -> RouteNode:
         host_pin=str(raw.get("host") or raw.get("host_pin") or "").strip(),
         model_pin=str(raw.get("model") or raw.get("model_pin") or "").strip(),
         prefer=("strong" if str(raw.get("prefer") or "").strip().lower() == "strong" else "cheap"),
+        targets=targets,
+        output_schema=output_schema,
+        strict_output_schema=bool(raw.get("strict_output_schema", False)),
     )
 
 
@@ -919,6 +957,18 @@ class NodeOutcome:
     exit_code: int | None = None
     usage_attempts: tuple[ActualUsage | None, ...] = ()
     handoff_policy: str = ""
+    isolation: str = "shared_workspace"
+    changed_paths: tuple[str, ...] = ()
+    merge_status: str = "not_applicable"
+    output_schema_status: str = "not_requested"
+
+
+@dataclass
+class _NodeExecution:
+    outcome: NodeOutcome
+    stdout: str
+    stderr: str
+    patch: WorktreePatch | None = None
 
 
 @dataclass
@@ -1005,7 +1055,12 @@ def _append_route_receipt(ws, result: RouteResult, nodes: list[AssignedNode]) ->
             },
             "orchestration_policy": {
                 "wave_policies": list(result.wave_policies),
-                "shared_workspace_mutations_serialized": True,
+                "shared_workspace_mutations_serialized": all(
+                    outcome.isolation != "git_worktree" for outcome in result.outcomes
+                ),
+                "isolated_worktrees_used": any(
+                    outcome.isolation == "git_worktree" for outcome in result.outcomes
+                ),
             },
             "outcomes": [
                 {
@@ -1015,8 +1070,12 @@ def _append_route_receipt(ws, result: RouteResult, nodes: list[AssignedNode]) ->
                     "handoff_policy": outcome.handoff_policy or None,
                     "exit_code": outcome.exit_code,
                     "escalated": outcome.escalated_to is not None,
-                    "checkpoint": outcome.checkpoint_ref is not None,
-                    "actual_usage": summarize_usage(outcome.usage_attempts),
+                        "checkpoint": outcome.checkpoint_ref is not None,
+                        "isolation": outcome.isolation,
+                        "changed_paths": list(outcome.changed_paths),
+                        "merge_status": outcome.merge_status,
+                        "output_schema_status": outcome.output_schema_status,
+                        "actual_usage": summarize_usage(outcome.usage_attempts),
                 }
                 for outcome in result.outcomes
             ],
@@ -1133,7 +1192,27 @@ def _node_prompt(
             "\n\nUpstream nodes produced these checkpoints — resolve any handle "
             "with `ctx get`:\n" + "\n---\n".join(dep_docs)
         )
+    if node.targets:
+        p += "\n\nYou may mutate only these declared targets: " + ", ".join(node.targets)
+    if node.output_schema is not None:
+        p += (
+            "\n\nYour final yield must be one JSON value matching this schema. "
+            "Do not put the JSON in a markdown fence:\n"
+            + json.dumps(node.output_schema, sort_keys=True, separators=(",", ":"))
+        )
     return p
+
+
+def _worker_yield_status(node: RouteNode, stdout: str) -> tuple[str, str]:
+    if node.output_schema is None:
+        return "not_requested", ""
+    value = _extract_json(stdout)
+    if value is None:
+        return "invalid", "worker output did not contain a JSON value"
+    errors = validate_worker_yield(value, node.output_schema)
+    if errors:
+        return "invalid", "; ".join(errors[:4])
+    return "valid", ""
 
 
 def _execution_contract_failed(code: int, stdout: str, stderr: str) -> bool:
@@ -1210,18 +1289,30 @@ def _actual_cost(assigned, outcome) -> float:
 
 
 def _select_wave(
-    ready: list[AssignedNode], max_workers: int, *, final_wave: bool = False
+    ready: list[AssignedNode],
+    max_workers: int,
+    *,
+    final_wave: bool = False,
+    isolated_worktrees: bool = False,
+    repository_clean: bool = False,
 ) -> tuple[list[AssignedNode], int, str]:
     """Apply evolved wave and mutation policies to one topological frontier."""
     mutations = [item for item in ready if _is_mutation_node(item.node)]
     readonly = [item for item in ready if not _is_mutation_node(item.node)]
+    declared = bool(mutations) and all(item.node.targets for item in mutations)
+    overlap = True
+    if declared:
+        try:
+            overlap = targets_overlap([item.node.targets for item in mutations])
+        except WorktreeIsolationError:
+            overlap = True
     isolation = choose_mutation_isolation(
         {
             "mutation_count": len(mutations),
             "shared_workspace": True,
-            "isolated_worktrees": False,
-            "targets_declared": False,
-            "target_overlap": len(mutations) > 1,
+            "isolated_worktrees": isolated_worktrees and repository_clean,
+            "targets_declared": declared,
+            "target_overlap": overlap,
         }
     )
     action = choose_wave(
@@ -1291,35 +1382,30 @@ def run_route(
     usage_attempts = (
         prior_usage_attempts if prior_usage_attempts is not None else []
     )
+    isolated_worktrees = bool(getattr(cfg, "isolated_worktrees", False))
+    strict_worker_yields = bool(getattr(cfg, "strict_worker_yields", False))
+    isolated_node_ids: set[str] = set()
 
-    def run_one(a: AssignedNode) -> NodeOutcome:
+    def run_one(a: AssignedNode) -> _NodeExecution:
         dep_docs = [docs[d] for d in a.node.deps if d in docs]
         prompt = _node_prompt(a.node, plan.task, dep_docs)
         host, model = a.host, a.model
         node_usage: list[ActualUsage | None] = []
-        code, out, err, usage = _launch_result(
-            launch(
-                host,
-                ws.root,
-                prompt,
-                resolved_exe,
-                timeout=timeout,
-                model=model.launch_id,
-            )
-        )
-        node_usage.append(usage)
-        if _execution_contract_failed(code, out, err):
-            code = code or 1
+        use_isolation = a.node.id in isolated_node_ids
+        checkout = IsolatedWorktree(Path(ws.root), a.node.id, a.node.targets) if use_isolation else None
+        work_root = Path(ws.root)
+        patch: WorktreePatch | None = None
         escalated = None
-        if code != 0:
-            target = _escalate(a.model, hosts)
-            if target is not None:
-                host, model = target
-                escalated = f"{host.name}/{model.id}"
+        schema_status = "not_requested"
+        try:
+            scope = checkout if checkout is not None else contextlib.nullcontext()
+            with scope:
+                if checkout is not None and checkout.path is not None:
+                    work_root = checkout.path
                 code, out, err, usage = _launch_result(
                     launch(
                         host,
-                        ws.root,
+                        work_root,
                         prompt,
                         resolved_exe,
                         timeout=timeout,
@@ -1329,6 +1415,39 @@ def run_route(
                 node_usage.append(usage)
                 if _execution_contract_failed(code, out, err):
                     code = code or 1
+                schema_status, schema_error = _worker_yield_status(a.node, out)
+                strict_schema = a.node.strict_output_schema or strict_worker_yields
+                if schema_status == "invalid" and strict_schema:
+                    code = code or 1
+                    err = f"typed worker yield invalid: {schema_error}"
+                if code != 0:
+                    target = _escalate(a.model, hosts)
+                    if target is not None:
+                        if checkout is not None:
+                            checkout.reset()
+                        host, model = target
+                        escalated = f"{host.name}/{model.id}"
+                        code, out, err, usage = _launch_result(
+                            launch(
+                                host,
+                                work_root,
+                                prompt,
+                                resolved_exe,
+                                timeout=timeout,
+                                model=model.launch_id,
+                            )
+                        )
+                        node_usage.append(usage)
+                        if _execution_contract_failed(code, out, err):
+                            code = code or 1
+                        schema_status, schema_error = _worker_yield_status(a.node, out)
+                        if schema_status == "invalid" and strict_schema:
+                            code = code or 1
+                            err = f"typed worker yield invalid: {schema_error}"
+                if code == 0 and checkout is not None:
+                    patch = checkout.capture()
+        except WorktreeIsolationError as exc:
+            code, out, err = 1, "", f"isolated worktree failed: {exc}"
         has_dependents = any(a.node.id in item.node.deps for item in nodes)
         handoff_strategy = choose_handoff(
             {
@@ -1339,26 +1458,20 @@ def run_route(
                 "output_bytes": len((out or err or "").encode("utf-8", "replace")),
             }
         )
-        ref = _checkpoint_node(
-            ws,
-            a.node,
-            plan.task,
-            out,
-            err,
-            handoff_strategy=handoff_strategy,
-        )
         tail = (out or err or "").strip().splitlines()
-        return NodeOutcome(
-            node_id=a.node.id,
-            host_name=f"{host.name}/{model.id}",
-            status="ok" if code == 0 else "failed",
-            checkpoint_ref=ref,
-            detail=(tail[-1][:200] if tail else "(no output)"),
-            escalated_to=escalated,
-            exit_code=code,
-            usage_attempts=tuple(node_usage),
-            handoff_policy=handoff_strategy,
+        outcome = NodeOutcome(
+            node_id=a.node.id, host_name=f"{host.name}/{model.id}",
+            status="ok" if code == 0 else "failed", checkpoint_ref=None,
+            detail=(tail[-1][:200] if tail else "(no output)"), escalated_to=escalated,
+            exit_code=code, usage_attempts=tuple(node_usage), handoff_policy=handoff_strategy,
+            isolation="git_worktree" if use_isolation else "shared_workspace",
+            changed_paths=patch.changed_paths if patch else (),
+            merge_status="pending" if patch is not None else (
+                "no_changes" if use_isolation and code == 0 else "not_applicable"
+            ),
+            output_schema_status=schema_status,
         )
+        return _NodeExecution(outcome=outcome, stdout=out, stderr=err, patch=patch)
 
     while waves_run < max_waves:
         # Skip nodes whose dependency failed — they can never become ready.
@@ -1386,13 +1499,64 @@ def run_route(
                     replans_done += 1
                     continue
             break
+        repository_clean = clean_git_root(Path(ws.root)) if isolated_worktrees else False
         selected, workers, wave_policy = _select_wave(
-            ready, max_workers, final_wave=waves_run + 1 >= max_waves
+            ready,
+            max_workers,
+            final_wave=waves_run + 1 >= max_waves,
+            isolated_worktrees=isolated_worktrees,
+            repository_clean=repository_clean,
+        )
+        isolated_node_ids = (
+            {item.node.id for item in selected if _is_mutation_node(item.node)}
+            if wave_policy.endswith("/parallel_worktrees")
+            else set()
         )
         wave_policies.append(wave_policy)
         waves_run += 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            results = list(pool.map(run_one, selected))
+            executions = list(pool.map(run_one, selected))
+
+        # Worktree mutations form one apply transaction per wave: every patch
+        # preflights against the unchanged real workspace before any is applied.
+        isolated_execs = [execution for execution in executions if execution.patch is not None]
+        conflicts: list[tuple[_NodeExecution, str]] = []
+        for execution in isolated_execs:
+            ok, detail = preflight_patch(Path(ws.root), execution.patch)
+            if not ok:
+                conflicts.append((execution, detail))
+        if conflicts:
+            conflict_ids = {id(execution): detail for execution, detail in conflicts}
+            for execution in isolated_execs:
+                execution.outcome.status = "failed"
+                execution.outcome.exit_code = 1
+                if id(execution) in conflict_ids:
+                    execution.outcome.merge_status = "conflict"
+                    execution.stderr = f"isolated patch conflict: {conflict_ids[id(execution)]}"
+                else:
+                    execution.outcome.merge_status = "aborted"
+                    execution.stderr = "isolated wave aborted because another patch conflicted"
+                execution.outcome.detail = execution.stderr[:200]
+        elif isolated_execs:
+            ok, detail = apply_patches(
+                Path(ws.root), [execution.patch for execution in isolated_execs if execution.patch]
+            )
+            for execution in isolated_execs:
+                execution.outcome.merge_status = "applied" if ok else "conflict"
+                if not ok:
+                    execution.outcome.status = "failed"
+                    execution.outcome.exit_code = 1
+                    execution.stderr = f"isolated patch apply failed: {detail}"
+                    execution.outcome.detail = execution.stderr[:200]
+
+        results: list[NodeOutcome] = []
+        for a, execution in zip(selected, executions):
+            o = execution.outcome
+            o.checkpoint_ref = _checkpoint_node(
+                ws, a.node, plan.task, execution.stdout, execution.stderr,
+                handoff_strategy=o.handoff_policy,
+            )
+            results.append(o)
         for a, o in zip(selected, results):
             state[a.node.id] = o.status
             outcomes[a.node.id] = o

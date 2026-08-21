@@ -30,6 +30,7 @@ what was integrated and what still beats us.
 | [**Maki**](https://maki.sh/) (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
 | [**TokenSave**](https://tokensave.dev/) (semantic code graph) | one-call context, per-branch indexes, 50+ languages, broad editor reach and ambient savings ledger | semantic ranking is probabilistic; 80+ MCP operations require dynamic disclosure to avoid a large stable prefix | one stable `ctx` op surface, typed symbol/call/impact facts and billed-token accounting; branch graphs and semantic ranking remain gaps |
 | [**WozCode**](https://www.wozcode.com/how-it-works) (Claude Code plugin) | combines glob/regex/read into ranked snippets; fuzzy batch edits with post-write syntax checks; SQL graph and session recall | host-specific; no exact omitted-byte address is publicly documented | compiled evidence plans and addressable AST rewrites; batch edit/validate and SQL graph workflows remain gaps |
+| [**oh-my-pi**](https://github.com/can1357/oh-my-pi) (owned agent runtime) | hash-anchored edits, post-write LSP feedback, isolated typed subagents, provider-aware visual compaction, and mid-stream rules | several mechanisms require ownership of edits or the model stream and therefore cannot be promised through every ctx host hook | sealed `ctx edit` transactions, fresh diagnostic receipts, and opt-in isolated typed workers; visual-cold and stream-rule code remain inactive experimental seams |
 
 *Rows for TokenSave and WozCode are desk research, not head-to-head runs —
 their figures are their own claims. Marked as such in
@@ -73,6 +74,7 @@ become benchmark claims.
 | **Ponytail** | measured solution ladders and enforced debt ledger | role-scoped injection, user-selectable policy intensity, broader host rules | compile host/role-specific minimal instruction cards and A/B prompt-prefix cost plus task completion |
 | **Caveman** | cite-don't-quote narration while evidence stays exact | user verbosity levels for prose-only output | add a response-style dial that golden-tests code, commands and errors as byte-exact invariants |
 | **Maki** | `ctx py`, provenance, bounded streams, declared orchestration, surface gateway | OS sandbox, resource caps, asynchronous tool gather, user-space plugin API | broker `ctx py` with CPU/memory/network policy and an addressable execution receipt |
+| **oh-my-pi** | sealed edit plan/preview/apply, exact stale-span relocation, post-edit diagnostic receipts, isolated worktrees, typed yields | live LSP lifecycle, renderer and frame/source map, provider transport, owned-stream abort/retry, task-level live benchmarks | run the [frozen promotion matrix](OH-MY-PI-INTEGRATION.md); keep visual and streaming paths inactive until their task and billing gates pass |
 
 ### Friction found by using ctx on this change
 

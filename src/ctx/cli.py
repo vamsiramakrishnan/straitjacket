@@ -173,6 +173,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "impls": ("retrieve", "cmd_impls", True),
     "cycles": ("retrieve", "cmd_cycles", True),
     "q": ("retrieve", "cmd_q", True),
+    "edit": ("edit", "cmd_edit", True),
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
     "ask": ("plans", "cmd_ask", True),
@@ -415,6 +416,24 @@ def _build_parser():
         help="digest <file>... or diff <before> <after>",
     )
     p_image.add_argument("files", nargs="+", help="workspace-relative file path(s)")
+
+    p_edit = sub.add_parser(
+        "edit", help="plan, preview, and safely apply anchored line edits"
+    )
+    edit_sub = p_edit.add_subparsers(dest="edit_cmd", required=True)
+    p_edit_plan = edit_sub.add_parser(
+        "plan", help="seal an anchored edit request against current snapshots"
+    )
+    p_edit_plan.add_argument("file", help="workspace-relative ctx.edit-request/v1 JSON")
+    p_edit_plan.add_argument("--out", required=True, help="workspace-relative plan JSON path")
+    for edit_cmd in ("preview", "apply"):
+        p_edit_action = edit_sub.add_parser(
+            edit_cmd, help=f"{edit_cmd} a sealed ctx.edit-plan/v1 JSON"
+        )
+        p_edit_action.add_argument("file", help="workspace-relative plan JSON path")
+        p_edit_action.add_argument(
+            "--receipt", help="also write the safe receipt to this workspace-relative path"
+        )
 
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")

@@ -99,6 +99,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "Change code",
         (
+            ("edit", "plan, preview, and apply anchored edits without guessing"),
             ("rewrite", "find and edit across many files in one transaction"),
         ),
     ),
