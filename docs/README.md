@@ -78,6 +78,10 @@ its plane with a "which file do I touch for X" table. To add a digest profile,
 follow **[Writing a profile](WRITING-A-PROFILE.md)**; for setup, the invariants,
 and how to run the tests and evals, see **[`CONTRIBUTING.md`](../CONTRIBUTING.md)**.
 
+Active development inspired by another owned agent runtime is tracked in
+**[oh-my-pi integration](OH-MY-PI-INTEGRATION.md)**, with provisional APIs,
+host boundaries, attribution, and the evaluation gates required before release.
+
 ---
 
 ## Foundations already shipped

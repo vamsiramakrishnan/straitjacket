@@ -6,6 +6,31 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-08-21
+
+The oh-my-pi mechanism wave turns three previously informal orchestration
+ideas into bounded contracts. `ctx edit plan`, `preview`, and `apply` seal an
+edit against its workspace and source snapshot, relocate only a unique
+byte-identical target, preflight the complete edit set, and attach a
+content-addressed post-edit diagnostic receipt. Refusals do not leak source or
+replacement text. Python, JSON, and TOML syntax checks ship as the stdlib
+diagnostic floor; external LSPs remain an injected adapter rather than a
+background process owned by ctx.
+
+Opt-in disjoint mutation waves may now execute in isolated Git worktrees.
+Every worker declares its allowed targets and emits a typed yield; ctx captures
+tracked, untracked, and binary changes as patches, rejects out-of-target
+writes, preflights the whole wave, and applies all patches or none. Non-Git,
+dirty, nested, overlapping, undeclared, and later mutation waves retain the
+serial shared-workspace path. Worktrees are transaction boundaries, not OS
+sandboxes.
+
+Archive promotion and streaming-output rules also have frozen, deterministic
+evaluators and adversarial gates. They remain inactive experiments until their
+matched canaries pass. The implementation ledger and clean-room provenance are
+in `docs/OH-MY-PI-INTEGRATION.md`; the dated receipt records live, simulated,
+and skipped evidence separately.
+
 The hook now records what happened to the host's own edits. It has always seen
 every `Edit`/`Write`/`MultiEdit` — `_tool_kind` classifies them and PreToolUse
 allows them through — and never looked at whether they landed, so the rate of

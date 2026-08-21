@@ -83,6 +83,10 @@ path = "src/ctx/__init__.py"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Keep the documented bare `pytest` command equivalent to `python -m pytest`.
+# Console-script launchers otherwise omit the repository root on some managed
+# Python installs, breaking imports of the intentionally unshipped eval corpus.
+pythonpath = [".", "src"]
 markers = [
     "sj_canary: Tier-0 evidence-channel conformance tests (evals/BENCHMARK.md); run with -m sj_canary as the PR gate",
 ]

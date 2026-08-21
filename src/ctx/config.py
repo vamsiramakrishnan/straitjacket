@@ -119,6 +119,12 @@ class OrchestratePolicy:
     max_replans: int = 2
     budget_usd: float = 0.0     # 0 = unbounded (still bounded by nodes/waves)
     node_timeout: float = 900.0
+    # Opt-in: independent mutation nodes with explicit disjoint targets run in
+    # detached Git worktrees and merge only after every patch preflights.
+    isolated_worktrees: bool = False
+    # A per-node strict_output_schema remains authoritative; this setting makes
+    # every declared output_schema fail closed without changing untyped nodes.
+    strict_worker_yields: bool = False
     # Complexity-adaptive implementation tier for the deterministic fallback:
     # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
     # simple edits. A live coordinator overrides this per task.

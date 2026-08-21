@@ -144,11 +144,15 @@ python -m evals.alphaevolve.portfolio retrieval-policy \
 | execution | backgrounding and cache freshness | shadow |
 | orchestration | fast paths, routes, DAGs, recovery | matched live canary |
 
-Within the orchestration wave, production now parallelizes independent
-read-only frontier nodes up to the configured worker/provider limit. It
-serializes mutations in a shared workspace. The experiment can model parallel
-isolated worktrees, but that arm is not active in production until worktree
-creation, merge-conflict handling, cleanup, and acceptance coverage exist.
+Within the orchestration wave, production parallelizes independent read-only
+frontier nodes up to the configured worker/provider limit. Shared-workspace
+mutations still serialize by default. An explicit opt-in can now run a ready
+wave of disjoint, declared mutations in isolated Git worktrees: ctx captures
+each patch, rejects out-of-target changes, preflights the complete wave, applies
+all patches or none, and cleans up the worktrees. Dirty, non-Git, nested,
+overlapping, undeclared, or later mutation waves fall back to the serial path.
+This is a transaction boundary, not an OS sandbox; symlinks and external
+process side effects remain outside its containment claim.
 
 ## Promotion lifecycle
 
