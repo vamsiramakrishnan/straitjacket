@@ -24,6 +24,7 @@ from ctx._retrieval.common import (
     _read_bytes_range,
     _route_workspace,
     _span,
+    _span_anchored,
 )
 from ctx._retrieval.get import Selector, _python_symbol_span, get
 from ctx._retrieval.rg_engine import RgMatch, _rg_available, _rg_repo_search
@@ -61,6 +62,7 @@ __all__ = [
     "record_telemetry",
     "telemetry_summary",
     "_span",
+    "_span_anchored",
     "_emit",
     "_parse",
     "_peek_blob",

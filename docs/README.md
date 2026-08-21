@@ -88,6 +88,7 @@ These documents explain mechanisms that have already crossed their acceptance ga
 |---|---|
 | **[PRICED CONTEXT](PRICED-CONTEXT.md)** | How should an agent decide whether to retrieve more evidence? Put the token price at the decision point, relate it to the remaining window, and offer the cheaper continuation. |
 | **[LOSSLESS RESCUE](LOSSLESS-RESCUE.md)** | How can an already-bloated session be reduced without repeating the destructive behaviour of transcript rewriting? Elide resident bytes only after preserving them behind stable addresses. |
+| **[ANCHORS](ANCHORS.md)** | What makes an address to a file someone is *editing* still mean something next turn? Name the content, not the position — then verify it, follow it if it moved, and refuse rather than answer a different question. |
 
 ## Architecture reading path
 
@@ -178,6 +179,7 @@ Every mechanism inherits the same invariants:
 | the code map (which file for what) | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | retrieval economics | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
 | context rescue | [LOSSLESS-RESCUE.md](LOSSLESS-RESCUE.md) |
+| addresses that survive an edit | [ANCHORS.md](ANCHORS.md) |
 | conditional mechanisms | [LADDERS.md](LADDERS.md) |
 | closed-loop adaptation | [REFLEX.md](REFLEX.md) |
 | evidence contracts and plans | [EDC.md](EDC.md) |

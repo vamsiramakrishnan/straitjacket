@@ -2444,6 +2444,59 @@ def _navigation_nudge(payload: dict[str, Any]) -> str | None:
         return None
 
 
+def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
+    """Record what happened to the host's own edit. Observation only, fail-open.
+
+    ``_tool_kind`` has always classified Edit/Write/MultiEdit, and PreToolUse
+    has always allowed them through -- so this hook watched every edit an agent
+    made and never once looked at whether it landed. That is the one number
+    needed to decide whether repairing failed edits is worth building, and it
+    did not exist.
+
+    Deliberately here rather than in the PreToolUse path: only the *result*
+    says whether the needle matched, matched twice, or matched nothing, and
+    only PostToolUse carries a result. Hosts whose contract has no PostToolUse
+    payload (Antigravity) contribute nothing, which is why the summary reports
+    which hosts it heard from instead of implying it heard from all of them.
+    """
+    tool = str(payload.get("tool_name") or payload.get("toolName") or "")
+    if _tool_kind(tool) != "edit":
+        return
+    workspace_root = _resolve_workspace_root(payload)
+    if not workspace_root:
+        return
+    ti = payload.get("tool_input") or payload.get("toolInput") or {}
+    ti = ti if isinstance(ti, dict) else {}
+    tr = payload.get("tool_response")
+    if tr is None:
+        tr = payload.get("toolResponse")
+    stdout, stderr = _normalize_tool_response(tr)
+    is_error = None
+    if isinstance(tr, dict) and isinstance(tr.get("is_error"), bool):
+        is_error = tr["is_error"]
+
+    from ctx.edit_outcomes import append_edit_outcome, classify
+
+    def _pick(*keys: str) -> str:
+        for key in keys:
+            value = ti.get(key)
+            if isinstance(value, str):
+                return value
+        return ""
+
+    append_edit_outcome(
+        workspace_root,
+        tool=tool,
+        outcome=classify(f"{stdout}\n{stderr}", is_error=is_error),
+        path=_pick("file_path", "filePath", "path", "target_file") or None,
+        # Lengths only. The strings themselves are the edit's content, and a
+        # ledger that quotes them stops being safe to attach to a receipt.
+        old_len=len(_pick("old_string", "oldString", "old_str")),
+        new_len=len(_pick("new_string", "newString", "new_str", "content")),
+        flavor=flavor,
+    )
+
+
 def _normalize_tool_response(tr: Any) -> tuple[str, str]:
     """Reduce any tool_response shape to ``(stdout, stderr)`` text.
 
@@ -2827,6 +2880,13 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         nudge = _navigation_nudge(payload) or _emission_nudge(payload)
     except Exception:
         nudge = None
+    try:
+        # Pure observation, in its own block for the same reason the nudges
+        # are: it influences nothing this call returns, so it must never be
+        # able to skip the gate below.
+        _record_edit_outcome(payload, flavor)
+    except Exception:
+        pass
     try:
         # Universal emission gate: replace over-budget output with a digest.
         replacement = _emission_gate(payload, flavor)

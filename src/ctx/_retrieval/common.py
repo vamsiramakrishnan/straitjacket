@@ -6,8 +6,6 @@ sibling ``ctx._retrieval.*`` modules should import from here directly.
 
 from __future__ import annotations
 
-import re
-
 from ctx.refs import Ref, parse_ref
 from ctx.store import Store
 from ctx.textutil import _redaction_of, bounded, redact, sanitize_for_model
@@ -128,21 +126,41 @@ def _route_workspace(store: Store, ws: Workspace, ref: Ref) -> tuple[Store, Work
     return Store(target.workspace_id), target
 
 
-# Hoisted (perf): compiled once at import time rather than per ``_span()``
-# call. ``re.match``/``re.compile`` on a repeated literal pattern is already
-# memoized by the stdlib's internal cache, but that cache is shared and can
-# be evicted by the arbitrary user-supplied search patterns compiled
-# elsewhere in this package (``ctx.retrieval.search``) — a module-level
-# compile guarantees this one never pays for that churn. Measured in the
-# perf pass; see the report for before/after numbers.
-_SPAN_RE = re.compile(r"^(\d+):(\d+)$")
+# The span grammar itself lives in ``ctx.anchors`` — pure, with no retrieval
+# imports — so an emission site can mint and parse an anchored address without
+# pulling this package onto the hook's hot import path. It keeps the hoisted
+# module-level compile the perf pass put here: ``re.match`` on a repeated
+# literal is memoized by the stdlib's internal cache, but that cache is shared
+# and gets evicted by the arbitrary user-supplied search patterns compiled
+# elsewhere in this package (``ctx.retrieval.search``), so only an explicit
+# module-level compile never pays for that churn.
+def _span_anchored(spec: str) -> tuple[int, int, str | None]:
+    """``A:B`` or ``A:B@anchor`` — the grammar for a *line* selector.
+
+    The anchor is the content the caller believes is at those lines (see
+    ``ctx.anchors``). Only line selectors carry one, because only they address
+    a moving target: ``--bytes`` and ``--records`` are offsets into an
+    immutable stream, and an anchor there would be a promise about nothing.
+    """
+    from ctx.anchors import parse_span
+
+    try:
+        return parse_span(spec)
+    except ValueError as e:
+        raise RetrievalError(str(e)) from None
 
 
 def _span(spec: str) -> tuple[int, int]:
-    m = _SPAN_RE.match(spec.strip())
-    if not m:
-        raise RetrievalError(f"invalid span {spec!r}; expected A:B")
-    a, b = int(m.group(1)), int(m.group(2))
-    if a < 1 or b < a:
-        raise RetrievalError(f"invalid span {spec!r}: need 1 <= A <= B")
+    """``A:B`` for the selectors that cannot be anchored.
+
+    Rejects the anchored form rather than dropping the anchor: silently
+    ignoring it would accept an address that *looks* verified and is not,
+    which is the exact failure anchors exist to remove.
+    """
+    a, b, span_anchor = _span_anchored(spec)
+    if span_anchor is not None:
+        raise RetrievalError(
+            f"invalid span {spec!r}: only --lines takes a content anchor "
+            "(--bytes/--records address an immutable stream)"
+        )
     return a, b

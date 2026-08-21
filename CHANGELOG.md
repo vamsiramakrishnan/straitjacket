@@ -6,6 +6,50 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+The hook now records what happened to the host's own edits. It has always seen
+every `Edit`/`Write`/`MultiEdit` — `_tool_kind` classifies them and PreToolUse
+allows them through — and never looked at whether they landed, so the rate of
+the field's most-cited harness failure was unknown here. A PostToolUse observer
+classifies each edit result into a closed vocabulary (`applied`, `not_found`,
+`not_unique`, `other_error`, `unknown`) and appends a privacy-safe row: outcome,
+tool, host, a path digest and string *lengths*, never the edited content.
+Unrecognised host wording stays `unknown` rather than being forced into a
+bucket, so a reworded error surfaces as drift instead of a silent mis-count.
+Hosts without a PostToolUse payload (Antigravity) contribute nothing, and the
+summary reports which hosts it heard from.
+
+A paired model-free receipt measures the ceiling that rate will be judged
+against: of failures where the model had the right region but reproduced its
+whitespace differently, a content-based repair resolves 76.1% unambiguously and
+refuses 21.5% as ambiguous; of the control failures where the model named
+different content, it resolves none; and across 1,669 resolutions it never
+landed on the wrong region. Arms are reported separately on purpose — how often
+each shape occurs is field data the ledger now collects, not something the
+simulation can know. No repair mechanism ships in this change; the instrument
+ships first and the mechanism waits on its numbers.
+
+## [0.34.0] - 2026-08-20
+
+A `repo:` line address now names content rather than a position. Line numbers
+into a live worktree file went stale the moment anything above them changed, so
+re-resolving `ctx get repo:m.py --lines 4:5` after an edit returned different
+code, exited 0, and said nothing — the one address family that could not keep
+the project's own "same address, same bytes" promise, and the one an agent uses
+most while editing. `--lines A:B@anchor` appends a short content digest: it
+verifies silently, relocates and declares the move when the content shifted,
+and refuses with a re-navigation path when the content is gone. Anchors are
+minted on `repo:` line reads, on their continuations, and by `ctx def`, which
+now labels its frozen `span:` address and its anchored `live:` one separately
+instead of offering the snapshot for both — the previous shape returned the
+pre-edit body to a reader asking about current code. `--hashlines` renders
+per-line content tags (`L40:a3| …`) for naming individual lines. Immutable
+handles mint nothing, since their bytes cannot move. The MCP `get` selector
+takes the same grammar as the CLI. A dated model-free receipt replays real edit
+shapes over this repository's own source: 99.9% of unanchored re-resolutions
+returned different content silently, anchored ones answered correctly in 75.8%
+of cases (1,454 of 1,455 by following moved content), refused the rest, and
+were never wrong, for about 20% overhead on a bare `repo:` line address.
+
 - The artifact store now proves backend writability and uses a sticky,
   doctor-visible workspace-local fallback when managed sandboxes make the
   default user-state directory read-only. Parallel catalog initialization

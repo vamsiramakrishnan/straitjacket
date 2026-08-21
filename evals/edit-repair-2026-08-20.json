@@ -1,0 +1,88 @@
+{
+  "by_corruption": {
+    "blank-lines-dropped": {
+      "ambiguous": 26,
+      "applies_today": 58,
+      "cases": 305,
+      "not_applicable": 405,
+      "not_found": 247,
+      "not_unique": 0,
+      "repair_wrong": 0,
+      "repairable": 165,
+      "unrecoverable": 56
+    },
+    "reindent": {
+      "ambiguous": 144,
+      "applies_today": 20,
+      "cases": 667,
+      "not_applicable": 43,
+      "not_found": 641,
+      "not_unique": 6,
+      "repair_wrong": 0,
+      "repairable": 497,
+      "unrecoverable": 0
+    },
+    "respace": {
+      "ambiguous": 144,
+      "applies_today": 18,
+      "cases": 668,
+      "not_applicable": 42,
+      "not_found": 644,
+      "not_unique": 6,
+      "repair_wrong": 0,
+      "repairable": 500,
+      "unrecoverable": 0
+    },
+    "tabs-for-spaces": {
+      "ambiguous": 151,
+      "applies_today": 2,
+      "cases": 667,
+      "not_applicable": 43,
+      "not_found": 665,
+      "not_unique": 0,
+      "repair_wrong": 0,
+      "repairable": 514,
+      "unrecoverable": 0
+    },
+    "verbatim": {
+      "ambiguous": 0,
+      "applies_today": 693,
+      "cases": 710,
+      "not_applicable": 0,
+      "not_found": 0,
+      "not_unique": 17,
+      "repair_wrong": 0,
+      "repairable": 0,
+      "unrecoverable": 0
+    },
+    "word-changed": {
+      "ambiguous": 0,
+      "applies_today": 0,
+      "cases": 704,
+      "not_applicable": 6,
+      "not_found": 704,
+      "not_unique": 0,
+      "repair_wrong": 0,
+      "repairable": 0,
+      "unrecoverable": 704
+    }
+  },
+  "files": 40,
+  "seed": 20260820,
+  "snippet_lines": [
+    2,
+    6,
+    15
+  ],
+  "total": {
+    "ambiguous": 465,
+    "applies_today": 791,
+    "cases": 3721,
+    "not_applicable": 539,
+    "not_found": 2901,
+    "not_unique": 29,
+    "repair_wrong": 0,
+    "repairable": 1676,
+    "unrecoverable": 760
+  }
+}

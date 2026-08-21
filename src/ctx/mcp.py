@@ -82,7 +82,7 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "selector": {
                 "type": "object",
-                "description": "get selector: {lines:'A:B'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {symbol:'Cls.meth'} | {span:'<token from digest>'}",
+                "description": "get selector: {lines:'A:B'|'A:B@anchor'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {symbol:'Cls.meth'} | {span:'<token from digest>'} | {hashlines:true}. An anchored repo: line span verifies the content is still there, follows it if it moved, and refuses if it is gone.",
             },
             "options": {
                 "type": "object",
@@ -153,7 +153,7 @@ def _resolve_cached(workspace_arg: str | None) -> tuple[Any, Any]:
 
 def _dispatch(args: dict[str, Any]) -> str:
     # Heavy modules load lazily so server startup stays fast.
-    from ctx.retrieval import Selector, RetrievalError, get, search, stats, charge_turn_budget, _span
+    from ctx.retrieval import Selector, RetrievalError, get, search, stats, charge_turn_budget, _span, _span_anchored
 
     op = args.get("op")
     ws, store = _resolve_cached(args.get("workspace"))
@@ -198,8 +198,17 @@ def _dispatch(args: dict[str, Any]) -> str:
         )
     elif op == "get":
         sel_raw = args.get("selector") or {}
+        # The MCP surface takes the same anchored grammar as the CLI. An agent
+        # reaching ctx through a tool call gets the same verifiable address it
+        # would get from a shell command -- two spellings of one contract, not
+        # a strong surface and a weak one.
+        la, lb, lanchor = (
+            _span_anchored(sel_raw["lines"]) if sel_raw.get("lines") else (None, None, None)
+        )
         selector = Selector(
-            lines=_span(sel_raw["lines"]) if sel_raw.get("lines") else None,
+            lines=(la, lb) if la is not None else None,
+            lines_anchor=lanchor,
+            hashlines=bool(sel_raw.get("hashlines")),
             bytes=_span(sel_raw["bytes"]) if sel_raw.get("bytes") else None,
             records=_span(sel_raw["records"]) if sel_raw.get("records") else None,
             json_pointer=sel_raw.get("jsonPointer"),

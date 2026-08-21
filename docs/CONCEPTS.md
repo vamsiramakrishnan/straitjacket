@@ -15,6 +15,7 @@ Scan this first; the sections below explain each term in depth.
 | **Artifact** | An immutable stored result — command output, a file snapshot, a query result — the durable source a view is rendered from. |
 | **Handle** | A stable reference to an artifact or a region of one, e.g. `run:ba3d1020ee8f#stdout`. |
 | **Span** | An exact range inside an artifact: lines, bytes, a failure block, a symbol body. |
+| **Anchor** | A short content digest carried inside a `repo:` line address (`--lines 40:52@07407f1c`) so re-resolving it verifies, follows the content if it moved, or refuses — instead of silently returning whatever now sits at those coordinates. |
 | **Digest** | The small, deterministic, bounded rendering of an artifact that the model actually sees. |
 | **Profile** | The parser that knows a command family's shape (pytest, logs, JSON…) and extracts typed evidence from it. |
 | **Evidence contract** | The declaration of what a command family must preserve (REQUIRED / ELASTIC / RETRIEVABLE). |
@@ -34,6 +35,8 @@ straitjacket therefore separates:
 - **Evidence** — the complete captured record of an operation.
 - **Context** — the bounded view currently shown to the model.
 - **Address** — a stable reference that reconnects the bounded view to exact evidence.
+
+For frozen evidence (`run:`, `blob:`, `snapshot:`) stability is free: the bytes cannot change. For a `repo:` address into a file the agent is editing, it is not — a line number is a position, not an identity — so those addresses carry a content [anchor](ANCHORS.md) that makes the reconnection verifiable.
 
 The store preserves evidence. The delivery layer decides what enters context. Addresses keep omission reversible.
 

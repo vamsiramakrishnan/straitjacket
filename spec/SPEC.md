@@ -199,15 +199,35 @@ Searching `repo:` performs snapshot-on-read: every returned file version is plac
 Selectors include:
 
 ```text
---lines A:B
+--lines A:B[@anchor]
 --bytes A:B
 --records A:B
 --json-pointer /items/57
 --symbol package.module:function
 --span <opaque-coordinate>
+--hashlines                     (render modifier; combines with --lines)
 ```
 
 A request larger than the configured result budget MUST return a bounded preview plus continuation coordinates; it MUST NOT silently flood the transcript.
+
+**Content anchors.** `--lines` MAY carry a content anchor (`A:B@<anchor>`), a
+short digest over the addressed lines' content and nothing else — never their
+position. Anchors apply to `--lines` only; a selector addressing an immutable
+byte or record offset MUST reject one rather than ignore it.
+
+Resolving an anchored span MUST take exactly one of three outcomes:
+
+- the anchored content is at `A:B` — the result MUST be byte-identical to the
+  unanchored resolution of the same span;
+- the anchored content is elsewhere in the target — the result MUST return that
+  content, declare the move, and echo the corrected address;
+- the anchored content is absent — resolution MUST fail non-zero and MUST NOT
+  return the current contents of `A:B`.
+
+An implementation MUST NOT emit an address that is less verifiable than the one
+that produced it: a continuation offered from an anchored resolution MUST itself
+carry an anchor. Addresses to immutable content (`run:`, `blob:`, `snapshot:`)
+SHOULD NOT carry anchors, whose guarantee that ref kind already provides.
 
 ### 6.5 `ctx stats`
 

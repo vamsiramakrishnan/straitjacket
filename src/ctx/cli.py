@@ -390,12 +390,18 @@ def _build_parser():
     p_get = sub.add_parser("get", help="exact bounded slice of a file or artifact")
     p_get.add_argument("ref", metavar="handle",
                        help="what to read: repo:path, or a run:/blob: handle")
-    p_get.add_argument("--lines", help="A:B line span")
+    p_get.add_argument(
+        "--lines",
+        help="A:B line span, or A:B@anchor to verify the content is still there",
+    )
     p_get.add_argument("--bytes", help="A:B byte span")
     p_get.add_argument("--records", help="A:B record span (JSONL)")
     p_get.add_argument("--json-pointer", dest="json_pointer", help="RFC 6901 pointer")
     p_get.add_argument("--symbol", help="Python def/class dotted name (stdlib ast)")
     p_get.add_argument("--span", help="opaque span token minted by a digest")
+    p_get.add_argument(
+        "--hashlines", action="store_true",
+        help="prefix each line with its content tag (L40:a3| …)")
 
     p_diff = sub.add_parser("diff", help="run-to-run regression delta digest")
     p_diff.add_argument("ref_a", metavar="handle_before", help="the earlier run handle")
