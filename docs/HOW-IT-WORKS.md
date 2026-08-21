@@ -1,156 +1,140 @@
-<sub><a href="README.md">« straitjacket / docs</a></sub>
-
 # How straitjacket works
 
-A plain-language walkthrough. No prior vocabulary assumed; every term is
-introduced when it appears. Ten minutes to read; the deep-dive docs are
-linked at each step for when you want more.
+[Documentation](README.md) · [Getting started](GETTING-STARTED.md) · [Core concepts](CONCEPTS.md)
 
-## The problem, in one paragraph
+## The problem
 
-Coding agents pay for their context window **twice**: once when tool output
-enters it, and again *every subsequent turn*, because the whole transcript
-is re-sent to the model each round. One noisy `pytest` run can dump 300k
-tokens into the transcript; a routine `kubectl get pods` is thousands more.
-You pay for those tokens on every turn that follows, your session slows
-down, and when the window fills, compaction summarizes old content away —
-sometimes deleting the one line that mattered, with no trace it existed.
+Tool output becomes model input. A large test log or connector response can occupy most of a coding agent's context window. The same bytes are then sent again on later turns. When the window fills, compaction may remove the evidence the agent still needs.
 
-straitjacket's answer: **never let the flood into the transcript in the
-first place, and never destroy a byte.** Raw output goes into a local
-content-addressed store; the agent sees a small, deterministic summary
-(a *digest*) in which every omitted byte keeps an exact address it can be
-retrieved from later.
+Larger context windows delay this failure. They do not change the data path.
 
-## Walking one command through the system
+straitjacket changes the data path:
 
-Say your agent (or you) runs a failing test suite:
+```text
+tool output
+    │
+    ├── complete bytes ──→ local artifact store
+    │
+    └── typed facts ─────→ bounded digest ──→ model
+                               │
+                               └── exact retrieval address
+```
+
+## One command
 
 ```bash
 ctx run -- pytest -q
 ```
 
-**Step 1 — capture.** The command executes normally, but its stdout/stderr
-stream into the artifact store (a local SQLite + blob store in your user
-state, never committed). The raw bytes are now permanent and
-content-addressed: nothing downstream can lose them.
+The command runs normally. stdout and stderr stream into a local artifact. A pytest profile extracts the failure identities, locations, and useful detail. The model receives a bounded digest:
 
-**Step 2 — digest.** A *profile* — a parser matched to this kind of output
-(pytest, cargo, docker tables, JSON, generic logs…) — extracts what
-matters and renders a bounded digest:
-
-```
+```text
 [ctx run:8d8335db6848 profile=pytest/v2]
-command: pytest -q
 exit: 1
 stdout: 4,102 lines · 402.1 KiB · est 98,000 tokens
-failing tests (census):
-  1. tests/test_auth.py::test_token_expiry   tests/test_auth.py:42
+failures:
+  tests/test_auth.py::test_token_expiry  tests/test_auth.py:42
 coverage:
-  census: 1/1 identities inline · attested complete
-  shown: 1 spans · omitted: 4,098 lines
+  identities: 1/1
+  omitted: 4,098 lines
 next:
   ctx get run:8d8335db6848#stdout --lines 1280:1300
 ```
 
-Read it top to bottom: what ran, what it cost in raw form (the ~98k tokens
-your agent **didn't** pay), the complete list of failures with file:line
-coordinates, an honest account of what was omitted, and a ready-made
-command to pull any omitted region. The digest is a fixed size no matter
-how large the output was.
+The digest is a view. It is not the stored evidence.
 
-**Step 3 — retrieval, only if needed.** If the agent wants the traceback
-detail, it pays a few hundred tokens for exactly the slice it needs:
+If the traceback matters, retrieve that region:
 
 ```bash
 ctx get run:8d8335db6848#stdout --lines 1280:1300
 ```
 
-That's the whole core loop: **capture everything, show a summary, keep an
-address for the rest.** Formally it's a two-layer code — a cheap always-on
-layer plus an exact on-demand layer — and [THEORY.md](THEORY.md) states the
-objective it optimizes, but you don't need the theory to use it.
+If the error text matters, search the stored artifact:
 
-## Why the digest is deterministic (and why you should care)
+```bash
+ctx search run:8d8335db6848 "MissingTenantError"
+```
 
-Identical bytes always produce a byte-identical digest: timings, temp
-paths, ANSI colors, and locale noise are stripped. This matters for money —
-model providers cache your prompt prefix, and cached tokens cost ~10× less
-than fresh ones. A transcript full of stable digests keeps the cache warm
-(measured 96–98% hit rates vs 80–84% for tools that rewrite history).
-It also means two runs of the same failing test look the same, so the
-*differences* that appear are real signal (`ctx diff run:A run:B`).
+Retrieval is also bounded. A broad request returns another small view with narrower addresses.
 
-## How it hooks into your agent
+## Why the digest is typed
 
-You never call `ctx run` yourself in normal use. `ctx setup` registers
-the harness with your agent host:
+Simple truncation preserves position, not meaning. It can keep progress output and drop the failure. A profile understands the output family.
 
-- **Before a tool call runs** (PreToolUse): a fast classifier looks at the
-  command. Known-flooding commands (`pytest`, `cat bigfile`, package and
-  cloud CLIs…) are transparently rewritten to run through `ctx run` — the
-  agent gets the digest instead of the flood. Known-safe commands pass
-  through untouched. Unknown commands follow a conservative policy you can
-  tune in `ctx.toml`.
-- **After a tool call returns** (PostToolUse): a safety net. If something
-  oversized got through anyway, the result is captured and replaced by a
-  digest before it reaches the model.
-- **A retrieval tool** (via MCP): the agent gets one bounded `ctx` tool for
-  search/get/stats over the store and the repo — retrieval that *cannot*
-  flood, because every operation is capped.
+Examples:
 
-Every host gets these pieces, translated to its native config format.
-Nothing here requires trusting the model to follow instructions — the hooks
-are mechanical.
+- pytest profiles preserve failed test identities and trace locations;
+- diagnostic profiles preserve severity, code, file, and line;
+- log profiles surface rare templates and repeated patterns;
+- JSON profiles preserve schema, counts, and exceptional records;
+- generic text keeps bounded head and tail windows.
 
-They are not, however, equally enforceable everywhere. Claude Code and Codex
-can both rewrite a command *and* replace an oversized result. Antigravity's
-published hook contract can do neither: its birth gate has to **deny** and
-name the contained command rather than substitute it silently, and it has
-**no output-side safety net** at all, so a verbose MCP/connector result
-reaches the transcript in full. If you use Antigravity, read
-[Host capabilities](HOST-CAPABILITIES.md) — it is short, and it changes what
-you should route through `ctx`.
+Each profile declares what must remain inline, what can shrink, and what may stay out of context only when it has an address. The digest includes a coverage receipt.
 
-## What else is in the box (each optional, each measured)
+## Why the output is deterministic
 
-- **`ctx search / get / stats / map`** — bounded retrieval over captured
-  artifacts *and* your repository (exact line/byte/symbol slices, ranked
-  repo maps). The agent explores without `cat`-ing files into context.
-- **`ctx q`** — small pipelines over typed evidence
-  (`refs Foo | group file | top 3 | get`), executed locally in one step.
-- **`ctx plan` / `ctx plan run`** — the agent writes a short JSON plan
-  (a bounded DAG of evidence operations); the harness validates, prices,
-  executes it locally, and returns **one** digest instead of N rounds of
-  tool calls. Measured: a 6-round investigation collapsed to 1.
-- **`ctx replay`** — learn from recorded sessions, offline: which digests
-  kept the evidence agents actually used (`--regret`), and which evidence
-  agents observably followed up on (`--outcomes`). Both feed reviewable,
-  committed policy files — the harness never adapts silently at runtime.
+The same evidence, contract, and delivery plan must produce the same bytes. Volatile timings, terminal decoration, and temporary paths are normalized where appropriate.
 
-## What it does NOT do
+Determinism has two practical effects:
 
-- **It doesn't make the model smarter.** In A/Bs, task success is at
-  parity; the wins are cost, latency, turns, and evidence preservation.
-- **It doesn't always win.** When output is small, digests pass it through
-  ~1:1; when a flood is trivially greppable, a shell-savvy agent can beat
-  the harness's overhead — that regime is published in our own evals, not
-  hidden. Graduated engagement keeps the harness out of your way on small
-  sessions.
-- **It doesn't phone home, learn online, or rewrite your transcript.**
-  Capture is local, policy changes are compiled offline into a diffable
-  TOML you review and commit, and history is never edited — old content is
-  *elided behind addresses*, never deleted.
+- stable prompt prefixes are easier for providers to cache;
+- a diff between two digests reflects evidence changes, not rendering noise.
 
-## Where to go next
+Use `ctx diff run:<before> run:<after>` when the question is what changed.
 
-| You want | Read |
+## How agent integration works
+
+`ctx setup` installs host-specific hooks and the bounded retrieval surface.
+
+Before execution, the birth gate classifies the operation:
+
+- known small operations pass through;
+- known noisy reads route through capture;
+- mutations retain their permission boundary;
+- unknown operations follow the configured guard policy.
+
+After execution, supported hosts can capture an oversized result that escaped birth-time classification and replace it with a digest.
+
+Host APIs differ. Claude Code and Codex support transparent command rewriting and output substitution. Antigravity can deny a noisy call before execution, but cannot replace an already returned tool result through its published PostToolUse contract. The exact behaviour is documented in [Host capabilities](HOST-CAPABILITIES.md).
+
+## The four gates
+
+| Gate | Function |
 |---|---|
-| to install and try it | [GETTING-STARTED.md](GETTING-STARTED.md) |
-| the vocabulary (artifact, span, digest, contract) | [CONCEPTS.md](CONCEPTS.md) |
-| to tune budgets, the guard, or scopes | [CONFIGURATION.md](CONFIGURATION.md) |
-| to fix a problem or ask "does it…?" | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
-| the numbers behind every claim | [`evals/`](../evals/) — one receipt per claim |
-| why retrieval choices carry price tags | [PRICED-CONTEXT.md](PRICED-CONTEXT.md) |
-| the formal objective and its theorems | [THEORY.md](THEORY.md) |
-| to write a digest profile for your own tool | [WRITING-A-PROFILE.md](WRITING-A-PROFILE.md) |
+| Birth | Prevent an unbounded operation from entering context raw. |
+| Entry | Measure and constrain results crossing a host or tool boundary. |
+| Residence | Control what remains in active context. |
+| Emission | Prevent large stored evidence from being pasted back into a deliverable. |
+
+One artifact store supports all four. The critical invariant is simple:
+
+> Potentially unbounded output is either captured before it reaches the model or rejected before execution.
+
+## Repository evidence
+
+The same model applies to code navigation. Repository maps, symbol definitions, references, call graphs, and compiled plans return bounded views with source addresses.
+
+Files can change between turns. A plain line number is only a position. straitjacket can attach a content anchor:
+
+```bash
+ctx get repo:src/auth.py --lines 40:52@07407f1c
+```
+
+On retrieval, the anchor is verified. If the content moved, the address follows it. If the content disappeared, retrieval refuses. It never silently returns different code at the old line number.
+
+## What the system guarantees
+
+- Complete captured evidence remains locally retrievable until retention removes it.
+- Every digest is bounded.
+- Every declared omission has a retrieval path.
+- Rendering is deterministic for the same inputs.
+- Path traversal and symlink escape are checked relative to the active workspace.
+- Retrieval cannot return an unbounded payload.
+
+## What it does not guarantee
+
+straitjacket is not a full process sandbox. Captured commands run with the invoking user's authority. It does not make a dangerous command safe. It preserves mutation approvals instead.
+
+It is also not agent memory and not semantic transcript compression. It contains tool evidence at its source.
+
+Next: [install it and run the first capture](GETTING-STARTED.md).
