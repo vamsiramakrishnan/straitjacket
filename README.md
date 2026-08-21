@@ -10,9 +10,9 @@
 [![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-architecture-blue)](docs/README.md)
 
-[Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
+[Quickstart](#-quickstart) · [How it works](docs/HOW-IT-WORKS.md) · [The four gates](#-the-four-gates) · [Digest anatomy](#-digest-anatomy) · [AlphaEvolve benefits](#alphaevolve-what-it-improved) · [Comparisons](#-comparisons) · [Design docs](docs/README.md) · [Roadmap](ROADMAP.md)
 
-**Status:** source v0.35.0 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,788 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
+**Status:** source v0.35.1 (pre-1.0, minor bump per mechanism) · published on PyPI as `ctx-harness` · 1,788 test functions · **built for Antigravity — works with Claude Code and Codex** · Apache-2.0
 
 </div>
 
@@ -197,6 +197,23 @@ Plain-language highlights from recent releases; full detail in
   −30% billed tokens, 152× less tool output at equal correctness on an
   unavoidable flood — and the regime where naive wins is published too
   ([receipt](evals/antigravity-gemini-2026-07-19.md)).
+### AlphaEvolve: what it improved
+
+AlphaEvolve is used as a bounded policy-search and counterexample engine, not
+as an autonomous source-code committer. Generated candidates stay quarantined;
+reviewed code ships only after frozen completion, holdout, adversarial, and
+product-path gates.
+
+| Benefit | Result | Evidence strength |
+|---|---|---|
+| Avoid fixed containment tax on proven-small named tests | **20.15% lower median local latency**, **46.67% fewer result bytes**; unexpected flood still contained **48.15x** | 11-repeat local product path |
+| Avoid repeat setup churn | **4.42x faster**, **8.17x less output**, zero rewrites | 11 paired local repositories |
+| Recognize more commands without widening mutation authority | **57,313 cases**, zero classification failures; compound rewrite bug found and fixed | deterministic production gate |
+| Make orchestration policies executable and adversarially testable | **269,696 cases**, zero policy failures; opt-in worktree canary **1.68x** faster than serial | deterministic gate + scoped local canary |
+| Prevent attractive regressions | rejected an 8.55%-more-expensive routed small-task path and managed campaigns with no incremental gain | host-reported actual usage + managed receipts |
+
+See the complete [benefit ledger, attribution, and limitations](docs/ALPHAEVOLVE-OPTIMIZATION.md).
+
 - **AlphaEvolve fixed a measured naive regression.** A live actual-usage probe
   found that always wrapping one already-small named pytest target cost 8.55%
   more than running it directly. The AlphaEvolve emission and engagement
@@ -227,6 +244,14 @@ Plain-language highlights from recent releases; full detail in
   structured, compound, noisy, and mutation-shaped cases with zero
   classification failures, and found a compound-command safety bug before the
   clean run ([receipt](evals/alphaevolve/2026-08-19-command-spans.md)).
+- **AlphaEvolve made multi-host optimization safe to iterate.** The policy
+  fleet covers wave scheduling, mutation isolation, address-budgeted handoff,
+  and independent verification. Its 269,696-case promotion matrix has zero
+  policy failures. Managed search found no incremental winner—useful evidence
+  that prevented automatic promotion—while the later opt-in worktree product
+  path measured a scoped **1.68x** local speedup for two disjoint workers
+  ([policy receipt](evals/alphaevolve/2026-08-19-orchestration-policy-fleet.md),
+  [canary](evals/oh-my-pi-integration-2026-08-21.md)).
 
 ## 📊 What's measured (and what isn't yet)
 

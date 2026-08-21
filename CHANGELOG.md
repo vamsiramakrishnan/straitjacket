@@ -6,6 +6,17 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.35.1] - 2026-08-21
+
+The AlphaEvolve evidence is now presented as one receipt-backed benefit ledger
+across the README, documentation, and published site. It separates measured
+product paths, deterministic safety/coverage gates, scoped canaries, modeled
+or inactive candidates, and rejected regressions instead of combining them
+into a misleading product-wide percentage. The site adds a discoverable
+AlphaEvolve benefits guide and homepage summary. The optimization charter also
+reflects the shipped opt-in worktree path and identifies the measured 21k–23k
+tiny-task context surface as the next campaign target.
+
 ## [0.35.0] - 2026-08-21
 
 The oh-my-pi mechanism wave turns three previously informal orchestration

@@ -1,4 +1,4 @@
-# AlphaEvolve optimization charter
+# AlphaEvolve benefits and optimization charter
 
 ## North-star outcome
 
@@ -13,7 +13,50 @@ Straitjacket should reduce the total cost of completing a real coding task:
 The order is binding. A cheaper, shorter, or smaller-context run that fails the
 task is not an improvement.
 
-## What AlphaEvolve has changed in the product
+## Benefit ledger
+
+AlphaEvolve has helped straitjacket in more ways than producing a higher search
+score. It found a real naive-loss case, searched narrow policy seams, generated
+counterexamples, forced completion and safety gates to become executable, and
+made rejected candidates durable evidence. The resulting benefits have
+different evidence strengths:
+
+| Area | Benefit now visible in the product | Evidence class | What AlphaEvolve contributed |
+|---|---|---|---|
+| Small named tests | **20.15% lower median local latency** and **46.67% fewer tool-result bytes** than always capturing, with 11/11 successful executions in both arms; an unexpected failure still received **48.15x addressable containment** | measured local product path | exposed the 8.55% naive cost regression and converged on direct-small/passive-until-pressure behavior |
+| Repeat setup | unchanged, doctor-verified setup is **4.42x faster**, emits **8.17x less output**, and performs zero host-config rewrites in 11/11 paired runs | measured local product path | turned ready, repair, drift, and refusal into one completion-gated setup policy |
+| Command coverage | **57,313** wrapper, limit, structured, compound, noisy-read, deny, and mutation cases with zero classification failures | deterministic production gate | found a compound-command rewrite counterexample and helped organize direct/capture/review as three explicit outcomes |
+| Multi-host orchestration | **269,696** wave, mutation, handoff, and verification combinations with zero policy failures; opt-in disjoint worktrees later measured **1.68x** faster than serial in a two-worker production-path canary | deterministic gate plus scoped local canary | made latency, turns, evidence, mutation isolation, and independent verification searchable without making safety mutable; managed runs produced no incremental winner |
+| Route correctness | interactive-host false success, unverified mutation plans, and zero-exit “not complete” responses became explicit failures; a passing lean feature arm used **52.7% less wall time**, 25% fewer turns, 44.2% less estimated visible context, and 70.4% less estimated spend than the passing four-stage arm | acceptance evidence plus estimated route economics | refreshed the corpus around actual completion instead of trusting exit status or route estimates |
+| Fleet and retrieval | **24** registered levers, **21** mutable seams, **15** experiment families, and three protected oracle planes; adversarial retrieval found and fixed failure-evidence ordering | deterministic search infrastructure | made widespread iteration bounded, repeatable, and incapable of mutating usage accounting, safety guards, or receipt integrity |
+| Generic evidence selection | a managed winner raised the frozen eight-case evidence objective from 75.419820 to 91.116070, a **20.81% relative improvement** | managed search candidate only | proved the bounded search loop can improve a narrow objective; the candidate remains quarantined pending independent holdout and long-output integration evidence |
+| Cold-context policy | seed models **76.56% fewer visible tokens** and **71.12% lower dollars** than always-inline, with no modeled turn reduction | inactive modeled candidate | supplied frozen search, holdout, and adversarial gates; no renderer, provider transport, or product claim exists |
+
+Two negative results are benefits too. Direct naive execution was **8.55%
+cheaper** than the warm routed path for one already-small named test, so the
+compact-prompt candidate was removed. Managed orchestration campaigns later
+found **0% incremental improvement** over the reviewed seeds, so no generated
+policy was copied into production. AlphaEvolve prevented two plausible-looking
+regressions from becoming release claims.
+
+The denominators and limitations live in the
+[named-test](../evals/alphaevolve/2026-08-18-speculative-native.md),
+[setup](../evals/alphaevolve/2026-08-19-setup-devex.md),
+[command-span](../evals/alphaevolve/2026-08-19-command-spans.md),
+[orchestration](../evals/alphaevolve/2026-08-19-orchestration-policy-fleet.md),
+[route](../evals/alphaevolve/2026-08-17-portfolio-result.md), and
+[oh-my-pi mechanism](../evals/oh-my-pi-integration-2026-08-21.md) receipts.
+Measured, estimated, modeled, and inactive results are deliberately not merged
+into one percentage.
+
+The latest live proposal canary also exposed the next optimization target:
+Claude and Codex each loaded roughly **21k–23k actual structured tokens** to
+produce a 13–17-token typed answer. That is not an AlphaEvolve win; it is a
+measured task-surface/context gap for the next campaign. Any candidate must
+reduce actual usage while retaining the same edit-completion and adversarial
+safety gates.
+
+## How those benefits reached the product
 
 AlphaEvolve is not presented here as an autonomous source-code author. It is
 the policy-search and counterexample engine in a controlled improvement loop:
@@ -214,9 +257,11 @@ into measured latency reduction without treating concurrent writes as safe.
 
 Choose shared read execution, serialized workspace mutation, or parallel
 worktrees. Parallel mutation is admissible only when every writer has an
-isolated worktree and declared, disjoint write targets. The current production
-orchestrator deliberately supplies `isolated_worktrees=false`, so the modeled
-parallel-worktree gain is not presented as shipped behavior.
+isolated worktree and declared, disjoint write targets. Production now exposes
+this as an explicit `isolated_worktrees` opt-in. A clean exact Git root,
+whole-wave patch preflight, and all-or-none application are mandatory; dirty,
+overlapping, undeclared, and later mutation waves serialize. The 1.68x result
+above is a scoped two-worker canary, not a general provider latency claim.
 
 ### 10. Evidence-budgeted handoff
 
@@ -307,10 +352,13 @@ the same regression.
 |---|---:|---|
 | Quiet-needle raw context | **578x smaller** with the needle retained and addressable | deterministic field corpus |
 | Unavoidable Antigravity flood | **152x less tool output**, 30% fewer billed tokens, equal correctness | live matched-host A/B |
-| Integrated naive fast path, search mix | **11.25x less visible context**, 9.09x lower modeled dollars, 3x fewer model turns | frozen completion-gated evaluator |
+| Quarantined naive-fast-path winner, search mix | **11.25x less visible context**, 9.09x lower modeled dollars, 3x fewer model turns; rejected after adversarial failure | frozen completion-gated evaluator, not product behavior |
 | Receipt-informed routing, search mix | **2.81x lower blended dollars**, 2.25x less visible context | replay; only 1 of 8 case costs currently actual |
 | Small warm named-test route | **0.92x** cost versus direct (an 8.55% loss) | one live matched-model probe |
 | Guarded native named-test path | **20.15% lower local median latency**, 46.67% fewer tool-result bytes versus always-captured; unexpected failure contained 48.15x | 11-repeat local path benchmark + real emission gate |
+| Receipt-backed repeat setup | **4.42x faster**, 8.17x less visible output, zero host-config rewrites | 11 paired local repositories |
+| Command guard | **57,313 cases**, zero classification failures; modeled dollars -33.33%, turns -66.67%, visible tokens -41.75% | deterministic matrix and evaluator; percentages are not provider billing |
+| Isolated disjoint mutation wave | **1.68x observed speedup** (40.5% lower wall time) versus serial for two deterministic 350 ms workers | scoped local production-path canary |
 
 The containment mechanism has therefore already exceeded 100x on the dimension
 where it is designed to operate. End-to-end dollars have not improved 100x, and

@@ -1,5 +1,5 @@
 """straitjacket / ctx-harness: context containment harness for Antigravity."""
 
-__version__ = "0.35.0"
+__version__ = "0.35.1"
 
 POLICY_VERSION = "default/v1"

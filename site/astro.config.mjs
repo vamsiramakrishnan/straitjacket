@@ -44,6 +44,7 @@ export default defineConfig({
             { label: 'Troubleshooting & FAQ', slug: 'guides/troubleshooting' },
             { label: 'Why straitjacket', slug: 'guides/why-straitjacket' },
             { label: 'Comparisons', slug: 'guides/comparisons' },
+            { label: 'AlphaEvolve benefits', slug: 'guides/alphaevolve-benefits' },
           ],
         },
         {
