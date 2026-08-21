@@ -10,14 +10,13 @@
 
 ## The promise that had a hole in it
 
-straitjacket's second house rule is *omission keeps an address*, and the README
-states the consequence plainly: **"The same address returns the same bytes
-tomorrow, next week, on another machine."**
+straitjacket's second house rule is *omission keeps an address*. For frozen
+artifacts — `run:`, `blob:`, `snapshot:` — a handle resolves the exact stored
+bytes while that artifact store is available.
 
-That is true, and enforced, for everything the store has frozen — `run:`,
-`blob:`, `snapshot:`. It was **not** true for `repo:`, the address family the
-model uses most while it is actually working, and the only one that names a file
-someone is concurrently editing.
+`repo:` needs a different promise. It names a live file that someone may be
+editing, so its content can move or disappear between the turn that records an
+address and the turn that follows it.
 
 Before this mechanism:
 
@@ -91,6 +90,13 @@ everywhere, on the CLI and on the MCP surface alike.
 
 Re-resolving an anchored address does one of three things, and which one
 happened is always visible.
+
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift-mobile.svg">
+  <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift-light.svg" width="100%" alt="A content-anchored repository address recorded at lines 40 to 52 follows the same content to lines 46 to 58 after six lines are inserted above it. Across 1,920 measured cases, one address verified in place, 1,454 relocated, 465 refused, and none returned wrong content.">
+</picture>
 
 ### Verified — the content is still there
 

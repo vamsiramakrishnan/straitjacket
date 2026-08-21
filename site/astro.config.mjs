@@ -52,6 +52,7 @@ export default defineConfig({
           items: [
             { label: 'Architecture & code map', slug: 'contributing/architecture' },
             { label: 'Writing a profile', slug: 'contributing/writing-a-profile' },
+            { label: 'Visual design', slug: 'contributing/visual-design' },
           ],
         },
         {

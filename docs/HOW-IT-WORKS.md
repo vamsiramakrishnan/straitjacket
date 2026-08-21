@@ -10,6 +10,13 @@ This sounds like a compression problem. It is not. Compression asks how to make 
 
 That distinction determines the architecture.
 
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates-mobile.svg">
+  <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates-light.svg" width="100%" alt="Three measured treatments of the same 20,001-line log: keeping all 302,628 tokens preserves the quiet needle but floods context; head-and-tail truncation emits 1,219 tokens and loses it; straitjacket emits 521 tokens, preserves the needle at line 14,238, and retains an exact retrieval address.">
+</picture>
+
 ## The ordinary path
 
 Consider a failing test run near the start of a debugging session:
@@ -27,6 +34,13 @@ turn 7  debug ──────────────────→ both log
 The test process produced the bytes once. The conversation rents them on every later turn.
 
 Eventually the host compacts the transcript. Now the system has paid to carry the log repeatedly and may still lose the only line that matters. It combines the cost of preservation with the semantics of deletion.
+
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency-mobile.svg">
+  <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency-light.svg" width="100%" alt="Illustrative seven-turn residency trace using the measured 302,628-token field-needle payload. The native path keeps the raw output resident for six turns. The contained path keeps a 521-token digest and retrieves 21 lines only when needed.">
+</picture>
 
 ## The contained path
 
@@ -61,21 +75,14 @@ next:
 
 The model receives the failure, its location, an honest omission count, and the next useful read. The artifact store keeps the rest.
 
-```text
-                         ┌──────────────────────────────┐
-pytest stdout ──────────→│ immutable artifact           │
-pytest stderr ──────────→│ run:8d8335db6848             │
-                         └──────────────┬───────────────┘
-                                        │ typed extraction
-                                        ▼
-                         ┌──────────────────────────────┐
-                         │ bounded evidence digest       │──→ model
-                         │ facts + coverage + addresses  │
-                         └──────────────┬───────────────┘
-                                        │ on demand
-                                        ▼
-                                  ctx get / search
-```
+The fields vary by profile. A separate, receipt-derived log specimen makes the contract visible:
+
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-digest-anatomy-mobile.svg">
+  <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-digest-anatomy-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-digest-anatomy.svg">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-digest-anatomy-light.svg" width="100%" alt="Annotated anatomy of a receipt-derived log-template specimen: immutable run identity, successful outcome, template census, quiet needle, coverage receipt, and exact continuation command.">
+</picture>
 
 The digest is not a lossy replacement. It is the first page of a lossless protocol.
 

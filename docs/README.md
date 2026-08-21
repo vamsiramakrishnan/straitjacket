@@ -34,6 +34,7 @@ Useful operational references:
 | Understand handles and digests | [Core concepts](CONCEPTS.md) |
 | See code ownership | [Architecture](ARCHITECTURE.md) |
 | Add a digest profile | [Writing a profile](WRITING-A-PROFILE.md) |
+| Draw evidence, not decoration | [Visual design](VISUAL-DESIGN.md) |
 | Run a release | [Releasing](RELEASING.md) |
 
 ## Understand the design

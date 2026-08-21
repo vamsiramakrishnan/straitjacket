@@ -9,7 +9,7 @@
 
 **v0.35.1 · pre-1.0 · Apache-2.0**
 
-A test run prints 300,000 tokens. The agent needs one failure.
+One log prints 302,628 tokens. The agent needs one quiet line.
 
 The usual fix is to truncate the log. That saves the window and destroys the evidence. The other fix is to keep the log. That preserves the evidence and makes every later turn carry it.
 
@@ -17,18 +17,14 @@ Both choices are wrong for the same reason: they treat evidence and context as t
 
 straitjacket separates them.
 
-```text
-                         304,113 tokens
-pytest ────────────────→ local evidence store
-                               │
-                               │ extract failures, locations, coverage
-                               ▼
-                         ~210-token digest ──→ agent
-                               │
-                               └── exact address back to every omitted byte
-```
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-evidence-fates-mobile.svg">
+  <source media="(max-width: 640px)" srcset="assets/readme/diagrams/ae-evidence-fates-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-evidence-fates.svg">
+  <img src="assets/readme/diagrams/ae-evidence-fates-light.svg" width="100%" alt="Three measured treatments of the same 20,001-line log: keeping all 302,628 tokens preserves the quiet needle but floods context; head-and-tail truncation emits 1,219 tokens and loses it; Straitjacket emits 521 tokens, preserves the needle at line 14,238, and retains an exact retrieval address.">
+</picture>
 
-The complete output stays local. The model sees a small deterministic digest. If it needs the missing traceback, it retrieves that traceback—not the other 303,900 tokens.
+The complete output stays local. The model sees a small deterministic digest. If it needs one missing region, it retrieves that region—not the entire payload again.
 
 That is context containment.
 
@@ -60,6 +56,13 @@ The log is useful once. Its conclusions may be useful for several turns. Its raw
 
 Larger context windows do not change this. They raise the ceiling while preserving the bill, latency, cache churn, and eventual compaction problem.
 
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-residency-mobile.svg">
+  <source media="(max-width: 640px)" srcset="assets/readme/diagrams/ae-residency-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-residency.svg">
+  <img src="assets/readme/diagrams/ae-residency-light.svg" width="100%" alt="Illustrative seven-turn residency trace using the measured 302,628-token field-needle payload. The native path keeps the raw output resident for six turns. The contained path keeps a 521-token digest and retrieves 21 lines only when needed.">
+</picture>
+
 ## One run, walked through
 
 ```bash
@@ -80,6 +83,15 @@ coverage:
 next:
   ctx get run:8d8335db6848#stdout --lines 1280:1300
 ```
+
+The fields vary by profile. A separate, receipt-derived log specimen makes the contract visible:
+
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-digest-anatomy-mobile.svg">
+  <source media="(max-width: 640px)" srcset="assets/readme/diagrams/ae-digest-anatomy-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-digest-anatomy.svg">
+  <img src="assets/readme/diagrams/ae-digest-anatomy-light.svg" width="100%" alt="Annotated anatomy of a receipt-derived log-template specimen: immutable run identity, successful outcome, template census, quiet needle, coverage receipt, and exact continuation command.">
+</picture>
 
 This is not a summary pretending to be the evidence. It is an index into the evidence.
 
@@ -141,11 +153,12 @@ Birth is the load-bearing gate. It is cheaper to prevent a flood than to repair 
 
 `ctx setup` installs host-specific enforcement:
 
-| Host | Noisy command | Oversized returned result |
-|---|---|---|
-| Claude Code | rewritten through capture | replaced with a digest |
-| Codex | rewritten through capture | replaced with a digest |
-| Antigravity | denied with the bounded replacement command | observed, not replaceable |
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-host-lanes-mobile.svg">
+  <source media="(max-width: 640px)" srcset="assets/readme/diagrams/ae-host-lanes-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-host-lanes.svg">
+  <img src="assets/readme/diagrams/ae-host-lanes-light.svg" width="100%" alt="Host enforcement lanes. Claude Code and Codex rewrite noisy commands and replace oversized output. Antigravity denies known command floods and the agent must re-issue ctx run on the next turn; connector output can only be persisted and observed. The ctx-owned Antigravity SDK uses bounded tools by construction.">
+</picture>
 
 Antigravity's published hooks cannot mutate PreToolUse arguments or replace PostToolUse output. The limitation is in the host contract, so the documentation says so. See [Host capabilities](docs/HOST-CAPABILITIES.md).
 
@@ -176,6 +189,13 @@ On retrieval, it follows a strict ladder:
 3. refuse if the content no longer exists.
 
 It does not silently return whatever now occupies lines 40–52. A refusal is cheaper than false evidence.
+
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-anchor-drift-mobile.svg">
+  <source media="(max-width: 640px)" srcset="assets/readme/diagrams/ae-anchor-drift-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/diagrams/ae-anchor-drift.svg">
+  <img src="assets/readme/diagrams/ae-anchor-drift-light.svg" width="100%" alt="A content-anchored repository address recorded at lines 40 to 52 follows the same content to lines 46 to 58 after six lines are inserted above it. Across 1,920 measured cases, one address verified in place, 1,454 relocated, 465 refused, and none returned wrong content.">
+</picture>
 
 ## Use the smallest machine that fits the work
 
@@ -220,7 +240,7 @@ The repository keeps evaluation code, fixtures, positive results, and negative r
 Measured surfaces include:
 
 - 8×–151× containment across real output families;
-- 304,113 raw tokens reduced to an approximately 210-token digest;
+- 302,628 raw tokens reduced to 521 visible tokens with the quiet needle retained;
 - 96.5–98.1% prompt-cache hit rates in measured runs;
 - equal-correctness agent A/Bs;
 - decisive-evidence preservation;
