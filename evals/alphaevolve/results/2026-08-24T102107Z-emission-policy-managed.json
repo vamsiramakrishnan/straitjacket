@@ -1,0 +1,75 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "emission-policy",
+  "experiment_module": "evals.alphaevolve.emission_policy.evaluate",
+  "metric": "completion_adjusted_emission_efficiency",
+  "dataset_fingerprint": "5b87d333e8212a48",
+  "config": {
+    "resumed_experiment": "projects/440790012685/locations/global/collections/default_collection/engines/phoenix-retail_1751440313229/sessions/16959183281261436770/alphaEvolveExperiments/431373623205428420"
+  },
+  "recorded_at": "2026-08-24T102107Z",
+  "programs_ranked": 24,
+  "top_programs": [
+    {
+      "program": "8477059527489150038",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8477059527489148717",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "11474142371945893318",
+      "score": 139.93793,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8477059527489148880",
+      "score": -101000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8477059527489148893",
+      "score": -101000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8477059527489148850",
+      "score": -102000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8477059527489150304",
+      "score": -102000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8477059527489147113",
+      "score": -102000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8477059527489149695",
+      "score": -102000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8477059527489148254",
+      "score": -102000,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T102107Z-emission-policy-winner.py"
+}

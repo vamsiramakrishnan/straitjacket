@@ -1,0 +1,34 @@
+{
+  "schema": "ctx.alphaevolve-exploration-corpus/v1",
+  "note": "Real command outputs captured from this repository on 2026-08-24 (grep sweep, 250-shard upload failing with ModuleNotFoundError, pip externally-managed block, verbose pytest failure). Relevance grades: 3=decisive, 2=diagnostic, 1=context/anchor. Line indices are zero-based.",
+  "cases": [
+    {
+      "name": "grep_sweep_locate_resolver",
+      "file": "grep_sweep.txt",
+      "budget": 6,
+      "question": "where does ctx resolve a workspace root?",
+      "relevance": {"374": 3, "358": 2, "360": 2, "0": 1}
+    },
+    {
+      "name": "upload_traceback_after_250_shards",
+      "file": "traceback_noise.txt",
+      "budget": 5,
+      "question": "why did the shard upload run die?",
+      "relevance": {"250": 2, "251": 3, "253": 3}
+    },
+    {
+      "name": "pip_install_blocked",
+      "file": "pip_block.txt",
+      "budget": 4,
+      "question": "why did pip install fail and what is the fix?",
+      "relevance": {"0": 3, "8": 2, "9": 2, "16": 1}
+    },
+    {
+      "name": "verbose_pytest_assertion_failure",
+      "file": "pytest_failure_verbose.txt",
+      "budget": 5,
+      "question": "which assertion failed and where?",
+      "relevance": {"15": 3, "16": 3, "19": 3, "21": 3, "22": 2, "9": 1}
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "collab-policy",
+  "experiment_module": "evals.alphaevolve.collab_policy.evaluate",
+  "metric": "completion_adjusted_routing_efficiency",
+  "dataset_fingerprint": "636c1d223356b89a",
+  "config": {
+    "title": "straitjacket cross-harness task routing",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T133522Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "17234857502412262359",
+      "score": 109.1798,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739934093",
+      "score": 109.1798,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739934922",
+      "score": 109.1798,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739934929",
+      "score": 109.1798,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739933129",
+      "score": 109.1798,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739934003",
+      "score": 109.1798,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739934988",
+      "score": 109.1798,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739934558",
+      "score": 109.1798,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739935394",
+      "score": 109.1798,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15082571745739934766",
+      "score": 106.40862,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T133522Z-collab-policy-winner.py"
+}

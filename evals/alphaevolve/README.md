@@ -32,8 +32,12 @@ fixture, denominators, safety boundary, verification, and limitations.
 
 The first bounded run is recorded in
 [`2026-08-17-result.md`](2026-08-17-result.md). It completed 19 evolved
-candidates and improved the frozen objective from 75.419820 to 91.116070; the
-winner remains unpromoted pending independent holdout evaluation.
+candidates and improved the frozen objective from 75.419820 to 91.116070.
+A 14-program rerun on 2026-08-24 reached **94.44** and then cleared
+independently authored holdout/adversarial gates plus a real-output
+exploration-scale corpus; its policy is translated into the generic digest
+fallback. See
+[`2026-08-24-evidence-selection-holdout.md`](2026-08-24-evidence-selection-holdout.md).
 
 The completion/context/turn/route portfolio and naive-fast-path campaigns are
 recorded in
@@ -102,7 +106,7 @@ python -m evals.alphaevolve.portfolio route-replay --local
 python -m evals.alphaevolve.portfolio escalation-policy --local
 ```
 
-The complete registry now spans 31 production levers and 20 experiment
+The complete registry now spans 33 production levers and 22 experiment
 families. Use the registry and wave commands instead of maintaining a manual
 command list:
 
@@ -135,6 +139,25 @@ Each new experiment defaults to the charter's 12-program, concurrency-2 cap:
 python -m evals.alphaevolve.portfolio context-budget \
   --run --confirm-spend
 ```
+
+Blend Google's documented fast/deep generation models by weight instead of
+searching with one model (`gemini-3.1-pro-preview` is served from `global`
+only, and unsupported names fail closed before any spend):
+
+```bash
+python -m evals.alphaevolve.portfolio context-budget \
+  --run --confirm-spend --max-programs 12 \
+  --model-mix 'gemini-3.5-flash:0.7,gemini-3.1-pro-preview:0.3'
+```
+
+Managed campaigns run through the memoized campaign harness in
+[`campaign.py`](campaign.py): duplicate candidate source is evaluated once and
+replayed (measured 12x cheaper on an all-duplicate campaign), each evaluation
+submits the primary scalar plus per-metric component gains as separate named
+scores, failures return typed hint text for the next generation, and every
+finished or resumed run writes a dated summary plus its best program to
+`results/`. See the [revamp receipt](2026-08-24-optimizer-revamp.md) for
+method and limits.
 
 It checks the seed locally and reads enabled-service state. License assignment,
 IAM bindings, engine identity, and Application Default Credentials remain manual

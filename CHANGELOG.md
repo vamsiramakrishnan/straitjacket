@@ -6,6 +6,48 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-08-25
+
+The full 22-family fleet ran bounded managed campaigns (~950 candidates, all
+spend-confirmed): four small deltas (largest +1.59), seventeen exact plateaus
+at the reviewed seeds, and one confirmed catch by the new cross-harness review
+gate — the context-budget winner's improvement was bought by silently dropping
+mandatory evidence; an independent harness reviewer flagged it and a local
+adversarial re-run confirmed (−101,000) before any promotion moved. Layer-B
+replay over 772 real recorded tool outputs shows the translated signal ranking
+strictly dominates the seed-era regex (57 decisive upgrades, 52 finds where
+old saw nothing, zero regressions). Fleet receipt:
+`evals/alphaevolve/2026-08-24-fleet-sweep.md`.
+
+A small AlphaEvolve campaign (14 programs) on evidence selection reached
+**94.44** on the frozen objective (seed 75.42, +25.22%), beating the
+historical 91.12 fleet best with fewer candidates. The promotion-contract
+steps previous winners never received are now in place: independently
+authored holdout (+16.3%) and adversarial (+35.8%) corpora in
+`evals/alphaevolve/evaluate.py`, a reviewed translation of the layered
+signal-ranking policy into the generic digest fallback
+(`src/ctx/digest/text.py:_signal_rank` — benign traps never become signals,
+keyword-less decisive evidence such as HTTP status codes now ranks highest),
+and an exploration-scale corpus built from real captured repository outputs
+(761-line grep sweep, 250-line noisy traceback, pip block, verbose pytest
+failure) where the policy improves selection by **+34.7%** with measured
+blind spots recorded as the next campaign target. Receipt:
+`evals/alphaevolve/2026-08-24-evidence-selection-holdout.md`.
+Receipt: `evals/alphaevolve/2026-08-24-optimizer-revamp.md`.
+
+The AlphaEvolve managed-search harness follows Google's
+alphaevolve-on-googlecloud client patterns more closely: weighted flash/pro
+model mixtures (`--model-mix`, fail-closed validation, pro served from `global`
+only), per-campaign memoization of duplicate candidate source (measured 12x
+cheaper on an all-duplicate run), multi-metric component scores on every
+evaluation, typed failure insights fed back to the ensemble, dated campaign
+summary and winner artifacts under `evals/alphaevolve/results/`, and a
+concurrent fleet scorecard that cut full-registry gate time from 7.44 s to
+2.60 s with byte-identical output. Search infrastructure only; no production
+seam, gate, corpus, or promotion rule changed. Registry counts were reconciled
+across documentation to 32 levers / 29 mutable / 21 families / 9 waves.
+Receipt: `evals/alphaevolve/2026-08-24-optimizer-revamp.md`.
+
 ## [0.35.1] - 2026-08-21
 
 The AlphaEvolve evidence is now presented as one receipt-backed benefit ledger

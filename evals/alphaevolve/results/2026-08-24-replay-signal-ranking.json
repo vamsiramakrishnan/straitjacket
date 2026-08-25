@@ -1,0 +1,21 @@
+{
+  "schema": "ctx.alphaevolve-replay-signal-ranking/v1",
+  "recorded_transcript_outputs_large": 772,
+  "agree": 337,
+  "decisive_upgrade": 57,
+  "old_picked_benign_trap": 0,
+  "old_trap_only": 0,
+  "new_finds_old_misses": 52,
+  "only_old_fires": 0,
+  "no_signal_either": 302,
+  "examples": {
+    "trap_avoided": [],
+    "decisive_upgrade": [
+      "    \"status\": \"PERMISSION_DENIED\"",
+      "                status_code=503,",
+      "32\treturned `403 PERMISSION_DENIED` for all three because the active ADC principal",
+      "318\t        errors: list[str] = []",
+      "45\t                status_code=503,"
+    ]
+  }
+}

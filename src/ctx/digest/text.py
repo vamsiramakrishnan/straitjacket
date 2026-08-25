@@ -13,6 +13,66 @@ _ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ---- layered signal ranking -------------------------------------------------
+# Translated from the reviewed AlphaEvolve evidence-selection winner
+# (evals/alphaevolve/2026-08-24-evidence-selection-holdout.md): one blunt
+# keyword regex both missed real signals ("HTTP/1.1 502 Bad Gateway" carries
+# no keyword) and fired on benign traps ("no errors detected"). Lines are
+# ranked in tiers; only positive tiers may become a digest signal line.
+_BENIGN_RE = re.compile(
+    r"\bno (?:errors?|failures?|warnings?)\b|\b0 (?:errors?|failed|failures?|warnings?)\b"
+    r'|\bzero (?:errors?|failures?)\b|["\'][^"\']*?\b0 errors?\b[^"\']*?["\']',
+    re.IGNORECASE,
+)
+_COORDINATE_RE = re.compile(
+    r'\bfile "[^"]+", line \d+'
+    r"|\b(?:[a-zA-Z]:[\\/])?[\w.\-/\\]+\.\w+:\d+(?::\d+)?\b"
+    r"|\b--> \S+:\d+"
+    r"|\bat \S+\(\w+\.java:\d+\)"
+    r"|\b\S+\.(?:go|py|rs|ts|js|java):\d+",
+)
+_HTTP_STATUS_RE = re.compile(r"HTTP/[12]\.\d+\s+[45]\d\d|\bstatus(?:_code)?\s*[:=]\s*[45]\d\d\b")
+_EXIT_CODE_RE = re.compile(
+    r"\b(?:exit(?:ed)?(?: with)?(?: code| status)?\s*[:=]?\s*[1-9]\d*|code\s+[1-9]\d*\s*\((?:OOMKilled|Error)\))\b",
+    re.IGNORECASE,
+)
+_REAL_FAILURES_RE = re.compile(
+    r"\b(?:failures?|errors?|failed|failing)\s*[:=]?\s*[1-9]\d*\b"
+    r"|\b[1-9]\d*\s+(?:failed|failures?|errors?)\b"
+    r"|--- FAIL: |\bFAIL\b|\bgyp ERR!|\bpsql:.*ERROR|\bELIFECYCLE\b|\bBack-off restarting failed\b"
+    r"|\bOOMKilled\b|\bconnection refused\b",
+)
+_STRONG_ERR_RE = re.compile(
+    r"\b(FATAL|CRITICAL|Traceback|Exception|AssertionError|PERMISSION_DENIED|PERMISSION denied)\b"
+    r"|^Error: |\bERR! ",
+)
+_WEAK_ERR_RE = _ERROR_RE
+_QUOTA_RE = re.compile(r"\b(quota exceeded|exceed quota|will exceed quota)\b", re.IGNORECASE)
+
+
+def _signal_rank(line: str) -> int:
+    """Tier of evidence salience for one output line.
+
+    -1 benign trap · 0 no signal · 1 weak keyword · 2 coordinate-bearing ·
+    3 decisive failure evidence. Higher wins; earliest line breaks ties.
+    """
+    if _BENIGN_RE.search(line):
+        return -1
+    rank = 0
+    if _WEAK_ERR_RE.search(line):
+        rank = 1
+    if _COORDINATE_RE.search(line):
+        rank = max(rank, 2)
+    if (
+        _REAL_FAILURES_RE.search(line)
+        or _HTTP_STATUS_RE.search(line)
+        or _EXIT_CODE_RE.search(line)
+        or _STRONG_ERR_RE.search(line)
+        or _QUOTA_RE.search(line)
+    ):
+        rank = 3
+    return rank
+
 
 class TextProfile(Profile):
     version = "text/v1"
@@ -75,19 +135,21 @@ class TextProfile(Profile):
                 summary.append(f"  focus {stream}:L{a}-L{b}: {sample}")
                 shown += 1
         else:
-            # First and last error lines across stderr then stdout.
+            # First and last evidence lines across stderr then stdout, ranked
+            # by the layered signal model: benign traps never qualify, and a
+            # decisive tier-3 line outranks an earlier weak-keyword line.
             for view in (ctx.stderr, ctx.stdout):
                 hits = [
-                    (i, ln.strip())
+                    (i, ln.strip(), _signal_rank(ln))
                     for i, ln in enumerate(view.text_lines, start=1)
-                    if _ERROR_RE.search(ln)
                 ]
+                hits = [h for h in hits if h[2] > 0]
                 if hits:
-                    i, ln = hits[0]
+                    i, ln, rank = max(hits, key=lambda h: (h[2], -h[0]))
                     summary.append(f"  first signal {view.name}:L{i}: {ln[:EVIDENCE_LINE_CHARS]}")
                     shown += 1
-                    if len(hits) > 1:
-                        j, lj = hits[-1]
+                    j, lj, _ = hits[-1]
+                    if j != i:
                         summary.append(f"  terminal signal {view.name}:L{j}: {lj[:EVIDENCE_LINE_CHARS]}")
                         shown += 1
                     break

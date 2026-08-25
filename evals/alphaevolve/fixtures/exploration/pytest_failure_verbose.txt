@@ -1,0 +1,23 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.7, pytest-9.1.1, pluggy-1.6.0 -- /home/user/anaconda3/bin/python
+cachedir: .pytest_cache
+rootdir: /tmp/opencode
+plugins: anyio-4.9.0
+collecting ... collected 1 item
+
+../../../tmp/opencode/test_scratch.py::test_quota_math FAILED            [100%]
+
+=================================== FAILURES ===================================
+_______________________________ test_quota_math ________________________________
+
+    def test_quota_math():
+        total = 900
+        sent = 250
+>       assert total % sent == 0, f"{total} shards not divisible by {sent}"
+E       AssertionError: 900 shards not divisible by 250
+E       assert (900 % 250) == 0
+
+/tmp/opencode/test_scratch.py:4: AssertionError
+=========================== short test summary info ============================
+FAILED ../../../tmp/opencode/test_scratch.py::test_quota_math - AssertionErro...
+============================== 1 failed in 0.02s ===============================

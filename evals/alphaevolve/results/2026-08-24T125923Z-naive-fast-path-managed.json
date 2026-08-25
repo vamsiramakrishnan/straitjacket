@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "naive-fast-path",
+  "experiment_module": "evals.alphaevolve.naive_fast_path.evaluate",
+  "metric": "completion_adjusted_naive_advantage",
+  "dataset_fingerprint": "00a2621d95f5fff2",
+  "config": {
+    "title": "straitjacket naive-use-case fast path",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T125923Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "122181789532690738",
+      "score": 165.36806,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532691143",
+      "score": 165.36806,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532691719",
+      "score": 165.36806,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532692162",
+      "score": 165.36806,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532691858",
+      "score": 165.36806,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532689351",
+      "score": 165.36806,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532691801",
+      "score": 165.36806,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532691080",
+      "score": 156.90973,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532690548",
+      "score": 156.90973,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "122181789532692409",
+      "score": 156.90973,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T125923Z-naive-fast-path-winner.py"
+}

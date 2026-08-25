@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "engagement-policy",
+  "experiment_module": "evals.alphaevolve.engagement_policy.evaluate",
+  "metric": "completion_adjusted_engagement_efficiency",
+  "dataset_fingerprint": "d4278c08ae544223",
+  "config": {
+    "title": "straitjacket graduated engagement and reflex",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T124250Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "10788329322742174490",
+      "score": 101.43783,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516356172",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516356272",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516357622",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516358072",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516354251",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516356526",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516358051",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516354905",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "388949616516354955",
+      "score": 101.43783,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T124250Z-engagement-policy-winner.py"
+}

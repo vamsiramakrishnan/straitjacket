@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "route-policy",
+  "experiment_module": "evals.alphaevolve.route_policy.evaluate",
+  "metric": "completion_adjusted_route_efficiency",
+  "dataset_fingerprint": "451e73530e8daa62",
+  "config": {
+    "title": "straitjacket success-adjusted execution routing",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T130214Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "839217370753896603",
+      "score": 106.59,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049106356",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049106162",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049105968",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049109870",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049109676",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049109482",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049109288",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049107963",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "2376712658049108944",
+      "score": 106.59,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T130214Z-route-policy-winner.py"
+}

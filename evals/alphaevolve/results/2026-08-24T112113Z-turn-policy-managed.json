@@ -1,0 +1,75 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "turn-policy",
+  "experiment_module": "evals.alphaevolve.turn_policy.evaluate",
+  "metric": "completion_adjusted_turn_efficiency",
+  "dataset_fingerprint": "c810e3757180fe8c",
+  "config": {
+    "resumed_experiment": "projects/440790012685/locations/global/collections/default_collection/engines/phoenix-retail_1751440313229/sessions/6356660244798316837/alphaEvolveExperiments/431373623205426140"
+  },
+  "recorded_at": "2026-08-24T112113Z",
+  "programs_ranked": 24,
+  "top_programs": [
+    {
+      "program": "15048001656393492651",
+      "score": 93.38333,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608985578",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608986952",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608985695",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608983662",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608986462",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608986527",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608986618",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608984182",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16145767415608984204",
+      "score": -101000,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T112113Z-turn-policy-winner.py"
+}

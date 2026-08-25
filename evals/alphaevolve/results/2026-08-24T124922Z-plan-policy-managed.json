@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "plan-policy",
+  "experiment_module": "evals.alphaevolve.plan_policy.evaluate",
+  "metric": "completion_adjusted_plan_efficiency",
+  "dataset_fingerprint": "94dddf1874312097",
+  "config": {
+    "title": "straitjacket evidence-plan compiler",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T124922Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "15943251646862014409",
+      "score": 110.59109,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595408791",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595406365",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595408035",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595409705",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595407279",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595406523",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595408193",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595409739",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8797760642595408227",
+      "score": 110.59109,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T124922Z-plan-policy-winner.py"
+}

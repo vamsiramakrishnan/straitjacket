@@ -188,6 +188,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "policy": ("admin", "cmd_policy", True),
     "ladders": ("admin", "cmd_ladders", True),
     "orchestrate": ("hosts", "cmd_orchestrate", True),
+    "collab": ("collab", "cmd_collab", True),
     "setup": ("hosts", "cmd_setup", False),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
@@ -563,6 +564,55 @@ def _build_parser():
     debt_sub.add_parser("list", help="show outstanding declared debt")
     p_dr = debt_sub.add_parser("resolve", help="mark a debt entry resolved")
     p_dr.add_argument("id", help="entry id from `ctx debt list`")
+
+    p_col = sub.add_parser(
+        "collab",
+        help="hand bounded tasks between your coding agents with leases, "
+             "completion packets, and cross-reviews",
+    )
+    col_sub = p_col.add_subparsers(dest="col_cmd", required=True)
+    p_cn = col_sub.add_parser("new", help="create a task")
+    p_cn.add_argument("--goal", required=True)
+    p_cn.add_argument("--owns", default="", help="comma-separated paths the worker owns")
+    p_cn.add_argument("--avoid", default="", help="comma-separated paths to never touch")
+    p_cn.add_argument("--verify", default="", help="acceptance command")
+    p_cn.add_argument("--context", default="", help="comma-separated files to read first")
+    p_cn.add_argument("--by", default="coordinator", help="creating harness")
+    col_sub.add_parser("list", help="tasks with holder, status, reviews")
+    p_cs = col_sub.add_parser("show", help="full event history for one task")
+    p_cs.add_argument("task_id")
+    p_cc = col_sub.add_parser("claim", help="take the lease on a task")
+    p_cc.add_argument("task_id")
+    p_cc.add_argument("--by", required=True, help="harness claiming (e.g. codex)")
+    p_cp = col_sub.add_parser("complete", help="file a completion packet")
+    p_cp.add_argument("task_id")
+    p_cp.add_argument("--by", required=True)
+    p_cp.add_argument("--status", required=True, choices=("done", "blocked", "failed"))
+    p_cp.add_argument("--summary", required=True)
+    p_cp.add_argument("--files", default="", help="comma-separated changed paths")
+    p_cp.add_argument("--verification", default="", help="command run + result")
+    p_cp.add_argument("--followups", default="", help="comma-separated follow-ups")
+    p_ch = col_sub.add_parser("handoff", help="print or run a handoff prompt for a harness")
+    p_ch.add_argument("task_id")
+    p_ch.add_argument("--to", required=True, choices=("claude", "codex", "gemini", "agy"))
+    p_ch.add_argument("--run", action="store_true",
+                      help="execute headless now instead of printing the packet")
+    p_ch.add_argument("--timeout", type=float, default=900.0)
+    p_cr = col_sub.add_parser("review", help="record or run a cross-harness review")
+    p_cr.add_argument("task_id")
+    p_cr.add_argument("--by", required=True, help="reviewer harness")
+    p_cr.add_argument("--verdict", choices=("approve", "reject"))
+    p_cr.add_argument("--evidence", default="")
+    p_cr.add_argument("--run", action="store_true",
+                      help="ask the reviewer harness headlessly instead of recording manually")
+    p_cr.add_argument("--timeout", type=float, default=900.0)
+    p_ci = col_sub.add_parser("integrate", help="integration gate verdict")
+    p_ci.add_argument("task_id")
+    p_ci.add_argument("--accept", dest="accepted", action="store_true")
+    p_ci.add_argument("--reject", dest="accepted", action="store_false")
+    p_ci.set_defaults(accepted=None)
+    p_ci.add_argument("--note", default="")
+
 
     p_lad = sub.add_parser(
         "ladders",
