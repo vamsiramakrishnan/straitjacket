@@ -28,21 +28,32 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 <div class="sj-stats">
   <div>
-    <span class="sj-stat-n">304,113 → 210</span>
-    <span class="sj-stat-l">tokens a full test log costs your transcript</span>
+    <span class="sj-stat-n">302,628 → 521</span>
+    <span class="sj-stat-l">visible tokens; quiet needle retained</span>
   </div>
   <div>
-    <span class="sj-stat-n">−28%</span>
-    <span class="sj-stat-l">turns to finish the same task</span>
+    <span class="sj-stat-n">L14,238</span>
+    <span class="sj-stat-l">the quiet line truncation lost</span>
   </div>
   <div>
-    <span class="sj-stat-n">96.5–98.1%</span>
-    <span class="sj-stat-l">prompt-cache hit rate held</span>
+    <span class="sj-stat-n">1,454</span>
+    <span class="sj-stat-l">addresses followed after content moved</span>
   </div>
   <div>
-    <span class="sj-stat-n">zero</span>
-    <span class="sj-stat-l">evidence dropped without an address</span>
+    <span class="sj-stat-n">0 wrong</span>
+    <span class="sj-stat-l">across 1,920 anchored resolutions</span>
   </div>
+</div>
+
+<div style="border: 1px solid var(--sl-color-gray-5); margin: 2rem 0;">
+  <picture className="sj-dark" style="display:block">
+    <source media="(max-width: 640px)" srcSet="/straitjacket/diagrams/ae-evidence-fates-mobile.svg" />
+    <img src="/straitjacket/diagrams/ae-evidence-fates.svg" width="100%" alt="Three measured treatments of the same 20,001-line log: raw output floods context; head-and-tail truncation loses the quiet needle; straitjacket preserves it in a bounded digest with an exact retrieval address." style="display:block" />
+  </picture>
+  <picture className="sj-light" style="display:block">
+    <source media="(max-width: 640px)" srcSet="/straitjacket/diagrams/ae-evidence-fates-mobile-light.svg" />
+    <img src="/straitjacket/diagrams/ae-evidence-fates-light.svg" width="100%" alt="Three measured treatments of the same 20,001-line log: raw output floods context; head-and-tail truncation loses the quiet needle; straitjacket preserves it in a bounded digest with an exact retrieval address." style="display:block" />
+  </picture>
 </div>
 
 ## What you get
@@ -56,8 +67,8 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
   </li>
   <li>
     <b>You stop re-paying for the same bytes every turn</b>
-    A 304,113-token log costs about <strong>210 tokens</strong> in your
-    transcript, and stays that size however loud the command was. Charged
+    In the field-needle receipt, 302,628 raw tokens become <strong>521 visible
+    tokens</strong>. The digest stays bounded however loud the command was. Charged
     once — not on every round for the rest of the session.
   </li>
   <li>
@@ -68,14 +79,14 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
   </li>
   <li>
     <b>You can check what the agent tells you</b>
-    It can show you where an answer came from, and the same address returns
-    the same bytes tomorrow, next week, on another machine. No "I recall
-    seeing", no rerunning the suite to confirm.
+    Frozen artifact handles resolve exact stored bytes while the store is
+    available. Live repository anchors verify, relocate, or refuse instead of
+    silently returning whatever moved under an old line number.
   </li>
   <li>
-    <b>Your sessions finish sooner, not just cheaper</b>
-    A small window keeps the cache warm and the plan intact. Measured on the
-    same tasks: <strong>−28% turns, −33% wall-clock time, −17% cost</strong>.
+    <b>Small work is allowed to stay small</b>
+    Containment is conditional. A proven-small named test can stay native;
+    the output gate remains armed if that same command unexpectedly floods.
   </li>
   <li>
     <b>It works with the agent you already use</b>
@@ -121,8 +132,8 @@ boundaries](/straitjacket/guides/alphaevolve-benefits/).
 
 ## What it costs you today
 
-One `pytest -q` can put **300,000 tokens** into your agent's transcript. You
-don't pay for that once — every turn afterwards re-sends it. A routine
+The measured field-needle log puts **302,628 tokens** into an uncontained
+transcript. You don't pay for that once — every turn afterwards re-sends it. A routine
 `mcp__github__list_commits` costs about **19,800 tokens per round**, forever.
 
 Then the window fills, compaction runs, and it silently deletes the one failing
@@ -134,17 +145,24 @@ needed is the first thing thrown overboard.**
 
 ## Why the window is the whole game
 
-<div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow); margin-bottom: 1rem;">
-  <img className="sj-dark" src="/straitjacket/diagrams/econ.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
-  <img className="sj-light" src="/straitjacket/diagrams/econ-light.svg" width="100%" alt="Without: one pytest run puts 304,113 tokens in the transcript, re-sent on every later turn. With: a ~210-token digest plus addresses; raw bytes stay on disk and the rest of the window is free." style="display:block" />
+<div style="border: 1px solid var(--sl-color-gray-5); margin-bottom: 1rem;">
+  <picture className="sj-dark" style="display:block">
+    <source media="(max-width: 640px)" srcSet="/straitjacket/diagrams/ae-residency-mobile.svg" />
+    <img src="/straitjacket/diagrams/ae-residency.svg" width="100%" alt="Illustrative seven-turn residency trace: native execution keeps a 302,628-token payload resident for six turns, while containment keeps a 521-token digest and retrieves one bounded region only when needed." style="display:block" />
+  </picture>
+  <picture className="sj-light" style="display:block">
+    <source media="(max-width: 640px)" srcSet="/straitjacket/diagrams/ae-residency-mobile-light.svg" />
+    <img src="/straitjacket/diagrams/ae-residency-light.svg" width="100%" alt="Illustrative seven-turn residency trace: native execution keeps a 302,628-token payload resident for six turns, while containment keeps a 521-token digest and retrieves one bounded region only when needed." style="display:block" />
+  </picture>
 </div>
 
 Context is not just a cost line — it's the agent's working memory. A window
 full of last hour's log is a window that can't hold your problem. Every token
 you spend re-reading `pytest` output is a token not spent on the bug.
 
-That's why the numbers above move together. Fewer tokens is the mechanism;
-finishing sooner is the result.
+The residency trace is an accounting model, not a task-outcome claim. Agent
+outcomes are measured separately, including the regimes where native execution
+wins.
 
 Nothing here is claimed without a receipt. Every steering change ships only
 after a measured A/B or head-to-head, and all of it is published in
@@ -160,7 +178,7 @@ charge you for it.
 |---|---|---|
 | **Letting the window fill** | you pay for every byte, every turn, and quality falls as it fills | the log is charged once, at a fixed small size |
 | **Compaction / summarization** | rewrites your history and throws evidence away permanently — you can't get it back | clearing is lossless: the evidence is secured first, then the window is freed |
-| **RAG / vector memory** | probabilistic recall with no provenance — you can't tell if it's real | exact addresses: the same coordinate returns the same bytes forever |
+| **RAG / vector memory** | probabilistic recall with no provenance — you can't tell if it's real | frozen handles resolve exact stored bytes; live repository anchors verify, relocate, or refuse |
 | **Rewriting wire proxies** (Headroom) | silent evidence drops — in our head-to-head, 347,595 tokens became 68 with no trace | every elided byte stays on disk and addressed; **96.5–98.1% cache hit vs their 80.6–84.2%** |
 | **Bash-hook filters** (rtk) | lossy on the paths that succeeded; no way to go back and look | budgets that spend bytes on failures and starve success noise |
 | **Terse-prompting styles** (Caveman) | destroys evidence to save tokens — the quiet-needle problem | cite instead of quote, with a handle that resolves |
@@ -231,9 +249,9 @@ protocol, with six reference documents that load **only** when a task reaches
 for them. Same discipline we apply to your tool output, applied to our own
 instructions.
 
-Its rules are numbered and checkable, which is the point — a rule you can score
-is a rule you can A/B. That is how the solution ladder earned its place here
-(−28% turns, −33% time, −17% cost) instead of being asserted.
+Its rules are numbered and checkable, which is the point: an observed behaviour
+can be scored, challenged, and removed when a larger receipt overturns an early
+result.
 
 Advisory means bypassable. That is the honest boundary of this layer, and it is
 why the hook exists: the hook enforces at the tool boundary what the skill can
@@ -247,7 +265,7 @@ only recommend.
 ## Try it in three commands
 
 ```bash
-pip install -e .    # from a clone (PyPI release pending); Python 3.11+
+python -m pip install --upgrade ctx-harness  # Python 3.11+
 cd your-repo
 ctx setup           # Antigravity, Claude Code and Codex are now harnessed
 ```
@@ -265,13 +283,19 @@ than claiming success.
 
 ## Then, how it actually works
 
-Only once you care. The short version: raw bytes stop at the gate, land in an
-immutable local store, and your transcript gets a small summary plus exact
-addresses back into the original.
+Only once you care. Raw bytes stop at the gate and land in an immutable local
+store. What crosses into the transcript is an evidence index: outcome, coverage,
+the exceptional fact, and the exact next read.
 
-<div style="border: 2px solid var(--sl-color-white); box-shadow: var(--sj-shadow);">
-  <img className="sj-dark" src="/straitjacket/diagrams/flow.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time." style="display:block" />
-  <img className="sj-light" src="/straitjacket/diagrams/flow-light.svg" width="100%" alt="Tool output hits the birth gate; every raw byte lands in an immutable artifact store; the transcript gets a bounded, span-addressed digest; ctx get returns the exact bytes any time." style="display:block" />
+<div style="border: 1px solid var(--sl-color-gray-5);">
+  <picture className="sj-dark" style="display:block">
+    <source media="(max-width: 640px)" srcSet="/straitjacket/diagrams/ae-digest-anatomy-mobile.svg" />
+    <img src="/straitjacket/diagrams/ae-digest-anatomy.svg" width="100%" alt="Annotated anatomy of a receipt-derived log-template specimen: immutable run identity, outcome, template census, quiet needle, coverage receipt, and exact continuation command." style="display:block" />
+  </picture>
+  <picture className="sj-light" style="display:block">
+    <source media="(max-width: 640px)" srcSet="/straitjacket/diagrams/ae-digest-anatomy-mobile-light.svg" />
+    <img src="/straitjacket/diagrams/ae-digest-anatomy-light.svg" width="100%" alt="Annotated anatomy of a receipt-derived log-template specimen: immutable run identity, outcome, template census, quiet needle, coverage receipt, and exact continuation command." style="display:block" />
+  </picture>
 </div>
 
 A token passes four points in its life, and every mechanism in the system

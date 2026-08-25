@@ -5,8 +5,12 @@ on:
     paths:
       - "docs/**"
       - "assets/**"
+      - "site/**"
+      - "evals/field-needle-record.json"
+      - "evals/anchor-drift-2026-08-20.json"
       - "README.md"
       - "scripts/fix_docs_svgs.py"
+      - "scripts/gen_addressable_evidence_visuals.py"
       - "scripts/check_docs_links.py"
       - "scripts/check_docs_facts.py"
       - ".github/workflows/docs-integrity.yml"
@@ -15,8 +19,12 @@ on:
     paths:
       - "docs/**"
       - "assets/**"
+      - "site/**"
+      - "evals/field-needle-record.json"
+      - "evals/anchor-drift-2026-08-20.json"
       - "README.md"
       - "scripts/fix_docs_svgs.py"
+      - "scripts/gen_addressable_evidence_visuals.py"
       - "scripts/check_docs_links.py"
       - "scripts/check_docs_facts.py"
       - ".github/workflows/docs-integrity.yml"
@@ -32,9 +40,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
       - name: Require portable SVG references
         run: python scripts/fix_docs_svgs.py --check
+      - name: Require generated evidence visuals to be current
+        run: python scripts/gen_addressable_evidence_visuals.py --check
       - name: Validate documentation links and SVG files
         run: python scripts/check_docs_links.py
       - name: Check documentation facts against source of truth
         run: python scripts/check_docs_facts.py
+      - name: Build documentation site
+        run: npm ci && npm run build
+        working-directory: site

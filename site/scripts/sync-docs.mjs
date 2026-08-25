@@ -42,6 +42,7 @@ const PAGES = [
   // Contributing
   ['ARCHITECTURE.md', 'contributing/architecture', 'Architecture & code map', 'Every src/ctx module mapped to its plane, with a which-file-do-I-touch table.'],
   ['WRITING-A-PROFILE.md', 'contributing/writing-a-profile', 'Writing a profile', 'Turn raw bytes into typed facts: the code, the registry, the contract, and the tests.'],
+  ['VISUAL-DESIGN.md', 'contributing/visual-design', 'Visual design', 'Addressable Evidence: the visual grammar for traces, specimens, receipts, and exact retrieval.'],
   // Design & internals
   ['THEORY.md', 'design/theory', 'Theory', 'The formal objective, the enforced theorems, and the honest derived-vs-empirical ledger.'],
   ['EDC.md', 'design/edc', 'The EDC', 'The Evidence Delivery Controller: typed Facts, Evidence Contracts, deterministic Delivery Plans.'],
