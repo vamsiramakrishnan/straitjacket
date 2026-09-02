@@ -2,7 +2,7 @@
 
 Keep large tool output out of your coding agent's prompt. Keep the evidence available.
 
-**v0.35.1 · pre-1.0 · Python 3.11+ · Apache-2.0**
+**v0.36.0 · pre-1.0 · Python 3.11+ · Apache-2.0**
 
 straitjacket is a local context-containment harness for Claude Code, Codex, and
 Antigravity. `ctx run` captures command output directly; supported host paths
@@ -51,6 +51,7 @@ how to retrieve the rest.
 | Find a fact in stored output | `ctx search <handle> <pattern>` | Matches without replaying the artifact |
 | Compare two runs | `ctx diff run:8d8335db6848 run:5a67c9de0123` | Outcome and evidence changes |
 | Navigate a repository | `ctx map`, `ctx def`, `ctx refs`, `ctx callers` | Structural views instead of broad file dumps |
+| Split and resume multi-agent work | `ctx orchestrate '<task>'`, `ctx task show <id>` | Persistent task ledger with recovery and budget state |
 
 The basic workflow stays familiar. Run the command. Inspect the failure. Read
 more only when the next decision needs it.
@@ -162,6 +163,9 @@ in [`evals/`](evals/). Two mechanism tests establish the core behavior:
   relocated 1,452 times, verified in place twice, refused 466 times, and returned
   the wrong content zero times. See the
   [anchor-drift receipt](evals/anchor-drift-2026-08-20.md).
+- The task-ledger replay exercises persisted orchestration state across resume,
+  typed recovery, and budget reconciliation. See the
+  [task-ledger receipt](evals/task-ledger-replay-2026-09-02.md).
 
 Those results test delivery and addressing. They do not prove that every agent
 task becomes cheaper or faster.
@@ -224,7 +228,8 @@ minor releases.
 2. [Getting started](docs/GETTING-STARTED.md)
 3. [Why straitjacket](docs/WHY-STRAITJACKET.md)
 4. [CLI guide](docs/CLI.md)
-5. [Documentation map](docs/README.md)
+5. [Task ledger](docs/TASK-LEDGER.md)
+6. [Documentation map](docs/README.md)
 
 Reference: [configuration](docs/CONFIGURATION.md) ·
 [troubleshooting](docs/TROUBLESHOOTING.md) ·

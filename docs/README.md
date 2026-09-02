@@ -41,6 +41,8 @@ retrieval returns bounded regions on demand
 | Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
 | Understand handles, spans, and profiles | [Core concepts](CONCEPTS.md) |
 | Understand content-stable repository addresses | [Anchors](ANCHORS.md) |
+| Route work across hosts and models | [Routing](ROUTING.md) |
+| Run or resume multi-agent work | [Task ledger](TASK-LEDGER.md) |
 | See module ownership and data flow | [Architecture](ARCHITECTURE.md) |
 | Add a typed digest | [Writing a profile](WRITING-A-PROFILE.md) |
 | Inspect measurements and counterexamples | [Evaluation receipts](../evals/) |
@@ -92,6 +94,8 @@ path is clear.
   them.
 - [Reflex](REFLEX.md) — steering from observed session behavior.
 - [Routing](ROUTING.md) — allocating work across hosts and models.
+- [Task ledger](TASK-LEDGER.md) — persisted multi-agent work, resume, recovery,
+  and budget state.
 - [Replacement surface](REPLACEMENT-SURFACE.md) — transparent command
   substitution and its adoption limits.
 - [Capability surface](CAPABILITY-SURFACE.md) — containing input schemas and MCP

@@ -1,0 +1,124 @@
+{
+  "budget": {
+    "actual_per_node_usd": 0.117,
+    "budget_usd": 0.26,
+    "estimate_would_have_run_all": true,
+    "estimated_total_usd": 0.2,
+    "ledger_spend_usd": 0.234,
+    "nodes_run": 2,
+    "nodes_total": 4,
+    "refused_at_claim": 1,
+    "stopped_within_budget": true
+  },
+  "recovery": {
+    "cases": [
+      {
+        "attempts": 1,
+        "classified_as": "auth_failure",
+        "completed": false,
+        "failure": "auth_failure",
+        "fixed_rule_completed": true,
+        "fixed_rule_spent_usd": 0.12000000000000001,
+        "spent_usd": 0.02,
+        "steward_action": "stop_blocked"
+      },
+      {
+        "attempts": 1,
+        "classified_as": "safety_denied",
+        "completed": false,
+        "failure": "safety_denied",
+        "fixed_rule_completed": true,
+        "fixed_rule_spent_usd": 0.12000000000000001,
+        "spent_usd": 0.02,
+        "steward_action": "stop_blocked"
+      },
+      {
+        "attempts": 2,
+        "classified_as": "rate_limited",
+        "completed": true,
+        "failure": "rate_limited",
+        "fixed_rule_completed": true,
+        "fixed_rule_spent_usd": 0.12000000000000001,
+        "spent_usd": 0.04,
+        "steward_action": "retry_same"
+      },
+      {
+        "attempts": 2,
+        "classified_as": "transient_transport",
+        "completed": true,
+        "failure": "transient_transport",
+        "fixed_rule_completed": true,
+        "fixed_rule_spent_usd": 0.12000000000000001,
+        "spent_usd": 0.04,
+        "steward_action": "retry_same"
+      },
+      {
+        "attempts": 2,
+        "classified_as": "capability_limit",
+        "completed": true,
+        "failure": "capability_limit",
+        "fixed_rule_completed": true,
+        "fixed_rule_spent_usd": 0.12000000000000001,
+        "spent_usd": 0.12,
+        "steward_action": "escalate"
+      },
+      {
+        "attempts": 2,
+        "classified_as": "incomplete_contract",
+        "completed": true,
+        "failure": "incomplete_contract",
+        "fixed_rule_completed": true,
+        "fixed_rule_spent_usd": 0.12000000000000001,
+        "spent_usd": 0.12,
+        "steward_action": "escalate"
+      },
+      {
+        "attempts": 2,
+        "classified_as": "capability_limit",
+        "completed": true,
+        "failure": "execution_denied",
+        "fixed_rule_completed": true,
+        "fixed_rule_spent_usd": 0.12000000000000001,
+        "spent_usd": 0.12,
+        "steward_action": "escalate"
+      }
+    ]
+  },
+  "resume": {
+    "cases": [
+      {
+        "all_done": true,
+        "died_after_launch": 1,
+        "finished_before_crash": 0,
+        "launches_naive_restart": 4,
+        "launches_on_resume": 4,
+        "max_attempts_any_node": 2
+      },
+      {
+        "all_done": true,
+        "died_after_launch": 2,
+        "finished_before_crash": 1,
+        "launches_naive_restart": 4,
+        "launches_on_resume": 3,
+        "max_attempts_any_node": 2
+      },
+      {
+        "all_done": true,
+        "died_after_launch": 3,
+        "finished_before_crash": 2,
+        "launches_naive_restart": 4,
+        "launches_on_resume": 2,
+        "max_attempts_any_node": 2
+      },
+      {
+        "all_done": true,
+        "died_after_launch": 4,
+        "finished_before_crash": 3,
+        "launches_naive_restart": 4,
+        "launches_on_resume": 1,
+        "max_attempts_any_node": 2
+      }
+    ],
+    "nodes": 4
+  }
+}

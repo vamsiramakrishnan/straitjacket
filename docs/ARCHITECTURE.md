@@ -37,6 +37,8 @@ inherits that plane's invariants, and ships with a test.
 | change retrieval (`get`/`search`/spans) | `src/ctx/retrieval.py` + `src/ctx/_retrieval/` |
 | change how a `repo:` line address stays valid across edits | `src/ctx/anchors.py` |
 | measure whether the host's own edits are landing | `src/ctx/edit_outcomes.py` |
+| change what happens when a node does not finish | `src/ctx/steward.py` (classifier + menu) · `src/ctx/recovery_policy.py` (the choice) |
+| change what harnesses record about a collaboration, or resume one | `src/ctx/taskledger.py` · `src/ctx/orchestrator.py:run_route` |
 | change the artifact store | `src/ctx/store.py` |
 | change path confinement or secret redaction | `src/ctx/workspace.py` / `src/ctx/textutil.py` |
 | add a code-navigation verb (callers/refs/def) | `src/ctx/codeverbs.py` / `src/ctx/callgraph.py` |
@@ -133,6 +135,9 @@ This is the plane most contributions touch. The flow is
 | `scorecard.py` | The session scorecard: cache / cost / effort economics from `wire.jsonl`. |
 | `replay.py` | The session-history replay learning loop (`ctx replay --regret/--outcomes`). |
 | `checkpoint.py` | Epoch checkpoints: freeze task state — goal, decisions, evidence handles (SPEC §14). |
+| `taskledger.py` | The task ledger: six closed-vocabulary row types, append/load/fold, the inbox. The bus harnesses collaborate over ([TASK-LEDGER.md](TASK-LEDGER.md)). |
+| `steward.py` | Typed failure classification and the action menu for the recovery policy; every decision is a ledger row before it is acted on. |
+| `recovery_policy.py` | The promoted AlphaEvolve `choose_recovery` seam: retry / escalate / re-plan / honest stop, by failure kind and remaining budget. |
 
 ## The native hook
 

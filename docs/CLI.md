@@ -184,6 +184,22 @@ than returning whatever now sits at those coordinates. `ctx def` emits an
 anchored `live:` address for exactly this reason. Full mechanism:
 [ANCHORS.md](ANCHORS.md).
 
+## The collaboration record: `ctx task`
+
+```bash
+ctx orchestrate "add a caching layer"                     # prints task: <id> at the end
+ctx task ls                                               # tasks with a ledger, newest first
+ctx task show task-18d1583556af4e76                       # claims · handbacks · steward · inbox
+ctx task send task-18d… implement checkpoint:d914ee702801 --note "the plan"
+ctx task inbox task-18d… implement
+ctx orchestrate --resume task-18d1583556af4e76            # finished nodes restored, the rest run
+```
+
+Every `ctx orchestrate` run writes a task ledger; `show` renders it as
+addresses and numbers. `send` hands a node an **address** — never content —
+which the node sees in its prompt and resolves with `ctx get`. Full
+mechanism: [TASK-LEDGER.md](TASK-LEDGER.md).
+
 ## Search captured artifacts: `ctx search`
 
 Use search when the evidence already exists in the store:
