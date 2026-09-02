@@ -208,7 +208,7 @@ def residency(p: dict[str, str]) -> str:
         700,
         "The expensive byte is the one that survives",
         "An illustrative seven-turn residency trace using the measured 302,628-token "
-        "field-needle payload and its 521-token addressable digest. Native execution "
+        f'field-needle payload and its {R["digest_tokens"]}-token addressable digest. Native execution '
         "keeps the payload resident; containment retrieves one bounded region on demand.",
         p,
     )
@@ -534,7 +534,7 @@ def residency_mobile(p: dict[str, str]) -> str:
         900,
         "Token residency on a narrow screen",
         "A compact trace: 302,628 raw tokens remain resident across six turns, while a "
-        "521-token digest remains and one exact 21-line region is retrieved on demand.",
+        f'{R["digest_tokens"]}-token digest remains and one exact 21-line region is retrieved on demand.',
         p,
     )
     c.grid(x=24, y=24, width=592, height=852)
@@ -562,7 +562,7 @@ def residency_mobile(p: dict[str, str]) -> str:
         c.text(x, 592, f"T{turn}", 15, p["muted"], 700, "middle", MONO)
         c.rect(x - 54, 610, 108, 62, p["blue2"], p["blue"], 1)
         c.text(x, 638, "digest", 14, p["blue"], 700, "middle", MONO)
-        c.text(x, 660, "521", 16, p["ink"], 750, "middle", MONO)
+        c.text(x, 660, str(R["digest_tokens"]), 16, p["ink"], 750, "middle", MONO)
     c.rect(162, 700, 108, 44, p["amber2"], p["amber"], 1)
     c.text(216, 728, "get 21 lines", 14, p["amber"], 700, "middle", MONO)
     c.arrow(216, 680, 216, 700, p["amber"], 2)

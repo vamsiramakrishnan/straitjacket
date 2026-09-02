@@ -1,6 +1,6 @@
 # Deploys the Starlight docs site (site/) to GitHub Pages.
-# Manual trigger only — enable Pages (Settings → Pages → Source: GitHub
-# Actions) before the first run.
+# Manual by design. Enable Pages (Settings → Pages → Source: GitHub Actions)
+# before the first run.
 name: docs-site
 
 on:
@@ -20,13 +20,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: site/package-lock.json
+      - name: Install field-receipt replay dependencies
+        run: python -m pip install -e . tiktoken==0.11.0
       - run: npm ci
         working-directory: site
+      - name: Check documentation facts, links, and generated assets
+        run: |
+          python scripts/fix_docs_svgs.py --check
+          python scripts/gen_addressable_evidence_visuals.py --check
+          python scripts/check_docs_links.py
+          CTX_DOCS_REQUIRE_FIELD_TOKEN_REPLAY=1 python scripts/check_docs_facts.py
       - run: npm run build
         working-directory: site
       - uses: actions/upload-pages-artifact@v3

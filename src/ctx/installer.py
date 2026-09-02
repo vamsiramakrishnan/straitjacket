@@ -9,6 +9,7 @@ on the invoking process's CWD or PATH.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import shutil
 import sys
@@ -176,6 +177,10 @@ def install_antigravity(ws: Workspace, *, init_policy: bool = True) -> str:
     lines.append("  Ask:   ctx run (command execution keeps the native permission flow)")
     lines.append("")
     lines.append("validate with: ctx doctor --antigravity")
+    lines.append(
+        "uninstall: remove .agents/plugins/ctx-harness; remove the global "
+        "statusLine only when its command is the ctx status-line command"
+    )
     return "\n".join(lines)
 
 
@@ -499,7 +504,9 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
         lines.extend(init_workspace(root, quiet=True))
     lines.append(
         "uninstall: remove the ctx hook entries from .claude/settings.json "
-        "and the ctx-harness block from CLAUDE.md"
+        "and the ctx-harness block from CLAUDE.md; remove the statusLine only "
+        "when its command is ctx, and remove ctx-explorer.md only if setup "
+        "reported that it created the file"
     )
     return "\n".join(lines)
 
@@ -559,6 +566,9 @@ def _codex_mcp_contract(path: Path, exe: str) -> tuple[bool, str]:
         return False, "ctx-harness MCP command is stale or contains arguments"
     if actual.get("args") != expected["args"]:
         return False, "ctx-harness MCP args are stale or incomplete"
+    features = doc.get("features")
+    if not isinstance(features, dict) or features.get("hooks") is not True:
+        return False, ".codex/config.toml must enable hooks = true in [features]"
     return True, ".codex/config.toml launches the bounded ctx MCP server"
 
 
@@ -592,10 +602,27 @@ def setup_conflicts(ws: Workspace, hosts: "list[str]") -> list[str]:
     ok, detail = _codex_mcp_contract(cfg, _ctx_executable())
     if ok or _managed_codex_config(text):
         return []
+    if "hooks = true" in detail:
+        return [
+            f"{detail}. ctx will not rewrite user-owned TOML. Add or update "
+            "the existing [features] table (do not duplicate it), then rerun "
+            "`ctx setup`."
+        ]
     snippet = _render_codex_mcp_snippet(_ctx_executable())
+    if re.search(r"(?m)^\s*\[mcp_servers\.ctx-harness\]\s*(?:#.*)?$", text):
+        values = "\n".join(snippet.splitlines()[1:])
+        return [
+            f"{detail}. ctx will not rewrite user-owned TOML. Update the "
+            "existing [mcp_servers.ctx-harness] table to contain these values "
+            "(do not add a duplicate), ensure the existing [features] table "
+            "contains hooks = true (create it if absent; do not duplicate it), "
+            f"then rerun `ctx setup`:\n{values}"
+        ]
     return [
         f"{detail}. ctx will not rewrite user-owned TOML. Add this reviewed "
-        f"entry, then rerun `ctx setup`:\n{snippet}"
+        f"entry, ensure the existing [features] table contains hooks = true "
+        f"(create it if absent; do not duplicate it), then rerun `ctx setup`:\n"
+        f"{snippet}"
     ]
 
 
@@ -672,7 +699,15 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
                 cfg.write_text(cfg_snippet, encoding="utf-8")
                 lines.append("refreshed managed .codex/config.toml")
         elif "mcp_servers.ctx-harness" in cfg_text:
-            lines.append(".codex/config.toml already registers ctx-harness; unchanged")
+            ok, detail = _codex_mcp_contract(cfg, exe)
+            if ok:
+                lines.append(".codex/config.toml already registers ctx-harness; unchanged")
+            else:
+                lines.append(
+                    f"{detail}; user-owned TOML was left unchanged. Ensure the "
+                    "existing [features] table contains hooks = true, then rerun "
+                    "ctx doctor"
+                )
         else:
             # Never rewrite a user's TOML in place (duplicate-table hazard).
             lines.append(
@@ -713,7 +748,11 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
 
     if init_policy:
         lines.extend(init_workspace(root, quiet=True))
-    lines.append("uninstall: remove .codex/config.toml, .codex/hooks.json, and the AGENTS.md block")
+    lines.append(
+        "uninstall: remove only the ctx-harness MCP table, ctx hook entries, "
+        "and the marker-delimited AGENTS.md block; delete a whole config file "
+        "only when setup created the managed file and it has no unrelated settings"
+    )
     return "\n".join(lines)
 
 
@@ -726,7 +765,7 @@ def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
     return False
 
 
-# The harness is built for Antigravity and works with Claude Code and Codex.
+# Host setup is explicit because each hook contract has different guarantees.
 # Both of these are DERIVED from the host registry (ctx.hosts): the wired set
 # and the name→installer mapping used to be hand-maintained here as well, a
 # second copy of what every HostSpec already declares via `installer`.
@@ -754,7 +793,7 @@ def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
 
     selected = hosts or list(SETUP_HOSTS)
     out: list[str] = [
-        "ctx harness setup — built for Antigravity, works with Claude Code and Codex",
+        "ctx harness setup — local context containment for coding agents",
         "",
     ]
     for host in selected:

@@ -22,11 +22,13 @@ _MANAGED_FILES = (
     ".agents/plugins/ctx-harness/hooks.json",
     ".agents/plugins/ctx-harness/mcp_config.json",
     ".claude/settings.json",
+    ".claude/agents/ctx-explorer.md",
     ".codex/config.toml",
     ".codex/hooks.json",
     "AGENTS.md",
     "CLAUDE.md",
 )
+_MANAGED_DIRS = (".agents/plugins/ctx-harness",)
 
 
 def setup_fingerprint(workspace_root: Path) -> str:
@@ -58,6 +60,35 @@ def setup_fingerprint(workspace_root: Path) -> str:
             digest.update(b"missing\0")
         else:
             digest.update(hashlib.sha256(payload).digest())
+    for relative in _MANAGED_DIRS:
+        directory = workspace_root / relative
+        digest.update(relative.encode() + b"\0")
+        if not directory.is_dir():
+            digest.update(b"missing\0")
+            continue
+        for path in sorted(p for p in directory.rglob("*") if p.is_file()):
+            child = path.relative_to(workspace_root).as_posix()
+            digest.update(child.encode() + b"\0")
+            try:
+                payload = path.read_bytes()
+            except OSError:
+                digest.update(b"unreadable\0")
+            else:
+                digest.update(hashlib.sha256(payload).digest())
+
+    # Antigravity's status line is global. Hash only that one setting, never the
+    # surrounding user-owned configuration.
+    home = os.environ.get("HOME") or str(Path.home())
+    antigravity_settings = Path(home) / ".gemini" / "antigravity-cli" / "settings.json"
+    digest.update(b"antigravity-statusLine\0")
+    try:
+        document = json.loads(antigravity_settings.read_text(encoding="utf-8"))
+        status_line = document.get("statusLine") if isinstance(document, dict) else None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        status_line = None
+    digest.update(
+        json.dumps(status_line, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
     return digest.hexdigest()
 
 

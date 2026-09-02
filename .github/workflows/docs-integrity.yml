@@ -6,9 +6,18 @@ on:
       - "docs/**"
       - "assets/**"
       - "site/**"
+      - "evals/field-needle-2026-07-20.md"
       - "evals/field-needle-record.json"
+      - "evals/field_needle.py"
+      - "evals/anchor-drift-2026-08-20.md"
       - "evals/anchor-drift-2026-08-20.json"
+      - "evals/anchor_drift.py"
       - "README.md"
+      - "pyproject.toml"
+      - "src/ctx/__init__.py"
+      - "src/ctx/anchors.py"
+      - "src/ctx/ask.py"
+      - "tests/**"
       - "scripts/fix_docs_svgs.py"
       - "scripts/gen_addressable_evidence_visuals.py"
       - "scripts/check_docs_links.py"
@@ -20,9 +29,18 @@ on:
       - "docs/**"
       - "assets/**"
       - "site/**"
+      - "evals/field-needle-2026-07-20.md"
       - "evals/field-needle-record.json"
+      - "evals/field_needle.py"
+      - "evals/anchor-drift-2026-08-20.md"
       - "evals/anchor-drift-2026-08-20.json"
+      - "evals/anchor_drift.py"
       - "README.md"
+      - "pyproject.toml"
+      - "src/ctx/__init__.py"
+      - "src/ctx/anchors.py"
+      - "src/ctx/ask.py"
+      - "tests/**"
       - "scripts/fix_docs_svgs.py"
       - "scripts/gen_addressable_evidence_visuals.py"
       - "scripts/check_docs_links.py"
@@ -37,6 +55,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -45,6 +65,8 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: site/package-lock.json
+      - name: Install field-receipt replay dependencies
+        run: python -m pip install -e . tiktoken==0.11.0
       - name: Require portable SVG references
         run: python scripts/fix_docs_svgs.py --check
       - name: Require generated evidence visuals to be current
@@ -52,7 +74,7 @@ jobs:
       - name: Validate documentation links and SVG files
         run: python scripts/check_docs_links.py
       - name: Check documentation facts against source of truth
-        run: python scripts/check_docs_facts.py
+        run: CTX_DOCS_REQUIRE_FIELD_TOKEN_REPLAY=1 python scripts/check_docs_facts.py
       - name: Build documentation site
         run: npm ci && npm run build
         working-directory: site

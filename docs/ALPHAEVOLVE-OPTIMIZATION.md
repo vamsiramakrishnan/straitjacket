@@ -350,7 +350,7 @@ the same regression.
 
 | Measurement | Improvement | Evidence class |
 |---|---:|---|
-| Quiet-needle raw context | **578x smaller** with the needle retained and addressable | deterministic field corpus |
+| Quiet-needle raw context | **570x smaller** with the needle retained and a retrieval address emitted (not exercised by this fixture) | deterministic field corpus |
 | Unavoidable Antigravity flood | **152x less tool output**, 30% fewer billed tokens, equal correctness | live matched-host A/B |
 | Quarantined naive-fast-path winner, search mix | **11.25x less visible context**, 9.09x lower modeled dollars, 3x fewer model turns; rejected after adversarial failure | frozen completion-gated evaluator, not product behavior |
 | Receipt-informed routing, search mix | **2.81x lower blended dollars**, 2.25x less visible context | replay; only 1 of 8 case costs currently actual |

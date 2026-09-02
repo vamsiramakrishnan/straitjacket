@@ -1,8 +1,20 @@
-# CTX Harness for Antigravity — Normative Specification
+# CTX core and Antigravity integration — Draft target specification
 
 **Version:** 0.1-draft  
 **Date:** 2026-07-15  
 **Keywords:** MUST, MUST NOT, SHOULD, SHOULD NOT, MAY follow RFC 2119 semantics.
+
+**Status:** target design, not a complete description of the current release.
+Known gaps include plaintext raw artifacts, configurable redaction, and the
+absence of the `--execute-without-capture` escape path described below. For
+shipped behavior, use the changelog, CLI and host-capability docs, code, and
+tests.
+
+**Scope:** core runtime behavior and Antigravity packaging. Host-hook statements
+in this document are Antigravity-specific. Claude Code and Codex use their own
+published hook contracts, the host adapters in `src/ctx`, and executable
+acceptance tests. [ADR 005](adr/005-antigravity-hook-contract.md) records the
+current Antigravity boundary.
 
 ## 1. Problem
 

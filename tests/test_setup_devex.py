@@ -145,7 +145,8 @@ def test_user_owned_codex_config_refuses_before_any_managed_write(
     output = capsys.readouterr().out
     assert "one reviewed edit needed" in output
     assert "[mcp_servers.ctx-harness]" in output
-    assert "[features]" not in output
+    assert "[features]" in output
+    assert "hooks = true" in output
     assert "[tui]" not in output
     assert "managed files were not changed" in output
     assert config.read_text(encoding="utf-8") == original
@@ -154,6 +155,52 @@ def test_user_owned_codex_config_refuses_before_any_managed_write(
     receipt = load_setup_receipt(setup_ws.root)
     assert receipt["success"] is False
     assert receipt["strategy"] == "refuse_unmanaged"
+
+
+def test_wrap_codex_propagates_user_owned_config_refusal(setup_ws, capsys):
+    import ctx.wrap as wrap
+
+    config = setup_ws.root / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[mcp_servers.ctx-harness]\ncommand = "stale-ctx"\nargs = []\n',
+        encoding="utf-8",
+    )
+
+    assert wrap.wrap_codex(setup_ws.root) == 1
+    captured = capsys.readouterr()
+    assert "one reviewed edit needed" in captured.out
+    assert "Update the existing [mcp_servers.ctx-harness] table" in captured.out
+    assert "Add this reviewed entry" not in captured.out
+    assert "now harnessed" not in captured.out + captured.err
+
+
+def test_wrap_claude_propagates_malformed_settings_refusal(
+    setup_ws, monkeypatch, capsys
+):
+    import sys
+
+    import ctx.installer as installer
+    from ctx.commands.hosts import cmd_wrap
+
+    settings = setup_ws.root / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{not-json", encoding="utf-8")
+    real_which = installer.shutil.which
+    monkeypatch.setattr(
+        installer.shutil,
+        "which",
+        lambda name: sys.executable if name == "ctx" else real_which(name),
+    )
+    ns = SimpleNamespace(
+        host="claude", agent_args=[], print_config=False,
+        workspace=str(setup_ws.root),
+    )
+
+    assert cmd_wrap(ns) == 1
+    captured = capsys.readouterr()
+    assert "claude hooks" in captured.out
+    assert "now harnessed" not in captured.out + captured.err
 
 
 def test_ctx_managed_codex_config_with_removed_mcp_is_repaired(setup_ws):
@@ -188,6 +235,21 @@ def test_doctor_rejects_broken_codex_mcp_launch_contract(setup_ws):
     assert "stale or contains arguments" in rows["codex MCP"][1]
 
 
+def test_doctor_rejects_codex_config_with_hooks_feature_disabled(setup_ws):
+    from ctx.installer import doctor_checks, install_codex
+
+    install_codex(setup_ws, init_policy=False)
+    config = setup_ws.root / ".codex" / "config.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace("hooks = true", "hooks = false"),
+        encoding="utf-8",
+    )
+
+    rows = {name: (ok, detail) for name, ok, detail in doctor_checks(setup_ws)}
+    assert rows["codex MCP"][0] is False
+    assert "hooks = true" in rows["codex MCP"][1]
+
+
 def test_setup_fingerprint_tracks_the_actual_ctx_executable(setup_ws, monkeypatch):
     import ctx.setup_telemetry as telemetry
 
@@ -204,6 +266,24 @@ def test_setup_fingerprint_tracks_the_actual_ctx_executable(setup_ws, monkeypatc
     after = telemetry.setup_fingerprint(setup_ws.root)
 
     assert before != after
+
+
+def test_setup_fingerprint_tracks_nested_plugin_and_claude_explorer(setup_ws):
+    import ctx.setup_telemetry as telemetry
+
+    before = telemetry.setup_fingerprint(setup_ws.root)
+    nested = setup_ws.root / ".agents" / "plugins" / "ctx-harness" / "skills" / "card.md"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("one", encoding="utf-8")
+    after_plugin = telemetry.setup_fingerprint(setup_ws.root)
+
+    explorer = setup_ws.root / ".claude" / "agents" / "ctx-explorer.md"
+    explorer.parent.mkdir(parents=True)
+    explorer.write_text("two", encoding="utf-8")
+    after_explorer = telemetry.setup_fingerprint(setup_ws.root)
+
+    assert before != after_plugin
+    assert after_plugin != after_explorer
 
 
 def test_setup_parser_exposes_short_front_door():

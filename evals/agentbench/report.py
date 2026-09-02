@@ -94,8 +94,8 @@ def main() -> int:
         arms = payload["arms"]
         L.append(f"## adapter: `{payload['adapter']}`\n")
         L.append(f"- Tasks: **{len(payload['task_ids'])}** · repeats: **{payload['repeats']}** "
-                 f"· max turns: {payload['max_turns']} · model: {payload.get('model') or 'host default'}")
-        L.append("- Arms differ only in the wrapper: `claude` vs `ctx wrap claude --proxy`")
+                 f"· max turns: {payload['max_turns']} · model: {payload.get('model') or 'host default (not recorded)'}")
+        L.append("- Arms: plain `claude` vs the full `ctx wrap claude --proxy` intervention; effective prompt/tools may differ")
         L.append("- Provenance: **live agent sessions** (simulated runs are refused)\n")
 
         summaries = {a: summarise(records, a) for a in arms}
@@ -115,7 +115,7 @@ def main() -> int:
             L.append("`resolved` only asks whether an arm produced ANY result. For a mission "
                      "with an open-ended count, that collapses very different outcomes into "
                      "the same cell.\n")
-            L.append("| Arm | Defects reproduced | Cost per reproduction |")
+            L.append("| Arm | Failing test nodes reproduced | Cost per reproduction |")
             L.append("|---|---:|---:|")
             for a in arms:
                 sm = summaries[a]

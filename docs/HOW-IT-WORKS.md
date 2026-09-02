@@ -6,15 +6,18 @@ One command prints 98,000 tokens. The agent needs one traceback.
 
 This sounds like a compression problem. It is not. Compression asks how to make the 98,000 tokens smaller. The agent problem is different:
 
-> Which facts deserve to stay in the prompt, and how can everything else remain exactly recoverable?
+> Which facts deserve to stay in the prompt, and how can everything else remain addressable while retained?
 
 That distinction determines the architecture.
+
+Handles address immutable stored bytes. Model-visible retrieval is still
+bounded and subject to the current redaction policy.
 
 <picture>
   <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates-mobile.svg">
   <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates-light.svg" width="100%" alt="Three measured treatments of the same 20,001-line log: keeping all 302,628 tokens preserves the quiet needle but floods context; head-and-tail truncation emits 1,219 tokens and loses it; straitjacket emits 521 tokens, preserves the needle at line 14,238, and retains an exact retrieval address.">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-evidence-fates-light.svg" width="100%" alt="Three treatments of the same 20,001-line fixture: keeping all 302,628 o200k_base tokens preserves the quiet target but floods context; head-and-tail truncation emits 1,219 and loses it; straitjacket emits 531, preserves the target at line 14,238, and emits a retrieval address.">
 </picture>
 
 ## The ordinary path
@@ -39,7 +42,7 @@ Eventually the host compacts the transcript. Now the system has paid to carry th
   <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency-mobile.svg">
   <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency-light.svg" width="100%" alt="Illustrative seven-turn residency trace using the measured 302,628-token field-needle payload. The native path keeps the raw output resident for six turns. The contained path keeps a 521-token digest and retrieves 21 lines only when needed.">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-residency-light.svg" width="100%" alt="Illustrative seven-turn residency trace using the measured 302,628-token field-needle payload. The native path keeps the raw output resident for six turns. The contained path keeps a 531-token digest and retrieves 21 lines only when needed.">
 </picture>
 
 ## The contained path
@@ -144,7 +147,7 @@ That buys:
 - reproducible evaluation;
 - no model call on the digest hot path.
 
-`ctx diff run:<before> run:<after>` can then report the behavioural delta instead of asking the model to compare two logs in attention.
+`ctx diff run:8d8335db6848 run:5a67c9de0123` can then report the behavioural delta instead of asking the model to compare two logs in attention.
 
 ## Capture has to happen before the flood
 
@@ -166,7 +169,7 @@ Host contracts are not equal:
 | Host | Pre-execution | Post-execution |
 |---|---|---|
 | Claude Code | can rewrite arguments | can replace output |
-| Codex | can rewrite arguments | can replace output |
+| Codex | implemented and contract-tested | implemented and contract-tested; live CLI receipt pending |
 | Antigravity | can allow or deny, not rewrite | cannot replace output |
 
 On Antigravity, straitjacket denies a known flood and returns the bounded replacement command. That costs a turn, but prevents the bytes. A large connector result can only be observed after return because the host exposes no replacement field. See [Host capabilities](HOST-CAPABILITIES.md).

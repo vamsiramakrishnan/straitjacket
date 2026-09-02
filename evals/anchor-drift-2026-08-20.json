@@ -1,15 +1,7 @@
 {
+  "corpus_commit": "7c69ea70aa40e1017aa6114b19e977225dd4166f",
   "by_edit": {
     "delete-above": {
-      "anchored_wrong": 0,
-      "cases": 480,
-      "refused": 0,
-      "relocated": 479,
-      "unanchored_correct": 1,
-      "unanchored_silently_wrong": 479,
-      "verified": 1
-    },
-    "insert-above": {
       "anchored_wrong": 0,
       "cases": 480,
       "refused": 0,
@@ -17,6 +9,15 @@
       "unanchored_correct": 0,
       "unanchored_silently_wrong": 480,
       "verified": 0
+    },
+    "insert-above": {
+      "anchored_wrong": 0,
+      "cases": 480,
+      "refused": 0,
+      "relocated": 478,
+      "unanchored_correct": 2,
+      "unanchored_silently_wrong": 478,
+      "verified": 2
     },
     "move-the-span": {
       "anchored_wrong": 0,
@@ -30,8 +31,8 @@
     "rewrite-the-span": {
       "anchored_wrong": 0,
       "cases": 480,
-      "refused": 465,
-      "relocated": 15,
+      "refused": 466,
+      "relocated": 14,
       "unanchored_correct": 0,
       "unanchored_silently_wrong": 480,
       "verified": 0
@@ -39,7 +40,7 @@
   },
   "cost": {
     "anchor_chars_added": 17280,
-    "bare_address_chars": 83788,
+    "bare_address_chars": 84028,
     "overhead_pct": 20.6
   },
   "files": 40,
@@ -52,10 +53,10 @@
   "total": {
     "anchored_wrong": 0,
     "cases": 1920,
-    "refused": 465,
-    "relocated": 1454,
-    "unanchored_correct": 1,
-    "unanchored_silently_wrong": 1919,
-    "verified": 1
+    "refused": 466,
+    "relocated": 1452,
+    "unanchored_correct": 2,
+    "unanchored_silently_wrong": 1918,
+    "verified": 2
   }
 }

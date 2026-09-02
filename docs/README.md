@@ -1,95 +1,131 @@
 # Documentation
 
-[Project README](../README.md) · [Getting started](GETTING-STARTED.md) · [CLI](CLI.md) · [Configuration](CONFIGURATION.md) · [Troubleshooting](TROUBLESHOOTING.md)
+[Project README](../README.md) · [Getting started](GETTING-STARTED.md) ·
+[CLI](CLI.md) · [Configuration](CONFIGURATION.md) ·
+[Troubleshooting](TROUBLESHOOTING.md)
 
-straitjacket stores complete evidence outside the model transcript. It gives the model a bounded deterministic view with exact retrieval addresses.
+straitjacket keeps large captured tool output outside a coding agent's prompt.
+The agent receives a bounded deterministic digest and bounded routes back to
+the captured evidence.
 
-The documentation separates four kinds of truth:
+Handles address immutable stored bytes while retained. Model-visible retrieval
+remains bounded and subject to the current redaction policy; when redaction
+changes an exact-byte request, the response declares it.
 
-| Source | Purpose |
-|---|---|
-| [`docs/`](.) | Explanations and design rationale |
-| [`spec/`](../spec/) | Normative schemas and behavioural contracts |
-| [`evals/`](../evals/) | Measurements, fixtures, and negative results |
-| [`CHANGELOG.md`](../CHANGELOG.md) | Released behaviour |
+## Start here
 
-A design document can describe shipped, experimental, rejected, or planned work. Check its status. Use the specifications and changelog when compatibility matters.
+Read these pages in order:
 
-## Use the product
-
-Read these in order:
-
-1. [How it works](HOW-IT-WORKS.md) — the data path in five minutes.
-2. [Getting started](GETTING-STARTED.md) — installation, host setup, and the first capture.
-3. [CLI guide](CLI.md) — command selection and full syntax.
-4. [Configuration](CONFIGURATION.md) — budgets, guard policy, storage, scopes, and redaction.
+1. [How it works](HOW-IT-WORKS.md) — one command through capture, storage,
+   digesting, and retrieval.
+2. [Getting started](GETTING-STARTED.md) — install the package, configure a
+   host, and run the first capture.
+3. [Use cases](USE-CASES.md) — choose the smallest useful command for the work.
+4. [CLI guide](CLI.md) — syntax and behavior for the complete command surface.
 5. [Troubleshooting](TROUBLESHOOTING.md) — symptoms, causes, and fixes.
-
-Useful operational references:
-
-| Need | Read |
-|---|---|
-| Choose a workflow | [Use cases](USE-CASES.md) |
-| Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
-| Understand handles and digests | [Core concepts](CONCEPTS.md) |
-| See code ownership | [Architecture](ARCHITECTURE.md) |
-| Add a digest profile | [Writing a profile](WRITING-A-PROFILE.md) |
-| Draw evidence, not decoration | [Visual design](VISUAL-DESIGN.md) |
-| Run a release | [Releasing](RELEASING.md) |
-
-## Understand the design
 
 The shortest model is:
 
 ```text
-complete evidence stays in the store
-bounded context carries addresses
-retrieval reconnects them on demand
+complete evidence stays in the local store
+bounded context carries facts and addresses
+retrieval returns bounded regions on demand
 ```
 
-The design documents answer narrower questions:
+## Find the right page
 
-| Document | Question |
+| Need | Read |
 |---|---|
-| [Why straitjacket](WHY-STRAITJACKET.md) | Why is context containment an economic and correctness problem? |
-| [Anchors](ANCHORS.md) | How can an address remain valid while a file changes? |
-| [Priced context](PRICED-CONTEXT.md) | When should an agent retrieve more evidence? |
-| [Lossless rescue](LOSSLESS-RESCUE.md) | How can an overloaded session shed resident bytes without losing evidence? |
-| [Ladders](LADDERS.md) | Which conditional mechanisms exist, and what signal controls each one? |
-| [Reflex](REFLEX.md) | How does the fast loop react to observed agent behaviour? |
-| [EDC](EDC.md) | How are typed facts, contracts, budgets, and renderers composed? |
-| [Algebra](ALGEBRA.md) | How are repository and runtime facts derived and joined? |
-| [Digest closure](DIGEST-CLOSURE.md) | Which operators work without rehydrating raw bytes? |
-| [Theory](THEORY.md) | What objective and invariants does the system enforce? |
-| [Substrate](SUBSTRATE.md) | Which physical engines sit behind logical operators? |
-| [Ask](ASK.md) | How do typed intents compile into bounded investigation plans? |
-| [Evidence plans](EVIDENCE-PLANS.md) | How does a multi-step investigation run in one bounded local pass? |
-| [Routing](ROUTING.md) | How is work allocated across hosts and models? |
-| [Task ledger](TASK-LEDGER.md) | How do several harnesses collaborate on one task, and how does a run survive its orchestrator? |
-| [Replacement surface](REPLACEMENT-SURFACE.md) | Which native host operations can be collapsed safely? |
-| [Capability surface](CAPABILITY-SURFACE.md) | How is the input capability surface measured and constrained? |
+| Understand the product decision | [Why straitjacket](WHY-STRAITJACKET.md) |
+| Configure budgets, storage, or redaction | [Configuration](CONFIGURATION.md) |
+| Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
+| Understand handles, spans, and profiles | [Core concepts](CONCEPTS.md) |
+| Understand content-stable repository addresses | [Anchors](ANCHORS.md) |
+| Route work across hosts and models | [Routing](ROUTING.md) |
+| Run or resume multi-agent work | [Task ledger](TASK-LEDGER.md) |
+| See module ownership and data flow | [Architecture](ARCHITECTURE.md) |
+| Add a typed digest | [Writing a profile](WRITING-A-PROFILE.md) |
+| Inspect measurements and counterexamples | [Evaluation receipts](../evals/) |
+| Check released behavior | [Changelog](../CHANGELOG.md) |
 
-AlphaEvolve-specific material is in [optimization](ALPHAEVOLVE-OPTIMIZATION.md) and [deployment](ALPHAEVOLVE-DEPLOYMENT.md). The active oh-my-pi integration design is in [OH-MY-PI-INTEGRATION.md](OH-MY-PI-INTEGRATION.md).
+## Product truth and design notes
 
-## Status terms
+The repository contains different kinds of evidence:
+
+| Source | Use it for |
+|---|---|
+| [`src/`](../src/) and [`tests/`](../tests/) | Current executable behavior |
+| [`CHANGELOG.md`](../CHANGELOG.md) | Behavior released by version |
+| [`spec/`](../spec/) | Draft target contracts and the original Antigravity design |
+| [`evals/`](../evals/) | Methods, fixtures, raw records, wins, and losses |
+| [`docs/`](.) | Explanation, operating guidance, and design work |
+
+Not every design note is a compatibility promise. A page may describe shipped,
+shadow, designed, or rejected work. When a page carries one of those labels,
+read it as follows:
 
 - **Shipped** — implemented and covered by acceptance tests.
 - **Shadow** — records a decision but does not enforce it.
 - **Designed** — specified with an evaluation gate, but not implemented.
 - **Rejected** — investigated and deliberately not adopted.
 
-These labels matter. Intent, experiment, and product behaviour are different things.
+An unlabelled design note is explanatory material, not proof that every
+mechanism on the page ships. Use the CLI guide, host-capability matrix,
+changelog, and tests when compatibility matters.
+
+## Design library
+
+The design notes answer narrower questions. They are useful after the operating
+path is clear.
+
+### Evidence and retrieval
+
+- [Priced context](PRICED-CONTEXT.md) — when another retrieval is worth its
+  prompt cost.
+- [Lossless rescue](LOSSLESS-RESCUE.md) — freeing an overloaded transcript
+  without orphaning evidence.
+- [Digest closure](DIGEST-CLOSURE.md) — operations that work without
+  rehydrating raw bytes.
+- [Evidence plans](EVIDENCE-PLANS.md) — bounded multi-step investigations.
+
+### Execution and policy
+
+- [Ladders](LADDERS.md) — conditional mechanisms and the signals that control
+  them.
+- [Reflex](REFLEX.md) — steering from observed session behavior.
+- [Routing](ROUTING.md) — allocating work across hosts and models.
+- [Task ledger](TASK-LEDGER.md) — persisted multi-agent work, resume, recovery,
+  and budget state.
+- [Replacement surface](REPLACEMENT-SURFACE.md) — transparent command
+  substitution and its adoption limits.
+- [Capability surface](CAPABILITY-SURFACE.md) — containing input schemas and MCP
+  surface area.
+
+### Internals
+
+- [Theory](THEORY.md) — formal objective and invariants.
+- [EDC](EDC.md) — facts, evidence contracts, and delivery plans.
+- [Algebra](ALGEBRA.md) — deriving and joining repository and runtime facts.
+- [Substrate](SUBSTRATE.md) — physical engines behind logical operators.
+- [Ask](ASK.md) — typed intents that compile into bounded plans.
+
+AlphaEvolve experiments remain in
+[optimization](ALPHAEVOLVE-OPTIMIZATION.md) and
+[deployment](ALPHAEVOLVE-DEPLOYMENT.md). The oh-my-pi integration is documented
+in [OH-MY-PI-INTEGRATION.md](OH-MY-PI-INTEGRATION.md). These are specialist
+design notes, not the product introduction.
 
 ## Design rules
 
-Every mechanism follows the same rules:
+New mechanisms should preserve the same small set of rules:
 
-1. Capture potential floods before execution.
-2. Keep an address for every omission.
-3. Declare coverage.
-4. Render deterministically.
+1. Capture potential floods before execution when the host allows it.
+2. Keep an address for every omitted region in a captured digest.
+3. Declare coverage and degradation.
+4. Render deterministically within an enforced budget.
 5. Keep hard safety limits non-adaptive.
-6. Label degraded precision.
-7. Measure behaviour before promoting policy.
+6. Measure task outcomes, not only byte reduction.
+7. Publish counterexamples when the native path wins.
 
-Start with [Architecture](ARCHITECTURE.md) before modifying the system. It maps each mechanism to its owner plane and source modules.
+Start with [Architecture](ARCHITECTURE.md) before changing the system. It maps
+mechanisms to their owner modules and acceptance gates.

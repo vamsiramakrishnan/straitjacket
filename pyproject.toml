@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ctx-harness"
 dynamic = ["version"]
-description = "straitjacket: artifact-backed, repository-aware context containment harness for Antigravity. Unbounded tool output becomes an immutable artifact plus a bounded deterministic digest."
+description = "straitjacket: local context containment for coding agents. Large captured output becomes an artifact plus a bounded, addressable digest."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

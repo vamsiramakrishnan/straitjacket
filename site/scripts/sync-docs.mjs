@@ -10,8 +10,9 @@
 //      (absolute URLs, in-page anchors, and asset links are left untouched;
 //       SVG embeds already use absolute raw.githubusercontent URLs.)
 //
-// Keep PAGES in sync with the Starlight sidebar in ../astro.config.mjs — the
-// slugs here are the sidebar's slugs.
+// PAGES is the set published by Starlight. The sidebar in ../astro.config.mjs
+// intentionally exposes only the product path; specialist pages may still be
+// published so existing links remain stable.
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -33,10 +34,12 @@ const PAGES = [
   ['CONCEPTS.md', 'start/concepts', 'Core concepts', 'The vocabulary: artifact, handle, span, digest, profile, contract, plan, and the four gates.'],
   // Guides
   ['USE-CASES.md', 'guides/use-cases', 'Use cases', 'Choose the shortest path through the harness by task and failure mode.'],
+  ['HOST-CAPABILITIES.md', 'guides/host-capabilities', 'Host capabilities', 'What Claude Code, Codex, and Antigravity can enforce before and after tool execution.'],
+  ['ANCHORS.md', 'guides/anchors', 'Anchored addresses', 'How repository addresses verify, relocate, or refuse after content moves.'],
   ['CLI.md', 'guides/cli', 'CLI guide', 'Choose a verb, retrieve evidence, and interpret the session scorecard.'],
   ['CONFIGURATION.md', 'guides/configuration', 'Configuration', 'Every ctx.toml setting: budgets, the guard, scopes, redaction, and the store.'],
   ['TROUBLESHOOTING.md', 'guides/troubleshooting', 'Troubleshooting & FAQ', 'Symptom to cause to fix for setup, steering, permissions, the store, and the proxy.'],
-  ['WHY-STRAITJACKET.md', 'guides/why-straitjacket', 'Why straitjacket', 'The context-cost, cache, latency, and quality thesis in one place.'],
+  ['WHY-STRAITJACKET.md', 'guides/why-straitjacket', 'Why straitjacket', 'The failure, design decision, shipped mechanism, limits, and counterexamples.'],
   ['COMPARISONS.md', 'guides/comparisons', 'Comparisons', 'Head-to-head data versus Headroom, rtk, Ponytail, Caveman, Maki, and the field.'],
   ['ALPHAEVOLVE-OPTIMIZATION.md', 'guides/alphaevolve-benefits', 'AlphaEvolve benefits', 'What AlphaEvolve measurably improved, what it made safer, and which results remain modeled or rejected.'],
   // Contributing
@@ -87,6 +90,10 @@ function rewriteTarget(value) {
     return `${base}${repoPath}${frag}`;
   }
 
+  // A sibling Markdown document that is not published -> its GitHub source.
+  // Leaving `FOO.md` relative from a nested generated page produces a 404.
+  if (path.endsWith('.md')) return `${GH_BLOB}docs/${path}${frag}`;
+
   // Anything else (already-correct relative asset, unknown) -> unchanged.
   return value;
 }
@@ -109,13 +116,25 @@ for (const [src, slug, title, description] of PAGES) {
   let text = readFileSync(join(docsDir, src), 'utf8');
   // Strip GitHub-only chrome: the leading banner (a <picture> or bare <img>),
   // the breadcrumb <sub>, and the H1. Starlight renders its own title from
-  // frontmatter, so these would otherwise leak. Each strip tolerates leading
-  // blank lines so a failed earlier match does not cascade.
-  text = text
-    .replace(/^\s*<picture>[\s\S]*?<\/picture>\s*/, '')
-    .replace(/^\s*<img[^>]*>\s*/, '')
-    .replace(/^\s*<sub>[\s\S]*?<\/sub>\s*/, '')
-    .replace(/^\s*#\s.*(?:\n|$)/, '');
+  // frontmatter, so these would otherwise leak. Source documents use more
+  // than one ordering, so consume whichever chrome element is currently first.
+  const chromePatterns = [
+    /^\s*<picture>[\s\S]*?<\/picture>\s*/,
+    /^\s*<img[^>]*>\s*/,
+    /^\s*<sub>[\s\S]*?<\/sub>\s*/,
+    /^\s*#\s.*(?:\n|$)/,
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pattern of chromePatterns) {
+      const stripped = text.replace(pattern, '');
+      if (stripped !== text) {
+        text = stripped;
+        changed = true;
+      }
+    }
+  }
   text = rewriteLinks(text);
   const fm = `---\ntitle: "${title}"\ndescription: "${description.replaceAll('"', '\\"')}"\n---\n\n`;
   const outPath = join(outDir, `${slug}.md`);

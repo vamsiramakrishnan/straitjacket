@@ -102,7 +102,7 @@ hosts without output substitution. An unexpected flood is digested once and
 marks that signature so subsequent calls return to birth-time capture.
 This policy is the first reviewed AlphaEvolve product canary; its measured
 tradeoffs and remaining proof boundary are documented in the
-[optimization guide](ALPHAEVOLVE-OPTIMIZATION.md#what-alphaevolve-has-changed-in-the-product).
+[optimization guide](ALPHAEVOLVE-OPTIMIZATION.md#how-those-benefits-reached-the-product).
 
 **To make the harness stricter,** `mode` and `steering` are different axes:
 `mode` sets *how much* is classified (`advisory` off → `guarded` → `strict`),

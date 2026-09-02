@@ -50,7 +50,9 @@ skill. The two must not coexist.
 `.codex/config.toml` in place (editing a TOML with duplicate tables is a
 data-loss hazard). If the file exists but doesn't yet register `ctx-harness`,
 setup prints the exact `[mcp_servers.ctx-harness]` snippet for you to paste.
-Add it and you're done.
+Add it, then ensure the existing `[features]` table contains `hooks = true`
+(create the table if absent; do not add a duplicate table). Rerun `ctx setup`
+after both changes.
 
 ### Codex: `MCP client for ctx-harness failed to start: No such file or directory`
 
@@ -199,19 +201,24 @@ exit (you'll see a one-line notice).
 ## FAQ
 
 **Does straitjacket send my code or output anywhere?**
-No. Capture is entirely local — an on-disk SQLite + blob store outside the repo.
-The optional observer proxy relays your existing API traffic byte-exact on
-loopback and records only usage/window metadata, never request bodies or auth
-headers.
+Capture and storage are local — an on-disk SQLite + blob store outside the repo.
+Anything shown in the agent conversation, including digests and retrieved
+excerpts, still reaches the configured model provider through the host's normal
+request path. The optional observer proxy relays that existing traffic
+byte-exact on loopback and records only usage/window metadata, never request
+bodies or auth headers.
 
 **Will it ever delete or rewrite my transcript history?**
-No. Omitted content is *elided behind an address*, never deleted, and history is
-never edited. Anything left out of a digest keeps a coordinate you can retrieve.
+It does not rewrite transcript history. Omitted content keeps a coordinate while
+its artifact is retained. Artifacts are plaintext and remain until an explicit
+`ctx gc`; once collected, their omitted bytes are no longer retrievable.
 
 **Does it change task outcomes?**
-In measured A/Bs, task success is at parity; the wins are cost, latency, turns,
-and evidence preservation. When output is small, digests pass it through roughly
-1:1. See [Why straitjacket](WHY-STRAITJACKET.md) and [`evals/`](../evals/).
+Measured outcomes are mixed. Some suites reached parity with less resident
+output; the small canary cost more and took longer, and one N=1 dogfood run
+reproduced fewer failing test nodes in the wrapped arm. When output is small,
+native execution can be better. See [Why straitjacket](WHY-STRAITJACKET.md) and
+[`evals/`](../evals/).
 
 **Do I need ripgrep / ctags / other binaries?**
 No. They accelerate or enrich analysis, but every path has a pure-Python
@@ -228,24 +235,42 @@ tells you what to run next; hosts it would have to *build* rather than detect
 **How do I preview what setup will write without touching anything?**
 `ctx wrap <host> --print-config`.
 
-**How do I run a one-off session that leaves nothing behind?**
+**How do I run a one-off session without persistent host configuration?**
 `ctx wrap claude -- -p "…"` injects host settings for that process only and
-removes them on exit.
+removes those settings on exit. Captured artifacts, the local ledger, and
+telemetry may remain under the normal retention policy.
 
-**How do I turn the harness off, or uninstall it?**
+## How do I turn the harness off, or uninstall it?
 For a single break-glass command, confirm the force-ask prompt. To disable
 steering everywhere, set `[guard] mode = "advisory"` — but note that only
 neutralizes the PreToolUse guard; the PostToolUse digest gate and the `ctx` MCP
 tool stay registered. To fully remove the host integration, delete the files
 `ctx wrap` added (this is exactly what each host's setup output tells you):
 
-- **Antigravity** — remove the `.agents/plugins/ctx-harness/` directory.
-- **Claude Code** — remove the `ctx` hook entries from `.claude/settings.json`.
-- **Codex** — remove `.codex/config.toml`, `.codex/hooks.json`, and the
-  `ctx-harness` block from `AGENTS.md`.
+- **Antigravity** — remove the `.agents/plugins/ctx-harness/` directory. In
+  `~/.gemini/antigravity-cli/settings.json`, remove `statusLine` only when its
+  command is the ctx status-line command; preserve a user-defined status line.
+- **Claude Code** — remove the `ctx` hook entries from
+  `.claude/settings.json`. Remove `statusLine` only when its command is the ctx
+  status-line command. Remove `.claude/agents/ctx-explorer.md` only when setup
+  reported that it created the file; a pre-existing file was left untouched.
+  Remove the marker-delimited `ctx-harness` block from `CLAUDE.md`.
+- **Codex** — remove the `ctx-harness` MCP table from `.codex/config.toml`, the
+  `ctx` hook entries from `.codex/hooks.json`, and the marker-delimited
+  `ctx-harness` block from `AGENTS.md`. Delete a whole config file only when
+  setup created a fully managed file and it contains no unrelated settings.
 
-Ephemeral `ctx wrap <host> -- …` sessions leave nothing behind — their settings
-are injected for the child process only and removed on exit.
+`ctx.toml` and `.ctxignore` are workspace policy, not host registration. Remove
+them separately only if the workspace no longer uses direct `ctx` commands.
+Removing host configuration does not delete captured artifacts. Use `ctx gc`
+with an explicit retention horizon when you intend to collect them.
+The content-free `.ctx-session-reads/setup.json` readiness receipt may be
+removed separately; do not remove other workspace-local store files as part of
+host uninstall.
+
+Ephemeral `ctx wrap <host> -- …` sessions restore their injected host settings
+on exit. Captured artifacts, the local ledger, and telemetry may remain under
+the normal retention policy.
 
 **How do I reclaim disk?**
 `ctx gc` mark-and-sweeps expired artifacts (retention is `[store] retention_days`,

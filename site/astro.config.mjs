@@ -8,8 +8,7 @@ import rehypeKatex from 'rehype-katex';
 export default defineConfig({
   site: 'https://vamsiramakrishnan.github.io',
   base: '/straitjacket',
-  // Render the \( … \) and \[ … \] math in the design docs (currently only
-  // WHY-STRAITJACKET) instead of leaking raw TeX onto the page.
+  // Render math in the design notes instead of leaking raw TeX onto the page.
   markdown: {
     remarkPlugins: [remarkMath],
     rehypePlugins: [rehypeKatex],
@@ -30,6 +29,7 @@ export default defineConfig({
         {
           label: 'Start here',
           items: [
+            { label: 'Why straitjacket', slug: 'guides/why-straitjacket' },
             { label: 'How it works', slug: 'start/how-it-works' },
             { label: 'Getting started', slug: 'start/getting-started' },
             { label: 'Core concepts', slug: 'start/concepts' },
@@ -39,12 +39,11 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Use cases', slug: 'guides/use-cases' },
+            { label: 'Host capabilities', slug: 'guides/host-capabilities' },
+            { label: 'Anchored addresses', slug: 'guides/anchors' },
             { label: 'CLI guide', slug: 'guides/cli' },
             { label: 'Configuration', slug: 'guides/configuration' },
             { label: 'Troubleshooting & FAQ', slug: 'guides/troubleshooting' },
-            { label: 'Why straitjacket', slug: 'guides/why-straitjacket' },
-            { label: 'Comparisons', slug: 'guides/comparisons' },
-            { label: 'AlphaEvolve benefits', slug: 'guides/alphaevolve-benefits' },
           ],
         },
         {
@@ -75,7 +74,7 @@ export default defineConfig({
           ],
         },
       ],
-      customCss: ['katex/dist/katex.min.css', './src/styles/brutalist.css'],
+      customCss: ['katex/dist/katex.min.css', './src/styles/docs.css'],
     }),
   ],
 });

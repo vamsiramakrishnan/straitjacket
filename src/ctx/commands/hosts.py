@@ -14,7 +14,7 @@ def cmd_wrap(ns) -> int:
 
     from ctx.hosts import harnessable_hosts, host_by_name, wrapper_for
     from ctx.workspace import resolve_workspace
-    from ctx.wrap import print_config, wrap_detect, wrap_setup
+    from ctx.wrap import guided_setup, print_config, wrap_detect, wrap_setup
 
     agent_args = list(ns.agent_args)
     # REMAINDER swallows options placed after the host positional;
@@ -81,22 +81,24 @@ def cmd_wrap(ns) -> int:
     # --gateway: set up the host(s) AND wire the progressive-disclosure
     # gateway, so unrevealed MCP tool schemas never enter context.
     if use_gateway:
-        from ctx.installer import install_claude, install_gateway
+        from ctx.installer import install_gateway
 
         hosts = wired if ns.host in ("setup", "all") else (ns.host,)
         if ns.host in ("setup", "all"):
-            wrap_setup(ws.root)
+            setup_status = wrap_setup(ws.root)
         elif ns.host == "claude":
-            print(install_claude(resolve_workspace(str(ws.root))))
+            setup_status = guided_setup(ws, hosts=["claude"])
         else:
-            wrapper(ws.root)
+            setup_status = wrapper(ws.root)
+        if setup_status:
+            return setup_status
         print()
         for h in hosts:
             print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
             print()
         return 0
     # Single-command multi-host setup: `setup` detects installed CLIs
-    # and harnesses those; `all` forces every supported host.
+    # and harnesses those; `all` forces the three vendor-host integrations.
     if ns.host in ("setup", "all"):
         return wrap_setup(ws.root, force_all=(ns.host == "all"))
     # The one genuine per-host asymmetry, and it is about capability rather
@@ -109,14 +111,7 @@ def cmd_wrap(ns) -> int:
                 ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct,
                 orchestrate=use_orchestrate,
             )
-        from ctx.installer import install_claude
-
-        print(install_claude(resolve_workspace(str(ws.root))))
-        print()
-        print("Claude Code sessions in this workspace are now harnessed. "
-              "For an ephemeral, zero-residue run instead: "
-              "ctx wrap claude -- -p \"...\"")
-        return 0
+        return guided_setup(ws, hosts=["claude"])
     return wrapper(ws.root)
 
 
