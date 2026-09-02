@@ -49,7 +49,10 @@ from ctx.hosts import (
     pick_model,
     tier_rank,
 )
+from ctx import steward as _steward
+from ctx import taskledger as _ledger
 from ctx.handoff_policy import choose_handoff
+from ctx.textutil import short_id
 from ctx.mutation_policy import choose_mutation_isolation
 from ctx.usage import ActualUsage, coerce_usage, parse_host_output, summarize_usage
 from ctx.verification_policy import choose_verification
@@ -785,12 +788,14 @@ def _launch_host(
     *,
     timeout: float,
     model: str = "",
+    max_turns: int = 0,
 ) -> tuple[int, str, str, ActualUsage | None]:
     """Run one harness in print mode with captured output, inside the harnessed
     workspace. Claude gets the ephemeral --settings hook injection; Codex /
     Antigravity discover their hooks from the workspace tree. ``model`` pins the
-    model via the host's model flag (used for the cheap coordinator). Never
-    raises."""
+    model via the host's model flag (used for the cheap coordinator).
+    ``max_turns`` > 0 hard-bounds a Claude node (``--max-turns``); other hosts
+    expose no equivalent and are bounded by observation only. Never raises."""
     spec = host.spec
     path = host.path or spec.cli_bins[0]
     argv = [path, *spec.print_flag, prompt]
@@ -826,6 +831,8 @@ def _launch_host(
             tmp.close()
             settings_tmp = tmp.name
             head = [path, "--settings", settings_tmp]
+            if max_turns > 0:
+                head += ["--max-turns", str(int(max_turns))]
             structured = ["--output-format", "json"]
             argv = ([*head, spec.model_flag, model, *structured, *spec.print_flag, prompt]
                     if model and spec.model_flag
@@ -961,6 +968,10 @@ class NodeOutcome:
     changed_paths: tuple[str, ...] = ()
     merge_status: str = "not_applicable"
     output_schema_status: str = "not_requested"
+    attempts: int = 1
+    reason: str = "done"            # last handback reason (taskledger)
+    failure_kind: str = "none"      # last handback failure_kind
+    steward_action: str | None = None  # what the steward decided, if consulted
 
 
 @dataclass
@@ -981,6 +992,10 @@ class RouteResult:
     duration_ms: float = 0.0
     actual_usage: dict = field(default_factory=lambda: summarize_usage([]))
     wave_policies: tuple[str, ...] = ()
+    task_id: str = ""
+    resumed_nodes: tuple[str, ...] = ()
+    ledger_spend_usd: float = 0.0
+    ledger_spend_complete: bool = False
 
 
 def _task_profile(task: str, kind: str) -> dict[str, object]:
@@ -1070,15 +1085,21 @@ def _append_route_receipt(ws, result: RouteResult, nodes: list[AssignedNode]) ->
                     "handoff_policy": outcome.handoff_policy or None,
                     "exit_code": outcome.exit_code,
                     "escalated": outcome.escalated_to is not None,
-                        "checkpoint": outcome.checkpoint_ref is not None,
-                        "isolation": outcome.isolation,
-                        "changed_paths": list(outcome.changed_paths),
-                        "merge_status": outcome.merge_status,
-                        "output_schema_status": outcome.output_schema_status,
-                        "actual_usage": summarize_usage(outcome.usage_attempts),
+                    "checkpoint": outcome.checkpoint_ref is not None,
+                    "isolation": outcome.isolation,
+                    "changed_paths": list(outcome.changed_paths),
+                    "merge_status": outcome.merge_status,
+                    "output_schema_status": outcome.output_schema_status,
+                    "actual_usage": summarize_usage(outcome.usage_attempts),
+                    "attempts": outcome.attempts,
+                    "reason": outcome.reason,
+                    "failure_kind": outcome.failure_kind,
+                    "steward_action": outcome.steward_action,
                 }
                 for outcome in result.outcomes
             ],
+            "task_id": result.task_id,
+            "resumed_nodes": list(result.resumed_nodes),
             "measurement": {
                 "route_completed": route_completed,
                 "task_success": "unmeasured",
@@ -1089,6 +1110,8 @@ def _append_route_receipt(ws, result: RouteResult, nodes: list[AssignedNode]) ->
                 "duration_ms": result.duration_ms,
                 "estimated_spend_usd": result.estimated_spend_usd,
                 "actual_usage": result.actual_usage,
+                "ledger_spend_usd": result.ledger_spend_usd,
+                "ledger_spend_complete": result.ledger_spend_complete,
             },
         }
         path = session_reads_path(ws.root, "route.jsonl")
@@ -1179,6 +1202,7 @@ def _node_prompt(
     node: RouteNode,
     task: str,
     dep_docs: list[str],
+    inbox: list[dict] | None = None,
 ) -> str:
     p = (
         f"You are node '{node.id}' ({node.role}) of a multi-harness collaboration "
@@ -1199,6 +1223,13 @@ def _node_prompt(
             "\n\nYour final yield must be one JSON value matching this schema. "
             "Do not put the JSON in a markdown fence:\n"
             + json.dumps(node.output_schema, sort_keys=True, separators=(",", ":"))
+        )
+    if inbox:
+        p += "\n\nMessages addressed to you (addresses, resolve with `ctx get`):\n"
+        p += "\n".join(
+            f"  from {m.get('from')}: {m.get('ref')}"
+            + (f" — {m['note']}" if m.get("note") else "")
+            for m in inbox
         )
     return p
 
@@ -1240,18 +1271,10 @@ def _execution_contract_failed(code: int, stdout: str, stderr: str) -> bool:
 def _escalate(
     cur_model: ModelChoice, hosts: list[DetectedHost]
 ) -> tuple[DetectedHost, ModelChoice] | None:
-    """The cheapest (host, model) strictly more capable than the failed node's
-    model — the escalation target. One tier up, cheapest, across all harnesses."""
-    unattended = [h for h in hosts if h.spec.unattended]
-    better = [
-        (h, m) for h in unattended if h.installed for m in h.models
-        if tier_rank(m.tier) > tier_rank(cur_model.tier)
-    ]
-    if not better:
-        return None
-    return sorted(
-        better, key=lambda hm: (tier_rank(hm[1].tier), hm[0].model_price(hm[1].id).output, hm[0].name)
-    )[0]
+    """Kept for callers of the old name; the target selection now lives in the
+    steward (``ctx.steward.escalation_target``) so the recovery policy and the
+    orchestrator agree about what "one tier up" means."""
+    return _steward.escalation_target(cur_model, hosts)
 
 
 def _actual_cost(assigned, outcome) -> float:
@@ -1353,12 +1376,28 @@ def run_route(
     coordinate=None,
     max_workers: int = 4,
     prior_usage_attempts: list[ActualUsage | None] | None = None,
+    task_id: str | None = None,
+    resume: bool = False,
 ) -> RouteResult:
-    """Coordinate the DAG closed-loop. Ready nodes (deps satisfied) run in
-    parallel; each sees its deps' checkpoints; a failed node escalates once to a
-    stronger harness; between waves the coordinator may patch the plan with
-    follow-up nodes. Bounded by cfg.max_waves / max_replans / budget_usd. Every
-    step is fail-open."""
+    """Coordinate the DAG closed-loop over the task ledger.
+
+    Ready nodes (deps satisfied) run in parallel; each sees its deps'
+    checkpoints and any inbox addresses sent to it. Every launch is preceded by
+    a ``ctx.claim/v1`` row and followed by a ``ctx.handback/v1`` row; a node
+    that does not finish is handed to the steward, whose decision is recorded
+    as a ``ctx.steward/v1`` row before it is acted on (retry, escalate, leave
+    for re-plan, or stop). Disjoint mutation waves may run in isolated
+    worktrees and merge as one transaction; a typed worker yield is validated
+    and, when strict, treated as a contract failure. Between waves the
+    coordinator may patch the plan with follow-up nodes. Budget is checked
+    against ledger ACTUALS, falling back to the estimate only for attempts no
+    host priced, and a claim the ledger cannot cover is refused before launch.
+
+    ``resume=True`` replays the ledger for ``task_id`` first: nodes with a
+    ``done`` handback are restored (status, checkpoint, handoff document) and
+    not re-run; everything else runs as pending. Bounded by cfg.max_waves /
+    max_replans / budget_usd / max_attempts. Every step is fail-open.
+    """
     from ctx.installer import _ctx_executable
     from ctx.store import Store
 
@@ -1375,6 +1414,9 @@ def run_route(
     replans_left = int(getattr(cfg, "max_replans", 2) or 0)
     budget = float(getattr(cfg, "budget_usd", 0.0) or 0.0)
     timeout = float(getattr(cfg, "node_timeout", 900.0) or 900.0)
+    max_attempts = max(1, int(getattr(cfg, "max_attempts", 2) or 2))
+    expected_turns = max(0, int(getattr(cfg, "expected_turns", 12) or 0))
+    turn_ceiling = max(0, int(getattr(cfg, "turn_ceiling", 0) or 0))
     spent_est = 0.0
     waves_run = 0
     wave_policies: list[str] = []
@@ -1386,92 +1428,200 @@ def run_route(
     strict_worker_yields = bool(getattr(cfg, "strict_worker_yields", False))
     isolated_node_ids: set[str] = set()
 
+    # ------------------------------------------------ the ledger: open/resume
+    tid = task_id or _ledger.new_task_id()
+    resumed: list[str] = []
+    if resume:
+        prior = _ledger.task_state(_ledger.load(ws.root, tid))
+        for a in nodes:
+            n = prior.nodes.get(a.node.id)
+            if n is None or not n.done:
+                continue  # claimed-but-not-handed-back re-runs: the safe direction
+            hb = n.last_handback or {}
+            state[a.node.id] = "ok"
+            resumed.append(a.node.id)
+            outcomes[a.node.id] = NodeOutcome(
+                a.node.id, f"{hb.get('host')}/{hb.get('model')}", "ok", n.checkpoint,
+                "resumed from ledger", attempts=n.attempts,
+            )
+            if n.checkpoint:
+                cp[a.node.id] = n.checkpoint
+                with contextlib.suppress(Exception):
+                    from ctx.checkpoint import show_checkpoint
+
+                    docs[a.node.id] = show_checkpoint(store, ws, n.checkpoint)
+    else:
+        _open_task(ws, store, tid, plan, nodes, budget)
+
+    def _record(row: dict) -> None:
+        # Fail-open: the ledger is bookkeeping for a run that must finish. A
+        # dropped claim or handback reads on resume as "not done", which
+        # re-runs the node -- the direction that costs money, never truth.
+        with contextlib.suppress(Exception):
+            with _LEDGER_LOCK:
+                _ledger.append(ws.root, row)
+
+    def _ledger_state():
+        with _LEDGER_LOCK:
+            return _ledger.task_state(_ledger.load(ws.root, tid))
+
+    def _remaining_budget() -> float:
+        if budget <= 0:
+            return float("inf")
+        st = _ledger_state()
+        # Actuals when every attempt was priced; otherwise the larger of what
+        # was measured and what was estimated, so an unpriced attempt cannot
+        # make the budget look healthier than the estimate already said.
+        actual = st.spent_usd if st.cost_complete else max(st.spent_usd, spent_est)
+        return budget - actual
+
+    def _do_launch(host, work_root, prompt: str, model):
+        if turn_ceiling > 0 and launch is _launch_host:
+            return launch(host, work_root, prompt, resolved_exe, timeout=timeout,
+                          model=model.launch_id, max_turns=turn_ceiling)
+        return launch(host, work_root, prompt, resolved_exe, timeout=timeout,
+                      model=model.launch_id)
+
     def run_one(a: AssignedNode) -> _NodeExecution:
         dep_docs = [docs[d] for d in a.node.deps if d in docs]
-        prompt = _node_prompt(a.node, plan.task, dep_docs)
+        st = _ledger_state()
+        inbox = _ledger.inbox_for(st, a.node.id)
+        prompt = _node_prompt(a.node, plan.task, dep_docs, inbox)
         host, model = a.host, a.model
         node_usage: list[ActualUsage | None] = []
         use_isolation = a.node.id in isolated_node_ids
         checkout = IsolatedWorktree(Path(ws.root), a.node.id, a.node.targets) if use_isolation else None
         work_root = Path(ws.root)
         patch: WorktreePatch | None = None
-        escalated = None
+        attempt = st.nodes[a.node.id].attempts if a.node.id in st.nodes else 0
+        escalated: str | None = None
+        last_action: str | None = None
+        cls = _steward.Classification("failed", "unknown")
+        handoff_strategy = ""
+        ref: str | None = None
         schema_status = "not_requested"
+        code, out, err = 1, "", ""
+        has_dependents = any(a.node.id in item.node.deps for item in nodes)
+
+        def _outcome() -> NodeOutcome:
+            tail = (out or err or "").strip().splitlines()
+            return NodeOutcome(
+                node_id=a.node.id, host_name=f"{host.name}/{model.id}",
+                status="ok" if cls.reason == "done" else "failed", checkpoint_ref=ref,
+                detail=(tail[-1][:200] if tail else "(no output)"), escalated_to=escalated,
+                exit_code=code, usage_attempts=tuple(node_usage), handoff_policy=handoff_strategy,
+                isolation="git_worktree" if use_isolation else "shared_workspace",
+                changed_paths=patch.changed_paths if patch else (),
+                merge_status="pending" if patch is not None else (
+                    "no_changes" if use_isolation and cls.reason == "done" else "not_applicable"
+                ),
+                output_schema_status=schema_status,
+                attempts=attempt, reason=cls.reason, failure_kind=cls.failure_kind,
+                steward_action=last_action,
+            )
+
+        # Refuse the claim before the launch when the ledger cannot cover it.
+        # The per-wave check below catches a budget already blown; this one
+        # stops a node whose own estimate would blow it, so the loop never
+        # STARTS work it knows it cannot pay for. Recorded as a steward
+        # decision with no attempt, which is exactly what happened.
+        if budget > 0 and float(a.est_cost_usd) > _remaining_budget():
+            cls = _steward.Classification("over_budget", "none")
+            last_action = "stop_budget"
+            _record(_ledger.steward_row(
+                tid, a.node.id, attempt=attempt, on_reason="over_budget",
+                failure_kind="none", action="stop_budget", target=None,
+                budget_remaining_usd=_remaining_budget(),
+            ))
+            code, err = None, "not started: estimate exceeds remaining budget"
+            return _NodeExecution(outcome=_outcome(), stdout="", stderr=err, patch=None)
+
         try:
             scope = checkout if checkout is not None else contextlib.nullcontext()
             with scope:
                 if checkout is not None and checkout.path is not None:
                     work_root = checkout.path
-                code, out, err, usage = _launch_result(
-                    launch(
-                        host,
-                        work_root,
-                        prompt,
-                        resolved_exe,
-                        timeout=timeout,
-                        model=model.launch_id,
+                while True:
+                    attempt += 1
+                    _record(_ledger.claim_row(
+                        tid, a.node.id, attempt=attempt, host=host.name, model=model.id,
+                        tier=model.tier, expected_turns=expected_turns,
+                        expected_cost_usd=a.est_cost_usd,
+                    ))
+                    code, out, err, usage = _launch_result(_do_launch(host, work_root, prompt, model))
+                    node_usage.append(usage)
+                    contract_failed = _execution_contract_failed(code, out, err)
+                    schema_status, schema_error = _worker_yield_status(a.node, out)
+                    strict_schema = a.node.strict_output_schema or strict_worker_yields
+                    schema_failed = schema_status == "invalid" and strict_schema
+                    if schema_failed:
+                        err = f"typed worker yield invalid: {schema_error}"
+                    turns = usage.turns if usage is not None else 0
+                    cls = _steward.classify_failure(
+                        code=code, stdout=out, stderr=err, turns=turns, attempt=attempt,
+                        expected_turns=expected_turns,
+                        contract_failed=contract_failed or schema_failed,
                     )
-                )
-                node_usage.append(usage)
-                if _execution_contract_failed(code, out, err):
-                    code = code or 1
-                schema_status, schema_error = _worker_yield_status(a.node, out)
-                strict_schema = a.node.strict_output_schema or strict_worker_yields
-                if schema_status == "invalid" and strict_schema:
-                    code = code or 1
-                    err = f"typed worker yield invalid: {schema_error}"
-                if code != 0:
-                    target = _escalate(a.model, hosts)
-                    if target is not None:
+                    if contract_failed or schema_failed:
+                        code = code or 1
+                    handoff_strategy = choose_handoff({
+                        "failed": cls.reason != "done",
+                        "mutation": _is_mutation_node(a.node),
+                        "verification": _is_verification_node(a.node),
+                        "has_dependents": has_dependents,
+                        "output_bytes": len((out or err or "").encode("utf-8", "replace")),
+                    })
+                    # Every attempt's output is evidence and gets an address;
+                    # the node's handoff is the last one.
+                    ref = _checkpoint_node(
+                        ws, a.node, plan.task, out, err, handoff_strategy=handoff_strategy,
+                    )
+                    _record(_ledger.handback_row(
+                        tid, a.node.id, attempt=attempt, reason=cls.reason,
+                        failure_kind=cls.failure_kind, checkpoint=ref, turns=turns,
+                        cost_usd=(usage.cost_usd if usage is not None else None),
+                        tokens=(usage.total_tokens if usage is not None else 0),
+                        exit_code=code, host=host.name, model=model.id,
+                    ))
+                    if cls.reason == "done":
+                        break
+                    remaining = _remaining_budget()
+                    if remaining <= 0:
+                        cls = _steward.Classification("over_budget", cls.failure_kind)
+                    decision = _steward.decide(
+                        classification=cls, attempt=attempt, max_attempts=max_attempts,
+                        budget_remaining_usd=remaining, est_cost_usd=a.est_cost_usd,
+                        cur_model=model, hosts=hosts,
+                        replan_available=(coordinate is not None and replans_left > 0),
+                    )
+                    last_action = decision.action
+                    _record(_ledger.steward_row(
+                        tid, a.node.id, attempt=attempt, on_reason=cls.reason,
+                        failure_kind=cls.failure_kind, action=decision.action,
+                        target=decision.target_name, budget_remaining_usd=remaining,
+                    ))
+                    if decision.action in ("escalate", "retry_same"):
+                        # A fresh attempt starts from a clean tree: whatever the
+                        # failed attempt wrote in its worktree is not evidence
+                        # the next one should inherit.
                         if checkout is not None:
                             checkout.reset()
-                        host, model = target
-                        escalated = f"{host.name}/{model.id}"
-                        code, out, err, usage = _launch_result(
-                            launch(
-                                host,
-                                work_root,
-                                prompt,
-                                resolved_exe,
-                                timeout=timeout,
-                                model=model.launch_id,
-                            )
-                        )
-                        node_usage.append(usage)
-                        if _execution_contract_failed(code, out, err):
-                            code = code or 1
-                        schema_status, schema_error = _worker_yield_status(a.node, out)
-                        if schema_status == "invalid" and strict_schema:
-                            code = code or 1
-                            err = f"typed worker yield invalid: {schema_error}"
-                if code == 0 and checkout is not None:
+                        if decision.action == "escalate" and decision.target is not None:
+                            host, model = decision.target
+                            escalated = decision.target_name
+                        continue
+                    break  # replan / stop_*: the node ends failed; the wave loop decides
+                if cls.reason == "done" and checkout is not None:
                     patch = checkout.capture()
         except WorktreeIsolationError as exc:
             code, out, err = 1, "", f"isolated worktree failed: {exc}"
-        has_dependents = any(a.node.id in item.node.deps for item in nodes)
-        handoff_strategy = choose_handoff(
-            {
-                "failed": code != 0,
-                "mutation": _is_mutation_node(a.node),
-                "verification": _is_verification_node(a.node),
-                "has_dependents": has_dependents,
-                "output_bytes": len((out or err or "").encode("utf-8", "replace")),
-            }
-        )
-        tail = (out or err or "").strip().splitlines()
-        outcome = NodeOutcome(
-            node_id=a.node.id, host_name=f"{host.name}/{model.id}",
-            status="ok" if code == 0 else "failed", checkpoint_ref=None,
-            detail=(tail[-1][:200] if tail else "(no output)"), escalated_to=escalated,
-            exit_code=code, usage_attempts=tuple(node_usage), handoff_policy=handoff_strategy,
-            isolation="git_worktree" if use_isolation else "shared_workspace",
-            changed_paths=patch.changed_paths if patch else (),
-            merge_status="pending" if patch is not None else (
-                "no_changes" if use_isolation and code == 0 else "not_applicable"
-            ),
-            output_schema_status=schema_status,
-        )
-        return _NodeExecution(outcome=outcome, stdout=out, stderr=err, patch=patch)
+            cls = _steward.Classification("failed", "verification_failure")
+            _record(_ledger.handback_row(
+                tid, a.node.id, attempt=max(attempt, 1), reason="failed",
+                failure_kind="verification_failure", checkpoint=ref, turns=0,
+                cost_usd=None, tokens=0, exit_code=1, host=host.name, model=model.id,
+            ))
+        return _NodeExecution(outcome=_outcome(), stdout=out, stderr=err, patch=patch)
 
     while waves_run < max_waves:
         # Skip nodes whose dependency failed — they can never become ready.
@@ -1525,6 +1675,7 @@ def run_route(
             ok, detail = preflight_patch(Path(ws.root), execution.patch)
             if not ok:
                 conflicts.append((execution, detail))
+        merge_failed: list[_NodeExecution] = []
         if conflicts:
             conflict_ids = {id(execution): detail for execution, detail in conflicts}
             for execution in isolated_execs:
@@ -1537,6 +1688,7 @@ def run_route(
                     execution.outcome.merge_status = "aborted"
                     execution.stderr = "isolated wave aborted because another patch conflicted"
                 execution.outcome.detail = execution.stderr[:200]
+                merge_failed.append(execution)
         elif isolated_execs:
             ok, detail = apply_patches(
                 Path(ws.root), [execution.patch for execution in isolated_execs if execution.patch]
@@ -1548,14 +1700,31 @@ def run_route(
                     execution.outcome.exit_code = 1
                     execution.stderr = f"isolated patch apply failed: {detail}"
                     execution.outcome.detail = execution.stderr[:200]
+                    merge_failed.append(execution)
 
         results: list[NodeOutcome] = []
         for a, execution in zip(selected, executions):
             o = execution.outcome
-            o.checkpoint_ref = _checkpoint_node(
-                ws, a.node, plan.task, execution.stdout, execution.stderr,
-                handoff_strategy=o.handoff_policy,
-            )
+            if execution in merge_failed:
+                # The node handed back `done`; the wave's merge then failed it.
+                # Re-checkpoint the merge evidence and correct the ledger, or
+                # resume would restore a node whose change never landed.
+                o.checkpoint_ref = _checkpoint_node(
+                    ws, a.node, plan.task, execution.stdout, execution.stderr,
+                    handoff_strategy=o.handoff_policy,
+                )
+                o.reason, o.failure_kind = "failed", "verification_failure"
+                _record(_ledger.handback_row(
+                    tid, a.node.id, attempt=max(o.attempts, 1), reason="failed",
+                    failure_kind="verification_failure", checkpoint=o.checkpoint_ref,
+                    turns=0, cost_usd=0.0, tokens=0, exit_code=1,
+                    host=o.host_name.split("/", 1)[0], model=o.host_name.split("/", 1)[-1],
+                ))
+            elif o.checkpoint_ref is None and o.exit_code is not None:
+                o.checkpoint_ref = _checkpoint_node(
+                    ws, a.node, plan.task, execution.stdout, execution.stderr,
+                    handoff_strategy=o.handoff_policy,
+                )
             results.append(o)
         for a, o in zip(selected, results):
             state[a.node.id] = o.status
@@ -1567,15 +1736,8 @@ def run_route(
                     from ctx.checkpoint import show_checkpoint
 
                     docs[a.node.id] = show_checkpoint(store, ws, o.checkpoint_ref)
-            # The estimated cost of every model attempt that actually ran.
-            # a.est_cost_usd is
-            # computed once at plan-build time from the originally assigned
-            # model, so when a node failed and run_one escalated it to a
-            # stronger, pricier one, the loop kept charging itself only the
-            # cheap estimate -- and budget_usd, documented as one of this loop's
-            # bounds, could be overrun without ever appearing to be.
             spent_est += _actual_cost(a, o)
-        if budget > 0 and spent_est >= budget:
+        if budget > 0 and _remaining_budget() <= 0:
             break
 
     # Any never-run node is recorded skipped for a complete ledger.
@@ -1585,6 +1747,7 @@ def run_route(
             NodeOutcome(a.node.id, a.host.name, "skipped", None, "not reached (bounds)"),
         )
     ordered = [outcomes[a.node.id] for a in nodes]
+    final = _ledger_state()
     result = RouteResult(
         plan=plan,
         outcomes=ordered,
@@ -1594,9 +1757,42 @@ def run_route(
         duration_ms=(time.monotonic() - started) * 1000.0,
         actual_usage=summarize_usage(usage_attempts),
         wave_policies=tuple(wave_policies),
+        task_id=tid,
+        resumed_nodes=tuple(resumed),
+        ledger_spend_usd=final.spent_usd,
+        ledger_spend_complete=final.cost_complete,
     )
     _append_route_receipt(ws, result, nodes)
     return result
+
+
+_LEDGER_LOCK = threading.Lock()
+
+
+def _open_task(ws, store, task_id: str, plan: RoutePlan, nodes: list[AssignedNode], budget: float) -> None:
+    """Write the ``ctx.task/v1`` row. Task text goes into the store as a blob
+    and the ledger carries its address, so the ledger stays export-safe like
+    the route receipt. Fail-open."""
+    with contextlib.suppress(Exception):
+        doc = {"task": plan.task, "nodes": {a.node.id: a.node.goal for a in nodes}}
+        blob = store.put_blob(json.dumps(doc, sort_keys=True).encode("utf-8"))
+        rows = [
+            {
+                "id": a.node.id, "role": a.node.role, "min_tier": a.node.min_tier,
+                "need_tags": list(a.node.need_tags), "deps": list(a.node.deps),
+                "host": a.host.name, "model": a.model.id, "prefer": a.node.prefer,
+                "targets": list(a.node.targets),
+                "est_input_tokens": a.node.est_input_tokens,
+                "est_output_tokens": a.node.est_output_tokens,
+                "est_cost_usd": a.est_cost_usd,
+            }
+            for a in nodes
+        ]
+        with _LEDGER_LOCK:
+            _ledger.append(ws.root, _ledger.task_row(
+                task_id, goal_ref=f"blob:{short_id(blob)}", nodes=rows,
+                budget_usd=budget, task_kind=plan.task_kind, source=plan.source,
+            ))
 
 
 def _replan_context(task: str, outcomes: dict[str, NodeOutcome]) -> str:
@@ -1654,6 +1850,12 @@ def render_result(result: RouteResult) -> str:
             f"({usage['status']}, {usage['attempts_measured']}/"
             f"{usage['attempts_total']} attempts measured)"
         )
+    lines.append(f"task: {result.task_id}")
+    if result.resumed_nodes:
+        lines.append(f"resumed from ledger: {', '.join(result.resumed_nodes)}")
+    if any(o.status != "ok" for o in result.outcomes):
+        lines.append(f"resume: ctx orchestrate --resume {result.task_id}")
+    lines.append(f"ledger: ctx task show {result.task_id}")
     return "\n".join(lines)
 
 
@@ -1668,9 +1870,15 @@ def orchestrate(
     force_run: bool = False,
     exe: str | None = None,
     launch=_launch_host,
+    resume: str | None = None,
 ) -> tuple[int, str]:
     """Detect harnesses → coordinate a route (cheap model, or deterministic
-    fallback) → price & show it → run the closed loop. Returns (exit_code, text)."""
+    fallback) → price & show it → run the closed loop. Returns (exit_code, text).
+
+    ``resume`` names a task ledger: the plan is rebuilt from its ``ctx.task/v1``
+    row (goal from the store, assignment re-resolved against the hosts
+    installed now), the coordinator is skipped, and finished nodes are
+    restored rather than re-run."""
     from ctx.installer import _ctx_executable
 
     cfg = ws.config.orchestrate
@@ -1691,8 +1899,18 @@ def orchestrate(
     note = ""
     coordinator_usage: list[ActualUsage | None] = []
     plan: RoutePlan
-    fast_kind = _fallback_task_kind(task)
-    if fast_kind != "general":
+    if resume:
+        try:
+            plan, task = _plan_from_ledger(ws, resume, hosts)
+        except (RouteError, _ledger.LedgerError) as error:
+            return 1, f"ctx orchestrate: cannot resume {resume}: {error}"
+        note = f"resumed {resume} from the task ledger; coordinator skipped"
+        fast_kind = "resumed"
+    else:
+        fast_kind = _fallback_task_kind(task)
+    if resume:
+        pass
+    elif fast_kind != "general":
         plan = fallback_route(task, hosts, cfg)
         note = f"deterministic {fast_kind} fast path; coordinator skipped"
     else:
@@ -1753,10 +1971,53 @@ def orchestrate(
         launch=launch,
         coordinate=coordinate,
         prior_usage_attempts=coordinator_usage,
+        task_id=resume,
+        resume=bool(resume),
     )
     out.append("")
     out.append(render_result(result))
     return 0, "\n".join(out)
+
+
+def _plan_from_ledger(ws, task_id: str, hosts) -> tuple[RoutePlan, str]:
+    """Rebuild a RoutePlan from a task ledger's ``ctx.task/v1`` row.
+
+    The recorded assignment becomes a pin per node; a pinned host that is no
+    longer installed is ignored by ``_assign_host`` and the node re-routes to
+    the cheapest model that clears its tier, which is the same rule a fresh
+    plan follows. The DAG was validated when the task was opened, so it is
+    not re-validated here."""
+    from ctx.store import Store
+
+    st = _ledger.task_state(_ledger.load(ws.root, task_id))
+    if not st.task:
+        raise RouteError("no ctx.task/v1 row in the ledger")
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        goal_ref = str(st.task.get("goal_ref") or "")
+        doc = json.loads(store.get_blob(goal_ref.removeprefix("blob:")).decode("utf-8"))
+    finally:
+        store.close()
+    task = str(doc.get("task") or "")
+    goals = doc.get("nodes") or {}
+    assigned: list[AssignedNode] = []
+    for n in st.task.get("nodes") or []:
+        node = RouteNode(
+            id=str(n["id"]), goal=str(goals.get(n["id"], "")), role=str(n.get("role") or ""),
+            min_tier=str(n.get("min_tier") or "economy"),
+            need_tags=tuple(n.get("need_tags") or ()), deps=tuple(n.get("deps") or ()),
+            est_input_tokens=int(n.get("est_input_tokens") or 0),
+            est_output_tokens=int(n.get("est_output_tokens") or 0),
+            host_pin=str(n.get("host") or ""), model_pin=str(n.get("model") or ""),
+            prefer=str(n.get("prefer") or "cheap"),
+            targets=tuple(n.get("targets") or ()),
+        )
+        assigned.append(_assign_host(node, list(hosts)))
+    return RoutePlan(
+        task=task, hosts=tuple(hosts), coordinator=None, assigned=assigned,
+        source=str(st.task.get("source") or "resumed"),
+        task_kind=str(st.task.get("task_kind") or "general"),
+    ), task
 
 
 __all__ = [
@@ -1778,4 +2039,5 @@ __all__ = [
     "run_route",
     "render_result",
     "orchestrate",
+    "_plan_from_ledger",
 ]

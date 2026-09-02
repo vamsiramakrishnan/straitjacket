@@ -83,7 +83,22 @@ def clean_git_root(root: Path) -> bool:
     if resolved_top != root:
         return False
     status = _git(root, "status", "--porcelain=v1", "--untracked-files=all")
-    return status.returncode == 0 and not status.stdout
+    if status.returncode != 0:
+        return False
+    # The harness's own bookkeeping directory is never dirt. It is excluded by
+    # name from retrieval, generation hashing and the census walk for the same
+    # reason (ctx.sessiondir): the harness must not observe its own state. The
+    # task ledger writes there BEFORE the first wave, and counting that as an
+    # untracked change turned every isolated wave into the serial fallback.
+    from ctx.sessiondir import LEDGER_DIR_NAME
+
+    for line in status.stdout.decode("utf-8", "replace").splitlines():
+        entry = line[3:].strip().strip('"')
+        if entry == LEDGER_DIR_NAME or entry.startswith(LEDGER_DIR_NAME + "/"):
+            continue
+        if entry:
+            return False
+    return True
 
 
 def _path_allowed(path: str, targets: tuple[str, ...]) -> bool:

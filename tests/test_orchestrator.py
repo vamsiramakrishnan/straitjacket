@@ -376,6 +376,8 @@ def test_route_aggregates_actual_usage_without_hiding_missing_attempts(
         "cost_complete": False,
         "cost_basis": "priced_tokens",
         "sources": ["test_json"],
+        "turns": 0,
+        "turns_reported": 0,
     }
 
     receipt = json.loads(

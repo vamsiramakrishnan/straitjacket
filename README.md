@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/github/license/vamsiramakrishnan/straitjacket)](LICENSE)
 
-**v0.35.1 · pre-1.0 · Apache-2.0**
+**v0.36.0 · pre-1.0 · Apache-2.0**
 
 One log prints 302,628 tokens. The agent needs one quiet line.
 
@@ -213,6 +213,8 @@ It does not silently return whatever now occupies lines 40–52. A refusal is ch
 | Navigate symbols | `ctx def`, `ctx refs`, `ctx callers` |
 | Ask a typed question | `ctx ask '<question>' --intent <intent>` |
 | Compile an investigation | `ctx plan run <plan.json>` |
+| Split one task across agents, by cost and capability | `ctx orchestrate '<task>'` |
+| See how they collaborated, or resume a killed run | `ctx task show <id>` · `ctx orchestrate --resume <id>` |
 | Inspect session economics | `ctx stats --session` |
 
 The operating rule is precise:
@@ -247,6 +249,7 @@ Measured surfaces include:
 - Python and native-hook latency;
 - six investigation rounds collapsed to one;
 - content-anchor behaviour across real edits;
+- resume, typed recovery, and budget-against-actuals on the task ledger;
 - policy candidates rejected when they cost more than the baseline.
 
 The last item matters. A system that only publishes wins becomes a marketing harness. straitjacket uses failed experiments to delete mechanisms, narrow claims, and find the regime where the native path is better.

@@ -188,6 +188,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "policy": ("admin", "cmd_policy", True),
     "ladders": ("admin", "cmd_ladders", True),
     "orchestrate": ("hosts", "cmd_orchestrate", True),
+    "task": ("hosts", "cmd_task", True),
     "setup": ("hosts", "cmd_setup", False),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
@@ -781,6 +782,31 @@ def _build_parser():
         "--run", action="store_true", dest="force_run",
         help="execute even when [orchestrate] confirm=true",
     )
+    p_orch.add_argument(
+        "--resume", metavar="TASK", default=None,
+        help="replay a task ledger: finished nodes are restored, the rest run",
+    )
+
+    p_task = sub.add_parser(
+        "task", help="the task ledger: how harnesses collaborated on a task"
+    )
+    task_sub = p_task.add_subparsers(dest="task_cmd", required=True)
+    task_sub.add_parser("ls", help="tasks with a ledger in this workspace, newest first")
+    p_ts = task_sub.add_parser("show", help="claims, handbacks, steward decisions, inbox")
+    p_ts.add_argument("task", metavar="TASK")
+    p_ti = task_sub.add_parser("inbox", help="addresses sent to one node")
+    p_ti.add_argument("task", metavar="TASK")
+    p_ti.add_argument("node", metavar="NODE")
+    p_tsend = task_sub.add_parser(
+        "send", help="send a node an address (never content) — the handoff bus"
+    )
+    p_tsend.add_argument("task", metavar="TASK")
+    p_tsend.add_argument("node", metavar="NODE", help="destination node id")
+    p_tsend.add_argument("ref", help="an address: checkpoint:, run:, blob:, repo:…@anchor")
+    p_tsend.add_argument("--from", dest="sender", default="operator",
+                         help="sending node id (default: operator)")
+    p_tsend.add_argument("--note", default=None,
+                         help="bounded note (≤200 chars); the ref carries the content")
 
     p_agy = sub.add_parser("antigravity", help="Antigravity integration")
     agy_sub = p_agy.add_subparsers(dest="agy_cmd", required=True)

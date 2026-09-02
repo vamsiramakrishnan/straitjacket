@@ -244,6 +244,33 @@ Compiled evidence plans (`ctx.plan/v1`, docs/EVIDENCE-PLANS.md): a model-authore
 - Execute-class ops (`test.run`, `ast.rewrite.*`) run only on the CLI tier under the standard guard; the MCP `investigate` op MUST reject them at validation (bounded-only surface, §10.4). `ast.rewrite.apply` MUST be transactional and MUST refuse when the source-state generation changed since preview.
 - The digest renders against `contracts/investigate.toml` through the shared resolver; the counterevidence section is REQUIRED in every outcome, including the empty form.
 
+### 6.7 `ctx orchestrate` / `ctx task` — the task ledger
+
+Multi-harness collaboration (docs/TASK-LEDGER.md) is recorded on a per-task,
+append-only ledger of schema-versioned rows: `ctx.task/v1`, `ctx.claim/v1`,
+`ctx.handback/v1`, `ctx.steward/v1`, `ctx.verdict/v1`, `ctx.inbox/v1`.
+
+- Harnesses MUST NOT address each other directly; collaboration state MUST
+  flow through the ledger, and the orchestrator MUST be one reader among
+  others.
+- Every launch MUST be preceded by a claim row and followed by a handback row
+  whose `reason` and `failure_kind` are drawn from the closed vocabularies in
+  `ctx.taskledger`. A row outside the contract MUST be refused, not stored.
+- A handback other than `done` MUST be decided by the steward, and the
+  decision row MUST be appended before the decision is acted on.
+- Only actions that exist for the node MAY be offered to the recovery policy.
+  A stop chosen because no applicable action existed MUST be recorded as
+  `stop_blocked`, never as `stop_budget`.
+- Budget MUST be evaluated against ledger actuals where every attempt was
+  priced, and MUST NOT fall below the estimate where any attempt was not. A
+  claim whose estimate exceeds the remaining budget MUST be refused before
+  launch.
+- `--resume <task>` MUST restore nodes with a `done` handback without
+  re-running them and MUST re-run nodes claimed but never handed back.
+- Ledger rows MUST NOT carry task text or node output; the goal is a `blob:`
+  address, output is a `checkpoint:` address. The inbox `note` is the only
+  free-text field, bounded and control-stripped.
+
 ## 7. Invocation and artifact data model
 
 A command produces an invocation manifest referencing independently addressed streams:

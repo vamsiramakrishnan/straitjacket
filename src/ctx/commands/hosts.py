@@ -147,14 +147,70 @@ def cmd_setup(ns) -> int:
 
 def cmd_orchestrate(ws, ns) -> int:
     """`ctx orchestrate` — route a task's phases across installed harnesses
-    by model cost. Usually a wrap mode rather than something a human types."""
+    by model cost. Usually a wrap mode rather than something a human types.
+    `--resume TASK` replays a task ledger instead of planning afresh."""
     from ctx.orchestrator import orchestrate
 
+    # `resume` is passed only when set, so an `orchestrate` that predates the
+    # task ledger (injected fakes included) keeps its signature.
+    extra = {"resume": ns.resume} if getattr(ns, "resume", None) else {}
     code, text = orchestrate(
-        ws, ns.task, dry_run=ns.dry_run, force_run=ns.force_run
+        ws, ns.task, dry_run=ns.dry_run, force_run=ns.force_run, **extra
     )
     print(text)
     return code
+
+
+def cmd_task(ws, ns) -> int:
+    """`ctx task ls|show|inbox|send` — read and write the task ledger.
+
+    The ledger is the bus harnesses collaborate over (docs/TASK-LEDGER.md).
+    `send` is the only writer here and it carries an ADDRESS, never content:
+    the receiving node resolves it with `ctx get`."""
+    import sys
+
+    from ctx import taskledger as ledger
+
+    if ns.task_cmd == "ls":
+        ids = ledger.list_tasks(ws.root)
+        if not ids:
+            print("no task ledgers in this workspace (run `ctx orchestrate`)")
+            return 0
+        for tid in ids:
+            st = ledger.task_state(ledger.load(ws.root, tid))
+            done = sum(1 for n in st.nodes.values() if n.done)
+            print(f"{tid}  nodes {done}/{len(st.nodes)} done  spent ${st.spent_usd:.4f}"
+                  + ("" if st.cost_complete else " (partial)"))
+        return 0
+    if ns.task_cmd == "show":
+        rows = ledger.load(ws.root, ns.task)
+        if not rows:
+            print(f"ctx task: unknown task {ns.task}", file=sys.stderr)
+            return 2
+        print(ledger.render_task(ledger.task_state(rows)))
+        return 0
+    if ns.task_cmd == "inbox":
+        st = ledger.task_state(ledger.load(ws.root, ns.task))
+        msgs = ledger.inbox_for(st, ns.node)
+        if not msgs:
+            print(f"inbox for {ns.node}: empty")
+            return 0
+        for m in msgs:
+            note = f" — {m['note']}" if m.get("note") else ""
+            print(f"from {m.get('from')}: {m.get('ref')}{note}")
+        return 0
+    if ns.task_cmd == "send":
+        try:
+            row = ledger.append(ws.root, ledger.inbox_row(
+                ns.task, to=ns.node, sender=ns.sender, ref=ns.ref, note=ns.note,
+            ))
+        except ledger.LedgerError as e:
+            print(f"ctx task send: {e}", file=sys.stderr)
+            return 2
+        print(f"sent to {row['to']}: {row['ref']}")
+        return 0
+    print(f"ctx task: unknown subcommand {ns.task_cmd}", file=sys.stderr)
+    return 2
 
 
 def cmd_antigravity(ns) -> int:

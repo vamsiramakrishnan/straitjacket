@@ -45,6 +45,7 @@ TOOL_SCHEMA: dict[str, Any] = {
         "q (compose typed evidence in one call: a total `|`-pipeline over "
         "symbols/sites/files/records streams — options.pipeline, e.g. "
         "\"refs Foo | group file | top 3 | get --context 5\")."
+        " task (the collaboration ledger for options.task — claims, handbacks, steward decisions, inbox — or the task list when omitted), inbox (addresses handed to options.node in options.task), send (hand options.node an ADDRESS — options.ref, never content — with an optional bounded options.note)."
     ),
     "inputSchema": {
         "type": "object",
@@ -55,6 +56,7 @@ TOOL_SCHEMA: dict[str, Any] = {
                     "search", "get", "stats", "map",
                     "def", "refs", "diag", "callers", "callees", "impact",
                     "diff", "repo", "doctor", "investigate", "q",
+                    "task", "inbox", "send",
                 ],
                 "description": (
                     "callers/callees: direct call-graph edges for options.symbol; "
@@ -66,7 +68,12 @@ TOOL_SCHEMA: dict[str, Any] = {
                     "no loops, no recursion, max 8 stages, so cost is statically "
                     "bounded; prefer it over several round-trips when the answer is a "
                     "composition (locate → narrow → read). "
-                    "execute-class ops (test.run, ast.rewrite.*) are CLI-only."
+                    "execute-class ops (test.run, ast.rewrite.*) are CLI-only. "
+                    "task: the collaboration ledger for options.task (or the list "
+                    "when omitted); inbox: addresses sent to options.node in "
+                    "options.task; send: hand options.node an ADDRESS (options.ref, "
+                    "never content) with an optional bounded options.note — the "
+                    "handoff bus between harnesses."
                 ),
             },
             "workspace": {"type": "string", "description": "workspace path or alias"},
@@ -86,7 +93,7 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "options": {
                 "type": "object",
-                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path} · callers/callees/impact options: {symbol,depth} · diff options: {refA,refB} · q options: {pipeline}",
+                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path} · callers/callees/impact options: {symbol,depth} · diff options: {refA,refB} · q options: {pipeline} · task/inbox/send options: {task,node,ref,from,note}",
             },
             "maxTokens": {
                 "type": "integer",
@@ -302,6 +309,8 @@ def _dispatch(args: dict[str, Any]) -> str:
         if code != 0:
             raise RetrievalError(text)
         return text
+    elif op in ("task", "inbox", "send"):
+        result = _task_ops(ws, op, args.get("options") or {})
     elif op == "repo":
         result = stats(store, ws, "repo:")
     elif op == "doctor":
@@ -315,6 +324,47 @@ def _dispatch(args: dict[str, Any]) -> str:
     if warning:
         result = warning + "\n" + result
     return result
+
+
+def _task_ops(ws, op: str, opts: dict[str, Any]) -> str:
+    """The ledger through MCP, so an agent inside ANY harness can read its
+    inbox and hand an address to another node without shelling out. Same
+    contract as `ctx task`: send carries an address, never content."""
+    from ctx import taskledger as ledger
+    from ctx.retrieval import RetrievalError
+
+    task = opts.get("task")
+    if op == "task":
+        if not task:
+            ids = ledger.list_tasks(ws.root)
+            return "\n".join(ids) if ids else "no task ledgers in this workspace"
+        rows = ledger.load(ws.root, str(task))
+        if not rows:
+            raise RetrievalError(f"unknown task {task}")
+        return ledger.render_task(ledger.task_state(rows))
+    node = opts.get("node")
+    if not task or not node:
+        raise RetrievalError(f"{op} requires options.task and options.node")
+    if op == "inbox":
+        st = ledger.task_state(ledger.load(ws.root, str(task)))
+        msgs = ledger.inbox_for(st, str(node))
+        if not msgs:
+            return f"inbox for {node}: empty"
+        return "\n".join(
+            f"from {m.get('from')}: {m.get('ref')}" + (f" — {m['note']}" if m.get("note") else "")
+            for m in msgs
+        )
+    ref = opts.get("ref")
+    if not isinstance(ref, str) or not ref:
+        raise RetrievalError("send requires options.ref (an address)")
+    try:
+        row = ledger.append(ws.root, ledger.inbox_row(
+            str(task), to=str(node), sender=str(opts.get("from") or "agent"),
+            ref=ref, note=opts.get("note"),
+        ))
+    except ledger.LedgerError as e:
+        raise RetrievalError(str(e)) from None
+    return f"sent to {row['to']}: {row['ref']}"
 
 
 def _tool_call(params: dict[str, Any]) -> dict[str, Any]:

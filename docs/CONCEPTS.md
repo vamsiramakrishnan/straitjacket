@@ -24,6 +24,9 @@ Scan this first; the sections below explain each term in depth.
 | **The four gates** | Birth, Entry, Residence, Emission — the four moments in a byte's life where the harness can act. |
 | **Capture ladder** | The choice of the least-powerful verb that fits the work: native read → `run` → `--shell` → `seq` → `eval`, with `q` alongside. |
 | **Reflex vs. policy epoch** | A within-session adjustment (fast loop) versus a reviewed, committed config change (slow loop). |
+| **Task ledger** | The append-only, per-task record harnesses collaborate over: claims, handbacks, steward decisions, verdicts, inbox addresses. Harnesses never address each other; they read and append here, and a killed run resumes from it. |
+| **Handback** | A node's typed exit — `done`, `failed`, `blocked`, `over_budget`, `over_turns`, `low_confidence` — with a failure kind, its checkpoint, turns and cost. |
+| **Steward** | The deterministic reader of handbacks: classifies why a node stopped, offers the recovery policy only the actions that exist, and records its decision before acting. Not a model. |
 | **Determinism** | Same evidence + same contract + same plan → byte-identical digest, so caches stay warm and diffs are real signal. |
 
 ## The central distinction: evidence versus context
