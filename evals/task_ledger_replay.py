@@ -29,6 +29,7 @@ import os
 import sys
 import tempfile
 from dataclasses import replace
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -111,7 +112,12 @@ def measure_resume(tmp: Path) -> dict:
             resumed["n"] += 1
             return 0, "ok", "", _usage(model)
 
-        code, _ = orchestrate(ws, "", launch=launch, resume=tid)
+        # `orchestrate` detects hosts itself; this replay is model-free and
+        # must run on a machine with no harness CLI installed.
+        with mock.patch("ctx.orchestrator.installed_harnessable", lambda **kw: _roster()):
+            code, text = orchestrate(ws, "", launch=launch, resume=tid)
+        if code != 0:
+            raise RuntimeError(f"resume failed: {text}")
         st = L.task_state(L.load(ws.root, tid))
         rows.append({
             "died_after_launch": die_at,

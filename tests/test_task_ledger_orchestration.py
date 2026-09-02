@@ -184,8 +184,10 @@ def test_budget_is_checked_against_actuals_not_the_estimate(state_home, git_work
     assert result.estimated_spend_usd < budget  # the estimate alone would have continued
 
 
-def test_resume_restores_finished_nodes_and_delivers_inbox(state_home, git_workspace):
+def test_resume_restores_finished_nodes_and_delivers_inbox(state_home, git_workspace, monkeypatch):
     ws = make_ws(git_workspace)
+    # `orchestrate` detects hosts itself; CI runners have no harness CLI on PATH.
+    monkeypatch.setattr("ctx.orchestrator.installed_harnessable", lambda **kw: _hosts("claude"))
     plan = build_route_plan("resumable task", _RAW, _hosts("claude"), ws.config.orchestrate)
 
     class Crash(RuntimeError):
@@ -225,8 +227,9 @@ def test_resume_restores_finished_nodes_and_delivers_inbox(state_home, git_works
     assert st.nodes["explore"].attempts == 1                      # still one attempt, ever
 
 
-def test_resume_of_an_unknown_task_fails_loudly(state_home, git_workspace):
+def test_resume_of_an_unknown_task_fails_loudly(state_home, git_workspace, monkeypatch):
     ws = make_ws(git_workspace)
+    monkeypatch.setattr("ctx.orchestrator.installed_harnessable", lambda **kw: _hosts("claude"))
     code, text = orchestrate(ws, "", launch=_ok, resume="task-000000000000")
     assert code == 1 and "cannot resume" in text
 
