@@ -1453,27 +1453,63 @@ def run_route(
     else:
         _open_task(ws, store, tid, plan, nodes, budget)
 
-    def _record(row: dict) -> None:
+    def _append_unlocked(row: dict) -> None:
         # Fail-open: the ledger is bookkeeping for a run that must finish. A
         # dropped claim or handback reads on resume as "not done", which
         # re-runs the node -- the direction that costs money, never truth.
         with contextlib.suppress(Exception):
-            with _LEDGER_LOCK:
-                _ledger.append(ws.root, row)
+            _ledger.append(ws.root, row)
+
+    def _record(row: dict) -> None:
+        with _LEDGER_LOCK:
+            _append_unlocked(row)
+
+    def _state_unlocked():
+        return _ledger.task_state(_ledger.load(ws.root, tid))
 
     def _ledger_state():
         with _LEDGER_LOCK:
-            return _ledger.task_state(_ledger.load(ws.root, tid))
+            return _state_unlocked()
 
-    def _remaining_budget() -> float:
+    def _remaining_from(st) -> float:
         if budget <= 0:
             return float("inf")
-        st = _ledger_state()
         # Actuals when every attempt was priced; otherwise the larger of what
         # was measured and what was estimated, so an unpriced attempt cannot
-        # make the budget look healthier than the estimate already said.
+        # make the budget look healthier than the estimate already said. Open
+        # claims reserve their estimate: nodes launched in parallel each see
+        # the others' reservations, so one wave cannot spend the same dollar
+        # twice.
         actual = st.spent_usd if st.cost_complete else max(st.spent_usd, spent_est)
-        return budget - actual
+        return budget - actual - st.reserved_usd
+
+    def _remaining_budget() -> float:
+        return _remaining_from(_ledger_state())
+
+    def _claim_or_refuse(a: AssignedNode, attempt: int, expected_turns: int) -> bool:
+        """Check the budget and write the claim as ONE step under the ledger
+        lock, so two nodes of the same wave cannot both pass a check against
+        the same remaining balance. Returns False (with the refusal on record
+        as a steward decision) when the node's own estimate would overspend."""
+        with _LEDGER_LOCK:
+            st = _state_unlocked()
+            # A claim this node left open in a run that died is superseded by
+            # the one being written now; it must not count against itself.
+            own = st.nodes[a.node.id].reserved_usd if a.node.id in st.nodes else 0.0
+            remaining = _remaining_from(st) + own
+            if budget > 0 and float(a.est_cost_usd) > remaining:
+                _append_unlocked(_ledger.steward_row(
+                    tid, a.node.id, attempt=attempt - 1, on_reason="over_budget",
+                    failure_kind="none", action="stop_budget", target=None,
+                    budget_remaining_usd=remaining,
+                ))
+                return False
+            _append_unlocked(_ledger.claim_row(
+                tid, a.node.id, attempt=attempt, host=a.host.name, model=a.model.id,
+                tier=a.model.tier, expected_turns=expected_turns,
+                expected_cost_usd=a.est_cost_usd,
+            ))
+            return True
 
     def _do_launch(host, work_root, prompt: str, model):
         if turn_ceiling > 0 and launch is _launch_host:
@@ -1523,16 +1559,14 @@ def run_route(
         # Refuse the claim before the launch when the ledger cannot cover it.
         # The per-wave check below catches a budget already blown; this one
         # stops a node whose own estimate would blow it, so the loop never
-        # STARTS work it knows it cannot pay for. Recorded as a steward
-        # decision with no attempt, which is exactly what happened.
-        if budget > 0 and float(a.est_cost_usd) > _remaining_budget():
+        # STARTS work it knows it cannot pay for. The check and the first
+        # claim are one atomic step: the claim reserves the estimate, so a
+        # sibling launched in parallel sees it. Recorded as a steward decision
+        # with no attempt, which is exactly what happened.
+        first_attempt = attempt + 1
+        if not _claim_or_refuse(a, first_attempt, expected_turns):
             cls = _steward.Classification("over_budget", "none")
             last_action = "stop_budget"
-            _record(_ledger.steward_row(
-                tid, a.node.id, attempt=attempt, on_reason="over_budget",
-                failure_kind="none", action="stop_budget", target=None,
-                budget_remaining_usd=_remaining_budget(),
-            ))
             code, err = None, "not started: estimate exceeds remaining budget"
             return _NodeExecution(outcome=_outcome(), stdout="", stderr=err, patch=None)
 
@@ -1543,11 +1577,14 @@ def run_route(
                     work_root = checkout.path
                 while True:
                     attempt += 1
-                    _record(_ledger.claim_row(
-                        tid, a.node.id, attempt=attempt, host=host.name, model=model.id,
-                        tier=model.tier, expected_turns=expected_turns,
-                        expected_cost_usd=a.est_cost_usd,
-                    ))
+                    if attempt != first_attempt:
+                        # A retry the steward already priced against the
+                        # budget (escalation cost vs remaining) in its menu.
+                        _record(_ledger.claim_row(
+                            tid, a.node.id, attempt=attempt, host=host.name, model=model.id,
+                            tier=model.tier, expected_turns=expected_turns,
+                            expected_cost_usd=a.est_cost_usd,
+                        ))
                     code, out, err, usage = _launch_result(_do_launch(host, work_root, prompt, model))
                     node_usage.append(usage)
                     contract_failed = _execution_contract_failed(code, out, err)
@@ -1647,6 +1684,10 @@ def run_route(
                 added = _merge_patch(nodes, state, patch, hosts, cfg)
                 if added:
                     replans_done += 1
+                    # The added nodes exist only in memory until they are on
+                    # the ledger; a resume rebuilds the route from task rows,
+                    # so an unrecorded re-plan would silently vanish.
+                    _open_task(ws, store, tid, plan, nodes[len(nodes) - added:], budget, source="replan")
                     continue
             break
         repository_clean = clean_git_root(Path(ws.root)) if isolated_worktrees else False
@@ -1769,12 +1810,18 @@ def run_route(
 _LEDGER_LOCK = threading.Lock()
 
 
-def _open_task(ws, store, task_id: str, plan: RoutePlan, nodes: list[AssignedNode], budget: float) -> None:
-    """Write the ``ctx.task/v1`` row. Task text goes into the store as a blob
+def _open_task(
+    ws, store, task_id: str, plan: RoutePlan, nodes: list[AssignedNode], budget: float,
+    *, source: str | None = None,
+) -> None:
+    """Write a ``ctx.task/v1`` row. Task text goes into the store as a blob
     and the ledger carries its address, so the ledger stays export-safe like
-    the route receipt. Fail-open."""
+    the route receipt. The opening row carries the whole DAG; an accepted
+    coordinator re-plan appends another row (``source="replan"``) with only
+    the nodes it added, so ``--resume`` restores them too. Fail-open."""
     with contextlib.suppress(Exception):
-        doc = {"task": plan.task, "nodes": {a.node.id: a.node.goal for a in nodes}}
+        replan = source == "replan"
+        doc = {"task": "" if replan else plan.task, "nodes": {a.node.id: a.node.goal for a in nodes}}
         blob = store.put_blob(json.dumps(doc, sort_keys=True).encode("utf-8"))
         rows = [
             {
@@ -1791,7 +1838,7 @@ def _open_task(ws, store, task_id: str, plan: RoutePlan, nodes: list[AssignedNod
         with _LEDGER_LOCK:
             _ledger.append(ws.root, _ledger.task_row(
                 task_id, goal_ref=f"blob:{short_id(blob)}", nodes=rows,
-                budget_usd=budget, task_kind=plan.task_kind, source=plan.source,
+                budget_usd=budget, task_kind=plan.task_kind, source=source or plan.source,
             ))
 
 
@@ -1882,6 +1929,11 @@ def orchestrate(
     from ctx.installer import _ctx_executable
 
     cfg = ws.config.orchestrate
+    if not resume and not (task or "").strip():
+        return 1, (
+            "ctx orchestrate: a task is required, or --resume <task-id> to replay a ledger; "
+            "see `ctx task ls`."
+        )
     resolved_exe = exe or _ctx_executable()
     hosts = installed_harnessable(workspace_root=ws.root)
     if not any(h.installed for h in hosts):
@@ -1993,15 +2045,26 @@ def _plan_from_ledger(ws, task_id: str, hosts) -> tuple[RoutePlan, str]:
     if not st.task:
         raise RouteError("no ctx.task/v1 row in the ledger")
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    task = ""
+    goals: dict[str, str] = {}
+    recorded: list[dict] = []
     try:
-        goal_ref = str(st.task.get("goal_ref") or "")
-        doc = json.loads(store.get_blob(goal_ref.removeprefix("blob:")).decode("utf-8"))
+        # The opening row plus one row per accepted re-plan, in order; nodes
+        # a re-plan added are as much a part of the route as the originals.
+        for row in st.task_rows:
+            goal_ref = str(row.get("goal_ref") or "")
+            doc = json.loads(store.get_blob(goal_ref.removeprefix("blob:")).decode("utf-8"))
+            task = task or str(doc.get("task") or "")
+            goals.update({str(k): str(v) for k, v in (doc.get("nodes") or {}).items()})
+            recorded.extend(row.get("nodes") or [])
     finally:
         store.close()
-    task = str(doc.get("task") or "")
-    goals = doc.get("nodes") or {}
     assigned: list[AssignedNode] = []
-    for n in st.task.get("nodes") or []:
+    seen: set[str] = set()
+    for n in recorded:
+        if str(n["id"]) in seen:
+            continue
+        seen.add(str(n["id"]))
         node = RouteNode(
             id=str(n["id"]), goal=str(goals.get(n["id"], "")), role=str(n.get("role") or ""),
             min_tier=str(n.get("min_tier") or "economy"),

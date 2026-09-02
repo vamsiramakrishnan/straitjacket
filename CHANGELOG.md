@@ -26,17 +26,22 @@ a login failure now stops instead of buying a stronger model, and a stop
 chosen because nothing applicable existed is labelled `stop_blocked`, never
 `stop_budget`. Budget is checked against ledger actuals, never below the
 estimate where an attempt went unpriced, and a claim whose estimate exceeds
-what remains is refused before launch. Hosts' turn counts are parsed (Claude
+what remains is refused before launch; a claim reserves its estimate until
+its handback and the check-and-claim is one step under the ledger lock, so
+two nodes of one wave cannot both pass against the same balance. Hosts' turn counts are parsed (Claude
 `num_turns`, Codex `turn.completed`) and summarized; a node past
 `[orchestrate] expected_turns` hands back `over_turns` as a complexity
 signal, and `turn_ceiling` > 0 hard-bounds Claude nodes with `--max-turns`.
-`ctx orchestrate --resume <task>` rebuilds the plan from the ledger, restores
-nodes with a `done` handback without re-running them, and re-runs nodes that
-were claimed but never handed back. `ctx task ls|show|inbox|send` and the MCP
+`ctx orchestrate --resume <task>` (no task argument needed) rebuilds the plan
+from the ledger, restores nodes with a `done` handback without re-running
+them, and re-runs nodes that were claimed but never handed back; nodes a
+coordinator re-plan added are on the ledger as a further task row, so they
+are restored too. `ctx task ls|show|inbox|send` and the MCP
 ops `task`/`inbox`/`send` read the ledger and hand a node an address — never
 content — which reaches it in its prompt. Ledger rows carry no task text or
-output: the goal is a `blob:` address, output a `checkpoint:` address, and the
-inbox note is the one bounded, sanitized free-text field. Model-free receipt
+output: the goal is a `blob:` address, output a `checkpoint:` address, the
+inbox ref must parse as an address (with `ctx get` options at most) and is
+bounded, and the inbox note is the one sanitized free-text field. Model-free receipt
 over injected hosts: resume saved 6 of 16 launches a naive restart makes with
 no node run twice; typed recovery spent 43% less than the fixed rule across
 seven failure shapes; the claim check held spend inside a budget the estimate

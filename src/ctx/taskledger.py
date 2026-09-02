@@ -47,6 +47,7 @@ to attach to a receipt, and this one is meant to be attached.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,6 +94,15 @@ STEWARD_ACTIONS = ("retry_same", "escalate", "replan", "stop_blocked", "stop_bud
 #: Bound on the one free-text field. Long enough to say what an address is
 #: for, short enough that a note cannot become a transcript.
 INBOX_NOTE_CHARS = 200
+# An inbox ref is an ADDRESS: the first token must parse under the reference
+# grammar (ctx.refs), and anything after it may only be `ctx get` options
+# (`--lines 40:52@07407f1c`, `--hashlines`). Bounded so the ledger can never
+# be used to smuggle content into a node's prompt.
+INBOX_REF_CHARS = 256
+INBOX_ID_CHARS = 64
+_INBOX_FLAG_RE = re.compile(r"^--[a-z][a-z0-9-]*$")
+_INBOX_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:@=/#,+~-]+$")
+_INBOX_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 class LedgerError(Exception):
@@ -128,11 +138,57 @@ def _check(row: dict[str, Any]) -> None:
     if schema == STEWARD_SCHEMA and row.get("action") not in STEWARD_ACTIONS:
         raise LedgerError(f"steward action {row.get('action')!r} not in {STEWARD_ACTIONS}")
     if schema == INBOX_SCHEMA:
-        note = row.get("note")
-        if note is not None and (not isinstance(note, str) or len(note) > INBOX_NOTE_CHARS):
-            raise LedgerError(f"inbox note must be a string of at most {INBOX_NOTE_CHARS} chars")
-        if not isinstance(row.get("ref"), str) or not row["ref"]:
-            raise LedgerError("inbox row needs a ref (an address, never content)")
+        _check_inbox(row)
+
+
+def check_address(ref: Any) -> str:
+    """Return ``ref`` if it is an address the receiving node can resolve with
+    ``ctx get``; raise LedgerError otherwise. An address is one reference
+    (``repo:path``, ``checkpoint:<id>``, ``run:<id>#stdout`` …) optionally
+    followed by ``ctx get`` options. Prose, output and anything unbounded is
+    refused here, before it reaches the ledger or a prompt."""
+    from ctx.refs import RefError, parse_ref
+
+    if not isinstance(ref, str) or not ref.strip():
+        raise LedgerError("inbox row needs a ref (an address, never content)")
+    if len(ref) > INBOX_REF_CHARS:
+        raise LedgerError(f"inbox ref must be at most {INBOX_REF_CHARS} chars (an address, never content)")
+    if ref != ref.strip() or any(ord(c) < 32 or ord(c) == 127 for c in ref):
+        raise LedgerError("inbox ref must be a single line with no control characters")
+    head, *rest = ref.split(" ")
+    try:
+        parse_ref(head)
+    except RefError as e:
+        raise LedgerError(f"inbox ref must be an address: {e}") from None
+    expect_flag = True
+    for token in rest:
+        if not token:
+            raise LedgerError("inbox ref options must be single-spaced")
+        if _INBOX_FLAG_RE.match(token):
+            expect_flag = False
+            continue
+        if expect_flag or not _INBOX_VALUE_RE.match(token):
+            raise LedgerError(
+                f"inbox ref may carry only `ctx get` options after the address, not {token!r}"
+            )
+        expect_flag = True
+    return ref
+
+
+def _check_inbox(row: dict[str, Any]) -> None:
+    note = row.get("note")
+    if note is not None and (not isinstance(note, str) or len(note) > INBOX_NOTE_CHARS):
+        raise LedgerError(f"inbox note must be a string of at most {INBOX_NOTE_CHARS} chars")
+    for key in ("to", "from"):
+        value = row.get(key)
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > INBOX_ID_CHARS
+            or not _INBOX_ID_RE.match(value)
+        ):
+            raise LedgerError(f"inbox {key!r} must be a node id of at most {INBOX_ID_CHARS} chars")
+    check_address(row.get("ref"))
 
 
 def append(workspace_root: Path | str, row: dict[str, Any]) -> dict[str, Any]:
@@ -293,6 +349,22 @@ class NodeState:
         return bool(self.last_handback and self.last_handback.get("reason") == "done")
 
     @property
+    def open_claim(self) -> dict[str, Any] | None:
+        """The claim still in flight: claimed, not yet handed back."""
+        if not self.last_claim:
+            return None
+        claimed = int(self.last_claim.get("attempt") or 0)
+        handed = int((self.last_handback or {}).get("attempt") or 0)
+        return self.last_claim if claimed > handed else None
+
+    @property
+    def reserved_usd(self) -> float:
+        """What an open claim expects to cost. Reserved against the budget so
+        two nodes claiming in parallel cannot both spend the same dollar."""
+        claim = self.open_claim
+        return float(claim.get("expected_cost_usd") or 0.0) if claim else 0.0
+
+    @property
     def status(self) -> str:
         if self.done:
             return "ok"
@@ -305,6 +377,9 @@ class NodeState:
 class TaskState:
     task_id: str
     task: dict[str, Any] | None
+    # Every ctx.task/v1 row in order: the opening row, then one per accepted
+    # coordinator re-plan (source "replan") carrying only the nodes it added.
+    task_rows: list[dict[str, Any]] = field(default_factory=list)
     nodes: dict[str, NodeState] = field(default_factory=dict)
     steward: list[dict[str, Any]] = field(default_factory=list)
     verdicts: list[dict[str, Any]] = field(default_factory=list)
@@ -327,12 +402,17 @@ class TaskState:
         return sum(n.turns for n in self.nodes.values())
 
     @property
+    def reserved_usd(self) -> float:
+        return sum(n.reserved_usd for n in self.nodes.values())
+
+    @property
     def remaining_usd(self) -> float:
-        """Budget left against ACTUALS. Unbounded (0) budgets report +inf so a
-        policy comparing an action's cost against it never refuses on 0."""
+        """Budget left against ACTUALS, less what open claims have reserved.
+        Unbounded (0) budgets report +inf so a policy comparing an action's
+        cost against it never refuses on 0."""
         if self.budget_usd <= 0:
             return float("inf")
-        return self.budget_usd - self.spent_usd
+        return self.budget_usd - self.spent_usd - self.reserved_usd
 
 
 def task_state(rows: Iterable[dict[str, Any]]) -> TaskState:
@@ -350,7 +430,9 @@ def task_state(rows: Iterable[dict[str, Any]]) -> TaskState:
     for r in rows:
         schema = r.get("schema")
         if schema == TASK_SCHEMA:
-            state.task = r
+            if state.task is None:
+                state.task = r
+            state.task_rows.append(r)
             for n in r.get("nodes") or []:
                 nid = str(n.get("id") or "")
                 if nid:
@@ -428,6 +510,7 @@ __all__ = [
     "TASK_SCHEMA", "CLAIM_SCHEMA", "HANDBACK_SCHEMA", "STEWARD_SCHEMA",
     "VERDICT_SCHEMA", "INBOX_SCHEMA", "SCHEMAS",
     "HANDBACK_REASONS", "FAILURE_KINDS", "STEWARD_ACTIONS", "INBOX_NOTE_CHARS",
+    "INBOX_REF_CHARS", "check_address",
     "LedgerError", "new_task_id", "ledger_path", "append", "load", "list_tasks",
     "task_row", "claim_row", "handback_row", "steward_row", "verdict_row", "inbox_row",
     "NodeState", "TaskState", "task_state", "inbox_for", "render_task",

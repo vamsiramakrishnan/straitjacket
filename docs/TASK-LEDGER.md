@@ -78,6 +78,10 @@ ctx.verdict/v1    a verification result and its evidence address
 ctx.inbox/v1      one node → another: an address, plus a bounded note
 ```
 
+A coordinator re-plan that adds nodes appends a second `ctx.task/v1` row
+(`source: replan`) carrying only the nodes it added, so a resume folds every
+task row and the added nodes are as much a part of the route as the originals.
+
 `reason` is one of `done · failed · blocked · over_budget · over_turns ·
 low_confidence`. `failure_kind` is the vocabulary the recovery policy was
 evolved against: `auth_failure · safety_denied · permission_denied ·
@@ -133,8 +137,8 @@ budget and two signals:
                                  │ survivors, ranked by
                                  ▼
    $ remaining ──────▶  ┌─────────────────┐   refuses the CLAIM when the
-   (ledger actuals,     │     PRICE       │   node's estimate exceeds it —
-    not the estimate)   └────────┬────────┘   never starts unpayable work
+   (ledger actuals      │     PRICE       │   node's estimate exceeds it —
+    minus open claims)  └────────┬────────┘   never starts unpayable work
                                  │ runs; emits
                                  ▼
                         ┌─────────────────┐
@@ -146,6 +150,12 @@ budget and two signals:
                                               model, or an honest stop —
                                               never the same model again
 ```
+
+A claim reserves what it expects to cost until its handback, and the check
+and the claim are one step under the ledger lock. Two nodes of the same wave
+claiming in parallel therefore each see the other's reservation: with budget
+for one of them, exactly one launches. What a wave can still overshoot is the
+gap between a launched node's estimate and its bill.
 
 Turns are the **feedback signal**, not a limit. A node past its claimed turn
 count has told us the coordinator underestimated it, and that becomes a
@@ -200,8 +210,11 @@ sent to implement: repo:src/auth.py --lines 40:52@07407f1c
 ```
 
 An inbox row is the `rig send` of this system, with one rule: it carries an
-**address**, never content. The receiving node sees it in its prompt and
-resolves it with `ctx get`. Content-anchored addresses
+**address**, never content. The ledger enforces the rule: the ref must parse
+under the reference grammar (`repo:`, `checkpoint:`, `run:`, `blob:` …), may
+be followed only by `ctx get` options, is bounded to 256 characters, and is
+refused before it is stored otherwise. The receiving node sees it in its
+prompt and resolves it with `ctx get`. Content-anchored addresses
 ([ANCHORS](ANCHORS.md)) are what make this safe across a file another node is
 editing. The same verbs exist on the MCP surface (`task`, `inbox`, `send`), so
 an agent inside any harness can read its inbox or hand an address forward

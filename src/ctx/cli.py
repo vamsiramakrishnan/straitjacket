@@ -773,7 +773,10 @@ def _build_parser():
         help="route a task's phases across installed harnesses by model cost "
         "(harness collaboration); prices the plan, then runs it",
     )
-    p_orch.add_argument("task", help="the task to collaborate on")
+    p_orch.add_argument(
+        "task", nargs="?", default="",
+        help="the task to collaborate on (omit when replaying with --resume)",
+    )
     p_orch.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="print the priced routing plan and stop (launch no harness)",

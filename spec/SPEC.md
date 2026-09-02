@@ -265,11 +265,20 @@ append-only ledger of schema-versioned rows: `ctx.task/v1`, `ctx.claim/v1`,
   priced, and MUST NOT fall below the estimate where any attempt was not. A
   claim whose estimate exceeds the remaining budget MUST be refused before
   launch.
-- `--resume <task>` MUST restore nodes with a `done` handback without
-  re-running them and MUST re-run nodes claimed but never handed back.
+- A claim MUST reserve its expected cost until its handback, and the budget
+  check and the claim MUST be one atomic step, so nodes claimed in parallel
+  cannot each pass against the same remaining balance.
+- An accepted coordinator re-plan MUST be appended as a further `ctx.task/v1`
+  row carrying the nodes it added.
+- `--resume <task>` MUST fold every task row, MUST restore nodes with a
+  `done` handback without re-running them, and MUST re-run nodes claimed but
+  never handed back. `ctx orchestrate --resume <task>` MUST NOT require a
+  task argument.
 - Ledger rows MUST NOT carry task text or node output; the goal is a `blob:`
   address, output is a `checkpoint:` address. The inbox `note` is the only
-  free-text field, bounded and control-stripped.
+  free-text field, bounded and control-stripped. An inbox `ref` MUST parse as
+  an address under §6.1, MAY be followed only by `ctx get` options, MUST be
+  bounded, and a row whose `ref` is not an address MUST be refused.
 
 ## 7. Invocation and artifact data model
 

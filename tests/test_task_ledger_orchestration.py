@@ -266,3 +266,140 @@ def test_turn_ceiling_hard_bounds_a_claude_node_at_launch(monkeypatch, tmp_path)
     assert usage.turns == 3
     _launch_host(host, tmp_path, "do it", "/usr/bin/ctx", timeout=5, model="claude-haiku-4.5")
     assert "--max-turns" not in seen["argv"]   # 0 = observe only, nothing added
+
+
+def test_replanned_nodes_survive_resume(state_home, git_workspace, monkeypatch):
+    """A coordinator re-plan adds nodes in memory. They must reach the ledger
+    (a second task row, source "replan") or a resume rebuilds the route from
+    the opening row alone and the added nodes silently vanish."""
+    ws = make_ws(git_workspace)
+    monkeypatch.setattr("ctx.orchestrator.installed_harnessable", lambda **kw: _hosts("claude"))
+    raw = {"nodes": [{"id": "main", "goal": "x", "min_tier": "frontier", "deps": []}]}
+    plan = build_route_plan("t", raw, _hosts("claude"), ws.config.orchestrate)
+
+    class Crash(RuntimeError):
+        pass
+
+    def first_run(host, root, prompt, exe, *, timeout, model=""):
+        if "rebuild the index" in prompt:
+            raise Crash("orchestrator died launching the re-planned node")
+        return 1, "", "fail"
+
+    def coordinate(extra):
+        return {"nodes": [{"id": "recover", "goal": "rebuild the index",
+                           "min_tier": "frontier", "deps": []}]}
+
+    with pytest.raises(Crash):
+        run_route(ws, plan, ws.config.orchestrate, launch=first_run, coordinate=coordinate)
+    tid = L.list_tasks(ws.root)[0]
+    st = L.task_state(L.load(ws.root, tid))
+    assert [r.get("source") for r in st.task_rows][1:] == ["replan"]
+    assert "recover" in st.nodes and not st.nodes["recover"].done
+
+    rebuilt, _ = _plan_from_ledger(ws, tid, _hosts("claude"))
+    by_id = {a.node.id: a.node for a in rebuilt.assigned}
+    assert set(by_id) == {"main", "recover"}
+    assert by_id["recover"].goal == "rebuild the index"
+
+    prompts = []
+
+    def second_run(host, root, prompt, exe, *, timeout, model=""):
+        prompts.append(prompt)
+        return 0, f"{host.name} ok", "", _usage()
+
+    code, text = orchestrate(ws, "", launch=second_run, resume=tid)
+    assert code == 0, text
+    assert any("rebuild the index" in p for p in prompts)         # the added node ran
+    st = L.task_state(L.load(ws.root, tid))
+    assert st.nodes["recover"].done and st.nodes["main"].done
+
+
+def test_parallel_claims_cannot_spend_the_same_dollar(state_home, git_workspace):
+    """Two nodes of one wave claim concurrently. Each claim reserves its
+    estimate under the ledger lock, so with budget for one of them exactly
+    one launches and the other is refused at the claim, whichever thread
+    gets there first."""
+    import subprocess
+    from dataclasses import replace
+
+    (git_workspace / "a.txt").write_text("old a\n", encoding="utf-8")
+    (git_workspace / "b.txt").write_text("old b\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt", "b.txt"], cwd=git_workspace, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=git_workspace, check=True)
+    ws = make_ws(git_workspace)
+    cfg = replace(ws.config.orchestrate, isolated_worktrees=True)
+    raw = {"nodes": [
+        {"id": "a", "goal": "edit a.txt", "role": "implement", "min_tier": "economy",
+         "deps": [], "targets": ["a.txt"]},
+        {"id": "b", "goal": "edit b.txt", "role": "implement", "min_tier": "economy",
+         "deps": [], "targets": ["b.txt"]},
+        {"id": "verify", "goal": "verify both", "role": "verify", "min_tier": "economy",
+         "deps": ["a", "b"]},
+    ]}
+    plan = build_route_plan("update the two fixtures", raw, _hosts("claude", "codex"), cfg)
+    est = {a.node.id: a.est_cost_usd for a in plan.assigned}
+    # Room for either mutation on its own, never for both.
+    cfg = replace(cfg, budget_usd=est["a"] + est["b"] * 0.5)
+    launched = []
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        nid = "a" if "node 'a'" in prompt else "b"
+        launched.append(nid)
+        (root / f"{nid}.txt").write_text(f"new {nid}\n", encoding="utf-8")
+        return 0, "worker completed", "", _usage(cost=0.001)
+
+    result = run_route(ws, plan, cfg, launch=launch)
+    assert result.wave_policies[0].endswith("/parallel_worktrees")
+    by_id = {o.node_id: o for o in result.outcomes}
+    assert len(launched) == 1
+    ran, refused = launched[0], ("b" if launched[0] == "a" else "a")
+    assert by_id[ran].status == "ok"
+    assert by_id[refused].status == "failed"
+    assert by_id[refused].reason == "over_budget" and by_id[refused].attempts == 0
+    assert by_id["verify"].status == "skipped"
+    st = L.task_state(L.load(ws.root, result.task_id))
+    assert st.nodes[refused].attempts == 0                         # never claimed
+    assert st.reserved_usd == 0.0                                  # nothing left in flight
+
+
+def test_orchestrate_requires_a_task_or_resume(state_home, git_workspace, monkeypatch):
+    ws = make_ws(git_workspace)
+    monkeypatch.setattr("ctx.orchestrator.installed_harnessable", lambda **kw: _hosts("claude"))
+    code, text = orchestrate(ws, "   ", launch=_ok)
+    assert code == 1 and "--resume" in text
+
+
+def test_resumed_node_is_not_charged_for_its_own_dead_claim(state_home, git_workspace):
+    """A run that dies mid-launch leaves that node's claim open, reserving
+    its estimate. On resume the node re-claims; the stale reservation is its
+    own and must not make the budget refuse it."""
+    from dataclasses import replace
+
+    ws = make_ws(git_workspace)
+    plan = build_route_plan("tight", _RAW, _hosts("claude"), ws.config.orchestrate)
+    est = {a.node.id: a.est_cost_usd for a in plan.assigned}
+
+    class Crash(RuntimeError):
+        pass
+
+    def crashing(host, root, prompt, exe, *, timeout, model=""):
+        if "make the change" in prompt:
+            raise Crash("died launching implement")
+        return 0, f"{host.name} ok", "", _usage(cost=0.01)
+
+    with pytest.raises(Crash):
+        run_route(ws, plan, ws.config.orchestrate, launch=crashing)
+    tid = L.list_tasks(ws.root)[0]
+    st = L.task_state(L.load(ws.root, tid))
+    assert st.nodes["implement"].open_claim is not None          # the dead claim
+    assert st.reserved_usd == pytest.approx(est["implement"])
+
+    # Exactly enough for implement's estimate on top of what was spent, and
+    # nothing for verify. Counting the dead claim would refuse implement.
+    cfg = replace(ws.config.orchestrate, budget_usd=st.spent_usd + est["implement"] + 1e-6)
+    result = run_route(ws, plan, cfg, launch=_ok, task_id=tid, resume=True)
+    by_id = {o.node_id: o for o in result.outcomes}
+    assert by_id["explore"].status == "ok" and by_id["explore"].detail == "resumed from ledger"
+    assert by_id["implement"].status == "ok" and by_id["implement"].attempts == 2
+    st = L.task_state(L.load(ws.root, tid))
+    assert st.nodes["implement"].open_claim is None                # handed back this time

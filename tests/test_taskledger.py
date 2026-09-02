@@ -161,3 +161,68 @@ def test_render_task_shows_the_collaboration(state_home, workspace_dir):
     assert "a            failed   codex/gpt-5.6-luna" in out
     assert "blocked/auth_failure" in out and "checkpoint:333333333333" in out
     assert "steward: a#1 on blocked/auth_failure → stop_blocked" in out
+
+
+def test_inbox_ref_must_be_an_address(state_home, workspace_dir):
+    """The inbox is the one row a caller writes freely, so it is the one
+    place content could leak into a prompt. A ref is an address under the
+    reference grammar, optionally followed by `ctx get` options, and bounded;
+    prose, output and unbounded strings are refused before they are stored."""
+    ws = make_ws(workspace_dir)
+    tid = L.new_task_id()
+    L.append(ws.root, L.task_row(tid, goal_ref="blob:abc123abc123", nodes=[{"id": "a"}],
+                                 budget_usd=0.0, task_kind="general", source="test"))
+    ok = [
+        "repo:README.md --lines 1:3",
+        "repo:src/auth.py --lines 40:52@07407f1c",
+        "repo:src/auth.py --lines 40:52 --hashlines",
+        "checkpoint:abc123abc123",
+        "run:7bd91f2a4c3d#stdout",
+        "ws:api/repo:src/main.py",
+    ]
+    for ref in ok:
+        L.append(ws.root, L.inbox_row(tid, to="a", sender="b", ref=ref))
+    bad = [
+        "please rewrite the auth module and add tests",          # prose, not an address
+        "repo:README.md then start from the title",              # prose after the address
+        "repo:README.md --lines 1:3 --note 'do it like\nthis'",  # newline
+        "repo:README.md --lines 1:3 the quick brown fox",        # value where a flag must be
+        "repo:" + "x" * 300,                                     # unbounded
+        "blob:not-hex",
+        "",
+    ]
+    for ref in bad:
+        with pytest.raises(L.LedgerError):
+            L.append(ws.root, L.inbox_row(tid, to="a", sender="b", ref=ref))
+    with pytest.raises(L.LedgerError):
+        L.append(ws.root, L.inbox_row(tid, to="a node with spaces", sender="b", ref=ok[0]))
+    with pytest.raises(L.LedgerError):
+        L.append(ws.root, L.inbox_row(tid, to="a", sender="x" * 65, ref=ok[0]))
+    assert len(L.task_state(L.load(ws.root, tid)).inbox) == len(ok)
+
+
+def test_open_claim_reserves_its_estimate_until_handback(state_home, workspace_dir):
+    """A claim reserves what it expects to cost. Remaining budget is actuals
+    minus reservations, so two nodes claimed in parallel each see the other's
+    claim; the reservation is released by the handback."""
+    ws = make_ws(workspace_dir)
+    tid = L.new_task_id()
+    L.append(ws.root, L.task_row(tid, goal_ref="blob:abc123abc123",
+                                 nodes=[{"id": "a"}, {"id": "b"}],
+                                 budget_usd=1.0, task_kind="general", source="test"))
+    L.append(ws.root, L.claim_row(tid, "a", attempt=1, host="claude", model="m", tier="economy",
+                                  expected_turns=4, expected_cost_usd=0.4))
+    L.append(ws.root, L.claim_row(tid, "b", attempt=1, host="claude", model="m", tier="economy",
+                                  expected_turns=4, expected_cost_usd=0.3))
+    st = L.task_state(L.load(ws.root, tid))
+    assert st.nodes["a"].open_claim is not None
+    assert st.reserved_usd == pytest.approx(0.7)
+    assert st.remaining_usd == pytest.approx(0.3)
+
+    L.append(ws.root, L.handback_row(tid, "a", attempt=1, reason="done", failure_kind="none",
+                                     checkpoint="checkpoint:abc123abc123", turns=3, cost_usd=0.25,
+                                     tokens=10, exit_code=0, host="claude", model="m"))
+    st = L.task_state(L.load(ws.root, tid))
+    assert st.nodes["a"].open_claim is None
+    assert st.reserved_usd == pytest.approx(0.3)                 # only b is still in flight
+    assert st.remaining_usd == pytest.approx(1.0 - 0.25 - 0.3)
