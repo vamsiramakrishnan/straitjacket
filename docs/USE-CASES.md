@@ -45,7 +45,7 @@ A useful test digest should preserve:
 Use retrieval only for the failure you are actively diagnosing:
 
 ```bash
-ctx get run:<id>#stdout --lines 418:472
+ctx get run:8d8335db6848#stdout --lines 418:472
 ```
 
 ### Why it helps
@@ -167,7 +167,7 @@ outputs. Duplicate evidence dominates the context; the behavioral change is impl
 ### The bounded path
 
 ```bash
-ctx diff run:<before> run:<after>
+ctx diff run:8d8335db6848 run:5a67c9de0123
 ```
 
 The useful output is a delta census:
@@ -243,8 +243,8 @@ evidence preservation = tasks solved with containment / tasks solved natively
 ```
 
 A small digest with poor decisive-evidence recall is not an optimization. The target is
-high containment **at matched or better task success**, with every omission declared and
-resolvable.
+high containment **at matched or better task success**, with every omission in
+a captured digest declared and resolvable while its artifact is retained.
 
 ---
 

@@ -185,8 +185,8 @@ def fake_hosts(monkeypatch):
     import ctx.wrap as wrap_mod
 
     rec = _Recorder()
-    for name in ("wrap_setup", "wrap_codex", "wrap_antigravity", "wrap_claude",
-                 "wrap_detect"):
+    for name in ("guided_setup", "wrap_setup", "wrap_codex", "wrap_antigravity",
+                 "wrap_claude", "wrap_detect"):
         monkeypatch.setattr(wrap_mod, name, rec(name))
     return rec
 
@@ -309,8 +309,10 @@ def test_wrap_claude_without_agent_args_installs_persistently(
 
     monkeypatch.chdir(workspace_dir)
     assert cmd_wrap(wrap_ns("claude", workspace=str(workspace_dir))) == 0
-    assert [c[0] for c in fake_hosts.calls] == []  # nothing launched
-    assert "now harnessed" in capsys.readouterr().out
+    name, _, kwargs = fake_hosts.calls[-1]
+    assert name == "guided_setup"  # verified persistent path; nothing launched
+    assert kwargs == {"hosts": ["claude"]}
+    assert "now harnessed" not in capsys.readouterr().out
 
 
 # --------------------------------------- other newly-isolatable handlers

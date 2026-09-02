@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Agent-harness referee: the wrapper is the only variable.
+"""Agent-harness referee: plain Claude versus the full wrapper bundle.
 
 The tokenomics eval (`evals/tokenomics/`) drives a fixed model ladder -- a
 script that calls an API, runs a subprocess, calls an API again. That measures a
 digest formatter, because nothing in the loop can decide to run a command or
-follow an address. This harness drives a REAL agent instead, and the arms differ
-in exactly one thing:
+follow an address. This harness drives a REAL agent instead:
 
     naive :  claude -p "<task>" --max-turns N --allowedTools "..."
     sj    :  ctx wrap claude --proxy -- -p "<task>" --max-turns N ...
 
-Same model, same fixture, same prompt, same tools, same turn cap. Fixtures carry
-`ctx.toml` and git for BOTH arms so the tree shape is identical. The agent runs
-the noisy suite itself, floods itself, and retrieves itself -- which is the mode
-straitjacket is built for and the fixed ladder structurally cannot reach.
+The task prompt, fixture, requested tool list, and turn cap match. The effective
+intervention is broader than output containment: `ctx wrap` can inject guidance,
+expose ctx tools, proxy traffic, and change native-tool availability. Model
+parity is auditable only when `--model` is supplied; a null model field means
+both commands used their host default, not that the resolved model was recorded.
+Fixtures carry `ctx.toml` and git for both arms so the tree shape is identical.
 
 Arm construction follows `evals/spec3_runner.py` (the frozen referee) so numbers
 from the two harnesses stay comparable.
@@ -48,7 +49,7 @@ ARMS = ("naive", "sj", "headroom")
 
 
 def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int) -> list[str]:
-    """Build the agent command line. Only the wrapper prefix differs."""
+    """Build agent commands; the sj prefix activates the full wrapper bundle."""
     base = [
         "claude", "-p", prompt,
         "--max-turns", str(max_turns),

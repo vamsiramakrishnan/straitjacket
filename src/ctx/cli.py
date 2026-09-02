@@ -355,7 +355,7 @@ def _build_parser():
     )
     p_setup.add_argument(
         "--all", action="store_true",
-        help="configure every supported host even when its CLI is not installed",
+        help="configure all three vendor hosts even when their CLIs are not installed",
     )
     p_setup.add_argument(
         "--repair", action="store_true",
@@ -751,8 +751,7 @@ def _build_parser():
 
     p_wrap = sub.add_parser(
         "wrap",
-        help="set up / run the harness for a host (built for Antigravity, "
-        "works with Claude Code and Codex)",
+        help="set up or run the harness for a supported coding-agent host",
     )
     p_wrap.add_argument(
         "host",

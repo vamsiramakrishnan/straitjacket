@@ -4,7 +4,7 @@ The CLI is organized around four operations:
 
 1. **capture** an operation before it can flood;
 2. **query** stored evidence without replaying raw output;
-3. **resolve** an address to exact bytes or a bounded sub-digest;
+3. **resolve** an address to selected stored coordinates or a bounded sub-digest;
 4. **measure** what the harness changed in the session.
 
 The command surface is larger than four verbs because different execution shapes need
@@ -20,7 +20,7 @@ different safety contracts. The mental model can stay small.
 | Computed control flow | `ctx py <script>` | Branch, loop, aggregate; one bounded final digest |
 | Long-running work | `ctx run --bg-after N -- …` | Returns a job handle instead of idling |
 | Inspect a job | `ctx job <id>` | Bounded live tail and lifecycle control |
-| Exact evidence | `ctx get <handle>` | Address in, exact bytes or bounded zoom out |
+| Stored evidence | `ctx get <handle>` | Address in, redaction-aware region or bounded zoom out |
 | Search stored evidence | `ctx search …` | Search artifacts without re-execution |
 | Compose typed facts | `ctx q '<pipeline>'` | Total, bounded repository/evidence query algebra |
 | Answer a question | `ctx ask "…" --intent <i>` | Typed intent preset (locate/impact/diagnose) → one evidence view |
@@ -147,17 +147,19 @@ not enter the transcript; failures remain deterministic and retrievable.
 `ctx py` provides bounded capture, not OS isolation. Treat it as having the same
 execution authority as `ctx run` until the broker security boundary ships.
 
-## Retrieve exact evidence: `ctx get`
+## Retrieve bounded evidence: `ctx get`
 
 ```bash
-ctx get run:<id>#stdout --lines 120:180
-ctx get blob:<id>
-ctx get <span-id>
+ctx get run:8d8335db6848#stdout --lines 120:180
+ctx get blob:7bd91f2a4c3d
+ctx get 0f44195122
 ```
 
-Small regions return exact bytes. A region too large for the retrieval budget returns a
-bounded zoom digest with further spans. Retrieval cannot recursively re-flood the
-transcript.
+Small requests select exact stored coordinates. Model-visible bytes remain
+subject to the current redaction policy; an exact-byte request declares when
+redaction changed it. A region too large for the retrieval budget returns a
+bounded zoom digest with further spans. Retrieval cannot recursively re-flood
+the transcript.
 
 A handle is an address today. It becomes an authorization capability only in the
 broker-era design; do not present current content identifiers as a sandbox boundary.
@@ -187,8 +189,8 @@ anchored `live:` address for exactly this reason. Full mechanism:
 Use search when the evidence already exists in the store:
 
 ```bash
-ctx search 'MissingTenantError'
-ctx search 'authorization failed' --run run:<id>
+ctx search run:8d8335db6848#stdout 'MissingTenantError'
+ctx search run:8d8335db6848 'authorization failed'
 ```
 
 Searching an artifact is cheaper and more trustworthy than rerunning a command merely
@@ -273,7 +275,7 @@ ctx q 'fails last | in-changed'
 ctx q 'refs TokenBucket | group file | top 5'
 ctx q 'fails last | shared-cause | top 10'
 ctx q 'corpus --ext py --changed | outline'
-ctx q 'records run:<id>#stdout --jsonl | group level | count'
+ctx q 'records run:8d8335db6848#stdout --jsonl | group level | count'
 ctx q 'search TODO --glob "src/*.py" | histogram file'
 ```
 
@@ -290,7 +292,7 @@ intent is a bounded composition of repository and evidence facts.
 ## Compare runs: `ctx diff`
 
 ```bash
-ctx diff run:<before> run:<after>
+ctx diff run:8d8335db6848 run:5a67c9de0123
 ```
 
 The comparison should answer the verification question directly: what failures,

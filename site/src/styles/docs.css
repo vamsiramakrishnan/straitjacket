@@ -1,0 +1,110 @@
+/* straitjacket docs: quiet typography, restrained color, no ornamental UI. */
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/700.css';
+
+:root {
+  --sl-font: 'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --sl-color-accent-low: #252d3c;
+  --sl-color-accent: #9fb7e9;
+  --sl-color-accent-high: #dce6fa;
+  --sl-color-white: #edf1f7;
+  --sl-color-gray-1: #d2d8e1;
+  --sl-color-gray-2: #9aa4b2;
+  --sl-color-gray-3: #6d7887;
+  --sl-color-gray-4: #394352;
+  --sl-color-gray-5: #232b36;
+  --sl-color-gray-6: #151a22;
+  --sl-color-black: #0d1117;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e9eef8;
+  --sl-color-accent: #455f94;
+  --sl-color-accent-high: #26385d;
+  --sl-color-white: #151a22;
+  --sl-color-gray-1: #242b36;
+  --sl-color-gray-2: #515c6b;
+  --sl-color-gray-3: #758091;
+  --sl-color-gray-4: #c3cad4;
+  --sl-color-gray-5: #e1e5eb;
+  --sl-color-gray-6: #f4f6f8;
+  --sl-color-black: #ffffff;
+}
+
+h1,
+h2,
+h3,
+.site-title {
+  font-family: var(--sl-font);
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+
+.hero h1 {
+  font-size: clamp(2.75rem, 7vw, 4.75rem);
+  line-height: 1;
+}
+
+.hero .tagline {
+  max-width: 48rem;
+  font-size: clamp(1rem, 2vw, 1.15rem);
+  line-height: 1.65;
+}
+
+.sl-markdown-content {
+  line-height: 1.72;
+}
+
+.sl-markdown-content code:not(pre code) {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.25rem;
+  padding: 0.08em 0.3em;
+}
+
+.sl-markdown-content pre,
+.expressive-code .frame pre {
+  border: 1px solid var(--sl-color-gray-5) !important;
+  border-radius: 0.4rem !important;
+  box-shadow: none !important;
+}
+
+.sl-markdown-content table {
+  border: 1px solid var(--sl-color-gray-5);
+}
+
+.sl-markdown-content blockquote {
+  border-left: 3px solid var(--sl-color-accent);
+  color: var(--sl-color-gray-2);
+}
+
+.sl-link-button,
+a.action {
+  border-radius: 0.35rem !important;
+  font-weight: 600;
+  box-shadow: none !important;
+}
+
+#starlight__sidebar a {
+  border-radius: 0.25rem;
+}
+
+#starlight__sidebar a[aria-current='page'] {
+  color: var(--sl-color-accent-high);
+  font-weight: 650;
+}
+
+/* Theme-aware diagrams used by the technical reference pages. */
+.sj-light {
+  display: none !important;
+}
+
+:root[data-theme='light'] .sj-light {
+  display: block !important;
+}
+
+:root[data-theme='light'] .sj-dark {
+  display: none !important;
+}

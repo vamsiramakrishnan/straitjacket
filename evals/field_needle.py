@@ -34,13 +34,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
 QUIET_NEEDLE_LINE = 14238
 QUIET_NEEDLE_MARK = "fell back to legacy gateway after circuit opened"
 LOUD_NEEDLE_MARK = "cache eviction storm"
@@ -61,6 +65,14 @@ PONYTAIL_RULESET = """\
 5. Keep narration terse.
 (advisory: the agent is asked to comply; nothing enforces it.)
 """
+
+# Content-addressed run IDs include workspace identity. A temporary fixture
+# therefore gets a different opaque 12-hex handle on every machine, and BPE
+# tokenization of those hex digits can vary by a few tokens. Canonicalize only
+# that opaque value for the reported token count/excerpt; survival and address
+# detection still run against the real digest.
+_RUN_HANDLE = re.compile(r"run:[0-9a-f]{12}\b")
+_CANONICAL_RUN_HANDLE = "run:8956c843e556"
 
 
 def build_corpus() -> str:
@@ -200,13 +212,25 @@ def run_headroom(raw: str, count) -> dict:
 def run_sj(raw: str, count) -> dict:
     with tempfile.TemporaryDirectory() as td:
         (Path(td) / "corpus.log").write_text(raw, encoding="utf-8")
+        env = os.environ.copy()
+        source_root = str(ROOT / "src")
+        inherited = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            source_root + (os.pathsep + inherited if inherited else "")
+        )
         proc = subprocess.run(
             [sys.executable, "-m", "ctx", "run", "--shell", "cat corpus.log"],
-            cwd=td, capture_output=True, text=True, check=True,
+            cwd=td, env=env, capture_output=True, text=True, check=True,
         )
     digest = proc.stdout
     has_addr = "ctx get run:" in digest and "--lines" in digest
-    return _result("sj (ctx run logtemplate/v1)", digest, count, address=has_addr)
+    measured_digest = _RUN_HANDLE.sub(_CANONICAL_RUN_HANDLE, digest)
+    return _result(
+        "sj (ctx run logtemplate/v1)",
+        measured_digest,
+        count,
+        address=has_addr,
+    )
 
 
 ARMS = [run_naive, run_caveman, run_rtk, run_ponytail, run_maki, run_headroom, run_sj]
@@ -223,8 +247,13 @@ def main() -> int:
     results = [fn(raw, count) for fn in ARMS]
 
     record = {
-        "corpus": {"lines": TOTAL_LINES, "bytes": len(raw.encode("utf-8")),
-                   "raw_tokens_o200k": raw_tokens, "quiet_needle_line": QUIET_NEEDLE_LINE},
+        "corpus": {
+            "lines": TOTAL_LINES,
+            "bytes": len(raw.encode("utf-8")),
+            "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            "raw_tokens_o200k": raw_tokens,
+            "quiet_needle_line": QUIET_NEEDLE_LINE,
+        },
         "arms": results,
     }
     if args.json:

@@ -1,4 +1,4 @@
-# agentbench — the wrapper is the only variable
+# agentbench — plain Claude versus the wrapper bundle
 
 `evals/tokenomics/` drives a **fixed model ladder**: a script calls an API, runs
 a subprocess, calls an API again. Nothing in that loop can decide to run a
@@ -13,13 +13,16 @@ This harness removes that bottleneck by putting a **real agent** in the loop:
 # naive
 claude -p "<task>" --max-turns 40 --allowedTools "Bash Read Grep Glob Edit Write"
 
-# sj — identical, one prefix
+# sj — same task invocation, with the full ctx wrapper intervention
 ctx wrap claude --proxy -- -p "<task>" --max-turns 40 --allowedTools "..."
 ```
 
-Same model, same fixture, same prompt, same tools, same turn cap. Fixtures carry
-`ctx.toml` and git for **both** arms so the tree shape is identical. The agent
-runs the noisy suite itself, floods itself, and retrieves itself.
+The task prompt, fixture, requested tool list, and turn cap match. The effective
+tools and prompt do not: `ctx wrap` can inject guidance, expose ctx tools, proxy
+traffic, and, with the default collapse policy, disallow native `Grep` and
+`Glob`. Model parity is auditable only when `--model` is supplied; `model: null`
+means the host default was used but not recorded. Fixtures carry `ctx.toml` and
+git for both arms so the tree shape is identical.
 
 Arm construction follows `evals/spec3_runner.py` (the frozen referee) so numbers
 from the two harnesses stay comparable. A `headroom` arm is wired for contrast.
@@ -184,10 +187,10 @@ one of those dollars noise.
 
 ## Status
 
-Validated to the session boundary: arm construction is asserted to differ only
-by the wrapper prefix, the canary referee passes 12/12, the SWE-bench adapter
-loads real instances with real test lists, and `report.py` renders and refuses
-simulated payloads. **Live agent runs have not been executed** — this
-environment has no usable docker and no agent credential to spend. Everything
-above the session call is proved; the session call itself needs a box with
-`claude` credentials and, for SWE-bench, docker.
+The model-free canary referee passes 12/12, the SWE-bench adapter loads real
+instances with real test lists, and `report.py` refuses simulated payloads.
+Two live, one-repeat receipts are committed: the three-task canary and the
+one-task dogfood mission. Both compare plain Claude with the full wrapper
+bundle, and both used an unrecorded host-default model; they are diagnostics,
+not a broad benchmark or a containment-only ablation. A paid SWE-bench sweep
+has not been run and still needs a machine with Claude credentials and Docker.

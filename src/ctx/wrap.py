@@ -415,15 +415,14 @@ def wrap_agy_sdk(workspace_root: Path, ctx_exe: str | None = None) -> int:
 def wrap_codex(workspace_root: Path, ctx_exe: str | None = None) -> int:
     """Persistent install: Codex discovers .codex/ config layers + AGENTS.md
     from the workspace tree."""
-    from ctx.installer import install_codex
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(str(workspace_root))
-    print(install_codex(ws))
-    print()
-    print("Codex sessions in this workspace are now harnessed "
-          "(MCP retrieval tool + PreToolUse/PostToolUse containment hooks).")
-    return 0
+    # Use the same preflight + installer + doctor path as `ctx setup`.  The
+    # old direct path printed "now harnessed" even when a user-owned TOML was
+    # left incomplete, then returned success.  guided_setup names the reviewed
+    # edit, verifies the result, and propagates a non-zero status.
+    return guided_setup(ws, hosts=["codex"])
 
 
 def _fmt_price(dollars_per_mtok: float) -> str:
@@ -659,8 +658,9 @@ def guided_setup(
         for d in optional:
             print(f"      ctx wrap {d.name}   headless Gemini agent, ctx builds its venv (~40s)")
     print()
-    print("  undo: the per-host lines above name every file written; removing the")
-    print("        ctx entries from them fully uninstalls. Nothing else was touched.")
+    print("  undo: remove only the ctx-owned entries and blocks named above; see")
+    print("        Troubleshooting for status-line and ownership checks. Captured")
+    print("        artifacts and the content-free setup receipt may remain.")
     record_setup(
         ws.root,
         target,

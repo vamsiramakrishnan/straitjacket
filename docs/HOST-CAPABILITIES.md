@@ -1,6 +1,8 @@
 # Host capabilities — what each agent can actually enforce
 
-**Status:** current behaviour · **Normative source:**
+**Status:** current implementation and published host contracts. Claude Code
+and Antigravity have live receipts; the Codex gates are contract-tested but
+still await a live CLI run. **Antigravity contract source:**
 [`spec/adr/005-antigravity-hook-contract.md`](../spec/adr/005-antigravity-hook-contract.md)
 
 > **New here?** `ctx` is straitjacket's command — the project is straitjacket,
@@ -17,12 +19,10 @@ and what to do where the guarantee is weaker.
 
 Containment happens at two points:
 
-- **The birth gate** (`PreToolUse`) fires *before* a command runs. It is the
-  primary mechanism: a flooding command is contained at source, so the unbounded
-  output never enters the transcript. (It is still captured *in full* to the
-  local artifact store — containment is about your context window, not about
-  discarding data. See [Capture happens even where substitution
-  cannot](#capture-happens-even-where-substitution-cannot).)
+- **The birth gate** (`PreToolUse`) fires *before* a command runs. On a
+  rewrite-capable host, the command is routed through `ctx run` and captured in
+  full. On Antigravity's deny-only path, the command does not run and nothing is
+  captured until the agent explicitly reissues the bounded command.
 - **The output gate** (`PostToolUse`) fires *after* a tool returns. It is the
   safety net: if something slipped past the birth gate, an oversized result is
   replaced by a bounded digest before the model sees it.
@@ -35,20 +35,14 @@ tool's arguments*; the output gate needs a way to *replace a tool's result*.
 | host | birth gate | output gate | how |
 |---|---|---|---|
 | **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `updatedToolOutput` |
-| **codex** (Codex CLI) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `decision:block` |
+| **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
 | **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
 | **antigravity-sdk** (ctx's own agent) | ✅ bounded inside the tool | ✅ bounded inside the tool | see below |
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-host-lanes-mobile.svg">
-  <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-host-lanes-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-host-lanes.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-host-lanes-light.svg" width="100%" alt="Host enforcement lanes. Claude Code and Codex rewrite noisy commands and replace oversized output. Antigravity denies known command floods and the agent must re-issue ctx run on the next turn; connector output can only be persisted and observed. The ctx-owned Antigravity SDK uses bounded tools by construction.">
-</picture>
-
-On Claude Code and Codex, containment is invisible: you type `pytest -q`, the
-hook silently substitutes `ctx run -- pytest -q`, and the agent never sees a
-refusal.
+On Claude Code, containment is invisible: you type `pytest -q`, the hook
+silently substitutes `ctx run -- pytest -q`, and the agent never sees a refusal.
+The Codex implementation targets the same experience; call it live only after a
+version-pinned Codex run records both gates.
 
 ## Why Antigravity is different
 
@@ -105,11 +99,12 @@ advisory rides `PreInvocation` instead, as an `injectSteps` *ephemeral* message 
 ephemeral because `PreInvocation` fires before every model call, so a persistent
 message would re-accumulate context on each one.
 
-## Capture happens even where substitution cannot
+## After-the-fact persistence is not containment
 
-An important distinction: **the output gate not being able to substitute does not
-mean nothing happens.** On every host, an over-budget result is still persisted
-to the artifact store and keeps a retrieval address. On Antigravity the raw bytes
+An important distinction: Antigravity's birth-gate denial executes nothing and
+captures nothing. Once the agent reissues the named `ctx run`, capture happens
+normally. If an over-budget result instead reaches Antigravity's post-tool hook,
+straitjacket can persist it but cannot replace what the model sees. The raw bytes
 reach the transcript *and* the store, so afterwards you can still do:
 
 ```bash
@@ -176,8 +171,9 @@ ctx wrap detect     # which hosts are installed, and their models/prices
 ctx doctor          # is the harness actually wired up here
 ```
 
-`ctx setup` verifies itself with these same checks and tells you if one
-fails.
+`ctx setup` runs these configuration checks and tells you if one fails. A green
+configuration check is not a substitute for the still-pending live Codex hook
+receipt.
 
 ## Where the truth lives
 

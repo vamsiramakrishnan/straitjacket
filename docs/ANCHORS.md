@@ -95,7 +95,7 @@ happened is always visible.
   <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift-mobile.svg">
   <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift-light.svg" width="100%" alt="A content-anchored repository address recorded at lines 40 to 52 follows the same content to lines 46 to 58 after six lines are inserted above it. Across 1,920 measured cases, one address verified in place, 1,454 relocated, 465 refused, and none returned wrong content.">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-anchor-drift-light.svg" width="100%" alt="A content-anchored repository address recorded at lines 40 to 52 follows the same content to lines 46 to 58 after six lines are inserted above it. Across 1,920 measured cases, two addresses verified in place, 1,452 relocated, 466 refused, and none returned wrong content.">
 </picture>
 
 ### Verified — the content is still there
@@ -118,7 +118,7 @@ L7:     return 2
 The caller asked for *content*, and the content is what comes back — along with
 the move, and a **corrected address** to carry into the next turn. This is the
 half that makes an anchor a working identifier rather than a tripwire: in the
-receipt, following moved content accounts for **1,454 of 1,455 correct answers**.
+receipt, following moved content accounts for **1,452 of 1,454 correct answers**.
 An address that merely detected staleness would have been right once.
 
 ### Lost — the content is gone
@@ -168,7 +168,7 @@ It is still not minted everywhere, and the choice is deliberate:
 | `ctx get` continuations (`next:`) | yes | a chain that sheds its anchor at the first budget cut silently stops being verifiable |
 | `ctx def` | yes | the verb that runs *immediately before* an edit — the navigate-to-edit handoff |
 | `ctx refs`, `ctx diag` | no | one anchor per row, on addresses that mostly get navigated rather than edited |
-| `run:`, `blob:`, `snapshot:` | no | the bytes cannot move; the ref kind already gives the guarantee for free |
+| `run:`, `blob:`, `snapshot:` | no | stored bytes cannot move while retained; the ref kind already carries content identity |
 
 `ctx def` now emits **two** addresses, labelled, because they answer different
 questions and confusing them was its own quiet bug:
@@ -178,8 +178,8 @@ span: b34a0fcd32 (region L4:5) · as captured: ctx get repo:m.py --span b34a0fcd
 live: ctx get repo:m.py --lines 4:5@07407f1c
 ```
 
-The span resolves against the snapshot that call froze, so it answers *"what did
-I read"* forever. The anchored range resolves against the worktree, so it answers
+The span resolves against the snapshot that call froze, so while retained it
+answers *"what did I read"*. The anchored range resolves against the worktree, so it answers
 *"what is there now"* and follows the definition if an edit moves it. The span
 alone used to be offered for both, which returned the pre-edit body to a reader
 asking about current code.
