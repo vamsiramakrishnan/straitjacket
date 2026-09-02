@@ -30,6 +30,13 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 8. Never re-run a command merely to recover output already stored under a handle.
 9. Never inspect the CTX backing-store path directly and never paste a complete blob into the conversation.
 10. Prefer one multi-pattern search over serial single-pattern searches.
+10b. When you are one node of an orchestrated task (your prompt says so and
+    names the task id), check your inbox first — the addresses in "Messages
+    addressed to you" are what other nodes handed you; resolve them with
+    `ctx get`. Hand things forward the same way: `ctx task send <task> <node>
+    <address> --note "<why>"` — an address, never pasted content. Your own
+    output becomes a `checkpoint:` your dependents read; you do not need to
+    repeat it.
 11. Cite evidence by handle and coordinate (`run:<id>#stdout L14238`), never
     by re-quoting it: quoted evidence duplicates context and burns output
     tokens, while the citation resolves exactly for any reader.

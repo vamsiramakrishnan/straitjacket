@@ -65,6 +65,7 @@ The design documents answer narrower questions:
 | [Ask](ASK.md) | How do typed intents compile into bounded investigation plans? |
 | [Evidence plans](EVIDENCE-PLANS.md) | How does a multi-step investigation run in one bounded local pass? |
 | [Routing](ROUTING.md) | How is work allocated across hosts and models? |
+| [Task ledger](TASK-LEDGER.md) | How do several harnesses collaborate on one task, and how does a run survive its orchestrator? |
 | [Replacement surface](REPLACEMENT-SURFACE.md) | Which native host operations can be collapsed safely? |
 | [Capability surface](CAPABILITY-SURFACE.md) | How is the input capability surface measured and constrained? |
 

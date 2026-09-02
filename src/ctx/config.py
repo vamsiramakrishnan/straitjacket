@@ -125,6 +125,15 @@ class OrchestratePolicy:
     # A per-node strict_output_schema remains authoritative; this setting makes
     # every declared output_schema fail closed without changing untyped nodes.
     strict_worker_yields: bool = False
+    # Task-ledger steward bounds (docs/TASK-LEDGER.md). ``max_attempts`` is
+    # how many times one node may be claimed before the steward stops trying
+    # (2 preserves the historical "escalate once" shape). ``expected_turns``
+    # is the per-node claim the steward compares actual turns against; going
+    # past it is the over-turns feedback signal. ``turn_ceiling`` > 0 also
+    # HARD-bounds Claude nodes at launch via --max-turns; 0 observes only.
+    max_attempts: int = 2
+    expected_turns: int = 12
+    turn_ceiling: int = 0
     # Complexity-adaptive implementation tier for the deterministic fallback:
     # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
     # simple edits. A live coordinator overrides this per task.

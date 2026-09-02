@@ -389,3 +389,15 @@ def test_cmd_checkpoint_requires_a_goal(workspace_dir, state_home, capsys):
     ws = resolve_workspace(str(workspace_dir))
     assert cmd_checkpoint(ws, Namespace(show=None, goal=None)) == 2
     assert "--goal is required" in capsys.readouterr().err
+
+
+def test_orchestrate_resume_needs_no_task_positional():
+    """`ctx orchestrate --resume <task>` is the documented replay invocation;
+    the task positional is optional so it parses without a dummy task."""
+    from ctx.cli import _build_parser
+
+    parser = _build_parser()
+    ns = parser.parse_args(["orchestrate", "--resume", "task-000000000000"])
+    assert ns.task == "" and ns.resume == "task-000000000000"
+    ns = parser.parse_args(["orchestrate", "do the thing"])
+    assert ns.task == "do the thing" and ns.resume is None

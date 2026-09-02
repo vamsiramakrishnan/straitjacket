@@ -6,6 +6,50 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-09-02
+
+Orchestrated harnesses now collaborate over a task ledger, and a run survives
+its orchestrator. `ctx orchestrate` writes a per-task, append-only ledger of
+six closed-vocabulary rows — task, claim, handback, steward, verdict, inbox —
+under `.ctx-session-reads/tasks/`. Every launch is claimed (host, model,
+expected turns and cost) and handed back with a typed reason and failure kind,
+its checkpoint, turns and actual cost. A handback other than `done` goes to a
+deterministic steward: it classifies why the host stopped, offers the recovery
+policy only the actions that exist for that node (a stronger installed model,
+a coordinator with re-plans left, another attempt), and appends its decision
+before acting. The policy is the AlphaEvolve `choose_recovery` seed, evolved
+for lever `recovery-escalation` and never wired in, promoted verbatim as
+`ctx.recovery_policy`; it replaces the fixed escalate-one-tier-once rule.
+A one-shot host's own `permission auto-denied` / read-only-workspace
+execution failure stays escalatable, as the acceptance suite always required;
+a login failure now stops instead of buying a stronger model, and a stop
+chosen because nothing applicable existed is labelled `stop_blocked`, never
+`stop_budget`. Budget is checked against ledger actuals, never below the
+estimate where an attempt went unpriced, and a claim whose estimate exceeds
+what remains is refused before launch; a claim reserves its estimate until
+its handback and the check-and-claim is one step under the ledger lock, so
+two nodes of one wave cannot both pass against the same balance. Hosts' turn counts are parsed (Claude
+`num_turns`, Codex `turn.completed`) and summarized; a node past
+`[orchestrate] expected_turns` hands back `over_turns` as a complexity
+signal, and `turn_ceiling` > 0 hard-bounds Claude nodes with `--max-turns`.
+`ctx orchestrate --resume <task>` (no task argument needed) rebuilds the plan
+from the ledger, restores nodes with a `done` handback without re-running
+them, and re-runs nodes that were claimed but never handed back; nodes a
+coordinator re-plan added are on the ledger as a further task row, so they
+are restored too. `ctx task ls|show|inbox|send` and the MCP
+ops `task`/`inbox`/`send` read the ledger and hand a node an address — never
+content — which reaches it in its prompt. Ledger rows carry no task text or
+output: the goal is a `blob:` address, output a `checkpoint:` address, the
+inbox ref must parse as an address (with `ctx get` options at most) and is
+bounded, and the inbox note is the one sanitized free-text field. Model-free receipt
+over injected hosts: resume saved 6 of 16 launches a naive restart makes with
+no node run twice; typed recovery spent 43% less than the fixed rule across
+seven failure shapes; the claim check held spend inside a budget the estimate
+had said was fine. The skill body now tells a node how to read its inbox and
+hand addresses forward, and the MCP tool description glosses the three new
+ops; both are injected prefix assets, so this intentional change bumps
+`PREFIX_VERSION` to 11 and cold-invalidates every user's prompt cache once.
+
 ## [0.35.1] - 2026-08-21
 
 The AlphaEvolve evidence is now presented as one receipt-backed benefit ledger
