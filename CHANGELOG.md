@@ -6,6 +6,15 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+`ctx.taskledger.append()` now holds one OS-level lock (`fcntl.flock`, the
+same idiom already used by `ctx.engagement`'s state file and `ctx.hook`'s
+read ledger) across its tail-check and write, closing a gap where two
+separate OS processes — not just threads inside one orchestrator — could
+race on the same task's ledger file. `ctx.orchestrator`'s own
+`threading.Lock` only ever protected concurrent launches within one
+`ctx orchestrate` run; a second orchestrator process, or a direct
+`ctx task send`, held no lock at all.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives
