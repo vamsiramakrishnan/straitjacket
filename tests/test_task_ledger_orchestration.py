@@ -16,6 +16,7 @@ from conftest import make_store, make_ws
 from ctx import hosts
 from ctx import taskledger as L
 from ctx.orchestrator import (
+    PREWALK_SENTINEL,
     _launch_host,
     _plan_from_ledger,
     build_route_plan,
@@ -403,3 +404,147 @@ def test_resumed_node_is_not_charged_for_its_own_dead_claim(state_home, git_work
     assert by_id["implement"].status == "ok" and by_id["implement"].attempts == 2
     st = L.task_state(L.load(ws.root, tid))
     assert st.nodes["implement"].open_claim is None                # handed back this time
+
+
+# ------------------------------------------------------------------ prewalk
+
+_PREWALK_RAW = {"nodes": [
+    {"id": "build", "goal": "add the feature", "role": "implement",
+     "min_tier": "frontier", "deps": []},
+    {"id": "verify", "goal": "prove it", "role": "verify",
+     "min_tier": "economy", "deps": ["build"]},
+]}
+
+
+def test_prewalk_hands_off_a_frontier_mutation_node_to_a_cheaper_model(
+    state_home, git_workspace
+):
+    """A frontier model on a mutation node plans, edits once, and signals;
+    the SAME node's next attempt runs on the cheapest installed model below
+    frontier, inheriting the plan and the first edit -- never re-exploring."""
+    from dataclasses import replace
+
+    ws = make_ws(git_workspace)
+    cfg = replace(ws.config.orchestrate, prewalk=True)
+    plan = build_route_plan("ship it", _PREWALK_RAW, _hosts("claude"), cfg)
+    assigned = plan.assigned[0]
+    assert assigned.model.tier == "frontier"   # sanity: prewalk's target shape
+
+    prompts = []
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        prompts.append(prompt)
+        if "node \'build\'" in prompt and model == assigned.model.launch_id:
+            return (
+                0,
+                f"Plan:\n1. do X\n2. do Y\n(edited foo.py)\n{PREWALK_SENTINEL}",
+                "", _usage(cost=0.30, turns=6),
+            )
+        return 0, "done", "", _usage(cost=0.02, turns=3)
+
+    result = run_route(ws, plan, cfg, launch=launch)
+    by_id = {o.node_id: o for o in result.outcomes}
+    outcome = by_id["build"]
+    assert outcome.status == "ok" and outcome.attempts == 2
+    assert outcome.reason == "done" and outcome.failure_kind == "none"
+    assert outcome.escalated_to and outcome.escalated_to != f"{assigned.host.name}/{assigned.model.id}"
+    assert by_id["verify"].status == "ok"
+
+    build_prompts = [p for p in prompts if "node \'build\'" in p]
+    assert len(build_prompts) == 2
+    assert "Prewalk:" in build_prompts[0]                 # attempt 1 was asked to hand off
+    assert "Prewalk:" not in build_prompts[1]              # attempt 2 is not asked to hand off again
+    assert "do X" in build_prompts[1] and "do Y" in build_prompts[1]   # the plan carried forward
+    assert "Continue directly from there" in build_prompts[1]
+
+    rows = L.load(ws.root, result.task_id)
+    handbacks = [r for r in rows if r["schema"] == L.HANDBACK_SCHEMA and r["node_id"] == "build"]
+    assert [h["reason"] for h in handbacks] == ["prewalk_handoff", "done"]
+    assert handbacks[0]["exit_code"] == 0 and handbacks[0]["failure_kind"] == "none"
+    steward = [r for r in rows if r["schema"] == L.STEWARD_SCHEMA]
+    assert [s["action"] for s in steward] == ["handoff_cheap"]
+    assert steward[0]["target"] != f"{assigned.host.name}/{assigned.model.id}"
+
+    st = L.task_state(rows)
+    assert st.nodes["build"].attempts == 2 and st.nodes["build"].done
+    assert st.nodes["build"].cost_usd == pytest.approx(0.32) and st.cost_complete
+
+
+def test_prewalk_is_opt_in_and_does_nothing_when_disabled(state_home, git_workspace):
+    ws = make_ws(git_workspace)
+    cfg = ws.config.orchestrate
+    assert cfg.prewalk is False
+    plan = build_route_plan("ship it", _PREWALK_RAW, _hosts("claude"), cfg)
+
+    launches = {"n": 0}
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        launches["n"] += 1
+        return 0, f"just finished it\n{PREWALK_SENTINEL}", "", _usage()
+
+    result = run_route(ws, plan, cfg, launch=launch)
+    # The sentinel is ignored entirely when prewalk is off: one attempt each
+    # (build, verify) -- the model's own text cannot trigger a mechanism the
+    # config never turned on.
+    assert launches["n"] == 2
+    by_id = {o.node_id: o for o in result.outcomes}
+    assert by_id["build"].status == "ok" and by_id["build"].attempts == 1
+    assert by_id["build"].reason == "done"
+
+
+def test_prewalk_ignores_a_non_mutation_node(state_home, git_workspace):
+    from dataclasses import replace
+
+    ws = make_ws(git_workspace)
+    cfg = replace(ws.config.orchestrate, prewalk=True)
+    raw = {"nodes": [{"id": "review", "goal": "review the design", "role": "review",
+                      "min_tier": "frontier", "deps": []}]}
+    plan = build_route_plan("t", raw, _hosts("claude"), cfg)
+
+    launches = {"n": 0}
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        launches["n"] += 1
+        return 0, f"reviewed\n{PREWALK_SENTINEL}", "", _usage()
+
+    result = run_route(ws, plan, cfg, launch=launch)
+    assert launches["n"] == 1   # a review node is never mutation-shaped, prewalk never arms
+    assert result.outcomes[0].status == "ok" and result.outcomes[0].reason == "done"
+
+
+def test_prewalk_keeps_the_isolated_worktree_edit_instead_of_resetting_it(
+    state_home, git_workspace
+):
+    """The edit already landed on disk before the handoff -- unlike a failed
+    attempt's retry, that work must survive into the continuation attempt."""
+    import subprocess
+    from dataclasses import replace
+
+    (git_workspace / "foo.py").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "foo.py"], cwd=git_workspace, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=git_workspace, check=True)
+    ws = make_ws(git_workspace)
+    cfg = replace(ws.config.orchestrate, prewalk=True, isolated_worktrees=True)
+    raw = {"nodes": [
+        {"id": "build", "goal": "add the feature", "role": "implement",
+         "min_tier": "frontier", "deps": [], "targets": ["foo.py"]},
+        {"id": "verify", "goal": "prove it", "role": "verify",
+         "min_tier": "economy", "deps": ["build"]},
+    ]}
+    plan = build_route_plan("ship it", raw, _hosts("claude"), cfg)
+    assigned = plan.assigned[0]
+    seen_on_continuation = {}
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        if "node \'build\'" in prompt and model == assigned.model.launch_id:
+            (root / "foo.py").write_text("new\n", encoding="utf-8")
+            return 0, f"planned it\n{PREWALK_SENTINEL}", "", _usage(cost=0.3)
+        if "node \'build\'" in prompt:
+            seen_on_continuation["foo.py"] = (root / "foo.py").read_text(encoding="utf-8")
+        return 0, "done", "", _usage(cost=0.02)
+
+    result = run_route(ws, plan, cfg, launch=launch)
+    by_id = {o.node_id: o for o in result.outcomes}
+    assert by_id["build"].status == "ok"
+    assert seen_on_continuation["foo.py"] == "new\n"   # not reset back to "old"
+    assert (git_workspace / "foo.py").read_text(encoding="utf-8") == "new\n"

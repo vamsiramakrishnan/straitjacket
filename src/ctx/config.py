@@ -134,6 +134,13 @@ class OrchestratePolicy:
     max_attempts: int = 2
     expected_turns: int = 12
     turn_ceiling: int = 0
+    # Opt-in: a frontier model assigned to a mutation node is asked to plan,
+    # make one validated edit, then hand off; on that signal the SAME node's
+    # next attempt runs on the cheapest installed model below frontier,
+    # carrying the plan and the first edit forward (docs/PREWALK.md). A
+    # model that ignores the instruction just finishes the task itself --
+    # this never costs more than not having it.
+    prewalk: bool = False
     # Complexity-adaptive implementation tier for the deterministic fallback:
     # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
     # simple edits. A live coordinator overrides this per task.

@@ -83,15 +83,19 @@ A coordinator re-plan that adds nodes appends a second `ctx.task/v1` row
 task row and the added nodes are as much a part of the route as the originals.
 
 `reason` is one of `done · failed · blocked · over_budget · over_turns ·
-low_confidence`. `failure_kind` is the vocabulary the recovery policy was
-evolved against: `auth_failure · safety_denied · permission_denied ·
-rate_limited · transient_transport · capability_limit · incomplete_contract ·
-repeated_incomplete · verification_failure · missing_evidence ·
-context_omission · unknown`, plus `none`.
+low_confidence · prewalk_handoff`. `failure_kind` is the vocabulary the
+recovery policy was evolved against: `auth_failure · safety_denied ·
+permission_denied · rate_limited · transient_transport · capability_limit ·
+incomplete_contract · repeated_incomplete · verification_failure ·
+missing_evidence · context_omission · unknown`, plus `none`.
 
 A handback is the row that turns collaboration into a loop. A node used to have
-two exits; it now has six, and each is a typed input to a policy rather than a
-crash to route around.
+two exits; it now has seven, and each is a typed input to a policy rather than
+a crash to route around. `prewalk_handoff` is the one exit that is not a
+failure at all — a frontier model succeeded at a narrower goal (plan, then one
+edit) by design and handed off on purpose; the steward routes it to its own
+`handoff_cheap` action rather than the failure-recovery policy
+([Prewalk](PREWALK.md)).
 
 ## The lifecycle of one node
 

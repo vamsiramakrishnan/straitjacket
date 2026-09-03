@@ -73,6 +73,10 @@ SCHEMAS = (
 #: can branch on them without string-matching prose.
 HANDBACK_REASONS = (
     "done", "failed", "blocked", "over_budget", "over_turns", "low_confidence",
+    # A deliberate, successful stop: a frontier model planned, made one
+    # validated edit, and handed off by design -- not a failure needing
+    # recovery. See ctx.steward.de_escalation_target and docs/PREWALK.md.
+    "prewalk_handoff",
 )
 
 #: The typed failure vocabulary the promoted recovery policy was evolved
@@ -90,7 +94,10 @@ FAILURE_KINDS = (
 
 #: What the steward can decide. Mirrors the recovery policy's action ids; the
 #: steward offers only the subset that exists for the node in front of it.
-STEWARD_ACTIONS = ("retry_same", "escalate", "replan", "stop_blocked", "stop_budget")
+STEWARD_ACTIONS = (
+    "retry_same", "escalate", "replan", "stop_blocked", "stop_budget",
+    "handoff_cheap",  # prewalk's de-escalation: the mirror of "escalate"
+)
 
 #: Bound on the one free-text field. Long enough to say what an address is
 #: for, short enough that a note cannot become a transcript.

@@ -149,6 +149,25 @@ def classify_failure(
     )
 
 
+def de_escalation_target(cur_model, hosts):
+    """The cheapest (host, model) strictly less capable than ``cur_model``,
+    across every installed unattended harness -- the mirror of
+    :func:`escalation_target`, for prewalk's success-driven handoff to a
+    cheaper model rather than a failure-driven escalation to a stronger one.
+    ``None`` when nothing cheaper is installed."""
+    unattended = [h for h in hosts if h.spec.unattended]
+    cheaper = [
+        (h, m) for h in unattended if h.installed for m in h.models
+        if tier_rank(m.tier) < tier_rank(cur_model.tier)
+    ]
+    if not cheaper:
+        return None
+    return sorted(
+        cheaper,
+        key=lambda hm: (tier_rank(hm[1].tier), hm[0].model_price(hm[1].id).output, hm[0].name),
+    )[0]
+
+
 def escalation_target(cur_model, hosts):
     """The cheapest (host, model) strictly more capable than ``cur_model``,
     across every installed unattended harness. ``None`` when nothing stronger
@@ -264,4 +283,5 @@ def decide(
 
 __all__ = [
     "Classification", "Decision", "classify_failure", "decide", "escalation_target",
+    "de_escalation_target",
 ]

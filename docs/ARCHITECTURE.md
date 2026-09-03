@@ -38,6 +38,7 @@ inherits that plane's invariants, and ships with a test.
 | change how a `repo:` line address stays valid across edits | `src/ctx/anchors.py` |
 | measure whether the host's own edits are landing | `src/ctx/edit_outcomes.py` |
 | change what happens when a node does not finish | `src/ctx/steward.py` (classifier + menu) · `src/ctx/recovery_policy.py` (the choice) |
+| change prewalk (frontier → cheap handoff after one edit) | `src/ctx/orchestrator.py` (`run_one`'s prewalk branch, `PREWALK_SENTINEL`) · `src/ctx/steward.py` (`de_escalation_target`) |
 | change what harnesses record about a collaboration, or resume one | `src/ctx/taskledger.py` · `src/ctx/orchestrator.py:run_route` |
 | change the artifact store | `src/ctx/store.py` |
 | change path confinement or secret redaction | `src/ctx/workspace.py` / `src/ctx/textutil.py` |
@@ -116,6 +117,7 @@ This is the plane most contributions touch. The flow is
 | `plan_ir.py`, `plan_ops.py`, `plan_exec.py` | The compiled evidence-plan IR (a total, bounded DAG), its logical operators, and the executor + `investigate/v1` digest. |
 | `ask.py` | `ctx ask` — intents as typed plan presets (the seven intents). |
 | `edit_outcomes.py` | What happened to the host's own Edit/Write: a closed-vocabulary classifier over the tool result and a privacy-safe rate ledger. Observation only. |
+| `edit_transactions.py`, `commands/edit.py` | `ctx edit plan\|preview\|apply`: a sealed, anchor-verified edit transaction (compare-and-swap on content, not fuzzy patching) — CLI-only by the same invariant that keeps `ctx run` the one path to filesystem mutation. |
 | `anchors.py` | Content anchors and line tags: the verify → relocate → refuse ladder that keeps a `repo:` line address meaningful after an edit. Pure and total ([ANCHORS.md](ANCHORS.md)). |
 | `retrieval.py`, `_retrieval/` | Bounded `ctx search` / `get` / `stats` / spans: deterministic, budget-capped, provenance-bearing (SPEC §6.3–6.5). |
 | `refs.py` | The reference/handle grammar (`run:…#stdout`, spans) (SPEC §6.1). |
@@ -138,6 +140,7 @@ This is the plane most contributions touch. The flow is
 | `taskledger.py` | The task ledger: six closed-vocabulary row types, append/load/fold, the inbox. The bus harnesses collaborate over ([TASK-LEDGER.md](TASK-LEDGER.md)). |
 | `steward.py` | Typed failure classification and the action menu for the recovery policy; every decision is a ledger row before it is acted on. |
 | `recovery_policy.py` | The promoted AlphaEvolve `choose_recovery` seam: retry / escalate / re-plan / honest stop, by failure kind and remaining budget. |
+| `orchestrator.py`'s prewalk branch, `steward.py`'s `de_escalation_target` | Prewalk: a frontier model plans and makes one edit, then hands the same node off to the cheapest cheaper model installed ([PREWALK.md](PREWALK.md)). |
 
 ## The native hook
 

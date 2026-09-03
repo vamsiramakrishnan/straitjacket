@@ -27,6 +27,7 @@ Scan this first; the sections below explain each term in depth.
 | **Task ledger** | The append-only, per-task record harnesses collaborate over: claims, handbacks, steward decisions, verdicts, inbox addresses. Harnesses never address each other; they read and append here, and a killed run resumes from it. |
 | **Handback** | A node's typed exit — `done`, `failed`, `blocked`, `over_budget`, `over_turns`, `low_confidence` — with a failure kind, its checkpoint, turns and cost. |
 | **Steward** | The deterministic reader of handbacks: classifies why a node stopped, offers the recovery policy only the actions that exist, and records its decision before acting. Not a model. |
+| **Prewalk** | Opt-in: a frontier model on a mutation node plans, makes one validated edit, then hands the same node off to the cheapest cheaper model installed — a success, not a failure, so it bypasses the steward's recovery policy for its own deterministic `handoff_cheap` decision ([PREWALK.md](PREWALK.md)). |
 | **Determinism** | Same evidence + same contract + same plan → byte-identical digest, so caches stay warm and diffs are real signal. |
 
 ## The central distinction: evidence versus context

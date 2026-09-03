@@ -1198,11 +1198,22 @@ def _checkpoint_node(
         return None
 
 
+#: A ctx-controlled literal a prewalk attempt prints to signal a deliberate
+#: stop after its first edit. Model output, not user input, so it is safe to
+#: match literally; requiring it (rather than inferring intent from prose)
+#: is what keeps the detection immune to a model's own wording ("the task
+#: is not complete yet") that would otherwise read as a failure.
+PREWALK_SENTINEL = "CTX_PREWALK_HANDOFF"
+
+
 def _node_prompt(
     node: RouteNode,
     task: str,
     dep_docs: list[str],
     inbox: list[dict] | None = None,
+    *,
+    continuation_doc: str = "",
+    prewalk_hint: bool = False,
 ) -> str:
     p = (
         f"You are node '{node.id}' ({node.role}) of a multi-harness collaboration "
@@ -1230,6 +1241,22 @@ def _node_prompt(
             f"  from {m.get('from')}: {m.get('ref')}"
             + (f" — {m['note']}" if m.get("note") else "")
             for m in inbox
+        )
+    if continuation_doc:
+        p += (
+            "\n\nA prior attempt on this same subtask (a stronger model) already "
+            "explored the codebase, planned the work, and made one validated "
+            "edit toward it. Continue directly from there — do not re-explore "
+            "or redo that first edit. Its record:\n" + continuation_doc
+        )
+    if prewalk_hint:
+        p += (
+            "\n\nPrewalk: plan deeply first. State your plan as a numbered "
+            "todo list in your reply, then make exactly one edit that begins "
+            "executing it. The moment that edit is applied and confirmed, "
+            f"print the line '{PREWALK_SENTINEL}' by itself and end your turn "
+            "— do not continue past that first edit. A cheaper model will "
+            "pick up your plan and that edit from here."
         )
     return p
 
@@ -1522,8 +1549,16 @@ def run_route(
         dep_docs = [docs[d] for d in a.node.deps if d in docs]
         st = _ledger_state()
         inbox = _ledger.inbox_for(st, a.node.id)
-        prompt = _node_prompt(a.node, plan.task, dep_docs, inbox)
         host, model = a.host, a.model
+        # Opt-in (cfg.prewalk): a frontier model on a mutation node is asked
+        # to plan, make one edit, then hand off -- never offered to a node
+        # already routed cheap, since there is nothing to save by handing off
+        # from economy to economy.
+        prewalk_enabled = (
+            bool(getattr(cfg, "prewalk", False))
+            and _is_mutation_node(a.node) and model.tier == "frontier"
+        )
+        prompt = _node_prompt(a.node, plan.task, dep_docs, inbox, prewalk_hint=prewalk_enabled)
         node_usage: list[ActualUsage | None] = []
         use_isolation = a.node.id in isolated_node_ids
         checkout = IsolatedWorktree(Path(ws.root), a.node.id, a.node.targets) if use_isolation else None
@@ -1587,6 +1622,16 @@ def run_route(
                         ))
                     code, out, err, usage = _launch_result(_do_launch(host, work_root, prompt, model))
                     node_usage.append(usage)
+                    # The sentinel is checked against the raw exit code, before
+                    # any contract-failure bookkeeping below can mutate it, and
+                    # wins over whatever classify_failure concludes: a model
+                    # explaining *why* it is stopping ("the task is not
+                    # complete yet, handing off") would otherwise trip the
+                    # same wording classify_failure reads as a real failure.
+                    prewalk_signaled = (
+                        prewalk_enabled and attempt == first_attempt and code == 0
+                        and PREWALK_SENTINEL in (out or "")
+                    )
                     contract_failed = _execution_contract_failed(code, out, err)
                     schema_status, schema_error = _worker_yield_status(a.node, out)
                     strict_schema = a.node.strict_output_schema or strict_worker_yields
@@ -1599,7 +1644,9 @@ def run_route(
                         expected_turns=expected_turns,
                         contract_failed=contract_failed or schema_failed,
                     )
-                    if contract_failed or schema_failed:
+                    if prewalk_signaled:
+                        cls = _steward.Classification("prewalk_handoff", "none")
+                    elif contract_failed or schema_failed:
                         code = code or 1
                     handoff_strategy = choose_handoff({
                         "failed": cls.reason != "done",
@@ -1625,6 +1672,55 @@ def run_route(
                     remaining = _remaining_budget()
                     if remaining <= 0:
                         cls = _steward.Classification("over_budget", cls.failure_kind)
+                    if cls.reason == "prewalk_handoff":
+                        # Not a failure recovery decision -- the attempt
+                        # succeeded at its narrower goal by design, so this
+                        # bypasses the recovery policy entirely rather than
+                        # forcing choose_recovery to explain a non-failure.
+                        target = (
+                            _steward.de_escalation_target(model, hosts)
+                            if attempt < max_attempts else None
+                        )
+                        action = "handoff_cheap" if target is not None else "stop_blocked"
+                        last_action = action
+                        _record(_ledger.steward_row(
+                            tid, a.node.id, attempt=attempt, on_reason="prewalk_handoff",
+                            failure_kind="none", action=action,
+                            target=(f"{target[0].name}/{target[1].id}" if target else None),
+                            budget_remaining_usd=remaining,
+                        ))
+                        if action == "handoff_cheap" and target is not None:
+                            # The edit already landed and is real progress --
+                            # unlike a failed attempt's retry, there is
+                            # nothing here to discard, so (unlike escalate
+                            # below) the worktree is NOT reset.
+                            host, model = target
+                            escalated = f"{target[0].name}/{target[1].id}"
+                            continuation_doc = ""
+                            if ref:
+                                # A fresh Store, not the run_route-scoped one:
+                                # run_one executes inside a wave's thread
+                                # pool, and sqlite3 connections are
+                                # check_same_thread (see _checkpoint_node's
+                                # own docstring for the same reason).
+                                with contextlib.suppress(Exception):
+                                    from ctx.checkpoint import show_checkpoint
+                                    from ctx.store import Store as _Store
+
+                                    cp_store = _Store(
+                                        ws.workspace_id,
+                                        retention_days=ws.config.store.retention_days,
+                                    )
+                                    try:
+                                        continuation_doc = show_checkpoint(cp_store, ws, ref)
+                                    finally:
+                                        cp_store.close()
+                            prompt = _node_prompt(
+                                a.node, plan.task, dep_docs, inbox,
+                                continuation_doc=continuation_doc,
+                            )
+                            continue
+                        break
                     decision = _steward.decide(
                         classification=cls, attempt=attempt, max_attempts=max_attempts,
                         budget_remaining_usd=remaining, est_cost_usd=a.est_cost_usd,

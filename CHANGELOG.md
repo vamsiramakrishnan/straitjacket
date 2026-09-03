@@ -6,6 +6,8 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-09-03
+
 `ctx.taskledger.append()` now holds one OS-level lock (`fcntl.flock`, the
 same idiom already used by `ctx.engagement`'s state file and `ctx.hook`'s
 read ledger) across its tail-check and write, closing a gap where two
@@ -14,6 +16,33 @@ race on the same task's ledger file. `ctx.orchestrator`'s own
 `threading.Lock` only ever protected concurrent launches within one
 `ctx orchestrate` run; a second orchestrator process, or a direct
 `ctx task send`, held no lock at all.
+
+Opt-in (`[orchestrate] prewalk = true`, docs/PREWALK.md): a node the router
+assigned a frontier model with a mutation role is asked to plan, make one
+edit, then hand off — printing a literal sentinel line and ending its turn
+rather than continuing the whole task. On that signal the SAME node's next
+attempt runs on the cheapest installed model below frontier, in the SAME
+worktree with the edit kept (never reset, unlike a failed attempt's retry),
+and its prompt carries the frontier attempt's plan and validated edit
+forward verbatim — the "free in-context example" a plan document alone
+cannot give a cheaper model, without which it routinely re-explores to
+trust it. The handback for this is a new, seventh reason,
+`prewalk_handoff` — a deliberate success, not a failure, so it bypasses
+`choose_recovery` entirely for its own deterministic decision,
+`ctx.steward.de_escalation_target` (the literal mirror of
+`escalation_target`: cheapest installed model *below* the current tier
+rather than above it), recorded as a `ctx.steward/v1` row
+(`action: "handoff_cheap"`) before it is acted on like every other steward
+decision. Detection is a single ctx-defined literal the model is asked to
+print, checked against the raw exit code before any of the existing
+failure-classification logic runs — deliberately, since a model narrating
+why it is stopping ("the task is not complete yet, handing off") would
+otherwise read as a real failure to that classifier. A model that ignores
+the instruction degrades safely: it just finishes the task itself, exactly
+as it would without prewalk, at no cost regression. No live-model receipt
+exists yet for the mechanism's actual cost/quality trade; the mechanism and
+its tests are model-free, pinning what the orchestrator does with a given
+transcript rather than what a real model writes.
 
 ## [0.36.0] - 2026-09-02
 
