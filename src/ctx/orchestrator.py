@@ -843,9 +843,14 @@ def _launch_host(
         elif spec.name == "antigravity-sdk":
             prefix = [path, spec.model_flag, model] if model and spec.model_flag else [path]
             argv = [*prefix, "--json", *spec.print_flag, prompt]
+        # Name the model and host for the hooks the launched process will
+        # run: the edit-outcome ledger splits by model, and a PostToolUse
+        # payload carries no model of its own.
+        env = {**os.environ, "CTX_MODEL": model or spec.default_model or "",
+               "CTX_HOST": spec.name}
         proc = subprocess.run(
             argv, cwd=ws_root, capture_output=True, text=True,
-            timeout=timeout, env={**os.environ},
+            timeout=timeout, env=env,
         )
         stdout, usage = parse_host_output(
             spec.name,

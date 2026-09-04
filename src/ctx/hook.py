@@ -2475,7 +2475,7 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
     if isinstance(tr, dict) and isinstance(tr.get("is_error"), bool):
         is_error = tr["is_error"]
 
-    from ctx.edit_outcomes import append_edit_outcome, classify
+    from ctx.edit_outcomes import append_edit_outcome, classify, resolve_model
 
     def _pick(*keys: str) -> str:
         for key in keys:
@@ -2484,6 +2484,7 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
                 return value
         return ""
 
+    transcript = payload.get("transcript_path") or payload.get("transcriptPath")
     append_edit_outcome(
         workspace_root,
         tool=tool,
@@ -2494,6 +2495,12 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
         old_len=len(_pick("old_string", "oldString", "old_str")),
         new_len=len(_pick("new_string", "newString", "new_str", "content")),
         flavor=flavor,
+        # Which model made the edit: CTX_MODEL when a launcher set it (ctx
+        # orchestrate does), else the transcript's last named model, else
+        # "unknown". The format is derived from the tool name inside.
+        model=resolve_model(
+            transcript_path=transcript if isinstance(transcript, str) else None
+        ),
     )
 
 

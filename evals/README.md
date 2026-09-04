@@ -36,6 +36,7 @@ python evals/plan_collapse.py          # rounds collapse, byte-stable digest
 python evals/anchor_drift.py           # how often a repo: address goes silently stale
 python evals/edit_repair.py            # how much of a failed host edit is recoverable
 python evals/task_ledger_replay.py     # resume, typed recovery, budget-against-actuals
+python evals/edit_format_by_model.py   # anchored vs native edit success, per model, from field rows
 ```
 
 Others in this class: `evalset_collapse.py`, `corpus_scoped_scan.py`,

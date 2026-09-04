@@ -67,6 +67,39 @@ unchanged. Requires the `image` extra (`pip install 'ctx-harness[image]'`);
 without it, a clear error names the missing extra rather than a bare
 `ImportError`.
 
+The edit-outcome ledger (`ctx.edit_outcomes`, `.ctx-session-reads/
+edit-outcomes.jsonl`) now records two more fields on every row: the edit's
+**format** — a closed vocabulary derived from the tool name
+(`search_replace` for Edit/MultiEdit/str_replace_editor, `whole_file` for
+Write/create_file, `patch` for apply_patch, `anchored` for `ctx edit apply`,
+`other`) — and the **model** that made it. Published edit benchmarks
+(Aider's format ladder, hashline's 16-model comparison, EDIT-Bench) all
+report that a model's edit success moves by tens of points on the shape of
+the edit alone and that the ranking is per model; a ledger without those
+two axes could not say whether the anchored format straitjacket already
+ships beats a host's native `Edit` for the model actually in use. The model
+comes from `CTX_MODEL`, which `ctx orchestrate` now exports (with
+`CTX_HOST`) into every host process it launches; outside an orchestrated
+run the hook reads the last named model from a bounded tail of the
+transcript the PostToolUse payload points at, and records `unknown`
+otherwise — never a guess from an unrelated variable. `ctx edit apply` now
+records its own outcome into the same ledger, one row per planned file
+(`flavor: "ctx"`, `format: "anchored"`), with its two addressable refusals
+mapped onto the needle's two failure kinds (target moved or vanished →
+`not_found`; target now has more than one copy → `not_unique`). `edit_summary`
+gains `by_model` (per (model, format): counts, classified rows, success and
+failure rates, with `unknown` outside the success denominator) and
+`models_reporting` / `unlabelled_model_rows`; `summarize_rows` and
+`load_rows` expose the same over any row sequence. Old rows without the
+fields fold into `unknown` and the tool-implied format. New
+`evals/edit_format_by_model.py` replays a ledger into the one table the
+question needs — success(anchored) − success(search_replace) per model, in
+points, refusing to print a number for a cell under 30 classified rows and
+labelling hashline's published +15 average as an external bar it does not
+reproduce. No live-model receipt is included: the eval's `--fixture` mode
+prints invented numbers and says so, and the real table only exists once
+sessions with the hook installed have written rows.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives
