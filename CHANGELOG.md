@@ -138,6 +138,34 @@ by hand before their fix, regression-tested in
 - `_retrieval/rg_engine.py`: `follow_symlinks = true` never reached
   ripgrep (`--follow`).
 
+The same round's harnessed arm produced zero findings, not from a code bug
+but from a harness/print-mode interaction: the main agent fanned out into 7
+background bug-hunt agents, then ended its turn to wait for their
+completion notifications — a `ScheduleWakeup` call is the last thing in its
+transcript, whose tool result says "the harness re-invokes you when the
+wakeup fires." Print mode (`claude -p`) is a single-shot process with no
+such re-invocation; it instead waits for background subagents up to
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (default well under ten minutes)
+after the main turn ends, then kills them — stderr shows "Background tasks
+still running after 600s; terminating," and `subagent_stats` confirms all 7
+were system-killed with zero completions, discarding real in-progress work.
+The naive arm fanned out the same way and survived because its main agent
+kept its own turn alive (polling for its subagents' notifications) until
+all six had reported; the harnessed main agent took the wakeup tool's
+reply at its word and ended its turn. That tool was present in both
+children only because the launch inherited the parent remote session's
+environment; nothing ctx injects — the ephemeral `--settings` hooks (33-37
+ms per call in the transcript, returning plain allow), the output-discipline
+prompt, the observer proxy — told the agent to delegate and wait. `ctx wrap
+claude` now defaults `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` (wait
+indefinitely) for print-mode launches, `ctx orchestrate`'s launcher sets the
+same default for its `claude -p` nodes (which its own per-node timeout still
+bounds), and `evals/matrix_runner.py` sets it for both arms of a pair so the
+ceiling is never what a comparison measures; all three are skipped if the
+caller already exported the variable. The runner also stops passing the
+parent session's identity (`CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_CHILD_SESSION`) to its arms.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives

@@ -81,6 +81,28 @@ def _with_output_discipline(agent_args: list[str], *, orchestrate: bool = False)
     return ["--append-system-prompt", prompt, *agent_args]
 
 
+_PRINT_BG_WAIT_CEILING_VAR = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+
+def _with_print_bg_wait_ceiling(
+    agent_args: list[str], env: dict[str, str] | None
+) -> dict[str, str] | None:
+    """In print mode, Claude Code kills background subagents a fixed ceiling
+    (600 s) after the main turn ends. evals/bugbash-round17-2026-09-04.md: a
+    harnessed run's main agent delegated to 7 background agents, ended its
+    turn to wait for their notifications, and print mode killed all 7 at the
+    ceiling before any reported back -- zero findings, $22 spent. A wrapped
+    print-mode run is a delegated task whose subagents' work is the
+    deliverable; discarding it on a timer is never what the caller wanted.
+    Default to waiting indefinitely (0); never touch a ceiling the user set."""
+    if "-p" not in agent_args and "--print" not in agent_args:
+        return env  # interactive session: unrelated to this ceiling
+    base = env if env is not None else os.environ
+    if _PRINT_BG_WAIT_CEILING_VAR in base:
+        return env  # the user's own setting wins
+    return {**base, _PRINT_BG_WAIT_CEILING_VAR: "0"}
+
+
 _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
 
 
@@ -268,6 +290,7 @@ def wrap_claude(
     try:
         if use_proxy:
             proxy_proc, child_env = _start_proxy(workspace_root, exe, rescue_pct)
+        child_env = _with_print_bg_wait_ceiling(agent_args, child_env)
         if not _claude_supports_settings(claude):
             print(
                 "ctx wrap: this claude build lacks --settings; "

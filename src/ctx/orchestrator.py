@@ -848,6 +848,12 @@ def _launch_host(
         # payload carries no model of its own.
         env = {**os.environ, "CTX_MODEL": model or spec.default_model or "",
                "CTX_HOST": spec.name}
+        if spec.name == "claude":
+            # Print mode kills background subagents 600 s after the main
+            # turn ends; a node that fans out and then waits would lose its
+            # work on that timer (round 17). The per-node ``timeout`` above
+            # is the bound; the user's own setting wins.
+            env.setdefault("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
         proc = subprocess.run(
             argv, cwd=ws_root, capture_output=True, text=True,
             timeout=timeout, env=env,

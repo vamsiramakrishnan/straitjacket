@@ -310,6 +310,32 @@ def test_orchestrator_launch_names_the_model_for_the_hooks(monkeypatch, tmp_path
     code, *_ = orchestrator._launch_host(codex, tmp_path, "p", "ctx", timeout=5, model="m-x")
     assert code == 0
     assert seen["env"]["CTX_MODEL"] == "m-x" and seen["env"]["CTX_HOST"] == "codex"
+    assert "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS" not in seen["env"]  # not a claude launch
+
+
+def test_orchestrator_claude_nodes_wait_for_their_subagents(monkeypatch, tmp_path):
+    """Print mode kills background subagents 600 s after the main turn ends;
+    a node that fans out and waits would lose its work on that timer. The
+    launcher defaults the ceiling off; the per-node timeout is the bound."""
+    import subprocess
+
+    from ctx import hosts, orchestrator
+
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["env"] = kw.get("env") or {}
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(orchestrator.subprocess, "run", fake_run)
+    monkeypatch.setattr(orchestrator, "parse_host_output", lambda *a, **k: ("", None))
+    claude = next(h for h in hosts.detect_all(which=lambda b: None) if h.spec.name == "claude")
+    monkeypatch.delenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", raising=False)
+    orchestrator._launch_host(claude, tmp_path, "p", "ctx", timeout=5, model="m-x")
+    assert seen["env"]["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
+    monkeypatch.setenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "5000")
+    orchestrator._launch_host(claude, tmp_path, "p", "ctx", timeout=5, model="m-x")
+    assert seen["env"]["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "5000"
 
 
 def test_ctx_edit_apply_records_anchored_rows_in_the_same_ledger(

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import json
 import os
 import pathlib
 import shutil
@@ -194,6 +193,22 @@ def run_pair(scenario: str, model: str, out: pathlib.Path, repo: pathlib.Path) -
             "CLAUDE_CONFIG_DIR": str(cfg),
             "PIP_REQUIRE_VIRTUALENV": "1",
         }
+        # Both arms run in print mode, which kills background subagents at a
+        # fixed ceiling after the main turn ends. `ctx wrap` defaults this to
+        # "wait indefinitely" for the sj arm (its hooks/proxy add per-tool
+        # latency that ate the ceiling in round 17 — see
+        # evals/bugbash-round17-2026-09-04.md); set the same default here so
+        # the naive arm isn't bounded by a shorter ceiling than sj gets,
+        # which would make the pair's finding counts an artifact of this
+        # timer rather than of bug-finding ability. Never overrides a value
+        # the caller already exported.
+        env.setdefault("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
+        # A pair launched from inside a Claude Code session inherited that
+        # session's identity, so both arms wrote their transcripts under the
+        # parent's session id and saw the parent's remote-session tools
+        # (round 17). Each arm is its own session.
+        for inherited in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION"):
+            env.pop(inherited, None)
         argv = ["claude", "-p", task, "--max-turns", str(max_turns),
                 "--output-format", "json", "--allowedTools", TOOLS]
         if MODELS[model]:

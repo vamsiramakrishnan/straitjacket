@@ -88,3 +88,45 @@ assignment is on the single-diagnostic branch, where one is the count.
    claims reproduced; the two refutations came from the arm that never
    finished verifying, which is the step the naive main agent spent its
    last turns on.
+4. **Root cause, established from the transcripts (not speculation).**
+   `harnessed-arm.main-transcript.jsonl` ends with the main agent's own
+   text — "Bug-hunt agents are running in the background across all of
+   src/ctx; I'll compile and verify the findings once they report back" —
+   preceded by a `ScheduleWakeup` call whose tool result states "Next
+   wakeup scheduled … Nothing more to do this turn — the harness
+   re-invokes you when the wakeup fires or a task-notification arrives,"
+   and a no-op `Bash("true")` call with the comment "waiting for agent
+   notifications." That belief is false for a `claude -p` process: there
+   is no persistent harness to re-invoke it, only the CLI's own print-mode
+   background-agent supervisor, which (per `harnessed-arm.stderr.txt`)
+   waited `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (600 s, unset) after the
+   turn ended and then killed all 7 subagents (`result.json`:
+   `"killed": {"system": 7}`, `"completed": 0`) before any could report —
+   discarding real in-progress work
+   (`evidence/harnessed-arm.subagent-notes.txt`). We checked every
+   ctx-injected surface for a push toward that decision: the persistent
+   CLAUDE.md block (`installer.py::_render_claude_md`) was not even
+   installed for this ephemeral `ctx wrap claude` run; the PreToolUse/
+   PostToolUse hook output visible in the transcript only routes Bash
+   through `ctx run` and nudges terser narration
+   (`CTX_EMISSION_GOVERNOR`); and `wrap.py`'s own injected system-prompt
+   nudge says the opposite of what happened — "prefer acting over
+   describing what you will do." The hooks around the final no-op command
+   took 33 and 37 ms and returned plain allow. The wakeup tool the agent
+   believed was present in BOTH children only because the launch inherited
+   the parent remote session's environment (its session id and tool set);
+   the naive arm called it once too, then kept polling for its subagents'
+   notifications until all six had reported, while the harnessed main
+   agent ended its turn on the tool's reply. One sample each: the split is
+   a stochastic choice under an inherited tool, not a harness effect, and
+   the per-tool-call latency story the first draft of this section told is
+   not supported by the transcript. **Fix:** `ctx wrap claude` now defaults
+   `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` (wait indefinitely) whenever it
+   launches Claude Code in print mode, `ctx orchestrate`'s launcher sets
+   the same default for its `claude -p` nodes (bounded by its own per-node
+   timeout), and `evals/matrix_runner.py` sets it for both arms of a pair
+   so this ceiling is never the thing a naive-vs-harnessed comparison is
+   actually measuring. None overrides a value already present in the
+   caller's environment. The runner also no longer inherits the parent
+   session's identity: it drops the `CLAUDE_CODE_SESSION_ID` and
+   `CLAUDE_CODE_CHILD_SESSION` variables so each arm is its own session.

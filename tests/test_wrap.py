@@ -90,6 +90,33 @@ def test_output_discipline_not_injected_interactive_or_opted_out(monkeypatch):
     assert _with_output_discipline(["-p", "x"]) == ["-p", "x"]  # env opt-out
 
 
+def test_print_bg_wait_ceiling_defaulted_in_print_mode(monkeypatch):
+    from ctx.wrap import _with_print_bg_wait_ceiling
+
+    monkeypatch.delenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", raising=False)
+    env = _with_print_bg_wait_ceiling(["-p", "fix it"], None)
+    assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
+    # --print spelling counts too, and an existing child env is preserved.
+    base = {"FOO": "bar"}
+    env = _with_print_bg_wait_ceiling(["--print", "x"], base)
+    assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
+    assert env["FOO"] == "bar"
+
+
+def test_print_bg_wait_ceiling_not_touched_interactive_or_user_set(monkeypatch):
+    from ctx.wrap import _with_print_bg_wait_ceiling
+
+    monkeypatch.delenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", raising=False)
+    # Interactive session: no ceiling to fight, leave env untouched.
+    assert _with_print_bg_wait_ceiling([], None) is None
+    assert _with_print_bg_wait_ceiling([], {"FOO": "bar"}) == {"FOO": "bar"}
+    # The user's own setting wins, whether in the passed env or the process env.
+    own = {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "5000"}
+    assert _with_print_bg_wait_ceiling(["-p", "x"], own) == own
+    monkeypatch.setenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "5000")
+    assert _with_print_bg_wait_ceiling(["-p", "x"], None) is None
+
+
 def _install_fake_claude(bin_dir: Path, body: str) -> Path:
     bin_dir.mkdir(parents=True, exist_ok=True)
     script = bin_dir / "claude"
@@ -138,6 +165,56 @@ exit 7
     # ... and was removed afterwards: zero residue.
     assert not os.path.exists(settings_path)
     assert not (ws / ".claude").exists()
+
+
+def test_wrap_claude_sets_print_bg_wait_ceiling_for_print_mode(tmp_path, monkeypatch):
+    from ctx.wrap import wrap_claude
+
+    monkeypatch.delenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", raising=False)
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    env_file = tmp_path / "env.txt"
+    _install_fake_claude(
+        tmp_path / "bin",
+        f"""\
+if [ "$1" = "--help" ]; then
+  echo "usage: claude [--settings <file>] [prompt]"
+  exit 0
+fi
+printenv CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS > {env_file} 2>&1 || true
+exit 0
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+
+    rc = wrap_claude(ws, ["-p", "fix the failing test"], "/opt/bin/ctx")
+    assert rc == 0
+    assert env_file.read_text(encoding="utf-8").strip() == "0"
+
+
+def test_wrap_claude_leaves_print_bg_wait_ceiling_untouched_if_user_set(tmp_path, monkeypatch):
+    from ctx.wrap import wrap_claude
+
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    env_file = tmp_path / "env.txt"
+    _install_fake_claude(
+        tmp_path / "bin",
+        f"""\
+if [ "$1" = "--help" ]; then
+  echo "usage: claude [--settings <file>] [prompt]"
+  exit 0
+fi
+printenv CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS > {env_file} 2>&1 || true
+exit 0
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "5000")
+
+    rc = wrap_claude(ws, ["-p", "fix the failing test"], "/opt/bin/ctx")
+    assert rc == 0
+    assert env_file.read_text(encoding="utf-8").strip() == "5000"
 
 
 def test_wrap_claude_fallback_merge_restores_settings(tmp_path, monkeypatch):

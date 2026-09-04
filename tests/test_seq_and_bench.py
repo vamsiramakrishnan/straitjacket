@@ -177,3 +177,62 @@ def test_bench_manifest_matches_frozen_tasks():
         "held-out rule — a mechanism tuned against a task records its win "
         "only on a variant that task never saw (evals/rtk-corpus doc)."
     )
+
+
+# ---------------------------------------- print-mode background-wait fairness
+class _FakeProc:
+    def wait(self, timeout=None):
+        return 0
+
+
+def _run_pair_capturing_env(monkeypatch, tmp_path):
+    """Run matrix_runner.run_pair with make_fixture and subprocess.Popen faked
+    out; returns the list of (argv, env) each arm was launched with."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "evals"))
+    import matrix_runner as mr
+
+    monkeypatch.setattr(
+        mr, "make_fixture", lambda scenario, dest, repo: dest.mkdir(parents=True)
+    )
+    captured = []
+
+    def fake_popen(argv, cwd=None, env=None, stdout=None, stderr=None):
+        captured.append((argv, env))
+        return _FakeProc()
+
+    monkeypatch.setattr(mr.subprocess, "Popen", fake_popen)
+    out = tmp_path / "out"
+    out.mkdir()
+    mr.run_pair("S6", "sonnet", out, tmp_path / "repo")
+    return captured
+
+
+def test_run_pair_defaults_print_bg_wait_ceiling_for_both_arms(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", raising=False)
+    captured = _run_pair_capturing_env(monkeypatch, tmp_path)
+
+    # Both the naive and sj launches must see the same ceiling, or the pair's
+    # finding counts would partly measure this timer instead of bug-finding
+    # ability (evals/bugbash-round17-2026-09-04.md).
+    assert len(captured) == 2
+    for _argv, env in captured:
+        assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
+
+
+def test_run_pair_does_not_inherit_the_parent_session_identity(tmp_path, monkeypatch):
+    """Launched from inside a Claude Code session, both arms wrote their
+    transcripts under the parent's session id and saw its remote-session
+    tools (round 17). Each arm is its own session."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-session")
+    monkeypatch.setenv("CLAUDE_CODE_CHILD_SESSION", "1")
+    for _argv, env in _run_pair_capturing_env(monkeypatch, tmp_path):
+        assert "CLAUDE_CODE_SESSION_ID" not in env
+        assert "CLAUDE_CODE_CHILD_SESSION" not in env
+
+
+def test_run_pair_leaves_print_bg_wait_ceiling_untouched_if_user_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "5000")
+    captured = _run_pair_capturing_env(monkeypatch, tmp_path)
+
+    for _argv, env in captured:
+        assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "5000"
