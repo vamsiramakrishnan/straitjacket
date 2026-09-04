@@ -190,8 +190,10 @@ def _render(text: str, font_size: int, cols: int):
     lines = _wrap(text, cols)
     cell_w, cell_h = _char_cell(font)
 
-    width = max(1, cols) * cell_w
-    height = max(1, len(lines)) * cell_h
+    # cols is already validated >= 1 above, and _wrap never returns an empty
+    # list (`return lines or [""]`) -- no floor needed on either factor.
+    width = cols * cell_w
+    height = len(lines) * cell_h
     # Mode "1" (1 bit/pixel, white=1/black=0) with fontmode "1" (no
     # anti-aliasing): crisp bilevel glyphs, smallest PNG, and no subpixel
     # rounding for identical input to vary across — the determinism this
