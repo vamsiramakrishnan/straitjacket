@@ -229,6 +229,38 @@ _HANDLE_RE = re.compile(r"\brun:[0-9a-f]{4,64}\b")
 _FAILING_ID_RE = re.compile(r"^\s*(?:\d+\.\s+)?([\w./-]+::[\w:\[\]-]+)", re.MULTILINE)
 
 
+_PASS_WORDS = ("passed", "skipped", "xfail", "xpass", " ok")
+_FAIL_WORDS = ("fail", "error")
+
+
+def _failing_ids(res: str) -> frozenset[str]:
+    """Node ids that FAILED in one tool result, decided line by line.
+
+    The first cut filtered every `path::name` match on whether the WHOLE
+    result contained "fail" -- a condition that never mentioned the match, so
+    one failure in a `pytest -v` run tagged every passing id as failing too,
+    and `followup_join` then refused to associate a later green run with the
+    fix. A line that names its own verdict decides by it; a numbered entry
+    (the digest's failure list carries no verdict per line) counts when the
+    result reports failures at all; a bare id with no verdict is not a
+    failure.
+    """
+    has_failures = "fail" in res.lower() or "error" in res.lower()
+    out: set[str] = set()
+    for line in res.splitlines():
+        m = _FAILING_ID_RE.match(line)
+        if not m:
+            continue
+        low = line.lower()
+        if any(w in low for w in _PASS_WORDS):
+            continue
+        if any(w in low for w in _FAIL_WORDS):
+            out.add(m.group(1))
+        elif line.lstrip()[:1].isdigit() and has_failures:
+            out.add(m.group(1))
+    return frozenset(out)
+
+
 def _profile_of(text: str) -> str | None:
     if "profile=" in text:
         return text.split("profile=", 1)[1].split("]", 1)[0].strip() or None
@@ -270,9 +302,7 @@ def emissions_from_calls(calls: list[dict[str, Any]]) -> list[EvidenceEmission]:
             from ctx import reflex
 
             operator = f"command:{reflex.family_of(sig)}"
-        failing = frozenset(
-            m for m in _FAILING_ID_RE.findall(res) if "FAIL" in res or "fail" in res
-        )
+        failing = _failing_ids(res)
         out.append(
             EvidenceEmission(
                 index=i,

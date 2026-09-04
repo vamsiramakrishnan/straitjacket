@@ -459,7 +459,11 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
             if thread is None:
                 thread = {"msgs": 0, "max_read": 0}
                 threads.append(thread)
-            if u_read and u_read < thread["max_read"]:
+            # `u_read and ...` skipped exactly the worst case: cache_read
+            # collapsing to 0 on an established thread is a full prefix
+            # rewrite, and 0 is a value here (usage-less records were
+            # dropped above), not an absence.
+            if u_read < thread["max_read"]:
                 invalidations += 1
             thread["msgs"] = msgs
             thread["max_read"] = max(thread["max_read"], u_read)

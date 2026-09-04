@@ -346,8 +346,15 @@ def load_config(workspace_root: Path | None) -> Config:
         activate_after_calls=_coerce_like(
             ed.activate_after_calls, eng_raw.get("activate_after_calls", ed.activate_after_calls)
         ),
-        lean_models=tuple(
-            str(m) for m in eng_raw.get("lean_models", ed.lean_models)
+        # The one list field that still iterated whatever TOML produced:
+        # `lean_models = 42` raised TypeError out of load_config (on every
+        # command's path), and `lean_models = "sonnet"` became six
+        # single-letter models. A non-list keeps the shipped default rather
+        # than emptying the setting, because "no lean models" changes routing.
+        lean_models=(
+            _str_tuple(eng_raw["lean_models"])
+            if isinstance(eng_raw.get("lean_models"), (list, tuple))
+            else ed.lean_models
         ),
         emission_nudge_tokens=_coerce_like(
             ed.emission_nudge_tokens,

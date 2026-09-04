@@ -1302,6 +1302,34 @@ def _decay_taught_reason(decision: dict[str, Any], workspace_root: str | None) -
             continue
 
 
+def _names_secret_path(argv: list[str], cwd: str | None) -> bool:
+    """Does any path-shaped argument name a secret-bearing file?
+
+    One predicate for every door: the plain command path and the
+    ``cmd > file 2>&1`` shortcut both consult it, so a new early return
+    cannot quietly skip the guarantee again. Restricted to arguments shaped
+    like paths, because the secret regex alone matches the bare WORD
+    "secrets", which is a sentence, not a file.
+    """
+    for _arg in argv[1:]:
+        if _arg.startswith("-"):
+            continue
+        _p = _arg.replace("\\", "/")
+        if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
+            continue
+        if _is_secret_path(_p, cwd):
+            return True
+    return False
+
+
+def _secret_path_force_ask() -> dict[str, str]:
+    return _force_ask(
+        "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
+        "an explicit user-visible permission step; it is excluded "
+        "from automatic capture."
+    )
+
+
 def _classify_command_inner(
     command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
 ) -> dict[str, str]:
@@ -1336,6 +1364,18 @@ def _classify_command_inner(
                     return _safety_deny_cmd(
                         denied, policy, original=stripped, has_meta=has_meta
                     )
+                # Same lesson, second door. The deny_commands check above was
+                # added because this shortcut returned ahead of a repo-
+                # committed rule; it still returned ahead of the secret-path
+                # guard below, so `cat .env > out.log 2>&1` was allowed while
+                # `cat .env` force-asks. The redirect answers the volume
+                # question only; the blanket secret guarantee holds here too.
+                try:
+                    inner = shlex.split(redir.group("cmd") or "")
+                except ValueError:
+                    inner = []
+                if _names_secret_path(inner, cwd):
+                    return _secret_path_force_ask()
                 return dict(DECISION_ALLOW)
         # Bounded chain: `a; b && c` with no other metacharacters. Each
         # segment is classified independently; the chain is allowed only if
@@ -1410,18 +1450,8 @@ def _classify_command_inner(
     # downgraded `echo secrets please` from deny to ask. Restricted to
     # arguments that are shaped like paths, because the regex alone matches
     # the bare WORD "secrets", which is a sentence, not a file.
-    for _arg in argv[1:]:
-        if _arg.startswith("-"):
-            continue
-        _p = _arg.replace("\\", "/")
-        if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
-            continue
-        if _is_secret_path(_p, cwd):
-            return _force_ask(
-                "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
-                "an explicit user-visible permission step; it is excluded "
-                "from automatic capture."
-            )
+    if _names_secret_path(argv, cwd):
+        return _secret_path_force_ask()
     # A prefix allow/promotion applies to a single command only. When shell
     # metacharacters survived the chain/redirect handling above (e.g.
     # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary

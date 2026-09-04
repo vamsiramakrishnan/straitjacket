@@ -100,6 +100,44 @@ reproduce. No live-model receipt is included: the eval's `--fixture` mode
 prints invented numbers and says so, and the real table only exists once
 sessions with the hook installed have written rows.
 
+Bug-bash round 17 (evals/bugbash-round17-2026-09-04.md): the S6 cell run
+live as a naive-vs-harnessed Claude Code pair. Ten defects, all reproduced
+by hand before their fix, regression-tested in
+`tests/test_round17_mechanisms.py`:
+
+- `hook.py`: the `cmd > file 2>&1` shortcut returned `allow` ahead of the
+  secret-path guard, so `cat .env > out.log 2>&1` was allowed while
+  `cat .env` force-asks. Both doors now consult one predicate
+  (`_names_secret_path`).
+- `config.py`: `[engagement] lean_models = 42` raised `TypeError` out of
+  `load_config` on every command's path, and `"sonnet"` became six
+  one-letter models. Coerced like every other list field; a non-list keeps
+  the shipped default.
+- `digest/__init__.py`: `digest_output` hard-coded `exitCode: 0`, so an
+  errored over-budget tool result digested as `exit 0` and its stored
+  manifest recorded a success. The host's error flag now sets exit 1;
+  run identity is (bytes, tool, is_error).
+- `ladders.py`: `_epoch_rung` indexed past a ladder narrowed to two rungs
+  in ctx.toml (`[x] * 0` still evaluates `x`); guarded like its siblings.
+- `repomap.py`: the builtin ranker raised `KeyError` on an import edge to
+  a listed-but-unreadable file; it now skips edges to files it never read,
+  as the networkx ranker already did.
+- `surface_gateway.py`: `_rpc`'s deadline bounded only the first byte —
+  `select` then `readline()` blocked without a timeout on a backend that
+  wrote half a line and hung. Reads are now raw chunks under the deadline
+  with line splitting in the client.
+- `evidence_outcomes.py`: the `failing_ids` filter tested the whole result
+  and never the match, so one FAILED in a verbose run tagged every passing
+  id as failing and blocked `followup_join` from associating the fix.
+  Decided per line now.
+- `scorecard.py`: `u_read and u_read < max_read` skipped the largest
+  invalidation, cache_read collapsing to 0.
+- `facts.py`: `fails_sites` served a gc-collected run's census from the
+  cached `latest_run` pointer with a dead `run:` citation; the pointer is
+  honoured only while its manifest still exists.
+- `_retrieval/rg_engine.py`: `follow_symlinks = true` never reached
+  ripgrep (`--follow`).
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives

@@ -895,7 +895,15 @@ def fails_sites(
                 # The derived pointer is a CACHE. The newest capture is the
                 # answer, and it is only fallen back on when there are no
                 # captures at all.
-                run_id = _newest_captured(store) or _meta_get(conn, "latest_run")
+                run_id = _newest_captured(store)
+                if run_id is None:
+                    # The pointer outlives the run: gc prunes manifests, not
+                    # facts.sqlite, so after a full collection this served
+                    # the old census as "last" with a `run:` citation that
+                    # no longer resolved. A dead pointer is no run at all.
+                    cached = _meta_get(conn, "latest_run")
+                    if cached and _run_exists(store, cached):
+                        run_id = cached
         finally:
             conn.close()
         if run_id is not None:
@@ -932,6 +940,14 @@ def _fails_for(store: Store, run_id: str) -> list[dict[str, Any]]:
         ]
     finally:
         conn.close()
+
+
+def _run_exists(store: Store, run_id: str) -> bool:
+    try:
+        store.get_manifest(run_id)
+        return True
+    except Exception:
+        return False
 
 
 def _newest_captured(store: Store) -> str | None:

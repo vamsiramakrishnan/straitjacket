@@ -78,6 +78,7 @@ class MCPBackend:
         self._proc: subprocess.Popen | None = None
         self._id = 0
         self._tools: list[dict[str, Any]] | None = None
+        self._rbuf = b""
 
     def _ensure(self) -> subprocess.Popen | None:
         if self._proc and self._proc.poll() is None:
@@ -91,6 +92,7 @@ class MCPBackend:
             self._proc = None
             return None
         self._id = 0
+        self._rbuf = b""
         # MCP handshake: initialize request, then the initialized notification.
         if self._rpc("initialize", {
             "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
@@ -127,29 +129,43 @@ class MCPBackend:
             proc.stdin.flush()
         except (BrokenPipeError, OSError):
             return None
+        # Read raw chunks under the deadline and split lines ourselves.
+        # `select` then `readline()` only bounded the FIRST byte: a backend
+        # that wrote half a line and hung -- the case the deadline exists for
+        # -- left readline blocking for the newline with no timeout at all.
+        # All reads go through this buffer, never the TextIOWrapper's.
+        import os
+
+        fd = proc.stdout.fileno()
         deadline = time.monotonic() + self.timeout
         while True:
+            while b"\n" in self._rbuf:
+                raw, self._rbuf = self._rbuf.split(b"\n", 1)
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line.decode("utf-8", "replace"))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(msg, dict) and msg.get("id") == rid:
+                    return msg
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
             try:
-                ready, _, _ = select.select([proc.stdout], [], [], remaining)
+                ready, _, _ = select.select([fd], [], [], remaining)
             except (OSError, ValueError):
                 return None
             if not ready:
                 return None  # timed out waiting for the backend
-            line = proc.stdout.readline()
-            if not line:
-                return None
-            line = line.strip()
-            if not line:
-                continue
             try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if msg.get("id") == rid:
-                return msg
+                chunk = os.read(fd, 65536)
+            except OSError:
+                return None
+            if not chunk:
+                return None  # backend closed its stdout
+            self._rbuf += chunk
 
     def list_tools(self) -> list[dict[str, Any]]:
         if self._tools is not None:

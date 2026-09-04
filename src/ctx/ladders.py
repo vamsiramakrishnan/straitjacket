@@ -368,8 +368,15 @@ def _epoch_rung(record: dict, rungs: tuple[str, ...]) -> list[str]:
     policy = record.get("policy") or record
     promoted = list(policy.get("promoted_commands") or [])
     demoted = list(policy.get("demoted_commands") or [])
-    out = [rungs[1]] * len(promoted) + [rungs[2]] * len(demoted)
-    return out or [rungs[0]]
+    # Guarded like the three sibling buckets: `[rungs[2]] * 0` still
+    # evaluates rungs[2], so a ladder narrowed to two rungs in ctx.toml (a
+    # documented, validated configuration) crashed `ctx ladders` here.
+    out: list[str] = []
+    if len(rungs) > 1:
+        out += [rungs[1]] * len(promoted)
+    if len(rungs) > 2:
+        out += [rungs[2]] * len(demoted)
+    return out or ([rungs[0]] if rungs else [])
 
 
 def _deployment_rung(root: Path, rungs: tuple[str, ...]) -> str | None:
