@@ -35,6 +35,13 @@ class Selector:
     #: Render ``L40:a3| text`` instead of ``L40: text`` — per-line content tags
     #: the model can name individual lines by when it goes on to edit them.
     hashlines: bool = False
+    #: Render the selected slice as a deterministic monospace bitmap PNG
+    #: (``ctx.snapcompact``), store it via the blob store, and return its
+    #: ``blob:`` ref instead of the raw text — the "snapcompact" technique
+    #: (docs/ARCHITECTURE.md, Delivery plane). Opt-in only; never changes
+    #: default behavior. See ``ctx.snapcompact`` for what is and is not
+    #: verified about the cost/fidelity tradeoff this makes available.
+    snapcompact: bool = False
 
 
 def _window(flag: str, a: int, b: int, total: int, unit: str) -> tuple[int, int]:
@@ -311,6 +318,18 @@ def get(
     continuation: str | None = None
     lines_handle: str | None = None
 
+    if selector.snapcompact and selector.span is not None:
+        # Declared, not silent (same house rule the --symbol/anchor
+        # combination below enforces): --span resolves and returns through
+        # its own path (`_resolve_span`, never reaching the snapcompact
+        # rendering below), so silently accepting the flag here would make
+        # `--span X --snapcompact` a no-op that looks like it worked.
+        raise RetrievalError(
+            "--snapcompact cannot be combined with --span: a span already "
+            "names a fixed rendering. Use --lines/--bytes/--records/"
+            "--json-pointer or --symbol instead."
+        )
+
     if selector.span is not None:
         result = _resolve_span(store, ws, ref_text, label, selector.span)
         record_telemetry(store, "get", len(data) if data else 0, len(encode_exact(result)))
@@ -347,7 +366,9 @@ def get(
         # silently ignored flag. `lines_anchor` deliberately does not survive --
         # the anchor described the caller's own range, and the range has just
         # been replaced by one the symbol resolver chose.
-        selector = Selector(lines=span, hashlines=selector.hashlines)
+        selector = Selector(
+            lines=span, hashlines=selector.hashlines, snapcompact=selector.snapcompact
+        )
 
     if selector.json_pointer is not None:
         try:
@@ -491,6 +512,38 @@ def get(
             # reader back to coordinates this very call reported as stale.
             lines_handle = f"{ref_text} --lines {_addr(a, b)}"
             body = "\n".join(rendered)
+
+    if selector.snapcompact and body:
+        # Opt-in transport swap (docs/ARCHITECTURE.md, Delivery plane): the
+        # slice is already fully selected and budget-fitted above by the
+        # ordinary text path -- this only changes how it leaves the tool,
+        # not what it contains or how much of it there is. Render exactly
+        # that bounded text, store the PNG as a blob (the store's existing
+        # binary-artifact path, SPEC §12), and hand back its `blob:` ref
+        # instead of the text itself. The caller still has to separately
+        # fetch the bytes and attach them as vision input -- ctx has no
+        # channel of its own to hand a model an image inline.
+        from ctx.snapcompact import SnapcompactUnavailable, estimate_savings, render_text_to_png
+
+        try:
+            png_bytes = render_text_to_png(body)
+            stats = estimate_savings(body)
+        except SnapcompactUnavailable as e:
+            raise RetrievalError(str(e)) from e
+        blob_hash = store.put_blob(png_bytes)
+        header.append(
+            f"snapcompact: blob:{short_id(blob_hash)} (image/png, "
+            f"{stats['image_width_px']}x{stats['image_height_px']}px, "
+            f"cell {stats['cell_width_px']}x{stats['cell_height_px']}px/char, "
+            f"~{fmt_int(stats['image_tokens'])} image tokens vs "
+            f"~{fmt_int(stats['raw_tokens'])} raw text tokens (est.) "
+            f"[UNVERIFIED transcription fidelity — see ctx.snapcompact])"
+        )
+        body = (
+            f"ctx get blob:{short_id(blob_hash)} --bytes 1:{len(png_bytes)}\n"
+            "(fetch the rendered PNG bytes above and pass them as an `image` "
+            "content block -- not as text)"
+        )
 
     if divergence:
         header.append(f"divergence: {divergence}")

@@ -44,6 +44,29 @@ exists yet for the mechanism's actual cost/quality trade; the mechanism and
 its tests are model-free, pinning what the orchestrator does with a given
 transcript rather than what a real model writes.
 
+`ctx get --snapcompact` (`src/ctx/snapcompact.py`, Delivery plane): an opt-in
+transport swap for a bounded `ctx get` slice — render the already-selected
+text as a deterministic monospace bitmap PNG (crisp, no anti-aliasing; same
+input always renders the same pixels) instead of emitting it as raw text,
+store it via the existing content-addressed blob store, and return its
+`blob:` ref in the header instead of the text body. Follows a 2026 blog post
+(stencil.so/blog/snapcompact) describing this as a cost-reduction technique
+for vision-capable models — dense text rendered as an image and read back by
+the model instead of tokenized as text. This ships the deterministic
+encoding half only: a real monospace TTF (DejaVu Sans Mono, or the first of
+Liberation Mono / FreeMono found on the host; Pillow's own bundled font as a
+last-resort fallback), a measured (not assumed) character-cell density, and
+a cost estimate that combines this repo's own `ctx.textutil.estimate_tokens`
+for the raw side with Anthropic's own documented 28x28px vision-tiling
+formula for the image side. It does **not** verify — and cannot verify from
+this sandbox — that a live vision model actually transcribes the rendered
+image back correctly at the blog's claimed ~2-3x cost reduction; that
+requires a real model call. Fully opt-in (`--snapcompact` on `ctx get`, or
+`{snapcompact: true}` in the MCP `get` selector); default behavior is
+unchanged. Requires the `image` extra (`pip install 'ctx-harness[image]'`);
+without it, a clear error names the missing extra rather than a bare
+`ImportError`.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives

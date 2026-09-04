@@ -34,6 +34,7 @@ inherits that plane's invariants, and ships with a test.
 | add a `ctx q` stage | `src/ctx/query.py` |
 | add an evidence-plan operator | `src/ctx/plan_ops.py` (+ `plan_ir.py`, `plan_exec.py`) |
 | change how a digest is selected/sized | `src/ctx/resolver.py` (the Delivery Policy Resolver) |
+| change snapcompact (`ctx get --snapcompact`, text → image) | `src/ctx/snapcompact.py` · wiring in `src/ctx/_retrieval/get.py` |
 | change retrieval (`get`/`search`/spans) | `src/ctx/retrieval.py` + `src/ctx/_retrieval/` |
 | change how a `repo:` line address stays valid across edits | `src/ctx/anchors.py` |
 | measure whether the host's own edits are landing | `src/ctx/edit_outcomes.py` |
@@ -114,6 +115,7 @@ This is the plane most contributions touch. The flow is
 |---|---|
 | `resolver.py` | **The Delivery Policy Resolver** — the single choke point where every ladder composes into a `DeliveryPlan` (EDC §5.4). |
 | `digest/evidence_render.py` | The plan-obeying **pure** renderer for census-grade profiles: `(graph, contract, plan) → bytes`. |
+| `snapcompact.py` | Deterministic text → monospace bitmap PNG rendering (the "snapcompact" technique) plus a cited, best-effort token-cost estimate; opt-in via `ctx get --snapcompact`. Requires the `image` extra (Pillow); degrades with a clear error, never a bare traceback. |
 | `plan_ir.py`, `plan_ops.py`, `plan_exec.py` | The compiled evidence-plan IR (a total, bounded DAG), its logical operators, and the executor + `investigate/v1` digest. |
 | `ask.py` | `ctx ask` — intents as typed plan presets (the seven intents). |
 | `edit_outcomes.py` | What happened to the host's own Edit/Write: a closed-vocabulary classifier over the tool result and a privacy-safe rate ledger. Observation only. |

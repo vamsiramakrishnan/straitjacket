@@ -177,6 +177,18 @@ ctx get repo:app/auth.py --lines 40:52@07407f1c
 ctx get repo:app/auth.py --lines 40:52 --hashlines   # L40:a3| … per-line tags
 ```
 
+`--snapcompact` renders the selected slice as a deterministic monospace
+bitmap PNG (`ctx.snapcompact`) and returns a `blob:` ref instead of text —
+an opt-in cost/format tradeoff (requires the `image` extra: `pip install
+'ctx-harness[image]'`). It never changes default behavior, and this repo
+does not claim a live vision model actually reads the image back correctly
+at any cost saving — see `ctx.snapcompact`'s module docstring:
+
+```bash
+ctx get run:7bd91f2a4c3d#stdout --lines 1:120 --snapcompact
+ctx get blob:<hash from the header> --bytes 1:<size>   # fetch the PNG bytes
+```
+
 The anchor verifies silently when the content has not moved, **follows it** when
 it has (declaring `anchor: @07407f1c moved L40:52 → L42:54` and echoing the
 corrected address), and **refuses with exit 2** when the content is gone rather

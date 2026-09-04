@@ -404,6 +404,10 @@ def _build_parser():
     p_get.add_argument(
         "--hashlines", action="store_true",
         help="prefix each line with its content tag (L40:a3| …)")
+    p_get.add_argument(
+        "--snapcompact", action="store_true",
+        help="render the slice as a monospace bitmap PNG blob instead of text "
+             "(opt-in cost/format tradeoff; requires the `image` extra)")
 
     p_diff = sub.add_parser("diff", help="run-to-run regression delta digest")
     p_diff.add_argument("ref_a", metavar="handle_before", help="the earlier run handle")
