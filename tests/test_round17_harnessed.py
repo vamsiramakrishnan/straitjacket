@@ -244,7 +244,8 @@ def test_job_stuck_in_launching_with_a_dead_supervisor_is_failed(state_home, wor
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()
     jobs._write_meta(jobdir, {"schema": "ctx.job/v1", "argv": ["x"], "state": "launching",
-                              "createdAt": time.time(), "launcherSupervisorPid": dead.pid})
+                              "createdAt": time.time()})
+    (jobdir / "launcher.pid").write_text(str(dead.pid))
     assert jobs.job_state(store, "deadbeefdead") == "failed"
     with pytest.raises(jobs.JobError, match="supervisor exited"):
         jobs.wait_for_done(store, "deadbeefdead", timeout=1)
@@ -256,8 +257,10 @@ def test_start_job_records_the_supervisor_pid(state_home, workspace_dir):
     ws = make_ws(workspace_dir)
     store = make_store(ws)
     job_id = jobs.start_job(ws, store, ["true"])
-    meta = jobs._read_meta(jobs._job_dir(store, job_id))
-    assert meta.get("launcherSupervisorPid") or meta.get("state") in ("running", "done")
+    jobdir = jobs._job_dir(store, job_id)
+    assert jobs._launcher_pid(jobdir) is not None
+    # The launcher never rewrites meta.json: that document is the supervisor's.
+    assert "launcherSupervisorPid" not in jobs._read_meta(jobdir)
     jobs.wait_for_done(store, job_id, timeout=20)
 
 

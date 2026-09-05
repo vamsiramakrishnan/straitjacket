@@ -491,14 +491,18 @@ def _import_edges(ws: Workspace, rels: set[str], units: dict[str, _Unit]) -> tup
         # from there. Nothing is registered when no prefix is a package, so
         # loose scripts and test trees keep exactly their old behaviour.
         parts = stem.split("/")
-        # Walk from the deepest prefix down: a shallow container dir (e.g. a
-        # src-layout root) can get wrongly marked a pkg_dir by one loose file
-        # sitting in it, and matching shallow-first would poison every nested
-        # package's import name with that container's name.
-        for i in range(len(parts) - 1, -1, -1):
-            if "/".join(parts[: i + 1]) in pkg_dirs:
+        # Register the name under EVERY package root the file is importable
+        # from: each prefix that starts an unbroken chain of package dirs
+        # down to the file. Shallow-first alone let a loose `src/conftest.py`
+        # mark `src` a package and key `src/ctx/store.py` only as
+        # `src.ctx.store`; deepest-first alone keyed `src/pkg/sub/store.py`
+        # only as `sub.store` and lost `pkg.sub.store` (Codex review, PR
+        # #33). A file has as many importable names as it has package roots
+        # above it, and `setdefault` keeps the first file per name.
+        dirs = ["/".join(parts[: i + 1]) for i in range(len(parts) - 1)]
+        for i in range(len(dirs)):
+            if all(d in pkg_dirs for d in dirs[i:]):
                 by_stem.setdefault(".".join(parts[i:]), rel)
-                break
     for rel, unit in units.items():
         for imp in unit.imports:
             dotted = imp.replace("::", ".").strip()

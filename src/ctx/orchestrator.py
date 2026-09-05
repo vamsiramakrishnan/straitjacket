@@ -1596,9 +1596,17 @@ def run_route(
         # to plan, make one edit, then hand off -- never offered to a node
         # already routed cheap, since there is nothing to save by handing off
         # from economy to economy.
+        # Armed only when the handoff it asks for can happen: a second attempt
+        # must be allowed (the cheap model runs as the SAME node's next
+        # attempt) and a cheaper unattended model must be installed. Asking a
+        # compliant frontier worker to stop after one edit with nobody to hand
+        # to turned a task it could have finished into a guaranteed
+        # stop_blocked (Codex review, PR #33).
         prewalk_enabled = (
             bool(getattr(cfg, "prewalk", False))
             and _is_mutation_node(a.node) and model.tier == "frontier"
+            and (st.nodes[a.node.id].attempts if a.node.id in st.nodes else 0) + 1 < max_attempts
+            and _steward.de_escalation_target(model, hosts) is not None
         )
         prompt = _node_prompt(a.node, plan.task, dep_docs, inbox, prewalk_hint=prewalk_enabled)
         node_usage: list[ActualUsage | None] = []
@@ -1732,11 +1740,32 @@ def run_route(
                             budget_remaining_usd=remaining,
                         ))
                         if action == "handoff_cheap" and target is not None:
+                            # The steward's menu prices an escalation against
+                            # the balance; this branch bypasses the steward,
+                            # so it prices the cheap attempt itself. Only
+                            # `remaining <= 0` was checked above, and a
+                            # frontier attempt that spent most of an explicit
+                            # budget could hand off into an attempt the ledger
+                            # knew it could not cover (Codex review, PR #33).
+                            cheap_est = target[0].model_price(target[1].id).cost_usd(
+                                input_tokens=a.node.est_input_tokens,
+                                output_tokens=a.node.est_output_tokens,
+                            )
+                            if budget > 0 and cheap_est > remaining:
+                                last_action = "stop_budget"
+                                _record(_ledger.steward_row(
+                                    tid, a.node.id, attempt=attempt, on_reason="over_budget",
+                                    failure_kind="none", action="stop_budget", target=None,
+                                    budget_remaining_usd=remaining,
+                                ))
+                                cls = _steward.Classification("over_budget", "none")
+                                break
                             # The edit already landed and is real progress --
                             # unlike a failed attempt's retry, there is
                             # nothing here to discard, so (unlike escalate
                             # below) the worktree is NOT reset.
                             host, model = target
+                            a = replace(a, host=host, model=model, est_cost_usd=cheap_est)
                             escalated = f"{target[0].name}/{target[1].id}"
                             continuation_doc = ""
                             if ref:

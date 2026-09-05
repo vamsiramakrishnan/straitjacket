@@ -105,6 +105,17 @@ def _write_meta(jobdir: Path, meta: dict[str, Any]) -> None:
     _atomic_write(jobdir / "meta.json", json.dumps(meta, sort_keys=True).encode("utf-8"))
 
 
+_LAUNCHER_PID_NAME = "launcher.pid"
+
+
+def _launcher_pid(jobdir: Path) -> int | None:
+    """The supervisor pid the launcher recorded, or None before it did."""
+    try:
+        return int((jobdir / _LAUNCHER_PID_NAME).read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _read_meta(jobdir: Path) -> dict[str, Any]:
     try:
         return json.loads((jobdir / "meta.json").read_text(encoding="utf-8"))
@@ -133,7 +144,7 @@ def _adopt_if_orphaned(jobdir: Path, meta: dict[str, Any]) -> dict[str, Any]:
     if meta.get("state") == "launching":
         # Never left "launching": the supervisor died before its first
         # state write. Without this, `ctx job <id> --wait` polled forever.
-        sup = meta.get("launcherSupervisorPid")
+        sup = _launcher_pid(jobdir)
         if sup is None or _pid_alive(sup):
             return meta
         meta = _read_meta(jobdir)
@@ -227,17 +238,13 @@ def start_job(
         )
     finally:
         sup_err.close()
-    # Record the supervisor's pid while the job is still "launching", so a
-    # supervisor that dies before its first state write (import failure,
-    # OOM in the window) can be recognised instead of waited on forever.
-    # Re-read first: the supervisor may already have written "running".
-    current = _read_meta(jobdir)
-    if current.get("state") == "launching":
-        # re-read right before writing: the read above can be stale if the supervisor concurrently wrote "running"
-        current = _read_meta(jobdir)
-        if current.get("state") == "launching":
-            current["launcherSupervisorPid"] = sup.pid
-            _write_meta(jobdir, current)
+    # Record the supervisor's pid so a supervisor that dies before its first
+    # state write (import failure, OOM in the window) can be recognised
+    # instead of waited on forever. In its OWN file: meta.json is the
+    # supervisor's document, and a parent read-modify-write of it raced the
+    # supervisor's "running" write however many times it re-read first
+    # (Codex review, PR #33). Two writers, two files, no race.
+    _atomic_write(jobdir / _LAUNCHER_PID_NAME, str(sup.pid).encode("ascii"))
     return job_id
 
 

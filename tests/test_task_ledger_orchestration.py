@@ -581,3 +581,78 @@ def test_prewalk_keeps_the_isolated_worktree_edit_instead_of_resetting_it(
     assert by_id["build"].status == "ok"
     assert seen_on_continuation["foo.py"] == "new\n"   # not reset back to "old"
     assert (git_workspace / "foo.py").read_text(encoding="utf-8") == "new\n"
+
+
+def test_prewalk_does_not_arm_without_a_second_attempt_or_a_cheaper_model(
+    state_home, git_workspace
+):
+    """Codex review of PR #33: asking a compliant frontier worker to stop
+    after one edit when max_attempts is 1, or when no cheaper unattended
+    model is installed, turned a task it could have finished into a
+    guaranteed stop_blocked. The hint is only added when the handoff it
+    asks for can happen."""
+    from dataclasses import replace
+
+    ws = make_ws(git_workspace)
+    prompts = []
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        prompts.append(prompt)
+        return 0, "done", "", _usage(cost=0.02, turns=3)
+
+    # One attempt allowed: no handoff is possible, so no hint.
+    cfg = replace(ws.config.orchestrate, prewalk=True, max_attempts=1)
+    plan = build_route_plan("ship it", _PREWALK_RAW, _hosts("claude"), cfg)
+    result = run_route(ws, plan, cfg, launch=launch)
+    assert {o.status for o in result.outcomes} == {"ok"}
+    assert not any("Prewalk:" in p for p in prompts)
+
+    # Two attempts, but only the frontier model installed: nothing to hand to.
+    prompts.clear()
+    frontier_only = [
+        replace(h, spec=replace(h.spec, models=tuple(m for m in h.spec.models if m.tier == "frontier")))
+        for h in _hosts("claude")
+    ]
+    cfg = replace(ws.config.orchestrate, prewalk=True, max_attempts=2)
+    plan = build_route_plan("ship it", _PREWALK_RAW, frontier_only, cfg)
+    result = run_route(ws, plan, cfg, launch=launch)
+    assert {o.status for o in result.outcomes} == {"ok"}
+    assert not any("Prewalk:" in p for p in prompts)
+
+
+def test_prewalk_handoff_is_priced_against_the_budget(state_home, git_workspace):
+    """Codex review of PR #33 (P1): the handoff bypassed the steward's menu
+    and only checked `remaining <= 0`, so a frontier attempt that spent most
+    of an explicit budget handed off into a cheap attempt the ledger knew it
+    could not cover. The cheap attempt is priced like any claim."""
+    from dataclasses import replace
+
+    ws = make_ws(git_workspace)
+    base = replace(ws.config.orchestrate, prewalk=True)
+    plan = build_route_plan("ship it", _PREWALK_RAW, _hosts("claude"), base)
+    build = plan.assigned[0]
+    from ctx.steward import de_escalation_target
+
+    cheap_host, cheap_model = de_escalation_target(build.model, list(plan.hosts))
+    cheap_est = cheap_host.model_price(cheap_model.id).cost_usd(
+        input_tokens=build.node.est_input_tokens, output_tokens=build.node.est_output_tokens)
+    # The first claim must clear the frontier estimate; the frontier attempt
+    # then spends exactly that, leaving less than the cheap estimate.
+    frontier_cost = float(build.est_cost_usd)
+    cfg = replace(base, budget_usd=frontier_cost + cheap_est * 0.5)
+    launches = []
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        launches.append(model)
+        if "node \'build\'" in prompt and model == build.model.launch_id:
+            return 0, f"plan\n(edited)\n{PREWALK_SENTINEL}", "", _usage(cost=frontier_cost, turns=6)
+        return 0, "done", "", _usage(cost=0.02, turns=3)
+
+    result = run_route(ws, plan, cfg, launch=launch)
+    by_id = {o.node_id: o for o in result.outcomes}
+    assert by_id["build"].status == "failed" and by_id["build"].steward_action == "stop_budget"
+    assert launches.count(cheap_model.launch_id) == 0, "the cheap attempt must not launch"
+    rows = L.load(ws.root, result.task_id)
+    stewards = [r for r in rows if r["schema"] == L.STEWARD_SCHEMA and r["node_id"] == "build"]
+    assert [s["action"] for s in stewards] == ["handoff_cheap", "stop_budget"]
+    assert L.task_state(rows).spent_usd <= cfg.budget_usd

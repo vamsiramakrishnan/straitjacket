@@ -23,7 +23,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import types
@@ -1066,6 +1065,41 @@ def test_loose_top_level_file_does_not_poison_src_as_package_root(tmp_path, monk
         f"{[c[2] for c in edges]!r} -- 'src' was likely poisoned into a "
         f"pkg_dir by the loose src/conftest.py file"
     )
+
+
+_SRC_NESTED = {
+    "src/conftest.py": "",
+    "src/pkg/__init__.py": "",
+    "src/pkg/sub/__init__.py": "",
+    "src/pkg/sub/store.py": "def helper():\n    return 1\n",
+    "src/pkg/user.py": "from pkg.sub.store import helper\n\n\ndef use():\n    return helper()\n",
+}
+
+
+def test_nested_package_keeps_its_outer_prefix_beside_the_loose_root(tmp_path, monkeypatch):
+    """Codex review of the fix above: deepest-first keyed `src/pkg/sub/store.py`
+    only as `sub.store`, so `from pkg.sub.store import helper` fell to the
+    unscoped tier. Every package root the file is importable from is
+    registered: `pkg.sub.store` resolves at the import tier, and the loose
+    `src/conftest.py` still does not make `src.pkg.sub.store` the only name."""
+    monkeypatch.setenv("CTX_STATE_HOME", str(tmp_path / "state"))
+    from ctx.callgraph import _load_graph
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+
+    d = tmp_path / "proj"
+    d.mkdir()
+    (d / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    for rel, content in _SRC_NESTED.items():
+        p = d / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "init", "-q", "."], cwd=d, check=True)
+    ws = resolve_workspace(str(d))
+    g = _load_graph(Store(ws.workspace_id), ws)
+    helper_id = next(n for n, dd in g.nodes.items() if dd.qual == "helper")
+    edges = [c for c in g.in_edges.get(helper_id, []) if g.nodes[c[0]].qual == "use"]
+    assert edges and any(c[2] == "import" for c in edges), [c[2] for c in edges]
 
 
 # =====================================================================

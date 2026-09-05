@@ -283,6 +283,19 @@ grandchild whose leader had already exited. The route now runs one
 attempt per node with a 100-turn ceiling and labels its cost estimate a
 placeholder; the first run cost 57 times it.
 
+Review round on this wave (Codex, four findings, all confirmed and fixed):
+prewalk is armed only when the handoff it asks for can happen (a second
+attempt allowed and a cheaper unattended model installed), so a compliant
+frontier worker is never told to stop after one edit with nobody to hand
+to; the cheap handoff attempt is priced against the remaining budget like
+any claim instead of passing on `remaining > 0` alone; the call graph
+registers a file under every package root it is importable from (an
+unbroken chain of package directories), so a nested `pkg.sub.store` keeps
+its outer prefix beside a loose file in the source root; and the job
+launcher records its supervisor's pid in its own file rather than
+read-modify-writing the supervisor's `meta.json`, which raced however many
+times it re-read first.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives
