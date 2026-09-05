@@ -12,7 +12,7 @@ from typing import Any
 
 from ctx.execution import snapshot_file
 from ctx.store import Store
-from ctx.textutil import decode_exact, encode_exact, fmt_int, short_id
+from ctx.textutil import index_lines, decode_exact, encode_exact, fmt_int, short_id
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit, _parse, _peek_blob, _read_bytes_range, _route_workspace
@@ -59,7 +59,14 @@ def _window(flag: str, a: int, b: int, total: int, unit: str) -> tuple[int, int]
     """
     window = bounds.span(a, b, total)
     if window is None:
-        suggest = min(total, 200) or 1
+        if total <= 0:
+            # No range can select from nothing; the old text suggested
+            # `--lines 1:1`, which raised this same error again.
+            raise RetrievalError(
+                f"--{flag} {a}:{b} selects nothing: the content is empty "
+                f"(0 {unit}). Omit --{flag} to see that."
+            )
+        suggest = min(total, 200)
         raise RetrievalError(
             f"--{flag} {a}:{b} selects nothing: the content has "
             f"{fmt_int(total)} {unit}. Use --{flag} 1:{suggest} or omit "
@@ -435,83 +442,95 @@ def get(
             a, b = selector.lines if selector.lines is not None else (1, total)
             if selector.lines is None:
                 b = min(total, ws.config.budgets.max_inline_lines)
-            # bounds.span, not a lone `min(b, total)`: only the END was
-            # clamped, so a START past EOF printed a self-contradictory
-            # header (start > total) over a silently empty body and still
-            # exited 0. An empty span is empty, and says so.
-            a, b = _window("lines", a, b, total, "lines")
-            if b - a + 1 > budget.max_inline_lines:
-                b = a + budget.max_inline_lines - 1
-                continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
-            chunk = store.read_blob_lines(blob_hash, a, b)
-            all_lines = chunk.decode("utf-8", "replace").splitlines()
-            rendered = anchors.render_window(all_lines, a, tagged=selector.hashlines)
-            b, fit_next = _fit_window("--lines", ref_text, a, b, total, rendered, budget)
-            if fit_next:
-                continuation = fit_next
-                rendered = rendered[: b - a + 1]
-            header.append(f"selector: --lines {a}:{b} of {fmt_int(total)}")
-            body = "\n".join(rendered)
+            if total == 0 and selector.lines is None:
+                # An empty file or stream is a complete answer. Every path
+                # through _window refused it ("selects nothing"), so `ctx
+                # get` could not return an empty blob at all -- and the
+                # refusal suggested `--lines 1:1`, which refused again.
+                header.append("selector: --lines 1:0 of 0 (empty)")
+                body = ""
+            else:
+                # bounds.span, not a lone `min(b, total)`: only the END was
+                # clamped, so a START past EOF printed a self-contradictory
+                # header (start > total) over a silently empty body and
+                # still exited 0. An empty span is empty, and says so.
+                a, b = _window("lines", a, b, total, "lines")
+                if b - a + 1 > budget.max_inline_lines:
+                    b = a + budget.max_inline_lines - 1
+                    continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
+                chunk = store.read_blob_lines(blob_hash, a, b)
+                all_lines = index_lines(chunk.decode("utf-8", "replace"))
+                rendered = anchors.render_window(all_lines, a, tagged=selector.hashlines)
+                b, fit_next = _fit_window("--lines", ref_text, a, b, total, rendered, budget)
+                if fit_next:
+                    continuation = fit_next
+                    rendered = rendered[: b - a + 1]
+                header.append(f"selector: --lines {a}:{b} of {fmt_int(total)}")
+                body = "\n".join(rendered)
         else:
             if b"\x00" in data[:8192]:
                 raise RetrievalError("binary content: use --bytes A:B for exact slices")
-            all_lines = data.decode("utf-8", "replace").splitlines()
-            if selector.lines is None:
-                a, b = 1, min(len(all_lines), ws.config.budgets.max_inline_lines)
+            all_lines = index_lines(data.decode("utf-8", "replace"))
+            if selector.lines is None and not all_lines:
+                header.append("selector: --lines 1:0 of 0 (empty)")
+                body = ""
             else:
-                a, b = selector.lines
-            # Anchor resolution runs BEFORE the range is clamped. An edit that
-            # deleted lines can leave an anchored address pointing past the new
-            # end of file, and _window refuses a start past the end -- so
-            # clamping first would answer "that range selects nothing" about
-            # content that is still in the file, three lines up. The address
-            # names content; where that content currently sits is the answer,
-            # not a precondition for looking.
-            if selector.lines_anchor is not None:
-                a, b, moved = _resolve_anchor(
-                    all_lines, a, b, selector.lines_anchor, ref_text
-                )
-                if moved:
-                    header.append(moved)
-            # Second door onto the same contract: this path clamped only the
-            # END too, so `--lines 1000:5` on a 5-line file printed the header
-            # "--lines 1000:5 of 5" -- a range whose start exceeds its own
-            # total -- over an empty body, and exited 0.
-            a, b = _window("lines", a, b, len(all_lines), "lines")
-            # How this ref spells a --lines value. A mutable target (repo:)
-            # mints the anchor of the window being addressed, so every address
-            # this call emits -- the selector it echoes and any continuation it
-            # offers -- is verifiable when it comes back. Immutable targets
-            # mint nothing: their bytes cannot move, and the nine characters
-            # would buy a guarantee the ref kind already gives for free.
-            def _addr(x: int, y: int) -> str:
-                if not mutable:
-                    return f"{x}:{y}"
-                return anchors.format_span(x, y, anchors.anchor(all_lines[x - 1 : y]))
+                if selector.lines is None:
+                    a, b = 1, min(len(all_lines), ws.config.budgets.max_inline_lines)
+                else:
+                    a, b = selector.lines
+                # Anchor resolution runs BEFORE the range is clamped. An edit that
+                # deleted lines can leave an anchored address pointing past the new
+                # end of file, and _window refuses a start past the end -- so
+                # clamping first would answer "that range selects nothing" about
+                # content that is still in the file, three lines up. The address
+                # names content; where that content currently sits is the answer,
+                # not a precondition for looking.
+                if selector.lines_anchor is not None:
+                    a, b, moved = _resolve_anchor(
+                        all_lines, a, b, selector.lines_anchor, ref_text
+                    )
+                    if moved:
+                        header.append(moved)
+                # Second door onto the same contract: this path clamped only the
+                # END too, so `--lines 1000:5` on a 5-line file printed the header
+                # "--lines 1000:5 of 5" -- a range whose start exceeds its own
+                # total -- over an empty body, and exited 0.
+                a, b = _window("lines", a, b, len(all_lines), "lines")
+                # How this ref spells a --lines value. A mutable target (repo:)
+                # mints the anchor of the window being addressed, so every address
+                # this call emits -- the selector it echoes and any continuation it
+                # offers -- is verifiable when it comes back. Immutable targets
+                # mint nothing: their bytes cannot move, and the nine characters
+                # would buy a guarantee the ref kind already gives for free.
+                def _addr(x: int, y: int) -> str:
+                    if not mutable:
+                        return f"{x}:{y}"
+                    return anchors.format_span(x, y, anchors.anchor(all_lines[x - 1 : y]))
 
-            if b - a + 1 > budget.max_inline_lines:
-                b = a + budget.max_inline_lines - 1
-                nxt_b = min(len(all_lines), b + budget.max_inline_lines)
-                continuation = f"ctx get {ref_text} --lines {_addr(b + 1, nxt_b)}"
-            rendered = anchors.render_window(
-                all_lines[a - 1 : b], a, tagged=selector.hashlines
-            )
-            b, fit_next = _fit_window(
-                "--lines", ref_text, a, b, len(all_lines), rendered, budget, addr=_addr
-            )
-            if fit_next:
-                continuation = fit_next
-                rendered = rendered[: b - a + 1]
-            header.append(
-                f"selector: --lines {_addr(a, b)} of {fmt_int(len(all_lines))}"
-            )
-            # The budget-truncation fallback address, resolved. `selector.lines`
-            # holds what the CALLER asked for, which after a relocation is the
-            # range the content has just been shown to have left -- so the one
-            # address emitted when the token budget cuts the body would send the
-            # reader back to coordinates this very call reported as stale.
-            lines_handle = f"{ref_text} --lines {_addr(a, b)}"
-            body = "\n".join(rendered)
+                if b - a + 1 > budget.max_inline_lines:
+                    b = a + budget.max_inline_lines - 1
+                    nxt_b = min(len(all_lines), b + budget.max_inline_lines)
+                    continuation = f"ctx get {ref_text} --lines {_addr(b + 1, nxt_b)}"
+                rendered = anchors.render_window(
+                    all_lines[a - 1 : b], a, tagged=selector.hashlines
+                )
+                b, fit_next = _fit_window(
+                    "--lines", ref_text, a, b, len(all_lines), rendered, budget, addr=_addr
+                )
+                if fit_next:
+                    continuation = fit_next
+                    rendered = rendered[: b - a + 1]
+                header.append(
+                    f"selector: --lines {_addr(a, b)} of {fmt_int(len(all_lines))}"
+                )
+                # The budget-truncation fallback address, resolved. `selector.lines`
+                # holds what the CALLER asked for, which after a relocation is the
+                # range the content has just been shown to have left -- so the one
+                # address emitted when the token budget cuts the body would send the
+                # reader back to coordinates this very call reported as stale.
+                lines_handle = f"{ref_text} --lines {_addr(a, b)}"
+                body = "\n".join(rendered)
 
     if selector.snapcompact and body:
         # Opt-in transport swap (docs/ARCHITECTURE.md, Delivery plane): the

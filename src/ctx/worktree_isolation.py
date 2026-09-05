@@ -52,11 +52,16 @@ def normalize_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
         path = PurePosixPath(value)
         if (
             not value
+            or not path.parts  # "." / "./": pathlib normalizes them to ()
             or path.is_absolute()
             or ".." in path.parts
             or path.parts[0] == ".git"
         ):
-            raise WorktreeIsolationError(f"unsafe declared target: {raw!r}")
+            raise WorktreeIsolationError(
+                f"unsafe declared target: {raw!r}"
+                + (" (a scope names paths; '.' is the whole repository)"
+                   if value and not path.parts else "")
+            )
         clean = path.as_posix().removeprefix("./")
         if clean not in normalized:
             normalized.append(clean)

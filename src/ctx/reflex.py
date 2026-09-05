@@ -165,6 +165,7 @@ it. The live named-pytest arm writes privacy-safe decisions and results to
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -584,6 +585,38 @@ def read_state(ws_root: Path | str | None) -> dict[str, Any]:
         return {}
 
 
+@contextlib.contextmanager
+def _exclusive(ws_root: Path | str):
+    """Hold the state file's lock across a read-modify-write.
+
+    Every mutator read the blob, changed it in memory and wrote it back with
+    nothing held in between; two hook processes from one assistant turn
+    (parallel tool calls) each read commands=5 and both wrote 6, and one
+    side's interventions, hysteresis counters and open windows were lost.
+    The engagement ledger already does this under flock (`_mutate_state`).
+    Fail-open, and never creates the ledger directory: a first-sight
+    command must not change `git status` (see check_command).
+    """
+    fd = None
+    try:
+        path = _state_path(ws_root) + ".lock"
+        if os.path.isdir(os.path.dirname(path)):
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+    except Exception:
+        fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 def _write_state(ws_root: Path | str, state: dict[str, Any]) -> None:
     """Atomic write: temp file in the ledger dir + rename. Raises to the
     caller (every caller is fail-open)."""
@@ -925,51 +958,52 @@ def emit_intervention(
     try:
         import hashlib
 
-        state = _normalized(read_state(ws_root))
-        if generation is None:
-            generation = _generation(ws_root)
-        state["seq"] = int(state.get("seq") or 0) + 1
-        seq = state["seq"]
-        iid = hashlib.sha256(f"{seq}|{signature}".encode("utf-8")).hexdigest()[:12]
-        fam = family if family else family_of(signature)
-        docs: list[dict[str, Any]] = []
-        # A fresh emission supersedes the signature's still-open window;
-        # generation-change expiry runs here too (a generation value is in
-        # hand — a scoring moment, per the lazy-hash discipline).
-        docs.extend(
-            _expire_windows(state, generation=generation)
-            if generation is not None
-            else []
-        )
-        rec = state["interventions"].get(signature)
-        if not isinstance(rec, dict):
-            # Shadow-only record: disarmed and starvation-deduped so the
-            # LIVE detector ignores it (see docstring).
-            rec = {
-                "count": 0,
-                "last_run": None,
-                "hints": 0,
-                "starved": True,
-                "armed": False,
-            }
-            state["interventions"][signature] = rec
-        prior_iid = rec.get("iid")
-        if prior_iid and prior_iid in state["open"]:
-            del state["open"][prior_iid]
-            docs.append(
-                _outcome_doc(
-                    str(prior_iid), "expired_unresolved", {"reason": "superseded"}
-                )
+        with _exclusive(ws_root):
+            state = _normalized(read_state(ws_root))
+            if generation is None:
+                generation = _generation(ws_root)
+            state["seq"] = int(state.get("seq") or 0) + 1
+            seq = state["seq"]
+            iid = hashlib.sha256(f"{seq}|{signature}".encode("utf-8")).hexdigest()[:12]
+            fam = family if family else family_of(signature)
+            docs: list[dict[str, Any]] = []
+            # A fresh emission supersedes the signature's still-open window;
+            # generation-change expiry runs here too (a generation value is in
+            # hand — a scoring moment, per the lazy-hash discipline).
+            docs.extend(
+                _expire_windows(state, generation=generation)
+                if generation is not None
+                else []
             )
-        rec["iid"] = iid
-        rec["generation"] = generation
-        state["open"][iid] = {
-            "signature": signature,
-            "family": fam,
-            "generation": generation,
-            "opened_at": int(state.get("commands") or 0),
-        }
-        _write_state(ws_root, state)
+            rec = state["interventions"].get(signature)
+            if not isinstance(rec, dict):
+                # Shadow-only record: disarmed and starvation-deduped so the
+                # LIVE detector ignores it (see docstring).
+                rec = {
+                    "count": 0,
+                    "last_run": None,
+                    "hints": 0,
+                    "starved": True,
+                    "armed": False,
+                }
+                state["interventions"][signature] = rec
+            prior_iid = rec.get("iid")
+            if prior_iid and prior_iid in state["open"]:
+                del state["open"][prior_iid]
+                docs.append(
+                    _outcome_doc(
+                        str(prior_iid), "expired_unresolved", {"reason": "superseded"}
+                    )
+                )
+            rec["iid"] = iid
+            rec["generation"] = generation
+            state["open"][iid] = {
+                "signature": signature,
+                "family": fam,
+                "generation": generation,
+                "opened_at": int(state.get("commands") or 0),
+            }
+            _write_state(ws_root, state)
         docs.append(
             {
                 "schema": "ctx.intervention/v1",
@@ -1017,22 +1051,23 @@ def note_intervention(
     if ws_root is None or not signature:
         return
     try:
-        state = _normalized(read_state(ws_root))
-        rec = state["interventions"].get(signature)
-        if not isinstance(rec, dict):
-            rec = {"count": 0, "last_run": None, "hints": 0}
-        rec["count"] = int(rec.get("count") or 0) + 1
-        rec["last_run"] = str(run_short_id) if run_short_id else None
-        rec["hints"] = int(rec.get("hints") or 0) + max(0, int(hints))
-        rec["starved"] = False
-        # v2 (spec3 round-2 finding): the intervention ARMS the signature.
-        # Only an armed signature can score starvation; an Edit/Write
-        # disarms (note_edit) because run → census → edit → re-run is the
-        # healthy verification loop, not the slicer flail.
-        rec["armed"] = True
-        state["interventions"][signature] = rec
-        plan_mode = "dense" if state["densify"].get(signature) else "normal"
-        _write_state(ws_root, state)
+        with _exclusive(ws_root):
+            state = _normalized(read_state(ws_root))
+            rec = state["interventions"].get(signature)
+            if not isinstance(rec, dict):
+                rec = {"count": 0, "last_run": None, "hints": 0}
+            rec["count"] = int(rec.get("count") or 0) + 1
+            rec["last_run"] = str(run_short_id) if run_short_id else None
+            rec["hints"] = int(rec.get("hints") or 0) + max(0, int(hints))
+            rec["starved"] = False
+            # v2 (spec3 round-2 finding): the intervention ARMS the signature.
+            # Only an armed signature can score starvation; an Edit/Write
+            # disarms (note_edit) because run → census → edit → re-run is the
+            # healthy verification loop, not the slicer flail.
+            rec["armed"] = True
+            state["interventions"][signature] = rec
+            plan_mode = "dense" if state["densify"].get(signature) else "normal"
+            _write_state(ws_root, state)
     except Exception:
         return
     try:
@@ -1064,16 +1099,17 @@ def note_edit(ws_root: Path | str | None) -> None:
     if ws_root is None:
         return
     try:
-        state = _normalized(read_state(ws_root))
-        if not state["interventions"]:
-            return
-        changed = False
-        for rec in state["interventions"].values():
-            if isinstance(rec, dict) and rec.get("armed", True):
-                rec["armed"] = False
-                changed = True
-        if changed:
-            _write_state(ws_root, state)
+        with _exclusive(ws_root):
+            state = _normalized(read_state(ws_root))
+            if not state["interventions"]:
+                return
+            changed = False
+            for rec in state["interventions"].values():
+                if isinstance(rec, dict) and rec.get("armed", True):
+                    rec["armed"] = False
+                    changed = True
+            if changed:
+                _write_state(ws_root, state)
     except Exception:
         pass
 
@@ -1131,129 +1167,130 @@ def check_command(
         if sig.startswith("q "):
             sync_query_outcomes(ws_root)
             return None
-        state = _normalized(read_state(ws_root))
-        # Nothing recorded, nothing open → nothing to score: return WITHOUT
-        # writing (v1 behavior kept). This matters beyond IO thrift: writing
-        # here would CREATE the ledger dir on first sight of any command,
-        # changing `git status --porcelain` — and with it the manifest
-        # worktreeHash (golden) — between two otherwise identical runs.
-        if not state["interventions"] and not state["open"]:
-            return None
-        # Tool-bearing command counter (hypothesis windows). Counting only
-        # signature-bearing commands keeps it a pure function of the
-        # command sequence.
-        state["commands"] = int(state.get("commands") or 0) + 1
-        shadow_docs: list[dict[str, Any]] = []
-        gen_holder: list[Any] = [generation, generation is not None]
+        with _exclusive(ws_root):
+            state = _normalized(read_state(ws_root))
+            # Nothing recorded, nothing open → nothing to score: return WITHOUT
+            # writing (v1 behavior kept). This matters beyond IO thrift: writing
+            # here would CREATE the ledger dir on first sight of any command,
+            # changing `git status --porcelain` — and with it the manifest
+            # worktreeHash (golden) — between two otherwise identical runs.
+            if not state["interventions"] and not state["open"]:
+                return None
+            # Tool-bearing command counter (hypothesis windows). Counting only
+            # signature-bearing commands keeps it a pure function of the
+            # command sequence.
+            state["commands"] = int(state.get("commands") or 0) + 1
+            shadow_docs: list[dict[str, Any]] = []
+            gen_holder: list[Any] = [generation, generation is not None]
 
-        def _gen() -> str | None:
-            if not gen_holder[1]:
-                gen_holder[0] = _generation(ws_root)
-                gen_holder[1] = True
-            return gen_holder[0]
+            def _gen() -> str | None:
+                if not gen_holder[1]:
+                    gen_holder[0] = _generation(ws_root)
+                    gen_holder[1] = True
+                return gen_holder[0]
 
-        rec = state["interventions"].get(sig)
-        result: str | None = None
-        fresh = False
-        run_id: str | None = None
-        if isinstance(rec, dict):
-            # ---- LIVE v2 path, unchanged: an Edit/Write since the digest
-            # disarmed this signature — the re-run is verification, not
-            # starvation. (Default True keeps v1 state files and the
-            # hook/cli same-re-run dedup working.)
-            if rec.get("armed", True):
-                fresh = not bool(rec.get("starved"))
-                rec["starved"] = True
-                state["densify"][sig] = True
-                if fresh:
-                    state["outcomes_appended"] = (
-                        int(state.get("outcomes_appended") or 0) + 1
-                    )
-                run_id = rec.get("last_run") or None
-                result = "densify"
-            # ---- SHADOW: generation confirmation (EDC §8).
-            try:
-                gen = _gen()
-                recorded = rec.get("generation")
-                if gen and recorded:
-                    rel = "equal" if gen == recorded else "changed"
-                else:
-                    rel = "unknown"
-                armed = bool(rec.get("armed", True))
-                if rel == "changed":
-                    outcome, starve, confirmed = "validation_after_edit", False, True
-                elif rel == "equal":
-                    outcome = "slicer_rerun" if _has_slicers(command) else "equivalent_rerun"
-                    starve, confirmed = True, True
-                else:  # unknown generation: provisional, event-classified
-                    if armed:
-                        outcome = (
-                            "slicer_rerun" if _has_slicers(command) else "equivalent_rerun"
+            rec = state["interventions"].get(sig)
+            result: str | None = None
+            fresh = False
+            run_id: str | None = None
+            if isinstance(rec, dict):
+                # ---- LIVE v2 path, unchanged: an Edit/Write since the digest
+                # disarmed this signature — the re-run is verification, not
+                # starvation. (Default True keeps v1 state files and the
+                # hook/cli same-re-run dedup working.)
+                if rec.get("armed", True):
+                    fresh = not bool(rec.get("starved"))
+                    rec["starved"] = True
+                    state["densify"][sig] = True
+                    if fresh:
+                        state["outcomes_appended"] = (
+                            int(state.get("outcomes_appended") or 0) + 1
                         )
-                        starve = True
-                    else:
-                        outcome, starve = "validation_after_edit", False
-                    confirmed = False
-                resolved = _resolve_window(
-                    state,
-                    sig,
-                    outcome,
-                    {"generation": rel, "confirmed": confirmed, "signature": sig},
-                )
-                shadow_docs.extend(resolved)
-                if resolved:  # dedupe: circuit moves once per window/cycle
-                    if starve:
-                        shadow_docs.extend(_circuit_on_starvation(state, sig, gen))
-                    else:
-                        shadow_docs.extend(_circuit_on_positive(state, sig, gen))
-            except Exception:
-                pass
-        else:
-            # ---- SHADOW: narrowing (EDC §7 / Rule 9b). Deterministic:
-            # first match in sorted signature order.
-            try:
-                for b_sig in sorted(state["interventions"]):
-                    brec = state["interventions"][b_sig]
-                    if not isinstance(brec, dict):
-                        continue
-                    if not is_narrower(sig, b_sig):
-                        continue
+                    run_id = rec.get("last_run") or None
+                    result = "densify"
+                # ---- SHADOW: generation confirmation (EDC §8).
+                try:
                     gen = _gen()
-                    recorded = brec.get("generation")
+                    recorded = rec.get("generation")
                     if gen and recorded:
                         rel = "equal" if gen == recorded else "changed"
                     else:
                         rel = "unknown"
+                    armed = bool(rec.get("armed", True))
+                    if rel == "changed":
+                        outcome, starve, confirmed = "validation_after_edit", False, True
+                    elif rel == "equal":
+                        outcome = "slicer_rerun" if _has_slicers(command) else "equivalent_rerun"
+                        starve, confirmed = True, True
+                    else:  # unknown generation: provisional, event-classified
+                        if armed:
+                            outcome = (
+                                "slicer_rerun" if _has_slicers(command) else "equivalent_rerun"
+                            )
+                            starve = True
+                        else:
+                            outcome, starve = "validation_after_edit", False
+                        confirmed = False
                     resolved = _resolve_window(
                         state,
-                        b_sig,
-                        "narrowed_execution",
-                        {
-                            "generation": rel,
-                            "narrower_signature": sig,
-                            "signature": b_sig,
-                        },
+                        sig,
+                        outcome,
+                        {"generation": rel, "confirmed": confirmed, "signature": sig},
                     )
                     shadow_docs.extend(resolved)
-                    if resolved:
-                        shadow_docs.extend(_circuit_on_positive(state, b_sig, gen))
-                    break
+                    if resolved:  # dedupe: circuit moves once per window/cycle
+                        if starve:
+                            shadow_docs.extend(_circuit_on_starvation(state, sig, gen))
+                        else:
+                            shadow_docs.extend(_circuit_on_positive(state, sig, gen))
+                except Exception:
+                    pass
+            else:
+                # ---- SHADOW: narrowing (EDC §7 / Rule 9b). Deterministic:
+                # first match in sorted signature order.
+                try:
+                    for b_sig in sorted(state["interventions"]):
+                        brec = state["interventions"][b_sig]
+                        if not isinstance(brec, dict):
+                            continue
+                        if not is_narrower(sig, b_sig):
+                            continue
+                        gen = _gen()
+                        recorded = brec.get("generation")
+                        if gen and recorded:
+                            rel = "equal" if gen == recorded else "changed"
+                        else:
+                            rel = "unknown"
+                        resolved = _resolve_window(
+                            state,
+                            b_sig,
+                            "narrowed_execution",
+                            {
+                                "generation": rel,
+                                "narrower_signature": sig,
+                                "signature": b_sig,
+                            },
+                        )
+                        shadow_docs.extend(resolved)
+                        if resolved:
+                            shadow_docs.extend(_circuit_on_positive(state, b_sig, gen))
+                        break
+                except Exception:
+                    pass
+            # ---- SHADOW: expire unresolved windows (censored observations).
+            # The generation axis applies only when a hash is already in hand —
+            # never computed just for expiry (hot-path discipline).
+            try:
+                shadow_docs.extend(
+                    _expire_windows(
+                        state,
+                        now_commands=state["commands"],
+                        generation=gen_holder[0] if gen_holder[1] else None,
+                    )
+                )
             except Exception:
                 pass
-        # ---- SHADOW: expire unresolved windows (censored observations).
-        # The generation axis applies only when a hash is already in hand —
-        # never computed just for expiry (hot-path discipline).
-        try:
-            shadow_docs.extend(
-                _expire_windows(
-                    state,
-                    now_commands=state["commands"],
-                    generation=gen_holder[0] if gen_holder[1] else None,
-                )
-            )
-        except Exception:
-            pass
-        _write_state(ws_root, state)
+            _write_state(ws_root, state)
         if fresh:
             _append_outcome(ws_root, "starvation", sig, run_id, "densify")
         _append_v2_events(ws_root, shadow_docs)
@@ -1274,41 +1311,42 @@ def note_landing(ws_root: Path | str | None, ref_or_handle: str) -> None:
         if not m:
             return
         target = m.group(1).lower()
-        state = _normalized(read_state(ws_root))
-        for sig in sorted(state["interventions"]):
-            rec = state["interventions"][sig]
-            if not isinstance(rec, dict):
-                continue
-            known = str(rec.get("last_run") or "").lower()
-            if not known:
-                continue
-            if known.startswith(target) or target.startswith(known):
-                state["outcomes_appended"] = (
-                    int(state.get("outcomes_appended") or 0) + 1
-                )
-                # SHADOW (EDC §9): a landing resolves the signature's open
-                # hypothesis window with the retrieval_landing positive and
-                # feeds the circuit hysteresis. The v1 "landing" line below
-                # stays byte-identical (dual-write).
-                shadow_docs: list[dict[str, Any]] = []
-                try:
-                    resolved = _resolve_window(
-                        state,
-                        sig,
-                        "retrieval_landing",
-                        {"handle": "run:" + known, "signature": sig},
+        with _exclusive(ws_root):
+            state = _normalized(read_state(ws_root))
+            for sig in sorted(state["interventions"]):
+                rec = state["interventions"][sig]
+                if not isinstance(rec, dict):
+                    continue
+                known = str(rec.get("last_run") or "").lower()
+                if not known:
+                    continue
+                if known.startswith(target) or target.startswith(known):
+                    state["outcomes_appended"] = (
+                        int(state.get("outcomes_appended") or 0) + 1
                     )
-                    shadow_docs.extend(resolved)
-                    if resolved:
-                        shadow_docs.extend(
-                            _circuit_on_positive(state, sig, rec.get("generation"))
+                    # SHADOW (EDC §9): a landing resolves the signature's open
+                    # hypothesis window with the retrieval_landing positive and
+                    # feeds the circuit hysteresis. The v1 "landing" line below
+                    # stays byte-identical (dual-write).
+                    shadow_docs: list[dict[str, Any]] = []
+                    try:
+                        resolved = _resolve_window(
+                            state,
+                            sig,
+                            "retrieval_landing",
+                            {"handle": "run:" + known, "signature": sig},
                         )
-                except Exception:
-                    shadow_docs = []
-                _write_state(ws_root, state)
-                _append_outcome(ws_root, "landing", sig, known, "none")
-                _append_v2_events(ws_root, shadow_docs)
-                return
+                        shadow_docs.extend(resolved)
+                        if resolved:
+                            shadow_docs.extend(
+                                _circuit_on_positive(state, sig, rec.get("generation"))
+                            )
+                    except Exception:
+                        shadow_docs = []
+                    _write_state(ws_root, state)
+                    _append_outcome(ws_root, "landing", sig, known, "none")
+                    _append_v2_events(ws_root, shadow_docs)
+                    return
     except Exception:
         pass
 
@@ -1631,12 +1669,13 @@ def sync_query_outcomes(ws_root: Path | str | None) -> None:
         has_ops, has_json = os.path.isfile(ops_path), os.path.isfile(json_path)
         if not has_ops and not has_json:
             return
-        state = _normalized(read_state(ws_root))
-        docs, changed = _fold_q_ledger(
-            state, ops_path if has_ops else None, json_path if has_json else None
-        )
-        if changed:
-            _write_state(ws_root, state)
+        with _exclusive(ws_root):
+            state = _normalized(read_state(ws_root))
+            docs, changed = _fold_q_ledger(
+                state, ops_path if has_ops else None, json_path if has_json else None
+            )
+            if changed:
+                _write_state(ws_root, state)
         if docs:
             _append_v2_events(ws_root, docs)
     except Exception:

@@ -304,7 +304,7 @@ def test_orchestrator_launch_names_the_model_for_the_hooks(monkeypatch, tmp_path
         seen["env"] = kw.get("env") or {}
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(orchestrator.subprocess, "run", fake_run)
+    monkeypatch.setattr(orchestrator, "_run_bounded", fake_run)
     monkeypatch.setattr(orchestrator, "parse_host_output", lambda *a, **k: ("", None))
     # The suite itself may run under `ctx wrap`, which exports this; the
     # assertion is about what the LAUNCHER adds, not what it inherits.
@@ -330,7 +330,7 @@ def test_orchestrator_claude_nodes_wait_for_their_subagents(monkeypatch, tmp_pat
         seen["env"] = kw.get("env") or {}
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(orchestrator.subprocess, "run", fake_run)
+    monkeypatch.setattr(orchestrator, "_run_bounded", fake_run)
     monkeypatch.setattr(orchestrator, "parse_host_output", lambda *a, **k: ("", None))
     claude = next(h for h in hosts.detect_all(which=lambda b: None) if h.spec.name == "claude")
     monkeypatch.delenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", raising=False)

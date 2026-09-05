@@ -245,6 +245,26 @@ def write_exact(text: str, stream=None, *, newline: bool = True) -> None:
     buf.flush()
 
 
+def index_lines(text: str) -> list[str]:
+    """Split on ``\n`` only, the way the store's line index counts lines.
+
+    ``str.splitlines()`` also breaks on ``\r``, ``\v``, ``\f``, ``\x1c``,
+    ``\x85``, U+2028 and U+2029, so a line index built on ``\n`` and a body
+    split with ``splitlines()`` disagreed on any content containing one of
+    them: ``ctx get`` printed four lines under a header claiming three, with
+    every number after the break off by one. Search already split this way
+    (``_retrieval/search.py``); retrieval and spans now do too. A trailing
+    ``\r`` is dropped from each line for display, since CRLF content is one
+    line per ``\n`` either way.
+    """
+    if not text:
+        return []
+    parts = text.split("\n")
+    if parts and parts[-1] == "":
+        parts.pop()
+    return [p[:-1] if p.endswith("\r") else p for p in parts]
+
+
 def estimate_tokens(n_bytes: int) -> int:
     """Cheap deterministic token estimate: ~4 bytes per token."""
     return max(1, n_bytes // 4) if n_bytes else 0

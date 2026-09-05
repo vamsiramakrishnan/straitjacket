@@ -130,6 +130,23 @@ def _adopt_if_orphaned(jobdir: Path, meta: dict[str, Any]) -> dict[str, Any]:
     """If both the supervisor and the child died without a state transition
     (host crash, external SIGKILL of the whole tree), take over meta once.
     Gated on a re-read so a supervisor writing 'done' concurrently wins."""
+    if meta.get("state") == "launching":
+        # Never left "launching": the supervisor died before its first
+        # state write. Without this, `ctx job <id> --wait` polled forever.
+        sup = meta.get("launcherSupervisorPid")
+        if sup is None or _pid_alive(sup):
+            return meta
+        meta = _read_meta(jobdir)
+        if meta.get("state") != "launching":
+            return meta
+        meta.update(
+            state="failed",
+            error="supervisor exited before the job started",
+            endedAt=time.time(),
+            orphaned=True,
+        )
+        _write_meta(jobdir, meta)
+        return meta
     if meta.get("state") != "running":
         return meta
     if _pid_alive(meta.get("supervisorPid")) or _pid_alive(meta.get("pid")):
@@ -200,7 +217,7 @@ def start_job(
     )
     sup_err = (jobdir / "supervisor.err").open("wb")
     try:
-        subprocess.Popen(
+        sup = subprocess.Popen(
             [sys.executable, "-m", "ctx", "job", "_supervise", str(jobdir)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -210,6 +227,14 @@ def start_job(
         )
     finally:
         sup_err.close()
+    # Record the supervisor's pid while the job is still "launching", so a
+    # supervisor that dies before its first state write (import failure,
+    # OOM in the window) can be recognised instead of waited on forever.
+    # Re-read first: the supervisor may already have written "running".
+    current = _read_meta(jobdir)
+    if current.get("state") == "launching":
+        current["launcherSupervisorPid"] = sup.pid
+        _write_meta(jobdir, current)
     return job_id
 
 
@@ -348,7 +373,7 @@ def wait_for_done(store: Store, job_id: str, *, timeout: float | None = None) ->
         if (jobdir / "finalized.json").is_file():
             return True
         meta = _read_meta(jobdir)
-        if meta.get("state") == "running":
+        if meta.get("state") in ("running", "launching"):
             meta = _adopt_if_orphaned(jobdir, meta)
         if meta.get("state") == "done":
             return True
@@ -489,7 +514,7 @@ def job_status(store: Store, job_id: str, *, tail: int | None = None) -> str:
     Never more than ~40 spool lines; long lines clipped."""
     jobdir = _job_dir(store, job_id)
     meta = _read_meta(jobdir)
-    if meta.get("state") == "running":
+    if meta.get("state") in ("running", "launching"):
         meta = _adopt_if_orphaned(jobdir, meta)
     state = meta.get("state", "unknown")
     if state == "failed":
@@ -529,7 +554,7 @@ def job_state(store: Store, job_id: str) -> str:
     if (jobdir / "finalized.json").is_file():
         return "finalized"
     meta = _read_meta(jobdir)
-    if meta.get("state") == "running":
+    if meta.get("state") in ("running", "launching"):
         meta = _adopt_if_orphaned(jobdir, meta)
     return str(meta.get("state", "unknown"))
 
@@ -555,7 +580,7 @@ def list_jobs(store: Store) -> str:
                 short = "?"
             desc = f"finalized → run:{short}"
         else:
-            if meta.get("state") == "running":
+            if meta.get("state") in ("running", "launching"):
                 meta = _adopt_if_orphaned(jobdir, meta)
             state = meta.get("state", "unknown")
             desc = state

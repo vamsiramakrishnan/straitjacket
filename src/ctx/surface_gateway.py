@@ -336,6 +336,12 @@ class Gateway:
             else:
                 if fam in KERNEL_FAMILIES:
                     return self._text(f"family {fam} is kernel; cannot hide"), False
+                if fam not in self.revealed:
+                    # Mirror of the reveal guard: a no-op must not report
+                    # surface_changed, or the server emits a spurious
+                    # tools/list_changed and the caller reads "hid" for
+                    # something that was never shown.
+                    return self._text(f"family {fam} already hidden"), False
                 self.revealed.discard(fam)
             save_state(self.ws_root, self.revealed)
             servers = self.families().get(fam, [])

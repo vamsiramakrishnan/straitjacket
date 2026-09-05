@@ -54,7 +54,7 @@ def test_antigravity_launch_adapts_model_id_and_required_effort(monkeypatch, tmp
         seen["argv"] = argv
         return Completed()
 
-    monkeypatch.setattr("ctx.orchestrator.subprocess.run", fake_run)
+    monkeypatch.setattr("ctx.orchestrator._run_bounded", fake_run)
     code, out, err, usage = _launch_host(
         host,
         tmp_path,
@@ -139,7 +139,7 @@ def test_structured_host_launches_return_clean_text_and_actual_usage(
         seen["argv"] = argv
         return Completed()
 
-    monkeypatch.setattr("ctx.orchestrator.subprocess.run", fake_run)
+    monkeypatch.setattr("ctx.orchestrator._run_bounded", fake_run)
     code, out, err, usage = _launch_host(
         host, tmp_path, "task", "ctx", timeout=5, model=model
     )

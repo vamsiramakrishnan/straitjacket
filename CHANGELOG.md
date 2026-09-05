@@ -189,6 +189,45 @@ not one of the byte-pinned prefix assets in `tests/test_prefix_stability.py`.
 No live re-run of the round-17 scenario has happened yet with this notice in
 place — the tests pin the injection, not a model's behavior in response to it.
 
+The harnessed arm re-run on the fixed tree kept its turn and completed all
+eight subagents (the lifecycle defect is closed) but hit the 30-turn cap
+collecting them, so its eleven findings were read from the subagent
+reports directly (evals/bugbash-round17-2026-09-04.md, "Harnessed arm,
+re-run"). All eleven reproduced and are fixed, regression-tested in
+`tests/test_round17_harnessed.py`; none overlapped the naive arm's ten:
+
+- `_retrieval/get.py`, `_retrieval/spans.py`: bodies were split with
+  `str.splitlines()` while the line index counts only `\n`, so a U+2028
+  (or `\r`, `\v`, `\f`, `\x1c`, `\x85`, U+2029) shifted every line
+  number after it. `ctx.textutil.index_lines` splits the way the index
+  counts; search already did.
+- `_retrieval/get.py`: an empty blob or stream is now an answer
+  (`--lines 1:0 of 0 (empty)`) instead of a refusal whose suggested fix
+  refused again.
+- `orchestrator.py`: a host launch owns its process group and a timeout
+  SIGKILLs all of it (`_run_bounded`), not just the host CLI.
+- `commands/execute.py`: a bare `ctx job <id>` on a finished background
+  job returns the run's exit code (3 on failure) instead of 0.
+- `reflex.py`: every state mutator now holds one flock across its
+  read-modify-write, so parallel hooks from one turn cannot lose each
+  other's updates.
+- `jobs.py`: the launcher records its supervisor's pid; a supervisor that
+  dies before the first state write turns the job `failed` instead of
+  leaving `--wait` polling forever.
+- `installer.py`: `doctor_checks` closes the three stores it opens.
+- `worktree_isolation.py`: `"."` as a declared target is refused with the
+  module's own error, not an `IndexError`.
+- `surface_gateway.py`: hiding a family that is not revealed reports no
+  change.
+- `engagement.py`: the symbol-grep list keeps the most recent 64, so the
+  count no longer freezes.
+- `edit_transactions.py`: a failed rename during rollback, or during the
+  forward commit, no longer leaks its staged temp file.
+
+The single-shot notice now also says that every blocking wait on
+background work spends a turn and prefers foreground subagents; the
+re-run spent fifteen of its thirty turns waiting.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives

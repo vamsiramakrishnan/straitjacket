@@ -260,7 +260,7 @@ def test_turn_ceiling_hard_bounds_a_claude_node_at_launch(monkeypatch, tmp_path)
         seen["argv"] = argv
         return Completed()
 
-    monkeypatch.setattr("ctx.orchestrator.subprocess.run", fake_run)
+    monkeypatch.setattr("ctx.orchestrator._run_bounded", fake_run)
     code, out, err, usage = _launch_host(host, tmp_path, "do it", "/usr/bin/ctx",
                                          timeout=5, model="claude-haiku-4.5", max_turns=7)
     assert "--max-turns" in seen["argv"] and "7" in seen["argv"]
@@ -290,7 +290,7 @@ def test_claude_node_launch_carries_the_single_shot_notice(monkeypatch, tmp_path
         seen["argv"] = argv
         return Completed()
 
-    monkeypatch.setattr("ctx.orchestrator.subprocess.run", fake_run)
+    monkeypatch.setattr("ctx.orchestrator._run_bounded", fake_run)
     monkeypatch.delenv("CTX_WRAP_NO_DISCIPLINE", raising=False)
     _launch_host(host, tmp_path, "do it", "/usr/bin/ctx", timeout=5)
     argv = seen["argv"]

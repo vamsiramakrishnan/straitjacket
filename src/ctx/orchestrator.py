@@ -860,10 +860,7 @@ def _launch_host(
             # work on that timer (round 17). The per-node ``timeout`` above
             # is the bound; the user's own setting wins.
             env.setdefault("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
-        proc = subprocess.run(
-            argv, cwd=ws_root, capture_output=True, text=True,
-            timeout=timeout, env=env,
-        )
+        proc = _run_bounded(argv, cwd=ws_root, timeout=timeout, env=env)
         stdout, usage = parse_host_output(
             spec.name,
             proc.stdout or "",
@@ -877,6 +874,32 @@ def _launch_host(
         if settings_tmp:
             with contextlib.suppress(OSError):
                 os.unlink(settings_tmp)
+
+
+def _run_bounded(argv, *, cwd, timeout, env) -> subprocess.CompletedProcess:
+    """``subprocess.run`` with a process group, so a timeout kills what the
+    host forked, not just the host.
+
+    ``subprocess.run(timeout=...)`` kills the direct child only. A harness
+    CLI that forked a sandboxed test run or a background subagent past
+    ``node_timeout`` left that grandchild running, invisible and possibly
+    still writing into the workspace after the orchestrator had moved on.
+    Same pattern as ``ctx._proc.wait_or_kill``: the child leads its own
+    session, and on timeout the whole group gets SIGKILL before the
+    ``TimeoutExpired`` propagates to the caller's existing handling.
+    """
+    proc = subprocess.Popen(
+        argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, env=env, start_new_session=True,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        from ctx._proc import wait_or_kill
+
+        wait_or_kill(proc, 0)
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 def _launch_result(value) -> tuple[int, str, str, ActualUsage | None]:

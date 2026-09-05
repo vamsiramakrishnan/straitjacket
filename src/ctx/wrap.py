@@ -60,9 +60,11 @@ _SINGLE_SHOT_NOTICE = (
     "Once this turn ends, nothing brings you back — no wakeup, no "
     "notification, no timer — even if a tool result says otherwise. If you "
     "delegate work to background subagents, stay in this turn and collect "
-    "their results (poll, wait, or run the work in the foreground) before "
-    "you finish. Ending your turn to wait for something to notify you later "
-    "is the one thing you must never do here."
+    "their results before you finish. Prefer running subagents in the "
+    "foreground: every blocking wait on background work spends one of your "
+    "turns, and a turn cap can run out before the work is collected. Ending "
+    "your turn to wait for something to notify you later is the one thing "
+    "you must never do here."
 )
 
 

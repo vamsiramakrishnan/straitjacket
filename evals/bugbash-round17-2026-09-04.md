@@ -154,3 +154,59 @@ launch does not, and the opt-outs still work (`tests/test_wrap.py`,
 real agent reads the notice and stays in its turn. No live re-run of this
 round's S6 scenario has happened with the notice in place — that receipt is
 still open.
+
+## Harnessed arm, re-run on the fixed tree (2026-09-05)
+
+`python evals/matrix_runner.py --repo . --out /tmp/bb17b --pairs S6:sonnet --arms sj`
+on the tree with the print-mode ceiling off (45ab477) and the single-shot
+notice in the wrap prompt (fa2bbfd).
+
+| arm | findings delivered | turns | wall | cost | subagents |
+|---|---|---|---|---|---|
+| harnessed (sj), re-run | 0 compiled; **8 subagent reports, 11 defects** | 31 (cap) | 27.7 min | $34.12 | 8 spawned, **8 completed**, 0 killed |
+
+Proxy scorecard: 1,404 rounds · 549,937 output tokens · 99.0 % cache hit ·
+586 invalidations · cold prefix 35,242.
+
+**What the receipt proves.** The main agent read the single-shot notice
+and did not repeat the failure: zero wakeup calls, eight subagents launched
+and all eight completed, none killed. It then hit the 30-turn cap before it
+could compile a ranked report, because it collected the eight background
+subagents with fifteen blocking `TaskOutput` calls at one turn each (each
+returned when its 600 s block elapsed, so several subagents needed two).
+The lifecycle defect is closed; what remains is a turn-budget shape: under
+a turn cap, background delegation plus blocking collection costs a turn per
+wait. The notice now says so and prefers foreground subagents. The July
+table's turn cap (30) was set for single-threaded hunting.
+
+**Findings, read from the eight subagent reports directly** (the main agent
+never compiled them). 11 claimed → 11 reproduced → 11 fixed, plus one
+sibling found while fixing the first. None of these was in the naive arm's
+list; the two arms' finding sets are disjoint. Regression tests:
+`tests/test_round17_harnessed.py`.
+
+| # | Defect | Site | Severity | Verified |
+|---|---|---|---|---|
+| H1 | rollback's restore temp file leaked when its rename failed; fixing it exposed the sibling: the forward commit popped a temp from `staged` before renaming it, so a failed rename leaked that one too | `edit_transactions.py` | low | reproduced (test) |
+| H2 | `surface_hide` on a family that was never revealed reported `surface_changed=True` and "hid", so the server emitted a spurious `tools/list_changed` | `surface_gateway.py` | low | reproduced (test) |
+| H3 | `ctx get` split the body with `str.splitlines()` while the line index counts only `\n`; a U+2028 inside a JS string made the header say 3 lines and the body print 4, every number after it off by one. Search had already been fixed for this; retrieval and spans had not | `_retrieval/get.py`, `_retrieval/spans.py` | high | reproduced (test) |
+| H4 | `ctx get` could not return an empty blob at all: every path refused with "selects nothing" and the refusal suggested `--lines 1:1`, which refused again | `_retrieval/get.py` | medium | reproduced (test) |
+| H5 | `doctor_checks` opened three `Store`s and closed none; `ctx mcp` serves `op: "doctor"` from a long-lived process, the exact leak `_WS_CACHE` exists for. The report named two; the schema check was the third | `installer.py` | medium | reproduced (test) |
+| H6 | `normalize_targets((".",))` raised `IndexError` (pathlib normalizes `.` to no parts), not the module's own `WorktreeIsolationError`, so a whole-repository scope crashed orchestration instead of being refused | `worktree_isolation.py` | medium | reproduced |
+| H7 | every reflex mutator did read → modify → write with nothing held; two hooks from one turn's parallel tool calls both read `commands=5` and both wrote 6, losing interventions and windows. Engagement's ledger already used flock | `reflex.py` | medium | reproduced (fork test, lost updates without the lock) |
+| H8 | `note_symbol_grep` kept the first 64 symbols ever seen (`syms[:64]`) so no new symbol was recorded after the 64th and the count froze | `engagement.py` | low | reproduced (test) |
+| H9 | `_launch_host` used `subprocess.run(timeout=...)`, which kills the host CLI only; anything it forked (a sandboxed test run, a subagent) outlived the node's timeout, invisible and still writing. `_proc.py` had the group-kill pattern; this call did not use it | `orchestrator.py` | high | reproduced (grandchild test) |
+| H10 | a job whose supervisor died before its first state write stayed `launching` forever and `ctx job <id> --wait` polled forever; orphan adoption was gated on `running` | `jobs.py` | medium | reproduced (test) |
+| H11 | a bare `ctx job <id>` on a finished background job computed the run's exit code and returned 0 anyway; `ctx run --bg -- false` then reported success | `commands/execute.py` | high | reproduced (test) |
+
+Refuted from the same reports: none. One subagent (digest formatters) found
+nothing and said so, listing what it had ruled out.
+
+**Reading it, round 17 as a whole.** Naive arm: 10 verified defects for
+$13.80 in one run. Harnessed arm: 0 delivered in the first run (killed by
+print mode, $22.72), 11 verified defects in the re-run ($34.12) that the
+main agent could not compile. The two finding sets do not overlap, which
+says more about the eight-way partition of the tree per arm than about the
+harness. The harness's own defects on the way — the print-mode ceiling, the
+belief a tool result planted, the worktree-id race CI found — were each
+fixed by a session running under it.
