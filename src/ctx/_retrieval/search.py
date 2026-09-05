@@ -341,7 +341,7 @@ def search(
 
     skipped_binary = 0
     if ref.kind == "run":
-        targets, skipped_binary = _resolve_run_targets(store, ref)
+        targets, skipped_binary = _resolve_run_targets(store, ref, glob=glob)
         considered = len(targets) + skipped_binary
     elif ref.kind == "blob":
         blob_id = store.resolve_id(ref.id or "", kinds=("blob",))

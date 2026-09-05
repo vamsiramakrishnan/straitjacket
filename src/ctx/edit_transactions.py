@@ -424,7 +424,10 @@ def apply_edit_plan(ws: Workspace, plan: dict[str, Any]) -> dict[str, Any]:
             # the protocol can still race between this read and os.replace.
             if item.path.read_bytes() != item.before:
                 raise EditTransactionError(f"{item.rel} changed during commit")
-            os.replace(staged.pop(item.rel), item.path)
+            # Rename first, forget second: popping before the rename left a
+            # failed rename's temp file tracked by nothing.
+            os.replace(staged[item.rel], item.path)
+            del staged[item.rel]
             committed.append(item)
     except Exception as e:
         rollback_failed: list[str] = []
@@ -433,7 +436,14 @@ def apply_edit_plan(ws: Workspace, plan: dict[str, Any]) -> dict[str, Any]:
                 # Do not overwrite a third party's post-commit change while
                 # trying to recover from an internal multi-file failure.
                 if item.path.read_bytes() == item.after:
-                    os.replace(_stage(item.path, item.before, item.mode), item.path)
+                    restore = _stage(item.path, item.before, item.mode)
+                    try:
+                        os.replace(restore, item.path)
+                    except Exception:
+                        # _stage only unlinks on its own failure; a failed
+                        # rename here left its temp file beside the target.
+                        restore.unlink(missing_ok=True)
+                        raise
                 else:
                     rollback_failed.append(item.rel)
             except Exception:

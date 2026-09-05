@@ -295,14 +295,19 @@ def digest_output(
         "cwd": ".",
         "argv": list(argv) if argv else [tool_name],
         "shell": False,
-        "result": {"exitCode": 0, "signal": None, "timedOut": False},
+        # A tool result the host flagged as an error is recorded as one. This
+        # was a constant 0: `is_error` only scaled the budget, so the digest
+        # header for a failed build's stack trace read "exit 0" and the stored
+        # manifest remembered a success. The host's flag is the only exit
+        # status a tool result has; 1 is the conventional non-zero.
+        "result": {"exitCode": 1 if is_error else 0, "signal": None, "timedOut": False},
         "streams": {
             "stdout": _stream(out_hash, out_b),
             "stderr": _stream(err_hash, err_b),
         },
         # Source nulled: the identity of a hook-captured result is a pure
-        # function of (bytes, tool_name), so the same payload always mints the
-        # same run id — no git head / worktree hash / timestamps.
+        # function of (bytes, tool_name, is_error), so the same payload always
+        # mints the same run id — no git head / worktree hash / timestamps.
         "source": {"gitHead": None, "worktreeHash": None},
         "digest": {
             "profile": "text/v1",

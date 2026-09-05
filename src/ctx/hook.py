@@ -1302,6 +1302,34 @@ def _decay_taught_reason(decision: dict[str, Any], workspace_root: str | None) -
             continue
 
 
+def _names_secret_path(argv: list[str], cwd: str | None) -> bool:
+    """Does any path-shaped argument name a secret-bearing file?
+
+    One predicate for every door: the plain command path and the
+    ``cmd > file 2>&1`` shortcut both consult it, so a new early return
+    cannot quietly skip the guarantee again. Restricted to arguments shaped
+    like paths, because the secret regex alone matches the bare WORD
+    "secrets", which is a sentence, not a file.
+    """
+    for _arg in argv[1:]:
+        if _arg.startswith("-"):
+            continue
+        _p = _arg.replace("\\", "/")
+        if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
+            continue
+        if _is_secret_path(_p, cwd):
+            return True
+    return False
+
+
+def _secret_path_force_ask() -> dict[str, str]:
+    return _force_ask(
+        "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
+        "an explicit user-visible permission step; it is excluded "
+        "from automatic capture."
+    )
+
+
 def _classify_command_inner(
     command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
 ) -> dict[str, str]:
@@ -1336,6 +1364,18 @@ def _classify_command_inner(
                     return _safety_deny_cmd(
                         denied, policy, original=stripped, has_meta=has_meta
                     )
+                # Same lesson, second door. The deny_commands check above was
+                # added because this shortcut returned ahead of a repo-
+                # committed rule; it still returned ahead of the secret-path
+                # guard below, so `cat .env > out.log 2>&1` was allowed while
+                # `cat .env` force-asks. The redirect answers the volume
+                # question only; the blanket secret guarantee holds here too.
+                try:
+                    inner = shlex.split(redir.group("cmd") or "")
+                except ValueError:
+                    inner = []
+                if _names_secret_path(inner, cwd):
+                    return _secret_path_force_ask()
                 return dict(DECISION_ALLOW)
         # Bounded chain: `a; b && c` with no other metacharacters. Each
         # segment is classified independently; the chain is allowed only if
@@ -1410,18 +1450,8 @@ def _classify_command_inner(
     # downgraded `echo secrets please` from deny to ask. Restricted to
     # arguments that are shaped like paths, because the regex alone matches
     # the bare WORD "secrets", which is a sentence, not a file.
-    for _arg in argv[1:]:
-        if _arg.startswith("-"):
-            continue
-        _p = _arg.replace("\\", "/")
-        if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
-            continue
-        if _is_secret_path(_p, cwd):
-            return _force_ask(
-                "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
-                "an explicit user-visible permission step; it is excluded "
-                "from automatic capture."
-            )
+    if _names_secret_path(argv, cwd):
+        return _secret_path_force_ask()
     # A prefix allow/promotion applies to a single command only. When shell
     # metacharacters survived the chain/redirect handling above (e.g.
     # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary
@@ -1479,8 +1509,9 @@ def _classify_command_inner(
             f"Prefer: ctx run --shell -- {shlex.quote(stripped)}"
         )
         if _steering_allows(policy):
+            bg = " --bg" if _follows_forever(argv) else ""  # fix: never-terminating piped command needs --bg too
             fa["_rewrite"] = {
-                "command": "ctx run --shell -- " + shlex.quote(stripped),
+                "command": "ctx run --shell" + bg + " -- " + shlex.quote(stripped),
                 "reason": _REWRITE_REASON,
             }
         return fa
@@ -1799,6 +1830,8 @@ def classify_read(
     policy: dict[str, Any],
     session_id: str = "unknown",
 ) -> dict[str, str]:
+    if workspace_root and not os.path.isabs(path_str):
+        path_str = os.path.join(workspace_root, path_str)  # fix: resolve relative paths against workspace_root, not process CWD
     if _is_secret_path(path_str, workspace_root):
         return _force_ask(
             "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires an explicit "
@@ -2000,7 +2033,12 @@ def classify(
                     command,
                     failure_available=lambda: _failure_available(workspace_root),
                     symbols_resolvable=lambda: _symbols_resolvable(workspace_root))
-                if sub is not None:
+                if sub is not None and not (
+                    decision.get("decision") == "force_ask"
+                    and decision.get("reason", "").startswith(
+                        "CTX_CONTEXT_GUARD: secret-bearing path"
+                    )
+                ):  # fix: never let collapse override a secret-path force_ask
                     # Deliberately overrides a DENY as well as an allow, and
                     # that is the product: the flagship case (`grep -rn X .`)
                     # is denied by the canonical layer as unbounded, and the
@@ -2475,7 +2513,7 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
     if isinstance(tr, dict) and isinstance(tr.get("is_error"), bool):
         is_error = tr["is_error"]
 
-    from ctx.edit_outcomes import append_edit_outcome, classify
+    from ctx.edit_outcomes import append_edit_outcome, classify, resolve_model
 
     def _pick(*keys: str) -> str:
         for key in keys:
@@ -2484,6 +2522,7 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
                 return value
         return ""
 
+    transcript = payload.get("transcript_path") or payload.get("transcriptPath")
     append_edit_outcome(
         workspace_root,
         tool=tool,
@@ -2494,6 +2533,12 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
         old_len=len(_pick("old_string", "oldString", "old_str")),
         new_len=len(_pick("new_string", "newString", "new_str", "content")),
         flavor=flavor,
+        # Which model made the edit: CTX_MODEL when a launcher set it (ctx
+        # orchestrate does), else the transcript's last named model, else
+        # "unknown". The format is derived from the tool name inside.
+        model=resolve_model(
+            transcript_path=transcript if isinstance(transcript, str) else None
+        ),
     )
 
 

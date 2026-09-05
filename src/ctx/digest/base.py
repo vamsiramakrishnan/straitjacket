@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ctx.store import Store
-from ctx.textutil import EVIDENCE_LINE_CHARS, estimate_tokens, fmt_bytes, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, estimate_tokens, fmt_bytes, fmt_int, index_lines
 from ctx.workspace import Workspace
 
 # Cap how much of a stream a profile parses in memory. Coverage reporting
@@ -33,7 +33,7 @@ class StreamView:
 
     @property
     def text_lines(self) -> list[str]:
-        return self.text.splitlines()
+        return index_lines(self.text)  # fix: splitlines() also breaks on \r etc, disagreeing with the store's \n-only line index
 
 
 @dataclass

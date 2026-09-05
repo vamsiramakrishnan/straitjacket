@@ -144,12 +144,18 @@ def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False):
     index = find_index(ws)
     if index is None or not available():
         return None
-    want = symbol.rsplit(".", 1)[-1]  # dotted subject → its final component
+    subject, _, want = symbol.rpartition(".")  # dotted subject → its final component
+    qualifier = subject.rsplit(".", 1)[-1] if subject else None
     hits: dict[tuple[str, int], str] = {}
     line_cache: dict[str, list[str]] = {}
     for occ in iter_occurrences(index):
         if occ.name != want:
             continue
+        if qualifier is not None:
+            # bare-name match alone conflates unrelated symbols sharing a method name; also require the qualifier
+            tokens = _IDENT_RE.findall(occ.symbol)
+            if len(tokens) < 2 or tokens[-2] != qualifier:
+                continue
         if definitions_only and not occ.is_definition:
             continue
         key = (occ.file, occ.line)

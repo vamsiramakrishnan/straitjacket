@@ -37,8 +37,10 @@ dev = ["pytest>=8", "jsonschema>=4"]
 map = ["grimp>=3.15", "networkx>=3.4"]
 fast = ["orjson>=3"]
 # Pillow decodes images for dHash comparison and enriches formats whose
-# dimensions are not parsed by the stdlib floor. Binary identity, magic-byte
-# detection, common image dimensions, and PDF structure remain dependency-free.
+# dimensions are not parsed by the stdlib floor; it also renders text to a
+# bitmap PNG for `ctx get --snapcompact` (ctx.snapcompact). Binary identity,
+# magic-byte detection, common image dimensions, and PDF structure remain
+# dependency-free.
 image = ["pillow>=10"]
 # Individual grammar wheels are the maintained, offline-safe tree-sitter
 # path (the bundle language-pack fetches parsers at runtime); the skeleton

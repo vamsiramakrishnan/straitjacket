@@ -34,10 +34,12 @@ inherits that plane's invariants, and ships with a test.
 | add a `ctx q` stage | `src/ctx/query.py` |
 | add an evidence-plan operator | `src/ctx/plan_ops.py` (+ `plan_ir.py`, `plan_exec.py`) |
 | change how a digest is selected/sized | `src/ctx/resolver.py` (the Delivery Policy Resolver) |
+| change snapcompact (`ctx get --snapcompact`, text → image) | `src/ctx/snapcompact.py` · wiring in `src/ctx/_retrieval/get.py` |
 | change retrieval (`get`/`search`/spans) | `src/ctx/retrieval.py` + `src/ctx/_retrieval/` |
 | change how a `repo:` line address stays valid across edits | `src/ctx/anchors.py` |
 | measure whether the host's own edits are landing | `src/ctx/edit_outcomes.py` |
 | change what happens when a node does not finish | `src/ctx/steward.py` (classifier + menu) · `src/ctx/recovery_policy.py` (the choice) |
+| change prewalk (frontier → cheap handoff after one edit) | `src/ctx/orchestrator.py` (`run_one`'s prewalk branch, `PREWALK_SENTINEL`) · `src/ctx/steward.py` (`de_escalation_target`) |
 | change what harnesses record about a collaboration, or resume one | `src/ctx/taskledger.py` · `src/ctx/orchestrator.py:run_route` |
 | change the artifact store | `src/ctx/store.py` |
 | change path confinement or secret redaction | `src/ctx/workspace.py` / `src/ctx/textutil.py` |
@@ -56,6 +58,7 @@ No behavioural signal may weaken anything here.
 | `hook.py` | The PreToolUse context guard — runs on the hot path of every intercepted tool call; **stdlib-only** for latency and reliability (SPEC §10.2, §11). |
 | `textutil.py` | Deterministic text: token estimation, ANSI/control stripping, **secret redaction**, bounded emission (SPEC §8, §16). |
 | `surface.py`, `surface_profiles.py`, `surface_gateway.py`, `surface_reconcile.py` | The input side: `ctx surface` capability-context audit, minimal-surface compilation, the progressive-disclosure MCP gateway, and shadow reconciliation. |
+| `prune.py` | `ctx prune` / `ctx setup --prune`: the audit's recommended disclosure levels applied as a decision at setup time (kernel and L0/L1 stay, L2+ deferred), compiled into each host's minimal config through `surface_profiles`, with a receipt of tokens per turn before and after. Never deletes. |
 
 ## Execution — running and capturing work
 
@@ -113,9 +116,11 @@ This is the plane most contributions touch. The flow is
 |---|---|
 | `resolver.py` | **The Delivery Policy Resolver** — the single choke point where every ladder composes into a `DeliveryPlan` (EDC §5.4). |
 | `digest/evidence_render.py` | The plan-obeying **pure** renderer for census-grade profiles: `(graph, contract, plan) → bytes`. |
+| `snapcompact.py` | Deterministic text → monospace bitmap PNG rendering (the "snapcompact" technique) plus a cited, best-effort token-cost estimate; opt-in via `ctx get --snapcompact`. Requires the `image` extra (Pillow); degrades with a clear error, never a bare traceback. |
 | `plan_ir.py`, `plan_ops.py`, `plan_exec.py` | The compiled evidence-plan IR (a total, bounded DAG), its logical operators, and the executor + `investigate/v1` digest. |
 | `ask.py` | `ctx ask` — intents as typed plan presets (the seven intents). |
-| `edit_outcomes.py` | What happened to the host's own Edit/Write: a closed-vocabulary classifier over the tool result and a privacy-safe rate ledger. Observation only. |
+| `edit_outcomes.py` | What happened to the host's own Edit/Write: a closed-vocabulary classifier over the tool result and a privacy-safe rate ledger. Every row names the edit **format** (search/replace, whole-file, patch, anchored `ctx edit apply`) and the **model** (`CTX_MODEL`, set by `ctx orchestrate` on every launch; else the transcript tail; else `unknown`), so `summarize_rows` can split success by (model, format). `evals/edit_format_by_model.py` replays that split. Observation only. |
+| `edit_transactions.py`, `commands/edit.py` | `ctx edit plan\|preview\|apply`: a sealed, anchor-verified edit transaction (compare-and-swap on content, not fuzzy patching) — CLI-only by the same invariant that keeps `ctx run` the one path to filesystem mutation. |
 | `anchors.py` | Content anchors and line tags: the verify → relocate → refuse ladder that keeps a `repo:` line address meaningful after an edit. Pure and total ([ANCHORS.md](ANCHORS.md)). |
 | `retrieval.py`, `_retrieval/` | Bounded `ctx search` / `get` / `stats` / spans: deterministic, budget-capped, provenance-bearing (SPEC §6.3–6.5). |
 | `refs.py` | The reference/handle grammar (`run:…#stdout`, spans) (SPEC §6.1). |
@@ -138,6 +143,7 @@ This is the plane most contributions touch. The flow is
 | `taskledger.py` | The task ledger: six closed-vocabulary row types, append/load/fold, the inbox. The bus harnesses collaborate over ([TASK-LEDGER.md](TASK-LEDGER.md)). |
 | `steward.py` | Typed failure classification and the action menu for the recovery policy; every decision is a ledger row before it is acted on. |
 | `recovery_policy.py` | The promoted AlphaEvolve `choose_recovery` seam: retry / escalate / re-plan / honest stop, by failure kind and remaining budget. |
+| `orchestrator.py`'s prewalk branch, `steward.py`'s `de_escalation_target` | Prewalk: a frontier model plans and makes one edit, then hands the same node off to the cheapest cheaper model installed ([PREWALK.md](PREWALK.md)). |
 
 ## The native hook
 

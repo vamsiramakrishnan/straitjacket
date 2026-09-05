@@ -16,7 +16,7 @@ from ctx.digest.logprof import mine_templates
 from ctx.refs import RefError, parse_ref
 from ctx.retrieval import RetrievalError, _emit, record_telemetry
 from ctx.store import Store, StoreError
-from ctx.textutil import fmt_bytes, fmt_int, short_id
+from ctx.textutil import fmt_bytes, fmt_int, index_lines, short_id
 from ctx.workspace import Workspace
 
 _MINE_CAP = 200_000  # lines template-mined per side
@@ -67,7 +67,7 @@ def _pytest_failures(text: str) -> dict[str, int] | None:
     """nodeid -> line number of its FAILED/ERROR summary line; None when the
     text does not parse as pytest-style output."""
     failures: dict[str, int] = {}
-    for i, ln in enumerate(text.splitlines(), start=1):
+    for i, ln in enumerate(index_lines(text), start=1):  # \n-only split to match the store's line_index geometry
         m = _FAILED_LINE_RE.match(ln.strip())
         if m:
             failures.setdefault(m.group("nodeid"), i)

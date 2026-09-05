@@ -47,6 +47,7 @@ to attach to a receipt, and this one is meant to be attached.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -72,6 +73,10 @@ SCHEMAS = (
 #: can branch on them without string-matching prose.
 HANDBACK_REASONS = (
     "done", "failed", "blocked", "over_budget", "over_turns", "low_confidence",
+    # A deliberate, successful stop: a frontier model planned, made one
+    # validated edit, and handed off by design -- not a failure needing
+    # recovery. See ctx.steward.de_escalation_target and docs/PREWALK.md.
+    "prewalk_handoff",
 )
 
 #: The typed failure vocabulary the promoted recovery policy was evolved
@@ -89,7 +94,10 @@ FAILURE_KINDS = (
 
 #: What the steward can decide. Mirrors the recovery policy's action ids; the
 #: steward offers only the subset that exists for the node in front of it.
-STEWARD_ACTIONS = ("retry_same", "escalate", "replan", "stop_blocked", "stop_budget")
+STEWARD_ACTIONS = (
+    "retry_same", "escalate", "replan", "stop_blocked", "stop_budget",
+    "handoff_cheap",  # prewalk's de-escalation: the mirror of "escalate"
+)
 
 #: Bound on the one free-text field. Long enough to say what an address is
 #: for, short enough that a note cannot become a transcript.
@@ -198,28 +206,46 @@ def append(workspace_root: Path | str, row: dict[str, Any]) -> dict[str, Any]:
     errors propagate. Callers that must never fail (the orchestrator's own
     bookkeeping) wrap this; the safe failure direction there is a missing
     claim or handback, which resume treats as "not done" and re-runs.
+
+    The tail check and the write are one held ``flock`` critical section --
+    the idiom already used by ``ctx.engagement._mutate_state`` and
+    ``ctx.hook._ledger_charge`` -- so two separate OS processes, not just
+    threads inside one orchestrator, can never interleave a write or race
+    the torn-line check below. Locking is best-effort: a platform without
+    ``fcntl`` falls back to the prior single-writer-only behavior.
     """
     _check(row)
     stored = dict(row)
     stored.setdefault("ts", time.time())
     path = ledger_path(workspace_root, str(row["task_id"]))
     path.parent.mkdir(parents=True, exist_ok=True)
-    # A process killed mid-write leaves a torn last line with no newline. The
-    # next append must not land on that same line -- it would glue a valid
-    # row onto the fragment and lose BOTH to the parser. Check the tail and
-    # start clean; the torn fragment is then skipped by load() on its own.
-    prefix = ""
+    payload = (json.dumps(stored, sort_keys=True) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        with path.open("rb") as fh:
-            fh.seek(0, 2)
-            if fh.tell() > 0:
-                fh.seek(-1, 2)
-                if fh.read(1) != b"\n":
-                    prefix = "\n"
-    except OSError:
-        pass
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(prefix + json.dumps(stored, sort_keys=True) + "\n")
+        try:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        # A process killed mid-write leaves a torn last line with no
+        # newline. The next append must not land on that same line -- it
+        # would glue a valid row onto the fragment and lose BOTH to the
+        # parser. Check the tail and start clean; the torn fragment is then
+        # skipped by load() on its own. Held under the same lock as the
+        # write below, so a live concurrent writer's in-progress row can
+        # never be misread as a torn one.
+        size = os.lseek(fd, 0, os.SEEK_END)
+        if size > 0:
+            os.lseek(fd, size - 1, os.SEEK_SET)
+            if os.read(fd, 1) != b"\n":
+                payload = b"\n" + payload
+        os.lseek(fd, 0, os.SEEK_END)
+        written = 0
+        while written < len(payload):
+            written += os.write(fd, payload[written:])
+    finally:
+        os.close(fd)  # closing releases the flock
     return stored
 
 

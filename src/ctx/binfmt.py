@@ -215,7 +215,7 @@ def phash_distance(a: str, b: str) -> int | None:
 def inspect(data: bytes) -> BlobInfo:
     """Structural digest of a blob. Never raises; parses what it can."""
     sha = hashlib.sha256(data).hexdigest()
-    fmt = sniff_format(data[:64])
+    fmt = sniff_format(data[:1024])  # widen to match sniff_format's own 1 KiB NUL-heuristic window
     info = BlobInfo(format=fmt, bytes=len(data), sha256=sha)
     if fmt in IMAGE_FORMATS:
         parser = _DIM_PARSERS.get(fmt)

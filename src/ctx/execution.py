@@ -175,23 +175,30 @@ def run_capture(
     timed_out = False
     try:
         in_fh = in_path.open("rb") if in_path is not None else None
-        with out_path.open("wb") as out_fh, err_path.open("wb") as err_fh:
-            try:
-                proc = subprocess.Popen(
-                    popen_args,
-                    cwd=workdir,
-                    shell=shell,
-                    stdout=out_fh,
-                    stderr=err_fh,
-                    stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-            except FileNotFoundError as e:
-                raise ExecutionError(f"command not found: {argv[0]}") from e
-            finally:
-                if in_fh is not None:
-                    in_fh.close()
-            timed_out = wait_or_kill(proc, timeout)
+        try:
+            with out_path.open("wb") as out_fh, err_path.open("wb") as err_fh:
+                try:
+                    proc = subprocess.Popen(
+                        popen_args,
+                        cwd=workdir,
+                        shell=shell,
+                        stdout=out_fh,
+                        stderr=err_fh,
+                        stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                except FileNotFoundError as e:
+                    raise ExecutionError(f"command not found: {argv[0]}") from e
+                finally:
+                    if in_fh is not None:
+                        in_fh.close()
+                        in_fh = None
+                timed_out = wait_or_kill(proc, timeout)
+        finally:
+            # in_fh stayed open if the stdout/stderr spool `with` failed before
+            # the inner try ever ran (e.g. out_path.open raising) -- close it here too.
+            if in_fh is not None:
+                in_fh.close()
 
         exit_code, sig_name = exit_status(proc.returncode)
         streams = stream_entries(store, {"stdout": out_path, "stderr": err_path})

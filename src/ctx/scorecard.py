@@ -459,7 +459,11 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
             if thread is None:
                 thread = {"msgs": 0, "max_read": 0}
                 threads.append(thread)
-            if u_read and u_read < thread["max_read"]:
+            # `u_read and ...` skipped exactly the worst case: cache_read
+            # collapsing to 0 on an established thread is a full prefix
+            # rewrite, and 0 is a value here (usage-less records were
+            # dropped above), not an absence.
+            if u_read < thread["max_read"]:
                 invalidations += 1
             thread["msgs"] = msgs
             thread["max_read"] = max(thread["max_read"], u_read)
@@ -714,8 +718,15 @@ def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
         # Creation tasks do all their work in untracked files; count their
         # lines too (bounded: text-decodable, first 200 files).
         lines_new = 0
-        for rel in untracked_paths[:200]:
+        expanded_new: list[Path] = []
+        for rel in untracked_paths:
             p = Path(workspace_root) / rel
+            if p.is_dir():
+                # git collapses a whole new untracked dir into one porcelain entry -- expand it
+                expanded_new.extend(sorted(fp for fp in p.rglob("*") if fp.is_file()))
+            else:
+                expanded_new.append(p)
+        for p in expanded_new[:200]:
             try:
                 if p.is_file() and p.stat().st_size < 1_048_576:
                     lines_new += len(
@@ -727,7 +738,7 @@ def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
             "insertions": ins,
             "deletions": dels,
             "files_changed": files,
-            "files_new": len(untracked_paths),
+            "files_new": len(expanded_new),
             "lines_new": lines_new,
         }
     except Exception:

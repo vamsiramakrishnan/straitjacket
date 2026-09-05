@@ -51,7 +51,7 @@ retention_days = 30
 
 [redaction]
 enabled = true
-patterns = ["aws-access-key", "private-key", "generic-api-token"]
+patterns = ["aws-access-key", "aws-secret-key", "private-key", "github-token", "gitlab-token", "slack-token", "stripe-key", "twilio-key", "sendgrid-key", "npm-token", "pypi-token", "huggingface-token", "anthropic-key", "jwt", "google-api-key", "generic-api-token"]  # fix: template pinned only 3 of 16 code-default patterns
 """
 
 _CTXIGNORE_TEMPLATE = """\
@@ -458,11 +458,23 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
         return _refusal(settings_path, e, what="Claude Code")
     merged = dict(existing)
     changed = False
-    if _hook_command_present(existing, exe):
+    full_stages = claude_hook_settings(exe)["hooks"]
+    # fix: check presence per stage, not any-stage-present, so a reinstall adds a stage an older install lacked
+    existing_hooks = existing.get("hooks", {})
+    if not isinstance(existing_hooks, dict):
+        existing_hooks = {}
+    missing_stages = {
+        stage: entries
+        for stage, entries in full_stages.items()
+        if not _hook_command_present(
+            {"hooks": {stage: existing_hooks.get(stage, [])}}, exe
+        )
+    }
+    if not missing_stages:
         lines.append(".claude/settings.json hooks already harnessed; left unchanged")
     else:
         try:
-            merge_hook_stages(merged, claude_hook_settings(exe)["hooks"])
+            merge_hook_stages(merged, missing_stages)
         except SettingsUnreadable as e:
             # Refuse the same way an unparseable file is refused, a few lines
             # above: a message and an untouched file. Raising here would have
@@ -836,9 +848,14 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         from ctx.store import Store
 
         store = Store(ws.workspace_id)
-        probe = store.put_blob(b"ctx-doctor-probe")
-        store.get_blob(probe)
-        check("store writable", True, store.location.detail)
+        try:
+            probe = store.put_blob(b"ctx-doctor-probe")
+            store.get_blob(probe)
+            check("store writable", True, store.location.detail)
+        finally:
+            # `ctx mcp` serves `op: "doctor"` from a long-lived process;
+            # an unclosed Store per call is the leak _WS_CACHE exists for.
+            store.close()
     except Exception as e:
         check("store writable", False, str(e))
 
@@ -940,13 +957,16 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
             from ctx.store import Store as _S
 
             _store = _S(ws.workspace_id)
-            row = _store.db.execute(
-                "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()
-            if row:
-                manifest = _store.get_manifest(row[0])
-                jsonschema.validate(manifest, json.loads(schema_path.read_text(encoding="utf-8")))
-                check("manifest schema", True, "latest run manifest validates against invocation-v1")
+            try:
+                row = _store.db.execute(
+                    "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
+                if row:
+                    manifest = _store.get_manifest(row[0])
+                    jsonschema.validate(manifest, json.loads(schema_path.read_text(encoding="utf-8")))
+                    check("manifest schema", True, "latest run manifest validates against invocation-v1")
+            finally:
+                _store.close()  # the third store doctor opened; the report missed this one
     except ImportError:
         pass
     except Exception as e:
@@ -991,7 +1011,11 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         from ctx.retrieval import telemetry_summary
         from ctx.store import Store as _Store
 
-        t = telemetry_summary(_Store(ws.workspace_id))
+        _tstore = _Store(ws.workspace_id)
+        try:
+            t = telemetry_summary(_tstore)
+        finally:
+            _tstore.close()
         if t["events"]:
             check(
                 "telemetry",

@@ -352,8 +352,13 @@ def _rank(files: dict[str, _FileMap], edges: dict[str, set[str]]) -> None:
     incoming: dict[str, list[str]] = {n: [] for n in names}
     outdeg: dict[str, int] = {}
     for importer, targets in edges.items():
-        outdeg[importer] = len(targets)
-        for t in sorted(targets):
+        # The module index is built from the file LISTING, the file table
+        # from what could be READ; an import of a listed-but-unreadable
+        # module is an edge to a node this table does not have. The networkx
+        # ranker already guards `target in files`; this one raised KeyError.
+        known = [t for t in sorted(targets) if t in incoming]
+        outdeg[importer] = len(known)
+        for t in known:
             incoming[t].append(importer)
     score = {n: 1.0 for n in names}
     for _ in range(_ITERATIONS):

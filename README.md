@@ -2,7 +2,7 @@
 
 Keep large tool output out of your coding agent's prompt. Keep the evidence available.
 
-**v0.36.0 · pre-1.0 · Python 3.11+ · Apache-2.0**
+**v0.37.0 · pre-1.0 · Python 3.11+ · Apache-2.0**
 
 straitjacket is a local context-containment harness for Claude Code, Codex, and
 Antigravity. `ctx run` captures command output directly; supported host paths
@@ -15,7 +15,7 @@ bounded routes back to the stored bytes.
 ```bash
 python -m pip install --upgrade ctx-harness
 cd your-repository
-ctx setup
+ctx setup            # add --prune to defer the tools, skills and agents this repo does not use
 ctx doctor
 ctx run -- pytest -q
 ```

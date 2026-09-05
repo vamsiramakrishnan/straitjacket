@@ -134,6 +134,13 @@ class OrchestratePolicy:
     max_attempts: int = 2
     expected_turns: int = 12
     turn_ceiling: int = 0
+    # Opt-in: a frontier model assigned to a mutation node is asked to plan,
+    # make one validated edit, then hand off; on that signal the SAME node's
+    # next attempt runs on the cheapest installed model below frontier,
+    # carrying the plan and the first edit forward (docs/PREWALK.md). A
+    # model that ignores the instruction just finishes the task itself --
+    # this never costs more than not having it.
+    prewalk: bool = False
     # Complexity-adaptive implementation tier for the deterministic fallback:
     # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
     # simple edits. A live coordinator overrides this per task.
@@ -303,10 +310,14 @@ def load_config(workspace_root: Path | None) -> Config:
         if isinstance(roots, list):
             scopes[str(name)] = tuple(str(r) for r in roots)
 
-    budgets = _pick(raw.get("budgets") or {}, Budgets)
+    # A scalar section (e.g. `budgets = 5`) is not a dict -- `or {}` only catches
+    # falsy/missing, so guard explicitly against a wrong-typed section too.
+    budgets_raw = raw.get("budgets")
+    budgets = _pick(budgets_raw if isinstance(budgets_raw, dict) else {}, Budgets)
     # Guard is hand-built (not _pick) so list keys coerce to tuples and bools
     # coerce honestly — and so Config models every key the hot-path guard reads.
-    guard_raw = raw.get("guard") or {}
+    guard_raw = raw.get("guard")
+    guard_raw = guard_raw if isinstance(guard_raw, dict) else {}
     gd = Guard()
     guard = Guard(
         mode=str(guard_raw.get("mode", gd.mode)),
@@ -339,8 +350,15 @@ def load_config(workspace_root: Path | None) -> Config:
         activate_after_calls=_coerce_like(
             ed.activate_after_calls, eng_raw.get("activate_after_calls", ed.activate_after_calls)
         ),
-        lean_models=tuple(
-            str(m) for m in eng_raw.get("lean_models", ed.lean_models)
+        # The one list field that still iterated whatever TOML produced:
+        # `lean_models = 42` raised TypeError out of load_config (on every
+        # command's path), and `lean_models = "sonnet"` became six
+        # single-letter models. A non-list keeps the shipped default rather
+        # than emptying the setting, because "no lean models" changes routing.
+        lean_models=(
+            _str_tuple(eng_raw["lean_models"])
+            if isinstance(eng_raw.get("lean_models"), (list, tuple))
+            else ed.lean_models
         ),
         emission_nudge_tokens=_coerce_like(
             ed.emission_nudge_tokens,

@@ -186,8 +186,10 @@ def cmd_job(ws, ns) -> int:
             digest, manifest = finalize_job(ws, store, job_id)
             short = short_id(manifest["id"])
             print(f"[ctx job:{job_id} finalized → run:{short}]")
-            _emit_run_digest(ws, digest, manifest, store=store)
-            return 0
+            # The plain query was the one branch that computed the run's
+            # exit code and then returned 0: `ctx run --bg -- false`, then a
+            # later bare `ctx job <id>`, reported success.
+            return _emit_run_digest(ws, digest, manifest, store=store)
         status = job_status(store, job_id, tail=ns.tail)
         print(status)
         # 3, not 1: "the thing you asked about failed" is not "ctx failed".

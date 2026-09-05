@@ -89,7 +89,7 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "selector": {
                 "type": "object",
-                "description": "get selector: {lines:'A:B'|'A:B@anchor'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {symbol:'Cls.meth'} | {span:'<token from digest>'} | {hashlines:true}. An anchored repo: line span verifies the content is still there, follows it if it moved, and refuses if it is gone.",
+                "description": "get selector: {lines:'A:B'|'A:B@anchor'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {symbol:'Cls.meth'} | {span:'<token from digest>'} | {hashlines:true} | {snapcompact:true}. An anchored repo: line span verifies the content is still there, follows it if it moved, and refuses if it is gone. snapcompact renders the selected slice as a monospace bitmap PNG and returns a blob: ref instead of text (opt-in; requires the `image` extra).",
             },
             "options": {
                 "type": "object",
@@ -216,6 +216,7 @@ def _dispatch(args: dict[str, Any]) -> str:
             lines=(la, lb) if la is not None else None,
             lines_anchor=lanchor,
             hashlines=bool(sel_raw.get("hashlines")),
+            snapcompact=bool(sel_raw.get("snapcompact")),
             bytes=_span(sel_raw["bytes"]) if sel_raw.get("bytes") else None,
             records=_span(sel_raw["records"]) if sel_raw.get("records") else None,
             json_pointer=sel_raw.get("jsonPointer"),
@@ -417,6 +418,8 @@ def serve(bounded_only: bool = True) -> int:
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(msg, dict):
+            continue  # e.g. a JSON array/batch: msg.get below would raise AttributeError
         method = msg.get("method")
         msg_id = msg.get("id")
         if method == "initialize":

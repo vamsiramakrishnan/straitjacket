@@ -68,6 +68,42 @@ ctx init
 This writes the workspace configuration and ignore policy. Commit the files when the
 policy is intended to be shared; keep machine- or secret-specific exclusions local.
 
+```bash
+ctx setup --prune      # configure the installed agents, then defer what this repo does not use
+ctx prune              # preview the same decision on an already-harnessed repo
+ctx prune --apply --host claude --host codex
+```
+
+`ctx prune` is the capability-surface audit run as a setup step with a decision
+rule: ctx's own kernel and every capability that is read-only or observed in use
+stays visible; a skill, agent or MCP server that is unused, remote-write or
+destructive is deferred, and each host's minimal launch config is compiled from
+that selection (`.ctx-surface/`). Nothing is deleted. The receipt
+(`.ctx-surface/prune-receipt.json`) records the per-turn tokens before and after
+and what the repository looked like when the decision was made. `--keep <id>`
+pins a capability the rule would defer; `--probe-mcp` spawns each MCP server to
+measure its real schema tokens instead of estimating them.
+
+On a terminal, `ctx prune` and `ctx setup --prune` ask rather than decide. One
+selector per group (MCP servers, skills, agents) lists each capability with its
+tokens per turn, authority, observed use and the rule's recommendation marked
+`[defer]` or `[keep]`:
+
+```text
+MCP servers: 2 · 1,240 tok/turn
+   1. [keep ] mcp.github                                   980 tok/turn  remote-write  used 12x
+   2. [defer] mcp.deploy-prod                              260 tok/turn  destructive   never used
+  defer which? [Enter = as marked]
+```
+
+Enter accepts the marks; `all` / `none`; `1,3-5` picks exactly those; `+2` /
+`-3` adjusts the marks; `?2` explains one item. Kernel capabilities (ctx's own
+tools, policy, repository instructions) are reported as kept and never asked
+about. Then the hosts to compile for, then a confirmation before anything is
+written. The receipt records, per capability, whether the rule or the user
+decided. `--yes` takes the rule's answer at every prompt without asking, which is
+also what a pipe or `--json` gets; `--interactive` forces the questions.
+
 ## Capture one command: `ctx run`
 
 ```bash
@@ -175,6 +211,18 @@ there:
 ```bash
 ctx get repo:app/auth.py --lines 40:52@07407f1c
 ctx get repo:app/auth.py --lines 40:52 --hashlines   # L40:a3| … per-line tags
+```
+
+`--snapcompact` renders the selected slice as a deterministic monospace
+bitmap PNG (`ctx.snapcompact`) and returns a `blob:` ref instead of text —
+an opt-in cost/format tradeoff (requires the `image` extra: `pip install
+'ctx-harness[image]'`). It never changes default behavior, and this repo
+does not claim a live vision model actually reads the image back correctly
+at any cost saving — see `ctx.snapcompact`'s module docstring:
+
+```bash
+ctx get run:7bd91f2a4c3d#stdout --lines 1:120 --snapcompact
+ctx get blob:<hash from the header> --bytes 1:<size>   # fetch the PNG bytes
 ```
 
 The anchor verifies silently when the content has not moved, **follows it** when

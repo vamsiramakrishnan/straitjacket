@@ -11,7 +11,7 @@ import pytest
 
 from ctx import hosts
 from ctx.recovery_policy import choose_recovery
-from ctx.steward import Classification, classify_failure, decide, escalation_target
+from ctx.steward import Classification, classify_failure, de_escalation_target, decide, escalation_target
 
 
 def _hosts(*installed):
@@ -140,3 +140,13 @@ def test_last_attempt_offers_no_attempt_consuming_action():
 def test_no_budget_left_is_stop_budget():
     d = _decide(Classification("failed", "capability_limit"), budget_remaining_usd=0.0)
     assert d.action == "stop_budget"
+
+
+def test_de_escalation_target_is_the_cheapest_tier_below_current():
+    H = _hosts("claude", "codex")
+    claude = next(h for h in H if h.name == "claude")
+    frontier = next(m for m in claude.models if m.tier == "frontier")
+    host, model = de_escalation_target(frontier, H)
+    assert hosts.tier_rank(model.tier) < hosts.tier_rank(frontier.tier)
+    economy = next(m for m in claude.models if m.tier == "economy")
+    assert de_escalation_target(economy, H) is None   # nothing cheaper than economy

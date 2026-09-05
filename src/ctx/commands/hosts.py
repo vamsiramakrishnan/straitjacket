@@ -132,12 +132,20 @@ def cmd_setup(ns) -> int:
             file=sys.stderr,
         )
         return 2
-    return wrap_setup(
-        resolve_workspace(ns.workspace).root,
-        hosts or None,
-        force_all=bool(ns.all),
-        force_repair=bool(ns.repair),
-    )
+    root = resolve_workspace(ns.workspace).root
+    code = wrap_setup(root, hosts or None, force_all=bool(ns.all), force_repair=bool(ns.repair))
+    if code == 0 and getattr(ns, "prune", False):
+        # Bound before bloat, at the moment the harness is installed: the
+        # same rule `ctx surface trim` recommends, made the default here.
+        from ctx.prune import interactive_prune, render_prune, run_prune
+        from ctx.surface_profiles import HOSTS
+
+        targets = tuple(h for h in (hosts or list(SETUP_HOSTS)) if h in HOSTS) or ("claude",)
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            interactive_prune(root, ask=input, say=print, hosts=targets)
+        else:
+            print(render_prune(run_prune(root, hosts=targets, apply=True)))
+    return code
 
 
 def cmd_orchestrate(ws, ns) -> int:

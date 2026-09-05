@@ -711,7 +711,7 @@ def _op_code_context(pc: PlanContext, args: dict, inp: dict | None) -> dict[str,
 
     rows_in = list((inp or {}).get("rows") or [])
     kind_in = str((inp or {}).get("kind") or "sites")
-    context = max(0, int(args.get("context", 3) or 3))
+    context = max(0, int(args.get("context") if args.get("context") is not None else 3))  # `or 3` silently widened an explicit 0 to the default
     cap = min(bounds.count(args.get("cap", 8)), OUTLINE_FILE_CAP)
     take = rows_in[:cap]
     omitted = max(0, len(rows_in) - len(take))

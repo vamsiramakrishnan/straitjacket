@@ -61,6 +61,7 @@ def _retrieval(ws, ns, verb: str) -> int:
                 lines=(la, lb) if la is not None else None,
                 lines_anchor=lanchor,
                 hashlines=bool(getattr(ns, "hashlines", False)),
+                snapcompact=bool(getattr(ns, "snapcompact", False)),
                 bytes=_span(ns.bytes) if ns.bytes else None,
                 records=_span(ns.records) if ns.records else None,
                 json_pointer=ns.json_pointer,

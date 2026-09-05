@@ -823,6 +823,7 @@ def _launch_host(
     try:
         if spec.name == "claude":
             from ctx.installer import claude_hook_settings
+            from ctx.wrap import _SINGLE_SHOT_NOTICE
 
             tmp = tempfile.NamedTemporaryFile(
                 "w", prefix="ctx-orch-", suffix=".json", delete=False, encoding="utf-8"
@@ -831,6 +832,11 @@ def _launch_host(
             tmp.close()
             settings_tmp = tmp.name
             head = [path, "--settings", settings_tmp]
+            # A node is itself a print-mode run (round 17): if it fans out to
+            # background subagents it must not end its turn to "wait" for
+            # them. Same opt-out as the wrap.py path.
+            if not os.environ.get("CTX_WRAP_NO_DISCIPLINE"):
+                head += ["--append-system-prompt", _SINGLE_SHOT_NOTICE]
             if max_turns > 0:
                 head += ["--max-turns", str(int(max_turns))]
             structured = ["--output-format", "json"]
@@ -843,10 +849,18 @@ def _launch_host(
         elif spec.name == "antigravity-sdk":
             prefix = [path, spec.model_flag, model] if model and spec.model_flag else [path]
             argv = [*prefix, "--json", *spec.print_flag, prompt]
-        proc = subprocess.run(
-            argv, cwd=ws_root, capture_output=True, text=True,
-            timeout=timeout, env={**os.environ},
-        )
+        # Name the model and host for the hooks the launched process will
+        # run: the edit-outcome ledger splits by model, and a PostToolUse
+        # payload carries no model of its own.
+        env = {**os.environ, "CTX_MODEL": model or spec.default_model or "",
+               "CTX_HOST": spec.name}
+        if spec.name == "claude":
+            # Print mode kills background subagents 600 s after the main
+            # turn ends; a node that fans out and then waits would lose its
+            # work on that timer (round 17). The per-node ``timeout`` above
+            # is the bound; the user's own setting wins.
+            env.setdefault("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
+        proc = _run_bounded(argv, cwd=ws_root, timeout=timeout, env=env)
         stdout, usage = parse_host_output(
             spec.name,
             proc.stdout or "",
@@ -860,6 +874,32 @@ def _launch_host(
         if settings_tmp:
             with contextlib.suppress(OSError):
                 os.unlink(settings_tmp)
+
+
+def _run_bounded(argv, *, cwd, timeout, env) -> subprocess.CompletedProcess:
+    """``subprocess.run`` with a process group, so a timeout kills what the
+    host forked, not just the host.
+
+    ``subprocess.run(timeout=...)`` kills the direct child only. A harness
+    CLI that forked a sandboxed test run or a background subagent past
+    ``node_timeout`` left that grandchild running, invisible and possibly
+    still writing into the workspace after the orchestrator had moved on.
+    Same pattern as ``ctx._proc.wait_or_kill``: the child leads its own
+    session, and on timeout the whole group gets SIGKILL before the
+    ``TimeoutExpired`` propagates to the caller's existing handling.
+    """
+    proc = subprocess.Popen(
+        argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, env=env, start_new_session=True,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        from ctx._proc import wait_or_kill
+
+        wait_or_kill(proc, 0)
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 def _launch_result(value) -> tuple[int, str, str, ActualUsage | None]:
@@ -1184,18 +1224,28 @@ def _checkpoint_node(
         # connection is never shared across threads.
         with _CHECKPOINT_LOCK:
             store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-            blob_id = store.put_blob(payload) if payload else None
-            evidence = [f"blob:{blob_id} node {node.id} full output"] if blob_id else []
-            cp_id, _ = create_checkpoint(
-                store, ws,
-                goal=f"node {node.id} ({node.role}) of orchestrated task: {task}",
-                state=state,
-                evidence=evidence,
-            )
-            store.close()
+            try:  # ensure the sqlite connection is closed even if create_checkpoint raises
+                blob_id = store.put_blob(payload) if payload else None
+                evidence = [f"blob:{blob_id} node {node.id} full output"] if blob_id else []
+                cp_id, _ = create_checkpoint(
+                    store, ws,
+                    goal=f"node {node.id} ({node.role}) of orchestrated task: {task}",
+                    state=state,
+                    evidence=evidence,
+                )
+            finally:
+                store.close()
         return f"checkpoint:{short_id(cp_id)}"
     except Exception:
         return None
+
+
+#: A ctx-controlled literal a prewalk attempt prints to signal a deliberate
+#: stop after its first edit. Model output, not user input, so it is safe to
+#: match literally; requiring it (rather than inferring intent from prose)
+#: is what keeps the detection immune to a model's own wording ("the task
+#: is not complete yet") that would otherwise read as a failure.
+PREWALK_SENTINEL = "CTX_PREWALK_HANDOFF"
 
 
 def _node_prompt(
@@ -1203,6 +1253,9 @@ def _node_prompt(
     task: str,
     dep_docs: list[str],
     inbox: list[dict] | None = None,
+    *,
+    continuation_doc: str = "",
+    prewalk_hint: bool = False,
 ) -> str:
     p = (
         f"You are node '{node.id}' ({node.role}) of a multi-harness collaboration "
@@ -1230,6 +1283,22 @@ def _node_prompt(
             f"  from {m.get('from')}: {m.get('ref')}"
             + (f" — {m['note']}" if m.get("note") else "")
             for m in inbox
+        )
+    if continuation_doc:
+        p += (
+            "\n\nA prior attempt on this same subtask (a stronger model) already "
+            "explored the codebase, planned the work, and made one validated "
+            "edit toward it. Continue directly from there — do not re-explore "
+            "or redo that first edit. Its record:\n" + continuation_doc
+        )
+    if prewalk_hint:
+        p += (
+            "\n\nPrewalk: plan deeply first. State your plan as a numbered "
+            "todo list in your reply, then make exactly one edit that begins "
+            "executing it. The moment that edit is applied and confirmed, "
+            f"print the line '{PREWALK_SENTINEL}' by itself and end your turn "
+            "— do not continue past that first edit. A cheaper model will "
+            "pick up your plan and that edit from here."
         )
     return p
 
@@ -1522,8 +1591,24 @@ def run_route(
         dep_docs = [docs[d] for d in a.node.deps if d in docs]
         st = _ledger_state()
         inbox = _ledger.inbox_for(st, a.node.id)
-        prompt = _node_prompt(a.node, plan.task, dep_docs, inbox)
         host, model = a.host, a.model
+        # Opt-in (cfg.prewalk): a frontier model on a mutation node is asked
+        # to plan, make one edit, then hand off -- never offered to a node
+        # already routed cheap, since there is nothing to save by handing off
+        # from economy to economy.
+        # Armed only when the handoff it asks for can happen: a second attempt
+        # must be allowed (the cheap model runs as the SAME node's next
+        # attempt) and a cheaper unattended model must be installed. Asking a
+        # compliant frontier worker to stop after one edit with nobody to hand
+        # to turned a task it could have finished into a guaranteed
+        # stop_blocked (Codex review, PR #33).
+        prewalk_enabled = (
+            bool(getattr(cfg, "prewalk", False))
+            and _is_mutation_node(a.node) and model.tier == "frontier"
+            and (st.nodes[a.node.id].attempts if a.node.id in st.nodes else 0) + 1 < max_attempts
+            and _steward.de_escalation_target(model, hosts) is not None
+        )
+        prompt = _node_prompt(a.node, plan.task, dep_docs, inbox, prewalk_hint=prewalk_enabled)
         node_usage: list[ActualUsage | None] = []
         use_isolation = a.node.id in isolated_node_ids
         checkout = IsolatedWorktree(Path(ws.root), a.node.id, a.node.targets) if use_isolation else None
@@ -1587,6 +1672,16 @@ def run_route(
                         ))
                     code, out, err, usage = _launch_result(_do_launch(host, work_root, prompt, model))
                     node_usage.append(usage)
+                    # The sentinel is checked against the raw exit code, before
+                    # any contract-failure bookkeeping below can mutate it, and
+                    # wins over whatever classify_failure concludes: a model
+                    # explaining *why* it is stopping ("the task is not
+                    # complete yet, handing off") would otherwise trip the
+                    # same wording classify_failure reads as a real failure.
+                    prewalk_signaled = (
+                        prewalk_enabled and attempt == first_attempt and code == 0
+                        and PREWALK_SENTINEL in (out or "")
+                    )
                     contract_failed = _execution_contract_failed(code, out, err)
                     schema_status, schema_error = _worker_yield_status(a.node, out)
                     strict_schema = a.node.strict_output_schema or strict_worker_yields
@@ -1599,7 +1694,9 @@ def run_route(
                         expected_turns=expected_turns,
                         contract_failed=contract_failed or schema_failed,
                     )
-                    if contract_failed or schema_failed:
+                    if prewalk_signaled:
+                        cls = _steward.Classification("prewalk_handoff", "none")
+                    elif contract_failed or schema_failed:
                         code = code or 1
                     handoff_strategy = choose_handoff({
                         "failed": cls.reason != "done",
@@ -1625,6 +1722,76 @@ def run_route(
                     remaining = _remaining_budget()
                     if remaining <= 0:
                         cls = _steward.Classification("over_budget", cls.failure_kind)
+                    if cls.reason == "prewalk_handoff":
+                        # Not a failure recovery decision -- the attempt
+                        # succeeded at its narrower goal by design, so this
+                        # bypasses the recovery policy entirely rather than
+                        # forcing choose_recovery to explain a non-failure.
+                        target = (
+                            _steward.de_escalation_target(model, hosts)
+                            if attempt < max_attempts else None
+                        )
+                        action = "handoff_cheap" if target is not None else "stop_blocked"
+                        last_action = action
+                        _record(_ledger.steward_row(
+                            tid, a.node.id, attempt=attempt, on_reason="prewalk_handoff",
+                            failure_kind="none", action=action,
+                            target=(f"{target[0].name}/{target[1].id}" if target else None),
+                            budget_remaining_usd=remaining,
+                        ))
+                        if action == "handoff_cheap" and target is not None:
+                            # The steward's menu prices an escalation against
+                            # the balance; this branch bypasses the steward,
+                            # so it prices the cheap attempt itself. Only
+                            # `remaining <= 0` was checked above, and a
+                            # frontier attempt that spent most of an explicit
+                            # budget could hand off into an attempt the ledger
+                            # knew it could not cover (Codex review, PR #33).
+                            cheap_est = target[0].model_price(target[1].id).cost_usd(
+                                input_tokens=a.node.est_input_tokens,
+                                output_tokens=a.node.est_output_tokens,
+                            )
+                            if budget > 0 and cheap_est > remaining:
+                                last_action = "stop_budget"
+                                _record(_ledger.steward_row(
+                                    tid, a.node.id, attempt=attempt, on_reason="over_budget",
+                                    failure_kind="none", action="stop_budget", target=None,
+                                    budget_remaining_usd=remaining,
+                                ))
+                                cls = _steward.Classification("over_budget", "none")
+                                break
+                            # The edit already landed and is real progress --
+                            # unlike a failed attempt's retry, there is
+                            # nothing here to discard, so (unlike escalate
+                            # below) the worktree is NOT reset.
+                            host, model = target
+                            a = replace(a, host=host, model=model, est_cost_usd=cheap_est)
+                            escalated = f"{target[0].name}/{target[1].id}"
+                            continuation_doc = ""
+                            if ref:
+                                # A fresh Store, not the run_route-scoped one:
+                                # run_one executes inside a wave's thread
+                                # pool, and sqlite3 connections are
+                                # check_same_thread (see _checkpoint_node's
+                                # own docstring for the same reason).
+                                with contextlib.suppress(Exception):
+                                    from ctx.checkpoint import show_checkpoint
+                                    from ctx.store import Store as _Store
+
+                                    cp_store = _Store(
+                                        ws.workspace_id,
+                                        retention_days=ws.config.store.retention_days,
+                                    )
+                                    try:
+                                        continuation_doc = show_checkpoint(cp_store, ws, ref)
+                                    finally:
+                                        cp_store.close()
+                            prompt = _node_prompt(
+                                a.node, plan.task, dep_docs, inbox,
+                                continuation_doc=continuation_doc,
+                            )
+                            continue
+                        break
                     decision = _steward.decide(
                         classification=cls, attempt=attempt, max_attempts=max_attempts,
                         budget_remaining_usd=remaining, est_cost_usd=a.est_cost_usd,
@@ -1864,10 +2031,10 @@ def _merge_patch(nodes, state, patch, hosts, cfg) -> int:
     for i, r in enumerate(raw):
         if not isinstance(r, dict) or len(nodes) >= max_nodes:
             break
-        n = _coerce_node(r, len(nodes) + i)
-        if n.id in existing:
-            continue
-        with contextlib.suppress(RouteError):
+        with contextlib.suppress(RouteError):  # _coerce_node can also raise RouteError; keep it inside the guard
+            n = _coerce_node(r, len(nodes) + i)
+            if n.id in existing:
+                continue
             nodes.append(_assign_host(n, hosts))
             state[n.id] = "pending"
             existing.add(n.id)

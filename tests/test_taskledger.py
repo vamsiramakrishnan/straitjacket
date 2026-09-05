@@ -61,6 +61,108 @@ def test_append_load_round_trip_survives_a_torn_line(state_home, workspace_dir):
     assert all("ts" in r for r in rows)
 
 
+def test_append_survives_concurrent_writes_from_separate_os_processes(state_home, workspace_dir):
+    """append() holds one flock across its read-tail-then-write, not just
+    ctx.orchestrator's in-process threading.Lock -- two independent OS
+    PROCESSES (not threads) racing on the same ledger file must not corrupt
+    or drop each other's rows, even for a row large enough to exceed a
+    single write()'s atomicity guarantee (PIPE_BUF, 4096 bytes on Linux)."""
+    import os
+
+    if not hasattr(os, "fork"):
+        pytest.skip("POSIX-only: append()'s locking is fcntl.flock")
+
+    ws = make_ws(workspace_dir)
+    tid = _tid()
+    n_children, rows_per_child = 8, 10
+    # A big enough `nodes` payload pushes one serialized row past PIPE_BUF,
+    # which is exactly the size class two unlocked writers could interleave.
+    big_nodes = [{"id": f"n{i}", "goal": "x" * 40} for i in range(120)]
+
+    def _child(child_id: int) -> None:
+        for i in range(rows_per_child):
+            L.append(ws.root, L.task_row(
+                tid, goal_ref="blob:" + f"{child_id:02d}{i:02d}".ljust(12, "a"),
+                nodes=big_nodes, budget_usd=0.0, task_kind="general",
+                source=f"child-{child_id}-{i}",
+            ))
+        os._exit(0)
+
+    pids = []
+    for child in range(n_children):
+        pid = os.fork()
+        if pid == 0:
+            _child(child)
+        pids.append(pid)
+    for pid in pids:
+        _, status = os.waitpid(pid, 0)
+        assert status == 0, "a child process crashed while appending"
+
+    rows = L.load(ws.root, tid)
+    assert len(rows) == n_children * rows_per_child          # none lost to a race
+    assert len({r["source"] for r in rows}) == n_children * rows_per_child  # none glued together
+    assert all(len(r["nodes"]) == len(big_nodes) for r in rows)            # none truncated mid-write
+
+
+def test_append_holds_an_exclusive_flock_across_its_critical_section(
+    state_home, workspace_dir, monkeypatch
+):
+    """append()'s tail-check-then-write must be one held OS-level lock, not
+    separate unlocked reads and writes. Pause the write mid-call so the
+    critical section is measurably open, then prove -- from OUTSIDE, via an
+    independent non-blocking flock attempt on the same file -- that the
+    lock is genuinely held during that window, and genuinely released once
+    append() returns."""
+    import fcntl
+    import os
+    import threading
+
+    ws = make_ws(workspace_dir)
+    tid = _tid()
+    # A warm-up call (unpatched) creates the file so the probe below can
+    # open an existing path.
+    L.append(ws.root, L.claim_row(tid, "warmup", attempt=1, host="claude", model="m",
+                                  tier="economy", expected_turns=1, expected_cost_usd=0.001))
+    path = L.ledger_path(ws.root, tid)
+
+    real_write = os.write
+    entered = threading.Event()
+    release = threading.Event()
+
+    def paused_write(fd, data):
+        entered.set()
+        release.wait(timeout=2)
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, "write", paused_write)
+
+    def do_append():
+        L.append(ws.root, L.claim_row(tid, "held", attempt=1, host="claude", model="m",
+                                      tier="economy", expected_turns=1, expected_cost_usd=0.001))
+
+    t = threading.Thread(target=do_append)
+    t.start()
+    assert entered.wait(timeout=2), "append() never reached its write"
+
+    probe_fd = os.open(path, os.O_RDONLY)
+    try:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)   # held by the paused append()
+    finally:
+        os.close(probe_fd)
+
+    release.set()
+    t.join(timeout=2)
+    assert not t.is_alive()
+
+    probe_fd = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)       # released once append() returned
+        fcntl.flock(probe_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(probe_fd)
+
+
 def test_list_tasks_is_newest_first(state_home, workspace_dir):
     ws = make_ws(workspace_dir)
     a, b = _tid(), _tid()

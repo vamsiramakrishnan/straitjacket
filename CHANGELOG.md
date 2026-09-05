@@ -6,6 +6,296 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-09-03
+
+`ctx.taskledger.append()` now holds one OS-level lock (`fcntl.flock`, the
+same idiom already used by `ctx.engagement`'s state file and `ctx.hook`'s
+read ledger) across its tail-check and write, closing a gap where two
+separate OS processes — not just threads inside one orchestrator — could
+race on the same task's ledger file. `ctx.orchestrator`'s own
+`threading.Lock` only ever protected concurrent launches within one
+`ctx orchestrate` run; a second orchestrator process, or a direct
+`ctx task send`, held no lock at all.
+
+Opt-in (`[orchestrate] prewalk = true`, docs/PREWALK.md): a node the router
+assigned a frontier model with a mutation role is asked to plan, make one
+edit, then hand off — printing a literal sentinel line and ending its turn
+rather than continuing the whole task. On that signal the SAME node's next
+attempt runs on the cheapest installed model below frontier, in the SAME
+worktree with the edit kept (never reset, unlike a failed attempt's retry),
+and its prompt carries the frontier attempt's plan and validated edit
+forward verbatim — the "free in-context example" a plan document alone
+cannot give a cheaper model, without which it routinely re-explores to
+trust it. The handback for this is a new, seventh reason,
+`prewalk_handoff` — a deliberate success, not a failure, so it bypasses
+`choose_recovery` entirely for its own deterministic decision,
+`ctx.steward.de_escalation_target` (the literal mirror of
+`escalation_target`: cheapest installed model *below* the current tier
+rather than above it), recorded as a `ctx.steward/v1` row
+(`action: "handoff_cheap"`) before it is acted on like every other steward
+decision. Detection is a single ctx-defined literal the model is asked to
+print, checked against the raw exit code before any of the existing
+failure-classification logic runs — deliberately, since a model narrating
+why it is stopping ("the task is not complete yet, handing off") would
+otherwise read as a real failure to that classifier. A model that ignores
+the instruction degrades safely: it just finishes the task itself, exactly
+as it would without prewalk, at no cost regression. No live-model receipt
+exists yet for the mechanism's actual cost/quality trade; the mechanism and
+its tests are model-free, pinning what the orchestrator does with a given
+transcript rather than what a real model writes.
+
+`ctx get --snapcompact` (`src/ctx/snapcompact.py`, Delivery plane): an opt-in
+transport swap for a bounded `ctx get` slice — render the already-selected
+text as a deterministic monospace bitmap PNG (crisp, no anti-aliasing; same
+input always renders the same pixels) instead of emitting it as raw text,
+store it via the existing content-addressed blob store, and return its
+`blob:` ref in the header instead of the text body. Follows a 2026 blog post
+(stencil.so/blog/snapcompact) describing this as a cost-reduction technique
+for vision-capable models — dense text rendered as an image and read back by
+the model instead of tokenized as text. This ships the deterministic
+encoding half only: a real monospace TTF (DejaVu Sans Mono, or the first of
+Liberation Mono / FreeMono found on the host; Pillow's own bundled font as a
+last-resort fallback), a measured (not assumed) character-cell density, and
+a cost estimate that combines this repo's own `ctx.textutil.estimate_tokens`
+for the raw side with Anthropic's own documented 28x28px vision-tiling
+formula for the image side. It does **not** verify — and cannot verify from
+this sandbox — that a live vision model actually transcribes the rendered
+image back correctly at the blog's claimed ~2-3x cost reduction; that
+requires a real model call. Fully opt-in (`--snapcompact` on `ctx get`, or
+`{snapcompact: true}` in the MCP `get` selector); default behavior is
+unchanged. Requires the `image` extra (`pip install 'ctx-harness[image]'`);
+without it, a clear error names the missing extra rather than a bare
+`ImportError`.
+
+The edit-outcome ledger (`ctx.edit_outcomes`, `.ctx-session-reads/
+edit-outcomes.jsonl`) now records two more fields on every row: the edit's
+**format** — a closed vocabulary derived from the tool name
+(`search_replace` for Edit/MultiEdit/str_replace_editor, `whole_file` for
+Write/create_file, `patch` for apply_patch, `anchored` for `ctx edit apply`,
+`other`) — and the **model** that made it. Published edit benchmarks
+(Aider's format ladder, hashline's 16-model comparison, EDIT-Bench) all
+report that a model's edit success moves by tens of points on the shape of
+the edit alone and that the ranking is per model; a ledger without those
+two axes could not say whether the anchored format straitjacket already
+ships beats a host's native `Edit` for the model actually in use. The model
+comes from `CTX_MODEL`, which `ctx orchestrate` now exports (with
+`CTX_HOST`) into every host process it launches; outside an orchestrated
+run the hook reads the last named model from a bounded tail of the
+transcript the PostToolUse payload points at, and records `unknown`
+otherwise — never a guess from an unrelated variable. `ctx edit apply` now
+records its own outcome into the same ledger, one row per planned file
+(`flavor: "ctx"`, `format: "anchored"`), with its two addressable refusals
+mapped onto the needle's two failure kinds (target moved or vanished →
+`not_found`; target now has more than one copy → `not_unique`). `edit_summary`
+gains `by_model` (per (model, format): counts, classified rows, success and
+failure rates, with `unknown` outside the success denominator) and
+`models_reporting` / `unlabelled_model_rows`; `summarize_rows` and
+`load_rows` expose the same over any row sequence. Old rows without the
+fields fold into `unknown` and the tool-implied format. New
+`evals/edit_format_by_model.py` replays a ledger into the one table the
+question needs — success(anchored) − success(search_replace) per model, in
+points, refusing to print a number for a cell under 30 classified rows and
+labelling hashline's published +15 average as an external bar it does not
+reproduce. No live-model receipt is included: the eval's `--fixture` mode
+prints invented numbers and says so, and the real table only exists once
+sessions with the hook installed have written rows.
+
+Bug-bash round 17 (evals/bugbash-round17-2026-09-04.md): the S6 cell run
+live as a naive-vs-harnessed Claude Code pair. Ten defects, all reproduced
+by hand before their fix, regression-tested in
+`tests/test_round17_mechanisms.py`:
+
+- `hook.py`: the `cmd > file 2>&1` shortcut returned `allow` ahead of the
+  secret-path guard, so `cat .env > out.log 2>&1` was allowed while
+  `cat .env` force-asks. Both doors now consult one predicate
+  (`_names_secret_path`).
+- `config.py`: `[engagement] lean_models = 42` raised `TypeError` out of
+  `load_config` on every command's path, and `"sonnet"` became six
+  one-letter models. Coerced like every other list field; a non-list keeps
+  the shipped default.
+- `digest/__init__.py`: `digest_output` hard-coded `exitCode: 0`, so an
+  errored over-budget tool result digested as `exit 0` and its stored
+  manifest recorded a success. The host's error flag now sets exit 1;
+  run identity is (bytes, tool, is_error).
+- `ladders.py`: `_epoch_rung` indexed past a ladder narrowed to two rungs
+  in ctx.toml (`[x] * 0` still evaluates `x`); guarded like its siblings.
+- `repomap.py`: the builtin ranker raised `KeyError` on an import edge to
+  a listed-but-unreadable file; it now skips edges to files it never read,
+  as the networkx ranker already did.
+- `surface_gateway.py`: `_rpc`'s deadline bounded only the first byte —
+  `select` then `readline()` blocked without a timeout on a backend that
+  wrote half a line and hung. Reads are now raw chunks under the deadline
+  with line splitting in the client.
+- `evidence_outcomes.py`: the `failing_ids` filter tested the whole result
+  and never the match, so one FAILED in a verbose run tagged every passing
+  id as failing and blocked `followup_join` from associating the fix.
+  Decided per line now.
+- `scorecard.py`: `u_read and u_read < max_read` skipped the largest
+  invalidation, cache_read collapsing to 0.
+- `facts.py`: `fails_sites` served a gc-collected run's census from the
+  cached `latest_run` pointer with a dead `run:` citation; the pointer is
+  honoured only while its manifest still exists.
+- `_retrieval/rg_engine.py`: `follow_symlinks = true` never reached
+  ripgrep (`--follow`).
+- `worktree_isolation.py` (found by CI on this branch, not by either arm):
+  every isolated worktree was created at `<tmp>/repo`, so git derived the
+  same worktree id for two parallel wave nodes and one read the other's
+  half-written `.git/worktrees/repo` entry. Leaf names now carry the node
+  id and a unique suffix, and the three mutating worktree commands share
+  one process-wide lock.
+
+The same round's harnessed arm produced zero findings, not from a code bug
+but from a harness/print-mode interaction: the main agent fanned out into 7
+background bug-hunt agents, then ended its turn to wait for their
+completion notifications — a `ScheduleWakeup` call is the last thing in its
+transcript, whose tool result says "the harness re-invokes you when the
+wakeup fires." Print mode (`claude -p`) is a single-shot process with no
+such re-invocation; it instead waits for background subagents up to
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (default well under ten minutes)
+after the main turn ends, then kills them — stderr shows "Background tasks
+still running after 600s; terminating," and `subagent_stats` confirms all 7
+were system-killed with zero completions, discarding real in-progress work.
+The naive arm fanned out the same way and survived because its main agent
+kept its own turn alive (polling for its subagents' notifications) until
+all six had reported; the harnessed main agent took the wakeup tool's
+reply at its word and ended its turn. That tool was present in both
+children only because the launch inherited the parent remote session's
+environment; nothing ctx injects — the ephemeral `--settings` hooks (33-37
+ms per call in the transcript, returning plain allow), the output-discipline
+prompt, the observer proxy — told the agent to delegate and wait. `ctx wrap
+claude` now defaults `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` (wait
+indefinitely) for print-mode launches, `ctx orchestrate`'s launcher sets the
+same default for its `claude -p` nodes (which its own per-node timeout still
+bounds), and `evals/matrix_runner.py` sets it for both arms of a pair so the
+ceiling is never what a comparison measures; all three are skipped if the
+caller already exported the variable. The runner also stops passing the
+parent session's identity (`CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_CHILD_SESSION`) to its arms.
+
+Disabling that timer stops it from killing the subagents, but it does not
+touch the belief that made the main agent end its turn to wait for them in
+the first place — `ScheduleWakeup` is built into this Claude Code build and
+cannot be removed from a print-mode child by environment, and its tool
+result still promises "the harness re-invokes you," which is false once a
+`claude -p` process has nothing left to do. Both print-mode launch points —
+`ctx wrap claude` and `ctx orchestrate`'s per-node launcher — now append a
+short system-prompt notice telling the agent plainly that this is a
+single-shot run with no supervisor, that no wakeup or notification will
+re-invoke it, and that if it delegates to background subagents it must stay
+in its turn and collect their results before finishing. It shares
+`ctx wrap`'s existing opt-out (`CTX_WRAP_NO_DISCIPLINE=1`, or the caller's
+own `--append-system-prompt`) and is skipped for interactive sessions. It is
+not one of the byte-pinned prefix assets in `tests/test_prefix_stability.py`.
+No live re-run of the round-17 scenario has happened yet with this notice in
+place — the tests pin the injection, not a model's behavior in response to it.
+
+The harnessed arm re-run on the fixed tree kept its turn and completed all
+eight subagents (the lifecycle defect is closed) but hit the 30-turn cap
+collecting them, so its eleven findings were read from the subagent
+reports directly (evals/bugbash-round17-2026-09-04.md, "Harnessed arm,
+re-run"). All eleven reproduced and are fixed, regression-tested in
+`tests/test_round17_harnessed.py`; none overlapped the naive arm's ten:
+
+- `_retrieval/get.py`, `_retrieval/spans.py`: bodies were split with
+  `str.splitlines()` while the line index counts only `\n`, so a U+2028
+  (or `\r`, `\v`, `\f`, `\x1c`, `\x85`, U+2029) shifted every line
+  number after it. `ctx.textutil.index_lines` splits the way the index
+  counts; search already did.
+- `_retrieval/get.py`: an empty blob or stream is now an answer
+  (`--lines 1:0 of 0 (empty)`) instead of a refusal whose suggested fix
+  refused again.
+- `orchestrator.py`: a host launch owns its process group and a timeout
+  SIGKILLs all of it (`_run_bounded`), not just the host CLI.
+- `commands/execute.py`: a bare `ctx job <id>` on a finished background
+  job returns the run's exit code (3 on failure) instead of 0.
+- `reflex.py`: every state mutator now holds one flock across its
+  read-modify-write, so parallel hooks from one turn cannot lose each
+  other's updates.
+- `jobs.py`: the launcher records its supervisor's pid; a supervisor that
+  dies before the first state write turns the job `failed` instead of
+  leaving `--wait` polling forever.
+- `installer.py`: `doctor_checks` closes the three stores it opens.
+- `worktree_isolation.py`: `"."` as a declared target is refused with the
+  module's own error, not an `IndexError`.
+- `surface_gateway.py`: hiding a family that is not revealed reports no
+  change.
+- `engagement.py`: the symbol-grep list keeps the most recent 64, so the
+  count no longer freezes.
+- `edit_transactions.py`: a failed rename during rollback, or during the
+  forward commit, no longer leaks its staged temp file.
+
+The single-shot notice now also says that every blocking wait on
+background work spends a turn and prefers foreground subagents; the
+re-run spent fifteen of its thirty turns waiting.
+
+`ctx prune`, and `ctx setup --prune`: the capability-surface audit run as
+a setup step with a decision rule. The audit (`ctx surface audit`) and the
+enforced compile (`ctx surface compile --profile`) had both shipped; what
+was missing was the step between them that runs when the harness is
+installed. Prune keeps ctx's own kernel and every capability whose
+recommended disclosure level is L0 or L1 (read-only, or observed in use),
+defers everything at L2 and above (unused, remote-write, destructive),
+compiles that selection into each host's minimal launch config with the
+existing emitters, and writes `.ctx-surface/prune-receipt.json` with the
+per-turn tokens before and after and the repository's shape (languages by
+file count, test-runner markers). Nothing is deleted; a deferred
+capability stays reachable through the gateway or `--keep <id>`. Preview
+by default, idempotent, and the same rule `ctx surface trim` already
+recommended. On a terminal it asks instead of deciding: one selector per
+group (MCP servers, skills, agents) listing each capability with its tokens
+per turn, authority, observed use and the rule's mark; Enter accepts the
+marks, `all` / `none` / `1,3-5` / `+2` / `-3` / `?2` adjust or explain;
+then the hosts to compile for; then a confirmation. Kernel capabilities are
+reported as kept and never asked about. The receipt records whether the rule
+or the user decided each one. `--yes` (or a pipe, or `--json`) takes the
+rule's answer without questions. `surface_profiles.compile_profile` accepts
+a ready `Profile` for callers that decided the selection themselves.
+
+`evals/improve_route.py`: the self-improvement loop round 17 ran by hand,
+as one `ctx orchestrate` route -- hunt (explore, strongest model), verify
+(reproduce every claim; write a failing test per confirmed one), harvest
+(fix exactly what the tests pin), prove (suite and lint) -- with the task
+ledger recording each step and a verdict computed from the four nodes'
+JSON yields: precision = reproduced / claimed, promotable only when it
+clears 0.8, at least one finding survived, and the suite passed on the
+harvested tree. Promotable means "review this diff", never merge. Model-
+free tests pin the plan's validity under the router's rules and the gate's
+arithmetic; a live receipt is recorded when one exists.
+
+The improvement route's first live run (evals/improve-route-2026-09-05.json,
+recorded in evals/bugbash-round17-2026-09-04.md): hunt 158 turns on the
+frontier model, verify 138 on the standard model, harvest killed at its
+hour timeout after making 69 of 70 verify tests pass across 48 files; the
+prove step, run by hand, found 3 regressions in the substitution family,
+so the gate held the round. The hand review took 47 files and 64 tests and
+refused the substitution changes (they re-decide a settled collapse rule),
+a replay-metric redefinition, and a process-wide child subreaper. Among
+the fixes taken: the collapse rewrite could override a secret-path
+force-ask; `classify_read` resolved a relative path against the process
+cwd rather than the workspace; the generated `ctx.toml` pinned 3 of 16
+redaction patterns; `ctx seq --keep-going` halted on a step that failed to
+spawn; `_authority_ok` failed open on a mistyped ceiling; two more
+`splitlines()` sites disagreed with the line index; `install_claude`
+never added a hook stage an older install lacked; a proxy retry could pop
+a second stale pooled connection; `plan_exec` crashed on an explicit
+`null` wall budget; `wait_or_kill(proc, 0)` did not kill an orphaned
+grandchild whose leader had already exited. The route now runs one
+attempt per node with a 100-turn ceiling and labels its cost estimate a
+placeholder; the first run cost 57 times it.
+
+Review round on this wave (Codex, four findings, all confirmed and fixed):
+prewalk is armed only when the handoff it asks for can happen (a second
+attempt allowed and a cheaper unattended model installed), so a compliant
+frontier worker is never told to stop after one edit with nobody to hand
+to; the cheap handoff attempt is priced against the remaining budget like
+any claim instead of passing on `remaining > 0` alone; the call graph
+registers a file under every package root it is importable from (an
+unbroken chain of package directories), so a nested `pkg.sub.store` keeps
+its outer prefix beside a loose file in the source root; and the job
+launcher records its supervisor's pid in its own file rather than
+read-modify-writing the supervisor's `meta.json`, which raced however many
+times it re-read first.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives

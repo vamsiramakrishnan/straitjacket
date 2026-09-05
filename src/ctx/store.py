@@ -162,10 +162,9 @@ def _probe_writable(root: Path) -> None:
             os.fsync(fh.fileno())
         os.unlink(probe)
     except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        # os.fdopen's `with` block already closed fd on the way out (even on
+        # exception) -- closing it again here could hit an unrelated fd the OS
+        # already recycled for a new open elsewhere.
         try:
             os.unlink(probe)
         except OSError:
@@ -666,9 +665,17 @@ class Store:
         # (surviving vs removed objects, return value) is unchanged; only
         # the number of commits shrinks.
         dead_ids: list[str] = []
-        for row in self.db.execute("SELECT id, kind FROM objects").fetchall():
+        candidates = self.db.execute("SELECT id, kind FROM objects").fetchall()
+        # Re-query recency here, right before deciding deadness, to close the window
+        # between mark (`recent` above) and sweep: an object written in between --
+        # like a concurrent put_blob -- is still within retention and must survive.
+        recent_now = {
+            r[0]
+            for r in self.db.execute("SELECT id FROM objects WHERE created_at >= ?", (cutoff,))
+        }
+        for row in candidates:
             obj_id, kind = row
-            if obj_id in live:
+            if obj_id in live or obj_id in recent_now:
                 continue
             if kind == "blob":
                 p = self.blob_path(obj_id)

@@ -28,15 +28,31 @@ mean:
   * **Only where PostToolUse exists.** Claude Code and Codex deliver a tool
     result to the hook; Antigravity's published contract does not. Rates
     gathered here describe the hosts that report, and the summary says which.
+
+Every row also names the edit's **format** and the **model** that produced
+it. Published edit benchmarks (Aider's format ladder, hashline, EDIT-Bench)
+agree that the same model succeeds or fails on the *shape* of the edit far
+more than folklore assumes -- a search/replace needle, a whole-file rewrite,
+a unified patch and an anchored ``ctx edit`` span are different tasks -- and
+that the ranking differs by model. A ledger that cannot split by those two
+axes cannot say whether the anchored format straitjacket already ships
+beats a host's native ``Edit`` for the model actually in use. The format is
+derived from the tool name (a closed vocabulary; anything else is ``other``).
+The model comes from ``CTX_MODEL``, which ``ctx orchestrate`` sets on every
+host it launches; outside an orchestrated run the hook reads it from the
+tail of the host's transcript when one is named, and ``unknown`` otherwise.
+No row ever asserts a model it did not see named.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from ctx.sessiondir import session_reads_path
 
@@ -118,6 +134,98 @@ def classify(result_text: str, *, is_error: bool | None = None) -> str:
     return "unknown"
 
 
+#: The edit formats a row can name. Closed on purpose: a summary that groups
+#: by free text groups by nothing. ``search_replace`` is a needle and a
+#: replacement (Claude Code Edit/MultiEdit, str_replace_editor, Codex
+#: replace_file_content); ``whole_file`` rewrites the file (Write, WriteFile,
+#: create_file); ``patch`` is a unified-diff style block (apply_patch);
+#: ``anchored`` is ``ctx edit apply`` -- a span address plus digest, resolved
+#: by content, refused when ambiguous.
+FORMATS = ("search_replace", "whole_file", "patch", "anchored", "other")
+
+_FORMAT_EXACT = {
+    "edit": "search_replace",
+    "multiedit": "search_replace",
+    "str_replace_editor": "search_replace",
+    "str_replace_based_edit_tool": "search_replace",
+    "replace_file_content": "search_replace",
+    "replace_in_file": "search_replace",
+    "write": "whole_file",
+    "writefile": "whole_file",
+    "write_file": "whole_file",
+    "create_file": "whole_file",
+    "apply_patch": "patch",
+    "applypatch": "patch",
+    "ctx edit apply": "anchored",
+    "ctx_edit_apply": "anchored",
+}
+
+#: ``CTX_MODEL`` is the one name every launcher can set. ``ctx orchestrate``
+#: does; a user running a host by hand can export it. Nothing else is
+#: consulted before the transcript, so a stale unrelated variable cannot
+#: label rows with a model that never ran.
+MODEL_ENV = "CTX_MODEL"
+_MODEL_CHARS = 64
+#: How much of a transcript tail to read when no ``CTX_MODEL`` is set. A
+#: bounded seek from the end, never the whole file: PostToolUse has a latency
+#: contract and a long session's transcript can be tens of megabytes.
+_TRANSCRIPT_TAIL_BYTES = 64 * 1024
+_TRANSCRIPT_MODEL = re.compile(r'"model"\s*:\s*"([A-Za-z0-9][A-Za-z0-9._:/-]{1,80})"')
+
+
+def edit_format(tool: str) -> str:
+    """Name the format an edit tool speaks. Total: always a member of FORMATS."""
+    raw = str(tool or "").strip()
+    exact = _FORMAT_EXACT.get(raw.lower())
+    if exact:
+        return exact
+    # Split camelCase before lowercasing, the way hook._tool_words does, so
+    # NotebookEdit is ("notebook", "edit") and not one unrecognised word.
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw)
+    words = [w.lower() for w in re.findall(r"[A-Za-z0-9]+", spaced)]
+    if "patch" in words:
+        return "patch"
+    if "write" in words or "create" in words:
+        return "whole_file"
+    if "replace" in words or "edit" in words:
+        return "search_replace"
+    return "other"
+
+
+def resolve_model(
+    env: Mapping[str, str] | None = None, transcript_path: str | None = None
+) -> str:
+    """The model behind an edit, or ``unknown``. Never raises.
+
+    Order: the ``CTX_MODEL`` variable a launcher set for this host process,
+    then the last ``"model"`` named in the tail of the transcript the hook
+    payload pointed at (Claude Code writes one per assistant message), then
+    ``unknown``. A row labelled ``unknown`` is counted, and the summary says
+    how many there are, because a per-model table that silently dropped the
+    rows it could not label would overstate its own coverage.
+    """
+    source = os.environ if env is None else env
+    try:
+        named = str(source.get(MODEL_ENV, "") or "").strip()
+    except Exception:
+        named = ""
+    if named:
+        return named[:_MODEL_CHARS]
+    if transcript_path:
+        try:
+            with open(transcript_path, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - _TRANSCRIPT_TAIL_BYTES))
+                tail = handle.read(_TRANSCRIPT_TAIL_BYTES).decode("utf-8", "replace")
+            hits = _TRANSCRIPT_MODEL.findall(tail)
+            if hits:
+                return hits[-1][:_MODEL_CHARS]
+        except Exception:
+            pass
+    return "unknown"
+
+
 def _path_digest(path: str) -> str:
     """A stable, non-reversible handle for a path.
 
@@ -137,22 +245,33 @@ def append_edit_outcome(
     old_len: int = 0,
     new_len: int = 0,
     flavor: str = "",
+    model: str = "",
+    fmt: str = "",
 ) -> None:
     """Append one privacy-safe outcome row. Fail-open, never raises.
 
     Called from the hook's PostToolUse path, which has a latency contract: this
     does one small append and swallows every error, because a telemetry write
     must never be the reason an agent's edit appears to fail.
+
+    ``model`` defaults to ``unknown`` when empty; ``fmt`` defaults to the
+    format the tool name implies (see ``edit_format``). Both are closed at
+    the summary: an unlisted format is ``other``.
     """
     if outcome not in OUTCOMES:
         outcome = "unknown"
     try:
+        fmt = str(fmt or "").strip() or edit_format(tool)
+        if fmt not in FORMATS:
+            fmt = "other"
         row = {
             "schema": EDIT_OUTCOME_SCHEMA,
             "ts": int(time.time()),
             "tool": str(tool)[:64],
             "outcome": outcome,
             "flavor": str(flavor)[:32],
+            "model": (str(model or "").strip() or "unknown")[:_MODEL_CHARS],
+            "format": fmt,
             "oldLen": max(0, int(old_len)),
             "newLen": max(0, int(new_len)),
         }
@@ -191,45 +310,122 @@ def _rows(workspace_root: Path) -> Iterable[dict[str, Any]]:
         return
 
 
-def edit_summary(workspace_root: Path) -> dict[str, Any]:
-    """The measured edit-failure picture for this workspace.
+def _new_counts() -> dict[str, int]:
+    return {name: 0 for name in OUTCOMES}
+
+
+def _cell(counts: dict[str, int]) -> dict[str, Any]:
+    """One (model, format) cell: counts plus the two rates a reader compares.
+
+    ``success_rate`` is applied over *classified* rows -- ``unknown`` is left
+    out of the denominator because it is a wording we have not learned, not
+    an outcome -- and ``unknown`` is reported beside it so the reader can see
+    how much of the cell the rate is silent about.
+    """
+    total = sum(counts.values())
+    classified = total - counts["unknown"]
+    failures = counts["not_found"] + counts["not_unique"] + counts["other_error"]
+    return {
+        "total": total,
+        "counts": dict(counts),
+        "classified": classified,
+        "failures": failures,
+        "success_rate": (counts["applied"] / classified) if classified else 0.0,
+        "failure_rate": (failures / total) if total else 0.0,
+    }
+
+
+def summarize_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """The edit-failure picture over any row sequence (a ledger, a fixture).
 
     ``repairable_share`` is the fraction of *failures* that are ``not_found`` —
     the only failure kind a content-based repair can address without guessing.
     ``not_unique`` is excluded on purpose: several equally good matches is not
     a lookup problem, and picking one would be the harness inventing intent.
 
+    ``by_model`` splits the same counts by (model, format), which is the one
+    table the edit-format question needs: for the model actually in use, did
+    the anchored format land more often than the host's native one? Rows from
+    before the two fields existed are folded into ``unknown`` / the format
+    the tool name implies, so an old ledger still summarizes.
+
     Reported as counts alongside every rate, because a rate over eleven edits
     is not a rate and the reader has to be able to see that.
     """
-    counts = {name: 0 for name in OUTCOMES}
+    counts = _new_counts()
     files: set[str] = set()
     flavors: set[str] = set()
-    for row in _rows(workspace_root):
-        counts[row.get("outcome", "unknown") if row.get("outcome") in counts else "unknown"] += 1
+    cells: dict[str, dict[str, dict[str, int]]] = {}
+    for row in rows:
+        outcome = row.get("outcome")
+        outcome = outcome if outcome in counts else "unknown"
+        counts[outcome] += 1
         digest = row.get("pathDigest")
         if isinstance(digest, str):
             files.add(digest)
         flavor = row.get("flavor")
         if isinstance(flavor, str) and flavor:
             flavors.add(flavor)
+        model = row.get("model")
+        model = model if isinstance(model, str) and model else "unknown"
+        fmt = row.get("format")
+        if not (isinstance(fmt, str) and fmt in FORMATS):
+            fmt = edit_format(str(row.get("tool") or ""))
+        cells.setdefault(model, {}).setdefault(fmt, _new_counts())[outcome] += 1
     total = sum(counts.values())
     failures = counts["not_found"] + counts["not_unique"] + counts["other_error"]
+    by_model = {
+        model: {fmt: _cell(c) for fmt, c in sorted(fmts.items())}
+        for model, fmts in sorted(cells.items())
+    }
     return {
         "total": total,
         "counts": counts,
         "distinct_files": len(files),
         "hosts_reporting": sorted(flavors),
+        "models_reporting": sorted(m for m in cells if m != "unknown"),
+        "unlabelled_model_rows": sum(
+            sum(c.values()) for c in cells.get("unknown", {}).values()
+        ),
         "failure_rate": (failures / total) if total else 0.0,
         "failures": failures,
         "repairable_share": (counts["not_found"] / failures) if failures else 0.0,
+        "by_model": by_model,
     }
+
+
+def edit_summary(workspace_root: Path) -> dict[str, Any]:
+    """``summarize_rows`` over this workspace's ledger."""
+    return summarize_rows(_rows(workspace_root))
+
+
+def load_rows(path: Path) -> list[dict[str, Any]]:
+    """Read one ledger file directly (for the replay eval). Missing → []."""
+    rows: list[dict[str, Any]] = []
+    try:
+        with Path(path).open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    doc = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(doc, dict) and doc.get("schema") == EDIT_OUTCOME_SCHEMA:
+                    rows.append(doc)
+    except OSError:
+        return []
+    return rows
 
 
 __all__ = [
     "EDIT_OUTCOME_SCHEMA",
+    "FORMATS",
+    "MODEL_ENV",
     "OUTCOMES",
     "classify",
+    "edit_format",
+    "resolve_model",
     "append_edit_outcome",
     "edit_summary",
+    "summarize_rows",
+    "load_rows",
 ]

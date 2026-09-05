@@ -291,6 +291,15 @@ append-only ledger of schema-versioned rows: `ctx.task/v1`, `ctx.claim/v1`,
   free-text field, bounded and control-stripped. An inbox `ref` MUST parse as
   an address under §6.1, MAY be followed only by `ctx get` options, MUST be
   bounded, and a row whose `ref` is not an address MUST be refused.
+- Prewalk (opt-in, `[orchestrate] prewalk`, docs/PREWALK.md): a node the
+  router assigned a frontier model with a mutation role MAY be asked to plan,
+  make one edit, then hand off. That handback MUST use `reason:
+  prewalk_handoff` and MUST NOT be routed through the failure-recovery
+  policy; the steward MUST decide it deterministically (the cheapest
+  installed model below the current tier, or `stop_blocked` if none is
+  installed) and MUST still record a `ctx.steward/v1` row before acting. The
+  worktree of a node handed off this way MUST NOT be reset before its next
+  attempt — its edit is progress, not a failed attempt to discard.
 
 ## 7. Invocation and artifact data model
 

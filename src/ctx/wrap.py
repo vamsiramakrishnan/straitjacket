@@ -47,6 +47,26 @@ _OUTPUT_DISCIPLINE = (
     "execute forward without re-planning."
 )
 
+# evals/bugbash-round17-2026-09-04.md: a harnessed main agent delegated a bug
+# hunt to 7 background subagents, then called the built-in ScheduleWakeup
+# tool and ended its turn on the strength of its tool result ("the harness
+# re-invokes you when the wakeup fires") — a claim that is only true in an
+# interactive session. In `claude -p`, ending the turn ends the run, and the
+# subagents' work is lost. Not tracked as a prefix asset (see
+# tests/test_prefix_stability.py): it rides the same injection point and
+# opt-outs as _OUTPUT_DISCIPLINE without being pinned by that manifest.
+_SINGLE_SHOT_NOTICE = (
+    "This is a single-shot, non-interactive run: there is no supervisor. "
+    "Once this turn ends, nothing brings you back — no wakeup, no "
+    "notification, no timer — even if a tool result says otherwise. If you "
+    "delegate work to background subagents, stay in this turn and collect "
+    "their results before you finish. Prefer running subagents in the "
+    "foreground: every blocking wait on background work spends one of your "
+    "turns, and a turn cap can run out before the work is collected. Ending "
+    "your turn to wait for something to notify you later is the one thing "
+    "you must never do here."
+)
+
 
 # Orchestration belongs in the session, not in a command a human types.
 # `ctx orchestrate "<task>"` makes routing something you invoke; nobody wants to
@@ -75,10 +95,32 @@ def _with_output_discipline(agent_args: list[str], *, orchestrate: bool = False)
         return agent_args  # the user's own instruction wins
     if "-p" not in agent_args and "--print" not in agent_args:
         return agent_args  # interactive session: leave the human in charge
-    prompt = _OUTPUT_DISCIPLINE
+    prompt = _OUTPUT_DISCIPLINE + " " + _SINGLE_SHOT_NOTICE
     if orchestrate:
         prompt = prompt + " " + _ORCHESTRATION_MODE
     return ["--append-system-prompt", prompt, *agent_args]
+
+
+_PRINT_BG_WAIT_CEILING_VAR = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+
+def _with_print_bg_wait_ceiling(
+    agent_args: list[str], env: dict[str, str] | None
+) -> dict[str, str] | None:
+    """In print mode, Claude Code kills background subagents a fixed ceiling
+    (600 s) after the main turn ends. evals/bugbash-round17-2026-09-04.md: a
+    harnessed run's main agent delegated to 7 background agents, ended its
+    turn to wait for their notifications, and print mode killed all 7 at the
+    ceiling before any reported back -- zero findings, $22 spent. A wrapped
+    print-mode run is a delegated task whose subagents' work is the
+    deliverable; discarding it on a timer is never what the caller wanted.
+    Default to waiting indefinitely (0); never touch a ceiling the user set."""
+    if "-p" not in agent_args and "--print" not in agent_args:
+        return env  # interactive session: unrelated to this ceiling
+    base = env if env is not None else os.environ
+    if _PRINT_BG_WAIT_CEILING_VAR in base:
+        return env  # the user's own setting wins
+    return {**base, _PRINT_BG_WAIT_CEILING_VAR: "0"}
 
 
 _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
@@ -268,6 +310,7 @@ def wrap_claude(
     try:
         if use_proxy:
             proxy_proc, child_env = _start_proxy(workspace_root, exe, rescue_pct)
+        child_env = _with_print_bg_wait_ceiling(agent_args, child_env)
         if not _claude_supports_settings(claude):
             print(
                 "ctx wrap: this claude build lacks --settings; "

@@ -324,7 +324,7 @@ class _RelayHandler(BaseHTTPRequestHandler):
         # A pooled connection can be stale (upstream idled it out); retry
         # exactly once on a fresh one. A fresh-connection failure is real.
         for _attempt in (0, 1):
-            conn, reused = self._acquire(server)
+            conn, reused = self._acquire(server, allow_pool=(_attempt == 0))  # retry forces a fresh conn, not another stale pooled one
             try:
                 t0 = time.monotonic()
                 if not reused:
@@ -446,9 +446,9 @@ class _RelayHandler(BaseHTTPRequestHandler):
             conn.putheader("Content-Length", "0")
         conn.endheaders(body if body else None)
 
-    def _acquire(self, server: _ProxyServer) -> tuple[http.client.HTTPConnection, bool]:
+    def _acquire(self, server: _ProxyServer, *, allow_pool: bool = True) -> tuple[http.client.HTTPConnection, bool]:
         with server.ctx_pool_lock:
-            if server.ctx_pool:
+            if allow_pool and server.ctx_pool:
                 return server.ctx_pool.pop(), True
         u = server.ctx_upstream
         if u.scheme == "https":
