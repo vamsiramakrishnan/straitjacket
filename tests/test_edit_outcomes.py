@@ -306,6 +306,9 @@ def test_orchestrator_launch_names_the_model_for_the_hooks(monkeypatch, tmp_path
 
     monkeypatch.setattr(orchestrator.subprocess, "run", fake_run)
     monkeypatch.setattr(orchestrator, "parse_host_output", lambda *a, **k: ("", None))
+    # The suite itself may run under `ctx wrap`, which exports this; the
+    # assertion is about what the LAUNCHER adds, not what it inherits.
+    monkeypatch.delenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", raising=False)
     codex = next(h for h in hosts.detect_all(which=lambda b: None) if h.spec.name == "codex")
     code, *_ = orchestrator._launch_host(codex, tmp_path, "p", "ctx", timeout=5, model="m-x")
     assert code == 0

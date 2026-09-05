@@ -823,6 +823,7 @@ def _launch_host(
     try:
         if spec.name == "claude":
             from ctx.installer import claude_hook_settings
+            from ctx.wrap import _SINGLE_SHOT_NOTICE
 
             tmp = tempfile.NamedTemporaryFile(
                 "w", prefix="ctx-orch-", suffix=".json", delete=False, encoding="utf-8"
@@ -831,6 +832,11 @@ def _launch_host(
             tmp.close()
             settings_tmp = tmp.name
             head = [path, "--settings", settings_tmp]
+            # A node is itself a print-mode run (round 17): if it fans out to
+            # background subagents it must not end its turn to "wait" for
+            # them. Same opt-out as the wrap.py path.
+            if not os.environ.get("CTX_WRAP_NO_DISCIPLINE"):
+                head += ["--append-system-prompt", _SINGLE_SHOT_NOTICE]
             if max_turns > 0:
                 head += ["--max-turns", str(int(max_turns))]
             structured = ["--output-format", "json"]

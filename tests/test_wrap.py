@@ -90,6 +90,37 @@ def test_output_discipline_not_injected_interactive_or_opted_out(monkeypatch):
     assert _with_output_discipline(["-p", "x"]) == ["-p", "x"]  # env opt-out
 
 
+def test_single_shot_notice_injected_in_print_mode(monkeypatch):
+    """evals/bugbash-round17-2026-09-04.md: ScheduleWakeup told a print-mode
+    main agent "the harness re-invokes you" and it ended its turn waiting on
+    7 background subagents, which print mode then killed. Every print-mode
+    launch must be told plainly that no such re-invocation happens here."""
+    from ctx.wrap import _SINGLE_SHOT_NOTICE, _with_output_discipline
+
+    monkeypatch.delenv("CTX_WRAP_NO_DISCIPLINE", raising=False)
+    args = _with_output_discipline(["-p", "fix it"])
+    assert args[0] == "--append-system-prompt"
+    assert _SINGLE_SHOT_NOTICE in args[1]
+    assert "Output discipline" in args[1]  # both share the one system-prompt slot
+
+
+def test_single_shot_notice_not_injected_interactive_or_opted_out(monkeypatch):
+    from ctx.wrap import _SINGLE_SHOT_NOTICE, _with_output_discipline
+
+    monkeypatch.delenv("CTX_WRAP_NO_DISCIPLINE", raising=False)
+    # Interactive: no system prompt injected at all, so no notice either.
+    assert _with_output_discipline([]) == []
+    # A caller's own --append-system-prompt wins outright, notice included.
+    own = ["--append-system-prompt", "mine", "-p", "x"]
+    result = _with_output_discipline(own)
+    assert result == own
+    assert _SINGLE_SHOT_NOTICE not in result[1]
+    # The existing opt-out covers the notice too, not just output discipline.
+    monkeypatch.setenv("CTX_WRAP_NO_DISCIPLINE", "1")
+    result = _with_output_discipline(["-p", "x"])
+    assert result == ["-p", "x"]
+
+
 def test_print_bg_wait_ceiling_defaulted_in_print_mode(monkeypatch):
     from ctx.wrap import _with_print_bg_wait_ceiling
 

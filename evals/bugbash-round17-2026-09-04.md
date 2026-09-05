@@ -130,3 +130,26 @@ assignment is on the single-diagnostic branch, where one is the count.
    caller's environment. The runner also no longer inherits the parent
    session's identity: it drops the `CLAUDE_CODE_SESSION_ID` and
    `CLAUDE_CODE_CHILD_SESSION` variables so each arm is its own session.
+
+**Defence (2026-09-05).** The timer fix above stops print mode from killing
+the subagents; it does nothing about the belief that made the main agent
+end its turn to wait for them. `ScheduleWakeup` is built into this Claude
+Code build (2.1.261) and cannot be stripped from a print-mode child by
+environment — probing with every `CLAUDE_CODE_*` variable removed still
+left the tool present — and its tool result still says "the harness
+re-invokes you," which is only true in an interactive session. `ctx wrap
+claude` (`src/ctx/wrap.py::_with_output_discipline`, new
+`_SINGLE_SHOT_NOTICE`) and `ctx orchestrate`'s Claude node launcher
+(`src/ctx/orchestrator.py::_launch_host`) now append a short system-prompt
+notice, print-mode only, telling the agent plainly that this is a
+single-shot run with no supervisor, that no wakeup or notification will
+re-invoke it, and that delegating to background subagents means staying in
+the turn to collect their results before finishing. It shares the existing
+`CTX_WRAP_NO_DISCIPLINE=1` / caller's-own-`--append-system-prompt` opt-out
+and is not one of the byte-pinned assets in `tests/test_prefix_stability.py`.
+What this proves: the two launch points inject the notice, an interactive
+launch does not, and the opt-outs still work (`tests/test_wrap.py`,
+`tests/test_task_ledger_orchestration.py`). What it does not prove: that a
+real agent reads the notice and stays in its turn. No live re-run of this
+round's S6 scenario has happened with the notice in place — that receipt is
+still open.

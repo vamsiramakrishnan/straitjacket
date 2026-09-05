@@ -47,6 +47,24 @@ _OUTPUT_DISCIPLINE = (
     "execute forward without re-planning."
 )
 
+# evals/bugbash-round17-2026-09-04.md: a harnessed main agent delegated a bug
+# hunt to 7 background subagents, then called the built-in ScheduleWakeup
+# tool and ended its turn on the strength of its tool result ("the harness
+# re-invokes you when the wakeup fires") — a claim that is only true in an
+# interactive session. In `claude -p`, ending the turn ends the run, and the
+# subagents' work is lost. Not tracked as a prefix asset (see
+# tests/test_prefix_stability.py): it rides the same injection point and
+# opt-outs as _OUTPUT_DISCIPLINE without being pinned by that manifest.
+_SINGLE_SHOT_NOTICE = (
+    "This is a single-shot, non-interactive run: there is no supervisor. "
+    "Once this turn ends, nothing brings you back — no wakeup, no "
+    "notification, no timer — even if a tool result says otherwise. If you "
+    "delegate work to background subagents, stay in this turn and collect "
+    "their results (poll, wait, or run the work in the foreground) before "
+    "you finish. Ending your turn to wait for something to notify you later "
+    "is the one thing you must never do here."
+)
+
 
 # Orchestration belongs in the session, not in a command a human types.
 # `ctx orchestrate "<task>"` makes routing something you invoke; nobody wants to
@@ -75,7 +93,7 @@ def _with_output_discipline(agent_args: list[str], *, orchestrate: bool = False)
         return agent_args  # the user's own instruction wins
     if "-p" not in agent_args and "--print" not in agent_args:
         return agent_args  # interactive session: leave the human in charge
-    prompt = _OUTPUT_DISCIPLINE
+    prompt = _OUTPUT_DISCIPLINE + " " + _SINGLE_SHOT_NOTICE
     if orchestrate:
         prompt = prompt + " " + _ORCHESTRATION_MODE
     return ["--append-system-prompt", prompt, *agent_args]

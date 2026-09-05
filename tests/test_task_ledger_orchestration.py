@@ -269,6 +269,39 @@ def test_turn_ceiling_hard_bounds_a_claude_node_at_launch(monkeypatch, tmp_path)
     assert "--max-turns" not in seen["argv"]   # 0 = observe only, nothing added
 
 
+def test_claude_node_launch_carries_the_single_shot_notice(monkeypatch, tmp_path):
+    """evals/bugbash-round17-2026-09-04.md: a node is itself a print-mode
+    `claude -p` run. If it fans out to background subagents and then ends
+    its turn to "wait" for them (as ScheduleWakeup's tool result implies a
+    harness will wake it), print mode kills that work on its background
+    ceiling. Every Claude node launch must carry the same single-shot
+    warning as `ctx wrap claude`, unless the caller opted out."""
+    from ctx.wrap import _SINGLE_SHOT_NOTICE
+
+    host = next(h for h in _hosts("claude") if h.name == "claude")
+    seen = {}
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps({"result": "ok", "num_turns": 1, "usage": {}})
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return Completed()
+
+    monkeypatch.setattr("ctx.orchestrator.subprocess.run", fake_run)
+    monkeypatch.delenv("CTX_WRAP_NO_DISCIPLINE", raising=False)
+    _launch_host(host, tmp_path, "do it", "/usr/bin/ctx", timeout=5)
+    argv = seen["argv"]
+    assert "--append-system-prompt" in argv
+    assert argv[argv.index("--append-system-prompt") + 1] == _SINGLE_SHOT_NOTICE
+
+    monkeypatch.setenv("CTX_WRAP_NO_DISCIPLINE", "1")
+    _launch_host(host, tmp_path, "do it", "/usr/bin/ctx", timeout=5)
+    assert "--append-system-prompt" not in seen["argv"]
+
+
 def test_replanned_nodes_survive_resume(state_home, git_workspace, monkeypatch):
     """A coordinator re-plan adds nodes in memory. They must reach the ledger
     (a second task row, source "replan") or a resume rebuilds the route from

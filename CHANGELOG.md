@@ -166,6 +166,23 @@ caller already exported the variable. The runner also stops passing the
 parent session's identity (`CLAUDE_CODE_SESSION_ID`,
 `CLAUDE_CODE_CHILD_SESSION`) to its arms.
 
+Disabling that timer stops it from killing the subagents, but it does not
+touch the belief that made the main agent end its turn to wait for them in
+the first place — `ScheduleWakeup` is built into this Claude Code build and
+cannot be removed from a print-mode child by environment, and its tool
+result still promises "the harness re-invokes you," which is false once a
+`claude -p` process has nothing left to do. Both print-mode launch points —
+`ctx wrap claude` and `ctx orchestrate`'s per-node launcher — now append a
+short system-prompt notice telling the agent plainly that this is a
+single-shot run with no supervisor, that no wakeup or notification will
+re-invoke it, and that if it delegates to background subagents it must stay
+in its turn and collect their results before finishing. It shares
+`ctx wrap`'s existing opt-out (`CTX_WRAP_NO_DISCIPLINE=1`, or the caller's
+own `--append-system-prompt`) and is skipped for interactive sessions. It is
+not one of the byte-pinned prefix assets in `tests/test_prefix_stability.py`.
+No live re-run of the round-17 scenario has happened yet with this notice in
+place — the tests pin the injection, not a model's behavior in response to it.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives
