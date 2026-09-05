@@ -7,11 +7,20 @@ def cmd_prune(ws, ns) -> int:
     """`ctx prune` — defer the capabilities this repository does not use and
     compile each host's minimal config. Preview by default; `--apply` writes."""
     import json as _json
+    import sys
 
-    from ctx.prune import render_prune, run_prune
+    from ctx.prune import interactive_prune, render_prune, run_prune
 
     hosts = tuple(ns.hosts) if ns.hosts else ("claude",)
-    rep = run_prune(ws.root, hosts=hosts, apply=bool(ns.apply),
+    # A terminal gets the conversation; --yes, --json, or a pipe gets the
+    # rule's answer without questions.
+    wants_questions = bool(ns.interactive) or (
+        not ns.yes and not ns.json and sys.stdin.isatty() and sys.stdout.isatty())
+    if wants_questions:
+        interactive_prune(ws.root, ask=input, say=print, hosts=hosts,
+                          probe_mcp=bool(ns.probe_mcp), keep=tuple(ns.keep or ()))
+        return 0
+    rep = run_prune(ws.root, hosts=hosts, apply=bool(ns.apply or ns.yes),
                     probe_mcp=bool(ns.probe_mcp), keep=tuple(ns.keep or ()))
     print(_json.dumps(rep, indent=2, sort_keys=True) if ns.json else render_prune(rep))
     return 0

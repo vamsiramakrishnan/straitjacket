@@ -123,3 +123,105 @@ def test_nothing_to_defer_on_a_bare_repo(state_home, workspace_dir):
     rep = run_prune(ws.root)
     assert rep["deferred"] == []
     assert "nothing to defer" in render_prune(rep)
+
+
+# ------------------------------------------------------------ interactive
+def _script(answers):
+    """An `ask` that replays scripted answers and records the prompts."""
+    prompts = []
+    it = iter(answers)
+
+    def ask(prompt):
+        prompts.append(prompt)
+        return next(it)
+
+    return ask, prompts
+
+
+def test_parse_selection_grammar():
+    from ctx.prune import parse_selection
+
+    d = {2, 4}
+    assert parse_selection("", 5, d) == {2, 4}
+    assert parse_selection("all", 5, d) == {1, 2, 3, 4, 5}
+    assert parse_selection("none", 5, d) == set()
+    assert parse_selection("1,3-5", 5, d) == {1, 3, 4, 5}
+    assert parse_selection("+1", 5, d) == {1, 2, 4}
+    assert parse_selection("-2", 5, d) == {4}
+    assert parse_selection("-2 +5", 5, d) == {4, 5}
+    assert parse_selection("?3", 5, d) == "explain:3"
+    for bad in ("9", "x", "1-9", "?9", "?x", "2-"):
+        assert parse_selection(bad, 5, d) == "invalid", bad
+
+
+def test_interactive_enter_everywhere_equals_the_rule(state_home, workspace_dir):
+    """Enter at every prompt must produce exactly what --yes produces."""
+    from ctx.prune import interactive_prune, run_prune
+
+    _repo(workspace_dir)
+    rule = run_prune(workspace_dir, hosts=("claude",))
+    ask, prompts = _script([""] * 12)
+    said = []
+    rep = interactive_prune(workspace_dir, ask=ask, say=said.append, hosts=("claude",))
+    assert rep["applied"] and rep["interactive"]
+    assert rep["deferred"] == rule["deferred"]
+    assert rep["tokens_per_turn"] == rule["tokens_per_turn"]
+    assert all(d["by"] == "rule" for d in rep["decisions"] if d["why"] != "kernel")
+    assert any("defer which?" in p for p in prompts)
+    assert any("write the compiled" in p for p in prompts)
+    assert (workspace_dir / ".ctx-surface" / "prune-receipt.json").is_file()
+    # Kernel is stated as kept without asking, never listed in a selector.
+    assert not any(d["why"] == "kernel" and any(d["id"] in line for line in said if line.startswith("  ")
+                                                  and "[" in line) for d in rep["decisions"])
+
+
+def test_interactive_keep_all_defers_nothing_and_records_the_user(state_home, workspace_dir):
+    from ctx.prune import interactive_prune
+
+    _repo(workspace_dir)
+    # "none" at every selector, default hosts, then decline the write.
+    ask, prompts = _script(["none"] * 6 + ["", "n"])
+    said = []
+    rep = interactive_prune(workspace_dir, ask=ask, say=said.append, hosts=("claude",))
+    assert rep["deferred"] == [] and rep["applied"] is False
+    assert not (workspace_dir / ".ctx-surface").exists()
+    overridden = [d for d in rep["decisions"] if d.get("by") == "user"]
+    assert overridden and all(d["keep"] and d["why"].startswith("kept by user") for d in overridden)
+    assert any("declined" in line for line in said)
+
+
+def test_interactive_explain_and_invalid_reask(state_home, workspace_dir):
+    from ctx.prune import interactive_prune
+
+    _repo(workspace_dir)
+    # First selector: an invalid answer, then an explain, then accept.
+    ask, prompts = _script(["zzz", "?1", ""] + [""] * 10)
+    said = []
+    interactive_prune(workspace_dir, ask=ask, say=said.append, hosts=("claude",))
+    assert any("not understood" in line for line in said)
+    assert any("level L" in line for line in said)
+
+
+def test_interactive_host_choice_is_validated(state_home, workspace_dir):
+    from ctx.prune import interactive_prune
+
+    _repo(workspace_dir)
+    host_answers = iter(["vscode", "codex, claude"])
+
+    def ask(prompt):  # prompt-aware: only the host question gets a non-default answer
+        return next(host_answers) if "hosts?" in prompt else ""
+
+    said = []
+    rep = interactive_prune(workspace_dir, ask=ask, say=said.append, hosts=("claude",))
+    assert set(rep["hosts"]) == {"codex", "claude"}
+    assert any("hosts are" in line for line in said)
+
+
+def test_cli_yes_applies_without_questions(state_home, workspace_dir, capsys, monkeypatch):
+    from ctx.cli import main
+
+    _repo(workspace_dir)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    assert main(["--workspace", str(workspace_dir), "prune", "--yes"]) == 0
+    assert "applied" in capsys.readouterr().out
+    assert (workspace_dir / ".ctx-surface" / "prune-receipt.json").is_file()

@@ -512,7 +512,11 @@ def _build_parser():
              "compile each host's minimal config (preview unless --apply)",
     )
     p_prune.add_argument("--apply", action="store_true",
-                         help="write the compiled host configs and the receipt")
+                         help="write the compiled host configs and the receipt (no questions)")
+    p_prune.add_argument("--yes", action="store_true",
+                         help="accept the rule's recommendation for every prompt and apply")
+    p_prune.add_argument("--interactive", action="store_true",
+                         help="ask, even when stdin is not a terminal")
     p_prune.add_argument("--host", dest="hosts", action="append",
                          choices=("claude", "codex", "antigravity"),
                          help="compile for this host (repeatable; default claude)")

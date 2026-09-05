@@ -84,6 +84,26 @@ and what the repository looked like when the decision was made. `--keep <id>`
 pins a capability the rule would defer; `--probe-mcp` spawns each MCP server to
 measure its real schema tokens instead of estimating them.
 
+On a terminal, `ctx prune` and `ctx setup --prune` ask rather than decide. One
+selector per group (MCP servers, skills, agents) lists each capability with its
+tokens per turn, authority, observed use and the rule's recommendation marked
+`[defer]` or `[keep]`:
+
+```text
+MCP servers: 2 · 1,240 tok/turn
+   1. [keep ] mcp.github                                   980 tok/turn  remote-write  used 12x
+   2. [defer] mcp.deploy-prod                              260 tok/turn  destructive   never used
+  defer which? [Enter = as marked]
+```
+
+Enter accepts the marks; `all` / `none`; `1,3-5` picks exactly those; `+2` /
+`-3` adjusts the marks; `?2` explains one item. Kernel capabilities (ctx's own
+tools, policy, repository instructions) are reported as kept and never asked
+about. Then the hosts to compile for, then a confirmation before anything is
+written. The receipt records, per capability, whether the rule or the user
+decided. `--yes` takes the rule's answer at every prompt without asking, which is
+also what a pipe or `--json` gets; `--interactive` forces the questions.
+
 ## Capture one command: `ctx run`
 
 ```bash

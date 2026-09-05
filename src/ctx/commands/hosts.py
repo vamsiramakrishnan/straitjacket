@@ -137,11 +137,14 @@ def cmd_setup(ns) -> int:
     if code == 0 and getattr(ns, "prune", False):
         # Bound before bloat, at the moment the harness is installed: the
         # same rule `ctx surface trim` recommends, made the default here.
-        from ctx.prune import render_prune, run_prune
+        from ctx.prune import interactive_prune, render_prune, run_prune
         from ctx.surface_profiles import HOSTS
 
         targets = tuple(h for h in (hosts or list(SETUP_HOSTS)) if h in HOSTS) or ("claude",)
-        print(render_prune(run_prune(root, hosts=targets, apply=True)))
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            interactive_prune(root, ask=input, say=print, hosts=targets)
+        else:
+            print(render_prune(run_prune(root, hosts=targets, apply=True)))
     return code
 
 

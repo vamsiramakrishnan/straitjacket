@@ -8,7 +8,14 @@ compile --profile`) have both shipped; what was missing was the step that
 runs them *at setup*, with a decision rule, so a freshly harnessed repository
 starts lean instead of being audited later.
 
-`ctx prune` (and `ctx setup --prune`) does exactly that:
+`ctx prune` (and `ctx setup --prune`) does exactly that, and on a terminal
+it does it as a conversation: one selector per group (MCP servers, skills,
+agents) listing each capability with its tokens per turn, authority,
+observed use and the rule's recommendation, then the hosts to compile for,
+then a confirmation. Enter at every prompt gives the rule's answer, so the
+non-interactive result (``--yes``) is exactly what a user who accepted every
+default would get. What the user chose is recorded in the receipt beside
+what the rule recommended.
 
 1. audit the discretionary surface and read each capability's recommended
    disclosure level (``surface.recommended_level``: read-only or used stays
@@ -160,9 +167,182 @@ def run_prune(ws_root: Path | str, *, hosts: tuple[str, ...] = ("claude",),
     return report
 
 
+# ------------------------------------------------------------ interactive
+#: Groups a user is asked about, in the order asked. Kernel kinds (policy,
+#: repo instructions, hooks, ctx's own tools) are never asked: they are what
+#: steers the host each turn.
+ASK_KINDS: tuple[tuple[str, str], ...] = (
+    ("mcp_server", "MCP servers"),
+    ("mcp_tool", "MCP tools (measured with --probe-mcp)"),
+    ("skill", "skills"),
+    ("agent", "agents"),
+)
+#: Past this many items in one group, the selector asks one yes/no question
+#: instead of listing them all: a wall of forty lines is not a choice.
+_LIST_CAP = 40
+
+
+def parse_selection(answer: str, n: int, default: set[int]) -> set[int] | str:
+    """Turn one selector answer into the set of 1-based indexes to defer.
+
+    ``""`` (Enter) -> the default; ``all`` / ``none``; ``1,3-5`` -> exactly
+    those; ``+2`` / ``-3`` -> the default with 2 added / 3 removed; ``?N``
+    -> the string ``"explain:N"``. Anything else -> ``"invalid"``.
+    """
+    text = answer.strip().lower()
+    if not text:
+        return set(default)
+    if text in ("all", "a"):
+        return set(range(1, n + 1))
+    if text in ("none", "n", "keep all"):
+        return set()
+    if text.startswith("?"):
+        rest = text[1:].strip()
+        return f"explain:{rest}" if rest.isdigit() and 1 <= int(rest) <= n else "invalid"
+    chosen = set(default) if text[0] in "+-" else set()
+    for part in text.replace(" ", ",").split(","):
+        if not part:
+            continue
+        sign = ""
+        if part[0] in "+-":
+            sign, part = part[0], part[1:]
+        if "-" in part:
+            lo, _, hi = part.partition("-")
+            if not (lo.isdigit() and hi.isdigit()):
+                return "invalid"
+            idxs = set(range(int(lo), int(hi) + 1))
+        elif part.isdigit():
+            idxs = {int(part)}
+        else:
+            return "invalid"
+        if any(i < 1 or i > n for i in idxs):
+            return "invalid"
+        if sign == "-":
+            chosen -= idxs
+        else:
+            chosen |= idxs
+    return chosen
+
+
+def _describe(d: dict[str, Any], idx: int) -> str:
+    used = "never used" if d["invocations"] == 0 else (
+        f"used {d['invocations']}x" if d["invocations"] > 0 else "use not measurable")
+    mark = "defer" if not d["keep"] else "keep "
+    return (f"  {idx:>2}. [{mark}] {d['id'][:44]:44} {d['tokens']:>6} tok/turn  "
+            f"{d['authority']:<12} {used}")
+
+
+def interactive_prune(ws_root: Path | str, *, ask, say, hosts: tuple[str, ...] = ("claude",),
+                      probe_mcp: bool = False, keep: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Walk the user through the prune decision, then apply what they chose.
+
+    ``ask(prompt) -> str`` and ``say(text)`` are injected so the flow is
+    testable without a terminal. Returns the report (``applied`` False when
+    the user declined at the confirmation).
+    """
+    plan = plan_prune(ws_root, probe_mcp=probe_mcp, keep=keep)
+    decisions = plan["decisions"]
+    t = plan["tokens_per_turn"]
+    say(f"[ctx prune] {len(decisions)} capabilities on the surface · {t['before']:,} tok/turn · "
+        f"rule recommends deferring {len(plan['deferred'])} ({t['saved']:,} tok/turn)")
+    kernel = [d for d in decisions if d["why"] == "kernel"]
+    if kernel:
+        say(f"kept without asking (kernel: ctx's own tools, policy, repo instructions): "
+            f"{len(kernel)} · {sum(d['tokens'] for d in kernel):,} tok/turn")
+    say("At each prompt, Enter accepts the recommendation; 'all' / 'none'; '1,3-5' picks "
+        "exactly those; '+2' or '-3' adjusts the recommendation; '?2' explains one item.")
+    chosen_defer: set[str] = set()
+    for kind, label in ASK_KINDS:
+        group = [d for d in decisions if d["kind"] == kind and d["why"] != "kernel"]
+        if not group:
+            continue
+        say("")
+        say(f"{label}: {len(group)} · {sum(d['tokens'] for d in group):,} tok/turn")
+        default = {i for i, d in enumerate(group, 1) if not d["keep"]}
+        if len(group) > _LIST_CAP:
+            unused = [d for d in group if not d["keep"]]
+            say(f"  (more than {_LIST_CAP}; {len(unused)} are unused or above authority)")
+            while True:
+                a = ask(f"  defer those {len(unused)}? [Y/n] ").strip().lower()
+                if a in ("", "y", "yes"):
+                    chosen_defer.update(d["id"] for d in unused)
+                    break
+                if a in ("n", "no"):
+                    break
+            continue
+        for i, d in enumerate(group, 1):
+            say(_describe(d, i))
+        while True:
+            sel = parse_selection(ask("  defer which? [Enter = as marked] "), len(group), default)
+            if isinstance(sel, str):
+                if sel.startswith("explain:"):
+                    d = group[int(sel.split(":")[1]) - 1]
+                    say(f"    {d['id']}: {d['kind']} · level {d['level']} · {d['why']}")
+                else:
+                    say("    not understood; try Enter, all, none, 1,3-5, +2, -3 or ?2")
+                continue
+            chosen_defer.update(group[i - 1]["id"] for i in sel)
+            break
+    # Fold the user's answers back into the decisions.
+    for d in decisions:
+        if d["why"] == "kernel":
+            continue
+        wanted = d["id"] in chosen_defer
+        if wanted != (not d["keep"]):
+            d["keep"] = not wanted
+            d["by"] = "user"
+            d["why"] = ("deferred by user" if wanted else "kept by user") + f" (rule: {d['why']})"
+        else:
+            d["by"] = "rule"
+    deferred = sorted(d["id"] for d in decisions if not d["keep"])
+    after = sum(d["tokens"] for d in decisions if d["keep"])
+    say("")
+    say(f"plan: defer {len(deferred)} · {t['before']:,} -> {after:,} tok/turn")
+    while True:
+        a = ask(f"compile for which hosts? [Enter = {','.join(hosts)}] ").strip().lower()
+        if not a:
+            chosen_hosts = tuple(hosts)
+            break
+        picked = tuple(h.strip() for h in a.replace(" ", ",").split(",") if h.strip())
+        if picked and all(h in HOSTS for h in picked):
+            chosen_hosts = picked
+            break
+        say(f"    hosts are {', '.join(HOSTS)}")
+    while True:
+        a = ask("write the compiled host configs and the receipt? [Y/n] ").strip().lower()
+        if a in ("", "y", "yes"):
+            apply = True
+            break
+        if a in ("n", "no"):
+            apply = False
+            break
+    profile = Profile("prune", exclude=frozenset(deferred),
+                      description="interactive prune: what the user chose to defer")
+    per_host: dict[str, Any] = {}
+    for host in chosen_hosts:
+        rep = compile_profile(ws_root, "prune", host=host, apply=apply,
+                              probe_mcp=probe_mcp, profile=profile)
+        per_host[host] = {k: v for k, v in rep.items() if k != "files"}
+    report = {
+        "schema": PRUNE_SCHEMA, "ts": int(time.time()), "applied": apply,
+        "interactive": True, "repo": plan["repo"], "decisions": decisions,
+        "deferred": deferred,
+        "tokens_per_turn": {"before": t["before"], "after": after, "saved": t["before"] - after},
+        "hosts": per_host,
+    }
+    if apply:
+        path = Path(ws_root) / COMPILE_DIR / RECEIPT_NAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        report["receipt"] = str(path.relative_to(Path(ws_root)))
+    say(render_prune(report))
+    return report
+
+
 def render_prune(rep: dict[str, Any]) -> str:
     t = rep["tokens_per_turn"]
-    mode = "applied" if rep.get("applied") else "preview (nothing written; add --apply)"
+    mode = "applied" if rep.get("applied") else (
+        "declined; nothing written" if rep.get("interactive") else "preview (nothing written; add --apply)")
     out = [f"[ctx prune · {mode}]"]
     repo = rep.get("repo") or {}
     langs = ", ".join(f"{d['ext']} x{d['files']}" for d in repo.get("languages", [])) or "-"
@@ -196,4 +376,5 @@ def render_prune(rep: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
-__all__ = ["PRUNE_SCHEMA", "KEEP_LEVELS", "plan_prune", "run_prune", "render_prune", "profile_repo"]
+__all__ = ["PRUNE_SCHEMA", "KEEP_LEVELS", "ASK_KINDS", "plan_prune", "run_prune",
+           "interactive_prune", "parse_selection", "render_prune", "profile_repo"]

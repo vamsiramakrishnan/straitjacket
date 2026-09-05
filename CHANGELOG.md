@@ -241,8 +241,15 @@ per-turn tokens before and after and the repository's shape (languages by
 file count, test-runner markers). Nothing is deleted; a deferred
 capability stays reachable through the gateway or `--keep <id>`. Preview
 by default, idempotent, and the same rule `ctx surface trim` already
-recommended. `surface_profiles.compile_profile` accepts a ready `Profile`
-for callers that decided the selection themselves.
+recommended. On a terminal it asks instead of deciding: one selector per
+group (MCP servers, skills, agents) listing each capability with its tokens
+per turn, authority, observed use and the rule's mark; Enter accepts the
+marks, `all` / `none` / `1,3-5` / `+2` / `-3` / `?2` adjust or explain;
+then the hosts to compile for; then a confirmation. Kernel capabilities are
+reported as kept and never asked about. The receipt records whether the rule
+or the user decided each one. `--yes` (or a pipe, or `--json`) takes the
+rule's answer without questions. `surface_profiles.compile_profile` accepts
+a ready `Profile` for callers that decided the selection themselves.
 
 `evals/improve_route.py`: the self-improvement loop round 17 ran by hand,
 as one `ctx orchestrate` route -- hunt (explore, strongest model), verify
