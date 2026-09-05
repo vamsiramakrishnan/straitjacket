@@ -249,10 +249,14 @@ _EMITTERS = {"claude": emit_claude, "codex": emit_codex, "antigravity": emit_ant
 
 
 def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
-                    apply: bool = False, probe_mcp: bool = False) -> dict[str, Any]:
+                    apply: bool = False, probe_mcp: bool = False,
+                    profile: Profile | None = None) -> dict[str, Any]:
     """Compile ``name`` for ``host``. Returns a structured report; with
-    ``apply`` also writes the emitted files under ``.ctx-surface/``."""
-    profile = load_profile(name, ws_root)
+    ``apply`` also writes the emitted files under ``.ctx-surface/``. A
+    caller that already decided the selection (``ctx prune``) passes the
+    ``profile`` itself instead of a name to look up."""
+    if profile is None:
+        profile = load_profile(name, ws_root)
     if profile is None:
         return {"error": f"unknown profile {name!r}; built-ins: {', '.join(BUILTIN_PROFILES)}"}
     if host not in _EMITTERS:

@@ -58,6 +58,7 @@ No behavioural signal may weaken anything here.
 | `hook.py` | The PreToolUse context guard — runs on the hot path of every intercepted tool call; **stdlib-only** for latency and reliability (SPEC §10.2, §11). |
 | `textutil.py` | Deterministic text: token estimation, ANSI/control stripping, **secret redaction**, bounded emission (SPEC §8, §16). |
 | `surface.py`, `surface_profiles.py`, `surface_gateway.py`, `surface_reconcile.py` | The input side: `ctx surface` capability-context audit, minimal-surface compilation, the progressive-disclosure MCP gateway, and shadow reconciliation. |
+| `prune.py` | `ctx prune` / `ctx setup --prune`: the audit's recommended disclosure levels applied as a decision at setup time (kernel and L0/L1 stay, L2+ deferred), compiled into each host's minimal config through `surface_profiles`, with a receipt of tokens per turn before and after. Never deletes. |
 
 ## Execution — running and capturing work
 

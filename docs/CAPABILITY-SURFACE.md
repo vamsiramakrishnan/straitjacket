@@ -84,6 +84,8 @@ ctx surface reconcile --enforce              # apply through gateway state
 ctx surface referee                          # score shadowed hides; promote/hold
 
 # preventive wiring — make it 'bound before bloat'
+ctx setup --prune                            # set up, then defer what this repo does not use
+ctx prune [--apply] [--host H] [--keep ID]   # the same decision on its own; preview by default
 ctx wrap setup --gateway                     # set up all 3 hosts + load ONLY the gateway
 ctx surface install-gateway --host claude --apply   # gateway-only config for one host
 # (the SessionStart gate is installed automatically by ctx wrap on every host)

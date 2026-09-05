@@ -68,6 +68,22 @@ ctx init
 This writes the workspace configuration and ignore policy. Commit the files when the
 policy is intended to be shared; keep machine- or secret-specific exclusions local.
 
+```bash
+ctx setup --prune      # configure the installed agents, then defer what this repo does not use
+ctx prune              # preview the same decision on an already-harnessed repo
+ctx prune --apply --host claude --host codex
+```
+
+`ctx prune` is the capability-surface audit run as a setup step with a decision
+rule: ctx's own kernel and every capability that is read-only or observed in use
+stays visible; a skill, agent or MCP server that is unused, remote-write or
+destructive is deferred, and each host's minimal launch config is compiled from
+that selection (`.ctx-surface/`). Nothing is deleted. The receipt
+(`.ctx-surface/prune-receipt.json`) records the per-turn tokens before and after
+and what the repository looked like when the decision was made. `--keep <id>`
+pins a capability the rule would defer; `--probe-mcp` spawns each MCP server to
+measure its real schema tokens instead of estimating them.
+
 ## Capture one command: `ctx run`
 
 ```bash

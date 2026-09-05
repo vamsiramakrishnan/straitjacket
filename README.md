@@ -15,7 +15,7 @@ bounded routes back to the stored bytes.
 ```bash
 python -m pip install --upgrade ctx-harness
 cd your-repository
-ctx setup
+ctx setup            # add --prune to defer the tools, skills and agents this repo does not use
 ctx doctor
 ctx run -- pytest -q
 ```

@@ -178,6 +178,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "plan": ("plans", "cmd_plan", True),
     "ask": ("plans", "cmd_ask", True),
     "surface": ("surfaces", "cmd_surface", True),
+    "prune": ("surfaces", "cmd_prune", True),
     "gain": ("admin", "cmd_gain", True),
     "init": ("admin", "cmd_init", True),
     "doctor": ("admin", "cmd_doctor", True),
@@ -362,6 +363,11 @@ def _build_parser():
         "--repair", action="store_true",
         help="bypass the ready receipt, refresh managed config, and verify again",
     )
+    p_setup.add_argument(
+        "--prune", action="store_true",
+        help="after setup, defer the capabilities this repo does not use and "
+             "compile each configured host's minimal config (ctx prune --apply)",
+    )
 
     p_run = sub.add_parser("run", help="execute a command with birth-time capture")
     p_run.add_argument("--focus", help="deterministic evidence-selection query")
@@ -499,6 +505,22 @@ def _build_parser():
     p_seq.add_argument("--focus", help="bias step digests toward this question")
 
     sub.add_parser("gain", help="cumulative token/cost savings from telemetry")
+
+    p_prune = sub.add_parser(
+        "prune",
+        help="defer the tools, skills and agents this repo does not use; "
+             "compile each host's minimal config (preview unless --apply)",
+    )
+    p_prune.add_argument("--apply", action="store_true",
+                         help="write the compiled host configs and the receipt")
+    p_prune.add_argument("--host", dest="hosts", action="append",
+                         choices=("claude", "codex", "antigravity"),
+                         help="compile for this host (repeatable; default claude)")
+    p_prune.add_argument("--probe-mcp", action="store_true",
+                         help="spawn MCP servers to measure real per-tool schema tokens")
+    p_prune.add_argument("--keep", action="append",
+                         help="capability id to keep visible regardless (repeatable)")
+    p_prune.add_argument("--json", action="store_true", help="machine-readable report")
 
     p_surface = sub.add_parser(
         "surface",

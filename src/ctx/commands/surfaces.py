@@ -3,6 +3,20 @@
 from __future__ import annotations
 
 
+def cmd_prune(ws, ns) -> int:
+    """`ctx prune` — defer the capabilities this repository does not use and
+    compile each host's minimal config. Preview by default; `--apply` writes."""
+    import json as _json
+
+    from ctx.prune import render_prune, run_prune
+
+    hosts = tuple(ns.hosts) if ns.hosts else ("claude",)
+    rep = run_prune(ws.root, hosts=hosts, apply=bool(ns.apply),
+                    probe_mcp=bool(ns.probe_mcp), keep=tuple(ns.keep or ()))
+    print(_json.dumps(rep, indent=2, sort_keys=True) if ns.json else render_prune(rep))
+    return 0
+
+
 def cmd_surface(ws, ns) -> int:
     """`ctx surface {inventory,audit,explain,trim}` — the input side of
     containment: measure the discretionary capability surface, never mutate it

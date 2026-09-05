@@ -228,6 +228,33 @@ The single-shot notice now also says that every blocking wait on
 background work spends a turn and prefers foreground subagents; the
 re-run spent fifteen of its thirty turns waiting.
 
+`ctx prune`, and `ctx setup --prune`: the capability-surface audit run as
+a setup step with a decision rule. The audit (`ctx surface audit`) and the
+enforced compile (`ctx surface compile --profile`) had both shipped; what
+was missing was the step between them that runs when the harness is
+installed. Prune keeps ctx's own kernel and every capability whose
+recommended disclosure level is L0 or L1 (read-only, or observed in use),
+defers everything at L2 and above (unused, remote-write, destructive),
+compiles that selection into each host's minimal launch config with the
+existing emitters, and writes `.ctx-surface/prune-receipt.json` with the
+per-turn tokens before and after and the repository's shape (languages by
+file count, test-runner markers). Nothing is deleted; a deferred
+capability stays reachable through the gateway or `--keep <id>`. Preview
+by default, idempotent, and the same rule `ctx surface trim` already
+recommended. `surface_profiles.compile_profile` accepts a ready `Profile`
+for callers that decided the selection themselves.
+
+`evals/improve_route.py`: the self-improvement loop round 17 ran by hand,
+as one `ctx orchestrate` route -- hunt (explore, strongest model), verify
+(reproduce every claim; write a failing test per confirmed one), harvest
+(fix exactly what the tests pin), prove (suite and lint) -- with the task
+ledger recording each step and a verdict computed from the four nodes'
+JSON yields: precision = reproduced / claimed, promotable only when it
+clears 0.8, at least one finding survived, and the suite passed on the
+harvested tree. Promotable means "review this diff", never merge. Model-
+free tests pin the plan's validity under the router's rules and the gate's
+arithmetic; a live receipt is recorded when one exists.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives
