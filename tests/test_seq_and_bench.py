@@ -219,6 +219,21 @@ def test_run_pair_defaults_print_bg_wait_ceiling_for_both_arms(tmp_path, monkeyp
         assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
 
 
+def test_run_pair_can_run_one_arm(tmp_path, monkeypatch):
+    """A re-run of one arm after a lifecycle failure need not buy the other."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "evals"))
+    import matrix_runner as mr
+
+    monkeypatch.setattr(mr, "make_fixture", lambda scenario, dest, repo: dest.mkdir(parents=True))
+    captured = []
+    monkeypatch.setattr(mr.subprocess, "Popen",
+                        lambda argv, **kw: captured.append(argv) or _FakeProc())
+    out = tmp_path / "out"
+    out.mkdir()
+    mr.run_pair("S6", "sonnet", out, tmp_path / "repo", arms=("sj",))
+    assert len(captured) == 1 and captured[0][:3] == ["ctx", "wrap", "claude"]
+
+
 def test_run_pair_does_not_inherit_the_parent_session_identity(tmp_path, monkeypatch):
     """Launched from inside a Claude Code session, both arms wrote their
     transcripts under the parent's session id and saw its remote-session
