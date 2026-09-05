@@ -58,6 +58,7 @@ question; a list-valued `lean_models` still loads).
 | 7 | `failing_ids` filter tested the whole result, never the match: one FAILED in a `pytest -v` run tagged every passing id as failing | `evidence_outcomes.py` | medium | reproduced |
 | 8 | `if u_read and u_read < max_read` skipped the largest invalidation, cache_read collapsing to 0 | `scorecard.py` | medium | reproduced |
 | 9 | `follow_symlinks = true` was a no-op on the ripgrep engine (`--follow` never passed) | `_retrieval/rg_engine.py` | low | reproduced |
+| 9c | parallel wave nodes raced on one git worktree id: every checkout was `<tmp>/repo`, so two `git worktree add` calls contended for `.git/worktrees/repo` and one read a half-written entry | `worktree_isolation.py` | medium | reproduced by CI on this branch (1 of 2 identical runs), not found by either arm; fixed with unique leaf names and a process lock |
 | 9b | `fails_sites` served a gc-collected run's stale census from the cached `latest_run` pointer, with a `run:` citation that no longer resolved | `facts.py` | medium | reproduced (naive subagent finding the main agent dropped from its ranked nine; kept because it held) |
 
 **Harnessed arm, from the killed transcripts: 3 candidates → 1 duplicate,

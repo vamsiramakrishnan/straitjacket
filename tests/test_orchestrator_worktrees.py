@@ -340,3 +340,52 @@ def test_route_rejects_unsupported_schema_keyword(git_workspace):
     }]}
     with pytest.raises(RouteError, match="unsupported keywords"):
         build_route_plan("inspect", raw, _hosts("claude"), ws.config.orchestrate)
+
+
+def test_parallel_worktrees_get_distinct_ids_and_never_race(git_workspace):
+    """CI (round 17 head): `fatal: failed to read .git/worktrees/repo/commondir`.
+    Every checkout was `<tmp>/repo`, so git gave two nodes adding at once the
+    same worktree id and one read the other's half-written entry. Leaf names
+    now carry the node id and a unique suffix, and the three mutating
+    worktree commands share one process lock."""
+    import threading
+
+    from ctx.worktree_isolation import IsolatedWorktree
+
+    assert clean_git_root(git_workspace)
+    n = 8
+    opened: list[IsolatedWorktree] = []
+    errors: list[BaseException] = []
+    gate = threading.Barrier(n)
+
+    def enter(i: int) -> None:
+        wt = IsolatedWorktree(git_workspace, f"node-{i % 2}", ("a.txt",))
+        try:
+            gate.wait(timeout=10)
+            wt.__enter__()
+            opened.append(wt)
+        except BaseException as e:  # noqa: BLE001 - collected for the assertion
+            errors.append(e)
+
+    threads = [threading.Thread(target=enter, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    try:
+        assert not errors, errors
+        names = [wt.path.name for wt in opened]
+        assert len(set(names)) == n and "repo" not in names
+        listed = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"], cwd=git_workspace,
+            text=True, capture_output=True, check=True,
+        ).stdout
+        assert listed.count("worktree ") == n + 1
+    finally:
+        for wt in opened:
+            wt.__exit__(None, None, None)
+    listed = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"], cwd=git_workspace,
+        text=True, capture_output=True, check=True,
+    ).stdout
+    assert listed.count("worktree ") == 1

@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -105,6 +107,18 @@ def _path_allowed(path: str, targets: tuple[str, ...]) -> bool:
     return any(path == target or path.startswith(target + "/") for target in targets)
 
 
+#: `git worktree add` / `remove` / `prune` all rewrite `.git/worktrees/` in
+#: the shared repository. Parallel wave nodes create their worktrees at the
+#: same moment, and git's own guard against a colliding entry is a check-
+#: then-create with no lock -- CI saw one node read the other's half-written
+#: entry ("failed to read .git/worktrees/repo/commondir"). One process-wide
+#: lock around the three mutating commands closes that window for the
+#: orchestrator's own threads; the unique leaf name below closes the
+#: collision itself.
+_WORKTREE_LOCK = threading.Lock()
+_NODE_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
 class IsolatedWorktree:
     """A detached worktree that can emit one target-checked binary patch."""
 
@@ -119,8 +133,16 @@ class IsolatedWorktree:
         if not clean_git_root(self.root):
             raise WorktreeIsolationError("repository must be a clean, exact Git root")
         self._temp_parent = Path(tempfile.mkdtemp(prefix="ctx-worktree-"))
-        self.path = self._temp_parent / "repo"
-        added = _git(self.root, "worktree", "add", "--detach", os.fspath(self.path), "HEAD")
+        # git derives the worktree's id from the leaf directory name. Every
+        # checkout used to be `<tmp>/repo`, so two nodes adding at once both
+        # asked for the id "repo" and raced on the same `.git/worktrees/repo`
+        # entry. The leaf now carries the node id and the temp dir's own
+        # unique suffix, so ids never collide.
+        node = _NODE_SAFE.sub("-", self.node_id).strip("-") or "node"
+        suffix = self._temp_parent.name.removeprefix("ctx-worktree-")
+        self.path = self._temp_parent / f"{node}-{suffix}"
+        with _WORKTREE_LOCK:
+            added = _git(self.root, "worktree", "add", "--detach", os.fspath(self.path), "HEAD")
         if added.returncode != 0:
             self._cleanup()
             raise WorktreeIsolationError(f"could not create worktree: {_git_error(added)}")
@@ -159,11 +181,12 @@ class IsolatedWorktree:
         return WorktreePatch(data=diff.stdout, changed_paths=changed)
 
     def _cleanup(self) -> None:
-        if self.path is not None and self.path.exists():
+        with _WORKTREE_LOCK:
+            if self.path is not None and self.path.exists():
+                with contextlib.suppress(Exception):
+                    _git(self.root, "worktree", "remove", "--force", os.fspath(self.path))
             with contextlib.suppress(Exception):
-                _git(self.root, "worktree", "remove", "--force", os.fspath(self.path))
-        with contextlib.suppress(Exception):
-            _git(self.root, "worktree", "prune")
+                _git(self.root, "worktree", "prune")
         if self._temp_parent is not None:
             shutil.rmtree(self._temp_parent, ignore_errors=True)
         self.path = None

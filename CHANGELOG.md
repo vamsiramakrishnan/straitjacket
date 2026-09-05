@@ -137,6 +137,12 @@ by hand before their fix, regression-tested in
   honoured only while its manifest still exists.
 - `_retrieval/rg_engine.py`: `follow_symlinks = true` never reached
   ripgrep (`--follow`).
+- `worktree_isolation.py` (found by CI on this branch, not by either arm):
+  every isolated worktree was created at `<tmp>/repo`, so git derived the
+  same worktree id for two parallel wave nodes and one read the other's
+  half-written `.git/worktrees/repo` entry. Leaf names now carry the node
+  id and a unique suffix, and the three mutating worktree commands share
+  one process-wide lock.
 
 The same round's harnessed arm produced zero findings, not from a code bug
 but from a harness/print-mode interaction: the main agent fanned out into 7
