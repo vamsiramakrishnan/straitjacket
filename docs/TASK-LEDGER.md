@@ -87,7 +87,8 @@ low_confidence · prewalk_handoff`. `failure_kind` is the vocabulary the
 recovery policy was evolved against: `auth_failure · safety_denied ·
 permission_denied · rate_limited · transient_transport · capability_limit ·
 incomplete_contract · repeated_incomplete · verification_failure ·
-missing_evidence · context_omission · unknown`, plus `none`.
+missing_evidence · context_omission · stalled · wall_timeout · unknown`,
+plus `none`.
 
 A handback is the row that turns collaboration into a loop. A node used to have
 two exits; it now has seven, and each is a typed input to a policy rather than
@@ -167,6 +168,22 @@ capability-class failure kind. `[orchestrate] expected_turns` sets the claim;
 `turn_ceiling` > 0 additionally hard-bounds Claude nodes at launch
 (`--max-turns`). Other hosts expose no equivalent and are bounded by
 observation only.
+
+Time has two bounds, kept apart the way headlong's shellm keeps them:
+`[orchestrate] node_timeout` is the wall clock, and `idle_timeout` (seconds,
+0 = off) is the inactivity bound. Every byte a host writes on either stream
+is the beacon — read raw, so a progress character counts — and a node
+silent for `idle_timeout` is killed with its process group and handed back
+as `stalled`; a node still emitting when `node_timeout` runs out is
+`wall_timeout`. They recover differently, because they mean different
+things: a stalled node is a stuck model, so the policy escalates it and
+never re-runs the same model blind; a wall-timeout node was too big, so the
+coordinator gets first say (it can split it) and the same model continues
+in the same worktree only when nobody can re-plan. Before v0.38.0 both were
+`transient_transport` — the improve route's first live run filed an hour of
+harvest work as a transport blip. Claude nodes stream their events
+(`--output-format stream-json`) only while the idle bound is on; Codex's
+`exec --json` already streams.
 
 ## Two classifier calls worth knowing
 
@@ -259,6 +276,13 @@ model-free:
 - **Turn counts come from hosts that report them.** Claude (`num_turns`) and
   Codex (`turn.completed` events) do; the Antigravity SDK does not, so its
   nodes are never `over_turns`.
+- **The beacon is host output, nothing finer.** A node that runs one long,
+  silent command (a twenty-minute test suite inside a single tool call)
+  looks stalled to the idle bound even though it is working, because the
+  host emits its next event only when the tool returns. Set `idle_timeout`
+  above the longest single command a node is expected to run, or leave it
+  at 0. Reading the workspace ledger's own writes as a second beacon is the
+  next step, not this one.
 - **Wave-parallel nodes can jointly overshoot.** The claim check runs per
   node; two nodes launched in the same wave each pass it against the same
   remaining budget. The receipt shows the per-wave check catching the

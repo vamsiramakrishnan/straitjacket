@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -66,12 +67,40 @@ def _stub_prefix(state_dir: Path) -> str:
     return str(state_dir)
 
 
+HEAD_LINE_MAX = 120  # chars of the elided block's first line kept on the stub
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def head_line(text: str) -> str:
+    """The first non-blank line of an elided block, bounded and single-line.
+
+    Headlong's tiered context keeps a one-line tldr on every summarized
+    entry so the trajectory stays a readable index without fetching. The
+    stub used to carry only bytes and a hash, so a rescued transcript read
+    as a column of identical placeholders and the model had to open a file
+    to learn which one held the pytest run. Every harnessed tool_result
+    already opens with its digest header (the operation, the counts), and
+    that first line is a pure function of the elided bytes -- so it rides
+    on the stub deterministically, no model, no summary. Control characters
+    become spaces and runs of whitespace collapse, so the stub stays one
+    line whatever the block held."""
+    for raw in text.splitlines():
+        line = " ".join(_CONTROL_RE.sub(" ", raw).split())
+        if line:
+            if len(line) > HEAD_LINE_MAX:
+                return line[: HEAD_LINE_MAX - 1] + "\u2026"
+            return line
+    return ""
+
+
 def stub_for(text: str, sha: str, prefix: str) -> str:
     """The replacement content — pure function of the elided bytes."""
     nbytes = len(text.encode("utf-8"))
+    head = head_line(text)
+    head_part = f'first line: "{head}" — ' if head else ""
     return (
         f"[ctx rescue: tool_result elided ({nbytes} bytes, sha256:{short_id(sha)}) — "
-        f"full content preserved verbatim at "
+        f"{head_part}full content preserved verbatim at "
         f"{prefix}/elided/{sha}.txt; read that file for any detail]"
     )
 

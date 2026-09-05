@@ -119,6 +119,14 @@ class OrchestratePolicy:
     max_replans: int = 2
     budget_usd: float = 0.0     # 0 = unbounded (still bounded by nodes/waves)
     node_timeout: float = 900.0
+    # Opt-in inactivity bound (headlong's shellm: a run that goes silent is
+    # dead, a run that is still emitting is allowed its wall clock). Seconds
+    # without a byte of host output before the node is killed as `stalled`,
+    # distinct from `wall_timeout` (still active when node_timeout ran out).
+    # 0 = off: only the wall clock bounds a node. Claude nodes stream their
+    # events (--output-format stream-json) only while this is on, so the
+    # default launch stays byte-identical.
+    idle_timeout: float = 0.0
     # Opt-in: independent mutation nodes with explicit disjoint targets run in
     # detached Git worktrees and merge only after every patch preflights.
     isolated_worktrees: bool = False

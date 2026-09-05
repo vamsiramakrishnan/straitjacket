@@ -89,6 +89,11 @@ FAILURE_KINDS = (
     "incomplete_contract", "verification_failure",
     "transient_transport", "rate_limited",
     "capability_limit", "repeated_incomplete",
+    # How a node ran out of time, kept apart: "stalled" went silent for
+    # idle_timeout (a stuck model), "wall_timeout" was still active when
+    # node_timeout ran out (work too big for one node). Neither is a
+    # transport blip, which is what a killed node used to be filed as.
+    "stalled", "wall_timeout",
     "unknown",
 )
 

@@ -34,7 +34,9 @@ def _cls(**kw):
     (1, "request refused by policy", "", ("blocked", "safety_denied")),
     (1, "", "429 too many requests", ("failed", "rate_limited")),
     (127, "", "OSError: no such file", ("failed", "transient_transport")),
-    (1, "", "TimeoutExpired", ("failed", "transient_transport")),
+    (127, "", "TimeoutExpired: Command timed out after 900 seconds", ("failed", "wall_timeout")),
+    (127, "", "NodeStalled: no output for 300s (stalled at 412s of a 3600s wall clock)", ("failed", "stalled")),
+    (1, "", "read timed out on the socket", ("failed", "transient_transport")),
     (1, "", "boom", ("failed", "capability_limit")),
 ])
 def test_classifier_reads_the_host_vocabulary(code, out, err, expected):
@@ -150,3 +152,30 @@ def test_de_escalation_target_is_the_cheapest_tier_below_current():
     assert hosts.tier_rank(model.tier) < hosts.tier_rank(frontier.tier)
     economy = next(m for m in claude.models if m.tier == "economy")
     assert de_escalation_target(economy, H) is None   # nothing cheaper than economy
+
+
+# ------------------------------------------- a killed node is not a transport blip
+# headlong's shellm keeps two bounds apart: a run that goes silent is dead,
+# a run still emitting is allowed its wall clock. The improve route's first
+# live run filed an hour of harvest work as `transient_transport` and offered
+# a blind same-model retry. Each kind now has its own recovery.
+def test_a_silent_node_gets_a_different_model_not_the_same_one_again():
+    d = _decide(Classification("failed", "stalled"))
+    assert d.action == "escalate" and d.target is not None
+    # nothing stronger installed (already on a frontier model): still never
+    # the same model again, blind
+    claude = next(h for h in _hosts("claude") if h.name == "claude")
+    frontier = next(m for m in claude.models if m.tier == "frontier")
+    top = dict(cur_model=frontier, hosts=_hosts("claude"))
+    assert _decide(Classification("failed", "stalled"), replan_available=True, **top).action == "replan"
+    assert _decide(Classification("failed", "stalled"), **top).action == "stop_blocked"
+
+
+def test_a_node_that_ran_out_of_wall_clock_is_split_before_it_is_rerun():
+    with_coord = _decide(Classification("failed", "wall_timeout"), replan_available=True)
+    assert with_coord.action == "replan"
+    alone = _decide(Classification("failed", "wall_timeout"), replan_available=False)
+    assert alone.action == "retry_same"  # same worktree, the work so far kept
+    assert choose_recovery({"failure_kind": "wall_timeout", "attempts": 1, "budget_remaining_usd": 1.0,
+                            "actions": ({"id": "retry_same", "cost_usd": 0.1},
+                                        {"id": "escalate", "cost_usd": 0.3})}) == "retry_same"

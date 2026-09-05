@@ -125,6 +125,18 @@ excluded from automatic capture — even under permissive steering. **Fix:**
 confirm the prompt if you really intend it; there's no way to silence this by
 config, by design.
 
+### "container escape surface … requires an explicit user-visible permission step"
+
+**Not a bug.** A `docker`/`podman`/`nerdctl` invocation that reaches past the
+workspace confinement — `--privileged`, a host namespace (`--pid=host`,
+`--network host`, `--ipc/--uts/--userns/--cgroupns=host`), `--device`,
+`--cap-add SYS_ADMIN`/`SYS_PTRACE`/`ALL`, the engine socket, or a bind mount
+from outside the workspace — always force-asks, through every door
+(`> file 2>&1`, chain segments, `ctx run --`). Mounting the workspace itself
+(`-v $PWD:/app`, `-v ./data:/data`) or a named volume does not trigger it.
+**Fix:** confirm the prompt if you intend it; a mount from a shell variable
+other than `$PWD` asks because the guard cannot resolve it — spell the path.
+
 ### "path resolves outside the active workspace"
 
 **Cause:** the read resolves (after following symlinks and `..`) to somewhere
