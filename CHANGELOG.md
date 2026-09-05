@@ -6,6 +6,58 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-09-05
+
+Three mechanisms taken from two outside designs — the Recursive Language
+Model write-up (Zhang et al., 2025) and headlong, the Laude Institute's
+bash agent microharness — after mapping both against what the harness
+already had. Their core moves (context as a variable the model reads
+through code, return by reference, an append-only trajectory that is an
+index over retrievable raw entries) are the handle model, the checkpoint
+address and lossless rescue respectively, so nothing was taken there. What
+was missing was narrower, and each piece is small.
+
+`ctx orchestrate` gains an inactivity bound beside its wall clock,
+headlong's `SHELLM_INACTIVITY_TIMEOUT` shape: `[orchestrate] idle_timeout`
+(seconds, 0 = off, the default) kills a node that emits nothing on either
+stream for that long and raises `ctx.orchestrator.NodeStalled`, while a
+node that keeps emitting is still bounded by `node_timeout`. Every byte a
+host writes is the beacon, read raw rather than by line so a progress
+character counts; Claude nodes switch to `--output-format stream-json
+--verbose` only while the bound is on (the default launch argv is
+unchanged), and `ctx.usage.parse_claude_json` reads that transcript's last
+`type: result` event as the same document `json` mode returned. The
+steward's vocabulary grows two failure kinds the improve route's first live
+run showed were missing: `stalled` (silent for `idle_timeout`) and
+`wall_timeout` (still active when `node_timeout` ran out). Both used to be
+`transient_transport` — the harvest node's hour of work was filed as a
+transport blip and offered a blind same-model retry. The recovery policy
+(production seam and evolution seed, kept identical, with two new evaluator
+cases) now escalates a stalled node and never re-runs it blind, and re-plans
+a wall-timeout node so the coordinator can split it, retrying the same model
+in the same worktree only when nobody can re-plan.
+
+The PreToolUse guard learns headlong's docker broker denylist as a
+safety-class `force_ask`: a privileged container, a host namespace
+(`--pid/--network/--ipc/--uts/--userns/--cgroupns=host`), a host device,
+`--cap-add` of `SYS_ADMIN`/`SYS_PTRACE`/`ALL`, the container-engine socket,
+or a bind mount whose source is outside the workspace (`-v`, `--mount
+type=bind`; `$PWD` resolves, any other shell variable asks). A named volume
+or a mount from inside the workspace keeps the volume-class answer
+`docker` always had. One predicate, every door: the plain command, the
+`> file 2>&1` shortcut, each chain segment, and `ctx run -- <argv>` — which
+was allowed outright because the program was `ctx`, and which the deny
+remediation itself points at. Closing that door also gave `ctx run -- cat
+secrets.json` the secret-path force_ask the plain command had.
+
+Rescue stubs carry the first line of the block they replaced (bounded to
+120 characters, control characters and runs of whitespace collapsed),
+headlong's one-line tldr on every summarized entry — except deterministic:
+a harnessed tool_result opens with its digest header, and that line is a
+pure function of the elided bytes, so a rescued transcript reads as an
+index instead of a column of identical placeholders, with no model and no
+summary involved. Hash, byte count and retrieval path are unchanged.
+
 ## [0.37.0] - 2026-09-03
 
 `ctx.taskledger.append()` now holds one OS-level lock (`fcntl.flock`, the

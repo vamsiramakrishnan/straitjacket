@@ -1302,6 +1302,23 @@ def _decay_taught_reason(decision: dict[str, Any], workspace_root: str | None) -
             continue
 
 
+def _ctx_run_inner(argv: list[str]) -> list[str]:
+    """The command ``ctx run [flags] -- <argv>`` will execute, or ``[]``.
+    ``--shell -- '<string>'`` is split like the shell would; a string the
+    shell would reject yields ``[]`` (the guard then has nothing to judge,
+    and ``ctx run`` itself reports the error)."""
+    if len(argv) < 3 or argv[1] != "run" or "--" not in argv[2:]:
+        return []
+    sep = argv.index("--", 2)
+    inner = argv[sep + 1:]
+    if "--shell" in argv[2:sep] and len(inner) == 1:
+        try:
+            inner = shlex.split(inner[0])
+        except ValueError:
+            return []
+    return inner
+
+
 def _names_secret_path(argv: list[str], cwd: str | None) -> bool:
     """Does any path-shaped argument name a secret-bearing file?
 
@@ -1327,6 +1344,87 @@ def _secret_path_force_ask() -> dict[str, str]:
         "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
         "an explicit user-visible permission step; it is excluded "
         "from automatic capture."
+    )
+
+
+# Container-engine invocations that reach past the workspace confinement.
+# The table is headlong's docker broker denylist (privileged containers,
+# host namespaces, host devices, the engine socket, bind mounts from
+# outside the workspace), applied here as a safety-class force_ask: the
+# command is not wrong, it is a decision the user has to see. Same class,
+# same door discipline, as secret-bearing paths -- the plain command, the
+# ``> file 2>&1`` shortcut, chain segments and ``ctx run --`` all consult
+# it. ``docker`` is also in _UNBOUNDED_CMDS, so a plain ``docker run`` still
+# gets the volume-class deny-with-remediation; this check comes first because
+# the remediation for a deny is ``ctx run -- <same argv>``, and a privileged
+# container is not made acceptable by capturing its output.
+_CONTAINER_PROGS = {"docker", "podman", "nerdctl"}
+_HOST_NS_FLAGS = {"--pid", "--network", "--net", "--ipc", "--uts", "--userns", "--cgroupns"}
+_CAP_ESCAPE = {"ALL", "SYS_ADMIN", "CAP_SYS_ADMIN", "CAP_ALL", "SYS_PTRACE", "CAP_SYS_PTRACE"}
+_ENGINE_SOCKET_MARKS = ("docker.sock", "podman.sock", "containerd.sock")
+
+
+def _bind_source_escape(src: str, cwd: str | None) -> str | None:
+    """Why a bind-mount SOURCE reaches outside the workspace, or None."""
+    if not src:
+        return None
+    if any(src.endswith(m) or f"{m}:" in src for m in _ENGINE_SOCKET_MARKS) or "/run/docker" in src:
+        return "the container engine socket is mounted"
+    if cwd:
+        src = src.replace("${PWD}", cwd).replace("$PWD", cwd).replace("$(pwd)", cwd)
+    if src.startswith("$"):
+        return "a bind mount from a shell variable the guard cannot resolve"
+    if src.startswith("~"):
+        src = os.path.expanduser(src)
+    if not src.startswith(("/", ".")):
+        return None  # a named volume, not a host path
+    if not cwd:
+        # No workspace to confine to: only an absolute host root is certain.
+        return "the host filesystem root is bind-mounted" if src.rstrip("/") == "" else None
+    absolute = src if os.path.isabs(src) else os.path.join(cwd, src)
+    if _path_outside(absolute, cwd):
+        return "a bind mount from outside the workspace"
+    return None
+
+
+def _container_escape(argv: list[str], cwd: str | None) -> str | None:
+    """The first container-escape surface in a docker/podman/nerdctl argv,
+    as a short reason fragment, or None. Pure over argv; the only I/O is
+    path resolution for bind-mount sources."""
+    if not argv or os.path.basename(argv[0]) not in _CONTAINER_PROGS:
+        return None
+    toks = argv[1:]
+    for i, tok in enumerate(toks):
+        flag, has_eq, inline = tok.partition("=")
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        value = inline if has_eq else nxt
+        if tok == "--privileged":
+            return "a privileged container"
+        if flag in _HOST_NS_FLAGS and value == "host":
+            return f"a host namespace ({flag}=host)"
+        if flag == "--device":
+            return "a host device is passed through"
+        if flag == "--cap-add" and value.upper() in _CAP_ESCAPE:
+            return f"capability {value.upper()} is added"
+        if flag in ("-v", "--volume"):
+            why = _bind_source_escape(value.split(":", 1)[0], cwd)
+            if why:
+                return why
+        if flag == "--mount":
+            fields = dict(kv.split("=", 1) for kv in value.split(",") if "=" in kv)
+            src = fields.get("source") or fields.get("src") or ""
+            if fields.get("type", "volume") == "bind" or any(m in src for m in _ENGINE_SOCKET_MARKS):
+                why = _bind_source_escape(src, cwd)
+                if why:
+                    return why
+    return None
+
+
+def _container_escape_force_ask(why: str) -> dict[str, str]:
+    return _force_ask(
+        f"CTX_CONTEXT_GUARD: container escape surface — {why}. It reaches past "
+        "the workspace confinement; running it requires an explicit "
+        "user-visible permission step."
     )
 
 
@@ -1376,6 +1474,9 @@ def _classify_command_inner(
                     inner = []
                 if _names_secret_path(inner, cwd):
                     return _secret_path_force_ask()
+                escape = _container_escape(inner, cwd)
+                if escape is not None:
+                    return _container_escape_force_ask(escape)
                 return dict(DECISION_ALLOW)
         # Bounded chain: `a; b && c` with no other metacharacters. Each
         # segment is classified independently; the chain is allowed only if
@@ -1425,8 +1526,17 @@ def _classify_command_inner(
 
     prog = os.path.basename(argv[0])
 
-    # Already routed through ctx → always allow.
+    # Already routed through ctx → allow, once the safety class has had its
+    # look at what ``ctx run -- <argv>`` will actually execute. Capture is
+    # a volume answer; it never makes a secret read or a container escape
+    # acceptable, and the deny remediation itself points here.
     if prog == "ctx":
+        inner = _ctx_run_inner(argv)
+        if _names_secret_path(inner, cwd):
+            return _secret_path_force_ask()
+        escape = _container_escape(inner, cwd)
+        if escape is not None:
+            return _container_escape_force_ask(escape)
         return dict(DECISION_ALLOW)
 
     # Repo-configured overrides win over built-in tables.
@@ -1452,6 +1562,9 @@ def _classify_command_inner(
     # the bare WORD "secrets", which is a sentence, not a file.
     if _names_secret_path(argv, cwd):
         return _secret_path_force_ask()
+    escape = _container_escape(argv, cwd)
+    if escape is not None:
+        return _container_escape_force_ask(escape)
     # A prefix allow/promotion applies to a single command only. When shell
     # metacharacters survived the chain/redirect handling above (e.g.
     # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary

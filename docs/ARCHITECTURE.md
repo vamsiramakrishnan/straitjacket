@@ -39,6 +39,7 @@ inherits that plane's invariants, and ships with a test.
 | change how a `repo:` line address stays valid across edits | `src/ctx/anchors.py` |
 | measure whether the host's own edits are landing | `src/ctx/edit_outcomes.py` |
 | change what happens when a node does not finish | `src/ctx/steward.py` (classifier + menu) · `src/ctx/recovery_policy.py` (the choice) |
+| change how a node is bounded in time (wall clock, inactivity beacon) | `src/ctx/orchestrator.py` (`_run_bounded`, `NodeStalled`) · `[orchestrate] node_timeout` / `idle_timeout` in `src/ctx/config.py` |
 | change prewalk (frontier → cheap handoff after one edit) | `src/ctx/orchestrator.py` (`run_one`'s prewalk branch, `PREWALK_SENTINEL`) · `src/ctx/steward.py` (`de_escalation_target`) |
 | change what harnesses record about a collaboration, or resume one | `src/ctx/taskledger.py` · `src/ctx/orchestrator.py:run_route` |
 | change the artifact store | `src/ctx/store.py` |

@@ -83,9 +83,17 @@ _SAFETY = ("safety", "content policy", "refused by policy", "blocked by policy")
 #: Wording that names a provider rate limit.
 _RATE = ("rate limit", "rate-limit", "429", "overloaded", "too many requests")
 
+#: The launcher's own exception names for a node it had to kill. Checked
+#: before _TRANSPORT because ``TimeoutExpired`` prints "timed out", and a
+#: node killed after an hour of work is not a transport blip (improve route,
+#: first live run: the harvest node was filed as one and offered a blind
+#: same-model retry).
+_STALLED = ("nodestalled",)
+_WALL_TIMEOUT = ("timeoutexpired",)
+
 #: Wording for a transport or process failure, retryable once.
 _TRANSPORT = (
-    "oserror", "subprocesserror", "timeoutexpired", "connection reset",
+    "oserror", "subprocesserror", "connection reset",
     "connection refused", "econnreset", "broken pipe", "timed out",
 )
 
@@ -140,6 +148,10 @@ def classify_failure(
             )
         return Classification("failed", "incomplete_contract")
 
+    if any(m in text for m in _STALLED):
+        return Classification("failed", "stalled")
+    if any(m in text for m in _WALL_TIMEOUT):
+        return Classification("failed", "wall_timeout")
     if code == 127 or any(m in text for m in _TRANSPORT):
         return Classification("failed", "transient_transport")
 

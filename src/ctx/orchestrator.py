@@ -789,13 +789,17 @@ def _launch_host(
     timeout: float,
     model: str = "",
     max_turns: int = 0,
+    idle_timeout: float = 0.0,
 ) -> tuple[int, str, str, ActualUsage | None]:
     """Run one harness in print mode with captured output, inside the harnessed
     workspace. Claude gets the ephemeral --settings hook injection; Codex /
     Antigravity discover their hooks from the workspace tree. ``model`` pins the
     model via the host's model flag (used for the cheap coordinator).
     ``max_turns`` > 0 hard-bounds a Claude node (``--max-turns``); other hosts
-    expose no equivalent and are bounded by observation only. Never raises."""
+    expose no equivalent and are bounded by observation only. ``idle_timeout``
+    > 0 kills a node that emits nothing for that long (``NodeStalled``), and
+    switches Claude to ``stream-json`` so its per-event lines are the beacon;
+    Codex ``exec --json`` already streams. Never raises."""
     spec = host.spec
     path = host.path or spec.cli_bins[0]
     argv = [path, *spec.print_flag, prompt]
@@ -839,7 +843,13 @@ def _launch_host(
                 head += ["--append-system-prompt", _SINGLE_SHOT_NOTICE]
             if max_turns > 0:
                 head += ["--max-turns", str(int(max_turns))]
-            structured = ["--output-format", "json"]
+            # ``json`` arrives in one piece at the very end, which is no
+            # beacon at all; ``stream-json`` (print mode requires --verbose
+            # with it) emits a line per assistant/tool event and ends with
+            # the same result document. Only when the idle bound is on, so
+            # the default launch stays byte-identical.
+            structured = (["--output-format", "stream-json", "--verbose"]
+                          if idle_timeout > 0 else ["--output-format", "json"])
             argv = ([*head, spec.model_flag, model, *structured, *spec.print_flag, prompt]
                     if model and spec.model_flag
                     else [*head, *structured, *spec.print_flag, prompt])
@@ -860,7 +870,9 @@ def _launch_host(
             # work on that timer (round 17). The per-node ``timeout`` above
             # is the bound; the user's own setting wins.
             env.setdefault("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
-        proc = _run_bounded(argv, cwd=ws_root, timeout=timeout, env=env)
+        proc = (_run_bounded(argv, cwd=ws_root, timeout=timeout, env=env, idle_timeout=idle_timeout)
+                if idle_timeout > 0
+                else _run_bounded(argv, cwd=ws_root, timeout=timeout, env=env))
         stdout, usage = parse_host_output(
             spec.name,
             proc.stdout or "",
@@ -876,7 +888,28 @@ def _launch_host(
                 os.unlink(settings_tmp)
 
 
-def _run_bounded(argv, *, cwd, timeout, env) -> subprocess.CompletedProcess:
+class NodeStalled(subprocess.TimeoutExpired):
+    """A node killed for silence: no byte on stdout or stderr for
+    ``idle_timeout`` seconds while the wall clock still had room. A subclass
+    of ``TimeoutExpired`` so every existing ``except SubprocessError`` path
+    handles it; its own name so the steward can tell it from the wall
+    bound (``stalled`` vs ``wall_timeout``)."""
+
+    def __init__(self, cmd, idle: float, *, elapsed: float, wall: float, output=None, stderr=None):
+        super().__init__(cmd, idle, output=output, stderr=stderr)
+        self.idle = float(idle)
+        self.elapsed = float(elapsed)
+        self.wall = float(wall)
+
+    def __str__(self) -> str:
+        return (f"no output for {self.idle:.0f}s "
+                f"(stalled at {self.elapsed:.0f}s of a {self.wall:.0f}s wall clock)")
+
+
+_IDLE_POLL_S = 0.25
+
+
+def _run_bounded(argv, *, cwd, timeout, env, idle_timeout: float = 0.0) -> subprocess.CompletedProcess:
     """``subprocess.run`` with a process group, so a timeout kills what the
     host forked, not just the host.
 
@@ -887,19 +920,78 @@ def _run_bounded(argv, *, cwd, timeout, env) -> subprocess.CompletedProcess:
     Same pattern as ``ctx._proc.wait_or_kill``: the child leads its own
     session, and on timeout the whole group gets SIGKILL before the
     ``TimeoutExpired`` propagates to the caller's existing handling.
+
+    ``idle_timeout`` > 0 adds headlong's inactivity bound beside the wall
+    clock: every byte the host writes on either stream is a beacon, and a
+    node silent for that long is killed the same way and raised as
+    :class:`NodeStalled`. The wall bound still applies to a node that keeps
+    talking. With ``idle_timeout`` off the call is the plain ``communicate``
+    it always was.
     """
+    if idle_timeout <= 0:
+        proc = subprocess.Popen(
+            argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, env=env, start_new_session=True,
+        )
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            from ctx._proc import wait_or_kill
+
+            wait_or_kill(proc, 0)
+            raise
+        return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+    from ctx._proc import wait_or_kill
+
     proc = subprocess.Popen(
         argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, env=env, start_new_session=True,
+        stderr=subprocess.PIPE, env=env, start_new_session=True,
     )
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        from ctx._proc import wait_or_kill
+    started = time.monotonic()
+    last_activity = [started]
+    chunks: dict[str, list[bytes]] = {"out": [], "err": []}
 
-        wait_or_kill(proc, 0)
-        raise
-    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+    def _pump(stream, key: str) -> None:
+        # Raw reads, not lines: a host that prints a progress character
+        # without a newline is still alive.
+        fd = stream.fileno()
+        while True:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            chunks[key].append(data)
+            last_activity[0] = time.monotonic()
+
+    pumps = [threading.Thread(target=_pump, args=(proc.stdout, "out"), daemon=True),
+             threading.Thread(target=_pump, args=(proc.stderr, "err"), daemon=True)]
+    for t in pumps:
+        t.start()
+
+    def _text(key: str) -> str:
+        return b"".join(chunks[key]).decode("utf-8", errors="replace")
+
+    while True:
+        try:
+            proc.wait(timeout=_IDLE_POLL_S)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        now = time.monotonic()
+        if timeout is not None and now - started >= timeout:
+            wait_or_kill(proc, 0)
+            raise subprocess.TimeoutExpired(argv, timeout, output=_text("out"), stderr=_text("err"))
+        if now - last_activity[0] >= idle_timeout:
+            wait_or_kill(proc, 0)
+            raise NodeStalled(argv, idle_timeout, elapsed=now - started,
+                              wall=(float(timeout) if timeout is not None else 0.0),
+                              output=_text("out"), stderr=_text("err"))
+    for t in pumps:
+        t.join(timeout=5.0)
+    return subprocess.CompletedProcess(argv, proc.returncode, _text("out"), _text("err"))
 
 
 def _launch_result(value) -> tuple[int, str, str, ActualUsage | None]:
@@ -1483,6 +1575,7 @@ def run_route(
     replans_left = int(getattr(cfg, "max_replans", 2) or 0)
     budget = float(getattr(cfg, "budget_usd", 0.0) or 0.0)
     timeout = float(getattr(cfg, "node_timeout", 900.0) or 900.0)
+    idle_timeout = max(0.0, float(getattr(cfg, "idle_timeout", 0.0) or 0.0))
     max_attempts = max(1, int(getattr(cfg, "max_attempts", 2) or 2))
     expected_turns = max(0, int(getattr(cfg, "expected_turns", 12) or 0))
     turn_ceiling = max(0, int(getattr(cfg, "turn_ceiling", 0) or 0))
@@ -1581,11 +1674,16 @@ def run_route(
             return True
 
     def _do_launch(host, work_root, prompt: str, model):
-        if turn_ceiling > 0 and launch is _launch_host:
-            return launch(host, work_root, prompt, resolved_exe, timeout=timeout,
-                          model=model.launch_id, max_turns=turn_ceiling)
+        # The extra bounds are keyword-only on the real launcher; an injected
+        # launcher (tests, evals) keeps the historical signature.
+        extra: dict = {}
+        if launch is _launch_host:
+            if turn_ceiling > 0:
+                extra["max_turns"] = turn_ceiling
+            if idle_timeout > 0:
+                extra["idle_timeout"] = idle_timeout
         return launch(host, work_root, prompt, resolved_exe, timeout=timeout,
-                      model=model.launch_id)
+                      model=model.launch_id, **extra)
 
     def run_one(a: AssignedNode) -> _NodeExecution:
         dep_docs = [docs[d] for d in a.node.deps if d in docs]

@@ -109,17 +109,40 @@ def _priced(
     )
 
 
+def _last_result_event(stdout: str) -> dict | None:
+    """The final ``type: result`` line of a stream-json transcript, or None."""
+    for line in reversed((stdout or "").splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            return event
+    return None
+
+
 def parse_claude_json(
     stdout: str,
     *,
     model: str,
     workspace_root: Path | str | None = None,
 ) -> tuple[str, ActualUsage | None]:
-    """Extract Claude Code's ``--output-format json`` result and usage."""
+    """Extract Claude Code's ``--output-format json`` result and usage.
+
+    ``--output-format stream-json`` (used when the orchestrator's idle
+    beacon is on) ends with the same result document as its last event,
+    ``{"type": "result", ...}``; the events before it are the beacon and
+    carry nothing this parser needs, so the last result line is the doc.
+    """
     try:
         doc = json.loads(stdout)
     except (json.JSONDecodeError, TypeError):
-        return stdout, None
+        doc = _last_result_event(stdout)
+        if doc is None:
+            return stdout, None
     if not isinstance(doc, dict):
         return stdout, None
     raw_usage = doc.get("usage")

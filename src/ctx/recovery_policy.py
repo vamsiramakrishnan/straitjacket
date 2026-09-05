@@ -43,6 +43,15 @@ def choose_recovery(state: Mapping[str, Any]) -> str:
         preferences = ["retry_same", "replan"]
     elif failure in {"capability_limit", "repeated_incomplete"}:
         preferences = ["escalate", "replan"]
+    elif failure == "stalled":
+        # Silent for idle_timeout: a stuck model, not a slow one. The same
+        # model again is the one action with no evidence behind it.
+        preferences = ["escalate", "replan", "stop_blocked"]
+    elif failure == "wall_timeout":
+        # Still working when the wall clock ran out: the node was too big.
+        # The coordinator gets first say (it can split it); the same model
+        # continues in the same worktree only when nobody can re-plan.
+        preferences = ["replan", "retry_same", "escalate"]
     else:
         preferences = ["replan", "escalate", "stop_blocked"]
 

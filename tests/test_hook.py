@@ -1,6 +1,8 @@
 """Acceptance: hook JSON contract, classification policy, fail-open."""
 
 import json
+
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -261,3 +263,79 @@ def test_codex_force_ask_degrades_safely_to_deny():
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     assert hso["permissionDecisionReason"] == "review this"
+
+
+# ------------------------------------------------ container escape surfaces
+# headlong's docker broker denylist, taken as a safety-class force_ask: a
+# privileged container, a host namespace, a host device, the engine socket
+# or a bind mount from outside the workspace reach past the confinement the
+# rest of the guard enforces. One predicate, every door.
+def _cmd(command, ws):
+    return _classify("run_command", {"CommandLine": command, "Cwd": str(ws)}, ws)
+
+
+@pytest.mark.parametrize("command", [
+    "docker run --privileged img",
+    "docker exec --privileged c sh",
+    "docker run --network host img",
+    "docker run --pid=host img",
+    "podman run --uts=host img",
+    "docker run --device /dev/sda img",
+    "docker run --cap-add=SYS_ADMIN img",
+    "docker run -v /:/host img",
+    "docker run -v ../:/up img",
+    "docker run -v /var/run/docker.sock:/var/run/docker.sock img",
+    "docker run --mount type=bind,source=/etc,target=/x img",
+])
+def test_container_escape_surfaces_force_ask(tmp_path, command):
+    d = _cmd(command, tmp_path)
+    assert d["decision"] == "force_ask", (command, d)
+    assert "container escape surface" in d["reason"]
+
+
+def test_unresolved_shell_variable_mount_still_asks(tmp_path):
+    """`$HOME` is a shell metacharacter, so the compound-expression door
+    answers first; the predicate itself refuses to guess what the variable
+    holds. Either way the user sees it."""
+    from ctx.hook import _container_escape
+
+    assert _cmd("docker run -v $HOME/.ssh:/root/.ssh img", tmp_path)["decision"] == "force_ask"
+    why = _container_escape(["docker", "run", "-v", "$HOME/.ssh:/root/.ssh", "img"], str(tmp_path))
+    assert why and "cannot resolve" in why
+    assert _container_escape(["docker", "run", "-v", "$PWD/data:/data", "img"], str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("command", [
+    "docker ps",
+    "docker compose up",
+    "docker run -v named:/data img",
+    "docker run -v ./data:/data img",
+    "docker run --cap-add NET_BIND_SERVICE img",
+    "docker run --mount type=bind,source={ws}/data,target=/x img",
+])
+def test_in_workspace_container_use_keeps_its_volume_class_answer(tmp_path, command):
+    (tmp_path / "data").mkdir()
+    _steering_deny(tmp_path)
+    d = _cmd(command.format(ws=tmp_path), tmp_path)
+    assert d["decision"] == "deny", (command, d)  # unbounded output, ctx run remediation
+    assert "container escape" not in d["reason"]
+
+
+@pytest.mark.parametrize("command", [
+    "docker run --privileged img > out.log 2>&1",       # the redirect shortcut
+    "echo hi && docker run --privileged img",           # a chain segment
+    "ctx run -- docker run --privileged img",           # the deny remediation's own door
+    "ctx run --shell -- 'docker run --privileged img | head -5'",
+])
+def test_container_escape_is_seen_through_every_door(tmp_path, command):
+    d = _cmd(command, tmp_path)
+    assert d["decision"] == "force_ask", (command, d)
+    assert "container escape surface" in d["reason"]
+
+
+def test_ctx_run_door_keeps_the_secret_path_guarantee(tmp_path):
+    """`ctx run -- cat secrets.json` used to be allowed outright because the
+    program was `ctx`; capture answers the volume question, never the
+    safety one."""
+    assert _cmd("ctx run -- cat secrets.json", tmp_path)["decision"] == "force_ask"
+    assert _cmd("ctx run -- pytest -q", tmp_path)["decision"] == "allow"

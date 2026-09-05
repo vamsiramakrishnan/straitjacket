@@ -272,6 +272,22 @@ less tool-output on an unavoidable flood, honest parity-loss on the greppable on
   arm, the distinction our own bug-bash A/B ran into when the harnessed arm
   won on bytes-per-result and lost on total billed tokens by taking more
   turns.
+- **Recursive Language Models** (Zhang et al., 2025) → nothing structural:
+  "context as a variable the root model reads through code" is the handle
+  model, `FINAL_VAR` is the checkpoint address, and the guarantees the paper
+  says it lacks (total cost, total runtime) are the priced plan and the node
+  bounds. Its counting failures at 263k tokens are the argument for keeping
+  counts in the facts database. Still to take: its partition-and-map as a
+  bounded, priced, depth-1 model call over minted spans, labelled
+  probabilistic and never on the deterministic digest path.
+- **headlong** (Laude Institute) → three pieces, each small: the inactivity
+  bound beside the wall clock (`idle_timeout`, `stalled` vs `wall_timeout`),
+  its docker broker denylist as a safety-class force_ask through every
+  door, and the one-line tldr on every summarized entry — taken
+  deterministically, as the first line of the elided block. Declined:
+  persistent thinking at $1–2/hour with backoff (the opposite of priced
+  context; the harness is not a mind), bash-only state (would un-ship the
+  content-addressed store), and async model-written run summaries.
 - **WozCode** → compiled plans already share its collapse-N-reads instinct.
   Still to take: addressable fuzzy edit transactions, parser validation and
   rollback receipts; its install-friction reproach is closed by the PyPI release.

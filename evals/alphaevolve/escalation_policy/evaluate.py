@@ -81,6 +81,10 @@ ADVERSARIAL_CASES = (
     _case("zero_exit_explicit_incomplete", "incomplete_contract", ("replan",)),
     _case("repeat_transport_should_not_loop", "transient_transport", ("replan",), attempts=2),
     _case("auth_cannot_be_fixed_by_opus", "auth_failure", ("stop_blocked",)),
+    # A killed node is not a transport blip: silence gets a different model,
+    # an active node that ran out of wall clock gets split, never re-run blind.
+    _case("silent_node_is_not_retried_blind", "stalled", ("escalate",)),
+    _case("wall_timeout_is_replanned_not_retried", "wall_timeout", ("replan",)),
 )
 
 
