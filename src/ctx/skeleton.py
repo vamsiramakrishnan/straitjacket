@@ -328,6 +328,17 @@ def _ast_extract(source: str) -> tuple[list[dict[str, Any]], list[str]]:
                          int(node.end_lineno or node.lineno), scope)
                 )
                 visit(node.body, node.name)
+            elif isinstance(node, ast.Try):
+                # recurse into try/except/else/finally bodies -- defs nested there were invisible
+                visit(node.body, scope)
+                for handler in node.handlers:
+                    visit(handler.body, scope)
+                visit(node.orelse, scope)
+                visit(node.finalbody, scope)
+            elif isinstance(node, (ast.If, ast.With, ast.AsyncWith)):
+                visit(node.body, scope)
+                if isinstance(node, ast.If):
+                    visit(node.orelse, scope)
 
     visit(tree.body, None)
     return symbols, _python_imports(source)

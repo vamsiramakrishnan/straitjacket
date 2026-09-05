@@ -262,6 +262,27 @@ harvested tree. Promotable means "review this diff", never merge. Model-
 free tests pin the plan's validity under the router's rules and the gate's
 arithmetic; a live receipt is recorded when one exists.
 
+The improvement route's first live run (evals/improve-route-2026-09-05.json,
+recorded in evals/bugbash-round17-2026-09-04.md): hunt 158 turns on the
+frontier model, verify 138 on the standard model, harvest killed at its
+hour timeout after making 69 of 70 verify tests pass across 48 files; the
+prove step, run by hand, found 3 regressions in the substitution family,
+so the gate held the round. The hand review took 47 files and 64 tests and
+refused the substitution changes (they re-decide a settled collapse rule),
+a replay-metric redefinition, and a process-wide child subreaper. Among
+the fixes taken: the collapse rewrite could override a secret-path
+force-ask; `classify_read` resolved a relative path against the process
+cwd rather than the workspace; the generated `ctx.toml` pinned 3 of 16
+redaction patterns; `ctx seq --keep-going` halted on a step that failed to
+spawn; `_authority_ok` failed open on a mistyped ceiling; two more
+`splitlines()` sites disagreed with the line index; `install_claude`
+never added a hook stage an older install lacked; a proxy retry could pop
+a second stale pooled connection; `plan_exec` crashed on an explicit
+`null` wall budget; `wait_or_kill(proc, 0)` did not kill an orphaned
+grandchild whose leader had already exited. The route now runs one
+attempt per node with a 100-turn ceiling and labels its cost estimate a
+placeholder; the first run cost 57 times it.
+
 ## [0.36.0] - 2026-09-02
 
 Orchestrated harnesses now collaborate over a task ledger, and a run survives

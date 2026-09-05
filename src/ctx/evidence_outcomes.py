@@ -303,6 +303,9 @@ def emissions_from_calls(calls: list[dict[str, Any]]) -> list[EvidenceEmission]:
 
             operator = f"command:{reflex.family_of(sig)}"
         failing = _failing_ids(res)
+        # _NODEID_RE strips a parametrized "[...]" suffix; compare on the stripped form so bracketed ids survive
+        base_test_ids = {t.split("[", 1)[0] for t in test_ids}
+        failing_ids = frozenset(f for f in failing if f.split("[", 1)[0] in base_test_ids)
         out.append(
             EvidenceEmission(
                 index=i,
@@ -311,7 +314,7 @@ def emissions_from_calls(calls: list[dict[str, Any]]) -> list[EvidenceEmission]:
                 handles=handles,
                 test_ids=test_ids,
                 files=files,
-                failing_ids=failing & test_ids,
+                failing_ids=failing_ids,
                 raw_text=res,
                 language=language_family(files),
             )

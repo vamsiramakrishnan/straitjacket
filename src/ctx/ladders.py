@@ -557,6 +557,9 @@ def measure_corpus(roots, lad: Ladder) -> dict[str, Any]:
         unmapped += m.get("unmapped", 0)
         for rung, n in m["rungs"].items():
             total[rung] = total.get(rung, 0) + n
+    if not measurable:
+        # empty corpus loop never returns measure()'s reason -- add it so report_corpus can render it
+        return {"measurable": False, "reason": lad.unmeasured_because, "records": 0, "rungs": {}}
     return {
         "measurable": measurable,
         "ledger": lad.signal.ledger if lad.signal else None,

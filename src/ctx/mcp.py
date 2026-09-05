@@ -418,6 +418,8 @@ def serve(bounded_only: bool = True) -> int:
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(msg, dict):
+            continue  # e.g. a JSON array/batch: msg.get below would raise AttributeError
         method = msg.get("method")
         msg_id = msg.get("id")
         if method == "initialize":

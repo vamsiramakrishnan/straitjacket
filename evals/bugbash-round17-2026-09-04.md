@@ -210,3 +210,51 @@ says more about the eight-way partition of the tree per arm than about the
 harness. The harness's own defects on the way — the print-mode ceiling, the
 belief a tool result planted, the worktree-id race CI found — were each
 fixed by a session running under it.
+
+## The improvement route, first live run (2026-09-05)
+
+`python evals/improve_route.py --workspace <clone of ec74ccc> --scope src/ctx`
+— hunt, verify, harvest, prove as one `ctx orchestrate` route. Record:
+[`improve-route-2026-09-05.json`](improve-route-2026-09-05.json) (the three
+node yields, the task ledger, the gate, the review).
+
+| node | model | turns | cost | outcome |
+|---|---|---|---|---|
+| hunt | frontier | 158 | $78.31 | 33 findings in its yield, more in its transcript |
+| verify | standard | 138 | $33.17 | 66 claimed, 66 "verified", 0 refuted; 70 tests written, all failing on the unfixed tree |
+| harvest | standard | — | unrecorded | 69 of 70 tests made to pass across 48 files; killed at the hour timeout before handing back |
+| prove | economy | — | — | never ran: the steward classified the timeout as a transport failure and queued a same-model retry; a watcher stopped the route first |
+
+**Prove, by hand.** On the harvested clone, 69 of the route's 70 tests
+pass and the full suite has 3 regressions, all in the command-substitution
+family. The gate: **held** — precision 1.00 by the route's own count, suite
+not passing. That is the gate working: the verify node's zero refutations
+was the number to distrust, and the suite refuted the substitution family
+for it.
+
+**Hand review, then harvest.** Every hunk read against its test and the
+contract the existing suite pins. Taken: 47 files, 64 tests. Refused: the
+four substitution changes (they re-decide the collapse rule rounds 12–14
+settled: a bare-identifier hunt collapses to the index-exact `refs`; the
+narrower `--glob`/`--include` carry-through is real and deferred), a
+redefinition of replay's downstream-fact metric, and a process-wide child
+subreaper installed at import time in the process helper (the
+killpg-on-timeout-0 hunk it accompanied is taken; the test reads zombie
+state instead). One test that cannot force fd recycling reliably is
+dropped with its fix kept. Highlights among the taken fixes: the collapse
+rewrite could override a secret-path force-ask; `classify_read` resolved a
+relative path against the process cwd, not the workspace; the generated
+`ctx.toml` pinned 3 of 16 redaction patterns; `ctx seq --keep-going` halted
+on a step that failed to spawn; `_authority_ok` failed open on a mistyped
+ceiling; two more `splitlines()`-against-the-index sites; a proxy retry
+that could pop a second stale pooled connection; `plan_exec` crashing on an
+explicit `null` wall budget.
+
+**What the run says about the route.** It found more than the bug-bash
+pair did and cost more than both arms together: $111 on the two nodes the
+ledger priced, plus an unrecorded harvest. Its estimate was $1.95, built
+from placeholder token counts. Three fixes follow: one attempt per node, a
+100-turn ceiling per node, and the estimate labelled as a placeholder in
+the receipt. A timeout classified as `transient_transport` with a
+`retry_same` decision is a steward defect left open here: a node that ran
+out of time is not a transport blip.

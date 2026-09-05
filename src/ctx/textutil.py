@@ -13,7 +13,7 @@ import re
 _ANSI_RE = re.compile(
     r"""
     \x1b\[[0-9;?]*[ -/]*[@-~]      # CSI sequences
-  | \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?  # OSC sequences
+  | \x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)?  # OSC sequences; stop at \n so an unterminated OSC can't eat the rest
   | \x1b[@-_]                      # other escape sequences
     """,
     re.VERBOSE,
@@ -177,7 +177,7 @@ def json_pointer(doc, pointer: str):
     for token in pointer[1:].split("/"):
         key = token.replace("~1", "/").replace("~0", "~")
         if isinstance(node, list):
-            if not (key.isdigit() and (key == "0" or not key.startswith("0"))):
+            if not (key.isdecimal() and (key == "0" or not key.startswith("0"))):  # fix: isdigit() accepts non-ASCII digits (e.g. superscripts) that int() rejects
                 raise JsonPointerError(
                     f"not an array index: {token!r} in {pointer!r}"
                 )

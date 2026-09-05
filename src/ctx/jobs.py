@@ -233,8 +233,11 @@ def start_job(
     # Re-read first: the supervisor may already have written "running".
     current = _read_meta(jobdir)
     if current.get("state") == "launching":
-        current["launcherSupervisorPid"] = sup.pid
-        _write_meta(jobdir, current)
+        # re-read right before writing: the read above can be stale if the supervisor concurrently wrote "running"
+        current = _read_meta(jobdir)
+        if current.get("state") == "launching":
+            current["launcherSupervisorPid"] = sup.pid
+            _write_meta(jobdir, current)
     return job_id
 
 
@@ -407,7 +410,8 @@ def kill_job(ws: Workspace, store: Store, job_id: str, *, settle_s: float = 8.0)
         except (ProcessLookupError, PermissionError):
             pass  # already gone (or unsignalable): the supervisor settles state
         # Let the supervisor record the death; adopt only if it died too.
-        while time.monotonic() < deadline:
+        settle_deadline = time.monotonic() + settle_s  # separate deadline: don't share the wait-for-pid budget
+        while time.monotonic() < settle_deadline:
             meta = _read_meta(jobdir)
             if meta.get("state") != "running":
                 break

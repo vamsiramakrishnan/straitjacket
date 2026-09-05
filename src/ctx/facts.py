@@ -931,7 +931,7 @@ def _fails_for(store: Store, run_id: str) -> list[dict[str, Any]]:
         got = conn.execute(
             "SELECT test, failure_class, file, line FROM fail WHERE run_id=? "
             "ORDER BY file, line, test",
-            (run_id,),
+            (_short_id(run_id) or run_id,),  # fail.run_id is the 12-hex short id; callers may pass a full 64-hex id
         ).fetchall()
         return [
             {"file": f, "line": ln, "test": t, "failure_class": c,

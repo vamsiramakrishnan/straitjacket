@@ -441,12 +441,18 @@ def _render_flood(
         lines += _coverage_tail(env, k)
         return lines, [i.id for i in items[:k]], frozenset(_BASE_FIELDS)
 
+    # size(k) is non-decreasing in k, so binary-search the largest fitting k instead of
+    # linearly scanning every k from n down to 1 (which rebuilt the whole census O(n) times, O(n^2) total)
     chosen = build(1)
-    for k in range(len(items), 0, -1):
-        candidate = build(k)
+    lo, hi = 1, len(items)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = build(mid)
         if _nbytes(candidate[0]) <= budget_bytes:
             chosen = candidate
-            break
+            lo = mid + 1
+        else:
+            hi = mid - 1
     lines, selected, included = chosen
     receipt = _receipt(graph, contract, selected, included)
     receipt = replace(

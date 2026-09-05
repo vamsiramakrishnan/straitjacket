@@ -1224,15 +1224,17 @@ def _checkpoint_node(
         # connection is never shared across threads.
         with _CHECKPOINT_LOCK:
             store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-            blob_id = store.put_blob(payload) if payload else None
-            evidence = [f"blob:{blob_id} node {node.id} full output"] if blob_id else []
-            cp_id, _ = create_checkpoint(
-                store, ws,
-                goal=f"node {node.id} ({node.role}) of orchestrated task: {task}",
-                state=state,
-                evidence=evidence,
-            )
-            store.close()
+            try:  # ensure the sqlite connection is closed even if create_checkpoint raises
+                blob_id = store.put_blob(payload) if payload else None
+                evidence = [f"blob:{blob_id} node {node.id} full output"] if blob_id else []
+                cp_id, _ = create_checkpoint(
+                    store, ws,
+                    goal=f"node {node.id} ({node.role}) of orchestrated task: {task}",
+                    state=state,
+                    evidence=evidence,
+                )
+            finally:
+                store.close()
         return f"checkpoint:{short_id(cp_id)}"
     except Exception:
         return None
@@ -2000,10 +2002,10 @@ def _merge_patch(nodes, state, patch, hosts, cfg) -> int:
     for i, r in enumerate(raw):
         if not isinstance(r, dict) or len(nodes) >= max_nodes:
             break
-        n = _coerce_node(r, len(nodes) + i)
-        if n.id in existing:
-            continue
-        with contextlib.suppress(RouteError):
+        with contextlib.suppress(RouteError):  # _coerce_node can also raise RouteError; keep it inside the guard
+            n = _coerce_node(r, len(nodes) + i)
+            if n.id in existing:
+                continue
             nodes.append(_assign_host(n, hosts))
             state[n.id] = "pending"
             existing.add(n.id)

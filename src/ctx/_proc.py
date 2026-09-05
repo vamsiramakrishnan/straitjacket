@@ -63,6 +63,16 @@ def wait_or_kill(proc: subprocess.Popen, timeout: float | None) -> bool:
             proc.kill()
         proc.wait()
         return True
+    if timeout == 0:
+        # timeout=0 means the caller already detected the timeout elsewhere
+        # (orchestrator._run_bounded: communicate() timed out) and is forcing
+        # cleanup now. The leader may have exited already while an orphaned
+        # grandchild keeps the process group alive, so wait() did not raise
+        # and killpg still has to run. Improvement route, first live run.
+        try:
+            os.killpg(proc.pid, signal_mod.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
     return False
 
 

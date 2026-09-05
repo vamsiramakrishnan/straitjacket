@@ -283,7 +283,8 @@ def execute_plan(
     ws_fingerprint = _workspace_fingerprint(ws)
     pc = plan_ops.PlanContext(ws=ws, store=store, generation=generation)
 
-    wall_budget = float(plan.budget.get("wall_seconds", ws.config.plan.wall_seconds))
+    _wall_seconds = plan.budget.get("wall_seconds", ws.config.plan.wall_seconds)  # fix: an explicit null must fall back too, not crash float(None)
+    wall_budget = float(_wall_seconds if _wall_seconds is not None else ws.config.plan.wall_seconds)
     max_fanout = min(
         int(plan.budget.get("max_fanout", ws.config.plan.max_fanout)),
         ws.config.plan.max_fanout,

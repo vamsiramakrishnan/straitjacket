@@ -189,11 +189,14 @@ class IsolatedWorktree:
         with _WORKTREE_LOCK:
             if self.path is not None and self.path.exists():
                 with contextlib.suppress(Exception):
-                    _git(self.root, "worktree", "remove", "--force", os.fspath(self.path))
+                    # --force twice: a single --force still refuses a locked worktree.
+                    _git(self.root, "worktree", "remove", "--force", "--force", os.fspath(self.path))
+            if self._temp_parent is not None:
+                shutil.rmtree(self._temp_parent, ignore_errors=True)
+            # prune after rmtree: if `remove` failed (e.g. locked), the directory
+            # still existed when prune ran here before, so it found nothing to reap.
             with contextlib.suppress(Exception):
                 _git(self.root, "worktree", "prune")
-        if self._temp_parent is not None:
-            shutil.rmtree(self._temp_parent, ignore_errors=True)
         self.path = None
         self._temp_parent = None
 

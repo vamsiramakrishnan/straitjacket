@@ -84,7 +84,10 @@ def _authority_ok(cap: surface.Capability, ceiling: str) -> bool:
     try:
         return order.index(cap.authority) <= order.index(ceiling)
     except ValueError:
-        return True
+        # An unrecognised ceiling (a typo in a repo-defined profile) must fail
+        # closed: returning True silently admitted every capability the
+        # profile meant to bound. Improvement route, first live run.
+        return False
 
 
 def _is_kernel(cap: surface.Capability) -> bool:

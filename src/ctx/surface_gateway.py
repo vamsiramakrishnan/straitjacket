@@ -406,6 +406,8 @@ def serve_gateway(ws_root: Path | str | None = None) -> int:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(msg, dict):
+                continue  # e.g. a JSON array/batch: msg.get below would raise AttributeError
             method, msg_id = msg.get("method"), msg.get("id")
             if method == "initialize":
                 reply(msg_id, {

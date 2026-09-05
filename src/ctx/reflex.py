@@ -241,6 +241,7 @@ _SLICER_PROGS = {
 }
 _REDIR_TAIL_TOKENS = {"2>&1", "2>/dev/null", ">/dev/null", "&>/dev/null"}
 _META_TOKENS = {"|", "||", "&&", ";", "&", ">", ">>", "<", "2>&1"}
+_REDIRECT_OPS = {">", ">>", "<"}  # these take a following target filename token, unlike 2>&1
 _PY_PROG_RE = re.compile(r"^python(3(\.\d+)?)?$")
 _MAX_SIGNATURE_CHARS = 240
 
@@ -309,6 +310,9 @@ def _signature_parts(prog: str, rest: list[str]) -> list[str]:
                 scope.append(f"{matched} {t[len(matched) + 1 :]}")
                 i += 1
                 continue
+        if t in _REDIRECT_OPS:
+            i += 2  # drop the redirect target filename too, not just the operator
+            continue
         if not t.startswith("-") and t not in _META_TOKENS:
             targets.append(t)
         i += 1
@@ -457,8 +461,13 @@ def _split_signature(sig: str) -> tuple[str, list[str], set[tuple[str, str]]]:
     while i < len(rest):
         t = rest[i]
         if t in valued and i + 1 < len(rest):
-            scope.add((t, rest[i + 1]))
-            i += 2
+            # value may have contained spaces (flattened away in the sig text), so
+            # take every token up to the next known flag, not just the one after it
+            j = i + 1
+            while j < len(rest) and rest[j] not in valued and rest[j] not in bare:
+                j += 1
+            scope.add((t, " ".join(rest[i + 1 : j])))
+            i = j
             continue
         if t in bare:
             scope.add((t, ""))
@@ -1550,12 +1559,16 @@ def _fold_q_ledger(
     if ops_path is not None:
         try:
             with open(ops_path, encoding="utf-8") as fh:
-                lines = fh.read().splitlines()
+                raw = fh.read()
+            lines = raw.splitlines()
         except Exception:
             lines = None
+            raw = ""
         if lines is not None:
+            # a trailing line with no newline yet may be a writer's partial append -- don't consume it
+            complete = len(lines) if (not raw or raw.endswith("\n")) else len(lines) - 1
             start = max(0, int(state.get("q_ops") or 0))
-            for ln in lines[start:]:
+            for ln in lines[start:complete]:
                 try:
                     rec = json.loads(ln)
                 except Exception:
@@ -1589,8 +1602,8 @@ def _fold_q_ledger(
                         # identical pipeline — the teaching worked.
                         docs.append(_q_outcome_doc("recovered", sig, rows_i))
                     qrec["dry"] = False
-            if len(lines) != start:
-                state["q_ops"] = len(lines)
+            if complete != start:
+                state["q_ops"] = complete
                 changed = True
     if json_path is not None:
         blob: Any = None

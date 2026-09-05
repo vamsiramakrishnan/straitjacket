@@ -148,7 +148,7 @@ def _emit_investigation(ws, store, text: str) -> None:
     """Emission tail for plan/investigate digests: the shared resolver
     (family 'investigate'; a digest naming failed nodes rides the failure
     budget) + engagement filter + bounded backstop."""
-    outcome = "failure" if ("ERROR:" in text or "candidates (census): 0" not in text) else "success"
+    outcome = "failure" if ("ERROR:" in text or "candidates (census): 0" in text) else "success"  # was inverted: "not in" misclassified successful census as failure
     plan = _delivery_plan(
         ws,
         outcome=outcome,

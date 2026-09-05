@@ -310,10 +310,14 @@ def load_config(workspace_root: Path | None) -> Config:
         if isinstance(roots, list):
             scopes[str(name)] = tuple(str(r) for r in roots)
 
-    budgets = _pick(raw.get("budgets") or {}, Budgets)
+    # A scalar section (e.g. `budgets = 5`) is not a dict -- `or {}` only catches
+    # falsy/missing, so guard explicitly against a wrong-typed section too.
+    budgets_raw = raw.get("budgets")
+    budgets = _pick(budgets_raw if isinstance(budgets_raw, dict) else {}, Budgets)
     # Guard is hand-built (not _pick) so list keys coerce to tuples and bools
     # coerce honestly — and so Config models every key the hot-path guard reads.
-    guard_raw = raw.get("guard") or {}
+    guard_raw = raw.get("guard")
+    guard_raw = guard_raw if isinstance(guard_raw, dict) else {}
     gd = Guard()
     guard = Guard(
         mode=str(guard_raw.get("mode", gd.mode)),

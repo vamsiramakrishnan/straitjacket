@@ -718,8 +718,15 @@ def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
         # Creation tasks do all their work in untracked files; count their
         # lines too (bounded: text-decodable, first 200 files).
         lines_new = 0
-        for rel in untracked_paths[:200]:
+        expanded_new: list[Path] = []
+        for rel in untracked_paths:
             p = Path(workspace_root) / rel
+            if p.is_dir():
+                # git collapses a whole new untracked dir into one porcelain entry -- expand it
+                expanded_new.extend(sorted(fp for fp in p.rglob("*") if fp.is_file()))
+            else:
+                expanded_new.append(p)
+        for p in expanded_new[:200]:
             try:
                 if p.is_file() and p.stat().st_size < 1_048_576:
                     lines_new += len(
@@ -731,7 +738,7 @@ def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
             "insertions": ins,
             "deletions": dels,
             "files_changed": files,
-            "files_new": len(untracked_paths),
+            "files_new": len(expanded_new),
             "lines_new": lines_new,
         }
     except Exception:

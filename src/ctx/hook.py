@@ -1509,8 +1509,9 @@ def _classify_command_inner(
             f"Prefer: ctx run --shell -- {shlex.quote(stripped)}"
         )
         if _steering_allows(policy):
+            bg = " --bg" if _follows_forever(argv) else ""  # fix: never-terminating piped command needs --bg too
             fa["_rewrite"] = {
-                "command": "ctx run --shell -- " + shlex.quote(stripped),
+                "command": "ctx run --shell" + bg + " -- " + shlex.quote(stripped),
                 "reason": _REWRITE_REASON,
             }
         return fa
@@ -1829,6 +1830,8 @@ def classify_read(
     policy: dict[str, Any],
     session_id: str = "unknown",
 ) -> dict[str, str]:
+    if workspace_root and not os.path.isabs(path_str):
+        path_str = os.path.join(workspace_root, path_str)  # fix: resolve relative paths against workspace_root, not process CWD
     if _is_secret_path(path_str, workspace_root):
         return _force_ask(
             "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires an explicit "
@@ -2030,7 +2033,12 @@ def classify(
                     command,
                     failure_available=lambda: _failure_available(workspace_root),
                     symbols_resolvable=lambda: _symbols_resolvable(workspace_root))
-                if sub is not None:
+                if sub is not None and not (
+                    decision.get("decision") == "force_ask"
+                    and decision.get("reason", "").startswith(
+                        "CTX_CONTEXT_GUARD: secret-bearing path"
+                    )
+                ):  # fix: never let collapse override a secret-path force_ask
                     # Deliberately overrides a DENY as well as an allow, and
                     # that is the product: the flagship case (`grep -rn X .`)
                     # is denied by the canonical layer as unbounded, and the

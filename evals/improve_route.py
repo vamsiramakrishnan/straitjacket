@@ -31,6 +31,7 @@ never depends on parsing a transcript.
 
     python evals/improve_route.py --dry-run            # priced plan, no launch
     python evals/improve_route.py --scope src/ctx/hook.py,src/ctx/reflex.py
+    python evals/improve_route.py --turn-ceiling 60    # tighter than the default 100
     python evals/improve_route.py --json               # machine-readable receipt
 """
 
@@ -51,6 +52,14 @@ from ctx.workspace import resolve_workspace  # noqa: E402
 YIELD_DIR = ".ctx-session-reads/improve"
 TEST_FILE = "tests/test_improve_round.py"
 PRECISION_BAR = 0.8
+#: Per-node turn ceiling (Claude's --max-turns) and attempts. The first live
+#: run (2026-09-05) had neither: its hunt node took 158 turns and $78 on the
+#: frontier model, its verify node 138 turns and $33, and its harvest node
+#: ran into the hour timeout, was classified as a transport failure and
+#: queued for a same-model retry that a watcher had to stop. A route that
+#: proposes improvements must be the cheapest thing in the loop to re-run.
+DEFAULT_TURN_CEILING = 100
+DEFAULT_ATTEMPTS = 1
 
 _SINGLE_SHOT = (
     "This node is one single-shot run: no supervisor re-invokes you. Run any "
@@ -178,19 +187,24 @@ def verdict(hunt: dict | None, verify: dict | None, harvest: dict | None,
 
 
 def run(ws_root: Path, *, scope: str, dry_run: bool, budget_usd: float,
-        node_timeout: float, hosts=None) -> dict:
+        node_timeout: float, hosts=None, turn_ceiling: int = DEFAULT_TURN_CEILING) -> dict:
     ws = resolve_workspace(str(ws_root))
     roster = hosts if hosts is not None else installed_harnessable(workspace_root=ws.root)
     if not roster:
         return {"error": "no installed harnessable host; nothing to route"}
     cfg = replace(ws.config.orchestrate, budget_usd=budget_usd, node_timeout=node_timeout,
-                  isolated_worktrees=False, turn_ceiling=0, confirm=False)
+                  isolated_worktrees=False, turn_ceiling=turn_ceiling,
+                  max_attempts=DEFAULT_ATTEMPTS, confirm=False)
     plan = build_route_plan(f"improve {scope}", raw_route(scope), roster, cfg)
     priced = [{"node": a.node.id, "role": a.node.role, "host": a.host.name,
                "model": a.model.id, "tier_met": a.tier_met,
                "est_usd": round(float(a.est_cost_usd), 3)} for a in plan.assigned]
     rec = {"schema": "ctx.improve-route/v1", "scope": scope, "plan": priced,
-           "est_total_usd": round(float(plan.est_total_usd), 3), "dry_run": dry_run}
+           "est_total_usd": round(float(plan.est_total_usd), 3), "dry_run": dry_run,
+           "turn_ceiling": turn_ceiling, "attempts": DEFAULT_ATTEMPTS,
+           "node_timeout_s": node_timeout,
+           "note": "est_total_usd is built from placeholder token counts; the first "
+                   "live run cost 57x its estimate. Read the ledger's cost_usd."}
     if dry_run:
         return rec
     result = run_route(ws, plan, cfg)
@@ -209,8 +223,9 @@ def run(ws_root: Path, *, scope: str, dry_run: bool, budget_usd: float,
 def render(rec: dict) -> str:
     if "error" in rec:
         return f"[improve route] {rec['error']}"
-    out = [f"[improve route · scope {rec['scope']} · est ${rec['est_total_usd']:.2f}"
-           + (" · dry run]" if rec["dry_run"] else "]")]
+    out = [f"[improve route · scope {rec['scope']} · est ${rec['est_total_usd']:.2f} "
+           f"(placeholder) · {rec.get('turn_ceiling', 0)} turns/node · "
+           f"{rec.get('attempts', 1)} attempt" + (" · dry run]" if rec["dry_run"] else "]")]
     out.append(f"{'node':8} {'role':10} {'host/model':34} {'est $':>6}")
     for p in rec["plan"]:
         out.append(f"{p['node']:8} {p['role']:10} {(p['host'] + '/' + p['model'])[:34]:34} {p['est_usd']:>6.3f}")
@@ -240,6 +255,7 @@ def _args(argv: list[str]) -> dict:
         "dry_run": "--dry-run" in argv,
         "budget_usd": float(val("--budget", "0")),
         "node_timeout": float(val("--node-timeout", "3600")),
+        "turn_ceiling": int(val("--turn-ceiling", str(DEFAULT_TURN_CEILING))),
         "as_json": "--json" in argv,
         "workspace": Path(val("--workspace", str(ROOT))),
     }
@@ -248,5 +264,6 @@ def _args(argv: list[str]) -> dict:
 if __name__ == "__main__":
     a = _args(sys.argv[1:])
     record = run(a["workspace"], scope=a["scope"], dry_run=a["dry_run"],
-                 budget_usd=a["budget_usd"], node_timeout=a["node_timeout"])
+                 budget_usd=a["budget_usd"], node_timeout=a["node_timeout"],
+                 turn_ceiling=a["turn_ceiling"])
     print(json.dumps(record, indent=2, sort_keys=True) if a["as_json"] else render(record))

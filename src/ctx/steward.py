@@ -75,8 +75,7 @@ _INCOMPLETE = (
 _AUTH = (
     "not logged in", "unauthorized", "unauthenticated", "invalid api key",
     "authentication", "login required", "token expired", "credential",
-    "401",
-)
+)  # removed bare "401": matched unrelated line numbers/test names, not just auth wording
 
 #: Wording that names a policy/safety refusal by the host or provider.
 _SAFETY = ("safety", "content policy", "refused by policy", "blocked by policy")

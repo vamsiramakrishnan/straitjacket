@@ -191,6 +191,10 @@ def _fit_window(
         kept += 1
     if kept >= len(rendered):
         return b, None
+    if kept == 0:
+        # nothing fit at all (e.g. a single oversized line) -- forcing kept=1 below
+        # produced an inverted continuation range (new_b==b, so next start > next end)
+        return b, None
     kept = max(1, kept)
     # Reached only when the window was actually trimmed (`kept < len(rendered)`
     # above), so `new_b < b <= total`: there is always a next item to address
@@ -578,6 +582,9 @@ def get(
         handle = f"{ref_text} --bytes {selector.bytes[0]}:{selector.bytes[1]}"
     elif selector.records is not None:
         handle = f"{ref_text} --records {selector.records[0]}:{selector.records[1]}"
+    elif selector.json_pointer is not None:
+        # was falling through to the bare ref, dropping --json-pointer from the continuation
+        handle = f"{ref_text} --json-pointer {selector.json_pointer}"
     elif selector.lines is not None:
         # --lines was the one selector this fix skipped when it was written,
         # so an over-budget `--lines A:B` emitted "next: ctx get <ref>" --

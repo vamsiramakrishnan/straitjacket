@@ -891,16 +891,31 @@ def probe_surface(ws_root: Path | str, *, timeout: float = 8.0,
             cache = {}
     out: list[Capability] = []
     dirty = False
-    for name, argv in sorted(_mcp_server_commands(ws_root).items()):
+    entries = sorted(_mcp_server_commands(ws_root).items())
+    to_probe: dict[str, list[str]] = {}
+    tools_by_name: dict[str, list] = {}
+    for name, argv in entries:
         key = _probe_cache_key(argv)
         entry = cache.get(name) if use_cache else None
         if isinstance(entry, dict) and entry.get("key") == key:
-            tools = entry.get("tools") or []
+            tools_by_name[name] = entry.get("tools") or []
         else:
-            tools = probe_mcp_tools(argv, timeout=timeout)
-            if tools:  # cache only successful probes
-                cache[name] = {"key": key, "tools": tools}
-                dirty = True
+            to_probe[name] = argv
+    if to_probe:
+        # spawn uncached servers concurrently so N servers cost ~timeout, not N * timeout
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(to_probe)) as ex:
+            futures = {ex.submit(probe_mcp_tools, argv, timeout=timeout): name
+                       for name, argv in to_probe.items()}
+            for fut in concurrent.futures.as_completed(futures):
+                name = futures[fut]
+                tools = fut.result()
+                tools_by_name[name] = tools
+                if tools:  # cache only successful probes
+                    cache[name] = {"key": _probe_cache_key(to_probe[name]), "tools": tools}
+                    dirty = True
+    for name, argv in entries:
+        tools = tools_by_name.get(name) or []
         for tool in tools:
             leak, terms = _leakage_tags(tool["name"] + " " + str(tool.get("description", "")),
                                         "mcp_tool", tool["authority"], -1)

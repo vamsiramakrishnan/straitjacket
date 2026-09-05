@@ -76,7 +76,7 @@ from typing import Callable
 
 from ctx.sessiondir import LEDGER_DIR_NAME, session_reads_path
 from ctx.store import Store, canonical_json
-from ctx.textutil import EVIDENCE_LINE_CHARS, bounded, fmt_int, short_id
+from ctx.textutil import EVIDENCE_LINE_CHARS, bounded, fmt_int, index_lines, short_id
 from ctx.workspace import Workspace
 
 # ------------------------------------------------------------------ model
@@ -587,7 +587,7 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         # ledger-scanning search would match its own guard state.
         if LEDGER_DIR_NAME in str(t.label).replace("\\", "/").split("/"):
             continue
-        for i, ln in enumerate(t.text.splitlines(), start=1):
+        for i, ln in enumerate(index_lines(t.text), start=1):  # \n-only split to match store's line_index geometry
             m = rx.search(ln)
             if m:
                 # Span-precise sites (M-K1): 1-based [col_a, col_b) character
@@ -807,7 +807,7 @@ def _stage_group(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     rows = sorted(
         enumerate(stream.rows), key=lambda ir: (rank[str(ir[1].get(fld, ""))], ir[0])
     )
-    out = Stream(stream.kind, [r for _, r in rows], omitted=stream.omitted)
+    out = Stream(stream.kind, [r for _, r in rows], omitted=stream.omitted, omitted_reason=stream.omitted_reason)  # was dropping the specific omission remedy
     out.groups = order
     out_rows = out.rows
     for r in out_rows:
@@ -827,13 +827,15 @@ def _stage_top(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
         keep = {k for k, _ in stream.groups[:n]}
         rows = [r for r in stream.rows if r.get("_group") in keep]
         out = Stream(
-            stream.kind, rows, omitted=stream.omitted + (len(stream.rows) - len(rows))
+            stream.kind, rows, omitted=stream.omitted + (len(stream.rows) - len(rows)),
+            omitted_reason=stream.omitted_reason,  # was dropping the specific omission remedy
         )
         out.groups = stream.groups[:n]
         return out
     rows = stream.rows[:n]
     return Stream(
-        stream.kind, rows, omitted=stream.omitted + (len(stream.rows) - len(rows))
+        stream.kind, rows, omitted=stream.omitted + (len(stream.rows) - len(rows)),
+        omitted_reason=stream.omitted_reason,  # was dropping the specific omission remedy
     )
 
 
