@@ -212,16 +212,22 @@ def test_launch_timeout_kills_the_hosts_grandchildren(tmp_path):
     assert code == 127 and "TimeoutExpired" in err
     assert time.monotonic() - t0 < 10
     grandchild = int(pidfile.read_text().strip())
-    for _ in range(50):  # SIGKILL delivery is asynchronous
+    def gone() -> bool:
         try:
             os.kill(grandchild, 0)
         except ProcessLookupError:
+            return True
+        # A killed-but-unreaped child of a dead shell lingers as a zombie;
+        # its /proc entry can vanish between the check and the read.
+        try:
+            with open(f"/proc/{grandchild}/stat") as fh:
+                return fh.read().split(")")[-1].split()[0] == "Z"
+        except OSError:
+            return True
+
+    for _ in range(50):  # SIGKILL delivery is asynchronous
+        if gone():
             break
-        # a killed-but-unreaped child of a dead shell is reparented; check zombie state
-        if os.path.exists(f"/proc/{grandchild}/stat"):
-            state = open(f"/proc/{grandchild}/stat").read().split(")")[-1].split()[0]
-            if state == "Z":
-                break
         time.sleep(0.1)
     else:
         os.kill(grandchild, 9)
