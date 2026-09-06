@@ -409,6 +409,8 @@ class DetectedHost:
     version: str | None
     model: str
     price: Price
+    # Explicit ACP endpoint, carried into isolated worktrees with the assignment.
+    acp: object | None = None
 
     @property
     def name(self) -> str:
@@ -544,6 +546,9 @@ def detect_all(
         )
         for s in _REGISTRY
     ]
+    if workspace_root is not None:
+        from ctx.acp import configured_hosts
+        out = configured_hosts(out, Path(workspace_root), which=which)
     if installed_only:
         out = [d for d in out if d.installed]
     return out

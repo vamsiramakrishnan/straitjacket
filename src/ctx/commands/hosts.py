@@ -155,6 +155,25 @@ def cmd_setup(ns) -> int:
             print("ctx setup: pruning is not implemented for the selected hosts", file=sys.stderr)
             return 2
     root = resolve_workspace(ns.workspace).root
+    if getattr(ns, "acp", False):
+        import json
+        from ctx.acp import configure
+        if len(hosts) != 1 or not ns.acp_model or ns.all:
+            print("ctx setup --acp requires one --host and --acp-model", file=sys.stderr)
+            return 2
+        try:
+            command = json.loads(ns.acp_command) if ns.acp_command else None
+            if command is not None and (not isinstance(command, list) or not command
+                    or not all(isinstance(a, str) and a and "\0" not in a for a in command)):
+                raise ValueError("--acp-command must be a nonempty JSON string array")
+            # ACP configuration is separate from interactive MCP setup. Workers
+            # receive the MCP server in session/new, in their actual worktree.
+            print(configure(root, hosts[0], ns.acp_model, command=command,
+                            tier=ns.acp_tier, permissions=ns.acp_permissions))
+            return 0
+        except ValueError as exc:
+            print(f"ctx setup: {exc}", file=sys.stderr)
+            return 2
     code = wrap_setup(root, hosts or None, force_all=bool(ns.all), force_repair=bool(ns.repair))
     if code == 0 and getattr(ns, "prune", False):
         # Bound before bloat, at the moment the harness is installed: the

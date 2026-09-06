@@ -935,8 +935,9 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     if plugin_dir.is_dir():
         wrapped.append("antigravity")
     from ctx.mcp_hosts import checks as mcp_checks
+    from ctx.acp import checks as acp_checks
 
-    for name, ok, detail in mcp_checks(ws.root):
+    for name, ok, detail in [*mcp_checks(ws.root), *acp_checks(ws.root)]:
         check(name, ok, detail)
         if ok:
             wrapped.append(name.split()[0])

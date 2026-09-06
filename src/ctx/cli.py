@@ -370,6 +370,12 @@ def _build_parser():
         "--repair", action="store_true",
         help="bypass the ready receipt, refresh managed config, and verify again",
     )
+    p_setup.add_argument("--acp", action="store_true", help="configure ACP orchestration for one --host")
+    p_setup.add_argument("--acp-model", help="exact model id advertised by the ACP agent")
+    p_setup.add_argument("--acp-command", help="override ACP command as a JSON argv array")
+    p_setup.add_argument("--acp-tier", choices=("economy", "standard", "frontier"), default="standard")
+    p_setup.add_argument("--acp-permissions", choices=("deny", "allow_once"), default="deny",
+                        help="how unattended ACP requests are answered; default deny")
     p_setup.add_argument(
         "--prune", action="store_true",
         help="after setup, defer the capabilities this repo does not use and "

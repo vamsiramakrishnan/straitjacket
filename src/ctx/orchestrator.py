@@ -804,6 +804,12 @@ def _launch_host(
     switches Claude to ``stream-json`` so its per-event lines are the beacon;
     Codex ``exec --json`` already streams. Never raises."""
     spec = host.spec
+    if host.acp is not None:
+        from ctx.acp import launch as launch_acp
+        return launch_acp(host.acp, ws_root, prompt, exe, timeout=timeout,
+                          idle_timeout=idle_timeout,
+                          env={**os.environ, "CTX_MODEL": host.acp.model,
+                               "CTX_HOST": spec.name, "CTX_EDIT_ATTEMPT": edit_attempt})
     from ctx.mcp_hosts import HOSTS as MCP_HOSTS
 
     if spec.name in MCP_HOSTS:
@@ -2266,7 +2272,10 @@ def orchestrate(
             "see `ctx task ls`."
         )
     resolved_exe = exe or _ctx_executable()
-    hosts = installed_harnessable(workspace_root=ws.root)
+    try:
+        hosts = installed_harnessable(workspace_root=ws.root)
+    except ValueError as exc:
+        return 2, f"ctx orchestrate: {exc}"
     if not any(h.installed for h in hosts):
         return 1, (
             "ctx orchestrate: no installed harnessable CLI to orchestrate across.\n"
