@@ -24,6 +24,12 @@ def cmd_edit(ws, ns) -> int:
     from ctx.astgrep import EngineMissing, RewriteError
 
     try:
+        if ns.edit_cmd == "advise":
+            from ctx.edit_policy import choose_format, load_rows
+            decision = choose_format(load_rows(ws.confine(ns.file, must_exist=True)),
+                                     model=ns.model, shape=ns.shape)
+            print(json.dumps(decision, sort_keys=True, separators=(",", ":")))
+            return 0
         if ns.edit_cmd == "expand":
             from ctx.edit_expansion import plan_expansion
             result = plan_expansion(ws, store, ns.verification, pattern=ns.pattern,

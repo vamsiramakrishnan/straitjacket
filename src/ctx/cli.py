@@ -473,6 +473,11 @@ def _build_parser():
     p_expand.add_argument("--glob", required=True)
     p_expand.add_argument("--receipt")
 
+    p_advise = edit_sub.add_parser("advise", help="select an edit format from paired evaluation rows")
+    p_advise.add_argument("file", help="workspace-relative evaluation JSONL")
+    p_advise.add_argument("--model", required=True)
+    p_advise.add_argument("--shape", required=True)
+
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
     p_rewrite.add_argument("pattern", help="ast-grep metavariable pattern, e.g. 'foo($A)'")

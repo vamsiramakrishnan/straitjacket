@@ -186,6 +186,7 @@ class RouteNode:
     # Optional dependency-free JSON-Schema subset for the worker's final yield.
     output_schema: dict | None = None
     strict_output_schema: bool = False
+    edit_shape: str = ""
 
 
 @dataclass
@@ -403,6 +404,7 @@ def _coerce_node(raw: dict, i: int) -> RouteNode:
         targets=targets,
         output_schema=output_schema,
         strict_output_schema=bool(raw.get("strict_output_schema", False)),
+        edit_shape=str(raw.get("edit_shape") or "")[:64],
     )
 
 
@@ -1791,8 +1793,17 @@ def run_route(
                     attempt_key = f"{tid}/{a.node.id}/{attempt}"
                     if prewalk_enabled and attempt == first_attempt:
                         prompt += f"\nPrewalk attempt key: {attempt_key}"
+                    attempt_prompt = prompt
+                    if getattr(cfg, "edit_policy_file", "") and a.node.edit_shape:
+                        from ctx.edit_policy import choose_format, format_hint, load_rows
+                        try:
+                            policy_rows = load_rows(ws.confine(cfg.edit_policy_file, must_exist=True))
+                            decision = choose_format(policy_rows, model=model.id, shape=a.node.edit_shape)
+                            attempt_prompt += "\n" + format_hint(decision)
+                        except (OSError, ValueError) as exc:
+                            attempt_prompt += f"\nEdit-format policy unavailable ({type(exc).__name__}); use native."
                     code, out, err, usage = _launch_result(_do_launch(
-                        host, work_root, prompt, model,
+                        host, work_root, attempt_prompt, model,
                         edit_attempt=attempt_key if prewalk_enabled else ""))
                     node_usage.append(usage)
                     from ctx import prewalk as _prewalk
@@ -2129,6 +2140,7 @@ def _open_task(
                 "need_tags": list(a.node.need_tags), "deps": list(a.node.deps),
                 "host": a.host.name, "model": a.model.id, "prefer": a.node.prefer,
                 "targets": list(a.node.targets),
+                "edit_shape": a.node.edit_shape,
                 "est_input_tokens": a.node.est_input_tokens,
                 "est_output_tokens": a.node.est_output_tokens,
                 "est_cost_usd": a.est_cost_usd,
@@ -2374,6 +2386,7 @@ def _plan_from_ledger(ws, task_id: str, hosts) -> tuple[RoutePlan, str]:
             host_pin=str(n.get("host") or ""), model_pin=str(n.get("model") or ""),
             prefer=str(n.get("prefer") or "cheap"),
             targets=tuple(n.get("targets") or ()),
+            edit_shape=str(n.get("edit_shape") or ""),
         )
         assigned.append(_assign_host(node, list(hosts)))
     return RoutePlan(
