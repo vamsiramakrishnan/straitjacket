@@ -2,13 +2,12 @@
 
 # Architecture & code map
 
-Where things live in the code, and which file to open for a given change.
-`src/ctx/` is a flat package of ~60 modules; this page is the map. If you're
-here to make a change, start with the "which file do I touch" table, then read
-the plane your change lands in.
+Use this page to locate the code responsible for capture, evidence retrieval,
+host integration, and execution policy. Follow an operation from its CLI handler
+to storage and the model-visible response before changing a shared component.
 
-New to the design ideas themselves? Read [How it works](HOW-IT-WORKS.md) and
-[Core concepts](CONCEPTS.md) first — this page assumes that vocabulary.
+The module map describes implementation ownership. The acceptance tests define
+the properties a change must preserve.
 
 ## The six planes
 

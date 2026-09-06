@@ -86,7 +86,7 @@ Three properties make R honest rather than decorative:
 First measurement (spec3 archives, 8 sessions): `pytest/v1` — 199/199
 downstream-used facts inline (sufficiency holds after profile changes: the
 regression gate), frontier **0.17** — the digest spends ~5.7× the
-strictly-used evidence. That 0.17 is the honest, load-bearing number: it is
+strictly-used evidence. That 0.17 is the honest, measured result: it is
 where "are we near-optimal" stops being rhetoric. Read with care — the oracle
 is a lower bound, and censuses the model *reads* without *reusing verbatim*
 are invisible to it — but any future profile change that pushes frontier

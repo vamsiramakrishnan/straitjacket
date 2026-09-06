@@ -1,17 +1,15 @@
 # Why straitjacket exists
 
-A coding agent runs a test suite. Twenty thousand lines come back. The useful
-line is in the middle. It does not say `ERROR`.
+Large tool results compete with the code, instructions, and decisions already
+in an agent's context. Truncating a result can also remove the evidence needed
+for the next step.
 
-Keep the output and every later turn carries it.
+Straitjacket stores captured output and returns a bounded view with retrieval
+addresses. Use it when retaining access to omitted evidence matters. Small,
+complete native results may be cheaper and easier to use.
 
-Trim the output and the useful line may disappear.
-
-straitjacket is a local context-containment harness for coding agents. For
-captured operations, it stores the complete output as an artifact and gives the
-model a small, deterministic view with addresses back to the stored bytes.
-
-It does not remove evidence. It changes what stays resident in the prompt.
+The measurements below distinguish a digest's properties from end-to-end task
+success. They include cases where adding the harness increased cost.
 
 ## The failure
 

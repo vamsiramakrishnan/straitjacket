@@ -9,31 +9,26 @@
 > status label literally. Want to *use* `ctx ask`? The [CLI guide](CLI.md) has
 > the seven intents and examples; this doc is the design behind them.
 
-**Date:** 2026-07-20 · M-L, shipped v0.27.0 (Phase 0 + core intents). The
-adopted core of an external `ctx ask` retrieval proposal, audited against
-the house constitution and resequenced so the elegant, testable pieces
-land first and the natural-language front door lands last (or never).
+**Status:** M-L core intents shipped in v0.27.0. This page records the design
+and implementation choices; use [the CLI guide](CLI.md) for operating syntax.
 
-**The product sentence:** *`ctx ask` compiles a repository question into
-the smallest complete, addressable evidence view the current decision
-requires — by selecting a typed intent preset, not by guessing English.*
+`ctx ask` fills a typed plan template for a selected intent and executes it
+through the existing plan engine. It returns candidate conclusions,
+counterevidence, coverage, and retrieval addresses. It does not use a model to
+classify arbitrary natural-language requests.
 
-## The one-line thesis
+<a id="the-one-line-thesis"></a>
+## Plan selection
 
-The proposal's spine is right and cheap: *compile a question into an
-intent contract, execute it on the shipped plan executor, answer with a
-candidates · counterevidence · coverage receipt.* That collapses the
-**decision cost** of exploration (which verbs, in what order) the way
-`ctx plan` (M-J) collapsed its **turn cost**. It obeys every house rule —
-no second executor, no evidence graph, no vector DB, no model-call
-classifier. So we built the spine. We did **not** build the packaging
-around it (see §5, Cut).
+The caller selects the intent. The compiler fills its typed slots and the
+existing executor performs the plan. This reduces the number of command
+choices exposed to the caller without adding another executor or changing
+the evidence contract.
 
 ## What an intent actually is
 
-Not an ontology, not a product, not an NL parser output: **a frozen
-`ctx.plan/v1` template with typed slots** (`src/ctx/ask.py`). The Ponytail
-move — compress INTENT, not English:
+An intent is a frozen `ctx.plan/v1` template with typed slots, implemented
+in `src/ctx/ask.py`:
 
 ```
 ctx ask "Why is test_build failing" --intent diagnose

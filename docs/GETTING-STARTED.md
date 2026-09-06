@@ -2,13 +2,14 @@
 
 [Documentation](README.md) · [How it works](HOW-IT-WORKS.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-This guide installs straitjacket, configures a coding-agent host, and runs the core capture and retrieval loop.
+Install Straitjacket, capture one command, and retrieve its evidence. Configure
+a coding-agent host after the terminal workflow works.
 
 ## Requirements
 
 - Python 3.11 or newer.
 - A local repository.
-- Antigravity, Claude Code, or Codex for host integration.
+- A supported coding-agent host if you want automatic interception.
 
 Host integration is optional. Every `ctx` command also works from a terminal.
 
@@ -57,6 +58,45 @@ cd straitjacket
 python -m pip install -e '.[dev]'
 pytest
 ```
+
+## Run the first capture
+
+```bash
+ctx run -- pytest -q
+```
+
+Small output may pass through unchanged. Large output becomes a digest:
+
+```text
+[ctx run:ba3d1020ee8f profile=pytest/v2]
+exit: 1
+failures: 7
+coverage:
+  identities: 7/7
+  detail shown: 2/7
+next:
+  ctx get run:ba3d1020ee8f#stdout --lines 140:220
+```
+
+The handle names the complete stored artifact. The digest names what it omitted and how to retrieve it.
+
+## Retrieve and search
+
+Retrieve an exact line range:
+
+```bash
+ctx get run:ba3d1020ee8f#stdout --lines 140:220
+```
+
+Search the stored output:
+
+```bash
+ctx search run:ba3d1020ee8f "MissingTenantError"
+```
+
+Use `#stdout` or `#stderr` to select a stream. Use `--lines`, `--bytes`, or a span address to select a region.
+
+Retrieval remains bounded. If the requested region is too large, `ctx get` returns a smaller view with continuation addresses.
 
 ## Know the host boundary
 
@@ -128,45 +168,6 @@ ctx wrap antigravity
 ctx wrap claude
 ctx wrap codex
 ```
-
-## Run the first capture
-
-```bash
-ctx run -- pytest -q
-```
-
-Small output may pass through unchanged. Large output becomes a digest:
-
-```text
-[ctx run:ba3d1020ee8f profile=pytest/v2]
-exit: 1
-failures: 7
-coverage:
-  identities: 7/7
-  detail shown: 2/7
-next:
-  ctx get run:ba3d1020ee8f#stdout --lines 140:220
-```
-
-The handle names the complete stored artifact. The digest names what it omitted and how to retrieve it.
-
-## Retrieve and search
-
-Retrieve an exact line range:
-
-```bash
-ctx get run:ba3d1020ee8f#stdout --lines 140:220
-```
-
-Search the stored output:
-
-```bash
-ctx search run:ba3d1020ee8f "MissingTenantError"
-```
-
-Use `#stdout` or `#stderr` to select a stream. Use `--lines`, `--bytes`, or a span address to select a region.
-
-Retrieval remains bounded. If the requested region is too large, `ctx get` returns a smaller view with continuation addresses.
 
 ## Choose the command by work shape
 

@@ -1,11 +1,16 @@
 # Editing from observed and verified bytes
 
-This workflow applies ideas from Stencil's [Harness Playbook](https://stencil.so/blog/harness-playbook),
-[Prewalk](https://stencil.so/blog/prewalk), and [Harness Problem](https://stencil.so/blog/the-harness-problem).
-The implementation connects observed source bytes, an applied edit, its checks,
-and a bounded continuation. Choosing a cheaper model or another edit format
-requires separate outcome evidence; these mechanisms alone establish no
-quality or cost improvement.
+Use `ctx edit` to connect an observed source snapshot, a proposed change,
+its application receipt, and verification of the resulting files. The workflow
+refuses stale or ambiguous source and keeps addresses for its evidence.
+
+The examples use placeholders returned by earlier commands. Model choice and
+edit format require separate outcome measurements; an accepted edit receipt
+alone does not establish a quality or cost improvement.
+
+Design sources: Stencil's [Harness Playbook](https://stencil.so/blog/harness-playbook),
+[Prewalk](https://stencil.so/blog/prewalk), and
+[Harness Problem](https://stencil.so/blog/the-harness-problem).
 
 ## Observe, preview, and apply
 

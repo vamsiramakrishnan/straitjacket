@@ -2,15 +2,12 @@
 
 # Comparisons
 
-This is a dated research appendix, not the product introduction. It compares
-mechanisms that could be reproduced and desk-researches the rest against their
-public contracts. Measured claims link to [`evals/`](../evals/). Vendor claims
-and modelled arms are labelled. Re-run version-sensitive comparisons before
-using them for a current product decision.
+Compare tools against the same task, input, and accounting boundary. This page
+collects repository measurements and descriptions of adjacent tools; neither
+feature similarity nor a smaller digest establishes lower end-to-end cost.
 
-In this appendix, a handle addresses immutable stored bytes while the artifact
-is retained. Model-visible retrieval remains bounded and subject to the current
-redaction policy; an exact-byte request declares when redaction changed it.
+Treat dated third-party descriptions as observations, not current compatibility
+promises. Follow each receipt for its fixture, method, and limitations.
 
 ## The field, in one table
 
