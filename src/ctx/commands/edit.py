@@ -20,7 +20,19 @@ def cmd_edit(ws, ns) -> int:
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    from ctx.edit_verification import Check, VerificationError, verify_edit
+
     try:
+        if ns.edit_cmd == "verify":
+            command = list(ns.command)
+            if command and command[0] == "--":
+                command.pop(0)
+            result = verify_edit(ws, store, ns.ref,
+                                 [Check(ns.kind, tuple(command), ns.timeout)], witnesses=ns.witness)
+            if ns.receipt:
+                write_json(ws.confine(ns.receipt), result)
+            print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+            return 0 if result["outcome"] == "passed" else 3
         if ns.edit_cmd == "replace":
             replacement_path = ws.confine(ns.replacement_file, must_exist=True)
             if ws.is_ignored(ws.relativize(replacement_path)):
@@ -55,6 +67,9 @@ def cmd_edit(ws, ns) -> int:
             write_json(ws.confine(ns.receipt), result)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0
+    except VerificationError as e:
+        print(f"ctx edit: {e}", file=sys.stderr)
+        return 2
     except EditTransactionError as e:
         receipt_path = getattr(ns, "receipt", None)
         if receipt_path and e.receipt is not None:

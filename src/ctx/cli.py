@@ -453,6 +453,14 @@ def _build_parser():
     p_replace.add_argument("--apply", action="store_true", help="apply instead of preview")
     p_replace.add_argument("--receipt", help="write the full receipt to this path")
 
+    p_verify = edit_sub.add_parser("verify", help="verify an apply receipt against exact bytes")
+    p_verify.add_argument("ref", help="blob: apply receipt")
+    p_verify.add_argument("--kind", choices=("syntax", "types", "behavior"), default="behavior")
+    p_verify.add_argument("--timeout", type=float, default=60.0)
+    p_verify.add_argument("--witness", action="append", default=[], help="also bind this check input file")
+    p_verify.add_argument("--receipt", help="write the full verification receipt")
+    p_verify.add_argument("command", nargs=argparse.REMAINDER, help="-- command [args...]")
+
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
     p_rewrite.add_argument("pattern", help="ast-grep metavariable pattern, e.g. 'foo($A)'")
