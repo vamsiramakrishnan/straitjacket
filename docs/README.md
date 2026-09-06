@@ -40,6 +40,7 @@ retrieval returns bounded regions on demand
 | Understand the product decision | [Why straitjacket](WHY-STRAITJACKET.md) |
 | Configure budgets, storage, or redaction | [Configuration](CONFIGURATION.md) |
 | Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
+| Connect Hermes, OMP, OpenCode, or DSH | [Agent integrations](AGENT-INTEGRATIONS.md) |
 | Understand handles, spans, and profiles | [Core concepts](CONCEPTS.md) |
 | Apply, verify, and expand an observed edit | [Edit loop](EDIT-LOOP.md) |
 | Understand content-stable repository addresses | [Anchors](ANCHORS.md) |

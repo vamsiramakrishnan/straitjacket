@@ -142,10 +142,18 @@ context residency—not the highest compression ratio.
 | Claude Code | Command rewriting and oversized-result substitution on supported hooks |
 | Codex | Implemented and contract-tested gates; live CLI receipt pending |
 | Antigravity | Deny recognized floods and supply a bounded replacement command; no output substitution |
+| Hermes / Open Hermes | Bounded MCP retrieval and explicit terminal workflows; active-profile setup |
+| Oh My Pi (`omp`) | Bounded MCP retrieval and explicit terminal workflows; project MCP config |
+| OpenCode | Bounded MCP retrieval and explicit terminal workflows; project MCP config |
+| DeepSeek Harness (`dsh`) | Bounded MCP retrieval through a Cordis overlay; explicit terminal workflows |
 
 `ctx setup` merges JSON where safe and refreshes ctx-managed blocks. For
 user-owned Codex TOML it prints a reviewed snippet rather than replacing the
 file. See [host capabilities](docs/HOST-CAPABILITIES.md) for exact coverage.
+
+[Set up Hermes, OMP, OpenCode, or DSH](docs/AGENT-INTEGRATIONS.md). These four
+integrations install explicit tools; they do not add automatic interception or
+an orchestration worker transport. They require a build containing this change.
 
 ## Boundaries
 

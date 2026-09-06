@@ -416,6 +416,18 @@ preservation and task success.
 
 ## Run a host under the harness
 
+Keep using the agent you prefer. `ctx setup --host <name>` configures one
+integration; `ctx wrap detect` lists supported hosts. Hermes (`hermes` or
+`open-hermes`), Oh My Pi (`omp` or `oh-my-pi`), OpenCode (`opencode`), and
+DeepSeek Harness (`dsh`) provide explicit MCP tools and terminal workflows.
+Their wrappers accept agent arguments after `--`; setup persists after exit.
+See [Agent integrations](AGENT-INTEGRATIONS.md) for commands and limits.
+
+`ctx mcp --bounded-only --workspace /absolute/project` serves the bounded MCP
+tool with that default workspace. A tool call's explicit `workspace` overrides
+the default. The MCP tool does not execute arbitrary commands; use `ctx run`
+through the agent's terminal and permission flow.
+
 ### Claude Code
 
 ```bash

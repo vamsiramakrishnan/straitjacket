@@ -41,6 +41,7 @@ export default defineConfig({
             { label: 'Use cases', slug: 'guides/use-cases' },
             { label: 'Edit and verify', slug: 'guides/edit-loop' },
             { label: 'Host capabilities', slug: 'guides/host-capabilities' },
+            { label: 'Agent integrations', slug: 'guides/agent-integrations' },
             { label: 'Anchored addresses', slug: 'guides/anchors' },
             { label: 'CLI guide', slug: 'guides/cli' },
             { label: 'Configuration', slug: 'guides/configuration' },

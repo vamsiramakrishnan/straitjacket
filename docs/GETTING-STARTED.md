@@ -111,6 +111,7 @@ Retrieval remains bounded. If the requested region is too large, `ctx get` retur
 | Claude Code | Transparent rewrite | Yes |
 | Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
 | Antigravity | Deny with a bounded replacement command | No |
+| Hermes, OMP, OpenCode, DSH | Explicit MCP/CLI tools; no interception adapter | No interception adapter |
 
 Antigravity's published PreToolUse contract cannot modify arguments. Its
 PostToolUse contract cannot replace tool output. straitjacket can prevent a
@@ -140,7 +141,10 @@ It preserves unrelated user-owned settings. It merges JSON settings where safe,
 refreshes ctx-managed files and marker-delimited blocks, and refuses to rewrite
 user-owned Codex TOML. A matching readiness receipt can skip repeated writes;
 use `ctx setup --repair` to force all checks and repair. Use `ctx setup --all` to
-prepare all three vendor hosts; `antigravity-sdk` remains an explicit opt-in.
+prepare all registered vendor integrations; `antigravity-sdk` remains an
+explicit opt-in. Hermes needs its installed CLI to activate profile settings;
+DSH needs the generated `--patch` at launch. See
+[the additional agent integrations](AGENT-INTEGRATIONS.md).
 
 Setup reports host-configuration writes. The persistent host configuration is:
 
@@ -150,6 +154,10 @@ Setup reports host-configuration writes. The persistent host configuration is:
 | Antigravity | `.agents/plugins/ctx-harness/`; a ctx `statusLine` in `~/.gemini/antigravity-cli/settings.json` only when no status line already exists |
 | Claude Code | ctx hook entries and, when absent, a ctx `statusLine` in `.claude/settings.json`; `.claude/agents/ctx-explorer.md` only when absent; a managed block in `CLAUDE.md` |
 | Codex | ctx entries in `.codex/config.toml` and `.codex/hooks.json`, a managed block in `AGENTS.md` |
+| Hermes | Active profile's MCP entry, through Hermes' native config CLI; `.ctx/hosts/hermes.json` records the recipe |
+| OMP | `mcpServers.ctx-harness` in `.omp/mcp.json` |
+| OpenCode | `mcp.ctx-harness` in `opencode.json`; existing JSONC requires a manual merge |
+| DSH | `.ctx/hosts/dsh.cordis.patch.yml`, loaded with `--patch` |
 
 Setup also writes a content-free readiness receipt to
 `.ctx-session-reads/setup.json`; this is not host configuration.

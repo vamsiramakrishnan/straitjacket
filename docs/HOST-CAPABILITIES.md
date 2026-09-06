@@ -10,10 +10,10 @@ still await a live CLI run. **Antigravity contract source:**
 > [How it works](HOW-IT-WORKS.md) first: ten minutes, one command walked through
 > the whole system.
 
-straitjacket harnesses four hosts, and they do **not** all protect you equally.
-The difference is not effort or polish — it is what each host's published hook
-contract permits. This page tells you what you actually get on the host you use,
-and what to do where the guarantee is weaker.
+Keep using your preferred coding agent. Straitjacket's integrations range from
+explicit MCP tools to automatic command interception, depending on the adapter
+implemented and the host's API. CLI capture and the verified edit workflow are
+available to any agent with terminal access.
 
 ## The two gates
 
@@ -38,6 +38,16 @@ tool's arguments*; the output gate needs a way to *replace a tool's result*.
 | **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
 | **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
 | **antigravity-sdk** (ctx's own agent) | ✅ bounded inside the tool | ✅ bounded inside the tool | see below |
+| **hermes** (Nous Hermes Agent) | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
+| **omp** (Oh My Pi) | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
+| **opencode** | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
+| **dsh** (DeepSeek Harness) | No interception adapter | No interception adapter | MCP-client overlay + explicit `ctx` CLI |
+
+The four new MCP integrations have configuration and subprocess tests, not live
+model-session receipts. They are excluded from automatic orchestration; no
+worker transport or default model is assumed. See
+[setup, launch, validation, and removal](AGENT-INTEGRATIONS.md). The absence of
+a ctx hook adapter does not imply that the upstream agent has no extension API.
 
 On Claude Code, containment is invisible: you type `pytest -q`, the hook
 silently substitutes `ctx run -- pytest -q`, and the agent never sees a refusal.
