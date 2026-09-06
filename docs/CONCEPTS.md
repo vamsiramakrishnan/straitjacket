@@ -10,6 +10,8 @@ Scan this first; the sections below explain each term in depth.
 
 | Term | In one sentence |
 |---|---|
+| **Coding harness** | The application that owns the agent's model calls, tool loop, session, authentication, and permissions: Claude Code, Codex, Antigravity, and other supported agents. |
+| **Sidecar** | Straitjacket's role alongside that harness: capture tool evidence, return bounded views, retrieve omitted detail, and optionally verify edits; a daemon or container is not required. |
 | **Artifact** | An immutable stored result — command output, a file snapshot, a query result — the durable source a view is rendered from. |
 | **Handle** | A stable reference to an artifact or a region of one, e.g. `run:ba3d1020ee8f#stdout`. |
 | **Span** | An exact range inside an artifact: lines, bytes, a failure block, a symbol body. |

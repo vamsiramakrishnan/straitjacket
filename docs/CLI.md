@@ -414,7 +414,7 @@ Read the scorecard in this order:
 `ctx gain` is an accounting view, not a quality score. Pair savings with evidence
 preservation and task success.
 
-## Run a host under the harness
+## Connect a coding harness to the sidecar
 
 Keep using the agent you prefer. `ctx setup --host <name>` configures one
 integration; `ctx wrap detect` lists supported hosts. Hermes (`hermes` or

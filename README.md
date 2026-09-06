@@ -1,15 +1,31 @@
 # straitjacket
 
-**Run noisy tools. Give the coding agent the result and a way to inspect the evidence.**
+**Context and evidence sidecar for coding agents.**
 
-straitjacket captures command output in a local artifact store and returns a
-bounded, deterministic digest. The agent can search the complete output or
+Keep your coding harness. Straitjacket runs alongside it, captures command
+output in a local artifact store, and returns a bounded, deterministic digest.
+The agent can search the complete output or
 retrieve a cited region without loading the whole log into its conversation.
 
 **Keep using your coding agent.** Claude Code, Codex, and Antigravity remain
 supported. Straitjacket adds capture, bounded retrieval, and an optional verified
 edit workflow to the agent you choose; you keep its interface, models, login,
 and permissions. Any terminal-capable agent can use the `ctx` CLI.
+
+The coding harness owns the model and tool loop. Straitjacket supplies capture,
+retrieval, and optional edit verification through CLI commands, MCP tools, and
+supported hooks. “Sidecar” describes this supporting role; no separate daemon
+or container is required. The package name remains `ctx-harness`.
+
+<p>
+  <a href="https://code.claude.com/"><img src="assets/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code"></a>
+  <a href="https://developers.openai.com/codex/"><img src="assets/agents/codex.svg" width="36" height="36" alt="Codex" title="Codex"></a>
+  <a href="https://antigravity.google/"><img src="assets/agents/antigravity.png" width="36" height="36" alt="Antigravity" title="Antigravity"></a>
+  <a href="https://github.com/NousResearch/hermes-agent"><img src="assets/agents/hermes.svg" width="36" height="36" alt="Hermes" title="Hermes"></a>
+  <a href="https://github.com/can1357/oh-my-pi"><img src="assets/agents/omp.svg" width="36" height="36" alt="Oh My Pi" title="Oh My Pi"></a>
+  <a href="https://opencode.ai/"><img src="assets/agents/opencode.svg" width="36" height="36" alt="OpenCode" title="OpenCode"></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
+</p>
 
 v0.38.0 · Python 3.11+ · package `ctx-harness` · command `ctx` · pre-1.0 · Apache-2.0
 

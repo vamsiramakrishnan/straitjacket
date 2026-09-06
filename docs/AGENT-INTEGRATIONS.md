@@ -1,5 +1,19 @@
 # Keep your agent; add Straitjacket
 
+**Straitjacket is a context and evidence sidecar, not a replacement coding
+harness.** The harness owns the model and tool loop. The sidecar adds bounded
+capture, retrieval, and optional edit verification.
+
+<p>
+  <a href="https://code.claude.com/"><img src="../assets/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code"></a>
+  <a href="https://developers.openai.com/codex/"><img src="../assets/agents/codex.svg" width="36" height="36" alt="Codex" title="Codex"></a>
+  <a href="https://antigravity.google/"><img src="../assets/agents/antigravity.png" width="36" height="36" alt="Antigravity" title="Antigravity"></a>
+  <a href="https://github.com/NousResearch/hermes-agent"><img src="../assets/agents/hermes.svg" width="36" height="36" alt="Hermes" title="Hermes"></a>
+  <a href="https://github.com/can1357/oh-my-pi"><img src="../assets/agents/omp.svg" width="36" height="36" alt="Oh My Pi" title="Oh My Pi"></a>
+  <a href="https://opencode.ai/"><img src="../assets/agents/opencode.svg" width="36" height="36" alt="OpenCode" title="OpenCode"></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="../assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
+</p>
+
 Continue using Claude Code, Codex, Antigravity, Hermes, Oh My Pi, OpenCode, or
 DeepSeek Harness. Straitjacket adds evidence capture, bounded retrieval, and an
 optional verified edit workflow. Your coding agent retains its conversation,
@@ -32,6 +46,10 @@ yet launch these four hosts; wrapper launch and orchestration are separate
 capabilities. No model or price is assumed for a user's multi-provider agent.
 
 ## Install and choose one host
+
+`ctx setup` installs the hook or MCP wiring described here. It does not install
+an ACP client or enable ACP orchestration. The ACP transport is currently
+proposed in [ADR 006](../spec/adr/006-acp-orchestration-transport.md).
 
 Install Straitjacket and the chosen agent separately. This setup does not
 install an agent or configure provider credentials. The commands below require

@@ -1,5 +1,8 @@
 # Getting started
 
+**Straitjacket is a context and evidence sidecar for coding agents.** It adds
+bounded tool output and retrievable evidence to an existing coding harness.
+
 Keep using Claude Code, Codex, Antigravity, or your preferred coding agent.
 Straitjacket runs alongside it. Your agent still handles the conversation,
 model selection, authentication, and permissions; `ctx` handles captured
@@ -121,6 +124,11 @@ enter the transcript unchanged.
 See [Host capabilities](HOST-CAPABILITIES.md) for the full matrix.
 
 ## Configure the repository
+
+`ctx setup` configures the sidecar's hook or MCP integration with the selected
+coding harness. It does **not** enable ACP. ACP orchestration is currently a
+[proposed transport](../spec/adr/006-acp-orchestration-transport.md), not an
+implemented setup option. `ctx orchestrate` currently uses CLI worker transports.
 
 ```bash
 cd your-repository

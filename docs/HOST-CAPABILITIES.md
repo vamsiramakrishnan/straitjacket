@@ -1,5 +1,10 @@
 # Host capabilities — what each agent can actually enforce
 
+Straitjacket is the sidecar; the hosts below are the coding harnesses. Each
+integration connects the sidecar's evidence tools to the user's existing agent.
+The optional `antigravity-sdk` entry is a separate ctx-owned agent runtime,
+not a requirement for using the sidecar with Google's Antigravity CLI.
+
 **Status:** current implementation and published host contracts. Claude Code
 and Antigravity have live receipts; the Codex gates are contract-tested but
 still await a live CLI run. **Antigravity contract source:**
@@ -34,14 +39,14 @@ tool's arguments*; the output gate needs a way to *replace a tool's result*.
 
 | host | birth gate | output gate | how |
 |---|---|---|---|
-| **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `updatedToolOutput` |
-| **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
-| **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
+| <img src="../assets/agents/claude.svg" width="24" height="24" alt=""> **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `updatedToolOutput` |
+| <img src="../assets/agents/codex.svg" width="24" height="24" alt=""> **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
+| <img src="../assets/agents/antigravity.png" width="24" height="24" alt=""> **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
 | **antigravity-sdk** (ctx's own agent) | ✅ bounded inside the tool | ✅ bounded inside the tool | see below |
-| **hermes** (Nous Hermes Agent) | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
-| **omp** (Oh My Pi) | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
-| **opencode** | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
-| **dsh** (DeepSeek Harness) | No interception adapter | No interception adapter | MCP-client overlay + explicit `ctx` CLI |
+| <img src="../assets/agents/hermes.svg" width="24" height="24" alt=""> **hermes** (Nous Hermes Agent) | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
+| <img src="../assets/agents/omp.svg" width="24" height="24" alt=""> **omp** (Oh My Pi) | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
+| <img src="../assets/agents/opencode.svg" width="24" height="24" alt=""> **opencode** | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
+| <img src="../assets/agents/dsh.svg" width="24" height="24" alt=""> **dsh** (DeepSeek Harness) | No interception adapter | No interception adapter | MCP-client overlay + explicit `ctx` CLI |
 
 The four new MCP integrations have configuration and subprocess tests, not live
 model-session receipts. They are excluded from automatic orchestration; no

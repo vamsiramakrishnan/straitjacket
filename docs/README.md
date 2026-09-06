@@ -4,7 +4,9 @@
 [CLI](CLI.md) · [Configuration](CONFIGURATION.md) ·
 [Troubleshooting](TROUBLESHOOTING.md)
 
-straitjacket keeps large captured tool output outside a coding agent's prompt.
+Straitjacket is a context and evidence sidecar for coding agents. Keep the
+coding harness that runs the model and tool loop; add bounded capture,
+retrieval, and optional edit verification. The sidecar keeps large captured tool output outside the agent's prompt.
 The agent receives a bounded deterministic digest and bounded routes back to
 the captured evidence.
 

@@ -13,13 +13,19 @@
 // PAGES is the set published by Starlight. The sidebar in ../astro.config.mjs
 // intentionally exposes only the product path; specialist pages may still be
 // published so existing links remain stable.
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const docsDir = join(here, '..', '..', 'docs');
 const outDir = join(here, '..', 'src', 'content', 'docs');
+const agentAssets = join(here, '..', '..', 'assets', 'agents');
+const publicAgents = join(here, '..', 'public', 'agents');
+mkdirSync(publicAgents, { recursive: true });
+for (const file of readdirSync(agentAssets)) {
+  if (/\.(svg|png)$/.test(file)) copyFileSync(join(agentAssets, file), join(publicAgents, file));
+}
 
 const BASE = '/straitjacket'; // must match `base` in astro.config.mjs
 const OWNER_REPO = 'vamsiramakrishnan/straitjacket';
@@ -85,6 +91,9 @@ function rewriteTarget(value) {
   // A sibling doc that we sync -> its slug.
   if (SLUG_BY_FILE.has(path)) return `${SLUG_BY_FILE.get(path)}${frag}`;
 
+  // Vendored agent marks are served locally on the docs site.
+  if (path.startsWith('../assets/agents/')) return `${BASE}/agents/${path.slice('../assets/agents/'.length)}${frag}`;
+
   // A path that escapes docs/ (../evals/, ../spec/, ../CONTRIBUTING.md, …) -> GitHub.
   if (path.startsWith('../')) {
     const repoPath = path.slice(3); // drop the leading ../ (docs/ -> repo root)
@@ -101,7 +110,7 @@ function rewriteTarget(value) {
 }
 
 const MD_LINK = /(\]\()([^)\s]+)(\))/g;                  // [text](target)
-const HTML_HREF = /(\bhref\s*=\s*(['"]))([^'"]+)(\2)/gi; // href="target"
+const HTML_HREF = /(\b(?:href|src)\s*=\s*(['"]))([^'"]+)(\2)/gi; // href/src="target"
 
 function rewriteLinks(text) {
   return text

@@ -17,7 +17,7 @@ export default defineConfig({
     starlight({
       title: 'straitjacket',
       description:
-        'Artifact-backed context containment harness for coding agents. Unbounded tool output becomes an immutable artifact plus a bounded, span-addressed digest.',
+        'Context and evidence sidecar for coding agents. Keep your harness; add bounded tool output, retrievable evidence, and verified edits.',
       social: [
         {
           icon: 'github',
