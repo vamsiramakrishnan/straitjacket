@@ -10,6 +10,11 @@ single leaderboard can referee a system that changes the agent's information
 channel, and the standing principle that **external corpora are teachers, never
 referees**.
 
+The [paired edit matrix](EDIT-MATRIX.md) covers native/anchored/structural edits
+and frontier/prewalk strategies with independent acceptance checks. It includes
+a model-free fixture and a live CLI-adapter contract; fixture success does not
+establish a model-quality or cost improvement.
+
 ## How to run an eval
 
 Every runnable script lives directly in `evals/` and has a `__main__` block, so

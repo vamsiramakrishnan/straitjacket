@@ -8,8 +8,10 @@ relevant here. Some of its replacement architecture is still being developed;
 its examples are design evidence, not a performance forecast for straitjacket.
 
 This assessment is based on straitjacket at `978036c`. The priorities below are
-our proposed application of those principles. Only the cancellation correction
-is implemented in this change.
+our proposed application of those principles. The first commit implements the
+cancellation correction. Follow-on commits implement the [verified edit loop](EDIT-LOOP.md),
+including receipt-gated prewalk, structural expansion, and paired outcome gates.
+The capture, gateway, composition, and replay proposals below remain future work.
 
 ## What already exists
 

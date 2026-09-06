@@ -67,3 +67,12 @@ authentication boundary against an adversary with the same filesystem access.
 Artifacts follow the store's retention policy. Missing evidence refuses the
 handoff. A live-model cost/quality comparison has not yet been run. Extra
 planning, checks, and prefix processing can outweigh the model-price saving.
+
+## Optional outcome gate
+
+Set `[orchestrate] prewalk_policy_file = "evals/prewalk-results.jsonl"` to require
+paired live quality and total-cost evidence for the exact guide/executor model
+pair and node `edit_shape`. Missing or insufficient evidence leaves the assigned
+frontier model in place. Without the file, `prewalk = true` remains experimental.
+See [paired evaluations](../evals/EDIT-MATRIX.md#selecting-prewalk) for driver
+requirements and [the edit loop](EDIT-LOOP.md) for the complete command workflow.

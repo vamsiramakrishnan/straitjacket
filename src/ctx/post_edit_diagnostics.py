@@ -2,7 +2,7 @@
 
 The host hooks can observe edits, but they cannot prove that diagnostics
 reported immediately afterwards describe the bytes that were just written.
-This module gives a future edit transaction a small, standalone seam:
+This module gives ctx-owned edit transactions a small diagnostic seam:
 
 1. capture a document digest and optional diagnostic version before writing;
 2. run dependency-free syntax checks and/or an injected LSP-like provider;

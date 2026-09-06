@@ -41,6 +41,7 @@ retrieval returns bounded regions on demand
 | Configure budgets, storage, or redaction | [Configuration](CONFIGURATION.md) |
 | Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
 | Understand handles, spans, and profiles | [Core concepts](CONCEPTS.md) |
+| Apply, verify, and expand an observed edit | [Edit loop](EDIT-LOOP.md) |
 | Understand content-stable repository addresses | [Anchors](ANCHORS.md) |
 | Route work across hosts and models | [Routing](ROUTING.md) |
 | Run or resume multi-agent work | [Task ledger](TASK-LEDGER.md) |
