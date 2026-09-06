@@ -47,7 +47,8 @@ MAX_EDITS = 128
 class EditTransactionError(Exception):
     """A refusal, optionally carrying the safe receipt that explains it."""
 
-    def __init__(self, message: str, *, receipt: dict[str, Any] | None = None):
+    def __init__(self, message: str, *, receipt: dict[str, Any] | None = None, code: str = "invalid_request"):
+        self.code = code
         super().__init__(message)
         self.receipt = receipt
 
@@ -140,9 +141,9 @@ def _unique_digest_start(
             if len(matches) > 1:
                 break
     if not matches:
-        raise EditTransactionError("planned target bytes changed or disappeared; make a fresh plan")
+        raise EditTransactionError("planned target bytes changed or disappeared; make a fresh plan", code="stale_target")
     if len(matches) > 1:
-        raise EditTransactionError("planned target is now ambiguous; refusing to choose a copy")
+        raise EditTransactionError("planned target is now ambiguous; refusing to choose a copy", code="ambiguous_target")
     return matches[0]
 
 
@@ -252,15 +253,23 @@ def create_edit_plan(
     return _seal(plan)
 
 
-def _refusal(plan: dict[str, Any], operation: str, reason: str) -> EditTransactionError:
+def _refusal(plan: dict[str, Any], operation: str, reason: str, code: str = "invalid_plan") -> EditTransactionError:
     return EditTransactionError(
-        reason,
+        reason, code=code,
         receipt={
             "schema": RECEIPT_SCHEMA,
             "operation": operation,
             "planId": plan.get("id"),
             "outcome": "refused",
             "reason": reason,
+            "code": code,
+            "retryable": code in {"stale_target", "ambiguous_target", "source_changed"},
+            "recovery": [
+                {"ref": "repo:" + str(e.get("path", "")),
+                 "selector": {"lines": str(e.get("plannedSpan", "")).split("@")[0]},
+                 "action": "read_current_context_then_replan"}
+                for e in plan.get("edits", [])[:MAX_EDITS] if isinstance(e, dict)
+            ],
             "files": [],
         },
     )
@@ -303,7 +312,7 @@ def _prepare(ws: Workspace, plan: dict[str, Any], operation: str) -> list[_Prepa
             ordered = sorted(resolved, key=lambda edit: (edit.start, edit.end))
             for left, right in zip(ordered, ordered[1:]):
                 if right.start <= left.end:
-                    raise EditTransactionError(f"planned edits overlap after resolution in {rel}")
+                    raise EditTransactionError(f"planned edits overlap after resolution in {rel}", code="overlapping_edits")
             after_parts = list(pieces)
             for edit in reversed(ordered):
                 after_parts[edit.start - 1 : edit.end] = [edit.replacement]
@@ -319,7 +328,7 @@ def _prepare(ws: Workspace, plan: dict[str, Any], operation: str) -> list[_Prepa
             )
     except (KeyError, TypeError, ValueError, OSError, WorkspaceError, EditTransactionError) as e:
         reason = str(e) if isinstance(e, EditTransactionError) else f"invalid plan: {e}"
-        raise _refusal(plan, operation, reason) from None
+        raise _refusal(plan, operation, reason, e.code if isinstance(e, EditTransactionError) else "invalid_plan") from None
     return prepared
 
 
@@ -470,13 +479,41 @@ def apply_edit_plan(ws: Workspace, plan: dict[str, Any]) -> dict[str, Any]:
                 "outcome": "unavailable",
                 "reason": f"diagnostic_error:{type(e).__name__}",
             }
-    return {
+    receipt = {
         "schema": RECEIPT_SCHEMA,
+        "workspaceId": ws.workspace_id,
         "operation": "apply",
         "planId": plan["id"],
         "outcome": "applied",
         "files": [_file_receipt(item, diagnostics[item.rel]) for item in prepared],
     }
+    # The write already succeeded. Evidence storage failure must stay distinct
+    # from apply failure, and makes the result ineligible for prewalk.
+    try:
+        receipt_store = Store(ws.workspace_id)
+        try:
+            receipt["receiptRef"] = "blob:" + receipt_store.put_blob(canonical_json(receipt))
+        finally:
+            receipt_store.close()
+    except Exception as exc:
+        receipt["evidenceError"] = type(exc).__name__
+    return receipt
+
+
+def replace_span(ws: Workspace, store: Store, ref: str, span: str,
+                 replacement: str, *, apply: bool = False) -> dict[str, Any]:
+    """Plan and preview/apply one anchored replacement without a JSON file.
+
+    This is a local SDK mutation, subject to the same authority as ctx run.
+    It does not expose writes through the retrieval MCP server.
+    """
+    plan = create_edit_plan(ws, store, {
+        "schema": REQUEST_SCHEMA,
+        "edits": [{"path": ref, "span": span, "replacement": replacement}],
+    })
+    plan_ref = "blob:" + store.put_blob(canonical_json(plan))
+    result = apply_edit_plan(ws, plan) if apply else preview_edit_plan(ws, store, plan)
+    return {**result, "planRef": plan_ref}
 
 
 def load_json(path: Path) -> dict[str, Any]:

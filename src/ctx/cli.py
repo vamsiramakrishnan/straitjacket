@@ -446,6 +446,13 @@ def _build_parser():
             "--receipt", help="also write the safe receipt to this workspace-relative path"
         )
 
+    p_replace = edit_sub.add_parser("replace", help="preview or apply one anchored span")
+    p_replace.add_argument("ref", help="repo:path or workspace-relative path")
+    p_replace.add_argument("--lines", required=True, help="observed A:B@anchor")
+    p_replace.add_argument("--replacement-file", required=True, help="UTF-8 replacement file")
+    p_replace.add_argument("--apply", action="store_true", help="apply instead of preview")
+    p_replace.add_argument("--receipt", help="write the full receipt to this path")
+
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
     p_rewrite.add_argument("pattern", help="ast-grep metavariable pattern, e.g. 'foo($A)'")

@@ -14,12 +14,23 @@ def cmd_edit(ws, ns) -> int:
         create_edit_plan,
         load_json,
         preview_edit_plan,
+        replace_span,
         write_json,
     )
     from ctx.store import Store
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
+        if ns.edit_cmd == "replace":
+            replacement_path = ws.confine(ns.replacement_file, must_exist=True)
+            if ws.is_ignored(ws.relativize(replacement_path)):
+                raise EditTransactionError("replacement file excluded by policy")
+            result = replace_span(ws, store, ns.ref, ns.lines,
+                                  replacement_path.read_text(encoding="utf-8"), apply=ns.apply)
+            if ns.receipt:
+                write_json(ws.confine(ns.receipt), result)
+            print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+            return 0
         source = ws.confine(ns.file, must_exist=True)
         value = load_json(source)
         if ns.edit_cmd == "plan":

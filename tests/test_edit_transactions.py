@@ -373,3 +373,47 @@ def test_diagnostics_cannot_validate_a_concurrent_writers_bytes(
     receipt = apply_edit_plan(ws, plan)
     assert receipt["outcome"] == "applied"
     assert receipt["files"][0]["diagnostics"]["outcome"] == "stale"
+
+
+def test_one_call_adapter_preview_apply_and_addressed_receipt(state_home, workspace_dir):
+    from ctx.edit_transactions import replace_span
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    span = _edit("m.py", ["x = 1"], 1, 1, "")["span"]
+    preview = replace_span(ws, store, "repo:m.py", span, "x = 2\n")
+    assert preview["outcome"] == "ready"
+    assert p.read_text() == "x = 1\n"
+    applied = replace_span(ws, store, "repo:m.py", span, "x = 2\n", apply=True)
+    saved = json.loads(store.get_blob(applied["receiptRef"].removeprefix("blob:")))
+    assert saved["workspaceId"] == ws.workspace_id
+    assert saved["files"][0]["afterSha256"] == applied["files"][0]["afterSha256"]
+
+
+def test_stale_refusal_names_recovery_without_guessing(state_home, workspace_dir):
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    ws = make_ws(workspace_dir)
+    plan = create_edit_plan(ws, make_store(ws), _request(_edit("m.py", ["x = 1"], 1, 1, "x = 2\n")))
+    p.write_text("x = 99\n")
+    with pytest.raises(EditTransactionError) as caught:
+        apply_edit_plan(ws, plan)
+    receipt = caught.value.receipt
+    assert receipt["code"] == "stale_target" and receipt["retryable"]
+    assert receipt["recovery"][0]["ref"] == "repo:m.py"
+    assert p.read_text() == "x = 99\n"
+
+
+def test_replace_cli_defaults_to_preview(state_home, workspace_dir, capsys):
+    from ctx.cli import main
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    (workspace_dir / "replacement.txt").write_text("x = 2\n")
+    args = ["--workspace", str(workspace_dir), "edit", "replace", "repo:m.py", "--lines",
+            "1:1@" + anchors.anchor(["x = 1"]), "--replacement-file", "replacement.txt"]
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["outcome"] == "ready"
+    assert p.read_text() == "x = 1\n"
+    assert main(args + ["--apply"]) == 0
+    assert json.loads(capsys.readouterr().out)["receiptRef"].startswith("blob:")
