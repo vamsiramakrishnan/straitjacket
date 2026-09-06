@@ -4,7 +4,11 @@
 [CLI](CLI.md) · [Configuration](CONFIGURATION.md) ·
 [Troubleshooting](TROUBLESHOOTING.md)
 
-straitjacket keeps large captured tool output outside a coding agent's prompt.
+[Agent integrations](AGENT-INTEGRATIONS.md) · [ACP orchestration](ACP.md)
+
+Straitjacket is a context and evidence sidecar for coding agents. Keep the
+coding harness that runs the model and tool loop; add bounded capture,
+retrieval, and optional edit verification. The sidecar keeps large captured tool output outside the agent's prompt.
 The agent receives a bounded deterministic digest and bounded routes back to
 the captured evidence.
 
@@ -40,6 +44,7 @@ retrieval returns bounded regions on demand
 | Understand the product decision | [Why straitjacket](WHY-STRAITJACKET.md) |
 | Configure budgets, storage, or redaction | [Configuration](CONFIGURATION.md) |
 | Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
+| Connect Hermes, OMP, OpenCode, or DSH | [Agent integrations](AGENT-INTEGRATIONS.md) |
 | Understand handles, spans, and profiles | [Core concepts](CONCEPTS.md) |
 | Apply, verify, and expand an observed edit | [Edit loop](EDIT-LOOP.md) |
 | Understand content-stable repository addresses | [Anchors](ANCHORS.md) |

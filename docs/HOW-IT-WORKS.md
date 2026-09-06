@@ -4,6 +4,10 @@
 
 One command prints 98,000 tokens. The agent needs one traceback.
 
+Straitjacket is the context and evidence sidecar beside the coding harness.
+The harness keeps running the agent. The sidecar changes how captured tool
+evidence is stored, delivered, and retrieved.
+
 This sounds like a compression problem. It is not. Compression asks how to make the 98,000 tokens smaller. The agent problem is different:
 
 > Which facts deserve to stay in the prompt, and how can everything else remain addressable while retained?

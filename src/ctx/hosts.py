@@ -303,6 +303,15 @@ _REGISTRY: tuple[HostSpec, ...] = (
         coordinator_model="gpt-5.4-nano",
         notes="persistent .codex/ MCP + hooks; strong code-gen",
     ),
+    # Native plugin hooks + MCP. Orchestration is eligible only when an ACP
+    # endpoint and model are explicitly configured for this workspace.
+    *tuple(HostSpec(
+        name=name, cli_bins=(name,), default_model="unknown",
+        installer=f"install_{name}", wrapper=f"wrap_{name}",
+        supports_mcp=True, unattended=False, print_flag=(), model_flag="",
+        supports_hooks=True, input_substitution=name != "dsh", output_substitution=True,
+        notes="native plugin hooks + MCP; opt-in ACP orchestration",
+    ) for name in ("hermes", "omp", "opencode", "dsh")),
     # --- detected & priced, not yet harnessable (no installer/wrapper) --------
     HostSpec(
         name="gemini",
@@ -328,14 +337,6 @@ _REGISTRY: tuple[HostSpec, ...] = (
         vendor_hint="unknown",
         notes="aider — multi-provider; detected/priced; harness wiring TODO",
     ),
-    HostSpec(
-        name="opencode",
-        cli_bins=("opencode",),
-        default_model="claude-sonnet",
-        model_env=("OPENCODE_MODEL",),
-        vendor_hint="unknown",
-        notes="opencode — detected/priced; harness wiring TODO",
-    ),
 )
 
 
@@ -346,6 +347,7 @@ def all_hosts() -> tuple[HostSpec, ...]:
 
 def host_by_name(name: str) -> HostSpec | None:
     key = (name or "").strip().lower()
+    key = {"open-hermes": "hermes", "oh-my-pi": "omp"}.get(key, key)
     for spec in _REGISTRY:
         if spec.name == key:
             return spec
@@ -408,6 +410,8 @@ class DetectedHost:
     version: str | None
     model: str
     price: Price
+    # Explicit ACP endpoint, carried into isolated worktrees with the assignment.
+    acp: object | None = None
 
     @property
     def name(self) -> str:
@@ -543,6 +547,9 @@ def detect_all(
         )
         for s in _REGISTRY
     ]
+    if workspace_root is not None:
+        from ctx.acp import configured_hosts
+        out = configured_hosts(out, Path(workspace_root), which=which)
     if installed_only:
         out = [d for d in out if d.installed]
     return out

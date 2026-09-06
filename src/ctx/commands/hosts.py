@@ -16,6 +16,9 @@ def cmd_wrap(ns) -> int:
     from ctx.workspace import resolve_workspace
     from ctx.wrap import guided_setup, print_config, wrap_detect, wrap_setup
 
+    selected_spec = host_by_name(ns.host)
+    if selected_spec:
+        ns.host = selected_spec.name
     agent_args = list(ns.agent_args)
     # REMAINDER swallows options placed after the host positional;
     # recognize --print-config there too (but never past the `--`).
@@ -55,6 +58,10 @@ def cmd_wrap(ns) -> int:
             use_proxy = True  # rescue implies the proxy
     if ns.print_config:
         host = "claude" if ns.host in ("setup", "all") else ns.host
+        from ctx.mcp_hosts import HOSTS, render_config
+        if host in HOSTS:
+            print(render_config(host, resolve_workspace(ns.workspace).root))
+            return 0
         print(print_config(host))
         return 0
     ws = resolve_workspace(ns.workspace)
@@ -78,12 +85,20 @@ def cmd_wrap(ns) -> int:
         )
         return 2
 
+    from ctx.mcp_hosts import HOSTS as MCP_HOSTS
+
+    if ns.host in MCP_HOSTS:
+        if use_gateway or use_proxy or use_orchestrate:
+            print(f"ctx wrap {ns.host}: gateway, proxy, and orchestration adapters are not implemented for this host", file=sys.stderr)
+            return 2
+        return wrapper(ws.root, agent_args)
+
     # --gateway: set up the host(s) AND wire the progressive-disclosure
     # gateway, so unrevealed MCP tool schemas never enter context.
     if use_gateway:
         from ctx.installer import install_gateway
 
-        hosts = wired if ns.host in ("setup", "all") else (ns.host,)
+        hosts = tuple(h for h in wired if h in ("claude", "codex", "antigravity")) if ns.host in ("setup", "all") else (ns.host,)
         if ns.host in ("setup", "all"):
             setup_status = wrap_setup(ws.root)
         elif ns.host == "claude":
@@ -123,7 +138,9 @@ def cmd_setup(ns) -> int:
     from ctx.wrap import wrap_setup
     from ctx.workspace import resolve_workspace
 
-    hosts = list(ns.hosts or [])
+    from ctx.hosts import host_by_name
+
+    hosts = [host_by_name(h).name if host_by_name(h) else h for h in (ns.hosts or [])]
     unknown = sorted(set(hosts) - set(SETUP_HOSTS))
     if unknown:
         print(
@@ -133,6 +150,41 @@ def cmd_setup(ns) -> int:
         )
         return 2
     root = resolve_workspace(ns.workspace).root
+    prune_targets = []
+    if getattr(ns, "prune", False):
+        from ctx.surface_profiles import HOSTS
+        selected = hosts or (list(SETUP_HOSTS) if ns.all else [])
+        if not selected:
+            from ctx.hosts import installed_harnessable
+            selected = [h.name for h in installed_harnessable(workspace_root=root)]
+            if not selected:
+                selected = [h for h in SETUP_HOSTS if h != "hermes"]
+        prune_targets = [h for h in selected if h in HOSTS]
+        if not prune_targets:
+            print("ctx setup: pruning is not implemented for the selected hosts", file=sys.stderr)
+            return 2
+    if getattr(ns, "acp", False):
+        import json
+        from ctx.acp import configure
+        if len(hosts) != 1 or not ns.acp_model or ns.all:
+            print("ctx setup --acp requires one --host and --acp-model", file=sys.stderr)
+            return 2
+        try:
+            command = json.loads(ns.acp_command) if ns.acp_command else None
+            if command is not None and (not isinstance(command, list) or not command
+                    or not all(isinstance(a, str) and a and "\0" not in a for a in command)):
+                raise ValueError("--acp-command must be a nonempty JSON string array")
+            # ACP configuration is separate from interactive MCP setup. Workers
+            # receive the MCP server in session/new, in their actual worktree.
+            setup_code = wrap_setup(root, hosts, force_repair=bool(ns.repair))
+            if setup_code:
+                return setup_code
+            print(configure(root, hosts[0], ns.acp_model, command=command,
+                            tier=ns.acp_tier, permissions=ns.acp_permissions))
+            return 0
+        except ValueError as exc:
+            print(f"ctx setup: {exc}", file=sys.stderr)
+            return 2
     code = wrap_setup(root, hosts or None, force_all=bool(ns.all), force_repair=bool(ns.repair))
     if code == 0 and getattr(ns, "prune", False):
         # Bound before bloat, at the moment the harness is installed: the
@@ -140,7 +192,7 @@ def cmd_setup(ns) -> int:
         from ctx.prune import interactive_prune, render_prune, run_prune
         from ctx.surface_profiles import HOSTS
 
-        targets = tuple(h for h in (hosts or list(SETUP_HOSTS)) if h in HOSTS) or ("claude",)
+        targets = tuple(prune_targets)
         if sys.stdin.isatty() and sys.stdout.isatty():
             interactive_prune(root, ask=input, say=print, hosts=targets)
         else:

@@ -6,6 +6,14 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+Hermes, Oh My Pi (`omp`), OpenCode, and DeepSeek Harness (`dsh`) now have
+explicit MCP integrations, host detection, setup, launch wrappers, and
+configuration checks. Existing Claude Code, Codex, and Antigravity integrations
+remain available. The new adapters preserve model choice and provider settings;
+they do not add native-tool interception or unattended orchestration. See
+[Agent integrations](docs/AGENT-INTEGRATIONS.md) for profile and launch details.
+`ctx mcp --workspace` supplies a default workspace for host-started MCP servers.
+
 The [edit loop](docs/EDIT-LOOP.md) now connects observed snapshot bytes to an
 anchored replacement, an immutable apply receipt, and explicit captured checks.
 `ctx edit replace` previews by default; `verify` binds behavior and declared

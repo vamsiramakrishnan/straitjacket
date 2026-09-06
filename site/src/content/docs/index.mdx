@@ -1,12 +1,12 @@
 ---
 title: straitjacket
-description: Capture noisy command output, give coding agents bounded results, and keep the complete evidence available.
+description: Context and evidence sidecar for coding agents. Keep your harness; add bounded tool output, retrievable evidence, and verified edits.
 template: splash
 hero:
-  title: Run noisy tools. Keep the evidence.
+  title: Your coding agent. A sidecar for its evidence.
   tagline: >-
-    Give your coding agent a bounded result it can act on, with addresses into
-    the complete captured output when it needs to investigate further.
+    Keep your coding harness. Straitjacket adds bounded tool output, retrievable
+    evidence, and optional verified edits alongside the agent you already use.
   actions:
     - text: Capture your first result
       link: /straitjacket/start/getting-started/
@@ -21,7 +21,26 @@ hero:
       variant: minimal
 ---
 
+<p>
+  <a href="https://code.claude.com/"><img src="/straitjacket/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code" /></a>
+  <a href="https://developers.openai.com/codex/"><img src="/straitjacket/agents/codex.svg" width="36" height="36" alt="Codex" title="Codex" /></a>
+  <a href="https://antigravity.google/"><img src="/straitjacket/agents/antigravity.png" width="36" height="36" alt="Antigravity" title="Antigravity" /></a>
+  <a href="https://github.com/NousResearch/hermes-agent"><img src="/straitjacket/agents/hermes.svg" width="36" height="36" alt="Hermes" title="Hermes" /></a>
+  <a href="https://github.com/can1357/oh-my-pi"><img src="/straitjacket/agents/omp.svg" width="36" height="36" alt="Oh My Pi" title="Oh My Pi" /></a>
+  <a href="https://opencode.ai/"><img src="/straitjacket/agents/opencode.svg" width="36" height="36" alt="OpenCode" title="OpenCode" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="/straitjacket/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness" /></a>
+</p>
+
 ## One command to try
+
+The coding harness owns the model and tool loop. Straitjacket is its context
+and evidence sidecar, connected through CLI commands, MCP tools, and supported
+hooks. No separate daemon or container is required.
+
+Keep using Claude Code, Codex, Antigravity, or your preferred coding agent.
+Straitjacket works alongside it: keep your interface, models, login, and
+permissions, and add bounded access to captured evidence. Any agent with a
+terminal can use `ctx` directly.
 
 ```bash
 python -m pip install --upgrade ctx-harness
@@ -97,6 +116,10 @@ latency, and retrieval count together.
 | Claude Code | Command rewrite and oversized-result substitution on supported hooks |
 | Codex | Implemented and contract-tested; live CLI receipt pending |
 | Antigravity | Deny recognized floods and return a bounded replacement command; no output substitution |
+| Hermes, OMP, OpenCode, DSH | Bounded MCP retrieval and explicit terminal workflows; no interception or orchestration adapter yet |
+
+[Connect these agents](/straitjacket/guides/agent-integrations/) for setup,
+launch commands, verification, and removal.
 
 [Host capabilities](/straitjacket/guides/host-capabilities/) states the exact
 contract. Commands retain the invoking user's authority. Captured artifacts

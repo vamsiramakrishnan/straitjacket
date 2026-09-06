@@ -19,6 +19,12 @@ it actually needs.
 
 ## What `ctx orchestrate` does
 
+Host setup and worker transport are separate capabilities. Hermes, OMP,
+OpenCode, and DSH currently expose explicit MCP/CLI tools but are not eligible
+orchestration workers. An [ACP transport migration](../spec/adr/006-acp-orchestration-transport.md)
+is proposed to share session, progress, permission, and cancellation handling
+across compatible agents. It is not implemented yet; existing CLI workers remain.
+
 ```bash
 ctx orchestrate "add a caching layer" --dry-run   # plan and price it, launch nothing
 ctx orchestrate "add a caching layer"             # run it

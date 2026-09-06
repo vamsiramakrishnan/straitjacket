@@ -414,7 +414,30 @@ Read the scorecard in this order:
 `ctx gain` is an accounting view, not a quality score. Pair savings with evidence
 preservation and task success.
 
-## Run a host under the harness
+## Connect a coding harness to the sidecar
+
+Keep using the agent you prefer. `ctx setup --host <name>` configures one
+integration; `ctx wrap detect` lists supported hosts. Hermes (`hermes` or
+`open-hermes`), Oh My Pi (`omp` or `oh-my-pi`), OpenCode (`opencode`), and
+DeepSeek Harness (`dsh`) provide native hook plugins and MCP retrieval/edit tools.
+Their wrappers accept agent arguments after `--`; setup persists after exit.
+See [Agent integrations](AGENT-INTEGRATIONS.md) for commands and limits.
+
+`ctx mcp --bounded-only --workspace /absolute/project` serves the bounded MCP
+tool with that default workspace. A tool call's explicit `workspace` overrides
+the default. The MCP tool does not execute arbitrary commands; use `ctx run`
+through the agent's terminal and permission flow.
+
+Add `--with-edits` to expose `ctx_edit` with anchored patch plans, apply receipts,
+and structural rewrite previews. This requires `--workspace`; edit calls cannot
+override that workspace. The new host integrations and ACP workers enable this
+tool. Plain `ctx mcp` retains the retrieval-only surface.
+
+`ctx setup --host <name> --acp --acp-model <exact-agent-model-id>` configures an
+ACP worker endpoint alongside the selected host's setup. Optional flags are
+`--acp-command '<JSON argv array>'`, `--acp-tier economy|standard|frontier`, and
+`--acp-permissions deny|allow_once`. See [ACP orchestration](ACP.md) for endpoint
+commands, model negotiation, permission behavior, and transport limits.
 
 ### Claude Code
 

@@ -1,10 +1,31 @@
 # straitjacket
 
-**Run noisy tools. Give the coding agent the result and a way to inspect the evidence.**
+**Context and evidence sidecar for coding agents.**
 
-straitjacket captures command output in a local artifact store and returns a
-bounded, deterministic digest. The agent can search the complete output or
+Keep your coding harness. Straitjacket runs alongside it, captures command
+output in a local artifact store, and returns a bounded, deterministic digest.
+The agent can search the complete output or
 retrieve a cited region without loading the whole log into its conversation.
+
+**Keep using your coding agent.** Claude Code, Codex, and Antigravity remain
+supported. Straitjacket adds capture, bounded retrieval, and an optional verified
+edit workflow to the agent you choose; you keep its interface, models, login,
+and permissions. Any terminal-capable agent can use the `ctx` CLI.
+
+The coding harness owns the model and tool loop. Straitjacket supplies capture,
+retrieval, and optional edit verification through CLI commands, MCP tools, and
+supported hooks. “Sidecar” describes this supporting role; no separate daemon
+or container is required. The package name remains `ctx-harness`.
+
+<p>
+  <a href="https://code.claude.com/"><img src="assets/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code"></a>
+  <a href="https://developers.openai.com/codex/"><img src="assets/agents/codex.svg" width="36" height="36" alt="Codex" title="Codex"></a>
+  <a href="https://antigravity.google/"><img src="assets/agents/antigravity.png" width="36" height="36" alt="Antigravity" title="Antigravity"></a>
+  <a href="https://github.com/NousResearch/hermes-agent"><img src="assets/agents/hermes.svg" width="36" height="36" alt="Hermes" title="Hermes"></a>
+  <a href="https://github.com/can1357/oh-my-pi"><img src="assets/agents/omp.svg" width="36" height="36" alt="Oh My Pi" title="Oh My Pi"></a>
+  <a href="https://opencode.ai/"><img src="assets/agents/opencode.svg" width="36" height="36" alt="OpenCode" title="OpenCode"></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
+</p>
 
 v0.38.0 · Python 3.11+ · package `ctx-harness` · command `ctx` · pre-1.0 · Apache-2.0
 
@@ -137,10 +158,23 @@ context residency—not the highest compression ratio.
 | Claude Code | Command rewriting and oversized-result substitution on supported hooks |
 | Codex | Implemented and contract-tested gates; live CLI receipt pending |
 | Antigravity | Deny recognized floods and supply a bounded replacement command; no output substitution |
+| Hermes / Open Hermes | Native argument rewriting and text-output replacement; active-profile plugin + MCP |
+| Oh My Pi (`omp`) | Native argument rewriting and text-output replacement; project plugin + MCP |
+| OpenCode | Native argument rewriting and text-output replacement; project plugin + MCP |
+| DeepSeek Harness (`dsh`) | Native gating and text-output replacement; sealed arguments require an explicit retry |
 
 `ctx setup` merges JSON where safe and refreshes ctx-managed blocks. For
 user-owned Codex TOML it prints a reviewed snippet rather than replacing the
 file. See [host capabilities](docs/HOST-CAPABILITIES.md) for exact coverage.
+
+[Set up Hermes, OMP, OpenCode, or DSH](docs/AGENT-INTEGRATIONS.md). These adapters
+have executable contract tests; live model-session receipts remain pending.
+They require a build containing this change.
+
+All seven agents can use [ACP orchestration](docs/ACP.md) with a configured
+endpoint and model: `ctx setup --host opencode --acp --acp-model provider/model-id`.
+ACP workers receive bounded retrieval and verified edit tools through MCP.
+Native hook coverage still depends on the agent's API; ACP does not expand it.
 
 ## Boundaries
 

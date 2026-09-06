@@ -87,9 +87,11 @@ def test_no_agent_installed_explains_rather_than_failing(ws, capsys, monkeypatch
     import ctx.wrap as wrap_mod
 
     monkeypatch.setattr(wrap_mod, "_guided_survey", lambda w: ([], [], []))
-    _, out = _run(ws, capsys)
+    code, out = _run(ws, capsys)
     assert "no coding-agent CLI found on PATH" in out
     assert "inert until a CLI reads it" in out
+    assert code == 0
+    assert not (ws.root / ".ctx/hosts/hermes.json").exists()
 
 
 def test_optional_hosts_are_offered_never_done(ws, capsys, monkeypatch):
