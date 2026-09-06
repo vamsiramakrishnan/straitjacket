@@ -6,6 +6,11 @@ straitjacket captures command output in a local artifact store and returns a
 bounded, deterministic digest. The agent can search the complete output or
 retrieve a cited region without loading the whole log into its conversation.
 
+**Keep using your coding agent.** Claude Code, Codex, and Antigravity remain
+supported. Straitjacket adds capture, bounded retrieval, and an optional verified
+edit workflow to the agent you choose; you keep its interface, models, login,
+and permissions. Any terminal-capable agent can use the `ctx` CLI.
+
 v0.38.0 · Python 3.11+ · package `ctx-harness` · command `ctx` · pre-1.0 · Apache-2.0
 
 [Start here](docs/GETTING-STARTED.md) · [Choose a workflow](docs/USE-CASES.md) ·

@@ -1,5 +1,11 @@
 # Getting started
 
+Keep using Claude Code, Codex, Antigravity, or your preferred coding agent.
+Straitjacket runs alongside it. Your agent still handles the conversation,
+model selection, authentication, and permissions; `ctx` handles captured
+evidence and the optional verified edit workflow. Host hooks are optional for
+direct `ctx` commands, and their capabilities differ by integration.
+
 [Documentation](README.md) · [How it works](HOW-IT-WORKS.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
 Install Straitjacket, capture one command, and retrieve its evidence. Configure
