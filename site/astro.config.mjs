@@ -39,6 +39,7 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Use cases', slug: 'guides/use-cases' },
+            { label: 'Edit and verify', slug: 'guides/edit-loop' },
             { label: 'Host capabilities', slug: 'guides/host-capabilities' },
             { label: 'Anchored addresses', slug: 'guides/anchors' },
             { label: 'CLI guide', slug: 'guides/cli' },
