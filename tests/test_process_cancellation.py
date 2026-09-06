@@ -23,7 +23,32 @@ def _stopped(pid: int) -> bool:
     try:
         return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z"
     except OSError:
+        # Reaping can remove /proc after the first PID probe. In particular,
+        # the loop may observe a zombie and the final assertion race its reap.
+        # An unreadable /proc entry alone still does not prove termination.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
         return False
+
+
+@pytest.mark.parametrize("reaped", [False, True])
+def test_stopped_rechecks_pid_when_proc_entry_disappears(monkeypatch, reaped):
+    probes = []
+
+    def probe(pid, sig):
+        probes.append((pid, sig))
+        if len(probes) == 2 and reaped:
+            raise ProcessLookupError
+
+    def vanished(_path):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(os, "kill", probe)
+    monkeypatch.setattr(Path, "read_text", vanished)
+    assert _stopped(12345) is reaped
+    assert probes == [(12345, 0), (12345, 0)]
 
 
 @pytest.mark.parametrize("mode", ["wait", "capture", "wall", "idle"])
