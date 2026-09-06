@@ -806,10 +806,26 @@ def _launch_host(
     spec = host.spec
     if host.acp is not None:
         from ctx.acp import launch as launch_acp
-        return launch_acp(host.acp, ws_root, prompt, exe, timeout=timeout,
-                          idle_timeout=idle_timeout,
-                          env={**os.environ, "CTX_MODEL": host.acp.model,
-                               "CTX_HOST": spec.name, "CTX_EDIT_ATTEMPT": edit_attempt})
+        from ctx.native_hooks import worker_files, PATHS
+        from dataclasses import replace
+        endpoint = host.acp
+        if model and model != endpoint.model:
+            return 2, "", f"ACP model {model} is not configured for {spec.name}", None
+        try:
+            with worker_files(spec.name, ws_root, Path(endpoint.workspace) if endpoint.workspace else None), contextlib.ExitStack() as stack:
+                if spec.name == "dsh" and Path(endpoint.command[0]).name in ("dsh", "dsh.exe"):
+                    # DSH requires an explicit Cordis overlay. Keep this worker's
+                    # hook overlay separate from its session-injected MCP server.
+                    directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="ctx-acp-dsh-")))
+                    patch = directory / "hooks.json"
+                    patch.write_text(json.dumps([{"insert": [{"id": "straitjacket-hooks", "name": str(ws_root / PATHS["dsh"])}]}]))
+                    endpoint = replace(endpoint, command=(endpoint.command[0], "--patch", str(patch), *endpoint.command[1:]))
+                return launch_acp(endpoint, ws_root, prompt, exe, timeout=timeout,
+                                  idle_timeout=idle_timeout,
+                                  env={**os.environ, "CTX_MODEL": endpoint.model,
+                                       "CTX_HOST": spec.name, "CTX_EDIT_ATTEMPT": edit_attempt})
+        except (OSError, ValueError) as exc:
+            return 2, "", f"ACP worker setup: {exc}", None
     from ctx.mcp_hosts import HOSTS as MCP_HOSTS
 
     if spec.name in MCP_HOSTS:

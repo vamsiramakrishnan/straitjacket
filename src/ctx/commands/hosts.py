@@ -168,6 +168,9 @@ def cmd_setup(ns) -> int:
                 raise ValueError("--acp-command must be a nonempty JSON string array")
             # ACP configuration is separate from interactive MCP setup. Workers
             # receive the MCP server in session/new, in their actual worktree.
+            setup_code = wrap_setup(root, hosts, force_repair=bool(ns.repair))
+            if setup_code:
+                return setup_code
             print(configure(root, hosts[0], ns.acp_model, command=command,
                             tier=ns.acp_tier, permissions=ns.acp_permissions))
             return 0

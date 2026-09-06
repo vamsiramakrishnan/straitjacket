@@ -168,6 +168,10 @@ DIALECT_CAPS: dict[str, dict[str, bool]] = {
     "claude-code": {"input_substitution": True, "output_substitution": True},
     "codex": {"input_substitution": True, "output_substitution": True},
     "antigravity": {"input_substitution": False, "output_substitution": False},
+    "hermes": {"input_substitution": True, "output_substitution": True},
+    "omp": {"input_substitution": True, "output_substitution": True},
+    "opencode": {"input_substitution": True, "output_substitution": True},
+    "dsh": {"input_substitution": False, "output_substitution": True},
 }
 
 
@@ -327,6 +331,7 @@ _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
 # order is load-bearing (edit → command → read → search): an `edit_command`-style
 # name classifies as edit, exactly as the old ordered `if` chain did.
 _TOOL_EXACT_KIND = {
+    "patch": "edit", "apply_patch": "edit",
     "create_file": "edit", "replace_file_content": "edit",
     "bash": "command", "shell": "command", "exec": "command",
     "open_file": "read", "view_file": "read",
@@ -2249,7 +2254,7 @@ def classify(
         session_id = str(
             payload.get("session_id") or payload.get("conversation_id") or "unknown"
         )
-        for key in ("AbsolutePath", "TargetFile", "file_path", "path", "Path"):
+        for key in ("AbsolutePath", "TargetFile", "file_path", "filePath", "path", "Path"):
             v = tool_input.get(key)
             if isinstance(v, str) and v:
                 return _apply_rewrite(
@@ -2623,6 +2628,8 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
         tr = payload.get("toolResponse")
     stdout, stderr = _normalize_tool_response(tr)
     is_error = None
+    if isinstance(payload.get("is_error"), bool):
+        is_error = payload["is_error"]
     if isinstance(tr, dict) and isinstance(tr.get("is_error"), bool):
         is_error = tr["is_error"]
 
@@ -3026,6 +3033,9 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
         payload = parsed if isinstance(parsed, dict) else {}
+        if flavor in ("hermes", "omp", "opencode", "dsh"):
+            from ctx.native_hooks import normalize
+            payload = normalize(flavor, payload)
     except Exception:
         payload = {}
     # Each stage gets its own block. The nudges are advisory; the emission
@@ -3055,7 +3065,9 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
             "[ctx gate-failed]\nCTX_EMISSION_GATE: the output gate raised; the "
             "raw result was withheld rather than emitted unbounded."
         )
-    if flavor == "claude-code":
+    if flavor in ("hermes", "omp", "opencode", "dsh"):
+        emitted = {"output": replacement} if replacement is not None else {}
+    elif flavor == "claude-code":
         hso: dict[str, Any] = {"hookEventName": "PostToolUse"}
         if replacement is not None:
             hso["updatedToolOutput"] = replacement
@@ -3175,6 +3187,9 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
         payload = parsed if isinstance(parsed, dict) else {}
+        if flavor in ("hermes", "omp", "opencode", "dsh"):
+            from ctx.native_hooks import normalize
+            payload = normalize(flavor, payload)
     except Exception as exc:
         # A payload we cannot read is still an internal error: route it
         # through the policy rather than assuming it was harmless.
@@ -3198,7 +3213,10 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             decision = classify(payload, policy)
         except Exception as exc:
             decision = _internal_error_decision(ws_root, policy, "classify", exc)
-    if flavor == "codex":
+    if flavor in ("hermes", "omp", "opencode", "dsh"):
+        from ctx.native_hooks import decision_for
+        emitted = decision_for(flavor, decision)
+    elif flavor == "codex":
         emitted = _to_codex_schema(decision)
     elif flavor == "claude-code":
         emitted = _to_claude_code_schema(decision)

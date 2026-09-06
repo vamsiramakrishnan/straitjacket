@@ -23,6 +23,13 @@ from pathlib import Path
 
 
 REQUIRED_FILES = {
+    "ctx/data/native-hooks/bridge.mjs",
+    "ctx/data/native-hooks/hermes.py",
+    "ctx/data/native-hooks/omp.mjs",
+    "ctx/data/native-hooks/opencode.mjs",
+    "ctx/data/native-hooks/dsh.mjs",
+    "ctx/acp.py",
+    "ctx/mcp_edits.py",
     "ctx/data/antigravity/plugin.json",
     "ctx/data/antigravity/hooks.json",
     "ctx/data/codex/config.toml",

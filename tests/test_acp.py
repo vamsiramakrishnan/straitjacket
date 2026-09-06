@@ -14,7 +14,7 @@ from ctx.acp import CONFIG, DEFAULT_COMMANDS, Endpoint, configure, launch, setti
 def agent(tmp_path):
     path = tmp_path / "agent.py"
     path.write_text('''
-import json, os, sys, time
+import json, os, sys, time, subprocess
 mode = os.environ.get("ACP_TEST_MODE", "ok")
 def send(value):
     print(json.dumps({"jsonrpc": "2.0", **value}), flush=True)
@@ -34,6 +34,14 @@ for line in sys.stdin:
             sys.exit(1)
         send({"id":p["id"], "result":{"protocolVersion":2 if mode == "version" else 1}})
     elif method == "session/new":
+        if mode == "mcp":
+            server = p["params"]["mcpServers"][0]
+            request = {"jsonrpc":"2.0", "id":1, "method":"tools/list"}
+            proc = subprocess.run([server["command"], *server["args"]],
+                input=json.dumps(request) + "\\n", text=True, capture_output=True, timeout=10)
+            assert proc.returncode == 0, proc.stderr
+            names = [tool["name"] for tool in json.loads(proc.stdout)["result"]["tools"]]
+            assert names == ["ctx", "ctx_edit"], names
         send({"id":p["id"], "result":{"sessionId":"s", "models":{
             "currentModelId":"test-model", "availableModels":[{"modelId":"test-model"}]}}})
     elif method == "session/prompt":
@@ -102,6 +110,10 @@ def test_failed_protocol_never_succeeds(agent, mode, reason):
 
 def test_explicit_allow_once(agent):
     assert run_agent(agent, "allow")[:2] == (0, "work done")
+
+
+def test_agent_can_launch_injected_mcp_server(agent):
+    assert run_agent(agent, "mcp")[:2] == (0, "work done")
 
 
 def test_idle_timeout_cleans_up(agent):

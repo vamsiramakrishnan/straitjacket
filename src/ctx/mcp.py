@@ -368,16 +368,20 @@ def _task_ops(ws, op: str, opts: dict[str, Any]) -> str:
     return f"sent to {row['to']}: {row['ref']}"
 
 
-def _tool_call(params: dict[str, Any]) -> dict[str, Any]:
+def _tool_call(params: dict[str, Any], *, edit_workspace: str | None = None) -> dict[str, Any]:
     name = params.get("name")
-    if name != "ctx":
+    if name != "ctx" and not (name == "ctx_edit" and edit_workspace):
         return {
             "content": [{"type": "text", "text": f"unknown tool {name!r}"}],
             "isError": True,
         }
     args = params.get("arguments") or {}
     try:
-        text = _dispatch(args)
+        if name == "ctx_edit":
+            from ctx.mcp_edits import dispatch
+            text = dispatch(args, edit_workspace)
+        else:
+            text = _dispatch(args)
         return {"content": [{"type": "text", "text": text}], "isError": False}
     except Exception as e:
         # Same handler, same prefix as the CLI (`ctx:`, not `ctx error:`) and
@@ -394,10 +398,13 @@ def _tool_call(params: dict[str, Any]) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
-def serve(bounded_only: bool = True, workspace: str | None = None) -> int:
+def serve(bounded_only: bool = True, workspace: str | None = None, with_edits: bool = False) -> int:
     """Run the stdio MCP server until EOF. ``bounded_only`` is the only
     supported v1 mode and is accepted for forward compatibility."""
     del bounded_only
+    if with_edits and not workspace:
+        print("ctx mcp --with-edits requires --workspace", file=sys.stderr)
+        return 2
     stdin = sys.stdin.buffer
     stdout = sys.stdout
 
@@ -434,14 +441,18 @@ def serve(bounded_only: bool = True, workspace: str | None = None) -> int:
         elif method == "notifications/initialized":
             continue
         elif method == "tools/list":
-            reply(msg_id, {"tools": [TOOL_SCHEMA]})
+            schemas = [TOOL_SCHEMA]
+            if with_edits:
+                from ctx.mcp_edits import TOOL_SCHEMA as EDIT_SCHEMA
+                schemas.append(EDIT_SCHEMA)
+            reply(msg_id, {"tools": schemas})
         elif method == "tools/call":
             params = msg.get("params") or {}
             if workspace and isinstance(params, dict):
                 arguments = params.get("arguments", {})
                 if isinstance(arguments, dict):
                     params = {**params, "arguments": {"workspace": workspace, **arguments}}
-            reply(msg_id, _tool_call(params))
+            reply(msg_id, _tool_call(params, edit_workspace=workspace if with_edits else None))
         elif method == "ping":
             reply(msg_id, {})
         elif msg_id is not None:

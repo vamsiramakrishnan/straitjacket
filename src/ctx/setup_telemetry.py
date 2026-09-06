@@ -31,6 +31,11 @@ _MANAGED_FILES = (
     "opencode.json",
     "opencode.jsonc",
     ".ctx/hosts/hermes.json",
+    ".omp/hooks/pre/straitjacket.js",
+    ".opencode/plugins/straitjacket.js",
+    ".ctx/hosts/straitjacket-dsh.mjs",
+    ".ctx/hosts/hermes-plugin/__init__.py",
+    ".ctx/acp.json",
     ".ctx/hosts/dsh.cordis.patch.yml",
 )
 _MANAGED_DIRS = (".agents/plugins/ctx-harness",)

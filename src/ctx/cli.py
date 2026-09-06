@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
 
     # ------------------------------------------------------ hook fast path
-    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code", "codex"):
+    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code", "codex", "hermes", "omp", "opencode", "dsh"):
         if args[2] == "pre-tool-use":
             from ctx.hook import main_pre_tool_use
 
@@ -74,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("ctx mcp: --workspace requires a path", file=sys.stderr)
                 return 2
             workspace = args[i + 1]
-        return serve(bounded_only="--bounded-only" in args, workspace=workspace)
+        return serve(bounded_only="--bounded-only" in args, workspace=workspace,
+                     with_edits="--with-edits" in args)
 
     return _main_slow(args)
 

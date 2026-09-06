@@ -42,6 +42,7 @@ class Endpoint:
     model: str
     tier: str = "standard"
     permissions: str = "deny"
+    workspace: str = ""
 
 
 def settings(root: Path) -> dict[str, Endpoint]:
@@ -64,7 +65,7 @@ def settings(root: Path) -> dict[str, Endpoint]:
                     or tier not in ("economy", "standard", "frontier")
                     or permissions not in ("deny", "allow_once")):
                 raise ValueError(f"invalid endpoint for {host}")
-            endpoints[host] = Endpoint(tuple(command), model, tier, permissions)
+            endpoints[host] = Endpoint(tuple(command), model, tier, permissions, str(root.resolve()))
         return endpoints
     except (OSError, TypeError, AttributeError, ValueError) as exc:
         raise ACPError(f"Invalid {CONFIG}: {exc}") from exc
@@ -265,7 +266,7 @@ class Client:
             raise ACPError("ctx MCP executable not found")
         session = self.request("session/new", {"cwd": str(Path(cwd).resolve()), "mcpServers": [{
             "name": "ctx-harness", "command": command,
-            "args": [*argv[1:], "mcp", "--bounded-only", "--workspace", str(Path(cwd).resolve())], "env": []}]})
+            "args": [*argv[1:], "mcp", "--bounded-only", "--with-edits", "--workspace", str(Path(cwd).resolve())], "env": []}]})
         if not isinstance(session, dict) or not isinstance(session.get("sessionId"), str):
             raise ACPError("ACP session/new did not return a session id")
         self.session = session["sessionId"]

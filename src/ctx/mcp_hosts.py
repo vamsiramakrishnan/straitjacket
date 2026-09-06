@@ -1,4 +1,4 @@
-"""Tool integrations for hosts without a ctx interception adapter.
+"""Native MCP configuration for the additional coding agents.
 
 Render each host's native MCP schema. JSON merges preserve unrelated settings;
 Hermes owns its YAML writes through its CLI, and DSH receives a separate overlay.
@@ -44,7 +44,7 @@ def configuration(host: str, root: Path, exe: str | None = None) -> dict | list:
     argv = ctx_argv(exe)
     # Hermes configuration belongs to the active profile, not one repository.
     workspace = "${workspaceFolder}" if host == "hermes" else str(root.resolve())
-    args = [*argv[1:], "mcp", "--bounded-only", "--workspace", workspace]
+    args = [*argv[1:], "mcp", "--bounded-only", "--with-edits", "--workspace", workspace]
     server = {"command": argv[0], "args": args}
     if host == "hermes":
         return {"mcp_servers": {SERVER: server}}
@@ -54,8 +54,10 @@ def configuration(host: str, root: Path, exe: str | None = None) -> dict | list:
         return {"mcp": {SERVER: {"type": "local", "command": [argv[0], *args], "enabled": True}}}
     if host == "dsh":
         # JSON is also YAML; avoid a new YAML dependency and executable tags.
+        from ctx.native_hooks import PATHS
         return [{"insert": [{"id": SERVER, "name": "@deepseek-ai/dsh-mcp-client",
-                             "config": {"serverName": SERVER, "transport": "stdio", **server}}]}]
+                             "config": {"serverName": SERVER, "transport": "stdio", **server}},
+                            {"id": "straitjacket-hooks", "name": str(root.resolve() / PATHS[host])}]}]
     raise IntegrationError(f"unknown MCP host: {host}")
 
 
@@ -127,6 +129,10 @@ def _merged(host: str, root: Path, expected: dict | list) -> dict | list:
 
 
 def conflicts(host: str, root: Path) -> list[str]:
+    from ctx.native_hooks import conflicts as hook_conflicts
+    problems = hook_conflicts(host, root)
+    if problems:
+        return problems
     try:
         expected = configuration(host, root)
         _merged(host, root, expected)
@@ -173,8 +179,10 @@ def install(host: str, ws, *, init_policy: bool = True) -> str:
     _write(ws.root / FILES[host], merged)
     if init_policy:
         init_workspace(ws.root, quiet=True)
+    from ctx.native_hooks import install as install_hooks
+    hook_note = install_hooks(host, ws.root)
     return (f"{host}: wrote {FILES[host]}\n"
-            "Explicit MCP retrieval + terminal `ctx run` / `ctx edit`; no native-tool interception.\n"
+            + hook_note + "\n"
             + next_step(host, ws.root))
 
 
@@ -213,7 +221,8 @@ def checks(root: Path) -> list[tuple[str, bool, str]]:
             ok, detail = False, str(exc)
         label = f"{host} MCP" if host != "dsh" else "dsh MCP overlay (requires --patch)"
         rows.append((label, ok, detail))
-    return rows
+    from ctx.native_hooks import checks as hook_checks
+    return [*rows, *hook_checks(root)]
 
 
 def wrap(host: str, root: Path, agent_args: list[str] | None = None) -> int:

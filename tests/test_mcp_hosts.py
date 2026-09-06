@@ -30,6 +30,13 @@ if args == ["config", "get", "mcp_servers", "--json"]:
 elif args[:3] == ["config", "set", "mcp_servers.ctx-harness"]:
     d.setdefault("mcp_servers", {})["ctx-harness"] = json.loads(args[3])
     p.write_text(json.dumps(d))
+elif args == ["config", "path"]:
+    print(p)
+elif args == ["plugins", "enable", "straitjacket"]:
+    d.setdefault("plugins", {})["enabled"] = ["straitjacket"]
+    p.write_text(json.dumps(d))
+elif args[:2] == ["config", "get"] and args[2].startswith("plugins."):
+    print(json.dumps(d.get("plugins", {}).get(args[2].split(".")[1], [])))
 else:
     sys.exit(9)
 ''')
@@ -156,7 +163,9 @@ def test_registry_discloses_limits_and_resolves_dispatch(host):
     from ctx.hosts import host_by_name, installer_for, wrapper_for
     spec = host_by_name(host)
     assert spec.harnessable and spec.supports_mcp
-    assert not any((spec.input_substitution, spec.output_substitution, spec.supports_hooks, spec.unattended))
+    assert spec.output_substitution and spec.supports_hooks
+    assert spec.input_substitution == (host != "dsh")
+    assert not spec.unattended  # becomes eligible only with explicit ACP configuration
     assert spec.default_model == "unknown"
     assert callable(installer_for(spec)) and callable(wrapper_for(spec))
 

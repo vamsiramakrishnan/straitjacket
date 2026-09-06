@@ -303,13 +303,14 @@ _REGISTRY: tuple[HostSpec, ...] = (
         coordinator_model="gpt-5.4-nano",
         notes="persistent .codex/ MCP + hooks; strong code-gen",
     ),
-    # Explicit MCP tools + terminal workflows. No interception or unattended
-    # worker adapter is claimed. Models remain selected by the user's host.
+    # Native plugin hooks + MCP. Orchestration is eligible only when an ACP
+    # endpoint and model are explicitly configured for this workspace.
     *tuple(HostSpec(
         name=name, cli_bins=(name,), default_model="unknown",
         installer=f"install_{name}", wrapper=f"wrap_{name}",
         supports_mcp=True, unattended=False, print_flag=(), model_flag="",
-        notes="MCP retrieval + explicit ctx CLI; no interception or orchestration adapter",
+        supports_hooks=True, input_substitution=name != "dsh", output_substitution=True,
+        notes="native plugin hooks + MCP; opt-in ACP orchestration",
     ) for name in ("hermes", "omp", "opencode", "dsh")),
     # --- detected & priced, not yet harnessable (no installer/wrapper) --------
     HostSpec(
