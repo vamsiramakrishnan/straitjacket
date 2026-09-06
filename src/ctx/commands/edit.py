@@ -21,8 +21,17 @@ def cmd_edit(ws, ns) -> int:
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     from ctx.edit_verification import Check, VerificationError, verify_edit
+    from ctx.astgrep import EngineMissing, RewriteError
 
     try:
+        if ns.edit_cmd == "expand":
+            from ctx.edit_expansion import plan_expansion
+            result = plan_expansion(ws, store, ns.verification, pattern=ns.pattern,
+                                    replacement=ns.replacement, language=ns.lang, glob=ns.glob)
+            if ns.receipt:
+                write_json(ws.confine(ns.receipt), result)
+            print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+            return 0
         if ns.edit_cmd == "handoff":
             from ctx.prewalk import create_handoff
             state = load_json(ws.confine(ns.state, must_exist=True))
@@ -49,8 +58,12 @@ def cmd_edit(ws, ns) -> int:
                 write_json(ws.confine(ns.receipt), result)
             print(json.dumps(result, sort_keys=True, separators=(",", ":")))
             return 0
-        source = ws.confine(ns.file, must_exist=True)
-        value = load_json(source)
+        if ns.edit_cmd in {"preview", "apply"} and ns.file.startswith("blob:"):
+            from ctx.edit_verification import read_evidence
+            value = read_evidence(store, ns.file, "ctx.edit-plan/v1")
+        else:
+            source = ws.confine(ns.file, must_exist=True)
+            value = load_json(source)
         if ns.edit_cmd == "plan":
             result = create_edit_plan(ws, store, value)
             destination = ws.confine(ns.out)
@@ -73,7 +86,7 @@ def cmd_edit(ws, ns) -> int:
             write_json(ws.confine(ns.receipt), result)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0
-    except VerificationError as e:
+    except (VerificationError, RewriteError, EngineMissing) as e:
         print(f"ctx edit: {e}", file=sys.stderr)
         return 2
     except EditTransactionError as e:

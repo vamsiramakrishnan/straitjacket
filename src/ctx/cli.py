@@ -465,6 +465,14 @@ def _build_parser():
     p_handoff.add_argument("--verification", required=True, help="blob: verification receipt")
     p_handoff.add_argument("--state", required=True, help="checklist and investigation JSON file")
 
+    p_expand = edit_sub.add_parser("expand", help="preview structural expansion from a verified example")
+    p_expand.add_argument("--verification", required=True)
+    p_expand.add_argument("--pattern", required=True)
+    p_expand.add_argument("--replacement", required=True)
+    p_expand.add_argument("--lang", required=True)
+    p_expand.add_argument("--glob", required=True)
+    p_expand.add_argument("--receipt")
+
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
     p_rewrite.add_argument("pattern", help="ast-grep metavariable pattern, e.g. 'foo($A)'")

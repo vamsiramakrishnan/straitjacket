@@ -495,6 +495,7 @@ def apply_edit_plan(ws: Workspace, plan: dict[str, Any], *, attempt_key: str | N
     try:
         receipt_store = Store(ws.workspace_id)
         try:
+            receipt["planRef"] = "blob:" + receipt_store.put_blob(canonical_json(plan))
             receipt["receiptRef"] = "blob:" + receipt_store.put_blob(canonical_json(receipt))
         finally:
             receipt_store.close()
