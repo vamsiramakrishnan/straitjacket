@@ -6,6 +6,14 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+Interrupted capture and orchestration waits now terminate their owned process
+groups and reap the leader before propagating the exception. The shared
+`kill_and_reap` helper covers cancellation as well as timeout; orchestration
+also closes settled pipe readers. Regression tests exercise real descendants
+through capture and both orchestration timeout modes. See the
+[Harness Playbook assessment](docs/HARNESS-PLAYBOOK.md) for the source analysis
+and the remaining capture, gateway, composition, and replay work.
+
 ## [0.38.0] - 2026-09-05
 
 Three mechanisms taken from two outside designs — the Recursive Language

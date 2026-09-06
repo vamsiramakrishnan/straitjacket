@@ -935,14 +935,17 @@ def _run_bounded(argv, *, cwd, timeout, env, idle_timeout: float = 0.0) -> subpr
         )
         try:
             out, err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            from ctx._proc import wait_or_kill
+        except BaseException:
+            from ctx._proc import kill_and_reap
 
-            wait_or_kill(proc, 0)
+            kill_and_reap(proc)
             raise
+        finally:
+            proc.stdout.close()
+            proc.stderr.close()
         return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
-    from ctx._proc import wait_or_kill
+    from ctx._proc import kill_and_reap
 
     proc = subprocess.Popen(
         argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -968,29 +971,44 @@ def _run_bounded(argv, *, cwd, timeout, env, idle_timeout: float = 0.0) -> subpr
 
     pumps = [threading.Thread(target=_pump, args=(proc.stdout, "out"), daemon=True),
              threading.Thread(target=_pump, args=(proc.stderr, "err"), daemon=True)]
-    for t in pumps:
-        t.start()
-
     def _text(key: str) -> str:
         return b"".join(chunks[key]).decode("utf-8", errors="replace")
 
-    while True:
-        try:
-            proc.wait(timeout=_IDLE_POLL_S)
-            break
-        except subprocess.TimeoutExpired:
-            pass
-        now = time.monotonic()
-        if timeout is not None and now - started >= timeout:
-            wait_or_kill(proc, 0)
-            raise subprocess.TimeoutExpired(argv, timeout, output=_text("out"), stderr=_text("err"))
-        if now - last_activity[0] >= idle_timeout:
-            wait_or_kill(proc, 0)
-            raise NodeStalled(argv, idle_timeout, elapsed=now - started,
-                              wall=(float(timeout) if timeout is not None else 0.0),
-                              output=_text("out"), stderr=_text("err"))
-    for t in pumps:
-        t.join(timeout=5.0)
+    try:
+        for t in pumps:
+            t.start()
+        while True:
+            try:
+                proc.wait(timeout=_IDLE_POLL_S)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.monotonic()
+            if timeout is not None and now - started >= timeout:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            if now - last_activity[0] >= idle_timeout:
+                raise NodeStalled(argv, idle_timeout, elapsed=now - started,
+                                  wall=(float(timeout) if timeout is not None else 0.0))
+    except BaseException as exc:
+        # Cancellation owns the same cleanup as wall/idle timeout. A host
+        # launched in another session does not receive our terminal's SIGINT.
+        kill_and_reap(proc)
+        for t in pumps:
+            if t.ident is not None:
+                t.join(timeout=5.0)
+        if isinstance(exc, subprocess.TimeoutExpired):
+            # Read after cleanup/drain so the failure receipt includes the
+            # final bytes already written by the child.
+            exc.output, exc.stderr = _text("out"), _text("err")
+        raise
+    finally:
+        for t, stream in zip(pumps, (proc.stdout, proc.stderr)):
+            if t.ident is not None:
+                t.join(timeout=5.0)
+            # An escaped descendant may still own a pipe. Do not block in
+            # close while its reader holds the stream; this is not a sandbox.
+            if not t.is_alive():
+                stream.close()
     return subprocess.CompletedProcess(argv, proc.returncode, _text("out"), _text("err"))
 
 

@@ -36,6 +36,7 @@ retrieval returns bounded regions on demand
 
 | Need | Read |
 |---|---|
+| Assess the next harness improvements | [Harness Playbook application](HARNESS-PLAYBOOK.md) |
 | Understand the product decision | [Why straitjacket](WHY-STRAITJACKET.md) |
 | Configure budgets, storage, or redaction | [Configuration](CONFIGURATION.md) |
 | Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
