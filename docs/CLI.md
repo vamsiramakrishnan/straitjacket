@@ -44,6 +44,19 @@ different safety contracts. The mental model can stay small.
 | Lint/syntax digest | `ctx diag <path>` | Deterministic diagnostics without running a full linter into context |
 | A compiled investigation | `ctx plan …` / `ctx plan run …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
 
+### Edit and verify observed source
+
+| Need | Command | Why |
+|---|---|---|
+| Preview or apply one observed replacement | `ctx edit replace …` | Snapshot or anchored span, addressed plan and receipt |
+| Review and apply a sealed plan | `ctx edit preview …` / `ctx edit apply …` | Check current bytes before writing |
+| Check an applied edit | `ctx edit verify … -- <command>` | Captured check bound to edited files and declared witnesses |
+| Request a verified continuation | `ctx edit handoff …` | Attempt-bound proof and complete bounded checklist |
+| Expand a demonstrated rewrite | `ctx edit expand …` | Explicit structural rule, scoped preview, ordinary plan |
+| Compare measured strategies | `ctx edit advise …` | Paired quality and total-cost gates |
+
+See the [edit loop](EDIT-LOOP.md) for command examples, recovery, and proof limits.
+
 ### Manage the store and the session
 
 | Need | Command | Why |

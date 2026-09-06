@@ -39,13 +39,30 @@ import os
 import signal as signal_mod
 import subprocess
 
-__all__ = ["exit_status", "wait_or_kill"]
+__all__ = ["exit_status", "kill_and_reap", "wait_or_kill"]
+
+
+def kill_and_reap(proc: subprocess.Popen) -> None:
+    """Stop an owned process group and reap its leader, even if it exited.
+
+    Call only for children started with ``start_new_session=True``. A dead
+    leader can still have live descendants, so do not gate the group signal
+    on ``poll()``. This is process cleanup, not containment of descendants
+    that deliberately escape the group with ``setsid()``.
+    """
+    try:
+        os.killpg(proc.pid, signal_mod.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    proc.wait()
 
 
 def wait_or_kill(proc: subprocess.Popen, timeout: float | None) -> bool:
     """Wait for ``proc``; on timeout SIGKILL its process group and reap it.
 
     Returns True iff the timeout expired. ``timeout=None`` waits forever.
+    Interruption or another wait failure also stops the group, then propagates
+    the original exception. It must never be reported as a successful run.
 
     The group kill is the point: both callers spawn with
     ``start_new_session=True``, so the child leads its own process group and
@@ -57,22 +74,18 @@ def wait_or_kill(proc: subprocess.Popen, timeout: float | None) -> bool:
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal_mod.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
-        proc.wait()
+        kill_and_reap(proc)
         return True
+    except BaseException:
+        kill_and_reap(proc)
+        raise
     if timeout == 0:
         # timeout=0 means the caller already detected the timeout elsewhere
         # (orchestrator._run_bounded: communicate() timed out) and is forcing
         # cleanup now. The leader may have exited already while an orphaned
         # grandchild keeps the process group alive, so wait() did not raise
         # and killpg still has to run. Improvement route, first live run.
-        try:
-            os.killpg(proc.pid, signal_mod.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        kill_and_reap(proc)
     return False
 
 

@@ -6,6 +6,27 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+The [edit loop](docs/EDIT-LOOP.md) now connects observed snapshot bytes to an
+anchored replacement, an immutable apply receipt, and explicit captured checks.
+`ctx edit replace` previews by default; `verify` binds behavior and declared
+witness files to the applied bytes. Typed refusals carry recovery coordinates,
+and all ctx-owned edit entry points record the same outcome telemetry.
+
+Prewalk now requires an attempt-bound applied edit, behavioral verification,
+and a complete bounded continuation checklist. `ctx edit expand` previews a
+scoped structural rule only after it reproduces a verified example. Paired
+edit and prewalk evaluations provide optional per-model/per-shape quality and
+total-cost gates through `ctx edit advise` and orchestration policy files.
+The fixture uses no model; no live quality or cost improvement is claimed.
+
+Interrupted capture and orchestration waits now terminate their owned process
+groups and reap the leader before propagating the exception. The shared
+`kill_and_reap` helper covers cancellation as well as timeout; orchestration
+also closes settled pipe readers. Regression tests exercise real descendants
+through capture and both orchestration timeout modes. See the
+[Harness Playbook assessment](docs/HARNESS-PLAYBOOK.md) for the source analysis
+and the remaining capture, gateway, composition, and replay work.
+
 ## [0.38.0] - 2026-09-05
 
 Three mechanisms taken from two outside designs — the Recursive Language

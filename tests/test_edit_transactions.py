@@ -331,3 +331,143 @@ def test_cli_plan_error_and_help_are_deterministic(state_home, workspace_dir, ca
     help_text = capsys.readouterr().out
     assert "ctx.edit-request/v1 JSON" in help_text
     assert "--out OUT" in help_text
+
+
+def test_plan_uses_the_cited_snapshot_even_when_live_file_changes(
+    state_home, workspace_dir, monkeypatch
+):
+    import ctx.edit_transactions as edits
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\ny = 1\n")
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    real = edits.snapshot_file
+
+    def race(*args):
+        snap = real(*args)
+        p.write_text("x = 1\ny = 99\n")
+        return snap
+
+    monkeypatch.setattr(edits, "snapshot_file", race)
+    plan = create_edit_plan(ws, store, _request(_edit("m.py", ["x = 1"], 1, 1, "x = 2\n")))
+    row = plan["edits"][0]
+    assert row["sourceFileSha256"] == row["sourceBlob"]
+    assert store.get_blob(row["sourceBlob"].removeprefix("sha256:")) == b"x = 1\ny = 1\n"
+
+
+def test_diagnostics_cannot_validate_a_concurrent_writers_bytes(
+    state_home, workspace_dir, monkeypatch
+):
+    import ctx.post_edit_diagnostics as diagnostics
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    ws = make_ws(workspace_dir)
+    plan = create_edit_plan(ws, make_store(ws), _request(_edit("m.py", ["x = 1"], 1, 1, "x = 2\n")))
+    real = diagnostics.builtin_syntax_snapshot
+
+    def race(path):
+        p.write_text("x = 300\n")
+        return real(path)
+
+    monkeypatch.setattr(diagnostics, "builtin_syntax_snapshot", race)
+    receipt = apply_edit_plan(ws, plan)
+    assert receipt["outcome"] == "applied"
+    assert receipt["files"][0]["diagnostics"]["outcome"] == "stale"
+
+
+def test_one_call_adapter_preview_apply_and_addressed_receipt(state_home, workspace_dir):
+    from ctx.edit_transactions import replace_span
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    span = _edit("m.py", ["x = 1"], 1, 1, "")["span"]
+    preview = replace_span(ws, store, "repo:m.py", span, "x = 2\n")
+    assert preview["outcome"] == "ready"
+    assert p.read_text() == "x = 1\n"
+    applied = replace_span(ws, store, "repo:m.py", span, "x = 2\n", apply=True)
+    saved = json.loads(store.get_blob(applied["receiptRef"].removeprefix("blob:")))
+    assert saved["workspaceId"] == ws.workspace_id
+    assert saved["files"][0]["afterSha256"] == applied["files"][0]["afterSha256"]
+
+
+def test_stale_refusal_names_recovery_without_guessing(state_home, workspace_dir):
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    ws = make_ws(workspace_dir)
+    plan = create_edit_plan(ws, make_store(ws), _request(_edit("m.py", ["x = 1"], 1, 1, "x = 2\n")))
+    p.write_text("x = 99\n")
+    with pytest.raises(EditTransactionError) as caught:
+        apply_edit_plan(ws, plan)
+    receipt = caught.value.receipt
+    assert receipt["code"] == "stale_target" and receipt["retryable"]
+    assert receipt["recovery"][0]["ref"] == "repo:m.py"
+    assert p.read_text() == "x = 99\n"
+
+
+def test_replace_cli_defaults_to_preview(state_home, workspace_dir, capsys):
+    from ctx.cli import main
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    (workspace_dir / "replacement.txt").write_text("x = 2\n")
+    args = ["--workspace", str(workspace_dir), "edit", "replace", "repo:m.py", "--lines",
+            "1:1@" + anchors.anchor(["x = 1"]), "--replacement-file", "replacement.txt"]
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["outcome"] == "ready"
+    assert p.read_text() == "x = 1\n"
+    assert main(args + ["--apply"]) == 0
+    assert json.loads(capsys.readouterr().out)["receiptRef"].startswith("blob:")
+
+
+def test_snapshot_adapter_uses_observed_bytes_after_live_file_moves(state_home, workspace_dir):
+    from ctx.execution import snapshot_file
+    from ctx.edit_transactions import replace_span
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    snap = snapshot_file(store, ws, "m.py")
+    ref = "snapshot:" + snap["id"].removeprefix("sha256:")
+    p.write_text("# inserted\nx = 1\n")
+    result = replace_span(ws, store, ref, "1:1", "x = 2\n", apply=True)
+    assert result["files"][0]["edits"][0]["relocated"]
+    assert p.read_text() == "# inserted\nx = 2\n"
+    from ctx.edit_outcomes import edit_summary
+    assert edit_summary(workspace_dir)["total"] == 1
+
+
+def test_snapshot_adapter_refuses_changed_observed_content(state_home, workspace_dir):
+    from ctx.execution import snapshot_file
+    from ctx.edit_transactions import replace_span
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    snap = snapshot_file(store, ws, "m.py")
+    ref = "snapshot:" + snap["id"].removeprefix("sha256:")
+    p.write_text("x = 99\n")
+    with pytest.raises(EditTransactionError, match="changed or disappeared"):
+        replace_span(ws, store, ref, "1:1", "x = 2\n", apply=True)
+    assert p.read_text() == "x = 99\n"
+
+
+def test_invalid_plan_edits_still_produces_a_refusal(state_home, workspace_dir):
+    from ctx.edit_transactions import _seal
+    ws = make_ws(workspace_dir)
+    plan = _seal({"schema": PLAN_SCHEMA, "workspaceId": ws.workspace_id, "edits": 12})
+    with pytest.raises(EditTransactionError) as caught:
+        apply_edit_plan(ws, plan)
+    assert caught.value.receipt["outcome"] == "refused"
+
+
+def test_large_receipt_emission_is_bounded_and_retrievable(state_home, workspace_dir, capsys):
+    from ctx.commands.edit import _emit_result
+    from ctx.textutil import estimate_tokens
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    result = {"outcome": "ready", "files": [{"path": "x" * 1000} for _ in range(128)]}
+    _emit_result(ws, store, result)
+    output = capsys.readouterr().out
+    assert estimate_tokens(len(output.encode())) <= ws.config.budgets.result_tokens
+    ref = json.loads(output)["receiptRef"]
+    assert json.loads(store.get_blob(ref[5:])) == result

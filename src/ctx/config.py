@@ -146,9 +146,12 @@ class OrchestratePolicy:
     # make one validated edit, then hand off; on that signal the SAME node's
     # next attempt runs on the cheapest installed model below frontier,
     # carrying the plan and the first edit forward (docs/PREWALK.md). A
-    # model that ignores the instruction just finishes the task itself --
-    # this never costs more than not having it.
+    # model that ignores the instruction may finish itself. Extra planning
+    # and verification can cost more; savings require a matched evaluation.
     prewalk: bool = False
+    # Optional paired evaluation JSONL. Native remains the default without evidence.
+    edit_policy_file: str = ""
+    prewalk_policy_file: str = ""
     # Complexity-adaptive implementation tier for the deterministic fallback:
     # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
     # simple edits. A live coordinator overrides this per task.

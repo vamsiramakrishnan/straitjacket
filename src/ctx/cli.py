@@ -446,6 +446,40 @@ def _build_parser():
             "--receipt", help="also write the safe receipt to this workspace-relative path"
         )
 
+    p_replace = edit_sub.add_parser("replace", help="preview or apply one anchored span")
+    p_replace.add_argument("ref", help="snapshot:id, repo:path, or workspace-relative path")
+    p_replace.add_argument("--lines", required=True, help="A:B@anchor, or A:B with an immutable snapshot")
+    p_replace.add_argument("--replacement-file", required=True, help="UTF-8 replacement file")
+    p_replace.add_argument("--apply", action="store_true", help="apply instead of preview")
+    p_replace.add_argument("--receipt", help="write the full receipt to this path")
+
+    p_verify = edit_sub.add_parser("verify", help="verify an apply receipt against exact bytes")
+    p_verify.add_argument("ref", help="blob: apply receipt")
+    p_verify.add_argument("--kind", choices=("syntax", "types", "behavior"), default="behavior")
+    p_verify.add_argument("--timeout", type=float, default=60.0)
+    p_verify.add_argument("--witness", action="append", default=[], help="also bind this check input file")
+    p_verify.add_argument("--receipt", help="write the full verification receipt")
+    p_verify.add_argument("command", nargs=argparse.REMAINDER, help="-- command [args...]")
+
+    p_handoff = edit_sub.add_parser("handoff", help="request prewalk from verified progress")
+    p_handoff.add_argument("--verification", required=True, help="blob: verification receipt")
+    p_handoff.add_argument("--state", required=True, help="checklist and investigation JSON file")
+
+    p_expand = edit_sub.add_parser("expand", help="preview structural expansion from a verified example")
+    p_expand.add_argument("--verification", required=True)
+    p_expand.add_argument("--pattern", required=True)
+    p_expand.add_argument("--replacement", required=True)
+    p_expand.add_argument("--lang", required=True)
+    p_expand.add_argument("--glob", required=True)
+    p_expand.add_argument("--receipt")
+
+    p_advise = edit_sub.add_parser("advise", help="select an edit format from paired evaluation rows")
+    p_advise.add_argument("file", help="workspace-relative evaluation JSONL")
+    p_advise.add_argument("--model", required=True)
+    p_advise.add_argument("--shape", required=True)
+    p_advise.add_argument("--strategy", choices=("format", "prewalk"), default="format")
+    p_advise.add_argument("--executor-model", help="required for prewalk strategy advice")
+
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
     p_rewrite.add_argument("pattern", help="ast-grep metavariable pattern, e.g. 'foo($A)'")

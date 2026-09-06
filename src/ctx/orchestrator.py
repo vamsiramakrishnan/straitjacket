@@ -186,6 +186,7 @@ class RouteNode:
     # Optional dependency-free JSON-Schema subset for the worker's final yield.
     output_schema: dict | None = None
     strict_output_schema: bool = False
+    edit_shape: str = ""
 
 
 @dataclass
@@ -403,6 +404,7 @@ def _coerce_node(raw: dict, i: int) -> RouteNode:
         targets=targets,
         output_schema=output_schema,
         strict_output_schema=bool(raw.get("strict_output_schema", False)),
+        edit_shape=str(raw.get("edit_shape") or "")[:64],
     )
 
 
@@ -790,6 +792,7 @@ def _launch_host(
     model: str = "",
     max_turns: int = 0,
     idle_timeout: float = 0.0,
+    edit_attempt: str = "",
 ) -> tuple[int, str, str, ActualUsage | None]:
     """Run one harness in print mode with captured output, inside the harnessed
     workspace. Claude gets the ephemeral --settings hook injection; Codex /
@@ -863,7 +866,7 @@ def _launch_host(
         # run: the edit-outcome ledger splits by model, and a PostToolUse
         # payload carries no model of its own.
         env = {**os.environ, "CTX_MODEL": model or spec.default_model or "",
-               "CTX_HOST": spec.name}
+               "CTX_HOST": spec.name, "CTX_EDIT_ATTEMPT": edit_attempt}
         if spec.name == "claude":
             # Print mode kills background subagents 600 s after the main
             # turn ends; a node that fans out and then waits would lose its
@@ -935,14 +938,17 @@ def _run_bounded(argv, *, cwd, timeout, env, idle_timeout: float = 0.0) -> subpr
         )
         try:
             out, err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            from ctx._proc import wait_or_kill
+        except BaseException:
+            from ctx._proc import kill_and_reap
 
-            wait_or_kill(proc, 0)
+            kill_and_reap(proc)
             raise
+        finally:
+            proc.stdout.close()
+            proc.stderr.close()
         return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
-    from ctx._proc import wait_or_kill
+    from ctx._proc import kill_and_reap
 
     proc = subprocess.Popen(
         argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -968,29 +974,44 @@ def _run_bounded(argv, *, cwd, timeout, env, idle_timeout: float = 0.0) -> subpr
 
     pumps = [threading.Thread(target=_pump, args=(proc.stdout, "out"), daemon=True),
              threading.Thread(target=_pump, args=(proc.stderr, "err"), daemon=True)]
-    for t in pumps:
-        t.start()
-
     def _text(key: str) -> str:
         return b"".join(chunks[key]).decode("utf-8", errors="replace")
 
-    while True:
-        try:
-            proc.wait(timeout=_IDLE_POLL_S)
-            break
-        except subprocess.TimeoutExpired:
-            pass
-        now = time.monotonic()
-        if timeout is not None and now - started >= timeout:
-            wait_or_kill(proc, 0)
-            raise subprocess.TimeoutExpired(argv, timeout, output=_text("out"), stderr=_text("err"))
-        if now - last_activity[0] >= idle_timeout:
-            wait_or_kill(proc, 0)
-            raise NodeStalled(argv, idle_timeout, elapsed=now - started,
-                              wall=(float(timeout) if timeout is not None else 0.0),
-                              output=_text("out"), stderr=_text("err"))
-    for t in pumps:
-        t.join(timeout=5.0)
+    try:
+        for t in pumps:
+            t.start()
+        while True:
+            try:
+                proc.wait(timeout=_IDLE_POLL_S)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.monotonic()
+            if timeout is not None and now - started >= timeout:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            if now - last_activity[0] >= idle_timeout:
+                raise NodeStalled(argv, idle_timeout, elapsed=now - started,
+                                  wall=(float(timeout) if timeout is not None else 0.0))
+    except BaseException as exc:
+        # Cancellation owns the same cleanup as wall/idle timeout. A host
+        # launched in another session does not receive our terminal's SIGINT.
+        kill_and_reap(proc)
+        for t in pumps:
+            if t.ident is not None:
+                t.join(timeout=5.0)
+        if isinstance(exc, subprocess.TimeoutExpired):
+            # Read after cleanup/drain so the failure receipt includes the
+            # final bytes already written by the child.
+            exc.output, exc.stderr = _text("out"), _text("err")
+        raise
+    finally:
+        for t, stream in zip(pumps, (proc.stdout, proc.stderr)):
+            if t.ident is not None:
+                t.join(timeout=5.0)
+            # An escaped descendant may still own a pipe. Do not block in
+            # close while its reader holds the stream; this is not a sandbox.
+            if not t.is_alive():
+                stream.close()
     return subprocess.CompletedProcess(argv, proc.returncode, _text("out"), _text("err"))
 
 
@@ -1332,11 +1353,7 @@ def _checkpoint_node(
         return None
 
 
-#: A ctx-controlled literal a prewalk attempt prints to signal a deliberate
-#: stop after its first edit. Model output, not user input, so it is safe to
-#: match literally; requiring it (rather than inferring intent from prose)
-#: is what keeps the detection immune to a model's own wording ("the task
-#: is not complete yet") that would otherwise read as a failure.
+#: A request to inspect evidence, never proof that an edit happened.
 PREWALK_SENTINEL = "CTX_PREWALK_HANDOFF"
 
 
@@ -1379,18 +1396,21 @@ def _node_prompt(
     if continuation_doc:
         p += (
             "\n\nA prior attempt on this same subtask (a stronger model) already "
-            "explored the codebase, planned the work, and made one validated "
-            "edit toward it. Continue directly from there — do not re-explore "
-            "or redo that first edit. Its record:\n" + continuation_doc
+            "made an edit with a passing behavioral check. Continue directly from there. "
+            "This is checkpoint continuation, not a restored native session. "
+            "Use the checklist and cited evidence; re-read when freshness or missing "
+            "context requires it. Its record:\n" + continuation_doc
         )
     if prewalk_hint:
         p += (
-            "\n\nPrewalk: plan deeply first. State your plan as a numbered "
-            "todo list in your reply, then make exactly one edit that begins "
-            "executing it. The moment that edit is applied and confirmed, "
-            f"print the line '{PREWALK_SENTINEL}' by itself and end your turn "
-            "— do not continue past that first edit. A cheaper model will "
-            "pick up your plan and that edit from here."
+            "\n\nPrewalk: plan, make one meaningful edit using ctx edit replace/apply, "
+            "then run ctx edit verify with an explicit behavioral check. "
+            "Build a JSON state file with checklist (1..12 objects, each with id, task, "
+            "validation, status=done|pending), hypotheses, ruledOut, and evidence arrays. "
+            "Keep at least one done and one pending item. Request handoff with "
+            "ctx edit handoff --verification <blob:proof> --state <file>. "
+            "Return its two signal lines exactly. A printed marker alone is not proof. "
+            "If the whole task is done, report completion instead."
         )
     return p
 
@@ -1673,11 +1693,13 @@ def run_route(
             ))
             return True
 
-    def _do_launch(host, work_root, prompt: str, model):
+    def _do_launch(host, work_root, prompt: str, model, edit_attempt: str = ""):
         # The extra bounds are keyword-only on the real launcher; an injected
         # launcher (tests, evals) keeps the historical signature.
         extra: dict = {}
         if launch is _launch_host:
+            if edit_attempt:
+                extra["edit_attempt"] = edit_attempt
             if turn_ceiling > 0:
                 extra["max_turns"] = turn_ceiling
             if idle_timeout > 0:
@@ -1706,7 +1728,22 @@ def run_route(
             and (st.nodes[a.node.id].attempts if a.node.id in st.nodes else 0) + 1 < max_attempts
             and _steward.de_escalation_target(model, hosts) is not None
         )
+        prewalk_policy_note = ""
+        if prewalk_enabled and getattr(cfg, "prewalk_policy_file", ""):
+            from ctx.edit_policy import choose_prewalk, load_rows
+            target = _steward.de_escalation_target(model, hosts)
+            try:
+                decision = choose_prewalk(
+                    load_rows(ws.confine(cfg.prewalk_policy_file, must_exist=True)),
+                    guide_model=model.id, executor_model=target[1].id, shape=a.node.edit_shape)
+                prewalk_enabled = decision["strategy"] == "prewalk"
+                prewalk_policy_note = (f"\nPrewalk strategy: {decision['strategy']}; {decision['reason']}; "
+                                       f"evidence {decision['evidenceSha256']}.")
+            except (OSError, ValueError):
+                prewalk_enabled = False
+                prewalk_policy_note = "\nPrewalk policy unavailable; finish on the assigned model."
         prompt = _node_prompt(a.node, plan.task, dep_docs, inbox, prewalk_hint=prewalk_enabled)
+        prompt += prewalk_policy_note
         node_usage: list[ActualUsage | None] = []
         use_isolation = a.node.id in isolated_node_ids
         checkout = IsolatedWorktree(Path(ws.root), a.node.id, a.node.targets) if use_isolation else None
@@ -1768,18 +1805,42 @@ def run_route(
                             tier=model.tier, expected_turns=expected_turns,
                             expected_cost_usd=a.est_cost_usd,
                         ))
-                    code, out, err, usage = _launch_result(_do_launch(host, work_root, prompt, model))
+                    attempt_key = f"{tid}/{a.node.id}/{attempt}"
+                    if prewalk_enabled and attempt == first_attempt:
+                        prompt += f"\nPrewalk attempt key: {attempt_key}"
+                    attempt_prompt = prompt
+                    if getattr(cfg, "edit_policy_file", "") and a.node.edit_shape:
+                        from ctx.edit_policy import choose_format, format_hint, load_rows
+                        try:
+                            policy_rows = load_rows(ws.confine(cfg.edit_policy_file, must_exist=True))
+                            decision = choose_format(policy_rows, model=model.id, shape=a.node.edit_shape)
+                            attempt_prompt += "\n" + format_hint(decision)
+                        except (OSError, ValueError) as exc:
+                            attempt_prompt += f"\nEdit-format policy unavailable ({type(exc).__name__}); use native."
+                    code, out, err, usage = _launch_result(_do_launch(
+                        host, work_root, attempt_prompt, model,
+                        edit_attempt=attempt_key if prewalk_enabled else ""))
                     node_usage.append(usage)
-                    # The sentinel is checked against the raw exit code, before
-                    # any contract-failure bookkeeping below can mutate it, and
-                    # wins over whatever classify_failure concludes: a model
-                    # explaining *why* it is stopping ("the task is not
-                    # complete yet, handing off") would otherwise trip the
-                    # same wording classify_failure reads as a real failure.
-                    prewalk_signaled = (
-                        prewalk_enabled and attempt == first_attempt and code == 0
-                        and PREWALK_SENTINEL in (out or "")
-                    )
+                    from ctx import prewalk as _prewalk
+                    prewalk_requested = (prewalk_enabled and attempt == first_attempt
+                                         and _prewalk.requested(out or ""))
+                    prewalk_signaled = False
+                    verified_continuation = ""
+                    if prewalk_requested and code == 0:
+                        from ctx.workspace import resolve_workspace
+                        from ctx.store import Store as _ProofStore
+                        proof_ws = resolve_workspace(str(work_root))
+                        proof_store = _ProofStore(proof_ws.workspace_id)
+                        try:
+                            accepted = _prewalk.accept_handoff(
+                                proof_ws, proof_store, out, attempt_key)
+                            verified_continuation = accepted["text"]
+                            prewalk_signaled = True
+                        except Exception as exc:
+                            err = f"prewalk evidence rejected: {type(exc).__name__}: {exc}"
+                            code = 1
+                        finally:
+                            proof_store.close()
                     contract_failed = _execution_contract_failed(code, out, err)
                     schema_status, schema_error = _worker_yield_status(a.node, out)
                     strict_schema = a.node.strict_output_schema or strict_worker_yields
@@ -1792,7 +1853,7 @@ def run_route(
                         expected_turns=expected_turns,
                         contract_failed=contract_failed or schema_failed,
                     )
-                    if prewalk_signaled:
+                    if prewalk_signaled and not schema_failed:
                         cls = _steward.Classification("prewalk_handoff", "none")
                     elif contract_failed or schema_failed:
                         code = code or 1
@@ -1865,8 +1926,8 @@ def run_route(
                             host, model = target
                             a = replace(a, host=host, model=model, est_cost_usd=cheap_est)
                             escalated = f"{target[0].name}/{target[1].id}"
-                            continuation_doc = ""
-                            if ref:
+                            continuation_doc = verified_continuation
+                            if ref and not continuation_doc:
                                 # A fresh Store, not the run_route-scoped one:
                                 # run_one executes inside a wave's thread
                                 # pool, and sqlite3 connections are
@@ -2094,6 +2155,7 @@ def _open_task(
                 "need_tags": list(a.node.need_tags), "deps": list(a.node.deps),
                 "host": a.host.name, "model": a.model.id, "prefer": a.node.prefer,
                 "targets": list(a.node.targets),
+                "edit_shape": a.node.edit_shape,
                 "est_input_tokens": a.node.est_input_tokens,
                 "est_output_tokens": a.node.est_output_tokens,
                 "est_cost_usd": a.est_cost_usd,
@@ -2339,6 +2401,7 @@ def _plan_from_ledger(ws, task_id: str, hosts) -> tuple[RoutePlan, str]:
             host_pin=str(n.get("host") or ""), model_pin=str(n.get("model") or ""),
             prefer=str(n.get("prefer") or "cheap"),
             targets=tuple(n.get("targets") or ()),
+            edit_shape=str(n.get("edit_shape") or ""),
         )
         assigned.append(_assign_host(node, list(hosts)))
     return RoutePlan(

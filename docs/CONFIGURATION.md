@@ -159,6 +159,33 @@ exceed.
 | `wall_seconds` | `120.0` | Wall-clock bound for a plan run. |
 | `replans` | `1` | Allowed replans. |
 
+## `[orchestrate]` — edit and prewalk policies
+
+These optional keys control the [edit loop](EDIT-LOOP.md) and
+[prewalk](PREWALK.md). See [routing](ROUTING.md) for the broader orchestration
+configuration.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `prewalk` | `false` | Offer a frontier mutation worker a verified handoff when a cheaper installed model and another attempt are available. |
+| `edit_policy_file` | `""` | Workspace-relative paired live JSONL evidence for edit-format advice. Insufficient evidence keeps native formatting. |
+| `prewalk_policy_file` | `""` | Workspace-relative paired live JSONL evidence required before offering prewalk. Insufficient evidence keeps the assigned model. |
+
+```toml
+[orchestrate]
+prewalk = true
+edit_policy_file = "evals/edit-results.jsonl"
+prewalk_policy_file = "evals/prewalk-results.jsonl"
+```
+
+Set `edit_shape` on each applicable route node to the evaluated task shape.
+The exact model ID (or guide/executor pair) and shape must match the evidence.
+An absent or unreadable configured file cannot select a new strategy. An empty
+`prewalk_policy_file` leaves `prewalk = true` as an explicit experimental
+opt-in, still subject to receipt verification and existing budget/attempt
+limits. Policy files grant no additional mutation permissions. See
+[paired evaluations](../evals/EDIT-MATRIX.md) for the evidence schema and gates.
+
 ## `[surface]` — the input side (MCP tool schemas)
 
 Governs the discretionary-context budget and the pre-flight gate. That gate runs
