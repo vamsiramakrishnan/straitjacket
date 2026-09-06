@@ -46,6 +46,10 @@ def choose_format(rows, *, model: str, shape: str, min_cases: int = 60, max_regr
         if set(observations) != set(native) or not native:
             result["candidates"].append({"format": arm, "reason": "unpaired_cases"})
             continue
+        if any(not base.get("caseHash") or base.get("caseHash") != observations[key].get("caseHash")
+               for key, base in native.items()):
+            result["candidates"].append({"format": arm, "reason": "case_identity_mismatch"})
+            continue
         cases = {key[0] for key in native}
         if len(cases) < min_cases:
             continue

@@ -36,7 +36,7 @@ def cmd_edit(ws, ns) -> int:
                                     replacement=ns.replacement, language=ns.lang, glob=ns.glob)
             if ns.receipt:
                 write_json(ws.confine(ns.receipt), result)
-            print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+            _emit_result(ws, store, result)
             return 0
         if ns.edit_cmd == "handoff":
             from ctx.prewalk import create_handoff
@@ -52,7 +52,7 @@ def cmd_edit(ws, ns) -> int:
                                  [Check(ns.kind, tuple(command), ns.timeout)], witnesses=ns.witness)
             if ns.receipt:
                 write_json(ws.confine(ns.receipt), result)
-            print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+            _emit_result(ws, store, result)
             return 0 if result["outcome"] == "passed" else 3
         if ns.edit_cmd == "replace":
             replacement_path = ws.confine(ns.replacement_file, must_exist=True)
@@ -62,7 +62,7 @@ def cmd_edit(ws, ns) -> int:
                                   replacement_path.read_text(encoding="utf-8"), apply=ns.apply)
             if ns.receipt:
                 write_json(ws.confine(ns.receipt), result)
-            print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+            _emit_result(ws, store, result)
             return 0
         if ns.edit_cmd in {"preview", "apply"} and ns.file.startswith("blob:"):
             from ctx.edit_verification import read_evidence
@@ -90,7 +90,7 @@ def cmd_edit(ws, ns) -> int:
             _record_anchored(ws, value, outcome="applied", receipt=result)
         if ns.receipt:
             write_json(ws.confine(ns.receipt), result)
-        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        _emit_result(ws, store, result)
         return 0
     except (VerificationError, RewriteError, EngineMissing) as e:
         print(f"ctx edit: {e}", file=sys.stderr)
@@ -169,3 +169,20 @@ def _record_anchored(ws, plan, *, outcome: str, receipt=None) -> None:
 
 
 __all__ = ["cmd_edit"]
+
+
+def _emit_result(ws, store, result):
+    """Preserve full receipts; bound only their model-visible projection."""
+    import json
+    from ctx.store import canonical_json
+    from ctx.textutil import estimate_tokens, sanitize_for_model
+
+    raw = canonical_json(result)
+    text, _ = sanitize_for_model(raw.decode("utf-8"), ws.config.redaction)
+    if estimate_tokens(len(text.encode("utf-8"))) > ws.config.budgets.result_tokens:
+        ref = "blob:" + store.put_blob(raw)
+        compact = {"outcome": result.get("outcome"), "receiptRef": ref,
+                   "omittedBytes": len(raw), "files": len(result.get("files", [])),
+                   "next": f"ctx get {ref}"}
+        text = json.dumps(compact, sort_keys=True, separators=(",", ":"))
+    print(text)

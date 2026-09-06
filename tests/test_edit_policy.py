@@ -3,7 +3,7 @@ from ctx.edit_policy import choose_format
 
 
 def rows(n=60):
-    return [{"case": str(i), "repeat": 0, "format": fmt, "model": "m", "shape": "mechanical",
+    return [{"case": str(i), "caseHash": "case-" + str(i), "repeat": 0, "format": fmt, "model": "m", "shape": "mechanical",
              "measurement": "live", "task_success": True, "wrong_target": False,
              "cost_usd": cost}
             for i in range(n) for fmt, cost in [("native", 1.0), ("anchored", 0.5)]]
