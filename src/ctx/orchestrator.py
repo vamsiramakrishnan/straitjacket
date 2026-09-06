@@ -790,6 +790,7 @@ def _launch_host(
     model: str = "",
     max_turns: int = 0,
     idle_timeout: float = 0.0,
+    edit_attempt: str = "",
 ) -> tuple[int, str, str, ActualUsage | None]:
     """Run one harness in print mode with captured output, inside the harnessed
     workspace. Claude gets the ephemeral --settings hook injection; Codex /
@@ -863,7 +864,7 @@ def _launch_host(
         # run: the edit-outcome ledger splits by model, and a PostToolUse
         # payload carries no model of its own.
         env = {**os.environ, "CTX_MODEL": model or spec.default_model or "",
-               "CTX_HOST": spec.name}
+               "CTX_HOST": spec.name, "CTX_EDIT_ATTEMPT": edit_attempt}
         if spec.name == "claude":
             # Print mode kills background subagents 600 s after the main
             # turn ends; a node that fans out and then waits would lose its
@@ -1350,11 +1351,7 @@ def _checkpoint_node(
         return None
 
 
-#: A ctx-controlled literal a prewalk attempt prints to signal a deliberate
-#: stop after its first edit. Model output, not user input, so it is safe to
-#: match literally; requiring it (rather than inferring intent from prose)
-#: is what keeps the detection immune to a model's own wording ("the task
-#: is not complete yet") that would otherwise read as a failure.
+#: A request to inspect evidence, never proof that an edit happened.
 PREWALK_SENTINEL = "CTX_PREWALK_HANDOFF"
 
 
@@ -1397,18 +1394,21 @@ def _node_prompt(
     if continuation_doc:
         p += (
             "\n\nA prior attempt on this same subtask (a stronger model) already "
-            "explored the codebase, planned the work, and made one validated "
-            "edit toward it. Continue directly from there — do not re-explore "
-            "or redo that first edit. Its record:\n" + continuation_doc
+            "made an edit with a passing behavioral check. Continue directly from there. "
+            "This is checkpoint continuation, not a restored native session. "
+            "Use the checklist and cited evidence; re-read when freshness or missing "
+            "context requires it. Its record:\n" + continuation_doc
         )
     if prewalk_hint:
         p += (
-            "\n\nPrewalk: plan deeply first. State your plan as a numbered "
-            "todo list in your reply, then make exactly one edit that begins "
-            "executing it. The moment that edit is applied and confirmed, "
-            f"print the line '{PREWALK_SENTINEL}' by itself and end your turn "
-            "— do not continue past that first edit. A cheaper model will "
-            "pick up your plan and that edit from here."
+            "\n\nPrewalk: plan, make one meaningful edit using ctx edit replace/apply, "
+            "then run ctx edit verify with an explicit behavioral check. "
+            "Build a JSON state file with checklist (1..12 objects, each with id, task, "
+            "validation, status=done|pending), hypotheses, ruledOut, and evidence arrays. "
+            "Keep at least one done and one pending item. Request handoff with "
+            "ctx edit handoff --verification <blob:proof> --state <file>. "
+            "Return its two signal lines exactly. A printed marker alone is not proof. "
+            "If the whole task is done, report completion instead."
         )
     return p
 
@@ -1691,11 +1691,13 @@ def run_route(
             ))
             return True
 
-    def _do_launch(host, work_root, prompt: str, model):
+    def _do_launch(host, work_root, prompt: str, model, edit_attempt: str = ""):
         # The extra bounds are keyword-only on the real launcher; an injected
         # launcher (tests, evals) keeps the historical signature.
         extra: dict = {}
         if launch is _launch_host:
+            if edit_attempt:
+                extra["edit_attempt"] = edit_attempt
             if turn_ceiling > 0:
                 extra["max_turns"] = turn_ceiling
             if idle_timeout > 0:
@@ -1786,18 +1788,33 @@ def run_route(
                             tier=model.tier, expected_turns=expected_turns,
                             expected_cost_usd=a.est_cost_usd,
                         ))
-                    code, out, err, usage = _launch_result(_do_launch(host, work_root, prompt, model))
+                    attempt_key = f"{tid}/{a.node.id}/{attempt}"
+                    if prewalk_enabled and attempt == first_attempt:
+                        prompt += f"\nPrewalk attempt key: {attempt_key}"
+                    code, out, err, usage = _launch_result(_do_launch(
+                        host, work_root, prompt, model,
+                        edit_attempt=attempt_key if prewalk_enabled else ""))
                     node_usage.append(usage)
-                    # The sentinel is checked against the raw exit code, before
-                    # any contract-failure bookkeeping below can mutate it, and
-                    # wins over whatever classify_failure concludes: a model
-                    # explaining *why* it is stopping ("the task is not
-                    # complete yet, handing off") would otherwise trip the
-                    # same wording classify_failure reads as a real failure.
-                    prewalk_signaled = (
-                        prewalk_enabled and attempt == first_attempt and code == 0
-                        and PREWALK_SENTINEL in (out or "")
-                    )
+                    from ctx import prewalk as _prewalk
+                    prewalk_requested = (prewalk_enabled and attempt == first_attempt
+                                         and _prewalk.requested(out or ""))
+                    prewalk_signaled = False
+                    verified_continuation = ""
+                    if prewalk_requested and code == 0:
+                        from ctx.workspace import resolve_workspace
+                        from ctx.store import Store as _ProofStore
+                        proof_ws = resolve_workspace(str(work_root))
+                        proof_store = _ProofStore(proof_ws.workspace_id)
+                        try:
+                            accepted = _prewalk.accept_handoff(
+                                proof_ws, proof_store, out, attempt_key)
+                            verified_continuation = accepted["text"]
+                            prewalk_signaled = True
+                        except Exception as exc:
+                            err = f"prewalk evidence rejected: {type(exc).__name__}: {exc}"
+                            code = 1
+                        finally:
+                            proof_store.close()
                     contract_failed = _execution_contract_failed(code, out, err)
                     schema_status, schema_error = _worker_yield_status(a.node, out)
                     strict_schema = a.node.strict_output_schema or strict_worker_yields
@@ -1810,7 +1827,7 @@ def run_route(
                         expected_turns=expected_turns,
                         contract_failed=contract_failed or schema_failed,
                     )
-                    if prewalk_signaled:
+                    if prewalk_signaled and not schema_failed:
                         cls = _steward.Classification("prewalk_handoff", "none")
                     elif contract_failed or schema_failed:
                         code = code or 1
@@ -1883,8 +1900,8 @@ def run_route(
                             host, model = target
                             a = replace(a, host=host, model=model, est_cost_usd=cheap_est)
                             escalated = f"{target[0].name}/{target[1].id}"
-                            continuation_doc = ""
-                            if ref:
+                            continuation_doc = verified_continuation
+                            if ref and not continuation_doc:
                                 # A fresh Store, not the run_route-scoped one:
                                 # run_one executes inside a wave's thread
                                 # pool, and sqlite3 connections are

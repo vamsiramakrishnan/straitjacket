@@ -461,6 +461,10 @@ def _build_parser():
     p_verify.add_argument("--receipt", help="write the full verification receipt")
     p_verify.add_argument("command", nargs=argparse.REMAINDER, help="-- command [args...]")
 
+    p_handoff = edit_sub.add_parser("handoff", help="request prewalk from verified progress")
+    p_handoff.add_argument("--verification", required=True, help="blob: verification receipt")
+    p_handoff.add_argument("--state", required=True, help="checklist and investigation JSON file")
+
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
     p_rewrite.add_argument("pattern", help="ast-grep metavariable pattern, e.g. 'foo($A)'")

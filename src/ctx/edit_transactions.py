@@ -404,7 +404,7 @@ def _stage(path: Path, data: bytes, mode: int) -> Path:
         raise
 
 
-def apply_edit_plan(ws: Workspace, plan: dict[str, Any]) -> dict[str, Any]:
+def apply_edit_plan(ws: Workspace, plan: dict[str, Any], *, attempt_key: str | None = None) -> dict[str, Any]:
     """Compare-and-swap every planned file, or refuse before source writes."""
     prepared = _prepare(ws, plan, "apply")
     # Capture these immediately before staging/writing.  The diagnostic layer
@@ -487,6 +487,9 @@ def apply_edit_plan(ws: Workspace, plan: dict[str, Any]) -> dict[str, Any]:
         "outcome": "applied",
         "files": [_file_receipt(item, diagnostics[item.rel]) for item in prepared],
     }
+    key = attempt_key if attempt_key is not None else os.environ.get("CTX_EDIT_ATTEMPT")
+    if key:
+        receipt["attemptKey"] = key
     # The write already succeeded. Evidence storage failure must stay distinct
     # from apply failure, and makes the result ineligible for prewalk.
     try:
@@ -501,7 +504,7 @@ def apply_edit_plan(ws: Workspace, plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def replace_span(ws: Workspace, store: Store, ref: str, span: str,
-                 replacement: str, *, apply: bool = False) -> dict[str, Any]:
+                 replacement: str, *, apply: bool = False, attempt_key: str | None = None) -> dict[str, Any]:
     """Plan and preview/apply one anchored replacement without a JSON file.
 
     This is a local SDK mutation, subject to the same authority as ctx run.
@@ -512,7 +515,7 @@ def replace_span(ws: Workspace, store: Store, ref: str, span: str,
         "edits": [{"path": ref, "span": span, "replacement": replacement}],
     })
     plan_ref = "blob:" + store.put_blob(canonical_json(plan))
-    result = apply_edit_plan(ws, plan) if apply else preview_edit_plan(ws, store, plan)
+    result = apply_edit_plan(ws, plan, attempt_key=attempt_key) if apply else preview_edit_plan(ws, store, plan)
     return {**result, "planRef": plan_ref}
 
 

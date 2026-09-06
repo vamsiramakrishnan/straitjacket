@@ -23,6 +23,12 @@ def cmd_edit(ws, ns) -> int:
     from ctx.edit_verification import Check, VerificationError, verify_edit
 
     try:
+        if ns.edit_cmd == "handoff":
+            from ctx.prewalk import create_handoff
+            state = load_json(ws.confine(ns.state, must_exist=True))
+            result = create_handoff(ws, store, ns.verification, state)
+            print(result["signal"])
+            return 0
         if ns.edit_cmd == "verify":
             command = list(ns.command)
             if command and command[0] == "--":

@@ -115,6 +115,16 @@ def validate_verification(ws, store, ref: str) -> dict:
         raise VerificationError("verification is not a passing proof for this workspace")
     receipt = read_evidence(store, proof["editReceipt"], "ctx.edit-receipt/v1")
     expected = applied_files(ws, receipt)
+    for item in receipt["files"]:
+        diagnostic = item.get("diagnostics", {})
+        if diagnostic.get("outcome") in {"issues", "stale"}:
+            raise VerificationError("edit diagnostics are not clean/current")
+        if diagnostic.get("receiptId"):
+            from ctx.post_edit_diagnostics import load_receipt
+            observed = load_receipt(ws.root, diagnostic["receiptId"])
+            if (observed.get("outcome") != diagnostic.get("outcome")
+                    or "sha256:" + str(observed.get("postEditDocumentDigest")) != item["afterSha256"]):
+                raise VerificationError("diagnostic receipt does not describe the applied bytes")
     inputs = proof["inputs"]
     if not inputs or any(inputs.get(k) != v for k, v in expected.items()):
         raise VerificationError("verification does not cover the applied bytes")

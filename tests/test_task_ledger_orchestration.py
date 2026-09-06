@@ -441,6 +441,30 @@ def test_resumed_node_is_not_charged_for_its_own_dead_claim(state_home, git_work
 
 # ------------------------------------------------------------------ prewalk
 
+def _verified_prewalk(root, prompt, path="hello.py", replacement="print('changed')\n"):
+    import sys
+    from ctx.anchors import anchor
+    from ctx.edit_transactions import replace_span
+    from ctx.edit_verification import Check, verify_edit
+    from ctx.prewalk import create_handoff
+    from conftest import make_store
+
+    ws = make_ws(root)
+    store = make_store(ws)
+    lines = (root / path).read_text().splitlines()
+    key = prompt.split("Prewalk attempt key: ")[-1].splitlines()[0]
+    receipt = replace_span(ws, store, path, f"1:{len(lines)}@" + anchor(lines),
+                           replacement, apply=True, attempt_key=key)
+    check = Check("behavior", (sys.executable, "-c",
+        f"from pathlib import Path; assert Path({path!r}).read_text() == {replacement!r}"))
+    proof = verify_edit(ws, store, receipt["receiptRef"], [check])
+    state = {"checklist": [
+        {"id": "one", "task": "do X", "validation": "targeted check", "status": "done"},
+        {"id": "two", "task": "do Y", "validation": "remaining check", "status": "pending"},
+    ], "hypotheses": [], "ruledOut": [], "evidence": [receipt["receiptRef"]]}
+    return create_handoff(ws, store, proof["verificationRef"], state)["signal"]
+
+
 _PREWALK_RAW = {"nodes": [
     {"id": "build", "goal": "add the feature", "role": "implement",
      "min_tier": "frontier", "deps": []},
@@ -470,7 +494,7 @@ def test_prewalk_hands_off_a_frontier_mutation_node_to_a_cheaper_model(
         if "node \'build\'" in prompt and model == assigned.model.launch_id:
             return (
                 0,
-                f"Plan:\n1. do X\n2. do Y\n(edited foo.py)\n{PREWALK_SENTINEL}",
+                _verified_prewalk(root, prompt),
                 "", _usage(cost=0.30, turns=6),
             )
         return 0, "done", "", _usage(cost=0.02, turns=3)
@@ -570,8 +594,7 @@ def test_prewalk_keeps_the_isolated_worktree_edit_instead_of_resetting_it(
 
     def launch(host, root, prompt, exe, *, timeout, model=""):
         if "node \'build\'" in prompt and model == assigned.model.launch_id:
-            (root / "foo.py").write_text("new\n", encoding="utf-8")
-            return 0, f"planned it\n{PREWALK_SENTINEL}", "", _usage(cost=0.3)
+            return 0, _verified_prewalk(root, prompt, "foo.py", "new\n"), "", _usage(cost=0.3)
         if "node \'build\'" in prompt:
             seen_on_continuation["foo.py"] = (root / "foo.py").read_text(encoding="utf-8")
         return 0, "done", "", _usage(cost=0.02)
@@ -645,7 +668,7 @@ def test_prewalk_handoff_is_priced_against_the_budget(state_home, git_workspace)
     def launch(host, root, prompt, exe, *, timeout, model=""):
         launches.append(model)
         if "node \'build\'" in prompt and model == build.model.launch_id:
-            return 0, f"plan\n(edited)\n{PREWALK_SENTINEL}", "", _usage(cost=frontier_cost, turns=6)
+            return 0, _verified_prewalk(root, prompt), "", _usage(cost=frontier_cost, turns=6)
         return 0, "done", "", _usage(cost=0.02, turns=3)
 
     result = run_route(ws, plan, cfg, launch=launch)
