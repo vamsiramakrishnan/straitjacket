@@ -43,16 +43,24 @@ tool's arguments*; the output gate needs a way to *replace a tool's result*.
 | <img src="../assets/agents/codex.svg" width="24" height="24" alt=""> **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
 | <img src="../assets/agents/antigravity.png" width="24" height="24" alt=""> **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
 | **antigravity-sdk** (ctx's own agent) | ✅ bounded inside the tool | ✅ bounded inside the tool | see below |
-| <img src="../assets/agents/hermes.svg" width="24" height="24" alt=""> **hermes** (Nous Hermes Agent) | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
-| <img src="../assets/agents/omp.svg" width="24" height="24" alt=""> **omp** (Oh My Pi) | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
-| <img src="../assets/agents/opencode.svg" width="24" height="24" alt=""> **opencode** | No interception adapter | No interception adapter | MCP retrieval + explicit `ctx` CLI |
-| <img src="../assets/agents/dsh.svg" width="24" height="24" alt=""> **dsh** (DeepSeek Harness) | No interception adapter | No interception adapter | MCP-client overlay + explicit `ctx` CLI |
+| <img src="../assets/agents/hermes.svg" width="24" height="24" alt=""> **hermes** (Nous Hermes Agent) | Contract-tested argument rewrite | Contract-tested text replacement | `pre_tool_call` / `transform_tool_result` |
+| <img src="../assets/agents/omp.svg" width="24" height="24" alt=""> **omp** (Oh My Pi) | Contract-tested argument rewrite | Contract-tested text replacement | `tool_call` / `tool_result` |
+| <img src="../assets/agents/opencode.svg" width="24" height="24" alt=""> **opencode** | Contract-tested argument rewrite | Contract-tested text replacement | `tool.execute.before` / `tool.execute.after` |
+| <img src="../assets/agents/dsh.svg" width="24" height="24" alt=""> **dsh** (DeepSeek Harness) | Deny and name the bounded retry | Contract-tested text replacement | `tools/pre-execute` / `tools/post-execute` |
 
-The four new MCP integrations have configuration and subprocess tests, not live
-model-session receipts. They are excluded from automatic orchestration; no
-worker transport or default model is assumed. See
-[setup, launch, validation, and removal](AGENT-INTEGRATIONS.md). The absence of
-a ctx hook adapter does not imply that the upstream agent has no extension API.
+The four new integrations have configuration, executable plugin, and subprocess
+tests, not live model-session receipts. All seven agents can use the optional
+[ACP worker transport](ACP.md) after endpoint/model setup. Every ACP session
+receives `ctx` retrieval and `ctx_edit` patch/rewrite tools. Native interception
+requires the adapter to load the host's plugin; receiving ACP tool updates alone
+does not provide interception. See [setup and removal](AGENT-INTEGRATIONS.md).
+
+The new plugins bound **text** results, preserving non-text blocks and metadata.
+OMP's direct eval/browser bridges do not emit these tool hooks, and its error
+path can rethrow the original error after the callback. DSH cannot rewrite
+sealed input arguments; its post-hook also preserves a downstream plugin's
+canonical-value rewrite rather than substituting stale presentation text.
+These paths still have explicit `ctx run` and verified edit tools available.
 
 On Claude Code, containment is invisible: you type `pytest -q`, the hook
 silently substitutes `ctx run -- pytest -q`, and the agent never sees a refusal.

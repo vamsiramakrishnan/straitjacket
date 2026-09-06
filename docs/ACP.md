@@ -14,8 +14,8 @@ ctx orchestrate 'Describe the task'
 ```
 
 Use the **exact model id advertised by the agent**, replacing the placeholder
-above. Setup writes `.ctx/acp.json`; ordinary `ctx setup` continues configuring
-interactive hooks/MCP. Each ACP worker receives the `ctx` MCP server through
+above. Setup configures the selected host's hooks/MCP and writes `.ctx/acp.json`.
+Each ACP worker receives the `ctx` and `ctx_edit` MCP tools through
 `session/new`, with its actual workspace or isolated worktree as the root.
 
 | Host | Default endpoint argv | Endpoint source |
@@ -53,8 +53,17 @@ The transport implements initialization, session creation, model selection,
 prompt streaming, permission responses, cancellation, and process-group cleanup.
 It advertises no client filesystem or terminal capabilities. Unknown client
 requests receive a protocol error. ACP tool notifications are progress events;
-they are **not** interception hooks. Native hooks and explicit `ctx run`,
-`ctx edit`, and `ctx rewrite` remain responsible for those operations.
+they are **not** interception hooks. Native plugins provide interception where
+the agent loads them; `ctx_edit` provides the shared verified patch/rewrite path.
+Agents can also use `ctx run`, `ctx edit`, and `ctx rewrite` through their terminal.
+
+Temporary worker wiring is removed before an isolated patch is captured.
+OMP/OpenCode receive project plugins; Hermes uses its enabled profile plugin;
+native `dsh` commands receive a hook-only Cordis overlay. A custom DSH wrapper
+must forward/load the hook overlay itself: Straitjacket preserves its argv.
+Claude/Codex project settings are copied from the source workspace when needed.
+The Google ACP server is a separate endpoint from `agy`; no support for `agy`'s
+native hooks is assumed in that server. Its common edit path is `ctx_edit`.
 
 Frames and final text are limited to 2 MiB each; stderr capture is limited to
 64 KiB. Exceeding a limit, timing out, receiving an invalid frame, or ending with

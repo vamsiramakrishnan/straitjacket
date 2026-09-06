@@ -114,7 +114,8 @@ Retrieval remains bounded. If the requested region is too large, `ctx get` retur
 | Claude Code | Transparent rewrite | Yes |
 | Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
 | Antigravity | Deny with a bounded replacement command | No |
-| Hermes, OMP, OpenCode, DSH | Explicit MCP/CLI tools; no interception adapter | No interception adapter |
+| Hermes, OMP, OpenCode | Native plugin argument rewrite | Text-output replacement; contract-tested |
+| DSH | Deny with a bounded replacement command | Native text-output replacement; contract-tested |
 
 Antigravity's published PreToolUse contract cannot modify arguments. Its
 PostToolUse contract cannot replace tool output. straitjacket can prevent a
@@ -125,10 +126,10 @@ See [Host capabilities](HOST-CAPABILITIES.md) for the full matrix.
 
 ## Configure the repository
 
-`ctx setup` configures the sidecar's hook or MCP integration with the selected
-coding harness. It does **not** enable ACP. ACP orchestration is currently a
-[proposed transport](../spec/adr/006-acp-orchestration-transport.md), not an
-implemented setup option. `ctx orchestrate` currently uses CLI worker transports.
+`ctx setup` configures the sidecar's hooks and MCP integration with the selected
+coding harness. To opt into [ACP orchestration](ACP.md), add `--acp` and an
+explicit `--acp-model` for one host. Existing CLI worker transports remain
+available for hosts without ACP configuration.
 
 ```bash
 cd your-repository
@@ -162,7 +163,7 @@ Setup reports host-configuration writes. The persistent host configuration is:
 | Antigravity | `.agents/plugins/ctx-harness/`; a ctx `statusLine` in `~/.gemini/antigravity-cli/settings.json` only when no status line already exists |
 | Claude Code | ctx hook entries and, when absent, a ctx `statusLine` in `.claude/settings.json`; `.claude/agents/ctx-explorer.md` only when absent; a managed block in `CLAUDE.md` |
 | Codex | ctx entries in `.codex/config.toml` and `.codex/hooks.json`, a managed block in `AGENTS.md` |
-| Hermes | Active profile's MCP entry, through Hermes' native config CLI; `.ctx/hosts/hermes.json` records the recipe |
+| Hermes | Active profile's MCP entry and enabled `straitjacket` plugin; `.ctx/hosts/hermes.json` records the recipe |
 | OMP | `mcpServers.ctx-harness` in `.omp/mcp.json` |
 | OpenCode | `mcp.ctx-harness` in `opencode.json`; existing JSONC requires a manual merge |
 | DSH | `.ctx/hosts/dsh.cordis.patch.yml`, loaded with `--patch` |

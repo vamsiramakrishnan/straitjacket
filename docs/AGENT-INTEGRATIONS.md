@@ -19,37 +19,44 @@ DeepSeek Harness. Straitjacket adds evidence capture, bounded retrieval, and an
 optional verified edit workflow. Your coding agent retains its conversation,
 models, authentication, native tools, and permission prompts.
 
-This guide covers the four new MCP integrations. For Claude Code, Codex, and
+This guide covers the four new native integrations. For Claude Code, Codex, and
 Antigravity setup, see [Getting started](GETTING-STARTED.md). The
 [capability matrix](HOST-CAPABILITIES.md) distinguishes explicit tools from
 automatic interception.
 
 ## What these integrations provide
 
-The agent receives one MCP tool, `ctx`, for bounded repository navigation and
-artifact retrieval. It can search stored output, retrieve cited regions, and
-inspect symbols. Command execution stays in the agent's native terminal tool:
+The agent receives `ctx` for bounded navigation and retrieval, and `ctx_edit`
+for anchored patches and structural rewrites. Native plugins connect the same
+guard and edit-outcome ledger used by the existing integrations. Command
+execution stays in the agent's native terminal tool: use `ctx run -- pytest -q`
+to capture a noisy run and `ctx` to retrieve follow-up evidence.
 
-```bash
-ctx run -- pytest -q
-ctx get run:<id>#stdout --lines 120:180
-```
+Hermes, OMP, and OpenCode can rewrite recognized command inputs and replace
+oversized text results. DSH gates calls and bounds text but cannot change sealed
+arguments; it returns the bounded command for an explicit retry. Native edits
+are observed in the edit ledger, not silently converted into verified
+transactions. Use `ctx_edit` when you need those guarantees.
 
-Replace `<id>` with the handle printed by the run. Ask the agent to use
-`ctx run` for noisy commands and the `ctx` MCP tool for follow-up evidence.
-Use the [edit workflow](EDIT-LOOP.md) when you want edits bound to observed
-source and verification receipts.
-
-These integrations do **not** intercept arbitrary native reads, commands, or
-edits. They install no PreToolUse/PostToolUse hooks. `ctx orchestrate` does not
-yet launch these four hosts; wrapper launch and orchestration are separate
-capabilities. No model or price is assumed for a user's multi-provider agent.
+Output replacement covers text, not image/audio blocks or metadata. OMP direct
+eval bridges bypass tool events, and error results can be rethrown unchanged.
+DSH preserves downstream canonical-value transformations; its content gate is
+not a confidentiality boundary for programmatic values. See the
+[capability matrix](HOST-CAPABILITIES.md) for the complete scope.
 
 ## Install and choose one host
 
-`ctx setup` installs the hook or MCP wiring described here. It does not install
-an ACP client or enable ACP orchestration. The ACP transport is currently
-proposed in [ADR 006](../spec/adr/006-acp-orchestration-transport.md).
+`ctx setup` installs native hooks and MCP wiring. To configure ACP through the
+same setup command, select one host and model:
+
+```sh
+ctx setup --host opencode --acp --acp-model provider/model-id
+```
+
+Replace the model placeholder with the exact id your agent advertises.
+[ACP setup](ACP.md) covers all seven agents, adapter commands, and permissions.
+ACP workers receive MCP tools in their actual worktree; interactive setup
+persists in the agent's native configuration.
 
 Install Straitjacket and the chosen agent separately. This setup does not
 install an agent or configure provider credentials. The commands below require
@@ -71,10 +78,10 @@ not the OpenHermes model family.
 
 | Agent | Configuration | Start after setup |
 |---|---|---|
-| Hermes | Active profile's `mcp_servers.ctx-harness`, written through Hermes' config CLI; local recipe in `.ctx/hosts/hermes.json` | `hermes chat` |
-| Oh My Pi | `.omp/mcp.json`, `mcpServers.ctx-harness` | `omp` |
-| OpenCode | `opencode.json`, `mcp.ctx-harness` | `opencode` |
-| DeepSeek Harness | `.ctx/hosts/dsh.cordis.patch.yml`, an MCP-client overlay | `ctx wrap dsh -- --profile web` |
+| Hermes | Active profile's MCP entry and enabled `plugins/straitjacket/`; local recipe in `.ctx/hosts/hermes.json` | `hermes chat` |
+| Oh My Pi | `.omp/mcp.json` and `.omp/hooks/pre/straitjacket.js` | `omp` |
+| OpenCode | `opencode.json` and `.opencode/plugins/straitjacket.js` | `opencode` |
+| DeepSeek Harness | `.ctx/hosts/dsh.cordis.patch.yml`, loading MCP and `.ctx/hosts/straitjacket-dsh.mjs` | `ctx wrap dsh -- --profile web` |
 
 OMP and OpenCode setup merges unrelated JSON settings and MCP servers. An
 existing conflicting `ctx-harness` entry, malformed file, or symlink refuses
@@ -91,8 +98,10 @@ ctx wrap opencode --print-config
 ## Hermes profiles
 
 Install a Hermes version with `config get <key> --json` and `config set`.
-Setup uses these native commands to inspect and add only the `ctx-harness`
-entry. Existing models and other MCP servers remain configured. Hermes owns
+Setup adds the `ctx-harness` MCP entry, locates the active profile with
+`hermes config path`, installs its `straitjacket` plugin, and enables it with
+`hermes plugins enable straitjacket`. The plugin runs only where `ctx.toml`
+is present above the working directory. Existing models and other MCP servers remain configured. Hermes owns
 the YAML serialization; Straitjacket does not parse or rewrite that YAML.
 
 The entry belongs to Hermes' active profile and applies across its sessions.
@@ -111,8 +120,9 @@ bypass them.
 ## DSH profiles and overlays
 
 DSH is in developer preview. Straitjacket renders a separate Cordis patch that
-inserts `@deepseek-ai/dsh-mcp-client`; DSH ships this dependency. The patch is
-JSON, which is valid YAML, and contains no executable YAML tags.
+inserts `@deepseek-ai/dsh-mcp-client` and the managed native hook module. DSH
+ships the MCP dependency. The patch is JSON, which is valid YAML, and loads
+the JavaScript plugin through Cordis' normal plugin loader.
 
 ```bash
 ctx wrap dsh -- --profile web
@@ -140,6 +150,17 @@ persists after exit. These are not ephemeral wrappers. Proxy, gateway, and
 orchestration wrapper options are unsupported for these four hosts and return
 an error.
 
+## Verified patches and rewrites
+
+First retrieve an anchored source span with `ctx`. Call `ctx_edit` with
+`op: "replace"`, its `ref` and `span`, and the replacement text. The default is
+a preview: inspect its patch, then use `op: "apply"` with the returned `planRef`.
+Stale or ambiguous source is refused. Structural rewrites use `op: "rewrite"`
+with a pattern, replacement, language, and optional glob; `op: "rewrite_apply"`
+requires that preview's `receiptRef`. Structural rewrites require ast-grep
+and refuse incomplete previews. Applying proves which bytes changed;
+[verification](EDIT-LOOP.md) checks whether they are correct.
+
 ## Verify and remove
 
 `ctx doctor` validates configured entries. To check the running integration,
@@ -151,11 +172,18 @@ access to the same checkout. Setup targets the machine running `ctx`.
 
 To remove, stop sessions using the integration, then:
 
-- OMP: remove only `mcpServers.ctx-harness` from `.omp/mcp.json`.
-- OpenCode: remove only `mcp.ctx-harness` from the JSON or JSONC file you used.
+- OMP: remove `mcpServers.ctx-harness` from `.omp/mcp.json` and the managed
+  `.omp/hooks/pre/straitjacket.js` plugin.
+- OpenCode: remove `mcp.ctx-harness` from the JSON or JSONC file you used and
+  `.opencode/plugins/straitjacket.js`.
 - Hermes: run `hermes config unset mcp_servers.ctx-harness` in the same profile
-  and delete `.ctx/hosts/hermes.json`.
-- DSH: stop passing the patch and delete `.ctx/hosts/dsh.cordis.patch.yml`.
+  and `hermes plugins disable straitjacket`; remove the managed profile plugin
+  and `.ctx/hosts/hermes.json` / `.ctx/hosts/hermes-plugin/` recipes.
+- DSH: stop passing the patch; remove `.ctx/hosts/dsh.cordis.patch.yml` and
+  `.ctx/hosts/straitjacket-dsh.mjs`.
+
+Remove a host from `.ctx/acp.json` to restore its original orchestration
+transport. Stop existing sessions before removing their active integrations.
 
 Keep unrelated settings and captured artifacts unless you also intend to
 remove them. Deleting a server entry leaves its surrounding config file;
@@ -173,7 +201,13 @@ The implementation follows these upstream contracts, reviewed on 2026-09-06:
 - [DSH CLI profiles](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md)
   and [MCP client](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md).
 
-Tests cover native config shapes, preservation and refusal, simulated host
-launches and Hermes config commands, and real Straitjacket MCP subprocess
-round trips. Live agent/model sessions remain unverified. Successful rendering
+Tests cover configuration preservation/refusal, executable Python/JavaScript
+callbacks, real MCP edit transactions, and stdio ACP protocol exchanges. Live agent/model sessions remain unverified. Successful rendering
 alone does not establish host-version compatibility or better task outcomes.
+
+Native hook contracts:
+
+- [Hermes hooks](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/hooks.md).
+- [OMP extension wrapper](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/extensibility/extensions/wrapper.ts).
+- [OpenCode plugins](https://opencode.ai/docs/plugins/).
+- [DSH interception contracts](https://github.com/deepseek-ai/deepseek-harness/blob/master/.agents/notes/implemented/feature/2026-06-30-interception-extension-points.md).

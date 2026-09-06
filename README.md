@@ -158,18 +158,23 @@ context residency—not the highest compression ratio.
 | Claude Code | Command rewriting and oversized-result substitution on supported hooks |
 | Codex | Implemented and contract-tested gates; live CLI receipt pending |
 | Antigravity | Deny recognized floods and supply a bounded replacement command; no output substitution |
-| Hermes / Open Hermes | Bounded MCP retrieval and explicit terminal workflows; active-profile setup |
-| Oh My Pi (`omp`) | Bounded MCP retrieval and explicit terminal workflows; project MCP config |
-| OpenCode | Bounded MCP retrieval and explicit terminal workflows; project MCP config |
-| DeepSeek Harness (`dsh`) | Bounded MCP retrieval through a Cordis overlay; explicit terminal workflows |
+| Hermes / Open Hermes | Native argument rewriting and text-output replacement; active-profile plugin + MCP |
+| Oh My Pi (`omp`) | Native argument rewriting and text-output replacement; project plugin + MCP |
+| OpenCode | Native argument rewriting and text-output replacement; project plugin + MCP |
+| DeepSeek Harness (`dsh`) | Native gating and text-output replacement; sealed arguments require an explicit retry |
 
 `ctx setup` merges JSON where safe and refreshes ctx-managed blocks. For
 user-owned Codex TOML it prints a reviewed snippet rather than replacing the
 file. See [host capabilities](docs/HOST-CAPABILITIES.md) for exact coverage.
 
-[Set up Hermes, OMP, OpenCode, or DSH](docs/AGENT-INTEGRATIONS.md). These four
-integrations install explicit tools; they do not add automatic interception or
-an orchestration worker transport. They require a build containing this change.
+[Set up Hermes, OMP, OpenCode, or DSH](docs/AGENT-INTEGRATIONS.md). These adapters
+have executable contract tests; live model-session receipts remain pending.
+They require a build containing this change.
+
+All seven agents can use [ACP orchestration](docs/ACP.md) with a configured
+endpoint and model: `ctx setup --host opencode --acp --acp-model provider/model-id`.
+ACP workers receive bounded retrieval and verified edit tools through MCP.
+Native hook coverage still depends on the agent's API; ACP does not expand it.
 
 ## Boundaries
 

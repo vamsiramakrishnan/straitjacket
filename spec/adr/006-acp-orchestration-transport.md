@@ -1,90 +1,73 @@
-# ADR 006: Add ACP as an orchestration transport
+# ADR 006: ACP as an optional orchestration transport
 
-Status: proposed; no ACP client is implemented by this change.
+Status: implemented behind explicit per-host setup; live adapter receipts pending.
 
-## Problem
+## Decision
 
-`ctx orchestrate` currently launches agent processes with host-specific flags
-and parses their output. Each new host needs another launch, progress, usage,
-and shutdown contract. A successful CLI launch does not establish session
-resumption, permission handling, or cancellation behavior.
+Straitjacket is an ACP v1 client for configured workers. The agent retains its
+model, authentication, and tool loop. Straitjacket retains routing, budget
+policy, task ledgers, isolated worktrees, edit receipts, and verification.
+Existing CLI workers remain available for hosts without ACP configuration.
 
-The Hermes, OMP, OpenCode, and DSH integrations add explicit MCP tools and
-terminal workflows. They intentionally do not claim an orchestration adapter.
-Adding more one-shot CLI branches would increase the maintenance cost before
-the common session contract has been isolated.
-
-## Proposed approach
-
-Make Straitjacket an Agent Client Protocol client for worker agents that expose
-a verified ACP endpoint. Keep routing, model eligibility, budgets, task ledgers,
-worktree isolation, edit receipts, and verification in Straitjacket. Introduce a
-worker transport interface below those mechanisms, with CLI and ACP backends.
-
-ACP handles conversations with an agent. MCP exposes Straitjacket's bounded
-evidence tool to that agent. The two protocols have different responsibilities:
+`ctx setup --host HOST --acp --acp-model MODEL` configures the selected host's
+native integration and records an explicit endpoint in `.ctx/acp.json`.
+The router sees only that endpoint's configured model and declared tier.
+Before prompting, the transport verifies the model against the agent's
+advertised catalog and selects it through ACP configuration options or the
+legacy model selector. It never infers a model catalog from the CLI's name.
 
 | Layer | Responsibility |
 |---|---|
-| Straitjacket orchestrator | Select work, enforce budgets, isolate changes, verify results, persist task state |
-| ACP worker transport | Negotiate capabilities, start a session, submit prompts, receive updates, cancel, and handle permission requests |
-| MCP evidence server | Bounded navigation and retrieval; no arbitrary command execution |
-| Agent | Run its own model and tool loop under its authentication and permissions |
+| Orchestrator | Route work, enforce bounds, isolate changes, verify outcomes |
+| ACP client | Initialize, create sessions, select models, stream prompts, answer permissions, cancel |
+| MCP server | Bounded evidence plus opt-in anchored edits and structural rewrite transactions |
+| Native plugins | Gate calls, rewrite inputs, or replace text where the host contract permits |
+| Coding agent | Own model requests, authentication, native tools, and agent execution |
 
-When supported, pass the `ctx` MCP server to ACP `session/new`. This makes the
-tool configuration session-scoped and avoids persistent agent configuration for
-orchestrated workers. Interactive users can continue launching their agents
-normally with the integrations described in
-[Agent integrations](../../docs/AGENT-INTEGRATIONS.md).
+Each worker receives the MCP server in `session/new` with its actual worktree.
+Temporary worker wiring is removed before patch capture. ACP tool updates do
+not prove that the client can intercept a tool result before inference. Native
+hook capabilities stay separate from ACP support.
 
-ACP is not an edit-verification contract or a universal interception hook.
-Receiving an agent's tool update does not prove that the client could replace
-the tool result before inference. A completed prompt is not a verified code
-change. Existing evidence and verification requirements still apply.
+## Implemented bounds
 
-## Small implementation steps
+The stdlib-only transport advertises no filesystem or terminal capabilities.
+Unknown client requests receive a protocol error. Frames and final text have
+2 MiB limits; stderr capture has a 64 KiB limit. Wall and optional idle timeouts
+stop the worker, send cancellation where possible, and clean up its process
+group. Malformed responses, missing models, unresolved permissions, and stop
+reasons other than `end_turn` fail the attempt.
 
-1. Extract the current CLI worker interface without changing routing or
-   outputs. Define typed progress, completion, cancellation, and usage records.
-   Preserve existing receipts as the regression baseline.
-2. Add a stdio ACP client behind an opt-in transport setting. Implement
-   initialization, session creation, prompting, updates, cancellation, bounded
-   stderr capture, and deterministic teardown. Advertise only client
-   capabilities actually implemented. Unknown methods receive a protocol
-   error; they cannot trigger file or terminal actions.
-3. Handle permission requests explicitly. Interactive runs use a configured
-   approval handler. Unattended runs cancel requests they cannot authorize;
-   never auto-approve or broaden the agent's permissions to finish a task.
-4. Pilot DSH's documented `dsh --profile acp` endpoint. Add a second independently
-   implemented agent only after verifying its advertised ACP entry point and
-   version. Retain CLI backends for unsupported agents.
-5. Promote transport selection per host only after live receipts establish
-   tool injection, progress, cancellation, permission refusal, and completion.
-   Resume/load support and usage accounting are capability-dependent. Missing
-   usage remains unknown, not zero, and cannot justify budget claims.
+Permissions default to refusal. Users may explicitly configure `allow_once`;
+this never chooses `allow_always` or rewrites persistent agent permissions.
+Unreported usage stays unknown. Session reload/resume, client-owned file and
+terminal operations, and provider-specific usage normalization remain unimplemented.
 
-## Acceptance gates
+The common edit path is the opt-in `ctx_edit` MCP tool. It reuses the existing
+anchored transaction and structural rewrite engines, requires a fixed workspace,
+previews by default, persists full receipts, and refuses stale applications.
+Native patch tools retain their own behavior; observing their result does not
+turn them into verified edits.
 
-Use a local fake ACP agent for out-of-order JSON-RPC responses, interleaved
-updates, malformed frames, bounded buffering, cancellation during permission
-requests, timeouts, process exits, and cleanup of pending sessions. Verify that
-failed or cancelled sessions never produce successful worker receipts.
+## Compatibility evidence
 
-Then run the same fixed task against a version-pinned live agent through both
-CLI and ACP. Record the agent and model, task outcome, patch, verification
-receipt, wall time, reported usage, and transport failures. Confirm that the
-agent can call the injected `ctx` tool in the intended worktree. Do not select
-ACP merely because both transports return final text.
+The ACP fixture runs as a real subprocess and covers initialization, injected
+MCP startup, model selection, interleaved notifications/requests, permissions,
+malformed and oversized messages, cancellation, timeouts, and completion.
+Executable Python/JavaScript plugin tests exercise the new native callback
+contracts. MCP tests apply anchored edits and reject stale patch/rewrite plans.
 
-Keep endpoint launch commands explicit. Do not assume that installing a CLI
-means it supports ACP, fetch adapters at runtime without an explicit setup
-step, or infer an endpoint from the host's name.
+These checks do not establish live compatibility with every installed adapter.
+Run a fixed task with a version-pinned agent/model and record tool invocation,
+patch, verification, usage, and failures before claiming task-quality or cost
+improvements. Do not promote ACP to the default based only on final text.
 
 ## Sources
 
-- [ACP overview](https://agentclientprotocol.com/protocol/v1/overview)
-- [ACP schema, including session creation and MCP servers](https://agentclientprotocol.com/protocol/v1/schema)
-- [DSH launcher and ACP profile](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md)
+- [ACP protocol](https://agentclientprotocol.com/protocol/v1/overview)
+- [ACP session setup](https://agentclientprotocol.com/protocol/v1/session-setup)
+- [ACP permissions](https://agentclientprotocol.com/protocol/v1/tool-calls)
+- [Setup guide and endpoint sources](../../docs/ACP.md)
+- [Native hook contracts and limits](../../docs/AGENT-INTEGRATIONS.md)
 
-Reviewed 2026-09-06. This is an incremental migration proposal, not a claim of
-ACP conformance or live compatibility with all registered hosts.
+Reviewed 2026-09-06.

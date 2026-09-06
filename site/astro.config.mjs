@@ -42,6 +42,7 @@ export default defineConfig({
             { label: 'Edit and verify', slug: 'guides/edit-loop' },
             { label: 'Host capabilities', slug: 'guides/host-capabilities' },
             { label: 'Agent integrations', slug: 'guides/agent-integrations' },
+            { label: 'ACP orchestration', slug: 'guides/acp' },
             { label: 'Anchored addresses', slug: 'guides/anchors' },
             { label: 'CLI guide', slug: 'guides/cli' },
             { label: 'Configuration', slug: 'guides/configuration' },

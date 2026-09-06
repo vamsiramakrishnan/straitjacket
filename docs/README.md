@@ -4,6 +4,8 @@
 [CLI](CLI.md) · [Configuration](CONFIGURATION.md) ·
 [Troubleshooting](TROUBLESHOOTING.md)
 
+[Agent integrations](AGENT-INTEGRATIONS.md) · [ACP orchestration](ACP.md)
+
 Straitjacket is a context and evidence sidecar for coding agents. Keep the
 coding harness that runs the model and tool loop; add bounded capture,
 retrieval, and optional edit verification. The sidecar keeps large captured tool output outside the agent's prompt.
