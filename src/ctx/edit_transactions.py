@@ -182,7 +182,7 @@ def create_edit_plan(
     if len(requested) > MAX_EDITS:
         raise EditTransactionError(f"request exceeds the {MAX_EDITS}-edit transaction cap")
 
-    cached: dict[str, tuple[bytes, list[str], list[bytes], dict[str, Any]]] = {}
+    cached: dict[tuple, tuple[bytes, list[str], list[bytes], dict[str, Any]]] = {}
     planned: list[dict[str, Any]] = []
     for index, item in enumerate(requested):
         if not isinstance(item, dict):
@@ -202,7 +202,7 @@ def create_edit_plan(
             start, end, short_anchor = anchors.parse_span(span_value)
         except ValueError as e:
             raise EditTransactionError(str(e)) from None
-        if short_anchor is None:
+        if short_anchor is None and not item.get("snapshot"):
             raise EditTransactionError(
                 f"edit {index} span is unanchored; retrieve it with ctx get first"
             )
@@ -211,17 +211,32 @@ def create_edit_plan(
         if not full.is_file():
             raise EditTransactionError(f"edit target is not a file: {path_value}")
         rel = ws.relativize_as_asked(path_value)
-        if rel not in cached:
-            snap = snapshot_file(store, ws, path_value)
+        cache_key = (rel, item.get("snapshot"))
+        if cache_key not in cached:
+            if item.get("snapshot"):
+                snap_ref = str(item["snapshot"])
+                if not snap_ref.startswith("snapshot:"):
+                    raise EditTransactionError("expected a snapshot: observation")
+                snap = store.get_manifest(snap_ref.removeprefix("snapshot:"))
+                if (snap.get("schema") != "ctx.snapshot/v1" or snap.get("path") != rel
+                        or snap.get("workspaceId") != ws.workspace_id):
+                    raise EditTransactionError("snapshot does not identify this workspace file")
+                if ws.is_ignored(rel) or ws.is_ignored(ws.relativize(full)):
+                    raise EditTransactionError("snapshot target excluded by current policy")
+            else:
+                snap = snapshot_file(store, ws, path_value)
             data = store.get_blob(snap["blob"].removeprefix("sha256:"))
             lines, pieces = _text_lines(data, rel)
-            cached[rel] = (data, lines, pieces, snap)
-        data, lines, pieces, snap = cached[rel]
+            cached[cache_key] = (data, lines, pieces, snap)
+        data, lines, pieces, snap = cached[cache_key]
         span_len = end - start + 1
         stated = lines[start - 1 : end] if 1 <= start <= len(lines) else []
-        if len(stated) == span_len and anchors.anchor(stated) == short_anchor:
+        if len(stated) == span_len and (short_anchor is None or anchors.anchor(stated) == short_anchor):
             resolved = start
+            short_anchor = anchors.anchor(stated)
         else:
+            if short_anchor is None:
+                raise EditTransactionError("span is outside the observed snapshot")
             resolved = _unique_anchor_start(lines, short_anchor, span_len, start)
         target = _span_bytes(pieces, resolved, span_len)
         if target is None:  # guarded above, kept total at the byte boundary
@@ -268,7 +283,8 @@ def _refusal(plan: dict[str, Any], operation: str, reason: str, code: str = "inv
                 {"ref": "repo:" + str(e.get("path", "")),
                  "selector": {"lines": str(e.get("plannedSpan", "")).split("@")[0]},
                  "action": "read_current_context_then_replan"}
-                for e in plan.get("edits", [])[:MAX_EDITS] if isinstance(e, dict)
+                for e in (plan.get("edits") if isinstance(plan.get("edits"), list) else [])[:MAX_EDITS]
+                if isinstance(e, dict)
             ],
             "files": [],
         },
@@ -284,6 +300,8 @@ def _prepare(ws: Workspace, plan: dict[str, Any], operation: str) -> list[_Prepa
             grouped.setdefault(str(edit["path"]), []).append(edit)
         for rel in sorted(grouped):
             full = ws.confine(rel, must_exist=True)
+            if ws.is_ignored(rel) or ws.is_ignored(ws.relativize(full)):
+                raise EditTransactionError("edit target excluded by current policy", code="excluded_path")
             before = full.read_bytes()
             _, pieces = _text_lines(before, rel)
             resolved: list[_ResolvedEdit] = []
@@ -404,7 +422,7 @@ def _stage(path: Path, data: bytes, mode: int) -> Path:
         raise
 
 
-def apply_edit_plan(ws: Workspace, plan: dict[str, Any], *, attempt_key: str | None = None) -> dict[str, Any]:
+def _apply_edit_plan(ws: Workspace, plan: dict[str, Any], *, attempt_key: str | None = None) -> dict[str, Any]:
     """Compare-and-swap every planned file, or refuse before source writes."""
     prepared = _prepare(ws, plan, "apply")
     # Capture these immediately before staging/writing.  The diagnostic layer
@@ -504,6 +522,18 @@ def apply_edit_plan(ws: Workspace, plan: dict[str, Any], *, attempt_key: str | N
     return receipt
 
 
+def apply_edit_plan(ws: Workspace, plan: dict[str, Any], *, attempt_key: str | None = None) -> dict[str, Any]:
+    """Apply with one shared telemetry record for CLI, SDK and expansion."""
+    from ctx.edit_outcomes import record_anchored, refusal_outcome
+    try:
+        result = _apply_edit_plan(ws, plan, attempt_key=attempt_key)
+    except EditTransactionError as exc:
+        record_anchored(ws, plan, outcome=refusal_outcome(str(exc)))
+        raise
+    record_anchored(ws, plan, outcome="applied", receipt=result)
+    return result
+
+
 def replace_span(ws: Workspace, store: Store, ref: str, span: str,
                  replacement: str, *, apply: bool = False, attempt_key: str | None = None) -> dict[str, Any]:
     """Plan and preview/apply one anchored replacement without a JSON file.
@@ -511,10 +541,11 @@ def replace_span(ws: Workspace, store: Store, ref: str, span: str,
     This is a local SDK mutation, subject to the same authority as ctx run.
     It does not expose writes through the retrieval MCP server.
     """
-    plan = create_edit_plan(ws, store, {
-        "schema": REQUEST_SCHEMA,
-        "edits": [{"path": ref, "span": span, "replacement": replacement}],
-    })
+    edit = {"path": ref, "span": span, "replacement": replacement}
+    if ref.startswith("snapshot:"):
+        observation = store.get_manifest(ref.removeprefix("snapshot:"))
+        edit.update(path=observation.get("path"), snapshot=ref)
+    plan = create_edit_plan(ws, store, {"schema": REQUEST_SCHEMA, "edits": [edit]})
     plan_ref = "blob:" + store.put_blob(canonical_json(plan))
     result = apply_edit_plan(ws, plan, attempt_key=attempt_key) if apply else preview_edit_plan(ws, store, plan)
     return {**result, "planRef": plan_ref}

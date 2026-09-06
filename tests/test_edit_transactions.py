@@ -417,3 +417,57 @@ def test_replace_cli_defaults_to_preview(state_home, workspace_dir, capsys):
     assert p.read_text() == "x = 1\n"
     assert main(args + ["--apply"]) == 0
     assert json.loads(capsys.readouterr().out)["receiptRef"].startswith("blob:")
+
+
+def test_snapshot_adapter_uses_observed_bytes_after_live_file_moves(state_home, workspace_dir):
+    from ctx.execution import snapshot_file
+    from ctx.edit_transactions import replace_span
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    snap = snapshot_file(store, ws, "m.py")
+    ref = "snapshot:" + snap["id"].removeprefix("sha256:")
+    p.write_text("# inserted\nx = 1\n")
+    result = replace_span(ws, store, ref, "1:1", "x = 2\n", apply=True)
+    assert result["files"][0]["edits"][0]["relocated"]
+    assert p.read_text() == "# inserted\nx = 2\n"
+    from ctx.edit_outcomes import edit_summary
+    assert edit_summary(workspace_dir)["total"] == 1
+
+
+def test_snapshot_adapter_refuses_changed_observed_content(state_home, workspace_dir):
+    from ctx.execution import snapshot_file
+    from ctx.edit_transactions import replace_span
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    snap = snapshot_file(store, ws, "m.py")
+    ref = "snapshot:" + snap["id"].removeprefix("sha256:")
+    p.write_text("x = 99\n")
+    with pytest.raises(EditTransactionError, match="changed or disappeared"):
+        replace_span(ws, store, ref, "1:1", "x = 2\n", apply=True)
+    assert p.read_text() == "x = 99\n"
+
+
+def test_invalid_plan_edits_still_produces_a_refusal(state_home, workspace_dir):
+    from ctx.edit_transactions import _seal
+    ws = make_ws(workspace_dir)
+    plan = _seal({"schema": PLAN_SCHEMA, "workspaceId": ws.workspace_id, "edits": 12})
+    with pytest.raises(EditTransactionError) as caught:
+        apply_edit_plan(ws, plan)
+    assert caught.value.receipt["outcome"] == "refused"
+
+
+def test_large_receipt_emission_is_bounded_and_retrievable(state_home, workspace_dir, capsys):
+    from ctx.commands.edit import _emit_result
+    from ctx.textutil import estimate_tokens
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    result = {"outcome": "ready", "files": [{"path": "x" * 1000} for _ in range(128)]}
+    _emit_result(ws, store, result)
+    output = capsys.readouterr().out
+    assert estimate_tokens(len(output.encode())) <= ws.config.budgets.result_tokens
+    ref = json.loads(output)["receiptRef"]
+    assert json.loads(store.get_blob(ref[5:])) == result

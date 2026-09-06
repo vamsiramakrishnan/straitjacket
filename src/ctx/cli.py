@@ -447,8 +447,8 @@ def _build_parser():
         )
 
     p_replace = edit_sub.add_parser("replace", help="preview or apply one anchored span")
-    p_replace.add_argument("ref", help="repo:path or workspace-relative path")
-    p_replace.add_argument("--lines", required=True, help="observed A:B@anchor")
+    p_replace.add_argument("ref", help="snapshot:id, repo:path, or workspace-relative path")
+    p_replace.add_argument("--lines", required=True, help="A:B@anchor, or A:B with an immutable snapshot")
     p_replace.add_argument("--replacement-file", required=True, help="UTF-8 replacement file")
     p_replace.add_argument("--apply", action="store_true", help="apply instead of preview")
     p_replace.add_argument("--receipt", help="write the full receipt to this path")

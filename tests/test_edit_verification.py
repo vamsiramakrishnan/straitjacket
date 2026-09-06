@@ -55,3 +55,10 @@ def test_verify_cli_preserves_child_failure(state_home, workspace_dir, capsys):
     assert main(["--workspace", str(workspace_dir), "edit", "verify", ref, "--", sys.executable,
                  "-c", "raise SystemExit(1)"]) == 3
     assert json.loads(capsys.readouterr().out)["outcome"] == "failed"
+
+
+def test_check_deleting_its_input_is_stale_not_a_success(state_home, workspace_dir):
+    ws, store, ref = edited(workspace_dir)
+    proof = verify_edit(ws, store, ref, [Check("behavior", (sys.executable, "-c",
+                        "from pathlib import Path; Path('m.py').unlink()"))])
+    assert proof["outcome"] == "stale"

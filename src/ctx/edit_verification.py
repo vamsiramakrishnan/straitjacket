@@ -13,6 +13,7 @@ from typing import Any
 
 from ctx.execution import run_capture
 from ctx.store import canonical_json
+from ctx.workspace import WorkspaceError
 
 
 class VerificationError(ValueError):
@@ -29,7 +30,10 @@ class Check:
 def read_evidence(store, ref: str, schema: str) -> dict[str, Any]:
     if not isinstance(ref, str) or not ref.startswith("blob:"):
         raise VerificationError("expected a blob: evidence address")
-    data = store.get_blob(ref[5:])
+    full = store.resolve_id(ref[5:], kinds=("blob",))
+    if store.blob_path(full).stat().st_size > 4 * 1024 * 1024:
+        raise VerificationError("evidence exceeds 4 MiB")
+    data = store.get_blob(full)
     # Store resolves short ids. Verify bytes too, rather than trusting a
     # mutable copy of a receipt supplied by the worker.
     full = store.resolve_id(ref[5:], kinds=("blob",))
@@ -44,7 +48,10 @@ def read_evidence(store, ref: str, schema: str) -> dict[str, Any]:
 def file_digests(ws, paths) -> dict[str, str]:
     result = {}
     for rel in sorted(set(paths)):
-        path = ws.confine(rel, must_exist=True)
+        try:
+            path = ws.confine(rel, must_exist=True)
+        except WorkspaceError as exc:
+            raise VerificationError("check input missing or outside workspace") from exc
         if ws.is_ignored(ws.relativize(path)):
             raise VerificationError("check input excluded by policy")
         h = hashlib.sha256()
