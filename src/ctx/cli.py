@@ -477,6 +477,8 @@ def _build_parser():
     p_advise.add_argument("file", help="workspace-relative evaluation JSONL")
     p_advise.add_argument("--model", required=True)
     p_advise.add_argument("--shape", required=True)
+    p_advise.add_argument("--strategy", choices=("format", "prewalk"), default="format")
+    p_advise.add_argument("--executor-model", help="required for prewalk strategy advice")
 
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")

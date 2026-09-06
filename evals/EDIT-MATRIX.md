@@ -78,3 +78,21 @@ model ID and shape select advice once per launch, so the format does not
 change within an attempt. The node's shape is persisted for resume. Without
 sufficient evidence, native editing remains the default. This is prompt-level
 format advice, not tool replacement or additional mutation authority.
+
+## Selecting prewalk
+
+The same runner accepts `frontier` and `prewalk` adapter names. Record the model
+identity as `guide-id->executor-id`; the frontier arm runs only the guide, while
+the prewalk driver must aggregate **all** guide, executor, handoff, and
+verification cost. Then inspect:
+
+```bash
+ctx edit advise prewalk-results.jsonl --strategy prewalk \
+  --model guide-id --executor-model executor-id --shape mechanical
+```
+
+Set `[orchestrate] prewalk_policy_file = "evals/prewalk-results.jsonl"` alongside
+`prewalk = true` to require this gate before arming prewalk. Insufficient,
+stale-pair, or incomplete evidence keeps the assigned frontier model. Without
+that optional file, `prewalk = true` explicitly enables experimental prewalk.
+Neither policy grants a handoff without the edit verification gate.

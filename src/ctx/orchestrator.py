@@ -1728,7 +1728,22 @@ def run_route(
             and (st.nodes[a.node.id].attempts if a.node.id in st.nodes else 0) + 1 < max_attempts
             and _steward.de_escalation_target(model, hosts) is not None
         )
+        prewalk_policy_note = ""
+        if prewalk_enabled and getattr(cfg, "prewalk_policy_file", ""):
+            from ctx.edit_policy import choose_prewalk, load_rows
+            target = _steward.de_escalation_target(model, hosts)
+            try:
+                decision = choose_prewalk(
+                    load_rows(ws.confine(cfg.prewalk_policy_file, must_exist=True)),
+                    guide_model=model.id, executor_model=target[1].id, shape=a.node.edit_shape)
+                prewalk_enabled = decision["strategy"] == "prewalk"
+                prewalk_policy_note = (f"\nPrewalk strategy: {decision['strategy']}; {decision['reason']}; "
+                                       f"evidence {decision['evidenceSha256']}.")
+            except (OSError, ValueError):
+                prewalk_enabled = False
+                prewalk_policy_note = "\nPrewalk policy unavailable; finish on the assigned model."
         prompt = _node_prompt(a.node, plan.task, dep_docs, inbox, prewalk_hint=prewalk_enabled)
+        prompt += prewalk_policy_note
         node_usage: list[ActualUsage | None] = []
         use_isolation = a.node.id in isolated_node_ids
         checkout = IsolatedWorktree(Path(ws.root), a.node.id, a.node.targets) if use_isolation else None

@@ -36,3 +36,63 @@ def test_successes_cannot_hide_paired_regressions():
             row["task_success"] = False
     assert choose_format(sample, model="m", shape="mechanical")["format"] == "native"
     assert choose_format(rows() + [rows()[0]], model="m", shape="mechanical")["reason"] == "invalid_or_duplicate_observations"
+
+
+def test_prewalk_uses_total_cost_for_the_exact_model_pair():
+    from ctx.edit_policy import choose_prewalk
+    sample = rows()
+    for row in sample:
+        row["model"] = "guide->executor"
+        row["format"] = "frontier" if row["format"] == "native" else "prewalk"
+    assert choose_prewalk(sample, guide_model="guide", executor_model="executor", shape="mechanical")["strategy"] == "prewalk"
+    assert choose_prewalk(sample, guide_model="guide", executor_model="other", shape="mechanical")["strategy"] == "frontier"
+    for row in sample:
+        if row["format"] == "prewalk":
+            row["cost_usd"] = 1.5  # Cheap execution did not recover guide/handoff cost.
+    assert choose_prewalk(sample, guide_model="guide", executor_model="executor", shape="mechanical")["strategy"] == "frontier"
+
+
+def test_orchestration_policy_pins_advice_for_one_launch(state_home, git_workspace):
+    import json
+    from dataclasses import replace
+    from conftest import make_ws
+    from test_task_ledger_orchestration import _hosts, _usage
+    from ctx.orchestrator import build_route_plan, run_route
+    ws = make_ws(git_workspace)
+    cfg = replace(ws.config.orchestrate, edit_policy_file="policy.jsonl")
+    raw = {"nodes": [{"id": "edit", "goal": "fix", "role": "implement", "edit_shape": "mechanical",
+                       "min_tier": "frontier", "deps": []}]}
+    raw["nodes"].append({"id": "verify", "goal": "check", "role": "verify", "min_tier": "economy", "deps": ["edit"]})
+    plan = build_route_plan("fix", raw, _hosts("claude"), cfg)
+    sample = rows()
+    for row in sample:
+        row["model"] = plan.assigned[0].model.id
+    (git_workspace / "policy.jsonl").write_text("\n".join(json.dumps(r) for r in sample))
+    prompts = []
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        prompts.append(prompt)
+        return 0, "done", "", _usage()
+
+    run_route(ws, plan, cfg, launch=launch)
+    assert len(prompts) == 2
+    assert sum("policy for this attempt: anchored" in p for p in prompts) == 1
+
+
+def test_configured_prewalk_policy_without_evidence_does_not_arm(state_home, git_workspace):
+    from dataclasses import replace
+    from conftest import make_ws
+    from test_task_ledger_orchestration import _hosts, _usage, _PREWALK_RAW
+    from ctx.orchestrator import build_route_plan, run_route
+    ws = make_ws(git_workspace)
+    cfg = replace(ws.config.orchestrate, prewalk=True, prewalk_policy_file="empty.jsonl")
+    (git_workspace / "empty.jsonl").write_text("")
+    plan = build_route_plan("fix", _PREWALK_RAW, _hosts("claude"), cfg)
+    prompts = []
+
+    def launch(host, root, prompt, exe, *, timeout, model=""):
+        prompts.append(prompt)
+        return 0, "done", "", _usage()
+
+    run_route(ws, plan, cfg, launch=launch)
+    assert all("Prewalk:" not in p for p in prompts)

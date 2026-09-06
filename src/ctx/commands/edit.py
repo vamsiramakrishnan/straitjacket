@@ -25,9 +25,15 @@ def cmd_edit(ws, ns) -> int:
 
     try:
         if ns.edit_cmd == "advise":
-            from ctx.edit_policy import choose_format, load_rows
-            decision = choose_format(load_rows(ws.confine(ns.file, must_exist=True)),
-                                     model=ns.model, shape=ns.shape)
+            from ctx.edit_policy import choose_format, choose_prewalk, load_rows
+            rows = load_rows(ws.confine(ns.file, must_exist=True))
+            if ns.strategy == "prewalk":
+                if not ns.executor_model:
+                    raise VerificationError("prewalk advice requires --executor-model")
+                decision = choose_prewalk(rows, guide_model=ns.model,
+                                          executor_model=ns.executor_model, shape=ns.shape)
+            else:
+                decision = choose_format(rows, model=ns.model, shape=ns.shape)
             print(json.dumps(decision, sort_keys=True, separators=(",", ":")))
             return 0
         if ns.edit_cmd == "expand":

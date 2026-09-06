@@ -151,6 +151,7 @@ class OrchestratePolicy:
     prewalk: bool = False
     # Optional paired evaluation JSONL. Native remains the default without evidence.
     edit_policy_file: str = ""
+    prewalk_policy_file: str = ""
     # Complexity-adaptive implementation tier for the deterministic fallback:
     # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
     # simple edits. A live coordinator overrides this per task.

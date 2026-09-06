@@ -102,3 +102,21 @@ def format_hint(decision):
     return (f"Edit-format policy for this attempt: {fmt}; {decision['reason']}. "
             f"Evidence {decision['evidenceSha256']}. {action} "
             "This is format advice, not authorization to edit additional files.")
+
+
+def choose_prewalk(rows, *, guide_model: str, executor_model: str, shape: str):
+    """Use total guide+executor cost from paired frontier/prewalk trials.
+
+    Reuse the same conservative quality gate. The model-pair identity must
+    match exactly; measurements from a different executor cannot select it.
+    """
+    pair = guide_model + "->" + executor_model
+    selected = [r for r in rows if r.get("model") == pair and r.get("shape") == shape]
+    mapped = [{**r, "format": {"frontier": "native", "prewalk": "anchored"}.get(r.get("format"), "unsupported")}
+              for r in selected]
+    decision = choose_format(mapped, model=pair, shape=shape)
+    strategy = "prewalk" if decision.pop("format") == "anchored" else "frontier"
+    for candidate in decision["candidates"]:
+        candidate["strategy"] = "prewalk" if candidate.pop("format") == "anchored" else "frontier"
+    return {**decision, "schema": "ctx.prewalk-policy/v1", "strategy": strategy,
+            "evidenceSha256": hashlib.sha256(canonical_json(selected)).hexdigest()}
