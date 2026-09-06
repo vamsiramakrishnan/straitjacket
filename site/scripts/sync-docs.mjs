@@ -28,6 +28,7 @@ const GH_TREE = `https://github.com/${OWNER_REPO}/tree/main/`;
 
 // [ source filename, site slug, title, description ]
 const PAGES = [
+  ['EDIT-LOOP.md', 'guides/edit-loop', 'Edit and verify', 'Observed source, anchored edits, verification, and evidence-gated continuation.'],
   // Start here
   ['HOW-IT-WORKS.md', 'start/how-it-works', 'How it works', 'A ten-minute, plain-language walkthrough of one command through the whole system.'],
   ['GETTING-STARTED.md', 'start/getting-started', 'Getting started', 'From a checkout to one harnessed session, then capture, inspect, and retrieve.'],

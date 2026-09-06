@@ -1,20 +1,19 @@
 ---
 title: straitjacket
-description: Keep large captured tool evidence outside the prompt, with a bounded view and bounded retrieval when a coding agent needs it.
+description: Capture noisy command output, give coding agents bounded results, and keep the complete evidence available.
 template: splash
 hero:
-  title: straitjacket
+  title: Run noisy tools. Keep the evidence.
   tagline: >-
-    Keep large captured tool output outside the prompt. Give coding agents a
-    small, deterministic view with bounded retrieval when they need more.
+    Give your coding agent a bounded result it can act on, with addresses into
+    the complete captured output when it needs to investigate further.
   actions:
-    - text: Get started
+    - text: Capture your first result
       link: /straitjacket/start/getting-started/
       icon: right-arrow
       variant: primary
-    - text: How it works
-      link: /straitjacket/start/how-it-works/
-      icon: open-book
+    - text: Choose a workflow
+      link: /straitjacket/guides/use-cases/
       variant: secondary
     - text: GitHub
       link: https://github.com/vamsiramakrishnan/straitjacket
@@ -22,166 +21,91 @@ hero:
       variant: minimal
 ---
 
-straitjacket is a local context-containment harness for coding agents. On
-supported paths, it captures potentially unbounded command output before it
-enters the conversation, stores the complete bytes locally, and returns a
-bounded digest with routes back to the stored evidence.
-
-## Why it exists
-
-Large test runs, build logs, searches, and diagnostics create a bad choice.
-
-Keep the complete output in the conversation, and every later model turn can
-carry it. Truncate it, and the missing line cannot be recovered. A larger
-context window postpones the limit, but it does not make old output useful on
-every turn.
-
-straitjacket separates the evidence from the view of the evidence.
-
-- The artifact store keeps the complete output.
-- The prompt keeps the outcome, useful facts, coverage, and retrieval
-  addresses.
-- The agent asks for bounded regions only when the next decision needs them.
-
-## Try it
+## One command to try
 
 ```bash
-python -m pip install --upgrade ctx-harness  # Python 3.11+
-cd your-repository
-ctx setup
-ctx doctor
+python -m pip install --upgrade ctx-harness
 ctx run -- pytest -q
 ```
 
-The package is `ctx-harness`. The command is `ctx`.
+Run this in a repository with tests. Python 3.11+ is required. Host integration
+is optional. The package is `ctx-harness`; the command is `ctx`.
 
-Small results can pass through unchanged. A large result becomes a typed digest
-instead of a wall of output. The complete stdout and stderr remain available:
+A failed command remains a failed command. For a large output, the agent gets
+an outcome, a typed digest, and a `run:` address. Complete captured stdout and
+stderr stay in the local store.
+
+Use the address returned by your run:
 
 ```bash
-ctx get run:8d8335db6848#stdout --lines 120:180
-ctx search run:8d8335db6848#stdout "MissingTenantError"
-ctx diff run:8d8335db6848 run:5a67c9de0123
+ctx get run:<id>#stdout --lines 120:180
+ctx search run:<id>#stdout "AssertionError"
 ```
 
-Retrieval is bounded too. Asking for a large region returns a smaller view and
-a continuation instead of creating a second flood.
+`<id>` is a placeholder. Large retrievals return a bounded region and a
+continuation. When the loop is useful, run `ctx setup` and `ctx doctor` to
+configure a supported coding host.
 
-## What it gives developers
+## Pick the job
 
-### Noisy commands without noisy conversations
+| Job | First tool | Result |
+|---|---|---|
+| Investigate noisy tests, builds, or logs | `ctx run` | Outcome and complete captured evidence |
+| Locate code before reading files | `ctx map`, `ctx def`, `ctx refs` | Structural views and source coordinates |
+| Compare two attempts | `ctx diff` | Outcome and evidence changes |
+| Apply an observed edit and check it | `ctx edit replace`, `ctx edit verify` | Plan, apply receipt, and checks bound to exact bytes |
+| Resume delegated work | `ctx orchestrate`, `ctx task show` | Attempts, recovery, budget, and persisted task state |
 
-Run test suites, builds, linters, and logs through `ctx run`. straitjacket
-stores the raw streams and renders a deterministic digest for the output
-family.
+[Capture and retrieve](/straitjacket/start/getting-started/) ·
+[Edit and verify](/straitjacket/guides/edit-loop/) ·
+[CLI reference](/straitjacket/guides/cli/)
 
-### Evidence you can inspect
+## Evidence stays available after the first turn
 
-A digest declares what it saw, what it omitted, and where the omitted bytes
-live. Frozen run handles address immutable stored bytes while retained. The
-model-visible view remains bounded and subject to the current redaction policy;
-an exact-byte request declares when redaction changed it. Live repository
-addresses verify their content, relocate it when it moves, or refuse when it no
-longer exists.
+Typed profiles extract failed test identities, diagnostic locations, unusual
+log events, and JSON structure. A deterministic renderer fits those facts into
+a budget and declares what it omitted. There is no model call in this path.
 
-### Fewer avoidable model round trips
+Stored handles identify immutable bytes while retained. Anchored repository
+reads verify the observed span, relocate unchanged content, or refuse stale
+coordinates. Model-visible retrieval follows the current redaction policy.
 
-Use `ctx seq`, `ctx q`, or an evidence plan when several deterministic checks
-are already known. The work runs beside the repository. The model returns when
-new evidence can change the hypothesis.
+[Follow the data path](/straitjacket/start/how-it-works/).
 
-### Integration with the agent you already use
+## Evidence for the mechanism, and for the trade-off
 
-`ctx setup` detects Claude Code, Codex, and Antigravity. It merges JSON settings
-where safe, refreshes ctx-managed files and blocks, and prints a reviewed
-snippet instead of rewriting user-owned Codex TOML. Enforcement depends on the
-host; the boundary is stated below.
+| Measurement | Finding | What it establishes |
+|---|---|---|
+| Deterministic field-needle fixture | 302,628 input tokens became 531 output tokens; the quiet target at line 14,238 and a retrieval address remained | Bounded evidence delivery on that fixture |
+| Small live canary, three tasks with one repeat | Both arms solved 3/3; the contained arm cost more and took longer | Wrapping small work can be a regression |
+| Paired edit and prewalk runner | Requires live paired outcomes before selecting another strategy | A way to measure a policy; no live improvement claim yet |
 
-## How it works
+The needle fixture measures address emission, not a retrieval round trip.
+[Read its receipt](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/field-needle-2026-07-20.md),
+[the live counterexamples](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/agentbench/RESULTS.md),
+and [the edit-policy method](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/EDIT-MATRIX.md).
 
-1. A guard identifies an operation that may produce unbounded output.
-2. stdout and stderr stream into a local, content-addressed artifact.
-3. A typed profile extracts outcomes, identities, locations, and coverage.
-4. A deterministic renderer emits those facts within a fixed budget, with
-   continuations into the stored artifact.
+Use containment when output is large, early, or repeatedly carried through a
+task. Keep small, complete results native. Compare completion, total usage,
+latency, and retrieval count together.
 
-There is no model call in this delivery path. The digest is an index into the
-evidence, not a generated summary pretending to be the evidence.
+## Know the integration boundary
 
-[Read the ten-minute walkthrough →](/straitjacket/start/how-it-works/)
-
-## One reproducible receipt
-
-The repository includes a deterministic test built from a 20,001-line log. The
-log contains 302,628 `o200k_base` tokens, one structurally rare target at line
-14,238, and two loud `ERROR` controls.
-
-| Treatment | `o200k_base` output tokens | Quiet target retained | Retrieval address emitted |
-|---|---:|:---:|:---:|
-| Complete log | 302,628 | Yes | Not applicable |
-| Head-and-tail truncation | 1,219 | No | No |
-| straitjacket | 531 | Yes | Yes |
-
-This measures the evidence-delivery mechanism. It is model-free and does not
-claim that every coding task becomes faster or cheaper. The fixture checks that
-the digest emits an address; it does not execute a retrieval round trip. The
-live agent suite also records cases where native execution is the better path.
-
-[Inspect the receipt →](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/field-needle-2026-07-20.md)
-
-## Where it helps
-
-| Work | Start with |
+| Entry point | Support |
 |---|---|
-| Noisy test, build, lint, or log output | `ctx run -- <command>` |
-| A process that may outlive the turn | `ctx run --bg-after 30 -- <command>` |
-| Search or retrieve captured evidence | `ctx search` or `ctx get` |
-| Compare behaviour before and after a change | `ctx diff run:A run:B` |
-| Run known checks without model round trips | `ctx seq` or `ctx q` |
-| Map or navigate a large repository | `ctx map`, `ctx def`, `ctx refs` |
+| Direct CLI | Capture and retrieval without host hooks |
+| Claude Code | Command rewrite and oversized-result substitution on supported hooks |
+| Codex | Implemented and contract-tested; live CLI receipt pending |
+| Antigravity | Deny recognized floods and return a bounded replacement command; no output substitution |
 
-If a command is already small and complete, run it natively. Containment should
-not turn a six-line answer into a retrieval workflow.
+[Host capabilities](/straitjacket/guides/host-capabilities/) states the exact
+contract. Commands retain the invoking user's authority. Captured artifacts
+are local plaintext; redaction of the model's view is not encryption at rest.
+Artifacts become eligible for collection after the configured horizon and remain
+until `ctx gc` runs. The project is pre-1.0.
 
-[Choose a workflow by failure mode →](/straitjacket/guides/use-cases/)
+## Continue
 
-## The current boundary
-
-straitjacket is pre-1.0. Its contract is narrower than “agent memory” or “agent
-security.”
-
-- It contains tool evidence. It is not a process sandbox. Commands still run
-  with the invoking user's authority.
-- Claude Code can transparently rewrite predictable floods and replace
-  oversized results. The Codex path implements and contract-tests both gates,
-  but a live Codex CLI receipt is still pending.
-- Antigravity can deny a predictable flood and provide the bounded replacement
-  command, but its published hooks cannot replace a returned tool result.
-- Run handles address immutable stored bytes while the artifact is retained;
-  model-visible retrieval is bounded and subject to the current redaction
-  policy. Mutable repository content may move or disappear, so anchored reads
-  verify, relocate, or refuse.
-- Captured artifacts can contain source, logs, and secrets. They are stored as
-  local plaintext today. Thirty days is the default GC eligibility horizon;
-  artifacts remain until `ctx gc` runs. An explicit `--retention-days` value
-  can shorten the horizon, while pins and active checkpoint leases survive.
-- Small or already-bounded work may be faster without the harness. That regime
-  is tested rather than hidden.
-
-See [Getting started](/straitjacket/start/getting-started/) for host setup and
-[the evaluation receipts](https://github.com/vamsiramakrishnan/straitjacket/tree/main/evals)
-for the measurements and their limits.
-
-## Read next
-
-- [How it works](/straitjacket/start/how-it-works/) — one command through the
-  complete data path.
-- [Getting started](/straitjacket/start/getting-started/) — install, configure,
-  capture, and retrieve.
-- [Why straitjacket](/straitjacket/guides/why-straitjacket/) — the design
-  choices and the counterexamples that shaped them.
-- [Use cases](/straitjacket/guides/use-cases/) — the smallest useful command for
-  each failure mode.
-- [CLI guide](/straitjacket/guides/cli/) — the operational surface.
-- [Core concepts](/straitjacket/start/concepts/) — artifacts, handles,
-  profiles, contracts, and gates.
+[Configuration](/straitjacket/guides/configuration/) ·
+[Troubleshooting](/straitjacket/guides/troubleshooting/) ·
+[Documentation map](https://github.com/vamsiramakrishnan/straitjacket/blob/main/docs/README.md)
