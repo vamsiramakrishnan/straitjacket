@@ -140,10 +140,12 @@ def check(wheel: Path, sdist: Path | None = None) -> None:
                     f"runtime version mismatch: expected 'ctx {version}', got {actual!r}"
                 )
 
-            for host in ("antigravity", "claude", "codex"):
+            for host in ("antigravity", "claude", "codex", "hermes", "omp", "opencode", "dsh"):
                 rendered = _run(ctx, clean_root, "wrap", host, "--print-config")
                 if not rendered.strip():
                     raise RuntimeError(f"{host} renderer returned no configuration")
+                if host in ("hermes", "omp", "opencode", "dsh"):
+                    json.loads(rendered)
 
             # Exercise the two Codex contracts that are easy to get subtly
             # wrong and otherwise fail only when the next Codex session starts.

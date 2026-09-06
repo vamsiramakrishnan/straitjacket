@@ -27,6 +27,11 @@ _MANAGED_FILES = (
     ".codex/hooks.json",
     "AGENTS.md",
     "CLAUDE.md",
+    ".omp/mcp.json",
+    "opencode.json",
+    "opencode.jsonc",
+    ".ctx/hosts/hermes.json",
+    ".ctx/hosts/dsh.cordis.patch.yml",
 )
 _MANAGED_DIRS = (".agents/plugins/ctx-harness",)
 
@@ -102,6 +107,11 @@ def load_setup_receipt(workspace_root: Path) -> dict[str, Any] | None:
 
 
 def setup_is_current(workspace_root: Path, hosts: Iterable[str]) -> bool:
+    hosts = tuple(hosts)
+    # Hermes owns profile-scoped YAML outside the workspace. Re-read through
+    # its CLI so a profile switch or native edit cannot reuse a stale receipt.
+    if "hermes" in hosts:
+        return False
     receipt = load_setup_receipt(workspace_root)
     receipt_parent = session_reads_path(workspace_root, _RECEIPT_NAME).parent
     return bool(

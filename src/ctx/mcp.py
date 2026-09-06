@@ -394,7 +394,7 @@ def _tool_call(params: dict[str, Any]) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
-def serve(bounded_only: bool = True) -> int:
+def serve(bounded_only: bool = True, workspace: str | None = None) -> int:
     """Run the stdio MCP server until EOF. ``bounded_only`` is the only
     supported v1 mode and is accepted for forward compatibility."""
     del bounded_only
@@ -436,7 +436,12 @@ def serve(bounded_only: bool = True) -> int:
         elif method == "tools/list":
             reply(msg_id, {"tools": [TOOL_SCHEMA]})
         elif method == "tools/call":
-            reply(msg_id, _tool_call(msg.get("params") or {}))
+            params = msg.get("params") or {}
+            if workspace and isinstance(params, dict):
+                arguments = params.get("arguments", {})
+                if isinstance(arguments, dict):
+                    params = {**params, "arguments": {"workspace": workspace, **arguments}}
+            reply(msg_id, _tool_call(params))
         elif method == "ping":
             reply(msg_id, {})
         elif msg_id is not None:

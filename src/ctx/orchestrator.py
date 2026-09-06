@@ -804,6 +804,10 @@ def _launch_host(
     switches Claude to ``stream-json`` so its per-event lines are the beacon;
     Codex ``exec --json`` already streams. Never raises."""
     spec = host.spec
+    from ctx.mcp_hosts import HOSTS as MCP_HOSTS
+
+    if spec.name in MCP_HOSTS:
+        return (2, "", f"{spec.name} has an explicit MCP integration but no orchestration transport yet", None)
     path = host.path or spec.cli_bins[0]
     argv = [path, *spec.print_flag, prompt]
     if model and spec.model_flag:

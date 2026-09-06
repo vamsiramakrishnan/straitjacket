@@ -602,6 +602,13 @@ def _render_codex_mcp_snippet(exe: str) -> str:
 
 def setup_conflicts(ws: Workspace, hosts: "list[str]") -> list[str]:
     """Return user-owned setup state that cannot be rewritten safely."""
+    from ctx.mcp_hosts import HOSTS, conflicts
+
+    problems = [problem for host in hosts if host in HOSTS for problem in conflicts(host, ws.root)]
+    return problems + _codex_setup_conflicts(ws, hosts)
+
+
+def _codex_setup_conflicts(ws: Workspace, hosts: "list[str]") -> list[str]:
     if "codex" not in hosts:
         return []
     cfg = ws.root / ".codex" / "config.toml"
@@ -927,6 +934,12 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         check("codex MCP", mcp_ok, mcp_detail)
     if plugin_dir.is_dir():
         wrapped.append("antigravity")
+    from ctx.mcp_hosts import checks as mcp_checks
+
+    for name, ok, detail in mcp_checks(ws.root):
+        check(name, ok, detail)
+        if ok:
+            wrapped.append(name.split()[0])
     check(
         "an agent is wrapped",
         bool(wrapped),
@@ -1026,6 +1039,26 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         pass
 
     return checks
+
+
+def install_hermes(ws, *, init_policy=True):
+    from ctx.mcp_hosts import install
+    return install("hermes", ws, init_policy=init_policy)
+
+
+def install_omp(ws, *, init_policy=True):
+    from ctx.mcp_hosts import install
+    return install("omp", ws, init_policy=init_policy)
+
+
+def install_opencode(ws, *, init_policy=True):
+    from ctx.mcp_hosts import install
+    return install("opencode", ws, init_policy=init_policy)
+
+
+def install_dsh(ws, *, init_policy=True):
+    from ctx.mcp_hosts import install
+    return install("dsh", ws, init_policy=init_policy)
 
 
 def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:

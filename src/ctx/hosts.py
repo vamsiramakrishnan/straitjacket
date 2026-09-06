@@ -303,6 +303,14 @@ _REGISTRY: tuple[HostSpec, ...] = (
         coordinator_model="gpt-5.4-nano",
         notes="persistent .codex/ MCP + hooks; strong code-gen",
     ),
+    # Explicit MCP tools + terminal workflows. No interception or unattended
+    # worker adapter is claimed. Models remain selected by the user's host.
+    *tuple(HostSpec(
+        name=name, cli_bins=(name,), default_model="unknown",
+        installer=f"install_{name}", wrapper=f"wrap_{name}",
+        supports_mcp=True, unattended=False, print_flag=(), model_flag="",
+        notes="MCP retrieval + explicit ctx CLI; no interception or orchestration adapter",
+    ) for name in ("hermes", "omp", "opencode", "dsh")),
     # --- detected & priced, not yet harnessable (no installer/wrapper) --------
     HostSpec(
         name="gemini",
@@ -328,14 +336,6 @@ _REGISTRY: tuple[HostSpec, ...] = (
         vendor_hint="unknown",
         notes="aider — multi-provider; detected/priced; harness wiring TODO",
     ),
-    HostSpec(
-        name="opencode",
-        cli_bins=("opencode",),
-        default_model="claude-sonnet",
-        model_env=("OPENCODE_MODEL",),
-        vendor_hint="unknown",
-        notes="opencode — detected/priced; harness wiring TODO",
-    ),
 )
 
 
@@ -346,6 +346,7 @@ def all_hosts() -> tuple[HostSpec, ...]:
 
 def host_by_name(name: str) -> HostSpec | None:
     key = (name or "").strip().lower()
+    key = {"open-hermes": "hermes", "oh-my-pi": "omp"}.get(key, key)
     for spec in _REGISTRY:
         if spec.name == key:
             return spec

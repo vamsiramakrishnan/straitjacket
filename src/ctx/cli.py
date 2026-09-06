@@ -67,7 +67,14 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == "mcp":
         from ctx.mcp import serve
 
-        return serve(bounded_only="--bounded-only" in args)
+        workspace = None
+        if "--workspace" in args:
+            i = args.index("--workspace")
+            if i + 1 >= len(args):
+                print("ctx mcp: --workspace requires a path", file=sys.stderr)
+                return 2
+            workspace = args[i + 1]
+        return serve(bounded_only="--bounded-only" in args, workspace=workspace)
 
     return _main_slow(args)
 
@@ -821,7 +828,8 @@ def _build_parser():
     p_wrap.add_argument(
         "host",
         choices=["setup", "all", "detect", "claude", "antigravity",
-                 "antigravity-sdk", "codex"],
+                 "antigravity-sdk", "codex", "hermes", "open-hermes",
+                 "omp", "oh-my-pi", "opencode", "dsh"],
         help="'setup' detects & harnesses installed CLIs; 'all' forces every "
         "supported host; 'detect' lists installed CLIs priced by model",
     )
