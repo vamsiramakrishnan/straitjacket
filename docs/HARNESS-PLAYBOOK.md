@@ -1,17 +1,9 @@
 # Applying the Harness Playbook to straitjacket
 
-The [Harness Playbook](https://stencil.so/blog/harness-playbook), published by
-Can Bölük on September 2, 2026, argues for centrally owned state, execution
-limits, compatibility rules, and a small permanent tool surface. Its distinction
-between complete execution data and model-visible projections is especially
-relevant here. Some of its replacement architecture is still being developed;
-its examples are design evidence, not a performance forecast for straitjacket.
-
-This assessment is based on straitjacket at `978036c`. The priorities below are
-our proposed application of those principles. The first commit implements the
-cancellation correction. Follow-on commits implement the [verified edit loop](EDIT-LOOP.md),
-including receipt-gated prewalk, structural expansion, and paired outcome gates.
-The capture, gateway, composition, and replay proposals below remain future work.
+This design review maps ideas from the Harness Playbook to Straitjacket's
+existing mechanisms and remaining evaluation work. Read the status of each
+proposal before treating it as a supported workflow. For operating instructions,
+start with [the edit loop](EDIT-LOOP.md) and [CLI guide](CLI.md).
 
 ## What already exists
 

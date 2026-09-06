@@ -1,10 +1,8 @@
 # Core concepts
 
-<sub><a href="README.md">« straitjacket / docs</a></sub>
-
-straitjacket is easiest to understand as an evidence-delivery system with a strict separation between **what happened**, **what is stored**, and **what the model is allowed to see at once**.
-
-This page defines the vocabulary used across the CLI, specifications, architecture documents, and benchmark receipts. New here? Read [How it works](HOW-IT-WORKS.md) first for the plain-language walkthrough; this page is the reference you come back to.
+Straitjacket separates stored evidence from the bounded view an agent receives.
+This reference defines the addresses, budgets, and receipts used by the CLI.
+Start with [Getting started](GETTING-STARTED.md) for a runnable workflow.
 
 ## Quick glossary
 
@@ -291,6 +289,8 @@ A receipt is a durable explanation of a mechanism decision or benchmark result. 
 
 A mechanism is adopted because measured behaviour supports it, not because the design sounds plausible.
 
-## The one-sentence model
+## Choose the next operation
 
-straitjacket moves deterministic evidence work out of the probabilistic model loop, keeps the full result addressable, and admits only a bounded, reproducible view into active context.
+Capture output with `ctx run`. Inspect its digest. Retrieve the addressed
+region needed for the decision. Keep verification receipts with the change
+and check their freshness before using them for continuation.

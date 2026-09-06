@@ -10,7 +10,7 @@
 
 ## The promise that had a hole in it
 
-straitjacket's second house rule is *omission keeps an address*. For frozen
+straitjacket's second repository invariant is *omission keeps an address*. For frozen
 artifacts — `run:`, `blob:`, `snapshot:` — a handle resolves the exact stored
 bytes while that artifact store is available.
 
