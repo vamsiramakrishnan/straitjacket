@@ -65,6 +65,9 @@ the current PyPI release already includes them.
 
 From the repository where the agent will work:
 
+If no agent is installed, automatic setup prepares project-local integrations
+and leaves Hermes for later: its active profile requires the Hermes CLI.
+
 ```bash
 ctx wrap detect
 ctx setup --host omp

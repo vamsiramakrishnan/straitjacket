@@ -149,12 +149,20 @@ def cmd_setup(ns) -> int:
             file=sys.stderr,
         )
         return 2
-    if getattr(ns, "prune", False) and hosts:
+    root = resolve_workspace(ns.workspace).root
+    prune_targets = []
+    if getattr(ns, "prune", False):
         from ctx.surface_profiles import HOSTS
-        if not any(h in HOSTS for h in hosts):
+        selected = hosts or (list(SETUP_HOSTS) if ns.all else [])
+        if not selected:
+            from ctx.hosts import installed_harnessable
+            selected = [h.name for h in installed_harnessable(workspace_root=root)]
+            if not selected:
+                selected = [h for h in SETUP_HOSTS if h != "hermes"]
+        prune_targets = [h for h in selected if h in HOSTS]
+        if not prune_targets:
             print("ctx setup: pruning is not implemented for the selected hosts", file=sys.stderr)
             return 2
-    root = resolve_workspace(ns.workspace).root
     if getattr(ns, "acp", False):
         import json
         from ctx.acp import configure
@@ -184,7 +192,7 @@ def cmd_setup(ns) -> int:
         from ctx.prune import interactive_prune, render_prune, run_prune
         from ctx.surface_profiles import HOSTS
 
-        targets = tuple(h for h in (hosts or list(SETUP_HOSTS)) if h in HOSTS) or ("claude",)
+        targets = tuple(prune_targets)
         if sys.stdin.isatty() and sys.stdout.isatty():
             interactive_prune(root, ask=input, say=print, hosts=targets)
         else:

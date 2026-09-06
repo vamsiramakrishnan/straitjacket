@@ -597,6 +597,10 @@ def guided_setup(
     target = (list(hosts) if hosts is not None
               else ([d.name for d in will] if (will and not force_all)
                     else list(SETUP_HOSTS)))
+    if not explicit and not will:
+        # Hermes needs its installed profile writer. An implicit inert recipe
+        # would poison doctor checks for every later host setup.
+        target = [name for name in target if name != "hermes"]
     prior = load_setup_receipt(ws.root)
     conflicts = setup_conflicts(ws, target)
     strategy = choose_setup(
@@ -666,7 +670,8 @@ def guided_setup(
                   f"`ctx wrap {d.name}`")
     else:
         print("  no coding-agent CLI found on PATH.")
-        print(f"  configuring all supported hosts anyway ({', '.join(SETUP_HOSTS)}) —")
+        print(f"  preparing project-local integrations ({', '.join(target)}) —")
+        print("  Hermes needs its installed CLI; run `ctx setup --host hermes` after installation.")
         print("  the config is inert until a CLI reads it, so installing one later")
         print("  needs no second setup.")
 
@@ -748,8 +753,8 @@ def wrap_setup(
 
     ``force_all`` (``ctx wrap all``/``--all``) restores the configure-everything
     behaviour; an explicit ``hosts`` list overrides detection entirely. When no
-    harnessable CLI is found on PATH, setup falls back to configuring all
-    supported hosts (config is inert until a CLI reads it) with a note.
+    harnessable CLI is found on PATH, setup prepares project-local integrations
+    with a note. Hermes waits for its installed profile writer.
 
     Output is guided by default (survey → harness → verify → next step); set
     ``CTX_SETUP_PLAIN=1`` for the bare installer report, which is what scripts
@@ -790,9 +795,11 @@ def wrap_setup(
             return 0
         # Nothing detected: configure all supported hosts so the workspace is
         # ready the moment a CLI is installed. Idempotent and non-destructive.
+        hosts = [name for name in SETUP_HOSTS if name != "hermes"]
         print(
-            "no coding-agent CLI detected on PATH; configuring all supported "
-            f"hosts ({', '.join(SETUP_HOSTS)}) — config is inert until a CLI reads it.\n"
+            "no coding-agent CLI detected on PATH; preparing project-local "
+            f"integrations ({', '.join(hosts)}) — config is inert until a CLI reads it.\n"
+            "Hermes needs its installed CLI; run `ctx setup --host hermes` after installation."
         )
 
     try:

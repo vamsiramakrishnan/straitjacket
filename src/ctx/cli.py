@@ -365,7 +365,7 @@ def _build_parser():
     )
     p_setup.add_argument(
         "--all", action="store_true",
-        help="configure all three vendor hosts even when their CLIs are not installed",
+        help="request setup for every supported host (Hermes activation needs its CLI)",
     )
     p_setup.add_argument(
         "--repair", action="store_true",

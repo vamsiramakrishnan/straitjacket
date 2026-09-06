@@ -180,6 +180,18 @@ def test_aliases_and_setup_fingerprint(workspace_dir):
     assert setup_fingerprint(workspace_dir) != before
 
 
+@pytest.mark.parametrize("host", mh.HOSTS)
+def test_automatic_pruning_refuses_unsupported_host_before_setup(host, workspace_dir, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from ctx.cli import main
+    import ctx.hosts
+    import ctx.wrap
+    monkeypatch.setattr(ctx.hosts, "installed_harnessable", lambda **kw: [SimpleNamespace(name=host)])
+    monkeypatch.setattr(ctx.wrap, "wrap_setup", lambda *a, **kw: pytest.fail("must refuse before setup"))
+    assert main(["--workspace", str(workspace_dir), "setup", "--prune"]) == 2
+    assert "pruning is not implemented" in capsys.readouterr().err
+
+
 def test_symlinked_config_directory_is_refused(workspace_dir, tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
