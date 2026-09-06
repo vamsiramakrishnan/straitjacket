@@ -349,6 +349,7 @@ def verify_post_edit(
     providers: Iterable[DiagnosticProvider] = (),
     run_builtin: bool = True,
     persist: bool = True,
+    expected_digest: str | None = None,
 ) -> dict[str, Any]:
     """Run post-edit checks and return a deterministic, addressable receipt."""
 
@@ -375,6 +376,9 @@ def verify_post_edit(
         else:
             snapshots.append(snapshot)
 
+    final_digest = _document_digest(target)
+    changed_during_checks = final_digest != current_digest
+    unexpected_bytes = expected_digest is not None and final_digest != expected_digest
     checks = [
         _check_doc(
             snapshot,
@@ -383,8 +387,15 @@ def verify_post_edit(
         )
         for snapshot in snapshots
     ]
+    if changed_during_checks or unexpected_bytes:
+        for check in checks:
+            if check["freshness"] == "fresh":
+                check["freshness"] = "stale"
+                check["reason"] = "edited_bytes_changed"
     fresh = [check for check in checks if check["freshness"] == "fresh"]
-    if fresh:
+    if changed_during_checks or unexpected_bytes:
+        outcome = "stale"
+    elif fresh:
         has_errors = any(check["hasErrors"] for check in fresh)
         outcome = "issues" if has_errors else "clean"
     elif any(check["freshness"] == "stale" for check in checks):

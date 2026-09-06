@@ -331,3 +331,45 @@ def test_cli_plan_error_and_help_are_deterministic(state_home, workspace_dir, ca
     help_text = capsys.readouterr().out
     assert "ctx.edit-request/v1 JSON" in help_text
     assert "--out OUT" in help_text
+
+
+def test_plan_uses_the_cited_snapshot_even_when_live_file_changes(
+    state_home, workspace_dir, monkeypatch
+):
+    import ctx.edit_transactions as edits
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\ny = 1\n")
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    real = edits.snapshot_file
+
+    def race(*args):
+        snap = real(*args)
+        p.write_text("x = 1\ny = 99\n")
+        return snap
+
+    monkeypatch.setattr(edits, "snapshot_file", race)
+    plan = create_edit_plan(ws, store, _request(_edit("m.py", ["x = 1"], 1, 1, "x = 2\n")))
+    row = plan["edits"][0]
+    assert row["sourceFileSha256"] == row["sourceBlob"]
+    assert store.get_blob(row["sourceBlob"].removeprefix("sha256:")) == b"x = 1\ny = 1\n"
+
+
+def test_diagnostics_cannot_validate_a_concurrent_writers_bytes(
+    state_home, workspace_dir, monkeypatch
+):
+    import ctx.post_edit_diagnostics as diagnostics
+    p = workspace_dir / "m.py"
+    p.write_text("x = 1\n")
+    ws = make_ws(workspace_dir)
+    plan = create_edit_plan(ws, make_store(ws), _request(_edit("m.py", ["x = 1"], 1, 1, "x = 2\n")))
+    real = diagnostics.builtin_syntax_snapshot
+
+    def race(path):
+        p.write_text("x = 300\n")
+        return real(path)
+
+    monkeypatch.setattr(diagnostics, "builtin_syntax_snapshot", race)
+    receipt = apply_edit_plan(ws, plan)
+    assert receipt["outcome"] == "applied"
+    assert receipt["files"][0]["diagnostics"]["outcome"] == "stale"

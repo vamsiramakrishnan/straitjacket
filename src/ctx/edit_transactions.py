@@ -212,7 +212,7 @@ def create_edit_plan(
         rel = ws.relativize_as_asked(path_value)
         if rel not in cached:
             snap = snapshot_file(store, ws, path_value)
-            data = full.read_bytes()
+            data = store.get_blob(snap["blob"].removeprefix("sha256:"))
             lines, pieces = _text_lines(data, rel)
             cached[rel] = (data, lines, pieces, snap)
         data, lines, pieces, snap = cached[rel]
@@ -458,7 +458,8 @@ def apply_edit_plan(ws: Workspace, plan: dict[str, Any]) -> dict[str, Any]:
     for item in prepared:
         try:
             diagnostics[item.rel] = verify_post_edit(
-                ws.root, item.rel, baselines[item.rel], run_builtin=True, persist=True
+                ws.root, item.rel, baselines[item.rel], run_builtin=True, persist=True,
+                expected_digest=_sha(item.after).removeprefix("sha256:"),
             )
         except Exception as e:
             # The source transaction has committed.  A diagnostic adapter
