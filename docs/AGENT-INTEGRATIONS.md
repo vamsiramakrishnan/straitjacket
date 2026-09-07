@@ -5,13 +5,13 @@ harness.** The harness owns the model and tool loop. The sidecar adds bounded
 capture, retrieval, and optional edit verification.
 
 <p>
-  <a href="https://code.claude.com/"><img src="../assets/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code"></a>
-  <a href="https://developers.openai.com/codex/"><img src="../assets/agents/codex.svg" width="36" height="36" alt="Codex" title="Codex"></a>
+  <a href="https://code.claude.com/"><img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code"></a>
+  <a href="https://developers.openai.com/codex/"><img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/codex.svg" width="36" height="36" alt="Codex" title="Codex"></a>
   <a href="https://antigravity.google/"><img src="../assets/agents/antigravity.png" width="36" height="36" alt="Antigravity" title="Antigravity"></a>
-  <a href="https://github.com/NousResearch/hermes-agent"><img src="../assets/agents/hermes.svg" width="36" height="36" alt="Hermes" title="Hermes"></a>
-  <a href="https://github.com/can1357/oh-my-pi"><img src="../assets/agents/omp.svg" width="36" height="36" alt="Oh My Pi" title="Oh My Pi"></a>
-  <a href="https://opencode.ai/"><img src="../assets/agents/opencode.svg" width="36" height="36" alt="OpenCode" title="OpenCode"></a>
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="../assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
+  <a href="https://github.com/NousResearch/hermes-agent"><img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/hermes.svg" width="36" height="36" alt="Hermes" title="Hermes"></a>
+  <a href="https://github.com/can1357/oh-my-pi"><img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/omp.svg" width="36" height="36" alt="Oh My Pi" title="Oh My Pi"></a>
+  <a href="https://opencode.ai/"><img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/opencode.svg" width="36" height="36" alt="OpenCode" title="OpenCode"></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
 </p>
 
 Continue using Claude Code, Codex, Antigravity, Hermes, Oh My Pi, OpenCode, or
