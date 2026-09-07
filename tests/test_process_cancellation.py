@@ -33,6 +33,29 @@ def _stopped(pid: int) -> bool:
         return False
 
 
+def _wait_stopped(pid: int, timeout: float = 5) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        if _stopped(pid):
+            # Termination is established. A second probe can race reaping
+            # (or PID reuse) and cannot invalidate the observation we made.
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
+def test_wait_stopped_keeps_observed_termination(monkeypatch):
+    observations = iter([False, True])
+    monkeypatch.setattr(sys.modules[__name__], "_stopped", lambda pid: next(observations))
+    assert _wait_stopped(12345)
+
+
+def test_wait_stopped_rejects_a_live_process(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "_stopped", lambda pid: False)
+    assert not _wait_stopped(12345, timeout=0)
+
+
 @pytest.mark.parametrize("reaped", [False, True])
 def test_stopped_rechecks_pid_when_proc_entry_disappears(monkeypatch, reaped):
     probes = []
@@ -109,10 +132,7 @@ def test_interruption_stops_descendants_and_preserves_exception(
         proc = processes[-1]
         assert proc.returncode == -signal.SIGKILL
         grandchild = int(marker.read_text())
-        deadline = time.monotonic() + 5
-        while not _stopped(grandchild) and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert _stopped(grandchild), "descendant kept running after owner stopped"
+        assert _wait_stopped(grandchild), "descendant kept running after owner stopped"
         if mode in ("wall", "idle"):
             assert proc.stdout.closed and proc.stderr.closed
     finally:
