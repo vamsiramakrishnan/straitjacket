@@ -71,6 +71,45 @@ a stop reason other than `end_turn` fails the worker. Missing usage remains
 unknown. Session reload/resume, client-owned terminals/files, and live provider
 usage accounting are not implemented in this transport.
 
+## Would a separate daemon help?
+
+The current setup starts ACP workers as owned subprocesses. It does not install
+a persistent Straitjacket service. Several benefits often attributed to a
+daemon already exist:
+
+| Need | Available today | What a shared daemon would add |
+|---|---|---|
+| Warm evidence access | `ctx mcp` stays alive, with a bounded workspace/store cache | Share caches across independent CLI and host processes |
+| Work that survives its caller | `ctx job` starts a detached supervisor per job | One owner for scheduling and observing all jobs |
+| Durable evidence and task state | The store and task ledger persist on disk | A live event stream for multiple attached clients |
+| Concurrent workers | Each orchestration run bounds its worker pool | Concurrency limits across separate orchestration runs |
+| Continued agent conversations | Each ACP attempt creates a fresh session | Keep connections/sessions alive between invocations |
+
+Persistent sessions and coordination across clients are the strongest reasons
+to add an **optional** daemon. They require more than moving the current client
+into a background process: session ownership, workspace/model/permission
+isolation, attach/cancel behavior, crash recovery, and versioned local IPC all
+need contracts. Sharing a conversation across unrelated tasks would also change
+the current fresh-attempt behavior.
+
+Session recovery can be implemented before a daemon. ACP exposes
+[`session/load` and `session/resume`](https://agentclientprotocol.com/protocol/v1/session-setup)
+when the agent advertises the corresponding capability. Straitjacket does not
+use them yet; support must be negotiated and session IDs bound to the original
+workspace and endpoint.
+
+For the current release, retain owned subprocesses. There is no live adapter
+receipt here showing that repeated startup dominates task time or that a shared
+service improves outcomes. First measure startup, session setup, useful work,
+and recovery on repeated tasks. A daemon becomes justified when those results,
+or a requirement for multiple attached clients, outweigh service lifecycle and
+recovery costs. See the [transport decision](../spec/adr/006-acp-orchestration-transport.md)
+for the implementation boundary.
+
+A daemon would not grant missing native hooks, make an agent's own edits
+verified, or reduce token usage by itself. The shared edit path remains
+`ctx_edit`; native interception still depends on each host's API.
+
 ## Validation
 
 `tests/test_acp.py` exercises real subprocess exchanges against a deterministic
