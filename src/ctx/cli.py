@@ -185,6 +185,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
     "ask": ("plans", "cmd_ask", True),
+    "semantic": ("semantic", "cmd_semantic", True),
     "surface": ("surfaces", "cmd_surface", True),
     "prune": ("surfaces", "cmd_prune", True),
     "gain": ("admin", "cmd_gain", True),
@@ -354,6 +355,21 @@ def _build_parser():
         help="repo to work in (default: the git root above the current directory)",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_semantic = sub.add_parser("semantic", help="explicit model analysis over selected evidence")
+    semantic_sub = p_semantic.add_subparsers(dest="semantic_cmd", required=True)
+    p_semantic_prepare = semantic_sub.add_parser("prepare", help="freeze a selection without calling a model")
+    p_semantic_prepare.add_argument("request_file", help="request JSON in the workspace, or - for stdin")
+    for name in ("run", "resume", "show"):
+        p_semantic_action = semantic_sub.add_parser(name, help={
+            "run": "execute the plan's explicitly configured worker",
+            "resume": "continue a saved map within its remaining root budget",
+            "show": "read the latest report without invoking a worker",
+        }[name])
+        p_semantic_action.add_argument("handle", help="prepared plan's blob: handle")
+        if name != "show":
+            p_semantic_action.add_argument("--retry-failed", action="store_true",
+                                           help="retry failed or uncertain partitions using additional budget")
 
     p_setup = sub.add_parser(
         "setup", prog="ctx setup",

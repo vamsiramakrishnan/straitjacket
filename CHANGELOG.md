@@ -6,6 +6,17 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+`ctx semantic prepare/run/resume/show` adds explicit, depth-one model analysis
+over frozen evidence through a caller-configured JSON driver or SDK callback.
+File/symbol/paragraph/line partitioning preserves exact model-view coverage;
+support and counterevidence citations must belong to the assigned partition.
+Findings remain labeled inferences, with unknown selection completeness.
+Durable pre-launch reservations, shared call/time/token/cost admission budgets,
+explicit retries, process cleanup, bounded output, and retained checkpoints make
+partial runs inspectable and resumable. Existing deterministic observation paths
+remain model-free. Tests use fixture workers; no live quality, cost, or latency
+advantage is claimed. See [Semantic analysis](docs/SEMANTIC.md).
+
 Hermes, Oh My Pi (`omp`), OpenCode, and DeepSeek Harness (`dsh`) now have
 explicit MCP integrations, host detection, setup, launch wrappers, and
 configuration checks. Existing Claude Code, Codex, and Antigravity integrations
