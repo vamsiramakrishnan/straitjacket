@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
 
     # ------------------------------------------------------ hook fast path
-    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code", "codex"):
+    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code", "codex", "hermes", "omp", "opencode", "dsh"):
         if args[2] == "pre-tool-use":
             from ctx.hook import main_pre_tool_use
 
@@ -67,7 +67,15 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == "mcp":
         from ctx.mcp import serve
 
-        return serve(bounded_only="--bounded-only" in args)
+        workspace = None
+        if "--workspace" in args:
+            i = args.index("--workspace")
+            if i + 1 >= len(args):
+                print("ctx mcp: --workspace requires a path", file=sys.stderr)
+                return 2
+            workspace = args[i + 1]
+        return serve(bounded_only="--bounded-only" in args, workspace=workspace,
+                     with_edits="--with-edits" in args)
 
     return _main_slow(args)
 
@@ -357,12 +365,18 @@ def _build_parser():
     )
     p_setup.add_argument(
         "--all", action="store_true",
-        help="configure all three vendor hosts even when their CLIs are not installed",
+        help="request setup for every supported host (Hermes activation needs its CLI)",
     )
     p_setup.add_argument(
         "--repair", action="store_true",
         help="bypass the ready receipt, refresh managed config, and verify again",
     )
+    p_setup.add_argument("--acp", action="store_true", help="configure ACP orchestration for one --host")
+    p_setup.add_argument("--acp-model", help="exact model id advertised by the ACP agent")
+    p_setup.add_argument("--acp-command", help="override ACP command as a JSON argv array")
+    p_setup.add_argument("--acp-tier", choices=("economy", "standard", "frontier"), default="standard")
+    p_setup.add_argument("--acp-permissions", choices=("deny", "allow_once"), default="deny",
+                        help="how unattended ACP requests are answered; default deny")
     p_setup.add_argument(
         "--prune", action="store_true",
         help="after setup, defer the capabilities this repo does not use and "
@@ -821,7 +835,8 @@ def _build_parser():
     p_wrap.add_argument(
         "host",
         choices=["setup", "all", "detect", "claude", "antigravity",
-                 "antigravity-sdk", "codex"],
+                 "antigravity-sdk", "codex", "hermes", "open-hermes",
+                 "omp", "oh-my-pi", "opencode", "dsh"],
         help="'setup' detects & harnesses installed CLIs; 'all' forces every "
         "supported host; 'detect' lists installed CLIs priced by model",
     )

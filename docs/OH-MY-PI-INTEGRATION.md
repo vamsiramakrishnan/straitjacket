@@ -1,5 +1,9 @@
 # oh-my-pi integration — mechanisms, boundaries, and promotion gates
 
+To use Oh My Pi itself with Straitjacket, run `ctx setup --host omp` and follow
+[Agent integrations](AGENT-INTEGRATIONS.md). This page documents the earlier
+mechanisms adopted from OMP; it is not the host setup guide.
+
 **Status:** v0.35.0 candidate with bounded canary evidence; opt-in mechanisms remain non-default ([development receipt](../evals/oh-my-pi-integration-2026-08-21.md))
 
 **Upstream studied:** [`can1357/oh-my-pi` at `76a294c`](https://github.com/can1357/oh-my-pi/tree/76a294cb19bfded1e32e2111f1f729129595bf5e)

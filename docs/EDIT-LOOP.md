@@ -4,6 +4,13 @@ Use `ctx edit` to connect an observed source snapshot, a proposed change,
 its application receipt, and verification of the resulting files. The workflow
 refuses stale or ambiguous source and keeps addresses for its evidence.
 
+ACP workers and the Hermes/OMP/OpenCode/DSH integrations also receive `ctx_edit`
+over MCP. Its `plan`, `apply`, and `replace` operations use this same transaction
+engine. `rewrite` previews a structural change; `rewrite_apply` requires its
+receipt and rechecks source generation. Standalone servers opt in with
+`ctx mcp --with-edits --workspace /absolute/project`. See
+[agent integrations](AGENT-INTEGRATIONS.md) for the tool workflow.
+
 The examples use placeholders returned by earlier commands. Model choice and
 edit format require separate outcome measurements; an accepted edit receipt
 alone does not establish a quality or cost improvement.

@@ -1,5 +1,10 @@
 # Host capabilities — what each agent can actually enforce
 
+Straitjacket is the sidecar; the hosts below are the coding harnesses. Each
+integration connects the sidecar's evidence tools to the user's existing agent.
+The optional `antigravity-sdk` entry is a separate ctx-owned agent runtime,
+not a requirement for using the sidecar with Google's Antigravity CLI.
+
 **Status:** current implementation and published host contracts. Claude Code
 and Antigravity have live receipts; the Codex gates are contract-tested but
 still await a live CLI run. **Antigravity contract source:**
@@ -10,10 +15,10 @@ still await a live CLI run. **Antigravity contract source:**
 > [How it works](HOW-IT-WORKS.md) first: ten minutes, one command walked through
 > the whole system.
 
-straitjacket harnesses four hosts, and they do **not** all protect you equally.
-The difference is not effort or polish — it is what each host's published hook
-contract permits. This page tells you what you actually get on the host you use,
-and what to do where the guarantee is weaker.
+Keep using your preferred coding agent. Straitjacket's integrations range from
+explicit MCP tools to automatic command interception, depending on the adapter
+implemented and the host's API. CLI capture and the verified edit workflow are
+available to any agent with terminal access.
 
 ## The two gates
 
@@ -34,10 +39,28 @@ tool's arguments*; the output gate needs a way to *replace a tool's result*.
 
 | host | birth gate | output gate | how |
 |---|---|---|---|
-| **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `updatedToolOutput` |
-| **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
-| **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
+| <img src="../assets/agents/claude.svg" width="24" height="24" alt=""> **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `updatedToolOutput` |
+| <img src="../assets/agents/codex.svg" width="24" height="24" alt=""> **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
+| <img src="../assets/agents/antigravity.png" width="24" height="24" alt=""> **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
 | **antigravity-sdk** (ctx's own agent) | ✅ bounded inside the tool | ✅ bounded inside the tool | see below |
+| <img src="../assets/agents/hermes.svg" width="24" height="24" alt=""> **hermes** (Nous Hermes Agent) | Contract-tested argument rewrite | Contract-tested text replacement | `pre_tool_call` / `transform_tool_result` |
+| <img src="../assets/agents/omp.svg" width="24" height="24" alt=""> **omp** (Oh My Pi) | Contract-tested argument rewrite | Contract-tested text replacement | `tool_call` / `tool_result` |
+| <img src="../assets/agents/opencode.svg" width="24" height="24" alt=""> **opencode** | Contract-tested argument rewrite | Contract-tested text replacement | `tool.execute.before` / `tool.execute.after` |
+| <img src="../assets/agents/dsh.svg" width="24" height="24" alt=""> **dsh** (DeepSeek Harness) | Deny and name the bounded retry | Contract-tested text replacement | `tools/pre-execute` / `tools/post-execute` |
+
+The four new integrations have configuration, executable plugin, and subprocess
+tests, not live model-session receipts. All seven agents can use the optional
+[ACP worker transport](ACP.md) after endpoint/model setup. Every ACP session
+receives `ctx` retrieval and `ctx_edit` patch/rewrite tools. Native interception
+requires the adapter to load the host's plugin; receiving ACP tool updates alone
+does not provide interception. See [setup and removal](AGENT-INTEGRATIONS.md).
+
+The new plugins bound **text** results, preserving non-text blocks and metadata.
+OMP's direct eval/browser bridges do not emit these tool hooks, and its error
+path can rethrow the original error after the callback. DSH cannot rewrite
+sealed input arguments; its post-hook also preserves a downstream plugin's
+canonical-value rewrite rather than substituting stale presentation text.
+These paths still have explicit `ctx run` and verified edit tools available.
 
 On Claude Code, containment is invisible: you type `pytest -q`, the hook
 silently substitutes `ctx run -- pytest -q`, and the agent never sees a refusal.

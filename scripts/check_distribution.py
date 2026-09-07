@@ -23,6 +23,13 @@ from pathlib import Path
 
 
 REQUIRED_FILES = {
+    "ctx/data/native-hooks/bridge.mjs",
+    "ctx/data/native-hooks/hermes.py",
+    "ctx/data/native-hooks/omp.mjs",
+    "ctx/data/native-hooks/opencode.mjs",
+    "ctx/data/native-hooks/dsh.mjs",
+    "ctx/acp.py",
+    "ctx/mcp_edits.py",
     "ctx/data/antigravity/plugin.json",
     "ctx/data/antigravity/hooks.json",
     "ctx/data/codex/config.toml",
@@ -140,10 +147,12 @@ def check(wheel: Path, sdist: Path | None = None) -> None:
                     f"runtime version mismatch: expected 'ctx {version}', got {actual!r}"
                 )
 
-            for host in ("antigravity", "claude", "codex"):
+            for host in ("antigravity", "claude", "codex", "hermes", "omp", "opencode", "dsh"):
                 rendered = _run(ctx, clean_root, "wrap", host, "--print-config")
                 if not rendered.strip():
                     raise RuntimeError(f"{host} renderer returned no configuration")
+                if host in ("hermes", "omp", "opencode", "dsh"):
+                    json.loads(rendered)
 
             # Exercise the two Codex contracts that are easy to get subtly
             # wrong and otherwise fail only when the next Codex session starts.

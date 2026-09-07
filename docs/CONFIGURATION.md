@@ -9,6 +9,11 @@ budget, tighten the guard, or add a monorepo scope.
 
 ## Where configuration lives
 
+This page covers Straitjacket policy. Agent-side MCP and hook settings are
+separate: see [Getting started](GETTING-STARTED.md) and
+[Agent integrations](AGENT-INTEGRATIONS.md). Hermes' MCP entry belongs to its
+active profile; OMP and OpenCode use project files, and DSH uses a launch overlay.
+
 straitjacket reads **exactly one file: `ctx.toml` at the workspace root.** There
 is no upward search and no user-global or machine-global config — configuration
 is per-workspace and committed with the repo. `ctx init` (or `ctx setup`)

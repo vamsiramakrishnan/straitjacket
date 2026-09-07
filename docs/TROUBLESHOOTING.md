@@ -238,6 +238,11 @@ fallback with the same output contract. `ctx doctor` shows which engine is
 active.
 
 **How do I set up just one host?**
+For Hermes, OMP, OpenCode, and DSH, see
+[Agent integrations](AGENT-INTEGRATIONS.md) for configuration conflicts,
+profile selection, DSH's required launch patch, and removal. These integrations
+do not intercept native tools; use `ctx run` explicitly for command capture.
+
 `ctx wrap antigravity`, `ctx wrap claude`, `ctx wrap codex`, or
 `ctx wrap antigravity-sdk` each set up exactly one. `ctx setup` detects
 which agent CLIs you have and configures those, then verifies the result and

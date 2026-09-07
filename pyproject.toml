@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ctx-harness"
 dynamic = ["version"]
-description = "straitjacket: local context containment for coding agents. Large captured output becomes an artifact plus a bounded, addressable digest."
+description = "straitjacket: context and evidence sidecar for coding agents. Keep your harness; add bounded output, retrieval, and edit verification."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

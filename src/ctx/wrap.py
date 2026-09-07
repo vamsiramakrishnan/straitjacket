@@ -485,8 +485,11 @@ def render_detect_table(detected: list) -> str:
         installed = "yes" if d.installed else "no"
         wrap = "yes" if d.harnessable else "todo"
         price = f"{_fmt_price(d.price.input)}/{_fmt_price(d.price.output)}"
+        tier = d.price.tier
+        if d.model == "unknown":
+            price, tier = "unknown", "unknown"
         rows.append(
-            (d.name, installed, d.model, d.price.tier, price, wrap)
+            (d.name, installed, d.model, tier, price, wrap)
         )
     widths = [
         max(len(header[i]), *(len(r[i]) for r in rows)) if rows else len(header[i])
@@ -506,7 +509,9 @@ def render_detect_table(detected: list) -> str:
         names = ", ".join(d.name for d in installed_wrappable)
         out.append(f"harnessable now: {names}")
         out.append("  ctx setup           # configure the installed hosts")
-        out.append("  ctx orchestrate \"<task>\"  # route work across them by cost")
+        if any(d.spec.unattended for d in installed_wrappable):
+            out.append("  ctx orchestrate \"<task>\"  # route across eligible unattended workers")
+        out.append("  MCP-only integrations provide explicit tools, not orchestration workers")
     else:
         out.append(
             "no harnessable CLI detected on PATH — install one of: claude, "
@@ -592,6 +597,10 @@ def guided_setup(
     target = (list(hosts) if hosts is not None
               else ([d.name for d in will] if (will and not force_all)
                     else list(SETUP_HOSTS)))
+    if not explicit and not will:
+        # Hermes needs its installed profile writer. An implicit inert recipe
+        # would poison doctor checks for every later host setup.
+        target = [name for name in target if name != "hermes"]
     prior = load_setup_receipt(ws.root)
     conflicts = setup_conflicts(ws, target)
     strategy = choose_setup(
@@ -630,6 +639,10 @@ def guided_setup(
             f"{', '.join(target)}; managed config unchanged"
         )
         print("  next: start your agent (use `ctx setup --repair` to force verification)")
+        from ctx.mcp_hosts import HOSTS, next_step
+        for host in target:
+            if host in HOSTS:
+                print("  " + next_step(host, ws.root))
         record_setup(
             ws.root,
             target,
@@ -657,7 +670,8 @@ def guided_setup(
                   f"`ctx wrap {d.name}`")
     else:
         print("  no coding-agent CLI found on PATH.")
-        print(f"  configuring all supported hosts anyway ({', '.join(SETUP_HOSTS)}) —")
+        print(f"  preparing project-local integrations ({', '.join(target)}) —")
+        print("  Hermes needs its installed CLI; run `ctx setup --host hermes` after installation.")
         print("  the config is inert until a CLI reads it, so installing one later")
         print("  needs no second setup.")
 
@@ -666,7 +680,17 @@ def guided_setup(
     # Indented so the per-host detail reads as evidence *under* this step
     # rather than as the whole output. It is kept in full on purpose: these
     # lines name every file written, which is what makes the undo note true.
-    for line in setup_hosts(ws, target).splitlines():
+    from ctx.mcp_hosts import IntegrationError
+
+    try:
+        setup_report = setup_hosts(ws, target)
+    except (IntegrationError, OSError) as exc:
+        print(f"  setup incomplete: {exc}", file=sys.stderr)
+        record_setup(ws.root, target, strategy=strategy, success=False,
+                     checks_total=1, checks_passed=0,
+                     duration_ms=(time.perf_counter() - started) * 1000)
+        return 1
+    for line in setup_report.splitlines():
         print(f"  {line}" if line.strip() else "")
 
     # ---------------------------------------------------------------- verify
@@ -688,7 +712,7 @@ def guided_setup(
         print("  fix the checks above first — until then containment is partial.")
         print("  most common cause: `ctx` not on PATH for the agent's environment.")
     else:
-        print("  Nothing else to do. Your agent is harnessed from its next session.")
+        print("  Configuration checks passed. Follow the host's start instructions above.")
     print()
     print("  see it work now (no agent needed):")
     print("      ctx run -- <any noisy command, e.g. your test suite>")
@@ -729,13 +753,14 @@ def wrap_setup(
 
     ``force_all`` (``ctx wrap all``/``--all``) restores the configure-everything
     behaviour; an explicit ``hosts`` list overrides detection entirely. When no
-    harnessable CLI is found on PATH, setup falls back to configuring all
-    supported hosts (config is inert until a CLI reads it) with a note.
+    harnessable CLI is found on PATH, setup prepares project-local integrations
+    with a note. Hermes waits for its installed profile writer.
 
     Output is guided by default (survey → harness → verify → next step); set
     ``CTX_SETUP_PLAIN=1`` for the bare installer report, which is what scripts
     that parse this output want."""
     from ctx.installer import SETUP_HOSTS, setup_hosts
+    from ctx.mcp_hosts import IntegrationError
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(str(workspace_root))
@@ -754,7 +779,11 @@ def wrap_setup(
             d.name for d in detected if d.harnessable and not d.installed
         ]
         if installed:
-            report = setup_hosts(ws, installed)
+            try:
+                report = setup_hosts(ws, installed)
+            except (IntegrationError, OSError) as exc:
+                print(f"ctx setup: {exc}", file=sys.stderr)
+                return 1
             print(report)
             if skipped:
                 print()
@@ -766,17 +795,27 @@ def wrap_setup(
             return 0
         # Nothing detected: configure all supported hosts so the workspace is
         # ready the moment a CLI is installed. Idempotent and non-destructive.
+        hosts = [name for name in SETUP_HOSTS if name != "hermes"]
         print(
-            "no coding-agent CLI detected on PATH; configuring all supported "
-            f"hosts ({', '.join(SETUP_HOSTS)}) — config is inert until a CLI reads it.\n"
+            "no coding-agent CLI detected on PATH; preparing project-local "
+            f"integrations ({', '.join(hosts)}) — config is inert until a CLI reads it.\n"
+            "Hermes needs its installed CLI; run `ctx setup --host hermes` after installation."
         )
 
-    print(setup_hosts(ws, hosts))
+    try:
+        print(setup_hosts(ws, hosts))
+    except (IntegrationError, OSError) as exc:
+        print(f"ctx setup: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
 def print_config(host: str, ctx_exe: str | None = None) -> str:
     """Copy-pasteable configuration for a host, for CI and docs."""
+    from ctx.mcp_hosts import HOSTS, render_config
+
+    if host in HOSTS:
+        return render_config(host, Path.cwd(), ctx_exe)
     exe = ctx_exe or _ctx_executable()
     if host == "claude":
         return json.dumps(prepare_claude(Path.cwd(), exe), indent=2)
@@ -804,3 +843,23 @@ def print_config(host: str, ctx_exe: str | None = None) -> str:
     raise ValueError(
         f"unsupported wrap host {host!r} (expected claude|antigravity|codex)"
     )
+
+
+def wrap_hermes(workspace_root: Path, agent_args=None) -> int:
+    from ctx.mcp_hosts import wrap
+    return wrap("hermes", workspace_root, agent_args)
+
+
+def wrap_omp(workspace_root: Path, agent_args=None) -> int:
+    from ctx.mcp_hosts import wrap
+    return wrap("omp", workspace_root, agent_args)
+
+
+def wrap_opencode(workspace_root: Path, agent_args=None) -> int:
+    from ctx.mcp_hosts import wrap
+    return wrap("opencode", workspace_root, agent_args)
+
+
+def wrap_dsh(workspace_root: Path, agent_args=None) -> int:
+    from ctx.mcp_hosts import wrap
+    return wrap("dsh", workspace_root, agent_args)
