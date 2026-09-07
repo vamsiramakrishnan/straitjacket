@@ -8,7 +8,8 @@
 //        - a link to the docs index      (README.md)   -> the site home
 //        - a link that escapes docs/      (../evals/…)  -> a GitHub URL
 //      (absolute URLs, in-page anchors, and asset links are left untouched;
-//       SVG embeds already use absolute raw.githubusercontent URLs.)
+//       SVG embeds already use absolute raw.githubusercontent URLs; agent marks
+//       are copied into the site and rewritten to local assets.)
 //
 // PAGES is the set published by Starlight. The sidebar in ../astro.config.mjs
 // intentionally exposes only the product path; specialist pages may still be
@@ -31,6 +32,7 @@ const BASE = '/straitjacket'; // must match `base` in astro.config.mjs
 const OWNER_REPO = 'vamsiramakrishnan/straitjacket';
 const GH_BLOB = `https://github.com/${OWNER_REPO}/blob/main/`;
 const GH_TREE = `https://github.com/${OWNER_REPO}/tree/main/`;
+const RAW_AGENTS = `https://raw.githubusercontent.com/${OWNER_REPO}/main/assets/agents/`;
 
 // [ source filename, site slug, title, description ]
 const PAGES = [
@@ -77,6 +79,8 @@ const SLUG_BY_FILE = new Map(PAGES.map(([src, slug]) => [src, `${BASE}/${slug}/`
 // Rewrite a single link target for the site. Returns the new target.
 function rewriteTarget(value) {
   const v = value.trim();
+  // Canonical docs use portable raw URLs; serve this build's vendored marks.
+  if (v.startsWith(RAW_AGENTS)) return `${BASE}/agents/${v.slice(RAW_AGENTS.length)}`;
   // Leave absolute URLs, in-page anchors, and mail/data URIs untouched.
   if (/^[a-z][a-z0-9+.-]*:/i.test(v) || v.startsWith('//') || v.startsWith('#')) {
     return value;
