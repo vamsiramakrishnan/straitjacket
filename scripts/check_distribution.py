@@ -30,6 +30,20 @@ REQUIRED_FILES = {
     "ctx/data/native-hooks/dsh.mjs",
     "ctx/acp.py",
     "ctx/mcp_edits.py",
+    "ctx/commands/semantic.py",
+    "ctx/semantic/__init__.py",
+    "ctx/semantic/contract.py",
+    "ctx/semantic/evidence.py",
+    "ctx/semantic/engine.py",
+    "ctx/semantic/worker.py",
+    "ctx/semantic/hosts.py",
+    "ctx/task_runtime.py",
+    "ctx/accounting.py",
+    "ctx/evidence_access.py",
+    "ctx/evidence_ops.py",
+    "ctx/commands/tasks.py",
+    "ctx/controllers/investigation.py",
+    "ctx/controllers/investigation_contract.py",
     "ctx/data/antigravity/plugin.json",
     "ctx/data/antigravity/hooks.json",
     "ctx/data/codex/config.toml",
@@ -146,6 +160,40 @@ def check(wheel: Path, sdist: Path | None = None) -> None:
                 raise RuntimeError(
                     f"runtime version mismatch: expected 'ctx {version}', got {actual!r}"
                 )
+
+            # The semantic SDK must work from the installed wheel with no
+            # provider, source checkout, optional dependencies, or model call.
+            _run(python, clean_root, "-c", """
+import pathlib, sys
+from ctx.semantic import prepare, inspect
+from ctx.store import Store
+from ctx.workspace import resolve_workspace
+root = pathlib.Path('semantic-workspace')
+root.mkdir()
+(root / 'ctx.toml').write_text('version = 1\\n')
+(root / 'evidence.py').write_text('answer = 42\\n')
+ws = resolve_workspace(str(root))
+store = Store(ws.workspace_id, state_root=root / 'state')
+try:
+    handle = prepare(ws, store, {'question': 'What is the answer?',
+        'sources': ['repo:evidence.py'], 'worker': {'identity': 'smoke-no-model',
+        'model': 'fixture', 'command': [sys.executable, '-c', 'raise AssertionError']}})
+    _, report = inspect(ws, store, handle)
+    assert report['totals']['calls'] == 0
+    assert report['coverage']['selected_partitions'] == 1
+    from ctx.task_runtime import TaskRuntime
+    from ctx.controllers import investigation
+    from ctx.plan_ops import OPS
+    assert 'semantic.map' in OPS and 'evidence.read' in OPS
+    rt = TaskRuntime.create(ws, store, goal='installed execution smoke')
+    with rt.active():
+        assert rt.perform('observe', 'fixture.observe', {}, lambda timeout: {'answer': 42})['answer'] == 42
+    resumed = TaskRuntime(ws, store, rt.task_id)
+    with resumed.active():
+        assert resumed.perform('observe', 'fixture.observe', {}, lambda timeout: None)['answer'] == 42
+finally:
+    store.close()
+""")
 
             for host in ("antigravity", "claude", "codex", "hermes", "omp", "opencode", "dsh"):
                 rendered = _run(ctx, clean_root, "wrap", host, "--print-config")

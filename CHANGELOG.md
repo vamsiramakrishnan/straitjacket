@@ -6,6 +6,33 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+`ctx task prepare/run/resume/show/cancel/apply` adds an opt-in investigation
+controller over shared execution services. Registered evidence operations,
+semantic subcalls, captured commands, anchored edits and independent checks
+share a durable `TaskRuntime` with root budgets, replay identities and retained
+artifact dependencies. The controller reproduces a failure in a retained Git
+worktree, investigates it, and feeds failed repairs back into investigation.
+Passing fixed checks produce a reviewable patch; applying it to the original
+checkout remains explicit. Existing ACP endpoints can supply reasoning with
+their pinned agent/model. Fixture tests establish execution and recovery
+mechanics, not model quality or cost gains. See [Task execution](docs/TASK-EXECUTION.md)
+and [ADR 007](spec/adr/007-durable-task-execution.md).
+
+Interrupted semantic calls now retain their reserved wall time even when a
+shorter elapsed duration was observed before interruption. Explicit retries
+cannot reclaim that uncertain allowance.
+
+`ctx semantic prepare/run/resume/show` adds explicit, depth-one model analysis
+over frozen evidence through a caller-configured JSON driver or SDK callback.
+File/symbol/paragraph/line partitioning preserves exact model-view coverage;
+support and counterevidence citations must belong to the assigned partition.
+Findings remain labeled inferences, with unknown selection completeness.
+Durable pre-launch reservations, shared call/time/token/cost admission budgets,
+explicit retries, process cleanup, bounded output, and retained checkpoints make
+partial runs inspectable and resumable. Existing deterministic observation paths
+remain model-free. Tests use fixture workers; no live quality, cost, or latency
+advantage is claimed. See [Semantic analysis](docs/SEMANTIC.md).
+
 Hermes, Oh My Pi (`omp`), OpenCode, and DeepSeek Harness (`dsh`) now have
 explicit MCP integrations, host detection, setup, launch wrappers, and
 configuration checks. Existing Claude Code, Codex, and Antigravity integrations

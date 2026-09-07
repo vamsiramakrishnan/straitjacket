@@ -71,6 +71,7 @@ class OpSpec:
     # expected baseline coverage in [0,1]). Additive: {} means the op makes
     # no declared dimension claim and ranks on priors + cost alone.
     provides: Mapping[str, float] = field(default_factory=dict)
+    composite: bool = False
 
 
 OPS: dict[str, OpSpec] = {}
@@ -93,6 +94,7 @@ def register_op(
     cacheable: bool = False,
     input_optional: bool = False,
     provides: Mapping[str, float] | None = None,
+    composite: bool = False,
 ) -> None:
     OPS[name] = OpSpec(
         name,
@@ -110,6 +112,7 @@ def register_op(
         cacheable,
         input_optional,
         dict(provides or {}),
+        composite,
     )
 
 
@@ -120,6 +123,9 @@ class PlanContext:
     timeout: float = 600.0
     generation: str | None = None
     trace: list[str] = field(default_factory=list)
+    runtime: Any = None
+    evidence: Any = None
+    worker: Any = None
 
 
 def payload(
@@ -919,3 +925,8 @@ __all__ = [
     "payload",
     "ops_census",
 ]
+
+# These are ordinary registered plan operations, also available to SDK
+# consumers. Model and command composites require an explicit execution context.
+from ctx.evidence_ops import install as _install_evidence_ops
+_install_evidence_ops()

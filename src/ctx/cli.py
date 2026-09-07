@@ -185,6 +185,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
     "ask": ("plans", "cmd_ask", True),
+    "semantic": ("semantic", "cmd_semantic", True),
     "surface": ("surfaces", "cmd_surface", True),
     "prune": ("surfaces", "cmd_prune", True),
     "gain": ("admin", "cmd_gain", True),
@@ -354,6 +355,21 @@ def _build_parser():
         help="repo to work in (default: the git root above the current directory)",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_semantic = sub.add_parser("semantic", help="explicit model analysis over selected evidence")
+    semantic_sub = p_semantic.add_subparsers(dest="semantic_cmd", required=True)
+    p_semantic_prepare = semantic_sub.add_parser("prepare", help="freeze a selection without calling a model")
+    p_semantic_prepare.add_argument("request_file", help="request JSON in the workspace, or - for stdin")
+    for name in ("run", "resume", "show"):
+        p_semantic_action = semantic_sub.add_parser(name, help={
+            "run": "execute the plan's explicitly configured worker",
+            "resume": "continue a saved map within its remaining root budget",
+            "show": "read the latest report without invoking a worker",
+        }[name])
+        p_semantic_action.add_argument("handle", help="prepared plan's blob: handle")
+        if name != "show":
+            p_semantic_action.add_argument("--retry-failed", action="store_true",
+                                           help="retry failed or uncertain partitions using additional budget")
 
     p_setup = sub.add_parser(
         "setup", prog="ctx setup",
@@ -872,6 +888,17 @@ def _build_parser():
         "task", help="the task ledger: how harnesses collaborated on a task"
     )
     task_sub = p_task.add_subparsers(dest="task_cmd", required=True)
+    p_tp = task_sub.add_parser("prepare", help="prepare a bounded investigation with fixed checks")
+    p_tp.add_argument("request_file", help="task request JSON in the workspace, or - for stdin")
+    for action in ("run", "resume", "apply", "cancel"):
+        p_tx = task_sub.add_parser(action, help={"run": "investigate and verify a repair in a retained worktree",
+            "resume": "continue from durable operation results and remaining budget",
+            "apply": "apply a verified patch to its clean original checkout",
+            "cancel": "stop dispatch and cancel owned running processes"}[action])
+        p_tx.add_argument("task", metavar="TASK")
+        if action in ("run", "resume"):
+            p_tx.add_argument("--retry-failed", action="store_true",
+                              help="allow another charged attempt after a failed or uncertain call")
     task_sub.add_parser("ls", help="tasks with a ledger in this workspace, newest first")
     p_ts = task_sub.add_parser("show", help="claims, handbacks, steward decisions, inbox")
     p_ts.add_argument("task", metavar="TASK")

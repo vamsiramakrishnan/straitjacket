@@ -39,6 +39,7 @@ const PAGES = [
   ['AGENT-INTEGRATIONS.md', 'guides/agent-integrations', 'Agent integrations', 'Keep your agent: connect Hermes, OMP, OpenCode, and DeepSeek Harness.'],
   ['ACP.md', 'guides/acp', 'ACP orchestration', 'Configure agent endpoints, permissions, and verified edit tools.'],
   ['EDIT-LOOP.md', 'guides/edit-loop', 'Edit and verify', 'Observed source, anchored edits, verification, and evidence-gated continuation.'],
+  ['SEMANTIC.md', 'guides/semantic', 'Semantic analysis', 'Explicit model calls over frozen evidence, with budgets and resumable findings.'],
   // Start here
   ['HOW-IT-WORKS.md', 'start/how-it-works', 'How it works', 'A ten-minute, plain-language walkthrough of one command through the whole system.'],
   ['GETTING-STARTED.md', 'start/getting-started', 'Getting started', 'From a checkout to one harnessed session, then capture, inspect, and retrieve.'],

@@ -50,6 +50,8 @@ retrieval returns bounded regions on demand
 | Understand content-stable repository addresses | [Anchors](ANCHORS.md) |
 | Route work across hosts and models | [Routing](ROUTING.md) |
 | Run or resume multi-agent work | [Task ledger](TASK-LEDGER.md) |
+| Analyze frozen evidence with explicit model calls | [Semantic analysis](SEMANTIC.md) |
+| Investigate a bug and verify a repair under one durable budget | [Task execution](TASK-EXECUTION.md) |
 | Hand a frontier model's edit off to a cheaper one | [Prewalk](PREWALK.md) |
 | See module ownership and data flow | [Architecture](ARCHITECTURE.md) |
 | Add a typed digest | [Writing a profile](WRITING-A-PROFILE.md) |

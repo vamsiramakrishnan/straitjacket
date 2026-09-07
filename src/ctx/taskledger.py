@@ -62,10 +62,12 @@ HANDBACK_SCHEMA = "ctx.handback/v1"
 STEWARD_SCHEMA = "ctx.steward/v1"
 VERDICT_SCHEMA = "ctx.verdict/v1"
 INBOX_SCHEMA = "ctx.inbox/v1"
+OPERATION_SCHEMA = "ctx.operation/v1"
+STATE_SCHEMA = "ctx.execution-state/v1"
 
 SCHEMAS = (
     TASK_SCHEMA, CLAIM_SCHEMA, HANDBACK_SCHEMA,
-    STEWARD_SCHEMA, VERDICT_SCHEMA, INBOX_SCHEMA,
+    STEWARD_SCHEMA, VERDICT_SCHEMA, INBOX_SCHEMA, OPERATION_SCHEMA, STATE_SCHEMA,
 )
 
 #: Why a node stopped. ``done`` is the only success; everything else is a
@@ -152,6 +154,21 @@ def _check(row: dict[str, Any]) -> None:
         raise LedgerError(f"steward action {row.get('action')!r} not in {STEWARD_ACTIONS}")
     if schema == INBOX_SCHEMA:
         _check_inbox(row)
+    if schema == OPERATION_SCHEMA:
+        if row.get("status") not in {"running", "done", "failed", "uncertain"}:
+            raise LedgerError("invalid operation status")
+        if row.get("kind") not in {"observe", "execute", "mutate", "model"}:
+            raise LedgerError("invalid operation kind")
+        for field in ("operation_id", "key", "op"):
+            if not isinstance(row.get(field), str) or not row[field] or len(row[field]) > 512:
+                raise LedgerError("invalid operation identity")
+        check_address(row.get("request"))
+        if row.get("result"):
+            check_address(row["result"])
+    if schema == STATE_SCHEMA:
+        if not isinstance(row.get("name"), str) or not 1 <= len(row["name"]) <= 128:
+            raise LedgerError("invalid execution checkpoint name")
+        check_address(row.get("ref"))
 
 
 def check_address(ref: Any) -> str:
@@ -204,7 +221,7 @@ def _check_inbox(row: dict[str, Any]) -> None:
     check_address(row.get("ref"))
 
 
-def append(workspace_root: Path | str, row: dict[str, Any]) -> dict[str, Any]:
+def append(workspace_root: Path | str, row: dict[str, Any], *, durable: bool = False) -> dict[str, Any]:
     """Validate and append one row. Stamps ``ts``. Returns the stored row.
 
     Raises :class:`LedgerError` on a row outside the contract and lets I/O
@@ -249,6 +266,14 @@ def append(workspace_root: Path | str, row: dict[str, Any]) -> dict[str, Any]:
         written = 0
         while written < len(payload):
             written += os.write(fd, payload[written:])
+        if durable:
+            os.fsync(fd)
+            # Also persist the directory entry when this creates a journal.
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     finally:
         os.close(fd)  # closing releases the flock
     return stored
@@ -415,6 +440,8 @@ class TaskState:
     steward: list[dict[str, Any]] = field(default_factory=list)
     verdicts: list[dict[str, Any]] = field(default_factory=list)
     inbox: list[dict[str, Any]] = field(default_factory=list)
+    operations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    checkpoints: dict[str, str] = field(default_factory=dict)
 
     @property
     def budget_usd(self) -> float:
@@ -460,6 +487,12 @@ def task_state(rows: Iterable[dict[str, Any]]) -> TaskState:
     state = TaskState(task_id=task_id, task=None)
     for r in rows:
         schema = r.get("schema")
+        if schema == OPERATION_SCHEMA:
+            state.operations[r["operation_id"]] = r
+            continue
+        if schema == STATE_SCHEMA:
+            state.checkpoints[r["name"]] = r["ref"]
+            continue
         if schema == TASK_SCHEMA:
             if state.task is None:
                 state.task = r
@@ -508,7 +541,18 @@ def render_task(state: TaskState) -> str:
             f"goal: {t.get('goal_ref')} · kind {t.get('task_kind')} · source {t.get('source')} · budget unbounded"
         )
     spent = f"${state.spent_usd:.4f}" + ("" if state.cost_complete else " (partial)")
-    lines.append(f"spent: {spent} · turns: {state.turns} · nodes: {len(state.nodes)}")
+    if state.operations:
+        from ctx.task_runtime import totals
+        usage = totals(state.operations.values())
+        lines.append(f"operations: {usage['steps']} · model calls: {usage['calls']} · "
+                     f"known cost: ${usage['known_cost_usd']:.4f} · unknown-cost calls: {usage['unknown_cost_calls']}")
+        rows = list(state.operations.values())
+        for op in rows[-30:]:
+            lines.append(f"  {op['op']} · {op['status']} · {op.get('result') or op['request']}")
+        if len(rows) > 30:
+            lines.append(f"  omitted: {len(rows) - 30} earlier operations")
+    else:
+        lines.append(f"spent: {spent} · turns: {state.turns} · nodes: {len(state.nodes)}")
     for nid, n in state.nodes.items():
         hb = n.last_handback or {}
         who = f"{hb.get('host')}/{hb.get('model')}" if hb else (
@@ -539,7 +583,7 @@ def render_task(state: TaskState) -> str:
 
 __all__ = [
     "TASK_SCHEMA", "CLAIM_SCHEMA", "HANDBACK_SCHEMA", "STEWARD_SCHEMA",
-    "VERDICT_SCHEMA", "INBOX_SCHEMA", "SCHEMAS",
+    "VERDICT_SCHEMA", "INBOX_SCHEMA", "OPERATION_SCHEMA", "STATE_SCHEMA", "SCHEMAS",
     "HANDBACK_REASONS", "FAILURE_KINDS", "STEWARD_ACTIONS", "INBOX_NOTE_CHARS",
     "INBOX_REF_CHARS", "check_address",
     "LedgerError", "new_task_id", "ledger_path", "append", "load", "list_tasks",

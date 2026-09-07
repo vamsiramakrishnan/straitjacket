@@ -43,6 +43,11 @@ different safety contracts. The mental model can stay small.
 | Why the import fails | `ctx cycles` / `ctx cycles --calls` | Circular imports between files, or mutual recursion between functions |
 | Lint/syntax digest | `ctx diag <path>` | Deterministic diagnostics without running a full linter into context |
 | A compiled investigation | `ctx plan …` / `ctx plan run …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
+| Explicit model analysis | `ctx semantic prepare/run/resume/show …` | Frozen evidence, bounded worker calls, validated citations, and durable partial reports |
+| Investigate and verify a repair | `ctx task prepare/run/resume/show/apply …` | Shared task budget, retained worktree, adaptive evidence gathering, and independent checks |
+
+See [semantic analysis](SEMANTIC.md) for the request/worker protocol and the
+distinction between admission estimates and hard process bounds.
 
 ### Edit and verify observed source
 

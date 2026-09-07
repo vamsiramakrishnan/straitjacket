@@ -86,6 +86,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("ask", "ask a question about this repo; get one evidence-backed answer"),
             ("q", "chain retrieval steps into one query"),
             ("plan", "build, price and run a multi-step evidence plan"),
+            ("semantic", "ask a model about selected evidence, with explicit budgets and saved progress"),
             ("def", "where a symbol is defined"),
             ("refs", "where a symbol is used"),
             ("callers", "what calls this symbol"),
