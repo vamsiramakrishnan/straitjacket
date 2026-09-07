@@ -226,6 +226,10 @@ def cmd_task(ws, ns) -> int:
 
     from ctx import taskledger as ledger
 
+    if ns.task_cmd in {"prepare", "run", "resume", "apply", "cancel"}:
+        from ctx.commands.tasks import cmd_execution_task
+        return cmd_execution_task(ws, ns)
+
     if ns.task_cmd == "ls":
         ids = ledger.list_tasks(ws.root)
         if not ids:
@@ -233,12 +237,21 @@ def cmd_task(ws, ns) -> int:
             return 0
         for tid in ids:
             st = ledger.task_state(ledger.load(ws.root, tid))
+            if "execution" in st.checkpoints:
+                from ctx.task_runtime import totals
+                usage = totals(st.operations.values())
+                print(f"{tid}  operations {usage['steps']}  model calls {usage['calls']}  "
+                      f"known cost ${usage['known_cost_usd']:.4f}  unknown-cost calls {usage['unknown_cost_calls']}")
+                continue
             done = sum(1 for n in st.nodes.values() if n.done)
             print(f"{tid}  nodes {done}/{len(st.nodes)} done  spent ${st.spent_usd:.4f}"
                   + ("" if st.cost_complete else " (partial)"))
         return 0
     if ns.task_cmd == "show":
         rows = ledger.load(ws.root, ns.task)
+        if "investigation" in ledger.task_state(rows).checkpoints:
+            from ctx.commands.tasks import cmd_execution_task
+            return cmd_execution_task(ws, ns)
         if not rows:
             print(f"ctx task: unknown task {ns.task}", file=sys.stderr)
             return 2

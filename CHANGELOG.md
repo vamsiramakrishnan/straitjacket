@@ -6,6 +6,22 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+`ctx task prepare/run/resume/show/cancel/apply` adds an opt-in investigation
+controller over shared execution services. Registered evidence operations,
+semantic subcalls, captured commands, anchored edits and independent checks
+share a durable `TaskRuntime` with root budgets, replay identities and retained
+artifact dependencies. The controller reproduces a failure in a retained Git
+worktree, investigates it, and feeds failed repairs back into investigation.
+Passing fixed checks produce a reviewable patch; applying it to the original
+checkout remains explicit. Existing ACP endpoints can supply reasoning with
+their pinned agent/model. Fixture tests establish execution and recovery
+mechanics, not model quality or cost gains. See [Task execution](docs/TASK-EXECUTION.md)
+and [ADR 007](spec/adr/007-durable-task-execution.md).
+
+Interrupted semantic calls now retain their reserved wall time even when a
+shorter elapsed duration was observed before interruption. Explicit retries
+cannot reclaim that uncertain allowance.
+
 `ctx semantic prepare/run/resume/show` adds explicit, depth-one model analysis
 over frozen evidence through a caller-configured JSON driver or SDK callback.
 File/symbol/paragraph/line partitioning preserves exact model-view coverage;

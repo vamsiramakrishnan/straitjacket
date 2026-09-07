@@ -304,6 +304,11 @@ CREATE TABLE IF NOT EXISTS leases (
     expires_at REAL,              -- NULL = pinned forever
     PRIMARY KEY (id, reason)
 );
+CREATE TABLE IF NOT EXISTS artifact_edges (
+    source TEXT NOT NULL,
+    target TEXT NOT NULL,
+    PRIMARY KEY (source, target)
+);
 CREATE TABLE IF NOT EXISTS turn_usage (
     conversation_id TEXT NOT NULL,
     turn_id TEXT NOT NULL,
@@ -586,6 +591,20 @@ class Store:
                 (obj_id, reason, expires),
             )
 
+    def link_artifacts(self, source: str, value: object) -> None:
+        """Declare immutable artifact dependencies for transitive retention.
+
+        Opaque blobs stay opaque. Publishers of structured artifacts supply
+        their reference-bearing document; GC need not guess JSON or parse code.
+        Republishing can add retention roots but never removes prior edges.
+        """
+        source = source.removeprefix("blob:").removeprefix("sha256:")
+        source = self.resolve_id(source, kinds=("blob",))
+        targets = _referenced_blobs(value) - {source}
+        with self.db:
+            self.db.executemany("INSERT OR IGNORE INTO artifact_edges(source,target) VALUES (?,?)",
+                                [(source, target) for target in targets])
+
     def pin(self, obj_id: str) -> None:
         self.lease(self.resolve_id(obj_id), "pin", ttl_days=None)
 
@@ -648,14 +667,24 @@ class Store:
         # data loss, and the field list would have had to grow by hand for
         # every future kind. Over-marking is the safe direction for a
         # collector -- an extra live id merely survives a cycle.
-        for mid in list(live):
+        pending = list(live)
+        visited = set()
+        while pending:
+            mid = pending.pop()
+            if mid in visited:
+                continue
+            visited.add(mid)
+            references = {r[0] for r in self.db.execute(
+                "SELECT target FROM artifact_edges WHERE source=?", (mid,))}
             mpath = self.manifest_dir / f"{mid}.json"
             if mpath.is_file():
                 try:
                     manifest = json.loads(mpath.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
-                    continue
-                live |= _referenced_blobs(manifest)
+                    manifest = {}
+                references |= _referenced_blobs(manifest)
+            live |= references
+            pending.extend(references - visited)
         removed_blobs = removed_manifests = 0
         # Files are unlinked eagerly per object (unchanged); the two catalog
         # DELETEs are batched into one transaction with executemany instead
@@ -693,6 +722,7 @@ class Store:
             with self.db:
                 self.db.executemany("DELETE FROM objects WHERE id=?", params)
                 self.db.executemany("DELETE FROM leases WHERE id=?", params)
+                self.db.executemany("DELETE FROM artifact_edges WHERE source=?", params)
         return {"blobs_removed": removed_blobs, "manifests_removed": removed_manifests}
 
     # --------------------------------------------------------------- spans

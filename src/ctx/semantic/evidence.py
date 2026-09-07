@@ -5,7 +5,7 @@ import ast
 import json
 
 from ctx.refs import parse_ref
-from ctx.store import Store, canonical_json
+from ctx.store import Store
 from ctx.textutil import _redaction_of, sanitize_for_model
 from ctx.semantic.contract import PROMPT, RESPONSE_SCHEMA, SemanticError, identity, parse_json, request
 
@@ -23,6 +23,7 @@ def publish(store: Store, value: dict, *, evidence=()) -> str:
     """
     data = json.dumps(value, sort_keys=True, ensure_ascii=False, indent=2).encode("utf-8")
     ref = "blob:" + store.put_blob(data)
+    store.link_artifacts(ref, [value, *evidence])
     store.put_manifest({"schema": "ctx.semantic.artifact/v1", "artifact": ref,
                         "evidence": list(evidence), "document": value}, kind="semantic")
     return ref
@@ -185,5 +186,7 @@ def worker_request(store, plan, part):
              "question": plan["spec"]["question"], "worker": {
                  key: plan["spec"]["worker"][key] for key in ("identity", "model", "settings")},
              "max_output_tokens": plan["spec"]["limits"]["max_output_tokens"],
-             "evidence": dict(part, text=text), "response_schema": plan["response_schema"]}
-    return canonical_json(value)
+             "response_schema": plan["response_schema"], "evidence": dict(part, text=text)}
+    # Stable instructions/schema precede the changing evidence. Sorting the
+    # outer keys put evidence first and discarded this reusable prefix.
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()

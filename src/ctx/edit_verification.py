@@ -76,7 +76,7 @@ def applied_files(ws, receipt) -> dict[str, str]:
     return expected
 
 
-def verify_edit(ws, store, receipt_ref: str, checks: list[Check], *, witnesses=()) -> dict:
+def verify_edit(ws, store, receipt_ref: str, checks: list[Check], *, witnesses=(), runner=None) -> dict:
     """Run a bounded set of explicit checks and persist the resulting proof."""
     if not checks or len(checks) > 8:
         raise VerificationError("provide between one and eight checks")
@@ -94,11 +94,12 @@ def verify_edit(ws, store, receipt_ref: str, checks: list[Check], *, witnesses=(
         if file_digests(ws, inputs) != inputs:
             outcome = "stale"
             break
-        capture = run_capture(ws, list(check.argv), timeout=check.timeout, store=store)
+        capture = (runner or run_capture)(ws, list(check.argv), timeout=check.timeout, store=store)
         result = capture.manifest["result"]
         rows.append({"kind": check.kind, "argv": list(check.argv),
                      "runRef": "run:" + capture.manifest_id,
-                     "passed": result["exitCode"] == 0 and not result["timedOut"]})
+                     "passed": result["exitCode"] == 0 and not result["timedOut"]
+                     and not result.get("outputLimited", False) and not result.get("cancelled", False)})
         try:
             unchanged = file_digests(ws, inputs) == inputs
         except (OSError, ValueError):
@@ -145,6 +146,7 @@ def validate_verification(ws, store, ref: str) -> dict:
     for check in checks:
         run = store.get_manifest(check["runRef"].removeprefix("run:"))
         if (run.get("workspaceId") != ws.workspace_id or run.get("argv") != check["argv"]
-                or run["result"]["exitCode"] != 0 or run["result"]["timedOut"]):
+                or run["result"]["exitCode"] != 0 or run["result"]["timedOut"]
+                or run["result"].get("outputLimited", False) or run["result"].get("cancelled", False)):
             raise VerificationError("verification run failed or does not match the check")
     return proof

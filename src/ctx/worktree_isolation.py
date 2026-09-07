@@ -218,3 +218,61 @@ def apply_patches(root: Path, patches: list[WorktreePatch]) -> tuple[bool, str]:
         return True, ""
     applied = _git(root, "apply", "--whitespace=nowarn", "-", input_bytes=payload)
     return applied.returncode == 0, ("" if applied.returncode == 0 else _git_error(applied))
+
+
+class PersistentWorktree:
+    """An owned checkout that survives a task process and exposes guarded patches.
+
+    Lifecycle is explicit; completed work is retained for review. This is also
+    usable by SDK workflows unrelated to the investigation controller.
+    """
+    def __init__(self, root: Path, path: Path, base: str, *, output_bytes=8 * 1024 * 1024):
+        self.root, self.path, self.base = root.resolve(), path.resolve(), base
+        self.output_bytes = output_bytes
+
+    def git(self, *args, input_bytes=b"", root=None):
+        from ctx.semantic.worker import CommandWorker
+        result = CommandWorker(["git", *args], cwd=root or self.path)(input_bytes, timeout=30,
+                                                                               response_bytes=self.output_bytes)
+        if result.error or result.returncode != 0:
+            raise WorktreeIsolationError("worktree git operation failed: " + (result.error or "nonzero_exit"))
+        return result.stdout
+
+    def open(self):
+        if not self.path.exists():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with _WORKTREE_LOCK:
+                self.git("worktree", "add", "--detach", str(self.path), self.base, root=self.root)
+        head = self.git("rev-parse", "HEAD").decode().strip()
+        common = self.git("rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip()
+        expected = self.git("rev-parse", "--path-format=absolute", "--git-common-dir", root=self.root).decode().strip()
+        if head != self.base or Path(common).resolve() != Path(expected).resolve():
+            raise WorktreeIsolationError("retained checkout belongs to another base or repository")
+        return self
+
+    def fingerprint(self):
+        import hashlib
+        from ctx.sessiondir import LEDGER_DIR_NAME
+        head = self.git("rev-parse", "HEAD")
+        patch = self.git("diff", "--binary", "--full-index", "HEAD", "--", ".", ":(exclude)" + LEDGER_DIR_NAME)
+        untracked = self.git("ls-files", "--others", "--exclude-standard", "-z")
+        extra = bytearray()
+        for raw in untracked.split(b"\0"):
+            if not raw:
+                continue
+            rel = raw.decode("utf-8")
+            if rel == LEDGER_DIR_NAME or rel.startswith(LEDGER_DIR_NAME + "/"):
+                continue
+            path = self.path / rel
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > self.output_bytes:
+                raise WorktreeIsolationError("unsupported untracked worktree entry")
+            extra.extend(raw + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+        return hashlib.sha256(head + patch + bytes(extra)).hexdigest()
+
+    def capture(self, targets):
+        names = self.git("diff", "--name-only", "-z", "HEAD")
+        changed = tuple(p.decode("utf-8") for p in names.split(b"\0") if p)
+        if not all("." in targets or _path_allowed(p, tuple(targets)) for p in changed):
+            raise WorktreeIsolationError("patch changes files outside the declared targets")
+        data = self.git("diff", "--binary", "--full-index", "HEAD")
+        return WorktreePatch(data, changed)

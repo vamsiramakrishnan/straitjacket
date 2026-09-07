@@ -15,6 +15,7 @@ from ctx.semantic.contract import SemanticError, identity, object_fields, number
 from ctx.semantic.evidence import load_plan, publish, read_document, worker_request
 from ctx.semantic.worker import CommandWorker
 from ctx.store import _atomic_write, canonical_json
+from ctx.accounting import charged_seconds
 
 
 @contextmanager
@@ -76,7 +77,7 @@ def _totals(state):
                                         sum(a.get("usage", {}).get(k) or 0 for k in ("input_tokens", "output_tokens")))
                                     for a in attempts),
             "elapsed_seconds": sum(t or 0 for t in elapsed) if all(t is not None for t in elapsed) else None,
-            "charged_seconds": sum(t if t is not None else a["reserved_seconds"] for a, t in zip(attempts, elapsed)),
+            "charged_seconds": sum(charged_seconds(a) for a in attempts),
             **{key: sum(a.get("usage", {}).get(key) or 0 for a in attempts)
                if all(a.get("usage", {}).get(key) is not None for a in attempts) else None
                for key in ("input_tokens", "output_tokens")}}
@@ -136,7 +137,8 @@ def _usage(data):
         return {}
 
 
-def run(ws, store, plan_ref, *, worker=None, retry_failed=False):
+def run(ws, store, plan_ref, *, worker=None, retry_failed=False, stop_on_failure=False,
+        runtime=None):
     """Execute unfinished partitions; durable results are reused only in this map.
 
     A new ``sample`` or any changed input/model/settings creates a new plan.
@@ -151,6 +153,8 @@ def run(ws, store, plan_ref, *, worker=None, retry_failed=False):
         if not command:
             raise SemanticError("plan has no command driver; supply an SDK worker or prepare with worker.command")
         worker = CommandWorker(command)
+    if runtime is not None:
+        stop_on_failure = True
     with _lock(path.with_suffix(".lock")):
         state = _load_state(store, path, plan_ref)
         # A lost process cannot prove whether an external provider billed it.
@@ -191,7 +195,10 @@ def run(ws, store, plan_ref, *, worker=None, retry_failed=False):
             _save(store, path, plan, state)  # durable before any billable action
             started = time.monotonic()
             try:
-                outcome = worker(data, timeout=timeout, response_bytes=limits["response_bytes"])
+                call_worker = (runtime.model_worker(worker, namespace=f"semantic/{plan_ref}/{i}/{len(prior)}",
+                                                   validate=lambda raw: response(raw, part))
+                               if runtime is not None else worker)
+                outcome = call_worker(data, timeout=timeout, response_bytes=limits["response_bytes"])
                 if len(outcome.stdout) > limits["response_bytes"] or len(outcome.stderr) > min(16000, limits["response_bytes"]):
                     raise SemanticError("SDK worker exceeded response_bytes")
                 attempt.update(stdout="blob:" + store.put_blob(outcome.stdout),
@@ -212,6 +219,13 @@ def run(ws, store, plan_ref, *, worker=None, retry_failed=False):
             finally:
                 attempt["elapsed_seconds"] = round(time.monotonic() - started, 6)
                 _save(store, path, plan, state)
+            if stop_on_failure and attempt["status"] != "done":
+                reason = "failed_or_uncertain_attempts"
+                break
         if reason is None and any(a["status"] != "done" for a in state["attempts"]):
             reason = "failed_or_uncertain_attempts"
-        return _report(store, plan, state, reason)
+        result = _report(store, plan, state, reason)
+        if runtime is not None and runtime.last_pause:
+            from ctx.task_runtime import ExecutionPaused
+            raise ExecutionPaused(runtime.last_pause)
+        return result

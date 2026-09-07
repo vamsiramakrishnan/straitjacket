@@ -34,6 +34,8 @@ inherits that plane's invariants, and ships with a test.
 | add an evidence-plan operator | `src/ctx/plan_ops.py` (+ `plan_ir.py`, `plan_exec.py`) |
 | change how a digest is selected/sized | `src/ctx/resolver.py` (the Delivery Policy Resolver) |
 | change explicit semantic worker analysis | `src/ctx/semantic/` — evidence freezing, response contract, worker transport, durable map coordinator |
+| change shared execution and recovery | `src/ctx/task_runtime.py`, `taskledger.py` — root reservations, operation journal, cancellation and checkpoints |
+| change investigation decisions | `src/ctx/controllers/investigation.py` — policy over registered evidence operations and existing edit verification |
 | change snapcompact (`ctx get --snapcompact`, text → image) | `src/ctx/snapcompact.py` · wiring in `src/ctx/_retrieval/get.py` |
 | change retrieval (`get`/`search`/spans) | `src/ctx/retrieval.py` + `src/ctx/_retrieval/` |
 | change how a `repo:` line address stays valid across edits | `src/ctx/anchors.py` |
@@ -71,6 +73,7 @@ No behavioural signal may weaken anything here.
 | `seq.py` | `ctx seq` — declared command trees (round economy without losing gates). |
 | `pyeval.py` | `ctx py` — programmable capture; a Python script runs under the birth gate, only its digest returns. |
 | `semantic/` | Explicit depth-one model maps over immutable evidence; durable reservations and partial inference reports. Separate from deterministic derivation and observation MCP. See [Semantic analysis](SEMANTIC.md). |
+| `task_runtime.py`, `evidence_access.py`, `evidence_ops.py` | Shared durable task execution and scoped, registered evidence operations. Plans, semantic maps and SDK consumers share one root context. See [Task execution](TASK-EXECUTION.md). |
 | `wrap.py` | `ctx wrap <host>` — run an agent under the harness, ephemerally. |
 | `installer.py` | Plugin rendering, installation, and health checks; `ctx doctor`, `ctx antigravity install` (SPEC §4, §18). |
 | `proxy.py` | The Tier-0 observer proxy: byte-exact relay for API traffic that measures wire ground truth. |

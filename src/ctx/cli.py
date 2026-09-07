@@ -888,6 +888,17 @@ def _build_parser():
         "task", help="the task ledger: how harnesses collaborated on a task"
     )
     task_sub = p_task.add_subparsers(dest="task_cmd", required=True)
+    p_tp = task_sub.add_parser("prepare", help="prepare a bounded investigation with fixed checks")
+    p_tp.add_argument("request_file", help="task request JSON in the workspace, or - for stdin")
+    for action in ("run", "resume", "apply", "cancel"):
+        p_tx = task_sub.add_parser(action, help={"run": "investigate and verify a repair in a retained worktree",
+            "resume": "continue from durable operation results and remaining budget",
+            "apply": "apply a verified patch to its clean original checkout",
+            "cancel": "stop dispatch and cancel owned running processes"}[action])
+        p_tx.add_argument("task", metavar="TASK")
+        if action in ("run", "resume"):
+            p_tx.add_argument("--retry-failed", action="store_true",
+                              help="allow another charged attempt after a failed or uncertain call")
     task_sub.add_parser("ls", help="tasks with a ledger in this workspace, newest first")
     p_ts = task_sub.add_parser("show", help="claims, handbacks, steward decisions, inbox")
     p_ts.add_argument("task", metavar="TASK")

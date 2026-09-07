@@ -36,6 +36,14 @@ REQUIRED_FILES = {
     "ctx/semantic/evidence.py",
     "ctx/semantic/engine.py",
     "ctx/semantic/worker.py",
+    "ctx/semantic/hosts.py",
+    "ctx/task_runtime.py",
+    "ctx/accounting.py",
+    "ctx/evidence_access.py",
+    "ctx/evidence_ops.py",
+    "ctx/commands/tasks.py",
+    "ctx/controllers/investigation.py",
+    "ctx/controllers/investigation_contract.py",
     "ctx/data/antigravity/plugin.json",
     "ctx/data/antigravity/hooks.json",
     "ctx/data/codex/config.toml",
@@ -173,6 +181,16 @@ try:
     _, report = inspect(ws, store, handle)
     assert report['totals']['calls'] == 0
     assert report['coverage']['selected_partitions'] == 1
+    from ctx.task_runtime import TaskRuntime
+    from ctx.controllers import investigation
+    from ctx.plan_ops import OPS
+    assert 'semantic.map' in OPS and 'evidence.read' in OPS
+    rt = TaskRuntime.create(ws, store, goal='installed execution smoke')
+    with rt.active():
+        assert rt.perform('observe', 'fixture.observe', {}, lambda timeout: {'answer': 42})['answer'] == 42
+    resumed = TaskRuntime(ws, store, rt.task_id)
+    with resumed.active():
+        assert resumed.perform('observe', 'fixture.observe', {}, lambda timeout: None)['answer'] == 42
 finally:
     store.close()
 """)

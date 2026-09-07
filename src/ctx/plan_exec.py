@@ -236,6 +236,9 @@ def execute_plan(
     tier: str = "cli",
     clock=time.monotonic,
     node_rows: dict[str, int] | None = None,
+    runtime=None,
+    evidence=None,
+    worker=None,
 ) -> tuple[str, int]:
     """Validate and execute one evidence plan; returns (digest, exit_code).
 
@@ -281,7 +284,8 @@ def execute_plan(
 
     generation = facts.current_generation(ws)
     ws_fingerprint = _workspace_fingerprint(ws)
-    pc = plan_ops.PlanContext(ws=ws, store=store, generation=generation)
+    pc = plan_ops.PlanContext(ws=ws, store=store, generation=generation, runtime=runtime,
+                              evidence=evidence, worker=worker)
 
     _wall_seconds = plan.budget.get("wall_seconds", ws.config.plan.wall_seconds)  # fix: an explicit null must fall back too, not crash float(None)
     wall_budget = float(_wall_seconds if _wall_seconds is not None else ws.config.plan.wall_seconds)
@@ -364,10 +368,16 @@ def execute_plan(
                     import json as _json
 
                     doc = _json.loads(store.get_blob(hit).decode("utf-8"))
+                    if runtime is not None:
+                        doc = invoke_operation(pc, step.op, dict(step.args), inp,
+                                               key=f"{plan_blob}/{step.id}", cached=doc)
                     results[step.id] = {**doc, "status": "ok"}
                     entry.update(blob=hit, cached=True)
                     continue
-                except Exception:
+                except Exception as exc:
+                    from ctx.task_runtime import ExecutionPaused
+                    if isinstance(exc, ExecutionPaused):
+                        raise
                     pass  # fall through to live execution
 
         t0 = clock()
@@ -380,7 +390,8 @@ def execute_plan(
                 artifacts: dict[str, str] = {}
                 kind = spec.output_kind
                 for item in values:
-                    part = spec.fn(pc, _subst_item(step.args, item), inp)
+                    part = invoke_operation(pc, step.op, _subst_item(step.args, item), inp,
+                                            key=f"{plan_blob}/{step.id}/{len(metas)}")
                     rows.extend(part.get("rows") or [])
                     omitted += int(part.get("omitted") or 0)
                     metas.append(part.get("meta") or {})
@@ -393,11 +404,15 @@ def execute_plan(
                     artifacts=artifacts,
                 )
             else:
-                out = spec.fn(pc, dict(step.args), inp)
+                out = invoke_operation(pc, step.op, dict(step.args), inp,
+                                       key=f"{plan_blob}/{step.id}")
             if len(out["rows"]) > spec.row_cap:
                 out["omitted"] += len(out["rows"]) - spec.row_cap
                 out["rows"] = out["rows"][: spec.row_cap]
         except Exception as e:
+            from ctx.task_runtime import ExecutionPaused
+            if isinstance(e, ExecutionPaused):
+                raise
             entry.update(status="error", reason=type(e).__name__, detail=str(e)[:200])
             dead.add(step.id)
             if step.on_error == "fail":
@@ -471,6 +486,38 @@ def execute_plan(
 
     errored = any(m.get("status") == "error" for m in node_meta.values())
     return text, (3 if errored else 0)
+
+
+def invoke_operation(pc, name, args, inp=None, *, key, cached=None):
+    """Shared dispatch for evidence plans and adaptive controllers.
+
+    Composite operations charge their leaf executions to the same runtime;
+    deterministic operators are journaled once with their input identity.
+    """
+    from ctx.plan_ops import OPS, OpError
+    spec = OPS.get(name)
+    if spec is None:
+        raise OpError("unknown evidence operator")
+    if spec.check_args:
+        problem = spec.check_args(args)
+        if problem:
+            raise OpError(problem)
+    def call(timeout):
+        from dataclasses import replace
+        if cached is not None:
+            return cached
+        out = spec.fn(replace(pc, timeout=min(pc.timeout, timeout)), args, inp)
+        if len(out["rows"]) > spec.row_cap:
+            from ctx.task_runtime import publish
+            full = publish(pc.store, out)
+            out = {**out, "rows": out["rows"][:spec.row_cap],
+                   "omitted": out["omitted"] + len(out["rows"]) - spec.row_cap,
+                   "artifacts": {**out["artifacts"], "full_result": full}}
+        return out
+    if pc.runtime is None or spec.composite:
+        return call(pc.timeout)
+    return pc.runtime.perform(key, name, {"args": args, "input": inp, "generation": pc.generation},
+                              call, kind=spec.klass, timeout=pc.timeout)
 
 
 _EMISSION_SCHEMA = "ctx.plan-emission/v1"

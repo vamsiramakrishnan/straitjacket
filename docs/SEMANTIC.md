@@ -191,7 +191,13 @@ process cleanup, output floods, retention, and CLI execution with fixture driver
 They establish mechanism behavior, not improved model accuracy or patch success.
 
 Use the [four-arm evaluation protocol](../evals/SEMANTIC-MATRIX.md) before selecting
-semantic mapping automatically. Host-native provider adapters, parallel dispatch,
-adaptive follow-up under a shared parent budget, and persistent interpreters are
-separate additions that require evidence of a benefit. The host still owns patch
-application and the ordinary [edit verification loop](EDIT-LOOP.md).
+semantic mapping automatically. Parallel dispatch and persistent interpreters
+remain separate additions that require evidence of a benefit.
+
+The optional [investigation controller](TASK-EXECUTION.md) connects adaptive
+evidence selection, semantic maps, anchored repair and independent verification.
+It uses the shared `TaskRuntime`; a standalone `run(..., runtime=runtime)` can
+consume that same root allowance without importing the controller. Maps remain
+depth one. Parent investigation rounds can select further evidence explicitly.
+The configured ACP adapter reuses the host's authentication and exact model;
+the ordinary [edit verification loop](EDIT-LOOP.md) owns patch verification.

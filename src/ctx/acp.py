@@ -122,12 +122,13 @@ def checks(root: Path):
 
 
 class Client:
-    def __init__(self, command, cwd, *, timeout, idle_timeout=0, env=None, permissions="deny"):
+    def __init__(self, command, cwd, *, timeout, idle_timeout=0, env=None, permissions="deny", cancelled=None):
         self.command = command
         self.deadline = time.monotonic() + timeout
         self.last_activity = time.monotonic()
         self.idle_timeout = idle_timeout
         self.permissions = permissions
+        self.cancelled = cancelled
         self.proc = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      start_new_session=True)
@@ -177,6 +178,8 @@ class Client:
             self.stderr.extend(data[:max(0, 65536 - len(self.stderr))])
 
     def _remaining(self):
+        if self.cancelled and self.cancelled():
+            raise ACPError("ACP task cancelled")
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise ACPError("ACP wall timeout")
@@ -253,20 +256,22 @@ class Client:
                         raise ACPError("ACP response exceeds 2 MiB; worker result refused")
                     self.output.append(text)
 
-    def open(self, cwd, exe):
+    def open(self, cwd, exe, *, with_tools=True):
         from ctx.mcp_hosts import ctx_argv
 
         initialized = self.request("initialize", {"protocolVersion": 1,
             "clientCapabilities": {}, "clientInfo": {"name": "straitjacket", "version": "1"}})
         if not isinstance(initialized, dict) or initialized.get("protocolVersion") != 1:
             raise ACPError("ACP agent did not negotiate protocol v1")
-        argv = ctx_argv(exe)
-        command = shutil.which(argv[0])
-        if not command:
-            raise ACPError("ctx MCP executable not found")
-        session = self.request("session/new", {"cwd": str(Path(cwd).resolve()), "mcpServers": [{
-            "name": "ctx-harness", "command": command,
-            "args": [*argv[1:], "mcp", "--bounded-only", "--with-edits", "--workspace", str(Path(cwd).resolve())], "env": []}]})
+        servers = []
+        if with_tools:
+            argv = ctx_argv(exe)
+            command = shutil.which(argv[0])
+            if not command:
+                raise ACPError("ctx MCP executable not found")
+            servers = [{"name": "ctx-harness", "command": command,
+                "args": [*argv[1:], "mcp", "--bounded-only", "--with-edits", "--workspace", str(Path(cwd).resolve())], "env": []}]
+        session = self.request("session/new", {"cwd": str(Path(cwd).resolve()), "mcpServers": servers})
         if not isinstance(session, dict) or not isinstance(session.get("sessionId"), str):
             raise ACPError("ACP session/new did not return a session id")
         self.session = session["sessionId"]
@@ -300,6 +305,7 @@ class Client:
         if self.session and self.proc.poll() is None:
             self.deadline = time.monotonic() + .2
             self.idle_timeout = 0
+            self.cancelled = None
             try:
                 self.send({"method": "session/cancel", "params": {"sessionId": self.session}})
             except (ACPError, OSError):
@@ -314,12 +320,12 @@ class Client:
 
 
 def launch(endpoint: Endpoint, root: Path, prompt: str, exe: str, *, timeout: float,
-           idle_timeout: float = 0, env=None):
+           idle_timeout: float = 0, env=None, with_tools=True, cancelled=None):
     client = None
     try:
         client = Client(endpoint.command, root, timeout=timeout, idle_timeout=idle_timeout,
-                        env=env, permissions=endpoint.permissions)
-        session = client.open(root, exe)
+                        env=env, permissions=endpoint.permissions, cancelled=cancelled)
+        session = client.open(root, exe, with_tools=with_tools)
         client.select_model(session, endpoint.model)
         result = client.request("session/prompt", {"sessionId": client.session,
                                 "prompt": [{"type": "text", "text": prompt}]})

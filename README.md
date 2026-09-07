@@ -77,6 +77,7 @@ Setup preserves unrelated settings and reports the changes it makes.
 | Edit the source you actually observed | `ctx edit replace`, `ctx edit verify` | Sealed plan, apply receipt, checks tied to file hashes |
 | Continue a task across workers | `ctx orchestrate`, `ctx task show` | Persisted task state, attempts, recovery, and budget records |
 | Analyze selected evidence with a model | `ctx semantic prepare/run/resume` | Bounded partitions, citation validation, explicit budgets, and saved partial findings |
+| Investigate and verify a repair | `ctx task prepare/run/resume` | One durable budget from evidence gathering through verified patch; [workflow and SDK](docs/TASK-EXECUTION.md) |
 
 Start with capture and retrieval. Add editing or orchestration when the task
 needs their contracts. See the [verified edit loop](docs/EDIT-LOOP.md) for

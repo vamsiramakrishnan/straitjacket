@@ -209,6 +209,30 @@ def test_concurrent_run_cannot_launch_against_the_same_budget(setup):
     assert run(ws, store, handle, worker=nested)[1]["status"] == "complete"
 
 
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
+def test_uncertain_short_observation_cannot_release_reserved_wall_time(setup, monkeypatch, interrupt):
+    from types import SimpleNamespace
+    from ctx.semantic import engine
+    ws, store, spec = setup
+    spec["limits"].update(wall_seconds=1.0, call_seconds=1.0)
+    clock = [0.0]
+    monkeypatch.setattr(engine, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    def interrupted(data, **kwargs):
+        clock[0] += 0.01
+        raise interrupt
+    handle = prepare(ws, store, spec)
+    with pytest.raises(interrupt):
+        run(ws, store, handle, worker=interrupted)
+    partial = inspect(ws, store, handle)[1]
+    assert partial["totals"]["elapsed_seconds"] == pytest.approx(0.01)
+    assert partial["totals"]["charged_seconds"] == pytest.approx(1.0)
+    for _ in range(2):
+        _, report = run(ws, store, handle, worker=lambda *a, **k: pytest.fail("released uncertain time"),
+                        retry_failed=True)
+        assert report["stop_reason"] == "wall_budget"
+        assert report["totals"]["calls"] == 1
+
+
 def test_tampered_partitions_are_rejected_before_dispatch(setup):
     ws, store, spec = setup
     plan = read_document(store, prepare(ws, store, spec))

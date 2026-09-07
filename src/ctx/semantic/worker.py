@@ -34,8 +34,10 @@ class CommandWorker:
     cannot make provider-side spend a hard guarantee.
     """
 
-    def __init__(self, command: list[str]):
+    def __init__(self, command: list[str], *, cwd=None, env=None, stderr_bytes=16000, cancelled=None):
         self.command = command
+        self.cwd, self.env, self.stderr_bytes = cwd, env, stderr_bytes
+        self.cancelled = cancelled
 
     def __call__(self, request: bytes, *, timeout: float, response_bytes: int) -> WorkerResult:
         deadline = time.monotonic() + timeout
@@ -47,7 +49,7 @@ class CommandWorker:
             with request_path.open("rb") as stdin:
                 try:
                     proc = subprocess.Popen(self.command, stdin=stdin, stdout=subprocess.PIPE,
-                                            stderr=subprocess.PIPE, cwd=directory,
+                                            stderr=subprocess.PIPE, cwd=self.cwd or directory, env=self.env,
                                             start_new_session=True)
                 except OSError:
                     return WorkerResult(error="launch_failed")
@@ -58,12 +60,15 @@ class CommandWorker:
                         os.set_blocking(stream.fileno(), False)
                         selector.register(stream, selectors.EVENT_READ, name)
                     while selector.get_map():
+                        if self.cancelled and self.cancelled():
+                            error = "cancelled"
+                            break
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             error = "timeout"
                             break
                         for key, _ in selector.select(min(remaining, 0.05)):
-                            cap = response_bytes if key.data == "stdout" else min(response_bytes, 16000)
+                            cap = response_bytes if key.data == "stdout" else min(response_bytes, self.stderr_bytes)
                             data = os.read(key.fd, min(8192, cap - len(output[key.data]) + 1))
                             if not data:
                                 selector.unregister(key.fileobj)
@@ -76,10 +81,18 @@ class CommandWorker:
                         if error:
                             break
                     if not error:
-                        try:
-                            proc.wait(timeout=max(0, deadline - time.monotonic()))
-                        except subprocess.TimeoutExpired:
-                            error = "timeout"
+                        while proc.poll() is None:
+                            if self.cancelled and self.cancelled():
+                                error = "cancelled"
+                                break
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                error = "timeout"
+                                break
+                            try:
+                                proc.wait(timeout=min(.05, remaining))
+                            except subprocess.TimeoutExpired:
+                                pass
             finally:
                 # Also covers a leader that exits while descendants hold a pipe
                 # open, and Ctrl-C while select/read/wait is in progress.
