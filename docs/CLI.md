@@ -266,6 +266,26 @@ addresses and numbers. `send` hands a node an **address** — never content —
 which the node sees in its prompt and resolves with `ctx get`. Full
 mechanism: [TASK-LEDGER.md](TASK-LEDGER.md).
 
+## Tell another harness: `ctx relay`
+
+```bash
+ctx relay watch claude job --action report          # tell me when a job lands
+ctx run --bg -- pytest -q                           # ... and stop polling
+ctx relay signal codex:0f1e2d checkpoint:d914ee702801 --interrupt \
+    --note "the migration schema changed under you"
+ctx relay status                                    # queued, watching, pending
+```
+
+The task ledger lets harnesses share a record; the relay lets one **tell**
+another. A signal carries an address and a bounded note, never content — the
+same closed grammar `ctx task send` enforces.
+
+Delivery is at the receiving harness's next hook boundary: `post-tool-use` and
+session start for `report`/`advise`, `pre-tool-use` for `interrupt`. There is
+no push and no mid-stream interruption; an interrupt stops the next **tool
+call**, not a token stream. Full mechanism, bounds and failure direction:
+[RELAY.md](RELAY.md).
+
 ## Search captured artifacts: `ctx search`
 
 Use search when the evidence already exists in the store:

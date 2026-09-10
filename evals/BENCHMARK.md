@@ -169,6 +169,17 @@ trajectory — the annotator and the simulator are the same machinery.
   gold regions) must be verified against the actual release before any
   manifest is committed; if the gold regions hold up, explore/ becomes
   the primary mechanism benchmark, exactly as argued.
+  **Resolved 2026-09-10, with a different corpus.** ContextBench
+  (arXiv:2602.05892) publishes what this slot needed and SWE-Explore
+  did not deliver in a verifiable form: human-annotated gold context as
+  `{file, start_line, end_line}` blocks. Verified against the actual
+  release before anything was built on it — `contextbench_verified` is
+  500 rows, 58 repos, 8 languages, 4,597 gold blocks over 1,746 files,
+  with real line coordinates. `evals/contextbench.py` is the runner;
+  `evals/contextbench-2026-09-10.md` is the first receipt. The standing
+  rule is unchanged: it is a **teacher**, its numbers are not comparable
+  to the paper's agent tables, and what it produces for us is a defect
+  queue, not a score.
 
 ## Tiers, mapped to infrastructure that exists
 
@@ -192,10 +203,18 @@ any profile change; evidence sufficiency must not drop. Zero API cost.
    `pytest -m sj_canary` is the PR gate.
 3. **Pathology oracle** — `evals/` annotator emitting the stratification
    JSON from a recorded trajectory (shares parsing with ctx.replay).
-4. **SJ-Explore-60 manifest** — after verifying the dataset: stratified
-   per the review (20 single-file / 20 cross-file / 20 dispersed, ≥6
-   languages, oversample flood repos), with evidence-density scoring
-   wired through the replay machinery.
+4. **SJ-Explore-60 manifest** — ✅ **landed 2026-09-10 as
+   `evals/contextbench.py`**, on ContextBench rather than SWE-Explore
+   (see the note above). Stratification is by language × edit-dispersion
+   (`--stratify`, deterministic: the tie-break is the instance id, never a
+   RNG), the metrics are the paper's file/block/line recall/precision/F1,
+   and evidence density is reported per arm over a budget ladder so the
+   output is a recall-vs-tokens curve rather than one collapsed number.
+   Two corrections it forced on itself before producing a number: gold
+   paths are not uniformly repo-relative across the four upstream sources
+   (Multi-SWE-bench carries a container prefix), and a retrieval policy
+   that returns grep hits rather than enclosing definitions scores block
+   recall 0.00 by construction while finding the right files.
 5. **SJ-SWE-60 manifest** — stratified by observability problem (15
    test-flood / 10 search-flood / 10 re-verification / 10 cross-file / 5
    long-runner / 5 low-output controls / 5 misleading-output).

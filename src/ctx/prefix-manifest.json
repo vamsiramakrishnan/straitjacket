@@ -1,9 +1,9 @@
 {
   "schema": "ctx.prefix/v1",
-  "prefix_version": 11,
+  "prefix_version": 12,
   "assets": {
     "agent.ctx-explorer": "sha256:9818ea52833f7c9bbd17cd974c3f7c22f979a217b87b53652abd4955590471fc",
-    "mcp.tool_description": "sha256:1444b4a108752aceed4dc41ff5618a058999a76d3445ce458777afa57b2339e4",
+    "mcp.tool_description": "sha256:c3ea0ca570c5d5377548021ff48a5afdb56df60e5142b639cb4389ac2a620ba7",
     "skill.ctx-harness.body": "sha256:0ccd46bce2702267cfb7c7e872f80dc8efb5ddf43175dbefabbcb8fae66f7c52",
     "skill.ctx-harness.frontmatter": "sha256:7ead9429ed7ec565fcea2c9896f95880c8815c81f2b455478748dcd14c5a90a6",
     "wrap.output_discipline": "sha256:b969739439b4f5f5a96f9e6534eb12a8e558b2f286cd17275b99e209e229a060"

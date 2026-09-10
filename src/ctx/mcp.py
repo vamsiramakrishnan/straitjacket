@@ -45,7 +45,7 @@ TOOL_SCHEMA: dict[str, Any] = {
         "q (compose typed evidence in one call: a total `|`-pipeline over "
         "symbols/sites/files/records streams — options.pipeline, e.g. "
         "\"refs Foo | group file | top 3 | get --context 5\")."
-        " task (the collaboration ledger for options.task — claims, handbacks, steward decisions, inbox — or the task list when omitted), inbox (addresses handed to options.node in options.task), send (hand options.node an ADDRESS — options.ref, never content — with an optional bounded options.note)."
+        " relay_watch (subscribe this harness to a relay topic — options.subscriber, options.topic, optional options.selector and options.action), relay_publish (announce an ADDRESS to whoever is watching — options.topic, options.ref, optional options.to/options.note/options.interrupt), relay_pending (what the relay has queued for options.subscriber, without consuming it). task (the collaboration ledger for options.task — claims, handbacks, steward decisions, inbox — or the task list when omitted), inbox (addresses handed to options.node in options.task), send (hand options.node an ADDRESS — options.ref, never content — with an optional bounded options.note)."
     ),
     "inputSchema": {
         "type": "object",
@@ -57,6 +57,7 @@ TOOL_SCHEMA: dict[str, Any] = {
                     "def", "refs", "diag", "callers", "callees", "impact",
                     "diff", "repo", "doctor", "investigate", "q",
                     "task", "inbox", "send",
+                    "relay_watch", "relay_publish", "relay_pending",
                 ],
                 "description": (
                     "callers/callees: direct call-graph edges for options.symbol; "
@@ -310,6 +311,8 @@ def _dispatch(args: dict[str, Any]) -> str:
         if code != 0:
             raise RetrievalError(text)
         return text
+    elif op in ("relay_watch", "relay_publish", "relay_pending"):
+        result = _relay_ops(ws, op, args.get("options") or {})
     elif op in ("task", "inbox", "send"):
         result = _task_ops(ws, op, args.get("options") or {})
     elif op == "repo":
@@ -366,6 +369,75 @@ def _task_ops(ws, op: str, opts: dict[str, Any]) -> str:
     except ledger.LedgerError as e:
         raise RetrievalError(str(e)) from None
     return f"sent to {row['to']}: {row['ref']}"
+
+
+def _relay_ops(ws, op: str, opts: dict[str, Any]) -> str:
+    """The cross-harness relay through MCP.
+
+    The point of putting it here rather than only on the CLI: an agent that
+    is about to start a long build should be able to say "tell me when this
+    lands" from inside whatever harness it is running in, and an agent that
+    has just discovered the schema changed should be able to stop its peer
+    without shelling out. Same contract as `ctx relay`: every write carries
+    an ADDRESS and a bounded note, never content.
+    """
+    from ctx import relay
+    from ctx.retrieval import RetrievalError
+
+    try:
+        if op == "relay_watch":
+            row = relay.watch(
+                ws.root,
+                subscriber=str(opts.get("subscriber") or ""),
+                topic=str(opts.get("topic") or "job"),
+                selector=str(opts.get("selector") or ""),
+                action=str(opts.get("action") or "advise"),
+            )
+            return (
+                f"watching {row['topic']}"
+                + (f"/{row['selector']}" if row["selector"] else "")
+                + f" as {row['subscriber']} -> {row['action']}\nwatch: {row['watch_id']}"
+            )
+
+        if op == "relay_publish":
+            ref = opts.get("ref")
+            if not isinstance(ref, str) or not ref:
+                raise RetrievalError("relay_publish requires options.ref (an address)")
+            origin = str(opts.get("origin") or "agent")
+            if opts.get("interrupt"):
+                to = opts.get("to")
+                if not isinstance(to, str) or not to:
+                    raise RetrievalError("an interrupt needs options.to")
+                row = relay.interrupt(
+                    ws.root, to=to, ref=ref, origin=origin,
+                    note=str(opts.get("note") or ""),
+                )
+                return (
+                    f"interrupt queued for {row['to']} ({row['signal_id']}); "
+                    "it lands at that harness's next tool call, not mid-turn"
+                )
+            queued = relay.publish(
+                ws.root,
+                topic=str(opts.get("topic") or "peer"),
+                selector=str(opts.get("selector") or ""),
+                ref=ref,
+                origin=origin,
+                note=str(opts.get("note") or ""),
+                to=str(opts.get("to") or "") or None,
+            )
+            if not queued:
+                return "published; nobody is watching that topic, nothing queued"
+            return "\n".join(
+                f"queued {r['kind']} for {r['to']} ({r['signal_id']})" for r in queued
+            )
+
+        subscriber = opts.get("subscriber")
+        if not isinstance(subscriber, str) or not subscriber:
+            raise RetrievalError("relay_pending requires options.subscriber")
+        signals = relay.pending(ws.root, subscriber)
+        return relay.render(signals) if signals else f"nothing pending for {subscriber}"
+    except relay.RelayError as e:
+        raise RetrievalError(str(e)) from None
 
 
 def _tool_call(params: dict[str, Any], *, edit_workspace: str | None = None) -> dict[str, Any]:

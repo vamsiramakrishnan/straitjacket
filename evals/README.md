@@ -41,6 +41,7 @@ python evals/plan_collapse.py          # rounds collapse, byte-stable digest
 python evals/anchor_drift.py           # how often a repo: address goes silently stale
 python evals/edit_repair.py            # how much of a failed host edit is recoverable
 python evals/task_ledger_replay.py     # resume, typed recovery, budget-against-actuals
+python evals/contextbench.py --workdir /scratch/cb --limit 12  # search-lane retrieval vs human gold context
 python evals/edit_format_by_model.py   # anchored vs native edit success, per model, from field rows
 python evals/improve_route.py --dry-run  # the hunt/verify/harvest/prove route, priced (live without --dry-run)
 ```
@@ -52,6 +53,12 @@ Others in this class: `evalset_collapse.py`, `corpus_scoped_scan.py`,
 `wire.jsonl` rather than calling a model). `swe_learn.py` is model-free but
 fetches SWE instances and reproduces failures in a venv, so it needs network and
 build toolchains.
+`contextbench.py` is model-free in the same sense: no LLM anywhere in the
+loop, but it fetches the ContextBench corpus and shallow-clones each repo at
+`base_commit`, so it needs network and about 50 MB of scratch per instance. It
+is the **search-lane** counterpart to `swe_learn.py`'s output-lane scoring —
+see [`contextbench-2026-09-10.md`](contextbench-2026-09-10.md) for the first
+receipt and the defect queue it produced.
 
 `alphaevolve/` is the bounded optimization portfolio for 27 named production
 levers across 16 experiment families. Local search, holdout, adversarial, and

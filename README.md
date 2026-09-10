@@ -76,6 +76,7 @@ Setup preserves unrelated settings and reports the changes it makes.
 | Run a known sequence of checks | `ctx seq`, `ctx q` | Locally composed results with evidence addresses |
 | Edit the source you actually observed | `ctx edit replace`, `ctx edit verify` | Sealed plan, apply receipt, checks tied to file hashes |
 | Continue a task across workers | `ctx orchestrate`, `ctx task show` | Persisted task state, attempts, recovery, and budget records |
+| Tell another harness something, between turns | `ctx relay watch`, `ctx relay signal` | Queued signals, delivery receipts, and what each harness has seen |
 | Analyze selected evidence with a model | `ctx semantic prepare/run/resume` | Bounded partitions, citation validation, explicit budgets, and saved partial findings |
 | Investigate and verify a repair | `ctx task prepare/run/resume` | One durable budget from evidence gathering through verified patch; [workflow and SDK](docs/TASK-EXECUTION.md) |
 

@@ -109,6 +109,8 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ("orchestrate", "split one task across your agents, cheapest model that fits "
                             "(usually a wrap mode, not something you type)"),
+            ("relay", "tell another agent something between turns: a finished job, "
+                      "a finding, or a stop"),
         ),
     ),
     (

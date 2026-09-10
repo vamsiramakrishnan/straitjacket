@@ -6,6 +6,49 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+`ctx relay` adds a cross-harness relay: the direction the task ledger never
+had. The ledger lets harnesses share a record; the relay lets one tell another.
+Three append-only schemas (`ctx.watch/v1`, `ctx.signal/v1`, `ctx.delivery/v1`)
+under `.ctx-session-reads/relay/`, written with the same lock and torn-line
+repair as the task ledger. A signal carries an address and a bounded note,
+validated by the grammar `ctx task send` already enforces; prose and output are
+refused at the boundary.
+
+Delivery is at the receiving harness's next hook boundary: `report` and
+`advise` at post-tool-use and session start, `interrupt` at pre-tool-use as a
+`force_ask` naming the address. There is no push and no mid-stream
+interruption — an interrupt stops the next tool call, not a token stream, and
+the bound is reported rather than implied. A guard `deny` outranks a relay
+interrupt, and a `ctx` call is never blocked by one. Antigravity receives the
+relay through pre-invocation, its only stage that can carry advisory text.
+
+Two producers ship with it. A backgrounded run announces its `run:` address
+when a harness subscribed to the `job` topic before it launched, so a finished
+job no longer waits for someone to poll; the supervisor stays dependency-free
+and shells out to a detached `ctx job --announce`. An expensive capture (raw
+above 32 KiB) publishes its address on the `digest` topic — the artifact store
+was always shared across harnesses, what was missing is that the peer knew.
+
+`relay_watch`, `relay_publish` and `relay_pending` join the MCP tool so an
+agent can use the relay from inside any harness. That changes prefix-resident
+bytes: **PREFIX_VERSION moves 11 → 12, one cold prefix-cache write per model.**
+A workspace with no relay pays one `os.path.exists` per tool call and imports
+nothing; every relay path in the hook degrades to silence rather than to a
+failed tool call. See [the relay](docs/RELAY.md) and
+[harness collaboration](docs/HARNESS-COLLABORATION.md).
+
+`evals/contextbench.py` scores the search lane against human-annotated gold
+context, closing the retrieval slot `evals/BENCHMARK.md` reserved. ContextBench
+(arXiv:2602.05892) was verified against its actual release first: 500 verified
+instances, 58 repositories, 8 languages, 4,597 gold blocks with real line
+coordinates. The runner is model-free and reports file/block/line
+recall/precision/F1 over a budget ladder. First receipt:
+[`evals/contextbench-2026-09-10.md`](evals/contextbench-2026-09-10.md) — the
+search lane is measurably Python-shaped (4–10x the other seven languages), and
+file-level recall is flat across a 16x budget increase, locating the bottleneck
+in candidate generation rather than packing. External corpora remain teachers,
+never referees; no resolve rate or agent comparison is claimed.
+
 `ctx task prepare/run/resume/show/cancel/apply` adds an opt-in investigation
 controller over shared execution services. Registered evidence operations,
 semantic subcalls, captured commands, anchored edits and independent checks
