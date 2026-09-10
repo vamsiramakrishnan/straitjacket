@@ -35,6 +35,7 @@ different safety contracts. The mental model can stay small.
 | Need | Command | Why |
 |---|---|---|
 | A map of the repo | `ctx map --budget N` | Ranked, token-budgeted file/symbol map instead of a directory dump |
+| Exact answers from def/refs | `ctx index` | Build a compiler-grade SCIP index once; def/refs stop approximating |
 | Where a symbol lives | `ctx def <symbol>` | Definition site as a snapshot + span |
 | Who uses a symbol | `ctx refs <symbol>` | Reference sites, bounded |
 | Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
@@ -266,6 +267,28 @@ addresses and numbers. `send` hands a node an **address** — never content —
 which the node sees in its prompt and resolves with `ctx get`. Full
 mechanism: [TASK-LEDGER.md](TASK-LEDGER.md).
 
+## Tell another harness: `ctx relay`
+
+```bash
+ctx relay watch claude job --action report          # tell me when a job lands
+ctx run --bg -- pytest -q                           # ... and stop polling
+ctx relay signal codex:0f1e2d checkpoint:d914ee702801 --interrupt \
+    --note "the migration schema changed under you"
+ctx relay status                                    # queued, watching, pending
+```
+
+The task ledger lets harnesses share a record; the relay lets one **tell**
+another. A signal carries an address and a bounded note, never content — the
+same closed grammar `ctx task send` enforces.
+
+Delivery is at the receiving harness's next hook boundary: `post-tool-use` and
+session start for `report`/`advise`, `pre-tool-use` for `interrupt`. There is no
+push, and on a hooked host an interrupt stops the next **tool call**, not a
+token stream. An [ACP worker](ACP.md) is the exception — ctx owns that
+subprocess, so a queued interrupt cancels its turn mid-flight and a queued
+report is prepended to its prompt. Full mechanism, per-host delivery table,
+bounds and failure direction: [RELAY.md](RELAY.md).
+
 ## Search captured artifacts: `ctx search`
 
 Use search when the evidence already exists in the store:
@@ -277,6 +300,69 @@ ctx search run:8d8335db6848 'authorization failed'
 
 Searching an artifact is cheaper and more trustworthy than rerunning a command merely
 to recover text the harness already captured.
+
+## Answer exactly, not approximately: `ctx index`
+
+```bash
+ctx index --list                 # which indexers are installed, what this repo needs
+ctx index                        # index the workspace's dominant language
+ctx index --language rust        # or name one
+```
+
+`ctx def` and `ctx refs` run an engine ladder, and the top rung is a SCIP index
+— the answer the language's own compiler front end gives. ctx has read those
+indexes for a long time and never made one, so unless a repository indexed
+itself the rung was unreachable and answers came from the ladder's floor: a
+word-boundary regex over source files.
+
+That floor is worse than it looks. Measured against `rust-analyzer scip` on
+`tokio-rs/bytes`, it reported **3,637 reference sites where the compiler says
+806** — and the error lands exactly where names are short and common, which is
+where you ask. `ctx refs buf` returned 754 sites, 55 of them real. A regex
+cannot tell a reference from the same letters in a comment or a string literal;
+the information is not in the text.
+
+`ctx index` shells out to the real tooling rather than approximating it:
+
+| language | indexer | install |
+|---|---|---|
+| rust | `rust-analyzer scip` | `rustup component add rust-analyzer` |
+| go | `scip-go` | `go install github.com/sourcegraph/scip-go/cmd/scip-go@latest` |
+| typescript / javascript | `scip-typescript` | `npm i -g @sourcegraph/scip-typescript` |
+| python | `scip-python` | `npm i -g @sourcegraph/scip-python` |
+| java | `scip-java` | see `sourcegraph/scip-java` |
+
+The index is written to the store's audit area, **never into your worktree**.
+Indexing stays an explicit command because it costs seconds to minutes and
+needs the project's toolchain — it must never happen inside a retrieval verb on
+a hook's latency budget.
+
+### An index goes stale, and ctx will not pretend otherwise
+
+A SCIP index is a snapshot of one moment; nothing keeps it in step with your
+edits. Trusting a stale one is worse than having none, because the exact tier
+answers in a confident voice: a symbol you added since indexing would come back
+as `sites: 0`, and a call site added to a file that changed would simply be
+missing from an answer still labelled `scip (exact)`.
+
+So before using an index, ctx checks that no source file is newer than it (and,
+for an index ctx built, that the file count still matches — a deletion moves no
+surviving file's timestamp). If the tree has moved on, the index is skipped
+exactly as if it were absent, the ladder falls through, and the header says so:
+
+```
+[ctx refs helper · engine ast (textual) · stale index skipped, re-run ctx index]
+```
+
+That check walks the source files, which measured ~220 ms on a 4,700-file
+worktree. It is charged on every `refs`/`def` call in an indexed repository,
+and it buys the difference between an exact answer and a plausible one — when
+the verdict is "stale", the textual scan that runs instead costs far more.
+
+Nothing about this is required. With no index the ladder keeps its lower rungs
+and every answer still discloses which engine produced it. `ctx doctor` carries
+an `exact index` row saying whether one exists, whether it is still current,
+and what to run if not, so the difference is visible rather than inferred.
 
 ## Walk the call graph: `ctx callers` / `callees` / `impact` / `impls`
 
@@ -461,6 +547,25 @@ ctx antigravity install
 
 The plugin is persistent. Both hosts use the same artifact store, digest contracts, and
 retrieval vocabulary.
+
+## Score a trajectory against gold context: `ctx replay --gold`
+
+```bash
+python evals/contextbench.py --workdir /scratch/cb --limit 40 --stratify \
+    --emit-gold /scratch/gold
+ctx replay --gold /scratch/gold/<instance>.json ~/.claude/projects/*/<session>.jsonl
+```
+
+Reconstructs the file regions an agent actually opened during a recorded
+session and scores them against human-annotated gold at file, block and line
+granularity, plus evidence density and regret against the gold oracle. No model
+and no network.
+
+The extractor reads the transcript and nothing else, so it scores a session
+that used ctx and one that did not through the same instrument. That is the
+point: an A/B whose arms are measured differently has decided its result before
+it runs. Design and pre-registered predictions:
+[the A/B design](../evals/contextbench-ab-design.md).
 
 ## Score the loop: regret, follow-up, shadow
 

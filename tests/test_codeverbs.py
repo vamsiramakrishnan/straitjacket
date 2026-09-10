@@ -251,3 +251,106 @@ def test_jedi_absent_degrades_to_ast_with_disclosure(
     refs = cmd_refs(store, ws, "put_blob", None)
     assert "engine ast (textual)" in refs.splitlines()[0]
     assert "sites: 3" in refs
+
+
+# ------------------------------------------------- non-Python code verbs
+# Found by `evals/verb_coverage.py`, which asks the only question that
+# matters about an affordance: `ctx map` prints `repo:<path> --symbol <name>`
+# as the address to use next — does `ctx def` resolve it? Baseline across six
+# languages was 18/80: every Python address resolved and every other one was
+# refused, because both engines were Python-only and nothing said so.
+
+GO_SOURCE = """package api
+
+const (
+\taccept = "Accept"
+)
+
+type Client struct {
+\thttp *http.Client
+}
+
+func NewClientFromHTTP(c *http.Client) *Client {
+\treturn &Client{http: c}
+}
+
+func use() *Client {
+\treturn NewClientFromHTTP(nil)
+}
+"""
+
+
+def _seed_go(root):
+    (root / "client.go").write_text(GO_SOURCE, encoding="utf-8")
+
+
+def _skeleton_backed(ws, store, rel):
+    """Whether this environment can parse `rel` at all — the roster decides,
+    so a thin install skips rather than reporting a false defect."""
+    from ctx.skeleton import backend_roster, language_for
+
+    return backend_roster().get(language_for(rel) or "", "none") != "none"
+
+
+def test_def_resolves_a_non_python_symbol(state_home, workspace_dir):
+    from ctx.codeverbs import cmd_def
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _seed_go(workspace_dir)
+    if not _skeleton_backed(ws, store, "client.go"):
+        pytest.skip("no Go backend in this environment (see ctx doctor)")
+
+    out = cmd_def(store, ws, "repo:client.go:NewClientFromHTTP")
+    assert "engine skeleton" in out.splitlines()[0]
+    assert "definition: repo:client.go L" in out
+    assert "func NewClientFromHTTP" in out
+
+
+def test_def_resolves_a_symbol_only_ctags_knows(state_home, workspace_dir):
+    """`ctx map` advertises from ctags; the skeleton answers with whichever
+    backend came first, and for Go that is tree-sitter with a narrower idea of
+    what counts. A package constant fell in that gap: advertised, then
+    refused. The ctags rung closes it."""
+    from ctx.codeverbs import cmd_def
+    from ctx.skeleton import _ctags_path
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _seed_go(workspace_dir)
+    if _ctags_path() is None:
+        pytest.skip("universal-ctags not on PATH (see ctx doctor)")
+
+    out = cmd_def(store, ws, "repo:client.go:accept")
+    assert "definition: repo:client.go L" in out
+
+
+def test_refs_finds_sites_outside_python(state_home, workspace_dir, monkeypatch):
+    """The textual rung is the ladder's floor, so it must be the least
+    language-specific one. Scanning `**/*.py` only made `ctx refs` answer
+    "sites: 0" on a Go repository — not a refusal, a wrong answer."""
+    from ctx.codeverbs import cmd_refs
+
+    monkeypatch.setenv("CTX_CODE_ENGINE", "ast")
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _seed_go(workspace_dir)
+
+    out = cmd_refs(store, ws, "NewClientFromHTTP", None)
+    assert "sites: 2 · shown: 2" in out
+    assert "repo:client.go:L11" in out and "repo:client.go:L16" in out
+
+
+def test_a_definition_verb_still_refuses_a_file_it_cannot_parse(
+    state_home, workspace_dir
+):
+    """Widening the language set must not turn a refusal into a guess."""
+    from ctx.codeverbs import cmd_def
+    from ctx.retrieval import RetrievalError
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    (workspace_dir / "notes.md").write_text("# Title\n\nprose\n", encoding="utf-8")
+
+    with pytest.raises(RetrievalError):
+        cmd_def(store, ws, "repo:notes.md:Title")

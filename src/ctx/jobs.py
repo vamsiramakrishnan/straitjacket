@@ -216,6 +216,18 @@ def start_job(
         "state": "launching",
         "createdAt": time.time(),
     }
+    # Decided here, by the launcher, because the launcher is the only party
+    # in this flow that already holds a workspace. If nobody is watching the
+    # `job` topic when the run starts, the supervisor stays exactly as
+    # dependency-free as it has always been and no extra process is spawned.
+    try:
+        from ctx import relay
+
+        meta["announce"] = any(
+            w.get("topic") == "job" for w in relay.active_watches(ws.root)
+        )
+    except Exception:
+        meta["announce"] = False
     _write_meta(jobdir, meta)
 
     # Defensive PYTHONPATH: works for src layouts even without an install.
@@ -301,7 +313,61 @@ def supervise_main(jobdir_str: str) -> int:
         endedAt=time.time(),
     )
     _write_meta(jobdir, meta)
+
+    # The one thing the supervisor does beyond spooling: if somebody asked to
+    # be told, hand the announcement to a detached child rather than doing it
+    # here. This function's contract is that it "never resolves a workspace or
+    # opens the store", and finalizing a job requires both — so it shells out
+    # to a fresh `ctx` instead of importing its way around the invariant.
+    # Without this, a finished background job is invisible until an agent
+    # remembers to poll, which is the gap the relay exists to close.
+    if meta.get("announce"):
+        try:
+            subprocess.Popen(
+                [sys.executable, "-m", "ctx", "job", jobdir.name, "--announce"],
+                cwd=meta["cwdAbs"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env=os.environ,
+            )
+        except Exception:  # noqa: BLE001 — an unannounced job is still a done job
+            pass
     return 0
+
+
+def announce_job(ws: Workspace, store: Store, job_id: str) -> list[dict[str, Any]]:
+    """Finalize a done job and publish its address to the relay.
+
+    The signal carries the ``run:`` address and a one-line outcome, never the
+    output — the receiving agent resolves it under its own permissions and
+    pays only for what it reads. Returns the queued signals (empty when
+    nobody is watching, which is not an error).
+    """
+    from ctx import relay
+
+    digest, manifest = finalize_job(ws, store, job_id)
+    meta = _read_meta(_job_dir(store, job_id))
+    result = manifest.get("result") or {}
+    code = result.get("exitCode")
+    outcome = (
+        "timed out"
+        if result.get("timedOut")
+        else f"signal {result['signal']}"
+        if result.get("signal")
+        else f"exit {code}"
+    )
+    argv = " ".join(str(a) for a in (meta.get("argv") or []))[:80]
+    short = short_id(manifest["id"])
+    return relay.publish(
+        ws.root,
+        topic="job",
+        selector=job_id,
+        ref=f"run:{short}#stdout",
+        origin="ctx-job",
+        note=f"{argv} — {outcome}",
+    )
 
 
 # ---------------------------------------------------------------- finalize

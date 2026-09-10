@@ -308,3 +308,106 @@ def cmd_proxy(ns) -> int:
         rescue_pct=ns.rescue_pct,
     )
     return 0
+
+
+def cmd_relay(ws, ns) -> int:
+    """`ctx relay watch|publish|signal|status|drain|gc` — the cross-harness relay.
+
+    The relay is the direction the task ledger never had: it lets one harness
+    reach another *between* turns instead of only leaving a record for
+    whoever reads next (docs/RELAY.md). Like `ctx task send`, every write
+    here carries an ADDRESS and a bounded note — never content. Delivery
+    happens at the receiving harness's next hook boundary, which is a real
+    bound and is reported as such by `status`.
+    """
+    from ctx import relay
+
+    if ns.relay_cmd == "watch":
+        row = relay.watch(
+            ws.root,
+            subscriber=ns.subscriber,
+            topic=ns.topic,
+            selector=ns.selector or "",
+            action=ns.action,
+            ttl_seconds=ns.ttl,
+        )
+        print(f"watching {row['topic']}"
+              + (f"/{row['selector']}" if row["selector"] else "")
+              + f" as {row['subscriber']} → {row['action']}")
+        print(f"watch: {row['watch_id']}")
+        print(f"retire: ctx relay unwatch {row['watch_id']}")
+        return 0
+
+    if ns.relay_cmd == "unwatch":
+        ok = relay.unwatch(ws.root, ns.watch_id)
+        print(f"retired {ns.watch_id}" if ok else f"no such watch: {ns.watch_id}")
+        return 0 if ok else 1
+
+    if ns.relay_cmd in ("publish", "signal"):
+        if ns.relay_cmd == "signal" and ns.interrupt:
+            row = relay.interrupt(
+                ws.root, to=ns.to, ref=ns.ref, origin=ns.origin,
+                note=ns.note or "", ttl_seconds=ns.ttl,
+            )
+            print(f"interrupt queued for {row['to']} · {row['signal_id']}")
+            print("delivery: at that harness's next tool call (pre-tool-use)")
+            return 0
+        queued = relay.publish(
+            ws.root,
+            topic=ns.topic,
+            selector=ns.selector or "",
+            ref=ns.ref,
+            origin=ns.origin,
+            note=ns.note or "",
+            ttl_seconds=ns.ttl,
+            to=getattr(ns, "to", None) or None,
+        )
+        if not queued:
+            # Not an error: publishing is silent by design, so a producer
+            # never has to know who is listening. Say so, so the operator is
+            # not left wondering whether the write failed.
+            print(f"published {ns.topic} · nobody is watching it, nothing queued")
+            return 0
+        for row in queued:
+            print(f"queued {row['kind']} for {row['to']} · {row['signal_id']}")
+        return 0
+
+    if ns.relay_cmd == "drain":
+        subscriber = relay.subscriber_id(ns.host, ns.session or None)
+        text, signals = relay.drain(
+            ws.root, subscriber, stage="cli", record=not ns.peek
+        )
+        if not signals:
+            print(f"nothing pending for {subscriber}")
+            return 0
+        print(text)
+        if ns.peek:
+            print("\n(peek: not marked delivered)")
+        return 0
+
+    if ns.relay_cmd == "gc":
+        dropped = relay.gc(ws.root)
+        print(f"dropped {dropped} settled row{'s' if dropped != 1 else ''}")
+        return 0
+
+    st = relay.status(ws.root)
+    print(f"[ctx relay] {st['signals']} signals · {st['delivered']} delivered · "
+          f"{st['expired']} expired")
+    print(f"queue: {st['path']}")
+    if st["watches"]:
+        print("watching:")
+        for w in st["watches"]:
+            print(f"  {w['subscriber']:<24} {w['topic']}"
+                  + (f"/{w['selector']}" if w.get("selector") else "")
+                  + f" → {w['action']}  ({w['watch_id']})")
+    else:
+        print("watching: nobody")
+    if st["pending_by_subscriber"]:
+        print("pending:")
+        for sub, n in sorted(st["pending_by_subscriber"].items()):
+            print(f"  {sub:<24} {n}")
+        print("delivery: at each harness's next hook boundary "
+              "(tool call, or turn start)")
+    else:
+        print("pending: nothing")
+    return 0

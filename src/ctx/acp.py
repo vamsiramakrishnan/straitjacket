@@ -319,8 +319,52 @@ class Client:
             pipe.close()
 
 
+def relay_prompt(root: Path, subscriber: str, prompt: str) -> str:
+    """Prepend whatever the relay has queued for this worker to its prompt.
+
+    An ACP worker is not a hooked host: it gets no PreToolUse and no
+    PostToolUse of ours, so the additionalContext channel the relay uses
+    everywhere else does not exist here. The prompt is the only place a
+    queued report can land before the turn starts, and it is bounded by the
+    same render cap as every other delivery point.
+
+    Delivered as an addressed advisory, never as content: the worker resolves
+    the reference through the session-scoped MCP server if it wants the bytes.
+    """
+    try:
+        from ctx import relay
+
+        if not relay.relay_path(root).exists():
+            return prompt
+        text, signals = relay.drain(root, subscriber, stage="acp-prompt")
+        if not signals:
+            return prompt
+        return f"{text}\n\n{prompt}"
+    except Exception:  # noqa: BLE001 — advisory, never blocks a worker
+        return prompt
+
+
 def launch(endpoint: Endpoint, root: Path, prompt: str, exe: str, *, timeout: float,
-           idle_timeout: float = 0, env=None, with_tools=True, cancelled=None):
+           idle_timeout: float = 0, env=None, with_tools=True, cancelled=None,
+           relay_subscriber: str | None = None):
+    """Run one bounded ACP attempt.
+
+    ``relay_subscriber`` opts this worker into the cross-harness relay under
+    that address. It buys two things a hooked host gets for free: queued
+    reports reach the worker through its prompt, and a queued **interrupt
+    actually stops it mid-turn**. The second is only honest here — this
+    transport owns the worker subprocess and already sends ``session/cancel``
+    on teardown, which is exactly what a PreToolUse hook cannot do. Leave it
+    unset for a worker that must not be reachable, such as the semantic
+    analysis worker, which runs with no tools over frozen evidence.
+    """
+    interrupted = None
+    if relay_subscriber:
+        from ctx import relay
+
+        prompt = relay_prompt(root, relay_subscriber, prompt)
+        interrupted = relay.pending_interrupt(root, relay_subscriber)
+        cancelled = relay.interrupt_watcher(root, relay_subscriber, chain=cancelled)
     client = None
     try:
         client = Client(endpoint.command, root, timeout=timeout, idle_timeout=idle_timeout,
@@ -336,7 +380,28 @@ def launch(endpoint: Endpoint, root: Path, prompt: str, exe: str, *, timeout: fl
             raise ACPError(f"ACP worker encountered {client.denied} unresolved permission request(s)")
         return 0, "".join(client.output), client.stderr.decode(errors="replace"), None
     except (OSError, ACPError, TypeError, AttributeError, KeyError) as exc:
-        return 2, "".join(client.output) if client else "", str(exc), None
+        error = str(exc)
+        if relay_subscriber and "cancelled" in error:
+            # Say which peer stopped this worker and where its evidence is.
+            # A bare "ACP task cancelled" would leave the operator guessing
+            # between a budget cancel and a relay stop, and would leave the
+            # interrupt queued so the next attempt died the same way.
+            error = _relay_stop_reason(root, relay_subscriber, interrupted, error)
+        return 2, "".join(client.output) if client else "", error, None
     finally:
         if client:
             client.close()
+
+
+def _relay_stop_reason(root: Path, subscriber: str, seen, error: str) -> str:
+    """Drain the interrupt that stopped this worker and name it in the error."""
+    try:
+        from ctx import relay
+
+        text, signals = relay.drain(root, subscriber, stage="acp-cancel")
+        if not signals and seen is None:
+            return error  # cancelled by the caller's own source, not by us
+        rendered = text or relay.render([seen] if seen else [])
+        return f"ACP worker stopped by a relay interrupt\n{rendered}"
+    except Exception:  # noqa: BLE001
+        return error

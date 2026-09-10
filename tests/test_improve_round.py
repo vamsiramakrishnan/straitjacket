@@ -1409,36 +1409,59 @@ def _make_evidence_graph(n):
     )
 
 
-def test_flood_render_scales_linearly_not_quadratically_with_item_count():
-    """_render_flood walks k linearly downward from len(items) with a tiny
-    budget, calling build(k) -- which re-renders and re-encodes the WHOLE
-    census -- at every single value of k on the way down. That makes the
-    flood path O(n^2) in the number of failing items: doubling the item
-    count should double the render time for a linear implementation, but
-    roughly quadruples it here."""
+def test_flood_render_does_not_rebuild_the_census_at_every_k():
+    """`_render_flood` must not walk k linearly downward from len(items),
+    calling build(k) — which re-renders and re-encodes the WHOLE census — at
+    every value on the way down. That is O(n^2) in the number of failing
+    items; the binary search over a non-decreasing size(k) is O(n log n).
+
+    Measured as the number of census builds, not as elapsed time. The
+    previous version of this test timed two single renders and asserted a
+    ratio, but at 250 items a render takes about four milliseconds, where
+    scheduler noise and CPU frequency scaling dominate the signal — it went
+    red on a shared CI runner at 3.37x against a 3.0 threshold while the
+    implementation was correct. Counting the builds measures the mechanism
+    the docstring actually names, is exact on any machine, and separates the
+    two implementations by two orders of magnitude instead of a factor of
+    1.5: binary search grows by one build per doubling, a linear scan by n.
+    """
     from ctx.contracts import contract_for_family
+    from ctx.digest import evidence_render
     from ctx.digest.evidence_render import DefaultPlan, render_fail_evidence
 
     contract = contract_for_family("pytest")
-    plan = DefaultPlan(mode="flood", token_budget=5)  # forces k all the way to 1
+    plan = DefaultPlan(mode="flood", token_budget=5)  # forces k all the way down
+    original = evidence_render._nbytes
 
-    g_small = _make_evidence_graph(250)
-    t0 = time.perf_counter()
-    render_fail_evidence(g_small, contract, plan)
-    small_elapsed = time.perf_counter() - t0
+    def builds_for(n: int) -> int:
+        count = 0
 
-    g_large = _make_evidence_graph(500)
-    t0 = time.perf_counter()
-    render_fail_evidence(g_large, contract, plan)
-    large_elapsed = time.perf_counter() - t0
+        def counting(lines):
+            nonlocal count
+            count += 1
+            return original(lines)
 
-    ratio = large_elapsed / max(small_elapsed, 1e-9)
-    assert ratio < 3.0, (
-        f"doubling item count 250->500 took {ratio:.2f}x longer "
-        f"({small_elapsed:.3f}s -> {large_elapsed:.3f}s); expected roughly "
-        "2x for a linear flood render, not the ~4x quadratic blowup from "
-        "rebuilding the whole census at every k on the way down"
+        evidence_render._nbytes = counting
+        try:
+            render_fail_evidence(_make_evidence_graph(n), contract, plan)
+        finally:
+            evidence_render._nbytes = original
+        return count
+
+    small, large, huge = builds_for(250), builds_for(500), builds_for(1000)
+
+    # Two doublings must cost at most a couple more builds each. A linear
+    # scan would answer 250 / 500 / 1000 here.
+    assert large - small <= 2, (
+        f"doubling 250->500 items cost {large - small} extra census builds "
+        f"({small} -> {large}); a binary search costs one, a linear rescan of "
+        "every k on the way down costs n"
     )
+    assert huge - large <= 2, (
+        f"doubling 500->1000 items cost {huge - large} extra census builds "
+        f"({large} -> {huge})"
+    )
+    assert huge < 40, f"{huge} census builds for 1000 items is not logarithmic"
 
 
 # =====================================================================

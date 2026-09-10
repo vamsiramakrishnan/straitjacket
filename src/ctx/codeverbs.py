@@ -29,11 +29,32 @@ from ctx.workspace import Workspace
 
 _ENGINE_JEDI = "jedi"
 _ENGINE_AST = "ast"
+_ENGINE_SKELETON = "skeleton"
+_ENGINE_SCIP = "scip (exact)"
 _DIAG_MAX_FILES = 200
 
 
 # ----------------------------------------------------------------- engine
-def _select_engine() -> str:
+def _select_engine(rel: str = "") -> str:
+    """Which definition backend to try first, for this file.
+
+    Both Python-only backends used to be chosen without looking at the file.
+    `ctx map` advertises symbols for eighteen languages — it prints the exact
+    address to use, `repo:path --symbol name` — and every one of those
+    addresses outside Python was then handed to jedi, which reported the
+    symbol "not found ... (engine jedi)". Measured across six languages with
+    the full optional dependency set installed: 18/18 Python addresses
+    resolved, 0/62 everything else (`evals/verb_coverage.py`). The discovery
+    surface and the resolution surface disagreed, and an agent following the
+    map's own printed affordance dead-ended every time.
+
+    So a non-Python file goes straight to the skeleton, which already knows
+    how to extract symbol spans for those languages through tree-sitter and
+    ctags. Python keeps jedi first: it resolves across files, which the
+    skeleton does not.
+    """
+    if rel and not rel.endswith((".py", ".pyi")):
+        return _ENGINE_SKELETON
     if os.environ.get("CTX_CODE_ENGINE") == _ENGINE_AST:
         return _ENGINE_AST
     try:
@@ -41,6 +62,134 @@ def _select_engine() -> str:
     except Exception:
         return _ENGINE_AST
     return _ENGINE_JEDI
+
+
+def _skeleton_def(
+    store: Store, ws: Workspace, rel: str, symbol: str
+) -> tuple[str, int, int, str]:
+    """(def_rel, start, end, kind) from the file's skeleton; raises on no match.
+
+    Reuses :func:`ctx.skeleton.skeleton_for` rather than adding a third symbol
+    extractor: it is already multi-language, already cached by source blob, and
+    already the thing `ctx map` consults. Resolution therefore agrees with
+    discovery by construction, which is the defect this closes.
+
+    Scoped names match both ways round, because callers write `Class.method`
+    and skeletons record the scope separately.
+    """
+    from ctx.skeleton import language_for, skeleton_for
+
+    if language_for(rel) is None:
+        raise RetrievalError(
+            f"no skeleton language for {rel} (engine skeleton resolves "
+            "definitions in supported source files only)"
+        )
+    try:
+        rows = skeleton_for(store, ws, rel).get("symbols") or []
+    except Exception as exc:  # noqa: BLE001 — a backend that will not run is data
+        raise RetrievalError(
+            f"skeleton unavailable for {rel}: {type(exc).__name__}"
+        ) from None
+
+    row = _match_symbol(rows, symbol)
+    if row is None:
+        # The map's inventory is ctags'; the skeleton's is whichever backend
+        # answered first, and for non-Python that is usually tree-sitter with
+        # a narrower idea of what counts. That gap is how `ctx map` came to
+        # advertise `--symbol accept` for a Go package constant that `ctx def`
+        # then refused. One more rung, not a second source of truth.
+        row = _match_symbol(_ctags_rows(store, ws, rel), symbol)
+        if row is not None:
+            a, b = int(row["range"][0]), int(row["range"][1])
+            return rel, a, b, str(row.get("kind") or "symbol")
+        raise RetrievalError(
+            f"symbol {symbol!r} not found in {rel} (engine skeleton; "
+            f"{len(rows)} symbols known for this file)"
+        )
+    a, b = int(row["range"][0]), int(row["range"][1])
+    return rel, a, b, str(row.get("kind") or "symbol")
+
+
+def _match_symbol(rows: list[dict], symbol: str) -> dict | None:
+    """Best symbol row for a possibly scoped name, or None.
+
+    Scoped names match both ways round, because callers write `Class.method`
+    and skeletons record the scope separately.
+    """
+    wanted = symbol.split(".")
+    matches = []
+    for row in rows:
+        name = str(row.get("name") or "")
+        scope = str(row.get("scope") or "")
+        if name == symbol:
+            matches.append((0, row))
+        elif len(wanted) == 2 and name == wanted[1] and scope.endswith(wanted[0]):
+            matches.append((1, row))
+        elif scope and f"{scope}.{name}" == symbol:
+            matches.append((1, row))
+    if not matches:
+        return None
+    # Prefer an exact name, then the widest span: an outer definition is what
+    # a caller asking for a bare name almost always means.
+    matches.sort(key=lambda m: (m[0], -(m[1]["range"][1] - m[1]["range"][0])))
+    return matches[0][1]
+
+
+def _ctags_rows(store: Store, ws: Workspace, rel: str) -> list[dict]:
+    """Symbol rows straight from ctags — the inventory `ctx map` advertises
+    from. Empty on any failure; this rung only ever adds resolutions."""
+    from ctx.skeleton import _ctags_extract, language_for
+
+    language = language_for(rel)
+    if language is None:
+        return []
+    try:
+        source = ws.confine(rel, must_exist=True).read_bytes().decode("utf-8", "replace")
+        return _ctags_extract(source, language, rel)[0]
+    except Exception:  # noqa: BLE001 — a backend that will not run is data
+        return []
+
+
+def _scip_def(store: Store, ws: Workspace, rel: str, symbol: str):
+    """(def_rel, start, end, kind) from the workspace's SCIP index, or None.
+
+    `ctx refs` has had the exact, compiler-backed tier since M-K4; `ctx def`
+    never did, so the two verbs disagreed about how precisely ctx could answer
+    the same question about the same tree.
+
+    SCIP gives the definition's exact line — which is the part a heuristic
+    gets wrong — but an occurrence is a point, and `ctx def` owes the caller a
+    body. The enclosing span therefore comes from the skeleton, chosen as the
+    tightest symbol range containing that line, so the coordinates stay the
+    compiler's while the extent stays what the map already agrees with.
+    """
+    try:
+        from ctx import scip_ingest
+
+        sites = scip_ingest.refs(ws, symbol, definitions_only=True, store=store)
+    except Exception:
+        return None
+    if not sites:
+        return None  # no index, or indexed and not defined — the ladder decides
+    want = rel.replace("\\", "/")
+    line = next((ln for f, ln, _ in sites if f == want), None)
+    if line is None:
+        return None
+    try:
+        from ctx.skeleton import skeleton_for
+
+        rows = skeleton_for(store, ws, want).get("symbols") or []
+    except Exception:
+        rows = []
+    enclosing = [
+        r for r in rows
+        if int(r["range"][0]) <= line <= int(r["range"][1])
+        and str(r.get("name") or "") == symbol.split(".")[-1]
+    ]
+    if enclosing:
+        row = min(enclosing, key=lambda r: int(r["range"][1]) - int(r["range"][0]))
+        return want, int(row["range"][0]), int(row["range"][1]), str(row.get("kind") or "symbol")
+    return want, line, line, "definition"
 
 
 def _within_root(ws: Workspace, module_path: object) -> str | None:
@@ -141,15 +290,29 @@ def cmd_def(store: Store, ws: Workspace, target: str) -> str:
     rel, symbol = _parse_target(target)
     ws.confine(rel, must_exist=True)
 
-    engine = _select_engine()
+    scip_hit = _scip_def(store, ws, rel, symbol)
+    if scip_hit is not None:
+        def_rel, a, b, kind = scip_hit
+        engine = _ENGINE_SCIP
+    else:
+        engine = _select_engine(rel)
     if engine == _ENGINE_JEDI:
         try:
             def_rel, a, b, kind = _jedi_def(ws, rel, symbol)
         except RetrievalError:
-            raise
+            # jedi resolves across files but only for Python, and a name it
+            # cannot see may still be in this file's skeleton. Try that before
+            # giving up; the original message is kept if it cannot either.
+            try:
+                def_rel, a, b, kind = _skeleton_def(store, ws, rel, symbol)
+                engine = _ENGINE_SKELETON
+            except RetrievalError:
+                raise
         except Exception:
             engine = _ENGINE_AST
-    if engine == _ENGINE_AST:
+    if engine == _ENGINE_SKELETON:
+        def_rel, a, b, kind = _skeleton_def(store, ws, rel, symbol)
+    elif engine == _ENGINE_AST:
         def_rel, a, b, kind = _ast_def(ws, rel, symbol)
 
     snap = snapshot_file(store, ws, def_rel)
@@ -245,20 +408,50 @@ def _jedi_refs(ws: Workspace, symbol: str) -> tuple[list[tuple[str, int, str]], 
 def _ast_refs(
     store: Store, ws: Workspace, symbol: str, scope_path: str | None
 ) -> tuple[list[tuple[str, int, str]], int]:
-    """Word-boundary textual references over ``*.py`` (labeled, not semantic)."""
+    """Word-boundary textual references over source files (labeled, not
+    semantic).
+
+    This is the ladder's floor, so it must be the *least* language-specific
+    rung, not the most. It scanned ``**/*.py`` only, which meant `ctx refs`
+    on a Go repository answered "sites: 0" — indistinguishable from a symbol
+    that genuinely has no references, and so a wrong answer rather than an
+    honest refusal. The file set is now every language the skeleton knows.
+    """
     from ctx.refs import parse_ref
+    from ctx.skeleton import language_for
 
     ref = parse_ref("repo:" + (scope_path or ""))
-    targets, _, _ = _resolve_repo_targets(store, ws, ref, glob="**/*.py", scope=None)
+    targets, _, _ = _resolve_repo_targets(store, ws, ref, glob=None, scope=None)
     rx = re.compile(rf"\b{re.escape(symbol.split('.')[-1])}\b")
     sites: list[tuple[str, int, str]] = []
     scanned = 0
     for t in targets:
+        if language_for(t.label) is None:
+            continue
         scanned += len(t.text)
         for i, ln in enumerate(t.text.splitlines(), start=1):
             if rx.search(ln):
                 sites.append((t.label, i, ln.rstrip()))
     return sites, scanned
+
+
+def _stale_index_note(ws: Workspace, store: Store) -> str:
+    """Disclose an exact tier skipped because its index went stale.
+
+    CONTRIBUTING's rule is that a fallback is never anonymous. Silently
+    dropping to the regex because `ctx index` has not been re-run since the
+    last edit would look identical to never having indexed at all, and the
+    remedy is one command.
+    """
+    try:
+        from ctx import scip_ingest
+
+        index = scip_ingest.find_index(ws, store)
+        if index is not None and not scip_ingest.index_is_current(ws, index):
+            return " · stale index skipped, re-run ctx index"
+    except Exception:
+        pass
+    return ""
 
 
 def resolve_refs(
@@ -272,19 +465,28 @@ def resolve_refs(
     try:
         from ctx import scip_ingest
 
-        scip_sites = scip_ingest.refs(ws, symbol)
-        if scip_sites:  # a non-empty precise answer wins the ladder
+        scip_sites = scip_ingest.refs(ws, symbol, store=store)
+        # `refs` distinguishes "no index" (None) from "indexed, and this
+        # symbol has no references" ([]). Treating both as falsy threw the
+        # second away and fell through to the regex, which then reported
+        # matches in comments and strings as references — replacing an exact
+        # answer with a wrong one, the failure this ladder exists to avoid.
+        if scip_sites is not None:
             return scip_sites, "scip (exact)"
     except Exception:
         pass
+    # Whichever lower rung answers, say if the exact one was skipped because
+    # its index no longer describes the tree: that reads identically to never
+    # having indexed, and the remedy is one command.
+    note = _stale_index_note(ws, store)
     if _select_engine() == _ENGINE_JEDI:
         try:
             sites, _ = _jedi_refs(ws, symbol)
-            return sites, _ENGINE_JEDI
+            return sites, f"{_ENGINE_JEDI}{note}"
         except Exception:
             pass
     sites, _ = _ast_refs(store, ws, symbol, None)
-    return sites, "ast (textual)"
+    return sites, f"ast (textual){note}"
 
 
 def _check_refs_symbol(symbol: str) -> None:

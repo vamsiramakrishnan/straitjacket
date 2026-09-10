@@ -50,6 +50,8 @@ retrieval returns bounded regions on demand
 | Understand content-stable repository addresses | [Anchors](ANCHORS.md) |
 | Route work across hosts and models | [Routing](ROUTING.md) |
 | Run or resume multi-agent work | [Task ledger](TASK-LEDGER.md) |
+| Tell another harness something between turns | [Relay](RELAY.md) |
+| See what the harness boundary can and cannot carry | [Harness collaboration](HARNESS-COLLABORATION.md) |
 | Analyze frozen evidence with explicit model calls | [Semantic analysis](SEMANTIC.md) |
 | Investigate a bug and verify a repair under one durable budget | [Task execution](TASK-EXECUTION.md) |
 | Hand a frontier model's edit off to a cheaper one | [Prewalk](PREWALK.md) |
@@ -106,6 +108,10 @@ path is clear.
 - [Routing](ROUTING.md) — allocating work across hosts and models.
 - [Task ledger](TASK-LEDGER.md) — persisted multi-agent work, resume, recovery,
   and budget state.
+- [Relay](RELAY.md) — the cross-harness signal queue: subscriptions, delivery
+  at hook boundaries, tool-call-boundary interrupts, and the bounds on each.
+- [Harness collaboration](HARNESS-COLLABORATION.md) — what the harness boundary
+  carries today, what it cannot, and the ranked backlog.
 - [Prewalk](PREWALK.md) — hand a frontier model's validated first edit off to
   a cheaper model, opt-in.
 - [Replacement surface](REPLACEMENT-SURFACE.md) — transparent command

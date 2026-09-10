@@ -89,13 +89,20 @@ def test_plan_node_fingerprint_survives_an_mtime_restoring_edit(git_workspace):
 
 def test_skeleton_key_stays_content_addressed(workspace_dir, state_home):
     """The one cache that must NOT move to stat: its key is the blob hash,
-    which is strictly stronger. Documented, not reconciled away."""
+    which is strictly stronger. Documented, not reconciled away.
+
+    The blob hash alone is not sufficient, though. A parse is a function of
+    the bytes *and* of which backends were installed when it ran, so the
+    backend fingerprint is part of the key too — see
+    ``test_skeleton.py::test_installing_a_backend_invalidates_a_degraded_skeleton``
+    for why serving the stale answer is the expensive failure."""
     from ctx.skeleton import _skeleton_cache_key
 
-    a = _skeleton_cache_key(hashlib.sha256(b"x = 1\n").hexdigest(), "a.py")
-    b = _skeleton_cache_key(hashlib.sha256(b"x = 2\n").hexdigest(), "a.py")
-    c = _skeleton_cache_key(hashlib.sha256(b"x = 1\n").hexdigest(), "b.py")
-    assert len({a, b, c}) == 3
+    a = _skeleton_cache_key(hashlib.sha256(b"x = 1\n").hexdigest(), "a.py", "ts+ast")
+    b = _skeleton_cache_key(hashlib.sha256(b"x = 2\n").hexdigest(), "a.py", "ts+ast")
+    c = _skeleton_cache_key(hashlib.sha256(b"x = 1\n").hexdigest(), "b.py", "ts+ast")
+    d = _skeleton_cache_key(hashlib.sha256(b"x = 1\n").hexdigest(), "a.py", "ast")
+    assert len({a, b, c, d}) == 4
 
 
 # --------------------------------------------------------- the name collision

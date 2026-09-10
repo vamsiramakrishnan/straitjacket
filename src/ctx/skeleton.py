@@ -1,10 +1,11 @@
 """Tree-sitter skeleton tier (docs/ALGEBRA.md M-F): imports, types, and
 signatures with line ranges for code files, house-styled after Maki.
 
-Skeletons are **derived artifacts**: canonical-JSON blobs content-keyed by
-the source file's blob hash (parse once per content, ever). Each symbol row
-carries name, kind, signature, line range, enclosing scope, and a minted
-span so bodies stay retrievable without re-emission.
+Skeletons are **derived artifacts**: canonical-JSON blobs keyed by the
+source file's blob hash *and* the set of backends able to run (parse once
+per content per capability set). Each symbol row carries name, kind,
+signature, line range, enclosing scope, and a minted span so bodies stay
+retrievable without re-emission.
 
 Backend chain (absence degrades, never errors — the jedi/ripgrep pattern):
 
@@ -71,14 +72,51 @@ def language_for(rel_path: str) -> str | None:
 # --------------------------------------------------------------------------
 # derived-blob cache (in-catalog manifest, keyed by source blob hash + path)
 # --------------------------------------------------------------------------
-def _skeleton_cache_key(source_hash: str, rel: str) -> str:
-    """Deterministic catalog id for the skeleton of (source bytes, path).
+def _backend_fingerprint(language: str | None) -> str:
+    """Which rungs of the backend chain can actually run here, right now.
 
-    The key manifest is a pure function of the source blob hash plus the
-    repo-relative path (the path is part of skeleton identity because the
-    frozen schema stores ``file``); lookup is a primary-key catalog query.
+    Content-addressing a skeleton assumes the same bytes give the same parse.
+    Across environments that is false: with no ctags on PATH a C file yields
+    zero symbols, and with ctags it yields a hundred. Keying on content alone
+    caches whichever answer came first and serves it forever, so installing
+    the missing dependency changes nothing — and a stale hit is
+    indistinguishable from a correct one, which is what makes it expensive.
+    The capability set is therefore part of skeleton identity.
+
+    Probed through the same seams ``_extract`` uses, so this can never claim
+    a rung the chain would not actually run; and per-language, so adding a Go
+    grammar does not invalidate every Python skeleton already computed.
     """
-    body = {"file": rel, "schema": SKELETON_SCHEMA, "source": f"sha256:{source_hash}"}
+    if language is None:
+        return "none"
+    rungs: list[str] = []
+    try:
+        _tree_sitter_extract("", language)
+        rungs.append("ts")
+    except Exception:
+        pass
+    if _ctags_path():
+        rungs.append("ctags")
+    if language == "python":
+        rungs.append("ast")
+    return "+".join(rungs) or "none"
+
+
+def _skeleton_cache_key(source_hash: str, rel: str, backends: str) -> str:
+    """Deterministic catalog id for the skeleton of (source bytes, path,
+    backends).
+
+    The key manifest is a pure function of the source blob hash, the
+    repo-relative path (part of skeleton identity because the frozen schema
+    stores ``file``), and the backend fingerprint; lookup is a primary-key
+    catalog query.
+    """
+    body = {
+        "backends": backends,
+        "file": rel,
+        "schema": SKELETON_SCHEMA,
+        "source": f"sha256:{source_hash}",
+    }
     return hashlib.sha256(canonical_json(body)).hexdigest()
 
 
@@ -112,13 +150,13 @@ def skeleton_for(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
     snap = snapshot_file(store, ws, rel_path)
     rel = str(snap["path"])
     src_hash = str(snap["blob"]).removeprefix("sha256:")
-    key = _skeleton_cache_key(src_hash, rel)
+    language = language_for(rel)
+    key = _skeleton_cache_key(src_hash, rel, _backend_fingerprint(language))
     cached = _cached_skeleton(store, key)
     if cached is not None:
         return cached
 
     source = store.get_blob(src_hash).decode("utf-8", "replace")
-    language = language_for(rel)
     symbols, imports, parser = _extract(source, language, rel)
 
     n_lines = len(source.splitlines())
@@ -161,6 +199,20 @@ def skeleton_for(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
         },
     )
     return json.loads(skel_bytes.decode("utf-8"))
+
+
+def backend_roster() -> dict[str, str]:
+    """Which backend chain is live for each language, here.
+
+    Exists because the degradation is otherwise silent. With no universal-ctags
+    on PATH, `ctx map` prints "0 files" for a Go repository and no verb says
+    why; `ctx doctor` renders this so a stripped install is visible *before*
+    somebody measures against it and reports the environment as a finding.
+    """
+    return {
+        lang: _backend_fingerprint(lang)
+        for lang in sorted(set(_LANG_BY_EXT.values()))
+    }
 
 
 def skeleton_outline(skeleton: dict[str, Any], budget_tokens: int) -> str:

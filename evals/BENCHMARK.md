@@ -82,7 +82,9 @@ mixed streams, long-runners), not by task topic.
 Adopted verbatim (definitions per the external review):
 
 - **Evidence density** = gold-region lines surfaced / model-visible
-  evidence tokens.
+  evidence tokens. **BUILT 2026-09-10**: `ctx.trajectory.score_trajectory`
+  computes it per recorded trajectory against ContextBench gold; entry point
+  `ctx replay --gold`.
 - **Retrieval regret** R = T_actual − T_oracle (tokens before sufficient
   evidence vs oracle-span minimum). **BUILT** (offline form): `ctx replay
   --regret` (`src/ctx/replay.py`) computes per-profile R over recorded
@@ -90,7 +92,13 @@ Adopted verbatim (definitions per the external review):
   R is an upper bound on the true gap; formal statement in
   `docs/THEORY.md`. First numbers (spec3 archives): pytest/v1 frontier
   0.17 with 199/199 facts inline. Gold-region oracles upgrade this from
-  "facts used" to "facts needed" when explore/ lands.
+  "facts used" to "facts needed" when explore/ lands. **Landed 2026-09-10**:
+  `ctx replay --gold` scores a recorded trajectory against human-annotated
+  regions, so wherever ContextBench covers the task the oracle stops being
+  one-sided. The extractor (`src/ctx/trajectory.py`) reads a transcript and
+  nothing else, so it scores a ctx arm and a native arm identically — the
+  precondition for the paired A/B in
+  [`contextbench-ab-design.md`](contextbench-ab-design.md).
 - **Containment ratio** = 1 − visible/raw tool-output tokens (already
   computed live by `ctx gain`; the benchmark reports it per-arm).
 - **Evidence preservation** = solved-under-SJ / solved-native. The
@@ -169,6 +177,30 @@ trajectory — the annotator and the simulator are the same machinery.
   gold regions) must be verified against the actual release before any
   manifest is committed; if the gold regions hold up, explore/ becomes
   the primary mechanism benchmark, exactly as argued.
+  **Resolved 2026-09-10, with a different corpus.** ContextBench
+  (arXiv:2602.05892) publishes what this slot needed and SWE-Explore
+  did not deliver in a verifiable form: human-annotated gold context as
+  `{file, start_line, end_line}` blocks. Verified against the actual
+  release before anything was built on it — `contextbench_verified` is
+  500 rows, 58 repos, 8 languages, 4,597 gold blocks over 1,746 files,
+  with real line coordinates. `evals/contextbench.py` is the runner;
+  `evals/contextbench-2026-09-10.md` is the first receipt. The standing
+  rule is unchanged: it is a **teacher**, its numbers are not comparable
+  to the paper's agent tables, and what it produces for us is a defect
+  queue, not a score.
+
+  **The referee that queue needed is internal.** A low ContextBench score
+  cannot be attributed — issue text, probe extraction, ranking and verbs
+  are all in the loop at once, and the first receipt's headline had to be
+  retracted for exactly that reason. `evals/verb_coverage.py` removes the
+  ambiguity by scoring ctx against itself: `ctx map` prints
+  `repo:<path> --symbol <name>` as the address to use next, and if
+  `ctx def` refuses that address the two halves of ctx disagree, with no
+  corpus, model or label involved. It found three real defects the corpus
+  run could only gesture at, and took resolution across six languages from
+  18/80 to 80/80 (`evals/verb-coverage-2026-09-10.md`). This is the shape
+  the charter's teacher/referee split implies: external corpora point at
+  an area, ctx's own internal agreement is what gates.
 
 ## Tiers, mapped to infrastructure that exists
 
@@ -192,10 +224,18 @@ any profile change; evidence sufficiency must not drop. Zero API cost.
    `pytest -m sj_canary` is the PR gate.
 3. **Pathology oracle** — `evals/` annotator emitting the stratification
    JSON from a recorded trajectory (shares parsing with ctx.replay).
-4. **SJ-Explore-60 manifest** — after verifying the dataset: stratified
-   per the review (20 single-file / 20 cross-file / 20 dispersed, ≥6
-   languages, oversample flood repos), with evidence-density scoring
-   wired through the replay machinery.
+4. **SJ-Explore-60 manifest** — ✅ **landed 2026-09-10 as
+   `evals/contextbench.py`**, on ContextBench rather than SWE-Explore
+   (see the note above). Stratification is by language × edit-dispersion
+   (`--stratify`, deterministic: the tie-break is the instance id, never a
+   RNG), the metrics are the paper's file/block/line recall/precision/F1,
+   and evidence density is reported per arm over a budget ladder so the
+   output is a recall-vs-tokens curve rather than one collapsed number.
+   Two corrections it forced on itself before producing a number: gold
+   paths are not uniformly repo-relative across the four upstream sources
+   (Multi-SWE-bench carries a container prefix), and a retrieval policy
+   that returns grep hits rather than enclosing definitions scores block
+   recall 0.00 by construction while finding the right files.
 5. **SJ-SWE-60 manifest** — stratified by observability problem (15
    test-flood / 10 search-flood / 10 re-verification / 10 cross-file / 5
    long-runner / 5 low-output controls / 5 misleading-output).

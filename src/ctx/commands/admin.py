@@ -300,3 +300,59 @@ def _raw_ladders_config(ws) -> dict:
             return (tomllib.load(fh) or {}).get("ladders") or {}
     except (OSError, ValueError):
         return {}
+
+
+def cmd_index(ws, ns) -> int:
+    """`ctx index` — build the SCIP index the precise tier reads.
+
+    ctx has read SCIP since M-K4 but never produced one, so the exact rung of
+    the `refs`/`def` ladders was unreachable in any repository that did not
+    already index itself, and answers came from the regex floor instead.
+    """
+    from ctx import scip_index
+    from ctx.store import Store
+    from ctx.textutil import fmt_bytes
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        if getattr(ns, "list_indexers", False):
+            print("[ctx index · available indexers]")
+            for lang, binary in scip_index.roster().items():
+                mark = "✓" if binary else "·"
+                detail = binary or "not installed"
+                print(f"  {mark} {lang:<12} {detail}")
+            present = scip_index.dominant_languages(ws)
+            print(f"in this workspace: {', '.join(present) or 'no indexable language'}")
+            return 0
+
+        languages = [ns.language] if ns.language else scip_index.dominant_languages(ws)
+        if not languages:
+            print("ctx index: no indexable language in this workspace", file=sys.stderr)
+            return 1
+
+        errors = []
+        for lang in languages:
+            try:
+                path, size = scip_index.build(
+                    ws, store, language=lang, timeout=ns.timeout
+                )
+            except scip_index.IndexError_ as e:
+                errors.append(f"{lang}: {e}")
+                continue
+            print(f"[ctx index · {lang} · {fmt_bytes(size)}]")
+            print(f"stored: {path}")
+            print("next:")
+            print("  ctx refs <symbol>          # now exact, not textual")
+            print("  ctx def repo:<path>:<sym>  # compiler coordinates")
+            return 0
+
+        for line in errors:
+            print(f"ctx index: {line}", file=sys.stderr)
+        print(
+            "ctx index: no index built; the refs/def ladders keep their "
+            "existing rungs (see `ctx index --list`)",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        store.close()

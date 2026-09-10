@@ -168,6 +168,7 @@ def render_run_digest(
     dense: bool = False,
     plan: Any = None,
     contained: bool = True,
+    producer: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Produce the bounded deterministic digest for a captured invocation and
     republish the manifest with its final digest identity.
@@ -234,7 +235,68 @@ def render_run_digest(
         from ctx.engagement import note_truncation
 
         note_truncation(ws.root)
+
+    _announce_expensive_capture(
+        ws, op, short, raw, len(digest.encode("utf-8")), producer
+    )
     return digest, final_manifest
+
+
+#: Only a capture that actually cost something is worth telling a peer about.
+#: A three-line `git status` announced to another harness is noise; a 40k-token
+#: test flood that has already been contained is evidence the peer would
+#: otherwise pay to reproduce.
+_ANNOUNCE_MIN_RAW_BYTES = 32_768
+
+
+def _announce_expensive_capture(
+    ws: Workspace, op: str, short: str, raw: int, emitted: int,
+    producer: str | None = None,
+) -> None:
+    """Publish an expensive capture's *address* to the cross-harness relay.
+
+    The store is already workspace-scoped and content-addressed, so a digest
+    produced under one harness has always been resolvable from another. What
+    was missing is that the other harness had no way to *know*. This closes
+    that: the second harness learns the address at its next hook boundary and
+    resolves it under its own permissions, instead of re-running the build to
+    rediscover the same bytes.
+
+    Gated three ways, in cost order: the raw capture must be large enough to
+    be worth a peer's attention, the relay queue file must exist at all, and
+    somebody must actually be watching the ``digest`` topic. A workspace with
+    no relay pays one ``os.path.exists`` per capture. Never raises — an
+    unannounced digest is still a perfectly good digest.
+    """
+    if raw < _ANNOUNCE_MIN_RAW_BYTES:
+        return
+    try:
+        import os
+
+        from ctx.sessiondir import session_reads_dir
+
+        if not os.path.exists(session_reads_dir(ws.root, "relay", "relay.jsonl")):
+            return
+        from ctx import relay
+
+        # `producer` names the harness whose tool call produced this capture,
+        # threaded down from the hook, so the fan-out can skip it: being told
+        # about your own output is noise dressed as collaboration. Threaded
+        # rather than stashed in the environment or a module global — the
+        # hook normally runs in a fresh interpreter, but tests and embedders
+        # call it in-process, where either of those would leak one call's
+        # identity into every later capture.
+        relay.publish(
+            ws.root,
+            topic="digest",
+            selector=op,
+            ref=f"run:{short}#stdout",
+            origin="ctx-capture",
+            note=f"{op}: {raw // 1024} KiB captured, {emitted // 4} tok digest",
+            exclude=producer,
+        )
+    except Exception:  # noqa: BLE001 — advisory, never part of the capture path
+        pass
 
 
 def digest_output(
@@ -247,6 +309,7 @@ def digest_output(
     is_error: bool = False,
     argv: list[str] | None = None,
     contained: bool = True,
+    producer: str | None = None,
 ) -> tuple[str, str]:
     """Digest an already-produced tool result (not a shell capture).
 
@@ -318,7 +381,7 @@ def digest_output(
     }
 
     digest, final = render_run_digest(store, ws, manifest, focus=None,
-                                      contained=contained)
+                                      contained=contained, producer=producer)
     short = short_id(final.get("id", ""))
 
     from ctx.engagement import filter_digest, suggestion_cap

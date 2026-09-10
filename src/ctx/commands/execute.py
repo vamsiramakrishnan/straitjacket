@@ -131,7 +131,13 @@ def _run_bg(ws, store, ns, command: list[str]) -> int:
     )
     from ctx.workspace import WorkspaceError
 
-    patience = ns.bg_after if ns.bg_after is not None else 0.0  # --bg ⇒ 0
+    # `--bg` promises a handle ("background immediately: … transcript gets a
+    # job handle"), so it must not race its own supervisor. Expressed as a
+    # zero patience window it did: `wait_for_done` checks job state before it
+    # checks the deadline, so a child that finished before the first poll —
+    # `echo` on a loaded runner — finalized inline and the transcript got no
+    # address at all. Only `--bg-after` has a window to wait out.
+    patience = ns.bg_after
     try:
         job_id = start_job(
             ws, store, command,
@@ -141,7 +147,9 @@ def _run_bg(ws, store, ns, command: list[str]) -> int:
         print(f"ctx run: {e}", file=sys.stderr)
         return 1
     try:
-        if wait_for_done(store, job_id, timeout=max(0.0, patience)):
+        if patience is not None and wait_for_done(
+            store, job_id, timeout=max(0.0, patience)
+        ):
             digest, manifest = finalize_job(ws, store, job_id)
             return _emit_run_digest(ws, digest, manifest, store=store)
         print(backgrounded_status(store, job_id))
@@ -167,6 +175,19 @@ def cmd_job(ws, ns) -> int:
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
         job_id = resolve_job_id(store, ns.job_id)
+        if getattr(ns, "announce", False):
+            # The detached completion hook the supervisor spawns. Prints the
+            # queued signals rather than the digest: nothing is watching this
+            # process's stdout, and the digest is what the *receiver* will
+            # fetch from the address it is handed.
+            from ctx.jobs import announce_job
+
+            queued = announce_job(ws, store, job_id)
+            for row in queued:
+                print(f"queued {row['kind']} for {row['to']} · {row['signal_id']}")
+            if not queued:
+                print(f"job {job_id} finalized · nobody watching, nothing queued")
+            return 0
         if ns.kill:
             digest, manifest = kill_job(ws, store, job_id)
             short = short_id(manifest["id"])

@@ -36,7 +36,11 @@ from pathlib import Path
 # v6: MCP tool description now glosses all 14 declared ops (callers, callees,
 # impact, diff, investigate were callable but absent from the prose catalogue,
 # so a model could not discover them).
-PREFIX_VERSION = 11
+# v12: the cross-harness relay ops (relay_watch, relay_publish, relay_pending)
+# joined the tool description. An agent that cannot read them in the catalogue
+# cannot ask to be told when its background job lands, which is the whole
+# point of the relay; the cost is one cold prefix-cache write per model.
+PREFIX_VERSION = 12
 
 _MANIFEST_NAME = "prefix-manifest.json"
 

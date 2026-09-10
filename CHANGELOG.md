@@ -6,6 +6,170 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+`ctx relay` adds a cross-harness relay: the direction the task ledger never
+had. The ledger lets harnesses share a record; the relay lets one tell another.
+Three append-only schemas (`ctx.watch/v1`, `ctx.signal/v1`, `ctx.delivery/v1`)
+under `.ctx-session-reads/relay/`, written with the same lock and torn-line
+repair as the task ledger. A signal carries an address and a bounded note,
+validated by the grammar `ctx task send` already enforces; prose and output are
+refused at the boundary.
+
+Delivery is at the receiving harness's next hook boundary: `report` and
+`advise` at post-tool-use and session start, `interrupt` at pre-tool-use as a
+`force_ask` naming the address. There is no push and no mid-stream
+interruption — an interrupt stops the next tool call, not a token stream, and
+the bound is reported rather than implied. A guard `deny` outranks a relay
+interrupt, and a `ctx` call is never blocked by one. Antigravity receives the
+relay through pre-invocation, its only stage that can carry advisory text.
+
+Two producers ship with it. A backgrounded run announces its `run:` address
+when a harness subscribed to the `job` topic before it launched, so a finished
+job no longer waits for someone to poll; the supervisor stays dependency-free
+and shells out to a detached `ctx job --announce`. An expensive capture (raw
+above 32 KiB) publishes its address on the `digest` topic — the artifact store
+was always shared across harnesses, what was missing is that the peer knew.
+
+ACP workers participate too, and are the one transport where an interrupt is
+more than a tool-call boundary. Their sessions already open with a
+session-scoped MCP server, so the relay ops are reachable from inside one; a
+queued report is prepended to the worker's prompt at the new `acp-prompt`
+stage, since an ACP worker has no `additionalContext` channel; and a queued
+interrupt becomes the transport's cancellation source at the new `acp-cancel`
+stage, cancelling the turn while it runs rather than stopping the next tool
+call. The attempt then fails with the peer's reason and address instead of a
+bare cancellation. Participation is per worker: an orchestrated ACP node
+subscribes as its host id, and the semantic analysis worker declares no address
+and stays unreachable, as a worker running with no tools over frozen evidence
+should.
+
+`relay_watch`, `relay_publish` and `relay_pending` join the MCP tool so an
+agent can use the relay from inside any harness. That changes prefix-resident
+bytes: **PREFIX_VERSION moves 11 → 12, one cold prefix-cache write per model.**
+A workspace with no relay pays one `os.path.exists` per tool call and imports
+nothing; every relay path in the hook degrades to silence rather than to a
+failed tool call. See [the relay](docs/RELAY.md) and
+[harness collaboration](docs/HARNESS-COLLABORATION.md).
+
+`ctx replay --gold` scores what an agent actually opened during a recorded
+session against human-annotated gold context, at file, block and line
+granularity, with evidence density and regret against the gold oracle. New
+`ctx.trajectory` reconstructs those regions from a transcript alone: it reads no
+ctx state and needs no ctx install, so a session that used ctx and one that did
+not are measured by the same instrument. An A/B whose arms are instrumented
+differently has decided its result before it runs, and a test pins that a native
+`Read`/`grep` trajectory and a ctx `get`/`search` trajectory over identical
+regions score identically.
+
+This upgrades the oracle `ctx replay --regret` documents as one-sided. Its
+facts-used oracle is a lower bound "since the trajectory only proves a subset of
+what was needed"; gold regions are what a human said *was* needed.
+`evals/contextbench.py --emit-gold` writes the `ctx.gold/v1` files, and its own
+scoring now delegates to `ctx.trajectory` so one metric cannot mean two things.
+Verified score-identical against a recorded instance. Design and predictions,
+registered before any paid arm:
+[`evals/contextbench-ab-design.md`](evals/contextbench-ab-design.md).
+
+Six defects found by automated review before merge, each verified against the
+code first. `ctx refs` treated an *unreadable* SCIP index the same as an empty
+one, so a truncated or corrupt index made every symbol report zero references
+with the ladder suppressed — parse failure now degrades like an absent index.
+`ctx index` published whatever an indexer left behind even when it exited
+nonzero, installing a silently partial exact tier. `ctx relay gc` snapshotted
+the queue before taking the lock it rewrites under, so an append racing the
+compaction was discarded. In `ctx.trajectory`, a `ctx def` result was credited
+with the full span named in its header even though `cmd_def` renders only the
+first ten lines of a long body — free recall for the arm that module exists to
+keep honest — and block precision divided gold blocks by retrieved regions,
+two different units, which could exceed 1.0. And gold files emitted by
+`--emit-gold` carry an empty root, which made `_relativize` refuse every
+absolute path, scoring a native arm's `Read` at zero while ctx's relative
+output scored fine; `ctx replay` now fills the root from the cwd or
+`--gold-root`. The `block P` column in the ContextBench receipt is withdrawn
+as a consequence.
+
+`ctx index` builds the compiler-grade index the precise tier was written to
+read. ctx has ingested SCIP since M-K4 but never produced one, so outside
+repositories that index themselves in CI the exact rung of the `refs`/`def`
+ladders was dead code and every answer came from the regex floor.
+`evals/refs_precision.py` priced that floor against `rust-analyzer scip` on
+`tokio-rs/bytes`: **3,637 reported sites where the compiler says 806**, with the
+error concentrated where names are short and common — `buf` reported 754 sites
+of which 55 were real. A word-boundary regex cannot separate a reference from
+the same letters in a comment or a string literal, so ctx now shells out to the
+language's own tooling (`rust-analyzer scip`, `scip-go`, `scip-typescript`,
+`scip-python`, `scip-java`) rather than hand-rolling a better approximation.
+The index lands in the store's audit area, never the worktree.
+
+Two defects closed with it. `ctx def` never reached the exact tier at all —
+`refs` had it and `def` did not, so the two verbs disagreed about how precisely
+ctx could answer the same question; a SCIP occurrence is a point, so the
+coordinates now come from the compiler and the extent from the skeleton, since
+`ctx def` still owes the caller a body. And an authoritative "indexed, no
+references" (`[]`) was tested with `if scip_sites:` and thrown away, falling
+through to the regex — replacing an exact answer with a wrong one.
+
+That last fix needed a guard of its own, found in review before merge: an empty
+SCIP answer is authoritative only while the index still describes the tree, and
+nothing kept the two in step, so a symbol added since indexing came back as
+`sites: 0` in the exact tier's voice. An index is now checked against the
+worktree before use — no source file newer than it, plus a file count for the
+indexes ctx writes, since a deletion moves no surviving file's timestamp — and
+skipped like an absent one when the tree has moved on, with the engine label
+saying why rather than falling back silently. Checking only the files an answer
+cites would be cheaper and is wrong: it cannot see a new call site in the file
+that changed, leaving the answer confidently incomplete.
+
+`ctx doctor` gains an **exact index** row, which distinguishes a current index
+from a stale one. Receipt:
+[`evals/refs-precision-2026-09-10.md`](evals/refs-precision-2026-09-10.md).
+
+`--bg` no longer races its own supervisor. Expressed as a zero patience window
+it did: `wait_for_done` checks job state before the deadline, so a child that
+finished before the first poll finalized inline and the transcript got no job
+handle at all — red in CI, never locally. Only `--bg-after` has a window.
+
+`ctx def` and `ctx refs` work outside Python. `evals/verb_coverage.py` asks
+whether `ctx map` advertises addresses the verbs can resolve — the map prints
+`repo:<path> --symbol <name>` as the address to use next, so if `ctx def`
+refuses it the two halves of ctx disagree and the defect is ctx's by
+construction, with no corpus or model in the loop. Baseline across six
+languages was **18/80**: every Python address resolved, every other one
+refused. Now 80/80.
+
+Three defects, in the order the eval surfaced them. `_select_engine()` chose
+between jedi and stdlib `ast` without looking at the file's language, though
+`skeleton.py` already extracted symbols for 16 languages and `ctx map` was
+using it — a third engine now resolves through that same skeleton, so
+resolution agrees with discovery by construction, with ctags as a final rung
+for what the map advertises but tree-sitter does not model (Go package
+constants, struct fields). Skeletons were cached under a key made of the source
+blob hash alone, so a parse performed with no ctags on PATH — every symbol
+missing — was served forever afterwards and installing the dependency changed
+nothing; the key now carries a per-language backend fingerprint. And `ctx refs`
+fell back to a word-boundary regex over `**/*.py`, making the ladder's floor its
+most language-specific rung: on a Go repository it answered `sites: 0`, a wrong
+answer rather than a refusal.
+
+`ctx doctor` gains a **code intelligence** row listing how many languages are
+parseable and what is missing. The extras stay optional, so a thin install is
+not a failure — but it is no longer silent. Twice in this workstream a missing
+`universal-ctags` nearly became a published finding about ctx.
+Receipt: [`evals/verb-coverage-2026-09-10.md`](evals/verb-coverage-2026-09-10.md).
+
+`evals/contextbench.py` scores the search lane against human-annotated gold
+context, closing the retrieval slot `evals/BENCHMARK.md` reserved. ContextBench
+(arXiv:2602.05892) was verified against its actual release first: 500 verified
+instances, 58 repositories, 8 languages, 4,597 gold blocks with real line
+coordinates. The runner is model-free and reports file/block/line
+recall/precision/F1 over a budget ladder. First receipt:
+[`evals/contextbench-2026-09-10.md`](evals/contextbench-2026-09-10.md) — the
+deterministic probe formulation, not ctx's structural engine, is the binding
+constraint: instrumenting the run showed `ctx def` contributing 6 of 1,416
+retrieved blocks, so the 4-10x language spread measures the runner's own
+fallback scanner. File-level recall is flat across a 16x budget increase,
+locating the remaining bottleneck in candidate generation rather than packing. External corpora remain teachers,
+never referees; no resolve rate or agent comparison is claimed.
+
 `ctx task prepare/run/resume/show/cancel/apply` adds an opt-in investigation
 controller over shared execution services. Registered evidence operations,
 semantic subcalls, captured commands, anchored edits and independent checks

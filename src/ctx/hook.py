@@ -2472,6 +2472,48 @@ EMISSION_NUDGE_TEMPLATE = (
 )
 
 
+#: Hook flavor -> the host id the relay addresses. Only Claude Code differs
+#: (the hook dialect is ``claude-code``; the host in ``ctx.hosts`` is
+#: ``claude``). Spelled here rather than imported because this module must
+#: not import :mod:`ctx.hosts` on the hot path.
+_RELAY_HOST = {"claude-code": "claude"}
+
+
+def _relay_subscriber(flavor: str, payload: dict[str, Any]) -> str:
+    """This harness's relay address: ``<host>:<session>``, or ``<host>``."""
+    host = _RELAY_HOST.get(flavor, flavor)
+    session = str(
+        payload.get("session_id") or payload.get("sessionId") or ""
+    ).strip()[:32]
+    session = "".join(c for c in session if c.isalnum() or c in "._-")
+    return f"{host}:{session}" if session else host
+
+
+def _relay_drain(
+    payload: dict[str, Any], flavor: str, stage: str, ws_root: str | None = None
+) -> tuple[str, list[dict[str, Any]]]:
+    """Take whatever the cross-harness relay has queued for this harness.
+
+    Gated on the queue file existing so a workspace that never uses the relay
+    pays one ``os.path.exists`` per tool call and imports nothing — the hot
+    path is pinned by ``tests/test_hook_hot_path.py`` and this must not widen
+    it. Fail-open in every direction: the relay is an advisory channel, and a
+    corrupt or unreadable queue must degrade to silence rather than to a
+    failed tool call.
+    """
+    try:
+        root = ws_root if ws_root is not None else _resolve_workspace_root(payload)
+        if not root:
+            return "", []
+        if not os.path.exists(session_reads_dir(root, "relay", "relay.jsonl")):
+            return "", []
+        from ctx import relay
+
+        return relay.drain_quietly(root, _relay_subscriber(flavor, payload), stage=stage)
+    except Exception:
+        return "", []
+
+
 def _emission_nudge(payload: dict[str, Any]) -> str | None:
     """Emission governor (mechanism B): the symmetric partner of the read
     budget. The proxy measures cumulative output tokens; when the session
@@ -2929,6 +2971,10 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
             is_error=is_error,
             argv=_command_argv(command),
             contained=can_substitute,
+            # Name this harness so the relay fan-out can skip it: an agent
+            # watching `digest` wants a peer's expensive output, not an echo
+            # of the flood it just produced itself.
+            producer=_relay_subscriber(flavor, payload),
         )
         if not isinstance(text, str) or not text.strip():
             raise ValueError("digest produced no text")
@@ -2979,6 +3025,7 @@ def main_session_start(flavor: str = "antigravity") -> int:
     Fires once per session (not the hot path), so the surface import is fine.
     Fail-open: any error emits a no-op, never a blocked session."""
     advisory = ""
+    payload: dict[str, Any] = {}
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
@@ -2999,6 +3046,19 @@ def main_session_start(flavor: str = "antigravity") -> int:
                     probe=sp.probe)
     except Exception:
         advisory = ""
+    try:
+        # A fresh session drains everything, interrupts included: there is no
+        # turn in flight to stop, so the backlog is simply what this harness
+        # missed while it was not running. On Antigravity this stage is
+        # PreInvocation and fires before every model call, which makes it
+        # that host's only relay delivery point — its PostToolUse contract
+        # has exactly one legal output and cannot carry advisory text.
+        relay_text, _ = _relay_drain(payload if isinstance(payload, dict) else {},
+                                     flavor, "session-start")
+        if relay_text:
+            advisory = f"{advisory}\n{relay_text}" if advisory else relay_text
+    except Exception:
+        pass
     if flavor in ("claude-code", "codex"):
         emitted: dict[str, Any] = (
             {"hookSpecificOutput": {"hookEventName": "SessionStart",
@@ -3065,14 +3125,35 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
             "[ctx gate-failed]\nCTX_EMISSION_GATE: the output gate raised; the "
             "raw result was withheld rather than emitted unbounded."
         )
-    if flavor in ("hermes", "omp", "opencode", "dsh"):
+    # The relay's report/advise delivery point, and it is deliberately drained
+    # *here* rather than alongside the nudges: a drain marks its signals
+    # delivered, so draining on a host that cannot carry the text would
+    # silently consume the message. That is the one failure this whole channel
+    # exists to prevent, so the drain is gated on there being a real channel
+    # for it on this flavor, and pending signals simply wait for a stage that
+    # has one. Interrupts are never delivered here — this stage cannot stop
+    # anything, and an interrupt shown as advisory text has been demoted to a
+    # suggestion. They wait for pre-tool-use.
+    native = flavor in ("hermes", "omp", "opencode", "dsh")
+    can_carry = flavor in ("claude-code", "codex") or (native and replacement is not None)
+    relay_text = ""
+    if can_carry:
+        try:
+            relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
+        except Exception:
+            relay_text = ""
+
+    if native:
+        if relay_text and replacement is not None:
+            replacement = f"{replacement}\n\n{relay_text}"
         emitted = {"output": replacement} if replacement is not None else {}
     elif flavor == "claude-code":
         hso: dict[str, Any] = {"hookEventName": "PostToolUse"}
         if replacement is not None:
             hso["updatedToolOutput"] = replacement
-        if nudge is not None:
-            hso["additionalContext"] = nudge
+        context = "\n".join(x for x in (nudge, relay_text) if x)
+        if context:
+            hso["additionalContext"] = context
         emitted: dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
     elif flavor == "codex":
         # Codex PostToolUse substitutes the model-visible result via
@@ -3083,8 +3164,9 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
             emitted["decision"] = "block"
             emitted["reason"] = replacement
         chso: dict[str, Any] = {"hookEventName": "PostToolUse"}
-        if nudge is not None:
-            chso["additionalContext"] = nudge
+        context = "\n".join(x for x in (nudge, relay_text) if x)
+        if context:
+            chso["additionalContext"] = context
         if len(chso) > 1:
             emitted["hookSpecificOutput"] = chso
     else:
@@ -3166,6 +3248,68 @@ def _internal_error_decision(
     return dict(DECISION_ALLOW)
 
 
+def _is_ctx_call(payload: dict[str, Any]) -> bool:
+    """Is the tool call about to run a ``ctx`` command?
+
+    An interrupt tells the agent to go read an address. Denying the very
+    call that would resolve it deadlocks the agent against the message, so
+    ctx invocations are exempt — the interrupt is still delivered, it just
+    does not block the one action it is asking for.
+    """
+    name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    if name.startswith("mcp__ctx") or name == "ctx":
+        return True
+    raw = payload.get("tool_input") or payload.get("toolInput") or {}
+    if not isinstance(raw, dict):
+        return False
+    command = str(raw.get("command") or raw.get("cmd") or "").lstrip()
+    return command.startswith("ctx ") or command == "ctx"
+
+
+def _apply_relay_interrupt(
+    decision: dict[str, Any] | None,
+    payload: dict[str, Any],
+    flavor: str,
+    ws_root: str | None,
+) -> dict[str, Any] | None:
+    """Turn a queued relay interrupt into a stop at this tool-call boundary.
+
+    This is the strongest form of "interrupt" that exists across hook hosts,
+    and the module docstring of :mod:`ctx.stream_rules` explains why there is
+    no stronger one: a PreToolUse hook cannot observe assistant tokens, so
+    nothing here can abort a request mid-stream. What it *can* do is refuse
+    the next tool call and say why, naming the address the sender wants read.
+
+    ``force_ask``, not ``deny``: a peer harness is not a safety authority,
+    and a wrong interrupt should cost a confirmation rather than a hard
+    refusal. A decision that already denies is left alone — the guard's own
+    verdict outranks a peer's.
+    """
+    if decision is not None and decision.get("decision") == "deny":
+        return decision
+    if _is_ctx_call(payload):
+        # Still drain, so the message is not re-delivered forever; just do
+        # not let it block the call that resolves it.
+        _relay_drain(payload, flavor, "pre-tool-use", ws_root)
+        return decision
+
+    text, signals = _relay_drain(payload, flavor, "pre-tool-use", ws_root)
+    if not signals:
+        return decision
+    reason = (
+        "CTX_RELAY_INTERRUPT: another harness asked you to stop and read "
+        "this before continuing.\n" + text
+    )
+    updated = dict(decision or {"decision": "allow"})
+    updated["decision"] = "force_ask"
+    updated["reason"] = reason
+    # A rewrite and an interrupt are contradictory instructions for one call.
+    # The interrupt is the newer information, so it wins and the rewrite is
+    # dropped rather than smuggled through alongside a stop.
+    updated.pop("rewrite", None)
+    return updated
+
+
 def main_pre_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> pre-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON decision on stdout.
@@ -3213,6 +3357,14 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             decision = classify(payload, policy)
         except Exception as exc:
             decision = _internal_error_decision(ws_root, policy, "classify", exc)
+
+    try:
+        decision = _apply_relay_interrupt(decision, payload, flavor, ws_root)
+    except Exception:
+        # An advisory channel must never be able to change a guard decision
+        # by failing. Leave the classified decision exactly as it stands.
+        pass
+
     if flavor in ("hermes", "omp", "opencode", "dsh"):
         from ctx.native_hooks import decision_for
         emitted = decision_for(flavor, decision)

@@ -191,6 +191,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "gain": ("admin", "cmd_gain", True),
     "init": ("admin", "cmd_init", True),
     "doctor": ("admin", "cmd_doctor", True),
+    "index": ("admin", "cmd_index", True),
     "gc": ("admin", "cmd_gc", True),
     "pin": ("admin", "cmd_pin", True),
     "checkpoint": ("admin", "cmd_checkpoint", True),
@@ -199,6 +200,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "ladders": ("admin", "cmd_ladders", True),
     "orchestrate": ("hosts", "cmd_orchestrate", True),
     "task": ("hosts", "cmd_task", True),
+    "relay": ("hosts", "cmd_relay", True),
     "setup": ("hosts", "cmd_setup", False),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
@@ -549,6 +551,11 @@ def _build_parser():
         "--kill", action="store_true",
         help="SIGKILL the process group; finalize what spooled",
     )
+    p_job.add_argument(
+        "--announce", action="store_true",
+        help="finalize and publish this job's address to the relay "
+             "(the supervisor runs this itself when a harness is watching jobs)",
+    )
 
     sub.add_parser("jobs", help="list this workspace's backgrounded runs")
 
@@ -647,6 +654,22 @@ def _build_parser():
         ".ctx-session-reads/evidence-followups.jsonl ledger (the input to "
         "`ctx policy compile --plan-value`) — an explicit user action, "
         "never a runtime side effect",
+    )
+    p_replay.add_argument(
+        "--gold", dest="replay_gold", default="",
+        help="score the trajectory against a ctx.gold/v1 file: which annotated "
+             "regions the agent actually opened, at what token cost",
+    )
+    p_replay.add_argument(
+        "--gold-root", dest="replay_gold_root", default="",
+        help="checkout the transcript's absolute paths are under (default: the "
+             "workspace). Gold annotations are repo-relative and the file "
+             "carries no root, so without this a native arm's absolute "
+             "Read/Edit paths score as nothing",
+    )
+    p_replay.add_argument(
+        "--block-overlap", dest="replay_block_overlap", type=float, default=0.5,
+        help="fraction of a gold block that must be observed to count (default 0.5)",
     )
     p_replay.add_argument("--json", dest="replay_json", action="store_true")
 
@@ -809,6 +832,18 @@ def _build_parser():
 
     sub.add_parser("init", help="write ctx.toml and .ctxignore templates")
 
+    p_index = sub.add_parser(
+        "index", help="build the SCIP index the exact refs/def tier reads"
+    )
+    p_index.add_argument(
+        "--language", help="index this language (default: the workspace's dominant one)"
+    )
+    p_index.add_argument(
+        "--list", action="store_true", dest="list_indexers",
+        help="show which indexers are installed, and what this workspace needs",
+    )
+    p_index.add_argument("--timeout", type=float, default=900.0)
+
     p_doctor = sub.add_parser("doctor", help="validate installation and store health")
     p_doctor.add_argument("--antigravity", action="store_true")
 
@@ -915,6 +950,52 @@ def _build_parser():
                          help="sending node id (default: operator)")
     p_tsend.add_argument("--note", default=None,
                          help="bounded note (≤200 chars); the ref carries the content")
+
+    p_relay = sub.add_parser(
+        "relay", help="the cross-harness relay: tell another harness, between turns"
+    )
+    relay_sub = p_relay.add_subparsers(dest="relay_cmd", required=True)
+
+    p_rw = relay_sub.add_parser("watch", help="subscribe a harness to a topic")
+    p_rw.add_argument("subscriber", help="<host> or <host>:<session>, e.g. claude or codex:9f1a")
+    p_rw.add_argument("topic", choices=["job", "task", "digest", "edit", "peer"])
+    p_rw.add_argument("--selector", default="", help="narrow within the topic (prefix match)")
+    p_rw.add_argument("--action", default="advise", choices=["report", "advise", "interrupt"],
+                      help="what a matching signal should do to you (default: advise)")
+    p_rw.add_argument("--ttl", type=float, default=6 * 3600, help="seconds (default: 6h)")
+
+    p_ru = relay_sub.add_parser("unwatch", help="retire a watch")
+    p_ru.add_argument("watch_id", metavar="WATCH")
+
+    p_rp = relay_sub.add_parser("publish", help="announce to whoever is watching")
+    p_rp.add_argument("topic", choices=["job", "task", "digest", "edit", "peer"])
+    p_rp.add_argument("ref", help="an address: run:, checkpoint:, blob:, repo:… (never content)")
+    p_rp.add_argument("--selector", default="", help="what this is about, e.g. a job id")
+    p_rp.add_argument("--origin", default="operator", help="who is announcing (default: operator)")
+    p_rp.add_argument("--to", default="", help="one subscriber instead of the watchers")
+    p_rp.add_argument("--note", default=None, help="bounded note (≤200 chars)")
+    p_rp.add_argument("--ttl", type=float, default=6 * 3600)
+
+    p_rs = relay_sub.add_parser(
+        "signal", help="send one harness an address, or interrupt it at its next tool call"
+    )
+    p_rs.add_argument("to", help="<host> or <host>:<session>")
+    p_rs.add_argument("ref", help="an address the receiver resolves with ctx get")
+    p_rs.add_argument("--interrupt", action="store_true",
+                      help="stop that harness at its next tool call (not mid-stream)")
+    p_rs.add_argument("--topic", default="peer", choices=["job", "task", "digest", "edit", "peer"])
+    p_rs.add_argument("--selector", default="")
+    p_rs.add_argument("--origin", default="operator")
+    p_rs.add_argument("--note", default=None, help="bounded note (≤200 chars)")
+    p_rs.add_argument("--ttl", type=float, default=6 * 3600)
+
+    p_rd = relay_sub.add_parser("drain", help="take what is queued for a harness, by hand")
+    p_rd.add_argument("host", help="host id, e.g. claude")
+    p_rd.add_argument("--session", default="", help="narrow to one session")
+    p_rd.add_argument("--peek", action="store_true", help="show without marking delivered")
+
+    relay_sub.add_parser("status", help="what is queued and who is listening")
+    relay_sub.add_parser("gc", help="drop settled rows from the queue")
 
     p_agy = sub.add_parser("antigravity", help="Antigravity integration")
     agy_sub = p_agy.add_subparsers(dest="agy_cmd", required=True)

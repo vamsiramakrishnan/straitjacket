@@ -41,6 +41,11 @@ python evals/plan_collapse.py          # rounds collapse, byte-stable digest
 python evals/anchor_drift.py           # how often a repo: address goes silently stale
 python evals/edit_repair.py            # how much of a failed host edit is recoverable
 python evals/task_ledger_replay.py     # resume, typed recovery, budget-against-actuals
+python evals/contextbench.py --workdir /scratch/cb --limit 12  # search-lane retrieval vs human gold context
+python evals/contextbench.py --workdir /scratch/cb --limit 40 --stratify --emit-gold /scratch/gold
+ctx replay --gold /scratch/gold/<instance>.json <transcript.jsonl>  # score a real agent trajectory
+python evals/verb_coverage.py --repo /path/to/checkout  # do map's advertised addresses resolve?
+python evals/refs_precision.py --repo /path/to/checkout  # what the textual refs floor costs
 python evals/edit_format_by_model.py   # anchored vs native edit success, per model, from field rows
 python evals/improve_route.py --dry-run  # the hunt/verify/harvest/prove route, priced (live without --dry-run)
 ```
@@ -52,6 +57,34 @@ Others in this class: `evalset_collapse.py`, `corpus_scoped_scan.py`,
 `wire.jsonl` rather than calling a model). `swe_learn.py` is model-free but
 fetches SWE instances and reproduces failures in a venv, so it needs network and
 build toolchains.
+`contextbench.py` is model-free in the same sense: no LLM anywhere in the
+loop, but it fetches the ContextBench corpus and shallow-clones each repo at
+`base_commit`, so it needs network and about 50 MB of scratch per instance. It
+is the **search-lane** counterpart to `swe_learn.py`'s output-lane scoring —
+see [`contextbench-2026-09-10.md`](contextbench-2026-09-10.md) for the first
+receipt and the defect queue it produced. That receipt also records why a
+one-pass policy cannot answer whether ctx is effective, and
+[`contextbench-ab-design.md`](contextbench-ab-design.md) is the design that
+can, with its predictions registered before any paid arm runs.
+
+`verb_coverage.py` needs no corpus and no labels. `ctx map` prints
+`repo:<path> --symbol <name>` as the address to use next; this takes the
+symbols it advertises and asks `ctx def` to resolve each one. Because the map
+produced both the symbol and the address, a refusal means the two halves of ctx
+disagree with each other and the defect is ctx's by construction — the
+attribution `contextbench.py` cannot make. Cheap enough to be a gate rather
+than a study. It reports its environment in the first line of output, because
+`universal-ctags` and the `code` extra change the answer completely and a run
+that does not say which were present is a measurement of a laptop. Receipt:
+[`verb-coverage-2026-09-10.md`](verb-coverage-2026-09-10.md), which took it from
+18/80 to 80/80 across six languages.
+
+`refs_precision.py` is the same idea one level down, and needs a SCIP index
+(`ctx index`) because the index *is* its ground truth: it scores ctx's textual
+refs engine against the answer the language's own compiler front end gives for
+the same tree. On `tokio-rs/bytes` the floor reported 3,637 sites where the
+compiler says 806. Receipt:
+[`refs-precision-2026-09-10.md`](refs-precision-2026-09-10.md).
 
 `alphaevolve/` is the bounded optimization portfolio for 27 named production
 levers across 16 experiment families. Local search, holdout, adversarial, and

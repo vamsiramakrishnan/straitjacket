@@ -57,6 +57,36 @@ they are **not** interception hooks. Native plugins provide interception where
 the agent loads them; `ctx_edit` provides the shared verified patch/rewrite path.
 Agents can also use `ctx run`, `ctx edit`, and `ctx rewrite` through their terminal.
 
+## The relay reaches an ACP worker
+
+An ACP worker is not a hooked host: it receives no PreToolUse and no
+PostToolUse, so the `additionalContext` channel the cross-harness relay
+([RELAY.md](RELAY.md)) uses elsewhere does not exist here. Three things make it
+reachable anyway, and the third is available on no other transport.
+
+**The relay ops ride the session-scoped MCP server.** `relay_watch`,
+`relay_publish` and `relay_pending` are ops on the same `ctx` tool the session
+is opened with, so a worker can subscribe itself and publish findings without
+shelling out.
+
+**Queued reports arrive through the prompt.** Anything pending for the worker's
+address is drained at the `acp-prompt` stage before `session/prompt` and
+prepended as a bounded, addressed advisory. The task itself still arrives last.
+
+**A queued interrupt stops the turn while it is running.** This transport owns
+the worker subprocess, polls a cancellation source on every wait iteration, and
+already sends `session/cancel`; a queued interrupt becomes that cancellation
+source. The attempt fails with the peer's reason and the address it wants read,
+rather than a bare cancellation. On a hooked host the same signal can only stop
+the *next tool call* — here it stops the turn.
+
+The queue read is throttled and latches, and it composes with the caller's own
+cancellation rather than replacing it: a budget or task cancel still cancels.
+Participation is per worker. An orchestrated ACP node subscribes as its host id,
+so `ctx relay signal codex … --interrupt` stops a running Codex node. The
+semantic analysis worker declares no address and stays unreachable, which is
+correct for a worker that runs with no tools over frozen evidence.
+
 Temporary worker wiring is removed before an isolated patch is captured.
 OMP/OpenCode receive project plugins; Hermes uses its enabled profile plugin;
 native `dsh` commands receive a hook-only Cordis overlay. A custom DSH wrapper
@@ -82,6 +112,7 @@ daemon already exist:
 | Warm evidence access | `ctx mcp` stays alive, with a bounded workspace/store cache | Share caches across independent CLI and host processes |
 | Work that survives its caller | `ctx job` starts a detached supervisor per job | One owner for scheduling and observing all jobs |
 | Durable evidence and task state | The store and task ledger persist on disk | A live event stream for multiple attached clients |
+| Telling a running worker something | The relay drains into the worker's prompt, and a queued interrupt cancels its turn | Delivery without waiting for the next attempt to start |
 | Concurrent workers | Each orchestration run bounds its worker pool | Concurrency limits across separate orchestration runs |
 | Continued agent conversations | Each ACP attempt creates a fresh session | Keep connections/sessions alive between invocations |
 
