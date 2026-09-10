@@ -104,14 +104,33 @@ instance id rather than a RNG, and the policy takes no random input.
 
 ## What the numbers say
 
-**1 · The search lane is Python-shaped, and now we have the size of it.**
-Python leads every other language by 4–10× on file F1, and is the only one with
-non-trivial block recall outside C++/Go. This was *predicted* by the charter —
-item 6 of the build list calls multilingual "the regression corpus for the
-Python-shaped mechanisms" — but predicted is not measured, and now it is
-measured against human gold. `ctx def` reports `engine ast`; the languages
-where that engine is thinnest are precisely the languages at the bottom of this
-table. This is the highest-value item the run produced.
+**1 · The runner's own probe formulation is the binding constraint, and it is
+what the language spread measures.** Python leads every other language by 4–10×
+on file F1 and is the only one with non-trivial block recall outside C++/Go.
+
+An earlier revision of this receipt read that gap as ctx's structural engine
+being thin outside Python. **That attribution was wrong, and instrumenting the
+run is what showed it.** Across all 40 instances `ctx def` — the authoritative
+AST span verb — contributed 6 of 1,416 retrieved blocks. The other 1,410 came
+from `_enclosing_block`, this file's own regex fallback scanner. On sampled Go
+and TypeScript instances `ctx def` was asked **zero** times, `ctx refs`
+returned zero sites, graph expansion never seeded, and *every* retrieved block
+came from the fallback.
+
+So the chain that fails is upstream of ctx: regex probes drawn from the issue
+text miss, search then finds little, no hit's enclosing symbol matches a probe,
+so `ctx def` is never asked, so nothing seeds the call graph. Asked, `ctx def`
+answered 3 of 3 times in the sample. The fallback scanner is indentation-first
+and its brace matching is crude, which makes it Python-shaped in exactly the
+way the table shows.
+
+**This run therefore does not license a claim about ctx's structural engine in
+either direction.** It measures a deterministic stand-in for the part an LLM
+does — reading an issue and deciding what to look for — and that stand-in is
+the weakest link. Fixing the receipt's story is cheap; fixing the policy so the
+structural verbs are actually put under load is the next experiment, and it has
+to contend with the reason the gate is strict at all (an earlier ungated
+revision expanded onto unrelated files and lost precision).
 
 **2 · The bottleneck is candidate generation, not packing.** File F1 is
 essentially flat across a 16× budget increase (0.104 → 0.100) while block
@@ -139,15 +158,36 @@ from anchors took that instance from 1 of 5 gold files to 2 of 5; the remaining
 three are further along edges the policy does not follow. Search and refs
 cannot cross a call edge, and no amount of ranking fixes that.
 
+## What this run does not test
+
+Recorded because the numbers above invite a reading they do not support.
+
+| verb | engagement across 40 instances |
+|---|---|
+| `ctx search` | 1,608 hits — heavily exercised, and the source of file-level recall |
+| `ctx refs` | 131 sites — thin |
+| `ctx callers` / `ctx callees` | 38 sites — barely reached |
+| `ctx def` | 6 blocks, asked ~6 times, answered every time it was asked |
+
+Containment — keeping large output out of the prompt while keeping it
+addressable — is straitjacket's actual claim and is not measured here at all.
+That lane has its own instruments (`evals/field_needle.py`,
+`evals/headroom_needle_v2.py`, the coverage corpus, and the evidence-channel
+conformance tests). ContextBench measures issue-to-gold-context retrieval,
+which is a different question, and the charter's rule that no single corpus can
+referee this system is the reason both exist.
+
 ## The defect queue
 
 130 gold files the lane never named at the top budget, listed in
 [`contextbench-2026-09-10.json`](contextbench-2026-09-10.json). The queue is
 dominated by the language finding above, so the ranked follow-ups are:
 
-1. **Structural engine coverage for JS/TS, C and Go.** These are 17 of 40
-   instances and contribute almost nothing. `ctx def` returning nothing is the
-   proximate cause on most of them.
+1. **Put the structural verbs under load before judging them.** Loosen the gate
+   so `ctx def` is asked for the enclosing symbol of the top-weighted hits
+   rather than only for symbols the issue named verbatim, and re-run. Until
+   that happens, JS/TS, C and Go contribute almost nothing for reasons this
+   runner owns, not reasons ctx owns.
 2. **A locating verb for prose-only issues** — the probe-starved third. Not a
    ranking change; a different mechanism.
 3. **Deeper graph expansion.** Depth-1 `callers`/`callees` from anchors was

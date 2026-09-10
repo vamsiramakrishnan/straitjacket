@@ -57,9 +57,11 @@ instances, 58 repositories, 8 languages, 4,597 gold blocks with real line
 coordinates. The runner is model-free and reports file/block/line
 recall/precision/F1 over a budget ladder. First receipt:
 [`evals/contextbench-2026-09-10.md`](evals/contextbench-2026-09-10.md) — the
-search lane is measurably Python-shaped (4–10x the other seven languages), and
-file-level recall is flat across a 16x budget increase, locating the bottleneck
-in candidate generation rather than packing. External corpora remain teachers,
+deterministic probe formulation, not ctx's structural engine, is the binding
+constraint: instrumenting the run showed `ctx def` contributing 6 of 1,416
+retrieved blocks, so the 4-10x language spread measures the runner's own
+fallback scanner. File-level recall is flat across a 16x budget increase,
+locating the remaining bottleneck in candidate generation rather than packing. External corpora remain teachers,
 never referees; no resolve rate or agent comparison is claimed.
 
 `ctx task prepare/run/resume/show/cancel/apply` adds an opt-in investigation
