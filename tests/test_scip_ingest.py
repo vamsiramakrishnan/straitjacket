@@ -402,3 +402,27 @@ def test_a_deletion_alone_is_caught_by_the_sidecar_count(state_home, workspace_d
 
     (workspace_dir / "main.py").unlink()
     assert not scip_ingest.index_is_current(ws, index)
+
+
+def test_a_corrupt_index_falls_through_rather_than_answering_zero(
+    state_home, workspace_dir
+):
+    """An unreadable index is not an empty one.
+
+    `iter_occurrences` reports a protobuf parse failure the same silent way it
+    reports a document with no occurrences — by yielding nothing. Once an empty
+    result became authoritative, a truncated or corrupt index would answer
+    `sites: 0` for *every* symbol at `scip (exact)`, with the lower rungs
+    suppressed. Found in review, not by a test, which is why there is one now.
+    """
+    from ctx.codeverbs import resolve_refs
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+    index = workspace_dir / "index.scip"
+    index.write_bytes(index.read_bytes()[: len(index.read_bytes()) // 3] + b"\xff\xff")
+
+    sites, label = resolve_refs(store, ws, "helper")
+    assert "scip" not in label, f"a corrupt index still claimed the exact tier: {label}"
+    assert sites, "the ladder did not fall through to an engine that can answer"

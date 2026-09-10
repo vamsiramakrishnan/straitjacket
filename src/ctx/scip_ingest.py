@@ -277,10 +277,6 @@ def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False, store=No
     index = find_index(ws, store)
     if index is None or not available():
         return None
-    if load_index(index) is None:
-        # Unreadable is not empty. Same None as "no index": the ladder must
-        # keep its lower rungs rather than answer zero for every symbol.
-        return None
     if not index_is_current(ws, index):
         # Same signal as "no index", deliberately: the caller's contract is
         # that None means fall through the ladder, and an index that no longer
@@ -324,7 +320,12 @@ def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False, store=No
         text = lines[occ.line - 1].strip() if 0 < occ.line <= len(lines) else ""
         hits[key] = text
     if not hits:
-        # An index exists, is current, and names nothing — a definitive SCIP
-        # answer for this symbol (empty), distinct from "no usable index".
-        return []
+        # Empty is two different facts wearing one face: "parsed, and names no
+        # site" — a definitive answer — or "could not be parsed at all", which
+        # a generator reports the same silent way. Trusting the second would
+        # let a truncated or corrupt index answer zero references for every
+        # symbol in the exact tier's voice, with the ladder suppressed. Asked
+        # only here, where the distinction changes the decision and nothing
+        # cheaper can settle it.
+        return [] if load_index(index) is not None else None
     return [(f, ln, hits[(f, ln)]) for (f, ln) in sorted(hits)]
