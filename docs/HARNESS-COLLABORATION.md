@@ -4,9 +4,10 @@ straitjacket's premise is that you keep your coding agent. That makes the
 harness boundary the most important interface in the project, and it is worth
 being precise about what that boundary can and cannot carry today.
 
-This document is the audit and the ranked backlog. One item on it has landed
-(§1); the rest are stated as gaps with the mechanism each would need, so that
-nothing here reads as a capability that exists.
+This document is the audit and the ranked backlog. Two items on it have landed
+(§1, and §5 on the one transport where it is honest); the rest are stated as
+gaps with the mechanism each would need, so that nothing here reads as a
+capability that exists.
 
 ## What exists today
 
@@ -56,10 +57,11 @@ boundaries that already exist. Three things make it fit rather than bolt on:
 - **It reuses the ledger's address rule.** A signal carries a ref and a bounded
   note, never content. The same closed grammar, so the two buses cannot drift
   into accepting different things.
-- **It states its latency instead of hiding it.** Delivery is at the next hook
-  boundary; an interrupt stops the next *tool call*, not a token stream. There
-  is no push, and `stream_rules.py` already said so — a feature that quietly
-  contradicted it would have been worse than no feature.
+- **It states its latency instead of hiding it.** On a hooked host, delivery is
+  at the next hook boundary and an interrupt stops the next *tool call*, not a
+  token stream. There is no push, and `stream_rules.py` already said so — a
+  feature that quietly contradicted it would have been worse than no feature.
+  The one exception is an ACP worker, whose subprocess ctx owns; §5.
 - **The subscriber picks the kind.** One job completion is an advisory report
   to one harness and a hard stop to another, decided by each of them.
 
@@ -99,23 +101,30 @@ session reload/resume are not implemented in the transport. Every attempt
 re-establishes context from checkpoints.
 
 This is the deepest limit on genuine multi-harness collaboration, because it
-means a peer harness cannot be *kept warm*. The relay makes it possible to tell
-a running harness something; ACP resume is what would make it possible to hand
-one a follow-up. The two compose: a resumable ACP worker that drains the relay
-at each turn boundary is a peer you can hold a conversation with, and neither
-half is sufficient alone.
+means a peer harness cannot be *kept warm*. The relay now reaches into a
+running ACP worker — its prompt carries queued reports and a queued interrupt
+stops its turn — but every attempt still starts from nothing. ACP resume is
+what would make a follow-up possible. The two compose: a resumable worker that
+drains the relay each turn is a peer you can hold a conversation with, and
+neither half is sufficient alone.
 
-## 5. Mid-stream interruption, where the stream is ours — **gap**
+## 5. Mid-turn interruption, where the stream is ours — **landed for ACP**
 
-`stream_rules.py` is already the transport-neutral state machine for callers
-that own their stream, and it is honest that hook hosts are not among them. But
-ACP workers and the SDK-backed runner *are* — its own docs call this
-"eligible; transport wiring not implemented".
+`stream_rules.py` is the transport-neutral state machine for callers that own
+their stream, and it is honest that hook hosts are not among them. ACP workers
+*are*: ctx spawns the subprocess, polls a cancellation source on every wait
+iteration, and already sends `session/cancel` on teardown.
 
-The relay's interrupt queue is the natural producer for it. A ctx-owned worker
-could drain `pre-tool-use`-class signals between tokens rather than between
-tool calls, giving a genuine mid-stream stop on exactly the hosts where the
-claim would be true. The queue does not change; only the drain point does.
+That is now wired. A queued interrupt becomes the cancellation source for an
+ACP worker, so the turn is cut off while it is running rather than at the next
+tool call, and the failure names the peer and the address. Queued reports reach
+the same worker through its prompt, since it has no `additionalContext`
+channel. Both are opt-in per worker: the semantic analysis worker stays
+unreachable by design, running with no tools over frozen evidence.
+
+The queue did not change; only the drain point did, which is what the design
+predicted. What remains is the SDK-backed runner, which owns its stream for the
+same reason and is not yet wired.
 
 ## 6. No back-pressure between peers — **gap**
 
@@ -137,11 +146,11 @@ right.
 | 2 | host capability statement | gap | hours | cheapest; the agent is guessing today |
 | 3 | presence registry | gap | days | makes the relay's addressing complete |
 | 6 | pressure back-pressure | gap | days | first real test of the topic vocabulary |
-| 5 | mid-stream drain for owned streams | gap | weeks | needs 1; honest only on owned hosts |
+| 5 | mid-turn drain for owned streams | **ACP landed** | — | honest only on owned hosts; SDK runner remains |
 | 4 | ACP session resume | gap | weeks | the structural one; unblocks warm peers |
 
 The ordering is deliberate: the two cheap items (2, 3) both make the landed
-mechanism more useful without changing it, and the two expensive ones (4, 5)
-are the ones that would let straitjacket claim something stronger than
-"delivery at the next boundary" — which is a claim worth earning rather than
-asserting.
+mechanism more useful without changing it. Item 5 has now earned the stronger
+claim on exactly the transport where it is true — an ACP worker really is
+stopped mid-turn — and item 4 remains the structural one, because being able
+to interrupt a worker is not the same as being able to keep one warm.

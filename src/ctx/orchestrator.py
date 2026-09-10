@@ -822,6 +822,12 @@ def _launch_host(
                     endpoint = replace(endpoint, command=(endpoint.command[0], "--patch", str(patch), *endpoint.command[1:]))
                 return launch_acp(endpoint, ws_root, prompt, exe, timeout=timeout,
                                   idle_timeout=idle_timeout,
+                                  # Addressed by host, exactly like a hooked
+                                  # session of the same agent: `ctx relay
+                                  # signal codex ... --interrupt` stops a
+                                  # running codex ACP node, and a queued
+                                  # report reaches it through its prompt.
+                                  relay_subscriber=spec.name,
                                   env={**os.environ, "CTX_MODEL": endpoint.model,
                                        "CTX_HOST": spec.name, "CTX_EDIT_ATTEMPT": edit_attempt})
         except (OSError, ValueError) as exc:

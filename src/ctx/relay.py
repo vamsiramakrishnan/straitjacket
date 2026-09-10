@@ -104,7 +104,14 @@ TOPICS = ("job", "task", "digest", "edit", "peer")
 
 #: The hook stages that may drain. Kept here rather than in :mod:`ctx.hook`
 #: so the queue and its delivery points version together.
-STAGES = ("session-start", "pre-invocation", "pre-tool-use", "post-tool-use", "cli")
+STAGES = (
+    "session-start", "pre-invocation", "pre-tool-use", "post-tool-use",
+    # The ACP transport's own two delivery points. Named rather than folded
+    # into the hook stages so a delivery receipt says where a signal actually
+    # landed: an ACP worker has no hooks, and "session-start" would be a lie.
+    "acp-prompt", "acp-cancel",
+    "cli",
+)
 
 #: Kinds each stage is allowed to deliver. ``pre-tool-use`` sees only
 #: interrupts: it is the stage that can *deny*, and turning an advisory
@@ -115,6 +122,11 @@ STAGE_KINDS: dict[str, tuple[str, ...]] = {
     "pre-invocation": ("report", "advise", "interrupt"),
     "post-tool-use": ("report", "advise"),
     "pre-tool-use": ("interrupt",),
+    # An ACP worker's prompt carries advisories only. Folding an interrupt in
+    # there would demote a stop into a suggestion the model may ignore — and
+    # would consume it, so the cancel that should have fired never would.
+    "acp-prompt": ("report", "advise"),
+    "acp-cancel": ("interrupt",),
     "cli": SIGNAL_KINDS,
 }
 
@@ -611,6 +623,72 @@ def drain(
                 },
             )
     return render(signals, max_chars=max_chars), signals
+
+
+def pending_interrupt(
+    workspace_root: Path | str, subscriber: str
+) -> dict[str, Any] | None:
+    """The oldest undelivered interrupt for this subscriber, without taking it.
+
+    Peeks rather than drains: the caller that acts on it (stopping a worker)
+    is not the same step as the caller that reports it, and a signal consumed
+    by a liveness check that then fails to act would be a stop nobody hears.
+    """
+    signals = pending(workspace_root, subscriber, kinds=("interrupt",))
+    return signals[0] if signals else None
+
+
+def interrupt_watcher(
+    workspace_root: Path | str,
+    subscriber: str,
+    *,
+    poll_seconds: float = 1.0,
+    chain: Any = None,
+):
+    """A zero-argument predicate that turns true once an interrupt is queued.
+
+    Shaped for a transport that already owns its worker and already polls a
+    cancellation source — :class:`ctx.acp.Client` calls its ``cancelled`` hook
+    on every wait iteration, roughly ten times a second. Three properties
+    matter there and none of them are optional:
+
+    * **Throttled.** Re-reading and re-parsing the queue at 10 Hz would make
+      an advisory channel the most expensive thing in the loop. The queue is
+      consulted at most every ``poll_seconds``, and not at all until the file
+      exists.
+    * **Latching.** Once true it stays true. The transport polls again while
+      tearing down, and a predicate that flickered back to false would leave
+      a worker half-cancelled.
+    * **Chaining.** ``chain`` composes with the caller's own cancellation
+      source, so adding the relay never removes a budget or a task cancel.
+
+    Never raises: a broken queue means "no interrupt", exactly as everywhere
+    else in this module.
+    """
+    state = {"hit": False, "checked": 0.0}
+
+    def cancelled() -> bool:
+        if chain is not None:
+            try:
+                if chain():
+                    return True
+            except Exception:  # noqa: BLE001 — the caller's source, not ours
+                pass
+        if state["hit"]:
+            return True
+        now = time.monotonic()
+        if now - state["checked"] < poll_seconds:
+            return False
+        state["checked"] = now
+        try:
+            if not relay_path(workspace_root).exists():
+                return False
+            state["hit"] = pending_interrupt(workspace_root, subscriber) is not None
+        except Exception:  # noqa: BLE001 — advisory, never fatal
+            return False
+        return state["hit"]
+
+    return cancelled
 
 
 def drain_quietly(

@@ -1,4 +1,4 @@
-# ADR 008: A cross-harness relay, bounded by the hook boundary
+# ADR 008: A cross-harness relay, bounded by the boundary it drains at
 
 Status: implemented.
 
@@ -51,17 +51,32 @@ flowchart LR
     Q -->|report, advise| P1[post-tool-use additionalContext]
     Q -->|report, advise| P2[session-start / pre-invocation]
     Q -->|interrupt| P3[pre-tool-use force_ask]
+    Q -->|report, advise| P4[acp-prompt: prepended to the worker prompt]
+    Q -->|interrupt| P5[acp-cancel: session/cancel, mid-turn]
     P1 --> H[the receiving harness]
     P2 --> H
     P3 --> H
+    P4 --> W[a ctx-owned ACP worker]
+    P5 --> W
 ```
 
-The bound is the decision, not a limitation of the implementation. Delivery
-latency is **one hook boundary**. An interrupt lands at a **tool-call
-boundary**, never mid-stream, because a PreToolUse hook cannot observe
-assistant tokens — `ctx.stream_rules` says so and this must not contradict it.
-A host that owns its stream can drain the same queue earlier without any change
-to the queue.
+The bound is the decision, not a limitation of the implementation. On a hooked
+host, delivery latency is **one hook boundary** and an interrupt lands at a
+**tool-call boundary**, never mid-stream, because a PreToolUse hook cannot
+observe assistant tokens — `ctx.stream_rules` says so and this must not
+contradict it.
+
+**Where ctx owns the stream, the same queue drains earlier, and that is the
+whole of the difference.** An ACP worker is a subprocess this project spawns;
+the transport already polls a cancellation source and already sends
+`session/cancel`. So a queued interrupt becomes that cancellation source and
+stops the turn while it is running, and queued reports are prepended to the
+worker's prompt because it has no `additionalContext` channel of its own. Two
+stages are named for it — `acp-prompt` and `acp-cancel` — rather than reusing
+the hook stage names, because a delivery receipt has to say where a signal
+actually landed and an ACP worker has no hooks. Participation is per worker:
+the semantic analysis worker declares no address and stays unreachable, which
+is correct for a worker that runs with no tools over frozen evidence.
 
 The **subscriber declares the kind**, not the publisher. One job completion is
 an advisory `report` to one harness and an `interrupt` to another, decided by
@@ -93,7 +108,10 @@ queues nothing and spawns nothing.
    hook's drain is gated on the queue file existing (one `os.path.exists`, no
    import — the hot path is pinned by test) and every path degrades to silence
    on a corrupt, unreadable or read-only queue.
-7. **Every bound is enforced on write and on render**: pending per subscriber,
+7. **A worker reaches the relay only if it was given an address.** Opt-in per
+   worker, so a transport that must stay unreachable — frozen evidence, no
+   tools — stays unreachable by declaring nothing.
+8. **Every bound is enforced on write and on render**: pending per subscriber,
    signals per drain, rendered characters, note length, ref length, TTL. A
    queue that grows without limit is a context leak with extra steps.
 
@@ -113,9 +131,11 @@ changes prefix-resident bytes and moves `PREFIX_VERSION` 11 → 12, at the cost
 of one cold prefix-cache write per model.
 
 What this does **not** unlock, stated so it is not assumed: a warm peer. ACP
-sessions remain single-shot, so a harness can now be told something but still
-cannot be handed a follow-up. That is the next structural change, and it
-composes with this one rather than replacing it —
+sessions remain single-shot, so a worker can now be told something and stopped
+mid-turn, and still cannot be handed a follow-up — every attempt starts from
+nothing. That is the next structural change, and it composes with this one
+rather than replacing it. The SDK-backed runner owns its stream for the same
+reason an ACP worker does and is not yet wired.
 `docs/HARNESS-COLLABORATION.md` carries the ranked backlog.
 
 See [the relay](../../docs/RELAY.md) for the command surface, the per-host

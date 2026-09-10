@@ -29,6 +29,19 @@ and shells out to a detached `ctx job --announce`. An expensive capture (raw
 above 32 KiB) publishes its address on the `digest` topic — the artifact store
 was always shared across harnesses, what was missing is that the peer knew.
 
+ACP workers participate too, and are the one transport where an interrupt is
+more than a tool-call boundary. Their sessions already open with a
+session-scoped MCP server, so the relay ops are reachable from inside one; a
+queued report is prepended to the worker's prompt at the new `acp-prompt`
+stage, since an ACP worker has no `additionalContext` channel; and a queued
+interrupt becomes the transport's cancellation source at the new `acp-cancel`
+stage, cancelling the turn while it runs rather than stopping the next tool
+call. The attempt then fails with the peer's reason and address instead of a
+bare cancellation. Participation is per worker: an orchestrated ACP node
+subscribes as its host id, and the semantic analysis worker declares no address
+and stays unreachable, as a worker running with no tools over frozen evidence
+should.
+
 `relay_watch`, `relay_publish` and `relay_pending` join the MCP tool so an
 agent can use the relay from inside any harness. That changes prefix-resident
 bytes: **PREFIX_VERSION moves 11 → 12, one cold prefix-cache write per model.**

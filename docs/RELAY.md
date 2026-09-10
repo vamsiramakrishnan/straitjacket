@@ -37,6 +37,8 @@ the harness already crosses*:
 | `post-tool-use` | `report` and `advise`, as additional context | claude, codex |
 | `post-tool-use` | `report` and `advise`, appended to the replaced output | hermes, omp, opencode, dsh — only when there *is* a replacement |
 | `pre-tool-use` | `interrupt`, as a stop on the next tool call | all seven |
+| `acp-prompt` | `report` and `advise`, prepended to the worker's prompt | ACP workers |
+| `acp-cancel` | `interrupt`, as a real mid-turn `session/cancel` | ACP workers |
 
 That last column is not decoration. **A drain marks its signals delivered**, so
 draining on a host that cannot carry the text would consume the message and
@@ -47,11 +49,16 @@ exactly one legal output (`{}`), so nothing is ever drained there; the native
 hosts have no `additionalContext` at all, so the advisory rides along with the
 substituted output or waits.
 
-So the latency of a signal is **one hook boundary**: the next tool call, or the
-next turn. An interrupt lands at a **tool-call boundary**, not mid-token. That
-bound is part of the contract, and `ctx relay status` prints it rather than
-leaving you to infer it. A host that owns its own stream — an ACP worker, the
-SDK-backed runner — can drain the same queue earlier without changing anything.
+So on a hooked host the latency of a signal is **one hook boundary**: the next
+tool call, or the next turn. An interrupt lands at a **tool-call boundary**,
+not mid-token.
+
+**ACP workers are the exception, and the only one.** There ctx owns the worker
+subprocess and already sends `session/cancel`, so a queued interrupt stops the
+turn *while it is running* rather than at the next tool call. That is why the
+two ACP stages are named separately in the table above: a delivery receipt has
+to say where a signal actually landed, and an ACP worker has no hooks, so
+"session-start" would be a lie. See [ACP workers](#acp-workers) below.
 
 ## Addresses, never content
 
@@ -168,6 +175,50 @@ Two rules keep this from becoming a hazard:
 - **A `ctx` call is never blocked by an interrupt.** The interrupt is telling
   the agent to go read an address; denying the call that resolves it would
   deadlock the agent against the message. It is delivered, and allowed.
+
+## ACP workers
+
+An ACP worker is not a hooked host. It gets no PreToolUse and no PostToolUse of
+ours, so the `additionalContext` channel the relay uses everywhere else does
+not exist. Three things make the relay work there anyway.
+
+**The ops are already reachable.** `ctx setup --host <name> --acp` sessions are
+opened with a session-scoped MCP server (`ctx mcp --bounded-only --with-edits
+--workspace …`), and `relay_watch`, `relay_publish` and `relay_pending` live on
+that same `ctx` tool. A worker can subscribe itself and publish findings
+without shelling out. `tests/test_acp.py` proves it over a real stdio exchange:
+the test agent spawns the injected server and calls all three.
+
+**Queued reports arrive through the prompt.** Before `session/prompt`, anything
+pending for the worker's address is drained at the `acp-prompt` stage and
+prepended as the same bounded, addressed advisory every other delivery point
+renders. The task itself still arrives last.
+
+**An interrupt genuinely stops the turn.** The transport already polls a
+cancellation source on every wait iteration and already sends `session/cancel`
+on teardown. A queued interrupt becomes that cancellation source, so the worker
+is cut off mid-turn and the failure names the peer and the address:
+
+```
+ACP worker stopped by a relay interrupt
+[ctx relay · 1 signal]
+  STOP · peer · from claude
+    resolve: ctx get checkpoint:d914ee702801
+    note: the schema changed under you
+```
+
+The queue read is throttled to once a second and latches once it fires, so an
+advisory channel does not become the most expensive thing in the polling loop,
+and a worker cannot end up half-cancelled. It composes with the caller's own
+cancellation rather than replacing it: a budget cancel still cancels.
+
+**Addressed by host.** An orchestrated ACP node subscribes as its host id, so
+`ctx relay signal codex checkpoint:… --interrupt` stops a running Codex ACP
+node exactly as it stops a hooked Codex session.
+
+**Opt-in.** A worker with no relay address is unreachable. The semantic
+analysis worker is deliberately one: it runs with no tools over frozen
+evidence, and stays that way.
 
 ## From inside a harness
 

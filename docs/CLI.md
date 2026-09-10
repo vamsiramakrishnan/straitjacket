@@ -281,10 +281,12 @@ another. A signal carries an address and a bounded note, never content — the
 same closed grammar `ctx task send` enforces.
 
 Delivery is at the receiving harness's next hook boundary: `post-tool-use` and
-session start for `report`/`advise`, `pre-tool-use` for `interrupt`. There is
-no push and no mid-stream interruption; an interrupt stops the next **tool
-call**, not a token stream. Full mechanism, bounds and failure direction:
-[RELAY.md](RELAY.md).
+session start for `report`/`advise`, `pre-tool-use` for `interrupt`. There is no
+push, and on a hooked host an interrupt stops the next **tool call**, not a
+token stream. An [ACP worker](ACP.md) is the exception — ctx owns that
+subprocess, so a queued interrupt cancels its turn mid-flight and a queued
+report is prepended to its prompt. Full mechanism, per-host delivery table,
+bounds and failure direction: [RELAY.md](RELAY.md).
 
 ## Search captured artifacts: `ctx search`
 
