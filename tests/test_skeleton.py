@@ -520,6 +520,7 @@ def test_stats_ts_without_any_backend_falls_through(env, monkeypatch):
 
 
 # ------------------------------------------- cached degradation (regression)
+@pytest.mark.skipif(not HAS_CTAGS, reason="universal-ctags not installed")
 def test_installing_a_backend_invalidates_a_degraded_skeleton(env, monkeypatch):
     """A skeleton is a function of the bytes *and* of the backends present.
 
@@ -533,6 +534,8 @@ def test_installing_a_backend_invalidates_a_degraded_skeleton(env, monkeypatch):
     """
     import ctx.skeleton as skel
 
+    if skel._ctags_path() is None:
+        pytest.skip("ctags disabled in this environment (CTX_NO_CTAGS)")
     store, ws = env
 
     _no_tree_sitter(monkeypatch)
