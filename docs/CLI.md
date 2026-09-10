@@ -35,6 +35,7 @@ different safety contracts. The mental model can stay small.
 | Need | Command | Why |
 |---|---|---|
 | A map of the repo | `ctx map --budget N` | Ranked, token-budgeted file/symbol map instead of a directory dump |
+| Exact answers from def/refs | `ctx index` | Build a compiler-grade SCIP index once; def/refs stop approximating |
 | Where a symbol lives | `ctx def <symbol>` | Definition site as a snapshot + span |
 | Who uses a symbol | `ctx refs <symbol>` | Reference sites, bounded |
 | Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
@@ -299,6 +300,47 @@ ctx search run:8d8335db6848 'authorization failed'
 
 Searching an artifact is cheaper and more trustworthy than rerunning a command merely
 to recover text the harness already captured.
+
+## Answer exactly, not approximately: `ctx index`
+
+```bash
+ctx index --list                 # which indexers are installed, what this repo needs
+ctx index                        # index the workspace's dominant language
+ctx index --language rust        # or name one
+```
+
+`ctx def` and `ctx refs` run an engine ladder, and the top rung is a SCIP index
+— the answer the language's own compiler front end gives. ctx has read those
+indexes for a long time and never made one, so unless a repository indexed
+itself the rung was unreachable and answers came from the ladder's floor: a
+word-boundary regex over source files.
+
+That floor is worse than it looks. Measured against `rust-analyzer scip` on
+`tokio-rs/bytes`, it reported **3,637 reference sites where the compiler says
+806** — and the error lands exactly where names are short and common, which is
+where you ask. `ctx refs buf` returned 754 sites, 55 of them real. A regex
+cannot tell a reference from the same letters in a comment or a string literal;
+the information is not in the text.
+
+`ctx index` shells out to the real tooling rather than approximating it:
+
+| language | indexer | install |
+|---|---|---|
+| rust | `rust-analyzer scip` | `rustup component add rust-analyzer` |
+| go | `scip-go` | `go install github.com/sourcegraph/scip-go/cmd/scip-go@latest` |
+| typescript / javascript | `scip-typescript` | `npm i -g @sourcegraph/scip-typescript` |
+| python | `scip-python` | `npm i -g @sourcegraph/scip-python` |
+| java | `scip-java` | see `sourcegraph/scip-java` |
+
+The index is written to the store's audit area, **never into your worktree**.
+Indexing stays an explicit command because it costs seconds to minutes and
+needs the project's toolchain — it must never happen inside a retrieval verb on
+a hook's latency budget.
+
+Nothing about this is required. With no index the ladder keeps its lower rungs
+and every answer still discloses which engine produced it. `ctx doctor` carries
+an `exact index` row saying whether one exists and what to run if not, so the
+difference is visible rather than inferred.
 
 ## Walk the call graph: `ctx callers` / `callees` / `impact` / `impls`
 

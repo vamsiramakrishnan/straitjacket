@@ -69,6 +69,34 @@ Verified score-identical against a recorded instance. Design and predictions,
 registered before any paid arm:
 [`evals/contextbench-ab-design.md`](evals/contextbench-ab-design.md).
 
+`ctx index` builds the compiler-grade index the precise tier was written to
+read. ctx has ingested SCIP since M-K4 but never produced one, so outside
+repositories that index themselves in CI the exact rung of the `refs`/`def`
+ladders was dead code and every answer came from the regex floor.
+`evals/refs_precision.py` priced that floor against `rust-analyzer scip` on
+`tokio-rs/bytes`: **3,637 reported sites where the compiler says 806**, with the
+error concentrated where names are short and common — `buf` reported 754 sites
+of which 55 were real. A word-boundary regex cannot separate a reference from
+the same letters in a comment or a string literal, so ctx now shells out to the
+language's own tooling (`rust-analyzer scip`, `scip-go`, `scip-typescript`,
+`scip-python`, `scip-java`) rather than hand-rolling a better approximation.
+The index lands in the store's audit area, never the worktree.
+
+Two defects closed with it. `ctx def` never reached the exact tier at all —
+`refs` had it and `def` did not, so the two verbs disagreed about how precisely
+ctx could answer the same question; a SCIP occurrence is a point, so the
+coordinates now come from the compiler and the extent from the skeleton, since
+`ctx def` still owes the caller a body. And an authoritative "indexed, no
+references" (`[]`) was tested with `if scip_sites:` and thrown away, falling
+through to the regex — replacing an exact answer with a wrong one. `ctx doctor`
+gains an **exact index** row. Receipt:
+[`evals/refs-precision-2026-09-10.md`](evals/refs-precision-2026-09-10.md).
+
+`--bg` no longer races its own supervisor. Expressed as a zero patience window
+it did: `wait_for_done` checks job state before the deadline, so a child that
+finished before the first poll finalized inline and the transcript got no job
+handle at all — red in CI, never locally. Only `--bg-after` has a window.
+
 `ctx def` and `ctx refs` work outside Python. `evals/verb_coverage.py` asks
 whether `ctx map` advertises addresses the verbs can resolve — the map prints
 `repo:<path> --symbol <name>` as the address to use next, so if `ctx def`

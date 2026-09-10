@@ -45,6 +45,7 @@ python evals/contextbench.py --workdir /scratch/cb --limit 12  # search-lane ret
 python evals/contextbench.py --workdir /scratch/cb --limit 40 --stratify --emit-gold /scratch/gold
 ctx replay --gold /scratch/gold/<instance>.json <transcript.jsonl>  # score a real agent trajectory
 python evals/verb_coverage.py --repo /path/to/checkout  # do map's advertised addresses resolve?
+python evals/refs_precision.py --repo /path/to/checkout  # what the textual refs floor costs
 python evals/edit_format_by_model.py   # anchored vs native edit success, per model, from field rows
 python evals/improve_route.py --dry-run  # the hunt/verify/harvest/prove route, priced (live without --dry-run)
 ```
@@ -77,6 +78,13 @@ than a study. It reports its environment in the first line of output, because
 that does not say which were present is a measurement of a laptop. Receipt:
 [`verb-coverage-2026-09-10.md`](verb-coverage-2026-09-10.md), which took it from
 18/80 to 80/80 across six languages.
+
+`refs_precision.py` is the same idea one level down, and needs a SCIP index
+(`ctx index`) because the index *is* its ground truth: it scores ctx's textual
+refs engine against the answer the language's own compiler front end gives for
+the same tree. On `tokio-rs/bytes` the floor reported 3,637 sites where the
+compiler says 806. Receipt:
+[`refs-precision-2026-09-10.md`](refs-precision-2026-09-10.md).
 
 `alphaevolve/` is the bounded optimization portfolio for 27 named production
 levers across 16 experiment families. Local search, holdout, adversarial, and

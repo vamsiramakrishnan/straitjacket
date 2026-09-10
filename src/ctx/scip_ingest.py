@@ -53,16 +53,43 @@ def available() -> bool:
     return _scip_pb2() is not None
 
 
-def find_index(ws: Workspace) -> Path | None:
+def find_index(ws: Workspace, store=None) -> Path | None:
     """The workspace's SCIP index, or None. ``$CTX_SCIP_INDEX`` overrides
-    (absolute, or relative to the workspace root)."""
+    (absolute, or relative to the workspace root).
+
+    Three places, in order: the override, an ``index.scip`` a build already
+    put in the worktree, then the one ``ctx index`` generated into the store.
+    The store copy is last so a project that indexes itself keeps priority
+    over ctx's, and first-class enough that ctx never has to write a build
+    artifact into someone's repository to make the precise tier reachable.
+    """
     override = os.environ.get("CTX_SCIP_INDEX")
     if override:
         p = Path(override)
         p = p if p.is_absolute() else ws.root / p
         return p if p.is_file() else None
     p = ws.root / _INDEX_NAME
-    return p if p.is_file() else None
+    if p.is_file():
+        return p
+    try:
+        from ctx.scip_index import index_path
+
+        if store is not None:
+            generated = index_path(store)
+        else:
+            # Only when the caller has none: every retrieval verb already
+            # holds an open store, and opening a second one per lookup is
+            # both wasted work and an avoidable lock on the hot path.
+            from ctx.store import Store
+
+            own = Store(ws.workspace_id)
+            try:
+                generated = index_path(own)
+            finally:
+                own.close()
+        return generated if generated.is_file() else None
+    except Exception:
+        return None  # a store that will not open is not an indexing error
 
 
 #: SCIP's local-symbol convention: `local <id>`. The word "local" matches
@@ -135,13 +162,13 @@ def iter_occurrences(index_path: Path):
             )
 
 
-def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False):
+def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False, store=None):
     """Precise reference sites for ``symbol`` from the workspace's SCIP
     index, matching the codeverbs contract: ``list[(rel, line, text)]``
     sorted (file, line). ``text`` is the source line (read from the
     worktree). Returns None when no index is present or the runtime is
     absent — the signal to fall through the engine ladder."""
-    index = find_index(ws)
+    index = find_index(ws, store)
     if index is None or not available():
         return None
     subject, _, want = symbol.rpartition(".")  # dotted subject → its final component

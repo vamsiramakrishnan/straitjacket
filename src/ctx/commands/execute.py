@@ -131,7 +131,13 @@ def _run_bg(ws, store, ns, command: list[str]) -> int:
     )
     from ctx.workspace import WorkspaceError
 
-    patience = ns.bg_after if ns.bg_after is not None else 0.0  # --bg ⇒ 0
+    # `--bg` promises a handle ("background immediately: … transcript gets a
+    # job handle"), so it must not race its own supervisor. Expressed as a
+    # zero patience window it did: `wait_for_done` checks job state before it
+    # checks the deadline, so a child that finished before the first poll —
+    # `echo` on a loaded runner — finalized inline and the transcript got no
+    # address at all. Only `--bg-after` has a window to wait out.
+    patience = ns.bg_after
     try:
         job_id = start_job(
             ws, store, command,
@@ -141,7 +147,9 @@ def _run_bg(ws, store, ns, command: list[str]) -> int:
         print(f"ctx run: {e}", file=sys.stderr)
         return 1
     try:
-        if wait_for_done(store, job_id, timeout=max(0.0, patience)):
+        if patience is not None and wait_for_done(
+            store, job_id, timeout=max(0.0, patience)
+        ):
             digest, manifest = finalize_job(ws, store, job_id)
             return _emit_run_digest(ws, digest, manifest, store=store)
         print(backgrounded_status(store, job_id))

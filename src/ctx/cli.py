@@ -191,6 +191,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "gain": ("admin", "cmd_gain", True),
     "init": ("admin", "cmd_init", True),
     "doctor": ("admin", "cmd_doctor", True),
+    "index": ("admin", "cmd_index", True),
     "gc": ("admin", "cmd_gc", True),
     "pin": ("admin", "cmd_pin", True),
     "checkpoint": ("admin", "cmd_checkpoint", True),
@@ -823,6 +824,18 @@ def _build_parser():
     pol_sub.add_parser("show", help="print the compiled policy")
 
     sub.add_parser("init", help="write ctx.toml and .ctxignore templates")
+
+    p_index = sub.add_parser(
+        "index", help="build the SCIP index the exact refs/def tier reads"
+    )
+    p_index.add_argument(
+        "--language", help="index this language (default: the workspace's dominant one)"
+    )
+    p_index.add_argument(
+        "--list", action="store_true", dest="list_indexers",
+        help="show which indexers are installed, and what this workspace needs",
+    )
+    p_index.add_argument("--timeout", type=float, default=900.0)
 
     p_doctor = sub.add_parser("doctor", help="validate installation and store health")
     p_doctor.add_argument("--antigravity", action="store_true")

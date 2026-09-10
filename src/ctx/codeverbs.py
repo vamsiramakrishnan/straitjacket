@@ -30,6 +30,7 @@ from ctx.workspace import Workspace
 _ENGINE_JEDI = "jedi"
 _ENGINE_AST = "ast"
 _ENGINE_SKELETON = "skeleton"
+_ENGINE_SCIP = "scip (exact)"
 _DIAG_MAX_FILES = 200
 
 
@@ -149,6 +150,48 @@ def _ctags_rows(store: Store, ws: Workspace, rel: str) -> list[dict]:
         return []
 
 
+def _scip_def(store: Store, ws: Workspace, rel: str, symbol: str):
+    """(def_rel, start, end, kind) from the workspace's SCIP index, or None.
+
+    `ctx refs` has had the exact, compiler-backed tier since M-K4; `ctx def`
+    never did, so the two verbs disagreed about how precisely ctx could answer
+    the same question about the same tree.
+
+    SCIP gives the definition's exact line — which is the part a heuristic
+    gets wrong — but an occurrence is a point, and `ctx def` owes the caller a
+    body. The enclosing span therefore comes from the skeleton, chosen as the
+    tightest symbol range containing that line, so the coordinates stay the
+    compiler's while the extent stays what the map already agrees with.
+    """
+    try:
+        from ctx import scip_ingest
+
+        sites = scip_ingest.refs(ws, symbol, definitions_only=True, store=store)
+    except Exception:
+        return None
+    if not sites:
+        return None  # no index, or indexed and not defined — the ladder decides
+    want = rel.replace("\\", "/")
+    line = next((ln for f, ln, _ in sites if f == want), None)
+    if line is None:
+        return None
+    try:
+        from ctx.skeleton import skeleton_for
+
+        rows = skeleton_for(store, ws, want).get("symbols") or []
+    except Exception:
+        rows = []
+    enclosing = [
+        r for r in rows
+        if int(r["range"][0]) <= line <= int(r["range"][1])
+        and str(r.get("name") or "") == symbol.split(".")[-1]
+    ]
+    if enclosing:
+        row = min(enclosing, key=lambda r: int(r["range"][1]) - int(r["range"][0]))
+        return want, int(row["range"][0]), int(row["range"][1]), str(row.get("kind") or "symbol")
+    return want, line, line, "definition"
+
+
 def _within_root(ws: Workspace, module_path: object) -> str | None:
     """Repo-relative POSIX path when inside the workspace, else None."""
     if module_path is None:
@@ -247,7 +290,12 @@ def cmd_def(store: Store, ws: Workspace, target: str) -> str:
     rel, symbol = _parse_target(target)
     ws.confine(rel, must_exist=True)
 
-    engine = _select_engine(rel)
+    scip_hit = _scip_def(store, ws, rel, symbol)
+    if scip_hit is not None:
+        def_rel, a, b, kind = scip_hit
+        engine = _ENGINE_SCIP
+    else:
+        engine = _select_engine(rel)
     if engine == _ENGINE_JEDI:
         try:
             def_rel, a, b, kind = _jedi_def(ws, rel, symbol)
@@ -398,8 +446,13 @@ def resolve_refs(
     try:
         from ctx import scip_ingest
 
-        scip_sites = scip_ingest.refs(ws, symbol)
-        if scip_sites:  # a non-empty precise answer wins the ladder
+        scip_sites = scip_ingest.refs(ws, symbol, store=store)
+        # `refs` distinguishes "no index" (None) from "indexed, and this
+        # symbol has no references" ([]). Treating both as falsy threw the
+        # second away and fell through to the regex, which then reported
+        # matches in comments and strings as references — replacing an exact
+        # answer with a wrong one, the failure this ladder exists to avoid.
+        if scip_sites is not None:
             return scip_sites, "scip (exact)"
     except Exception:
         pass

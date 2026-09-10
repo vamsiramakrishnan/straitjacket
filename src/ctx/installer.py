@@ -884,6 +884,28 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
         check("code intelligence", False, f"{type(e).__name__}: {e}")
 
+    # The exact tier of the refs/def ladders needs an index, and for years
+    # nothing in ctx made one — so it was unreachable and every answer came
+    # from the regex floor without saying so. Same rule as the row above:
+    # optional, therefore not a failure; invisible, therefore a defect.
+    try:
+        from ctx import scip_index, scip_ingest
+
+        have = scip_ingest.find_index(ws)
+        if have is not None:
+            check("exact index", True, "SCIP index present — refs/def answer exactly")
+        else:
+            wanted = scip_index.dominant_languages(ws)
+            usable = [lang for lang in wanted if scip_index.available(lang)]
+            detail = "no SCIP index; refs/def use the textual fallback"
+            if usable:
+                detail += f" — run: ctx index --language {usable[0]}"
+            elif wanted:
+                detail += f"; no indexer installed for {', '.join(wanted[:4])}"
+            check("exact index", True, detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("exact index", False, f"{type(e).__name__}: {e}")
+
     plugin_dir = ws.root / ".agents" / "plugins" / PLUGIN_DIRNAME
     skill_dir = ws.root / ".agents" / "skills" / PLUGIN_DIRNAME
     if antigravity:

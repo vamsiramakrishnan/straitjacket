@@ -198,3 +198,87 @@ def test_scip_extra_matches_the_vendored_gencode_floor():
         map(int, re.search(r"Protobuf Python Version: (\d+)\.(\d+)", generated).groups())
     )
     assert declared >= gencode
+
+
+# ------------------------------------------- the exact tier, made reachable
+# ctx has read SCIP since M-K4 and never produced one, so in any repository
+# that did not index itself the precise rung was unreachable and every answer
+# came from the regex floor. `evals/refs_precision.py` priced that floor on
+# tokio-rs/bytes: 3,637 reported sites where the compiler front end says 806.
+
+
+def test_an_indexed_symbol_with_no_references_is_not_handed_to_the_regex(
+    state_home, workspace_dir
+):
+    """`scip_ingest.refs` distinguishes "no index" (None) from "indexed, and
+    this symbol has no references" ([]). The ladder tested both with `if
+    scip_sites:` and threw the second away, falling through to the textual
+    engine — which then reported comments and string literals as references.
+    Replacing an exact answer with a wrong one is the failure a ladder exists
+    to prevent, so an empty SCIP answer is still a SCIP answer."""
+    from ctx.codeverbs import resolve_refs
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+
+    sites, label = resolve_refs(store, ws, "nosuchsymbol")
+    assert label == "scip (exact)"
+    assert sites == []
+
+
+def test_def_reaches_the_exact_tier_too(state_home, workspace_dir):
+    """`refs` had the compiler-backed rung and `def` did not, so the two verbs
+    disagreed about how precisely ctx could answer the same question about the
+    same tree."""
+    from ctx.codeverbs import cmd_def
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+
+    out = cmd_def(store, ws, "repo:pkg/core.py:helper")
+    assert "engine scip (exact)" in out.splitlines()[0]
+    assert "definition: repo:pkg/core.py L1:" in out
+    assert "def helper" in out
+
+
+def test_a_scip_definition_still_carries_a_body_not_a_point(
+    state_home, workspace_dir
+):
+    """An occurrence is a point; `ctx def` owes the caller a body. The
+    coordinates come from the compiler, the extent from the skeleton the map
+    already agrees with."""
+    import re
+
+    from ctx.codeverbs import cmd_def
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+
+    out = cmd_def(store, ws, "repo:pkg/core.py:use_helper")
+    m = re.search(r"definition: repo:pkg/core\.py L(\d+):(\d+)", out)
+    assert m, out
+    a, b = int(m.group(1)), int(m.group(2))
+    assert b > a, "a definition collapsed to a single line"
+
+
+def test_the_worktrees_own_index_outranks_the_one_ctx_generated(
+    state_home, workspace_dir
+):
+    """A project that indexes itself keeps priority; ctx's copy is the
+    fallback that makes the tier reachable for everyone else."""
+    from ctx import scip_ingest
+
+    ws = make_ws(workspace_dir)
+    _repo_with_index(workspace_dir)
+    assert scip_ingest.find_index(ws) == ws.root / "index.scip"
+
+
+def test_no_index_anywhere_is_none_not_an_error(state_home, workspace_dir):
+    from ctx import scip_ingest
+
+    ws = make_ws(workspace_dir)
+    (workspace_dir / "a.py").write_text("x = 1\n", encoding="utf-8")
+    assert scip_ingest.find_index(ws) is None
