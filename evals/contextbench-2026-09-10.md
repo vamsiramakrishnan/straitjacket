@@ -44,6 +44,22 @@ structural:
 
 What this run produces for us is a **defect queue**, not a score.
 
+### Added 2026-09-10, after the fact: the environment was degraded
+
+This run was executed **without `universal-ctags` on PATH and without the
+`code` extra installed**. ctx resolves definitions through a backend ladder —
+tree-sitter, then ctags, then stdlib `ast` — so on that machine every rung
+except the Python one was missing, and `ctx map` saw **zero** Go, Java,
+TypeScript or Rust files at all.
+
+Every non-Python figure below is therefore a measurement of a stripped install,
+not of ctx. Combined with the policy-attribution error retracted above, the
+per-language spread in particular should not be quoted for any purpose.
+[`verb-coverage-2026-09-10.md`](verb-coverage-2026-09-10.md) is the current
+statement about non-Python coverage; it also records the three real defects
+that a properly equipped environment then exposed, and the `ctx doctor` row
+added so this class of mistake stops being available.
+
 ## Two measurement bugs, found and fixed before any number was reported
 
 Recording these because both would have produced a confidently wrong result.

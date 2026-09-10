@@ -189,6 +189,19 @@ trajectory — the annotator and the simulator are the same machinery.
   to the paper's agent tables, and what it produces for us is a defect
   queue, not a score.
 
+  **The referee that queue needed is internal.** A low ContextBench score
+  cannot be attributed — issue text, probe extraction, ranking and verbs
+  are all in the loop at once, and the first receipt's headline had to be
+  retracted for exactly that reason. `evals/verb_coverage.py` removes the
+  ambiguity by scoring ctx against itself: `ctx map` prints
+  `repo:<path> --symbol <name>` as the address to use next, and if
+  `ctx def` refuses that address the two halves of ctx disagree, with no
+  corpus, model or label involved. It found three real defects the corpus
+  run could only gesture at, and took resolution across six languages from
+  18/80 to 80/80 (`evals/verb-coverage-2026-09-10.md`). This is the shape
+  the charter's teacher/referee split implies: external corpora point at
+  an area, ctx's own internal agreement is what gates.
+
 ## Tiers, mapped to infrastructure that exists
 
 | Tier | Trigger | Content | Infra |

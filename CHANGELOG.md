@@ -69,6 +69,34 @@ Verified score-identical against a recorded instance. Design and predictions,
 registered before any paid arm:
 [`evals/contextbench-ab-design.md`](evals/contextbench-ab-design.md).
 
+`ctx def` and `ctx refs` work outside Python. `evals/verb_coverage.py` asks
+whether `ctx map` advertises addresses the verbs can resolve — the map prints
+`repo:<path> --symbol <name>` as the address to use next, so if `ctx def`
+refuses it the two halves of ctx disagree and the defect is ctx's by
+construction, with no corpus or model in the loop. Baseline across six
+languages was **18/80**: every Python address resolved, every other one
+refused. Now 80/80.
+
+Three defects, in the order the eval surfaced them. `_select_engine()` chose
+between jedi and stdlib `ast` without looking at the file's language, though
+`skeleton.py` already extracted symbols for 16 languages and `ctx map` was
+using it — a third engine now resolves through that same skeleton, so
+resolution agrees with discovery by construction, with ctags as a final rung
+for what the map advertises but tree-sitter does not model (Go package
+constants, struct fields). Skeletons were cached under a key made of the source
+blob hash alone, so a parse performed with no ctags on PATH — every symbol
+missing — was served forever afterwards and installing the dependency changed
+nothing; the key now carries a per-language backend fingerprint. And `ctx refs`
+fell back to a word-boundary regex over `**/*.py`, making the ladder's floor its
+most language-specific rung: on a Go repository it answered `sites: 0`, a wrong
+answer rather than a refusal.
+
+`ctx doctor` gains a **code intelligence** row listing how many languages are
+parseable and what is missing. The extras stay optional, so a thin install is
+not a failure — but it is no longer silent. Twice in this workstream a missing
+`universal-ctags` nearly became a published finding about ctx.
+Receipt: [`evals/verb-coverage-2026-09-10.md`](evals/verb-coverage-2026-09-10.md).
+
 `evals/contextbench.py` scores the search lane against human-annotated gold
 context, closing the retrieval slot `evals/BENCHMARK.md` reserved. ContextBench
 (arXiv:2602.05892) was verified against its actual release first: 500 verified

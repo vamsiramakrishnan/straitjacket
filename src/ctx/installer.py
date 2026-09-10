@@ -866,6 +866,24 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     except Exception as e:
         check("store writable", False, str(e))
 
+    # Code intelligence is optional tooling, so a thin install is not a
+    # failure — but it must never be invisible. Measuring ctx against a
+    # missing universal-ctags and reporting the result as a ctx defect is a
+    # mistake this row exists to make impossible.
+    try:
+        from ctx.skeleton import _ctags_path, backend_roster
+
+        roster = backend_roster()
+        dark = sorted(lang for lang, rungs in roster.items() if rungs == "none")
+        detail = f"{len(roster) - len(dark)}/{len(roster)} languages parseable"
+        if _ctags_path() is None:
+            detail += "; no universal-ctags (non-Python symbols unavailable)"
+        if dark:
+            detail += f"; no backend for {', '.join(dark)}"
+        check("code intelligence", len(dark) < len(roster), detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("code intelligence", False, f"{type(e).__name__}: {e}")
+
     plugin_dir = ws.root / ".agents" / "plugins" / PLUGIN_DIRNAME
     skill_dir = ws.root / ".agents" / "skills" / PLUGIN_DIRNAME
     if antigravity:
