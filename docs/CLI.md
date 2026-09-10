@@ -337,10 +337,32 @@ Indexing stays an explicit command because it costs seconds to minutes and
 needs the project's toolchain — it must never happen inside a retrieval verb on
 a hook's latency budget.
 
+### An index goes stale, and ctx will not pretend otherwise
+
+A SCIP index is a snapshot of one moment; nothing keeps it in step with your
+edits. Trusting a stale one is worse than having none, because the exact tier
+answers in a confident voice: a symbol you added since indexing would come back
+as `sites: 0`, and a call site added to a file that changed would simply be
+missing from an answer still labelled `scip (exact)`.
+
+So before using an index, ctx checks that no source file is newer than it (and,
+for an index ctx built, that the file count still matches — a deletion moves no
+surviving file's timestamp). If the tree has moved on, the index is skipped
+exactly as if it were absent, the ladder falls through, and the header says so:
+
+```
+[ctx refs helper · engine ast (textual) · stale index skipped, re-run ctx index]
+```
+
+That check walks the source files, which measured ~220 ms on a 4,700-file
+worktree. It is charged on every `refs`/`def` call in an indexed repository,
+and it buys the difference between an exact answer and a plausible one — when
+the verdict is "stale", the textual scan that runs instead costs far more.
+
 Nothing about this is required. With no index the ladder keeps its lower rungs
 and every answer still discloses which engine produced it. `ctx doctor` carries
-an `exact index` row saying whether one exists and what to run if not, so the
-difference is visible rather than inferred.
+an `exact index` row saying whether one exists, whether it is still current,
+and what to run if not, so the difference is visible rather than inferred.
 
 ## Walk the call graph: `ctx callers` / `callees` / `impact` / `impls`
 

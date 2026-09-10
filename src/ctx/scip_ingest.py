@@ -25,6 +25,7 @@ The local identifier is the last identifier token in the string
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -51,6 +52,93 @@ def _scip_pb2():
 def available() -> bool:
     """True when SCIP indexes can be parsed here (protobuf importable)."""
     return _scip_pb2() is not None
+
+
+#: Sidecar `ctx index` writes beside a generated index, recording the tree it
+#: describes. Absent for an index a project built itself, which is why the
+#: currency check degrades to the index file's own mtime.
+_SIDECAR_NAME = "index.meta.json"
+
+
+def _source_state(ws: Workspace) -> tuple[int, int]:
+    """(file count, newest mtime_ns) over the workspace's *source* files.
+
+    Restricted to files a code indexer would read, decided by the skeleton's
+    own language table so this cannot disagree with the rest of ctx about what
+    source is. A touched README does not invalidate a code index, and neither
+    does the index — or its own sidecar — sitting in the worktree.
+
+    Stats only, no reads: this runs on the retrieval path, whereas the heavier
+    :func:`ctx.workspace.stat_fingerprint` hashes bytes because a rewrite
+    guard needs evidence a timestamp cannot give.
+    """
+    from ctx.skeleton import language_for
+
+    newest = 0
+    count = 0
+    root = ws.root
+    for rel in ws.list_files(None):
+        if language_for(rel) is None:
+            continue
+        count += 1
+        try:
+            mtime = (root / rel).stat().st_mtime_ns
+        except OSError:
+            continue
+        if mtime > newest:
+            newest = mtime
+    return count, newest
+
+
+def _index_basis(index: Path) -> int | None:
+    """The moment ``index`` describes, in mtime_ns, or None if unreadable.
+
+    The sidecar's recorded high-water mark beats the index file's own mtime
+    where both exist, because an indexer may finish writing well after it read
+    the last source file.
+    """
+    try:
+        basis = index.stat().st_mtime_ns
+    except OSError:
+        return None
+    try:
+        meta = json.loads(index.with_name(_SIDECAR_NAME).read_text(encoding="utf-8"))
+        basis = max(basis, int(meta["max_mtime_ns"]))
+    except Exception:
+        pass
+    return basis
+
+
+def index_is_current(ws: Workspace, index: Path) -> bool:
+    """Whether ``index`` still describes the worktree.
+
+    A SCIP index is a snapshot of a tree at one moment, and nothing keeps it in
+    step with edits afterwards. Trusting a stale one is worse than having none:
+    the coordinates it returns are exact-looking and wrong, and — the reason
+    this exists — an *empty* answer from a stale index would suppress the rest
+    of the ladder, so `ctx refs` would confidently report `sites: 0` for a
+    symbol added since indexing. A clean wrong answer beats a noisy right one
+    nowhere, least of all here.
+
+    Basis: no tracked file may be newer than the index, and (when `ctx index`
+    left its sidecar) the file count must match. The bound worth stating is
+    that a deletion which touches no surviving file is invisible to a
+    mtime-only check — that is why the sidecar records the count at all.
+    """
+    basis = _index_basis(index)
+    if basis is None:
+        return False
+    recorded_count: int | None = None
+    try:
+        meta = json.loads(index.with_name(_SIDECAR_NAME).read_text(encoding="utf-8"))
+        recorded_count = int(meta["files"])
+    except Exception:
+        pass  # a project's own index has no sidecar; mtime alone still bounds it
+
+    count, newest = _source_state(ws)
+    if newest > basis:
+        return False
+    return recorded_count is None or recorded_count == count
 
 
 def find_index(ws: Workspace, store=None) -> Path | None:
@@ -166,10 +254,26 @@ def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False, store=No
     """Precise reference sites for ``symbol`` from the workspace's SCIP
     index, matching the codeverbs contract: ``list[(rel, line, text)]``
     sorted (file, line). ``text`` is the source line (read from the
-    worktree). Returns None when no index is present or the runtime is
-    absent — the signal to fall through the engine ladder."""
+    worktree). Returns None when no *usable* index is present — none at all,
+    no protobuf runtime, or one that no longer describes this worktree — which
+    is the signal to fall through the engine ladder. An empty list is the
+    other thing entirely: a current index that genuinely names no site."""
     index = find_index(ws, store)
     if index is None or not available():
+        return None
+    if not index_is_current(ws, index):
+        # Same signal as "no index", deliberately: the caller's contract is
+        # that None means fall through the ladder, and an index that no longer
+        # describes this tree has exactly that much to say.
+        #
+        # Checked up front rather than per-cited-file. A per-file check is
+        # cheaper and validates coordinates, but it cannot see a *new* site in
+        # a file that changed — so `ctx refs` would answer "scip (exact) ·
+        # sites: 52" while silently missing the 53rd. Confident incompleteness
+        # is the defect this guard exists to prevent, not a cheaper version of
+        # it. The walk measured 220 ms on a 4,700-file worktree, which is real
+        # but is dwarfed by the textual scan of every source file that runs
+        # instead whenever the answer is that the index cannot be trusted.
         return None
     subject, _, want = symbol.rpartition(".")  # dotted subject → its final component
     qualifier = subject.rsplit(".", 1)[-1] if subject else None
@@ -200,7 +304,7 @@ def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False, store=No
         text = lines[occ.line - 1].strip() if 0 < occ.line <= len(lines) else ""
         hits[key] = text
     if not hits:
-        # An index exists but names nothing — still a definitive SCIP answer
-        # for this symbol (empty), distinct from "no index" (None).
+        # An index exists, is current, and names nothing — a definitive SCIP
+        # answer for this symbol (empty), distinct from "no usable index".
         return []
     return [(f, ln, hits[(f, ln)]) for (f, ln) in sorted(hits)]

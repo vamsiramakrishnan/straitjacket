@@ -435,6 +435,25 @@ def _ast_refs(
     return sites, scanned
 
 
+def _stale_index_note(ws: Workspace, store: Store) -> str:
+    """Disclose an exact tier skipped because its index went stale.
+
+    CONTRIBUTING's rule is that a fallback is never anonymous. Silently
+    dropping to the regex because `ctx index` has not been re-run since the
+    last edit would look identical to never having indexed at all, and the
+    remedy is one command.
+    """
+    try:
+        from ctx import scip_ingest
+
+        index = scip_ingest.find_index(ws, store)
+        if index is not None and not scip_ingest.index_is_current(ws, index):
+            return " · stale index skipped, re-run ctx index"
+    except Exception:
+        pass
+    return ""
+
+
 def resolve_refs(
     store: Store, ws: Workspace, symbol: str
 ) -> tuple[list[tuple[str, int, str]], str]:
@@ -456,14 +475,18 @@ def resolve_refs(
             return scip_sites, "scip (exact)"
     except Exception:
         pass
+    # Whichever lower rung answers, say if the exact one was skipped because
+    # its index no longer describes the tree: that reads identically to never
+    # having indexed, and the remedy is one command.
+    note = _stale_index_note(ws, store)
     if _select_engine() == _ENGINE_JEDI:
         try:
             sites, _ = _jedi_refs(ws, symbol)
-            return sites, _ENGINE_JEDI
+            return sites, f"{_ENGINE_JEDI}{note}"
         except Exception:
             pass
     sites, _ = _ast_refs(store, ws, symbol, None)
-    return sites, "ast (textual)"
+    return sites, f"ast (textual){note}"
 
 
 def _check_refs_symbol(symbol: str) -> None:

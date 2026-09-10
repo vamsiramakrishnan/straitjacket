@@ -892,8 +892,14 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         from ctx import scip_index, scip_ingest
 
         have = scip_ingest.find_index(ws)
-        if have is not None:
+        if have is not None and scip_ingest.index_is_current(ws, have):
             check("exact index", True, "SCIP index present — refs/def answer exactly")
+        elif have is not None:
+            check(
+                "exact index", True,
+                "SCIP index is stale and is being skipped; refs/def have fallen "
+                "back to the textual engine — run: ctx index",
+            )
         else:
             wanted = scip_index.dominant_languages(ws)
             usable = [lang for lang in wanted if scip_index.available(lang)]

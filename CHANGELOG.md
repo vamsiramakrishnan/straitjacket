@@ -88,8 +88,21 @@ ctx could answer the same question; a SCIP occurrence is a point, so the
 coordinates now come from the compiler and the extent from the skeleton, since
 `ctx def` still owes the caller a body. And an authoritative "indexed, no
 references" (`[]`) was tested with `if scip_sites:` and thrown away, falling
-through to the regex — replacing an exact answer with a wrong one. `ctx doctor`
-gains an **exact index** row. Receipt:
+through to the regex — replacing an exact answer with a wrong one.
+
+That last fix needed a guard of its own, found in review before merge: an empty
+SCIP answer is authoritative only while the index still describes the tree, and
+nothing kept the two in step, so a symbol added since indexing came back as
+`sites: 0` in the exact tier's voice. An index is now checked against the
+worktree before use — no source file newer than it, plus a file count for the
+indexes ctx writes, since a deletion moves no surviving file's timestamp — and
+skipped like an absent one when the tree has moved on, with the engine label
+saying why rather than falling back silently. Checking only the files an answer
+cites would be cheaper and is wrong: it cannot see a new call site in the file
+that changed, leaving the answer confidently incomplete.
+
+`ctx doctor` gains an **exact index** row, which distinguishes a current index
+from a stale one. Receipt:
 [`evals/refs-precision-2026-09-10.md`](evals/refs-precision-2026-09-10.md).
 
 `--bg` no longer races its own supervisor. Expressed as a zero patience window

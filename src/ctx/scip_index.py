@@ -36,6 +36,7 @@ Design rules, all inherited from the surrounding code:
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -166,4 +167,15 @@ def build(
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
         detail = " · ".join(t.strip() for t in tail) if tail else "no output"
         raise IndexError_(f"{ix.binary} produced no index (exit {proc.returncode}): {detail}")
+
+    # Record the tree this index describes. Without it the only currency
+    # signal is the index file's own mtime, which cannot see a deletion that
+    # touched no surviving file — see `scip_ingest.index_is_current`.
+    from ctx.scip_ingest import _SIDECAR_NAME, _source_state
+
+    count, newest = _source_state(ws)
+    out.with_name(_SIDECAR_NAME).write_text(
+        json.dumps({"language": language, "files": count, "max_mtime_ns": newest}),
+        encoding="utf-8",
+    )
     return out, out.stat().st_size

@@ -77,6 +77,30 @@ through to the regex — which then reported comments and string literals as
 references. Replacing an exact answer with a wrong one is precisely what a
 ladder is supposed to prevent.
 
+## The guard the first version of this needed
+
+Reviewing the change before merge turned up a defect introduced by defect 3's
+own fix. Making an empty SCIP answer authoritative is right only while the
+index describes the tree, and nothing kept the two in step: index a repository,
+add a function, and `ctx refs new_function` answered **`sites: 0`** at engine
+`scip (exact)` — where before the fix it would have fallen through and found
+it. A clean wrong answer in place of a noisy right one, which is the thing this
+whole receipt is about.
+
+An index is now checked against the worktree before use — no source file newer
+than it, and for a ctx-built index the file count unchanged — and skipped like
+an absent one when it has fallen behind, with the header disclosing why.
+
+Worth recording that the cheaper design was tried and rejected. Checking only
+the files a given answer *cites* costs one stat per hit instead of a walk, and
+validates coordinates — but it cannot see a new call site inside the file that
+changed, so `ctx refs` would report `sites: 52` while missing the 53rd, still
+labelled exact. Confident incompleteness is the same defect wearing a faster
+coat. Currency is a property of the tree, not of the files an answer happens to
+name, so the whole-tree walk stays: ~220 ms on a 4,700-file worktree, against a
+textual scan of every source file whenever the verdict is that it cannot be
+trusted.
+
 ## What is still hand-rolled, deliberately
 
 The floor stays. A minimal install with no indexer, no ctags and no
