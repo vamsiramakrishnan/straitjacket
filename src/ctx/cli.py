@@ -661,6 +661,13 @@ def _build_parser():
              "regions the agent actually opened, at what token cost",
     )
     p_replay.add_argument(
+        "--gold-root", dest="replay_gold_root", default="",
+        help="checkout the transcript's absolute paths are under (default: the "
+             "workspace). Gold annotations are repo-relative and the file "
+             "carries no root, so without this a native arm's absolute "
+             "Read/Edit paths score as nothing",
+    )
+    p_replay.add_argument(
         "--block-overlap", dest="replay_block_overlap", type=float, default=0.5,
         help="fraction of a gold block that must be observed to count (default 0.5)",
     )

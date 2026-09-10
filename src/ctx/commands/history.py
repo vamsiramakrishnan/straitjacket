@@ -10,6 +10,7 @@ def cmd_replay(ns) -> int:
     """`ctx replay` — workspace-free by design: history replay must run on
     any machine that has ~/.claude/projects, harnessed or not."""
     import json as _json
+    from pathlib import Path
 
     from ctx.replay import (
         default_history_paths,
@@ -28,6 +29,19 @@ def cmd_replay(ns) -> int:
         from ctx.trajectory import load_gold, render, score_transcript
 
         gold = load_gold(ns.replay_gold)
+        # `--emit-gold` writes `root: ""` because annotations are repo-relative
+        # and the corpus cannot know where the tree was checked out. Left
+        # empty, `_relativize` refuses every absolute path — so a native arm's
+        # `Read {file_path: /abs/...}` scores as nothing while ctx's own
+        # `repo:`-relative output scores fine, and the A/B measures the
+        # instrument. The workspace is the right default; `--gold-root`
+        # overrides it for a transcript recorded elsewhere.
+        # `ctx replay` resolves no workspace by design, so the checkout is the
+        # cwd unless named. Both are better than the empty string, which
+        # refuses every path it is asked about.
+        gold["root"] = str(
+            getattr(ns, "replay_gold_root", "") or Path.cwd()
+        )
         scored = [
             score_transcript(p, gold, block_overlap=ns.replay_block_overlap)
             for p in paths

@@ -69,6 +69,24 @@ Verified score-identical against a recorded instance. Design and predictions,
 registered before any paid arm:
 [`evals/contextbench-ab-design.md`](evals/contextbench-ab-design.md).
 
+Six defects found by automated review before merge, each verified against the
+code first. `ctx refs` treated an *unreadable* SCIP index the same as an empty
+one, so a truncated or corrupt index made every symbol report zero references
+with the ladder suppressed — parse failure now degrades like an absent index.
+`ctx index` published whatever an indexer left behind even when it exited
+nonzero, installing a silently partial exact tier. `ctx relay gc` snapshotted
+the queue before taking the lock it rewrites under, so an append racing the
+compaction was discarded. In `ctx.trajectory`, a `ctx def` result was credited
+with the full span named in its header even though `cmd_def` renders only the
+first ten lines of a long body — free recall for the arm that module exists to
+keep honest — and block precision divided gold blocks by retrieved regions,
+two different units, which could exceed 1.0. And gold files emitted by
+`--emit-gold` carry an empty root, which made `_relativize` refuse every
+absolute path, scoring a native arm's `Read` at zero while ctx's relative
+output scored fine; `ctx replay` now fills the root from the cwd or
+`--gold-root`. The `block P` column in the ContextBench receipt is withdrawn
+as a consequence.
+
 `ctx index` builds the compiler-grade index the precise tier was written to
 read. ctx has ingested SCIP since M-K4 but never produced one, so outside
 repositories that index themselves in CI the exact rung of the `refs`/`def`

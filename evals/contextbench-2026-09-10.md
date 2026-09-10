@@ -89,6 +89,22 @@ stage picks its seeds. Both arms' aggregates came back **identical** across the
 pair, which is the determinism the charter asks for: the sample is fixed by
 instance id rather than a RNG, and the policy takes no random input.
 
+### Added 2026-09-10, after review: the `block P` column is withdrawn
+
+Block precision divided *gold blocks covered* by *regions retrieved* — two
+different units. One broad region covering two gold blocks scored 2.0, and an
+F1 above one; at the low coverage below the pathology never surfaced as a
+value over 1.0, which is precisely why it survived to publication. The numbers
+in the `block P` columns are therefore not a measurement of anything and
+should not be quoted. Block *recall*, file and line columns are unaffected —
+they always counted like with like.
+
+The corrected definition lives in `ctx.trajectory._block_prf`: recall is gold
+blocks covered over gold blocks, precision is the share of retrieved regions
+that landed on one, both bounded by one. Re-running the corpus would produce
+different `block P` values; this receipt is not being re-run, it is being
+marked.
+
 ### Stratified across all eight languages (n=40, `--stratify --limit 40`)
 
 | budget | file F1 | block R | block P | line R | line P | retrieved tok |

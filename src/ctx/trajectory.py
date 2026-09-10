@@ -290,11 +290,26 @@ def _from_ctx(call: dict[str, Any], root: str | None) -> list[Region]:
     result = call.get("result") or ""
     regions: list[Region] = []
 
-    # ctx def: the header states the authoritative span.
-    for m in _CTX_DEF.finditer(result):
-        regions.append(
-            Region(_relativize(m.group(1), root), int(m.group(2)), int(m.group(3)), "ctx-def", "parsed")
-        )
+    # ctx def: the header names the file; the *rendered body* is the evidence.
+    #
+    # The header's `L240:336` is the definition's full extent, but `cmd_def`
+    # shows only the first ten lines once a body exceeds `max_inline_lines`.
+    # Crediting the header would count lines the model never saw — free recall
+    # and deflated cost for the arm this module exists to keep honest, and the
+    # exact asymmetry its docstring promises not to introduce. So the span is
+    # read off the `L<n>:` lines actually rendered, as everywhere else here.
+    def_hit = _CTX_DEF.search(result)
+    if def_hit:
+        path = _relativize(def_hit.group(1), root)
+        shown = [
+            int(m.group(1))
+            for m in (_CTX_LINE.match(line) for line in result.splitlines())
+            if m
+        ]
+        if path and shown:
+            regions.extend(
+                Region(path, a, b, "ctx-def", "parsed") for a, b in _spans(shown)
+            )
 
     # ctx refs: "repo:path:L123: text"
     ref_files: dict[str, list[int]] = {}
@@ -447,6 +462,38 @@ def extract(calls: list[dict[str, Any]], *, root: str | None = None) -> Trajecto
 # scoring against gold regions
 
 
+def _block_prf(
+    hit_blocks: int,
+    n_gold: int,
+    covered_spans: list[tuple[str, set[int]]],
+    regs: list[Region],
+) -> dict[str, float]:
+    """Block-level P/R/F1 with both sides counted in compatible units.
+
+    Recall is gold blocks covered over gold blocks. Precision cannot use the
+    same numerator over *regions*: one broad read covering two gold blocks
+    scored 2/1 = 2.0, and an F1 above one, which then propagated into every
+    ContextBench aggregate. Precision is therefore the share of retrieved
+    regions that actually landed on a covered gold block — regions and
+    regions, both bounded by one.
+    """
+    useful = 0
+    for r in regs:
+        span = set(range(r.start, r.end + 1)) if r.end >= r.start else set()
+        if any(f == r.path and span & gold_span for f, gold_span in covered_spans):
+            useful += 1
+    recall = hit_blocks / n_gold if n_gold else 0.0
+    precision = useful / len(regs) if regs else 0.0
+    f1 = (
+        2 * recall * precision / (recall + precision) if (recall + precision) else 0.0
+    )
+    return {
+        "recall": round(recall, 4),
+        "precision": round(precision, 4),
+        "f1": round(f1, 4),
+    }
+
+
 def _prf(hit: int, retrieved: int, gold: int) -> dict[str, float]:
     r = hit / gold if gold else 0.0
     p = hit / retrieved if retrieved else 0.0
@@ -490,12 +537,15 @@ def score_regions(
     n_obs_lines = sum(len(v) for v in observed.values())
 
     blocks, hit_blocks = [], 0
+    covered_spans: list[tuple[str, set[int]]] = []
     for b in gold:
         span = set(range(b["start"], b["end"] + 1))
         got = len(span & observed.get(b["file"], set()))
         cov = got / len(span) if span else 0.0
         ok = cov >= block_overlap
         hit_blocks += ok
+        if ok:
+            covered_spans.append((b["file"], span))
         blocks.append(
             {
                 "file": b["file"],
@@ -507,7 +557,7 @@ def score_regions(
 
     return {
         "file": _prf(len(set(gold_lines) & set(observed)), len(observed), len(gold_lines)),
-        "block": _prf(hit_blocks, len(regs), len(gold)),
+        "block": _block_prf(hit_blocks, len(gold), covered_spans, regs),
         "line": _prf(hit_lines, n_obs_lines, n_gold_lines),
         "counts": {
             "gold_files": len(gold_lines),

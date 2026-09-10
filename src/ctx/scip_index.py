@@ -163,10 +163,19 @@ def build(
     if ix.emits_to_cwd and stray.is_file() and not stray_existed:
         stray.replace(out)
 
-    if not out.is_file() or out.stat().st_size == 0:
+    # A nonzero exit is a failed index even when a file was left behind:
+    # indexers routinely emit partial output before giving up on a
+    # compilation or dependency error, and publishing that would install a
+    # silently incomplete exact tier — answers missing whole files, in the
+    # voice that says it is exact. Verified against the indexer this ships
+    # against: `rust-analyzer scip` exits 0 on a successful run that emits
+    # duplicate-symbol warnings, so this rejects failures, not noise.
+    if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
+        if out.is_file():
+            out.unlink()
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
         detail = " · ".join(t.strip() for t in tail) if tail else "no output"
-        raise IndexError_(f"{ix.binary} produced no index (exit {proc.returncode}): {detail}")
+        raise IndexError_(f"{ix.binary} failed (exit {proc.returncode}): {detail}")
 
     # Record the tree this index describes. Without it the only currency
     # signal is the index file's own mtime, which cannot see a deletion that

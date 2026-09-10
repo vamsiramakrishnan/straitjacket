@@ -104,14 +104,38 @@ def test_single_file_grep_is_attributed_from_the_command():
     assert [(r.path, r.start, r.end) for r in traj.explored] == [("src/mod.py", 40, 41)]
 
 
-def test_a_ctx_def_span_comes_from_its_header():
-    traj = extract(
-        [call("Bash", {"command": "ctx def repo:src/m.py:foo"},
-              "[ctx def repo:src/m.py:foo · engine ast]\n"
-              "definition: repo:src/m.py L240:336@c27214bc (function)\n")],
-        root=ROOT,
+def test_a_ctx_def_credits_the_body_shown_not_the_span_claimed():
+    """`ctx def`'s header names the definition's full extent, but `cmd_def`
+    renders only the first ten lines once the body exceeds `max_inline_lines`.
+
+    Crediting the header would hand the ctx arm recall over lines the model
+    never saw, and deflate its cost per gold line — free marks for the arm
+    this module exists to keep honest. The lines actually rendered are the
+    evidence, exactly as for `Read` and `grep`.
+    """
+    header = (
+        "[ctx def repo:src/m.py:foo · engine ast]\n"
+        "definition: repo:src/m.py L240:336@c27214bc (function)\n"
+        "body: 97 lines — showing first 10 · full body: ctx get repo:src/m.py --span ab\n"
     )
-    assert [(r.path, r.start, r.end) for r in traj.explored] == [("src/m.py", 240, 336)]
+    shown = "".join(f"L{n}: line {n}\n" for n in range(240, 250))
+    traj = extract([call("Bash", {"command": "ctx def repo:src/m.py:foo"}, header + shown)],
+                   root=ROOT)
+    assert [(r.path, r.start, r.end) for r in traj.explored] == [("src/m.py", 240, 249)]
+
+
+def test_a_complete_ctx_def_body_credits_all_of_it():
+    """The correction must not under-count the ordinary case: when the body
+    fits, every line of it was rendered and every line counts."""
+    header = (
+        "[ctx def repo:src/m.py:foo · engine ast]\n"
+        "definition: repo:src/m.py L10:12@c27214bc (function)\n"
+        "body (complete):\n"
+    )
+    shown = "L10: def foo():\nL11:     return 1\nL12:\n"
+    traj = extract([call("Bash", {"command": "ctx def repo:src/m.py:foo"}, header + shown)],
+                   root=ROOT)
+    assert [(r.path, r.start, r.end) for r in traj.explored] == [("src/m.py", 10, 12)]
 
 
 def test_scattered_grep_hits_collapse_into_spans():
@@ -267,3 +291,51 @@ def test_gold_with_no_usable_blocks_is_refused(tmp_path):
     p.write_text(json.dumps({"schema": GOLD_SCHEMA, "blocks": [{"file": "a", "start": 9, "end": 2}]}))
     with pytest.raises(ValueError):
         load_gold(str(p))
+
+
+def test_block_precision_cannot_exceed_one():
+    """Numerator and denominator must count the same kind of thing.
+
+    Block recall counts gold blocks; block precision counted them too, over a
+    denominator of retrieved *regions*. One broad read covering two gold
+    blocks therefore scored 2/1 = 2.0, with an F1 above one, and the value
+    propagated into every ContextBench aggregate that averaged it.
+    """
+    gold = [
+        {"file": "a.py", "start": 10, "end": 20},
+        {"file": "a.py", "start": 30, "end": 40},
+    ]
+    one_broad_region = [Region("a.py", 1, 100, "read", "parsed")]
+    scored = score_regions(one_broad_region, gold)
+
+    assert scored["block"]["recall"] == 1.0, "both gold blocks are covered"
+    assert 0.0 <= scored["block"]["precision"] <= 1.0
+    assert 0.0 <= scored["block"]["f1"] <= 1.0
+
+
+def test_block_precision_still_punishes_regions_that_reach_nothing():
+    gold = [{"file": "a.py", "start": 10, "end": 20}]
+    tight = [Region("a.py", 10, 20, "read", "parsed")]
+    padded = tight + [Region(f"n{i}.py", 1, 50, "read", "parsed") for i in range(4)]
+    assert score_regions(tight, gold)["block"]["precision"] == 1.0
+    assert score_regions(padded, gold)["block"]["precision"] < 1.0
+
+
+def test_an_emitted_gold_file_carries_no_root_and_must_be_given_one(tmp_path):
+    """`--emit-gold` writes `root: ""` because the corpus cannot know where a
+    tree was checked out. Left that way, `_relativize` refuses every absolute
+    path — so a native arm's `Read {file_path: /abs/...}` scores as nothing
+    while ctx's `repo:`-relative output scores fine, and the A/B measures the
+    instrument rather than the tools. `ctx replay --gold` fills it from the
+    cwd, or from `--gold-root`."""
+    native = [call("Read", {"file_path": "/checkout/src/app.py"}, "   10→x\n   11→y\n")]
+
+    unrooted = extract(native, root="")
+    assert unrooted.explored == [], "an empty root refuses absolute paths"
+
+    rooted = extract(native, root="/checkout")
+    assert [(r.path, r.start, r.end) for r in rooted.explored] == [("src/app.py", 10, 11)]
+
+    gold = [{"file": "src/app.py", "start": 10, "end": 11}]
+    assert score_regions(rooted.explored, gold)["line"]["recall"] == 1.0
+    assert score_regions(unrooted.explored, gold)["line"]["recall"] == 0.0

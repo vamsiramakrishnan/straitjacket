@@ -224,16 +224,32 @@ def _range_1indexed(rng) -> tuple[int, int, int]:
     return int(line0) + 1, int(ca) + 1, int(cb) + 1
 
 
-def iter_occurrences(index_path: Path):
-    """Yield every :class:`Occurrence` in a SCIP index. Fail-open: an
-    unreadable/absent runtime yields nothing (the caller degrades)."""
+def load_index(index_path: Path):
+    """The parsed SCIP index, or None when it cannot be read.
+
+    Separated from :func:`iter_occurrences` because "parsed fine and names
+    nothing" and "could not be parsed" are the same empty stream to a
+    generator, and the difference decides whether an empty answer may be
+    trusted. A truncated or corrupt index that silently yielded no rows would
+    otherwise let `ctx refs` report zero references for *every* symbol, in the
+    exact tier's voice, with the rest of the ladder suppressed.
+    """
     pb2 = _scip_pb2()
     if pb2 is None:
-        return
+        return None
     try:
         idx = pb2.Index()
         idx.ParseFromString(Path(index_path).read_bytes())
+        return idx
     except Exception:
+        return None
+
+
+def iter_occurrences(index_path: Path):
+    """Yield every :class:`Occurrence` in a SCIP index. Fail-open: an
+    unreadable/absent runtime yields nothing (the caller degrades)."""
+    idx = load_index(index_path)
+    if idx is None:
         return
     for doc in idx.documents:
         rel = str(doc.relative_path).replace("\\", "/")
@@ -260,6 +276,10 @@ def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False, store=No
     other thing entirely: a current index that genuinely names no site."""
     index = find_index(ws, store)
     if index is None or not available():
+        return None
+    if load_index(index) is None:
+        # Unreadable is not empty. Same None as "no index": the ladder must
+        # keep its lower rungs rather than answer zero for every symbol.
         return None
     if not index_is_current(ws, index):
         # Same signal as "no index", deliberately: the caller's contract is

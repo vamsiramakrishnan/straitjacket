@@ -751,6 +751,30 @@ def gc(workspace_root: Path | str, *, keep_seconds: float = 7 * 24 * 3600) -> in
     cannot be lost.
     """
     now = time.time()
+    path = relay_path(workspace_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        return _compact_locked(workspace_root, path, now, keep_seconds)
+    finally:
+        os.close(fd)
+
+
+def _compact_locked(
+    workspace_root: Path | str, path: Path, now: float, keep_seconds: float
+) -> int:
+    """The read-decide-rewrite, all of it inside the caller's lock.
+
+    Snapshotting before taking the lock is how a publisher's append between
+    the two silently vanished: `os.replace` wrote back rows that predated it.
+    The docstring above always claimed this ran under one lock; now it does.
+    """
     rows = load(workspace_root)
     delivered = {
         str(r.get("signal_id")) for r in rows if r.get("schema") == DELIVERY_SCHEMA
@@ -774,21 +798,9 @@ def gc(workspace_root: Path | str, *, keep_seconds: float = 7 * 24 * 3600) -> in
     dropped = len(rows) - len(keep)
     if not dropped:
         return 0
-    path = relay_path(workspace_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".jsonl.tmp")
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        try:
-            import fcntl
-
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        except ImportError:
-            pass
-        tmp.write_text(
-            "".join(json.dumps(r, sort_keys=True) + "\n" for r in keep), encoding="utf-8"
-        )
-        os.replace(tmp, path)
-    finally:
-        os.close(fd)
+    tmp.write_text(
+        "".join(json.dumps(r, sort_keys=True) + "\n" for r in keep), encoding="utf-8"
+    )
+    os.replace(tmp, path)
     return dropped
