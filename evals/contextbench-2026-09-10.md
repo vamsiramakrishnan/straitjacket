@@ -125,7 +125,11 @@ and its brace matching is crude, which makes it Python-shaped in exactly the
 way the table shows.
 
 **This run therefore does not license a claim about ctx's structural engine in
-either direction.** It measures a deterministic stand-in for the part an LLM
+either direction.** The design that can is
+[`contextbench-ab-design.md`](contextbench-ab-design.md); its stage 0 (an
+arm-agnostic trajectory extractor and `ctx replay --gold`) is built and
+validated, and scores what an agent actually opened rather than what a
+hand-written policy fetched. It measures a deterministic stand-in for the part an LLM
 does — reading an issue and deciding what to look for — and that stand-in is
 the weakest link. Fixing the receipt's story is cheap; fixing the policy so the
 structural verbs are actually put under load is the next experiment, and it has

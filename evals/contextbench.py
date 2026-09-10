@@ -934,64 +934,29 @@ def _span_tokens(root: Path, s: Span) -> int:
 # scoring: file / block / line, per the paper's definitions
 
 
-def _prf(hit: int, retrieved: int, gold: int) -> dict:
-    r = hit / gold if gold else 0.0
-    p = hit / retrieved if retrieved else 0.0
-    f = 2 * r * p / (r + p) if (r + p) else 0.0
-    return {"recall": round(r, 4), "precision": round(p, 4), "f1": round(f, 4)}
-
-
 def score(spans: list[Span], gold: list[dict], block_overlap: float) -> dict:
-    gold_files = {b["file"] for b in gold}
-    ret_files = {s.file for s in spans}
+    """File / block / line scoring, delegated to :mod:`ctx.trajectory`.
 
-    gold_lines: dict[str, set[int]] = {}
-    for b in gold:
-        gold_lines.setdefault(b["file"], set()).update(range(b["start"], b["end"] + 1))
-    ret_lines: dict[str, set[int]] = {}
-    for s in spans:
-        ret_lines.setdefault(s.file, set()).update(range(s.start, s.end + 1))
+    The metric has one definition and it lives in ``src``, because the same
+    numbers are computed there for agent trajectories (``ctx replay --gold``).
+    Two copies would drift the moment one of them was tuned, and a benchmark
+    whose metric quietly differs between arms measures nothing.
+    """
+    from ctx.trajectory import Region, score_regions
 
-    line_hit = sum(len(gold_lines[f] & ret_lines.get(f, set())) for f in gold_lines)
-    n_gold_lines = sum(len(v) for v in gold_lines.values())
-    n_ret_lines = sum(len(v) for v in ret_lines.values())
-
-    # A gold block counts as retrieved when a retrieved region covers at
-    # least `block_overlap` of its lines. Adaptation, not the paper's AST
-    # alignment — see the module docstring.
-    block_hit, per_block = 0, []
-    for b in gold:
-        got = len(
-            set(range(b["start"], b["end"] + 1)) & ret_lines.get(b["file"], set())
-        )
-        span_len = b["end"] - b["start"] + 1
-        cov = got / span_len
-        ok = cov >= block_overlap
-        block_hit += ok
-        per_block.append(
-            {
-                "file": b["file"],
-                "lines": f"{b['start']}:{b['end']}",
-                "coverage": round(cov, 3),
-                "verdict": "retrieved" if ok else ("partial" if cov > 0 else "missed"),
-            }
-        )
-    n_ret_blocks = len(spans)
-
-    return {
-        "file": _prf(len(gold_files & ret_files), len(ret_files), len(gold_files)),
-        "block": _prf(block_hit, n_ret_blocks, len(gold)),
-        "line": _prf(line_hit, n_ret_lines, n_gold_lines),
-        "counts": {
-            "gold_files": len(gold_files),
-            "gold_blocks": len(gold),
-            "gold_lines": n_gold_lines,
-            "retrieved_files": len(ret_files),
-            "retrieved_spans": len(spans),
-            "retrieved_lines": n_ret_lines,
-        },
-        "blocks": per_block,
+    regions = [Region(sp.file, sp.start, sp.end, sp.origin, "parsed") for sp in spans]
+    scored = score_regions(regions, gold, block_overlap=block_overlap)
+    c = scored["counts"]
+    # This runner's older field names, kept so recorded receipts stay readable.
+    scored["counts"] = {
+        "gold_files": c["gold_files"],
+        "gold_blocks": c["gold_blocks"],
+        "gold_lines": c["gold_lines"],
+        "retrieved_files": c["observed_files"],
+        "retrieved_spans": c["observed_regions"],
+        "retrieved_lines": c["observed_lines"],
     }
+    return scored
 
 
 def _mean(xs: list[float]) -> float:
@@ -1083,6 +1048,12 @@ def main() -> None:
         help="comma-separated retrieved-token budgets; one arm each",
     )
     ap.add_argument("--block-overlap", type=float, default=0.5)
+    ap.add_argument(
+        "--emit-gold", default="",
+        help="write ctx.gold/v1 files for the selected instances into this "
+             "directory instead of running retrieval; feed them to "
+             "`ctx replay --gold` to score a real agent trajectory",
+    )
     ap.add_argument("--json", default="", help="write the full record here")
     ap.add_argument("--keep", action="store_true", help="keep cloned trees")
     ap.add_argument("--refresh", action="store_true", help="re-fetch the corpus cache")
@@ -1116,6 +1087,40 @@ def main() -> None:
 
     if not rows:
         raise SystemExit("no instances matched the filters")
+
+    if args.emit_gold:
+        out = Path(args.emit_gold)
+        out.mkdir(parents=True, exist_ok=True)
+        written = 0
+        for inst in rows:
+            blocks = gold_blocks(inst)
+            if not blocks:
+                continue
+            (out / f"{inst['instance_id']}.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "ctx.gold/v1",
+                        "instance_id": inst["instance_id"],
+                        "repo": inst["repo"],
+                        "base_commit": inst["base_commit"],
+                        "language": inst["language"],
+                        "problem_statement": inst.get("problem_statement", ""),
+                        # `root` is filled in per machine at scoring time; the
+                        # annotations themselves are repo-relative.
+                        "root": "",
+                        "blocks": [
+                            {"file": b["file"], "start": b["start"], "end": b["end"]}
+                            for b in blocks
+                        ],
+                    },
+                    indent=1,
+                ),
+                encoding="utf-8",
+            )
+            written += 1
+        print(f"wrote {written} ctx.gold/v1 files to {out}")
+        print("score a trajectory with: ctx replay --gold <file> <transcript.jsonl>")
+        return
 
     print(
         f"ContextBench/{CONFIGS[args.config]} · {len(rows)} instances · "

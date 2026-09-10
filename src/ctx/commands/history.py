@@ -24,6 +24,21 @@ def cmd_replay(ns) -> int:
     if not paths:
         print("no transcripts given (pass paths or --all-projects)")
         return 1
+    if getattr(ns, "replay_gold", ""):
+        from ctx.trajectory import load_gold, render, score_transcript
+
+        gold = load_gold(ns.replay_gold)
+        scored = [
+            score_transcript(p, gold, block_overlap=ns.replay_block_overlap)
+            for p in paths
+        ]
+        if ns.replay_json:
+            print(_json.dumps(scored, indent=2))
+            return 0
+        for s in scored:
+            print(render(s, title=s.get("instance_id") or ""))
+        return 0
+
     if ns.replay_outcomes:
         from ctx.replay import render_outcomes, session_outcomes
 

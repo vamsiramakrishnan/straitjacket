@@ -82,7 +82,9 @@ mixed streams, long-runners), not by task topic.
 Adopted verbatim (definitions per the external review):
 
 - **Evidence density** = gold-region lines surfaced / model-visible
-  evidence tokens.
+  evidence tokens. **BUILT 2026-09-10**: `ctx.trajectory.score_trajectory`
+  computes it per recorded trajectory against ContextBench gold; entry point
+  `ctx replay --gold`.
 - **Retrieval regret** R = T_actual − T_oracle (tokens before sufficient
   evidence vs oracle-span minimum). **BUILT** (offline form): `ctx replay
   --regret` (`src/ctx/replay.py`) computes per-profile R over recorded
@@ -90,7 +92,13 @@ Adopted verbatim (definitions per the external review):
   R is an upper bound on the true gap; formal statement in
   `docs/THEORY.md`. First numbers (spec3 archives): pytest/v1 frontier
   0.17 with 199/199 facts inline. Gold-region oracles upgrade this from
-  "facts used" to "facts needed" when explore/ lands.
+  "facts used" to "facts needed" when explore/ lands. **Landed 2026-09-10**:
+  `ctx replay --gold` scores a recorded trajectory against human-annotated
+  regions, so wherever ContextBench covers the task the oracle stops being
+  one-sided. The extractor (`src/ctx/trajectory.py`) reads a transcript and
+  nothing else, so it scores a ctx arm and a native arm identically — the
+  precondition for the paired A/B in
+  [`contextbench-ab-design.md`](contextbench-ab-design.md).
 - **Containment ratio** = 1 − visible/raw tool-output tokens (already
   computed live by `ctx gain`; the benchmark reports it per-arm).
 - **Evidence preservation** = solved-under-SJ / solved-native. The

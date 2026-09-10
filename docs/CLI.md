@@ -484,6 +484,25 @@ ctx antigravity install
 The plugin is persistent. Both hosts use the same artifact store, digest contracts, and
 retrieval vocabulary.
 
+## Score a trajectory against gold context: `ctx replay --gold`
+
+```bash
+python evals/contextbench.py --workdir /scratch/cb --limit 40 --stratify \
+    --emit-gold /scratch/gold
+ctx replay --gold /scratch/gold/<instance>.json ~/.claude/projects/*/<session>.jsonl
+```
+
+Reconstructs the file regions an agent actually opened during a recorded
+session and scores them against human-annotated gold at file, block and line
+granularity, plus evidence density and regret against the gold oracle. No model
+and no network.
+
+The extractor reads the transcript and nothing else, so it scores a session
+that used ctx and one that did not through the same instrument. That is the
+point: an A/B whose arms are measured differently has decided its result before
+it runs. Design and pre-registered predictions:
+[the A/B design](../evals/contextbench-ab-design.md).
+
 ## Score the loop: regret, follow-up, shadow
 
 ```bash

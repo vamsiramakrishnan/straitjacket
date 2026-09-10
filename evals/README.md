@@ -42,6 +42,8 @@ python evals/anchor_drift.py           # how often a repo: address goes silently
 python evals/edit_repair.py            # how much of a failed host edit is recoverable
 python evals/task_ledger_replay.py     # resume, typed recovery, budget-against-actuals
 python evals/contextbench.py --workdir /scratch/cb --limit 12  # search-lane retrieval vs human gold context
+python evals/contextbench.py --workdir /scratch/cb --limit 40 --stratify --emit-gold /scratch/gold
+ctx replay --gold /scratch/gold/<instance>.json <transcript.jsonl>  # score a real agent trajectory
 python evals/edit_format_by_model.py   # anchored vs native edit success, per model, from field rows
 python evals/improve_route.py --dry-run  # the hunt/verify/harvest/prove route, priced (live without --dry-run)
 ```
@@ -58,7 +60,10 @@ loop, but it fetches the ContextBench corpus and shallow-clones each repo at
 `base_commit`, so it needs network and about 50 MB of scratch per instance. It
 is the **search-lane** counterpart to `swe_learn.py`'s output-lane scoring —
 see [`contextbench-2026-09-10.md`](contextbench-2026-09-10.md) for the first
-receipt and the defect queue it produced.
+receipt and the defect queue it produced. That receipt also records why a
+one-pass policy cannot answer whether ctx is effective, and
+[`contextbench-ab-design.md`](contextbench-ab-design.md) is the design that
+can, with its predictions registered before any paid arm runs.
 
 `alphaevolve/` is the bounded optimization portfolio for 27 named production
 levers across 16 experiment families. Local search, holdout, adversarial, and

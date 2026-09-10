@@ -654,6 +654,15 @@ def _build_parser():
         "`ctx policy compile --plan-value`) — an explicit user action, "
         "never a runtime side effect",
     )
+    p_replay.add_argument(
+        "--gold", dest="replay_gold", default="",
+        help="score the trajectory against a ctx.gold/v1 file: which annotated "
+             "regions the agent actually opened, at what token cost",
+    )
+    p_replay.add_argument(
+        "--block-overlap", dest="replay_block_overlap", type=float, default=0.5,
+        help="fraction of a gold block that must be observed to count (default 0.5)",
+    )
     p_replay.add_argument("--json", dest="replay_json", action="store_true")
 
     p_debt = sub.add_parser("debt", help="declared-omission ledger for deferred decisions")

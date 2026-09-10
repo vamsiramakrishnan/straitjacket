@@ -50,6 +50,25 @@ nothing; every relay path in the hook degrades to silence rather than to a
 failed tool call. See [the relay](docs/RELAY.md) and
 [harness collaboration](docs/HARNESS-COLLABORATION.md).
 
+`ctx replay --gold` scores what an agent actually opened during a recorded
+session against human-annotated gold context, at file, block and line
+granularity, with evidence density and regret against the gold oracle. New
+`ctx.trajectory` reconstructs those regions from a transcript alone: it reads no
+ctx state and needs no ctx install, so a session that used ctx and one that did
+not are measured by the same instrument. An A/B whose arms are instrumented
+differently has decided its result before it runs, and a test pins that a native
+`Read`/`grep` trajectory and a ctx `get`/`search` trajectory over identical
+regions score identically.
+
+This upgrades the oracle `ctx replay --regret` documents as one-sided. Its
+facts-used oracle is a lower bound "since the trajectory only proves a subset of
+what was needed"; gold regions are what a human said *was* needed.
+`evals/contextbench.py --emit-gold` writes the `ctx.gold/v1` files, and its own
+scoring now delegates to `ctx.trajectory` so one metric cannot mean two things.
+Verified score-identical against a recorded instance. Design and predictions,
+registered before any paid arm:
+[`evals/contextbench-ab-design.md`](evals/contextbench-ab-design.md).
+
 `evals/contextbench.py` scores the search lane against human-annotated gold
 context, closing the retrieval slot `evals/BENCHMARK.md` reserved. ContextBench
 (arXiv:2602.05892) was verified against its actual release first: 500 verified
