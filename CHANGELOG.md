@@ -4,7 +4,7 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
-## [Unreleased]
+## [0.39.0] - 2026-09-10
 
 `ctx relay` adds a cross-harness relay: the direction the task ledger never
 had. The ledger lets harnesses share a record; the relay lets one tell another.

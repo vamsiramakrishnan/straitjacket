@@ -27,7 +27,7 @@ or container is required. The package name remains `ctx-harness`.
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
 </p>
 
-v0.38.0 · Python 3.11+ · package `ctx-harness` · command `ctx` · pre-1.0 · Apache-2.0
+v0.39.0 · Python 3.11+ · package `ctx-harness` · command `ctx` · pre-1.0 · Apache-2.0
 
 [Start here](docs/GETTING-STARTED.md) · [Choose a workflow](docs/USE-CASES.md) ·
 [CLI reference](docs/CLI.md) · [Documentation site](https://vamsiramakrishnan.github.io/straitjacket/)
