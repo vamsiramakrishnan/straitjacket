@@ -31,6 +31,13 @@ more per session and read 21-33% more input for no outcome gain:
   landed 106 KB of Read results against 74 KB unwrapped, from the guard that
   exists to bound them. A cap now keeps the caller's own smaller `limit`
   (and Grep `head_limit`); it narrows, never widens.
+- A whole-file Read of a large code file is answered with the file's skeleton
+  (every symbol with kind, line range and a minted span; tree-sitter, ctags
+  or stdlib ast) instead of its first 240 lines. Measured on cattrs: the 64 KB
+  `converters.py` outlines to ~1k tokens for 83 symbols where the first page
+  was ~2.5k tokens showing 14% of the file, and the outline makes the next
+  read a range or a `--symbol` fetch instead of the next page. Slice reads
+  (offset/limit) and files without a parser are untouched; fail-open.
 - Print-mode wraps declare the coding tool surface (`--tools Bash,Read,Edit,
   Write,MultiEdit,Grep,Glob,Agent`). The host's default catalogue on a hosted
   session is 16 tools / 154 KB / ~33k cached tokens on every request, of

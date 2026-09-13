@@ -1951,11 +1951,66 @@ def _pressured_window(max_lines: int, total: int, budget: int) -> int:
     return max(_OVER_BUDGET_MIN_LINES, int(max_lines / (4 * over)))
 
 
+#: Token budget for the outline that answers a whole-file read. A 64 KB
+#: Python module (~16k tok) outlines to ~1k tok at this budget; the first
+#: 240-line page it replaces was ~2.5k tok and showed 14% of the file.
+_OUTLINE_BUDGET_TOKENS = 1200
+
+
+def _whole_file_read(tool_input: dict[str, Any] | None) -> bool:
+    """A Read that asked for the file, not a slice of it."""
+    if not tool_input:
+        return False
+    return not any(
+        isinstance(tool_input.get(k), int) and not isinstance(tool_input.get(k), bool)
+        and tool_input.get(k) > 0
+        for k in ("offset", "limit", "start_line", "end_line", "StartLine", "EndLine")
+    )
+
+
+def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int) -> str | None:
+    """The map of a large code file, for a Read that wanted all of it.
+
+    Measured on DeepSWE (cattrs, haiku): every whole-file Read of the 64 KB
+    converters.py came back as its first 240 lines, ~2.5k tokens showing 14%
+    of the file and no structure, and the session paged on from there. The
+    skeleton (tree-sitter / ctags / stdlib ast, with line ranges and minted
+    spans) is ~1k tokens for all 83 symbols and makes the next read a
+    targeted one. Slice reads (offset/limit) are never touched. Fail-open:
+    any problem returns None and the bounded first page applies as before."""
+    if not workspace_root:
+        return None
+    try:
+        from ctx.skeleton import language_for, skeleton_for, skeleton_outline
+
+        rel = os.path.relpath(path_str, workspace_root).replace(os.sep, "/")
+        if rel.startswith("..") or not language_for(rel):
+            return None
+        from ctx.store import Store
+        from ctx.workspace import resolve_workspace
+
+        ws = resolve_workspace(workspace_root)
+        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+        sk = skeleton_for(store, ws, rel)
+        if not sk.get("symbols"):
+            return None
+        outline = skeleton_outline(sk, _OUTLINE_BUDGET_TOKENS)
+        return (
+            f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte code file "
+            f"(~{size // 4:,} tok). Its map is below instead of the first page; "
+            "read what you need by range (Read with offset and limit) or by "
+            f"symbol (ctx get repo:{rel} --symbol <Name>).\n" + outline
+        )
+    except Exception:
+        return None
+
+
 def classify_read(
     path_str: str,
     workspace_root: str | None,
     policy: dict[str, Any],
     session_id: str = "unknown",
+    tool_input: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     if workspace_root and not os.path.isabs(path_str):
         path_str = os.path.join(workspace_root, path_str)  # fix: resolve relative paths against workspace_root, not process CWD
@@ -1989,6 +2044,13 @@ def classify_read(
     # which _pressured_window reads as "no pressure").
     seen = 0 if in_ledger else _ledger_charge(workspace_root, session_id, 0)
     if size > limit:
+        if not in_ledger and _whole_file_read(tool_input):
+            outline = _skeleton_outline_for(path_str, workspace_root, size)
+            if outline:
+                # A deny whose reason IS the answer: the outline reaches the
+                # model as the tool's text on every host, and no rewrite is
+                # attached so the first-page fallback never overrides it.
+                return _deny(outline)
         price = _price_note(size, workspace_root)
         decision: dict[str, Any] = _deny(
             f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline budget).\n"
@@ -2286,7 +2348,8 @@ def classify(
             v = tool_input.get(key)
             if isinstance(v, str) and v:
                 return _apply_rewrite(
-                    classify_read(v, workspace_root, policy, session_id), tool_input
+                    classify_read(v, workspace_root, policy, session_id, tool_input=tool_input),
+                    tool_input,
                 )
         return dict(DECISION_ALLOW)
 
