@@ -153,6 +153,14 @@ ablation, those calls are a plausible contributor rather than a proven cause.
 See the
 [agent-harness results](evals/agentbench/RESULTS.md).
 
+The DeepSWE v1.1 receipt (eight Python tasks, haiku, 60-turn cap) is the
+sharper counterexample: under v0.39.0 the wrapped arm cost 27% more and read
+36% more input than plain Claude for no gain, and the transcripts put both
+numbers on the wrapper — the observer proxy had switched Claude Code's deferred
+tool loading off, and small tool results came back as receipts. With those
+fixed the input gap is 3% and the wrapped arm passes more held-out tests. See
+the [DeepSWE receipt](evals/agentbench/deepswe-2026-09-13.md).
+
 That boundary matters. straitjacket is most useful when output is large, early,
 repeated, or likely to survive many turns. A short task with small, hot-cached
 results may be better left native. The target is matched task success with less

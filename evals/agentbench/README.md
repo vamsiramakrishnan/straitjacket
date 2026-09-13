@@ -226,8 +226,12 @@ one of those dollars noise.
 
 The model-free canary referee passes 12/12, the SWE-bench adapter loads real
 instances with real test lists, and `report.py` refuses simulated payloads.
-Two live, one-repeat receipts are committed: the three-task canary and the
-one-task dogfood mission. Both compare plain Claude with the full wrapper
-bundle, and both used an unrecorded host-default model; they are diagnostics,
-not a broad benchmark or a containment-only ablation. A paid SWE-bench sweep
-has not been run and still needs a machine with Claude credentials and Docker.
+Three live receipts are committed: the three-task canary and the one-task
+dogfood mission (host-default model, unrecorded), and the DeepSWE v1.1 sweep
+(eight Python tasks, haiku, one repeat, run twice: before and after the two
+wrapper fixes it found). The DeepSWE referee was proven on 14 of 34 Python
+tasks by `validate.py`; see [`deepswe-2026-09-13.md`](deepswe-2026-09-13.md)
+for the mechanism analysis, the exclusion list, and the per-task tables. All
+are diagnostics, not a broad benchmark or a containment-only ablation. A paid
+SWE-bench sweep has not been run and still needs a machine with Claude
+credentials and Docker.
