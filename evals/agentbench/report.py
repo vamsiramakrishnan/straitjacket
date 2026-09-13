@@ -71,7 +71,33 @@ def summarise(records: list[dict], arm: str) -> dict:
         # the count so the headline cannot hide the difference.
         "reproduced": sum(r.get("reproduced") or 0 for r in rows),
         "has_yield": any("reproduced" in r for r in rows),
+        # Graders that score a whitelist of test ids (deepswe) also report the
+        # fraction passed. On long-horizon tasks a small model may resolve
+        # nothing in either arm; the fraction is then the only signal that
+        # separates "did half the feature" from "did nothing".
+        "has_partial": any(r.get("partial") is not None for r in rows),
+        "partial_mean": _mean([r.get("partial") for r in rows]),
+        "f2p_passed": sum(_frac(r.get("f2p"))[0] for r in rows),
+        "f2p_total": sum(_frac(r.get("f2p"))[1] for r in rows),
+        "apply_failed": sum(1 for r in rows if r.get("apply_failed")),
+        "uncommitted": sum(1 for r in rows if r.get("uncommitted_changes")),
+        "verifier_errors": sum(1 for r in rows if r.get("verifier_error")),
+        "models_used": sorted({r.get("model_used") for r in rows if r.get("model_used")}),
     }
+
+
+def _mean(vals):
+    vals = [v for v in vals if v is not None]
+    return round(sum(vals) / len(vals), 3) if vals else None
+
+
+def _frac(text) -> tuple[int, int]:
+    """'12/69' -> (12, 69); anything else -> (0, 0)."""
+    try:
+        a, b = str(text).split("/")
+        return int(a), int(b)
+    except (ValueError, AttributeError):
+        return 0, 0
 
 
 def main() -> int:
@@ -99,6 +125,12 @@ def main() -> int:
         L.append("- Provenance: **live agent sessions** (simulated runs are refused)\n")
 
         summaries = {a: summarise(records, a) for a in arms}
+        used = sorted({m for s in summaries.values() for m in s["models_used"]})
+        if used:
+            L.append(f"- Model billed (from session usage): {', '.join(f'`{m}`' for m in used)}")
+        if payload.get("jobs", 1) > 1:
+            L.append(f"- Concurrency: {payload['jobs']} sessions at a time (wall-clock is per session, not per sweep)")
+        L.append("")
 
         L.append("| Arm | Resolved | Median turns | Median cache hit | Total input tok | Output tok | Cost $ | Median wall s | Timeouts |")
         L.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
@@ -122,6 +154,30 @@ def main() -> int:
                 per = (sm["cost_usd"] / sm["reproduced"]) if sm["reproduced"] else float("nan")
                 L.append(f"| `{a}` | {sm['reproduced']} | ${per:.2f} |")
 
+        if any(s["has_partial"] for s in summaries.values()):
+            L.append("\n### Partial credit (whitelisted test ids passed)\n")
+            L.append("`resolved` needs every fail-to-pass id green and no pass-to-pass id red. "
+                     "The fraction below is the grader's own `partial` score, averaged over runs; "
+                     "`f2p` sums fail-to-pass ids passed across runs. Only COMMITTED work is graded "
+                     "(v1.1 collect semantics), so `uncommitted` counts sessions that left edits behind.\n")
+            L.append("| Arm | Mean partial | f2p ids passed | Patches that failed to apply | Uncommitted at exit | Verifier errors |")
+            L.append("|---|---:|---:|---:|---:|---:|")
+            for a in arms:
+                sm = summaries[a]
+                L.append(f"| `{a}` | {sm['partial_mean']} | {sm['f2p_passed']}/{sm['f2p_total']} | "
+                         f"{sm['apply_failed']} | {sm['uncommitted']} | {sm['verifier_errors']} |")
+
+            L.append("\n#### Per task\n")
+            L.append("| Task | Arm | Resolved | f2p | p2p | Partial | Turns | Cost $ | Wall s | Patch bytes |")
+            L.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
+            for tid in payload["task_ids"]:
+                for a in arms:
+                    for r in records:
+                        if r["task_id"] == tid and r["arm"] == a:
+                            L.append(f"| `{tid}` | `{a}` | {r.get('resolved')} | {r.get('f2p')} | {r.get('p2p')} | "
+                                     f"{r.get('partial')} | {r.get('turns')} | ${r.get('cost_usd') or 0:.2f} | "
+                                     f"{r.get('wall_s')} | {r.get('patch_bytes')} |")
+
         if "naive" in summaries:
             base = summaries["naive"]["resolved"]
             L.append("\n### Evidence-preservation gate\n")
@@ -131,9 +187,15 @@ def main() -> int:
             for a in arms:
                 s = summaries[a]
                 ratio = (s["resolved"] / base) if base else float("nan")
-                gate = "PASS" if base and ratio >= 0.95 else ("—" if a == "naive" else "FAIL")
                 if a == "naive":
                     gate = "baseline"
+                elif not base:
+                    # A ratio over zero says nothing either way. The gate is
+                    # undecided, not passed: the efficiency columns describe
+                    # sessions that all failed, and must be read that way.
+                    gate = "UNDECIDED (naive solved 0)"
+                else:
+                    gate = "PASS" if ratio >= 0.95 else "FAIL"
                 L.append(f"| `{a}` | {s['resolved']}/{s['tasks']} | {ratio:.2f} | {gate} |")
 
             L.append("\n### Paired outcome (McNemar, exact)\n")
@@ -153,8 +215,9 @@ def main() -> int:
         tampered = sum(s["tampered"] for s in summaries.values())
         errs = sum(s["session_errors"] for s in summaries.values())
         if tampered or errs:
-            L.append(f"\n> Run health: {tampered} run(s) modified instance tests (scored unresolved), "
-                     f"{errs} session(s) produced no result JSON.")
+            L.append(f"\n> Run health: {tampered} run(s) modified instance tests (SWE-bench-style "
+                     f"adapters score these unresolved; the deepswe grader resets them, so there it "
+                     f"is a recorded signal only), {errs} session(s) produced no result JSON.")
 
     L.append(
         "\n## Reading this\n\nResolve rate is a gate, not a headline: the claim this harness can "

@@ -100,6 +100,43 @@ comparable numbers. `exec=local` with `--adapter-arg python=<path>` is faster
 and needs no docker, but you own the dependencies; a wrong environment shows up
 as `p2p` failures at baseline, which `validate.py` reports rather than hides.
 
+### `deepswe` — DeepSWE v1.1, graded by the task's own verifier
+
+[DeepSWE](https://github.com/datacurve-ai/deep-swe) is 113 original,
+long-horizon feature tasks on active repositories (TypeScript, Go, Python,
+JavaScript, Rust), each with a held-out program verifier. v1.1 grades **only
+committed work**, extracted as `git diff --binary <base> HEAD`, re-applied to a
+pristine checkout in a separate environment, with the held-out `test.patch`
+applied afterwards and a whitelist of test ids scored from JUnit/CTRF. Editing
+tests cannot help; leaving edits uncommitted loses them.
+
+The adapter reproduces that pipeline without docker: the image's `RUN`/`ENV`
+lines are replayed into a per-run virtualenv, the agent gets that venv on
+`PATH`, and grading runs the task's own `tests/test.sh` + `grader.py` against a
+pristine checkout and a pristine copy of the venv snapshotted before the
+session. Python tasks only (the other language images need toolchain steps the
+replay does not translate); tasks whose image needs `apt-get` fail to build
+here and are excluded by validation rather than silently scored 0.
+
+```bash
+python evals/agentbench/validate.py --adapter deepswe --jobs 6          # model-free, all 34 python tasks
+python evals/agentbench/harness.py --adapter deepswe --model haiku --max-turns 60 --jobs 4 \
+    --arms naive sj --adapter-arg ids=cattrs-partial-structuring-recovery,httpx-streaming-json-iteration
+```
+
+`validate.py` uses the adapter's own controls, because DeepSWE's cheat
+surface differs from SWE-bench's: `baseline` (no patch), `gold` (reference
+patch, committed like a submission), `tampered` (**no fix**, every held-out
+test file rewritten to pass trivially — must score 0, which proves the grader
+resets them), and `vandal` (gold applied, then the solution's source files
+replaced with `raise` — must score 0, which proves tests actually execute).
+
+Two deviations from the official runner are deliberate and recorded in the
+results: the agent's network is not cut (the task's `no-network` mode cannot
+be enforced outside a container), and the interpreter is a uv-managed CPython
+3.12 (`DEEPSWE_PYTHON` overrides) rather than the image's own build. The
+corpus commit is stored on every task record.
+
 ### Not yet written
 
 **Terminal-Bench** is the closest fit of all — already agent-in-a-terminal, with

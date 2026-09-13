@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import importlib
 import json
 import os
@@ -36,6 +37,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -84,7 +86,11 @@ def session_metrics(doc: dict, wall: float) -> dict:
     writes = u.get("cache_creation_input_tokens") or 0
     uncached = u.get("input_tokens") or 0
     denom = reads + writes + uncached
+    # The host resolves aliases like `haiku`; record what it actually billed
+    # so model parity is auditable from the record, not from the flag.
+    used = sorted((doc.get("modelUsage") or {}).keys())
     return {
+        "model_used": ",".join(used) if used else None,
         "turns": doc.get("num_turns"),
         "cost_usd": round(doc.get("total_cost_usd") or 0.0, 4),
         "api_duration_s": round((doc.get("duration_ms") or 0) / 1000, 1),
@@ -119,6 +125,10 @@ def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
     cfg = (out / "cfg" / tag).resolve()
     cfg.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg), "PIP_REQUIRE_VIRTUALENV": "1"}
+    # An adapter that builds a per-run toolchain (a venv, an image's ENV) hands
+    # it to the agent here. Both arms receive the identical mapping.
+    if hasattr(adapter, "session_env"):
+        env.update(adapter.session_env(task, workdir))
 
     t0 = time.monotonic()
     try:
@@ -158,7 +168,7 @@ def load_adapter(name: str):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--adapter", required=True, help="canary | swebench")
+    ap.add_argument("--adapter", required=True, help="canary | swebench | deepswe | dogfood")
     ap.add_argument("--arms", nargs="+", default=["naive", "sj"], choices=ARMS)
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--repeats", type=int, default=1)
@@ -170,6 +180,9 @@ def main() -> int:
                          "OUTSIDE this repo so an agent cannot reach the repo under test")
     ap.add_argument("--adapter-arg", action="append", default=[],
                     help="key=value passed through to the adapter's load()")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="concurrent (task, arm, repeat) sessions; each has its own "
+                         "fixture, config dir and toolchain, so runs cannot share state")
     args = ap.parse_args()
 
     import sys
@@ -195,38 +208,58 @@ def main() -> int:
     print(f"adapter={args.adapter} tasks={len(tasks)} arms={args.arms} repeats={args.repeats}",
           flush=True)
 
-    records = []
-    for repeat in range(1, args.repeats + 1):
-        for task in tasks:
-            for arm in args.arms:
-                rec = run_one(adapter, task, arm, args.model, args.out,
-                              args.max_turns, repeat, work_root)
-                records.append(rec)
-                print(
-                    f"  [{arm}] r{repeat} {task['id']:44s} "
-                    f"resolved={str(rec.get('resolved')):5s} turns={rec.get('turns')} "
-                    f"cache={rec.get('cache_hit_pct')}% {rec.get('wall_s')}s",
-                    flush=True,
-                )
-                payload = {
-                    "schema": "agentbench.run/v1",
-                    "adapter": args.adapter,
-                    "arms": args.arms,
-                    "model": args.model,
-                    "max_turns": args.max_turns,
-                    "repeats": args.repeats,
-                    "task_ids": [t["id"] for t in tasks],
-                    "provenance": "live",
-                    "simulated": False,
-                    "work_root": str(work_root),
-                    "results": records,
-                }
-                # In-flight runs write to a .partial file: a results file
-                # named like a finished one, holding half the arms, reads as a
-                # complete eval to anything that globs the directory -- report.py
-                # included. Renamed to the real name only once every arm lands.
-                (args.out / f"{args.adapter}.partial.json").write_text(
-                    json.dumps(payload, indent=1), encoding="utf-8")
+    records: list[dict] = []
+    lock = threading.Lock()
+
+    def record(rec: dict) -> None:
+        with lock:
+            records.append(rec)
+            print(
+                f"  [{rec['arm']}] r{rec['repeat']} {rec['task_id']:44s} "
+                f"resolved={str(rec.get('resolved')):5s} turns={rec.get('turns')} "
+                f"cache={rec.get('cache_hit_pct')}% {rec.get('wall_s')}s",
+                flush=True,
+            )
+            payload = {
+                "schema": "agentbench.run/v1",
+                "adapter": args.adapter,
+                "arms": args.arms,
+                "model": args.model,
+                "max_turns": args.max_turns,
+                "repeats": args.repeats,
+                "jobs": args.jobs,
+                "task_ids": [t["id"] for t in tasks],
+                "provenance": "live",
+                "simulated": False,
+                "work_root": str(work_root),
+                "results": records,
+            }
+            # In-flight runs write to a .partial file: a results file
+            # named like a finished one, holding half the arms, reads as a
+            # complete eval to anything that globs the directory -- report.py
+            # included. Renamed to the real name only once every arm lands.
+            (args.out / f"{args.adapter}.partial.json").write_text(
+                json.dumps(payload, indent=1), encoding="utf-8")
+
+    def one(task: dict, arm: str, repeat: int) -> None:
+        try:
+            rec = run_one(adapter, task, arm, args.model, args.out,
+                          args.max_turns, repeat, work_root)
+        except Exception as exc:  # noqa: BLE001 - a broken fixture is a row, not a crash
+            rec = {"task_id": task["id"], "arm": arm, "repeat": repeat, "provenance": "live",
+                   "resolved": False, "session_error": True, "harness_error": repr(exc)[:500]}
+        record(rec)
+
+    jobs = [(task, arm, repeat)
+            for repeat in range(1, args.repeats + 1)
+            for task in tasks
+            for arm in args.arms]
+    if args.jobs <= 1:
+        for job in jobs:
+            one(*job)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            list(pool.map(lambda j: one(*j), jobs))
 
     partial = args.out / f"{args.adapter}.partial.json"
     final = args.out / f"{args.adapter}.json"
