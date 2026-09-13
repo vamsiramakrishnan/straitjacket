@@ -474,7 +474,22 @@ def grade(task: dict, workdir: pathlib.Path, **kw) -> dict:
     }
     if uncommitted and not kw.get("skip_worktree"):
         rec.update(grade_worktree(task, workdir, agent_dir))
+    _cleanup(workdir)
     return rec
+
+
+def _cleanup(workdir: pathlib.Path) -> None:
+    """Drop the two venvs and the re-materialized pristine checkout once
+    grading is done. What stays: the agent's own tree (`<tag>.agent`), the
+    verifier logs and reward.json, the build log and env sidecar. A session
+    otherwise leaves ~0.5-1 GB behind and a sweep runs out of disk long
+    before it runs out of budget. DEEPSWE_KEEP=1 keeps everything (needed
+    for `regrade`, which re-verifies from the pristine venv)."""
+    if os.environ.get("DEEPSWE_KEEP"):
+        return
+    venv, pristine, _ = _venv_paths(workdir)
+    for p in (venv, pristine, workdir):
+        shutil.rmtree(p, ignore_errors=True)
 
 
 def grade_worktree(task: dict, workdir: pathlib.Path, agent_dir: pathlib.Path) -> dict:
@@ -494,7 +509,8 @@ def grade_worktree(task: dict, workdir: pathlib.Path, agent_dir: pathlib.Path) -
 
 def _cli_regrade(argv: list[str]) -> int:
     """Back-fill `worktree_*` on a results payload whose `<tag>.agent`
-    workspaces still exist: python adapters/deepswe.py regrade RESULTS.json"""
+    workspaces and pristine venvs still exist (a run made with DEEPSWE_KEEP=1):
+    python adapters/deepswe.py regrade RESULTS.json"""
     import argparse
     ap = argparse.ArgumentParser(prog="deepswe.py regrade")
     ap.add_argument("results", type=pathlib.Path)

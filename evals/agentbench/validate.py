@@ -56,7 +56,7 @@ DEFAULT_STATES = {"baseline": False, "gold": True, "tampered": False, "vandal": 
 
 
 def check(adapter, task: dict, state: str, expected: bool,
-          tmp: pathlib.Path) -> tuple[bool, dict]:
+          tmp: pathlib.Path, keep: bool = False) -> tuple[bool, dict]:
     workdir = tmp / f"{task['id'].replace('/', '_')}_{state}"
     if workdir.exists():
         shutil.rmtree(workdir)
@@ -75,6 +75,13 @@ def check(adapter, task: dict, state: str, expected: bool,
         result = adapter.grade(task, workdir)
     except Exception as exc:  # noqa: BLE001 - an unbuildable fixture is a FAIL row, not a crash
         result = {"resolved": None, "error": repr(exc)[:300]}
+    finally:
+        # A checkout plus its toolchain can run to hundreds of MB, and a
+        # sweep materializes tasks x states of them. Only a failed control
+        # is worth keeping around for inspection.
+        if not keep and result.get("resolved") is expected:
+            for p in tmp.glob(f"{workdir.name}*"):
+                shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
     return result.get("resolved") is expected, result
 
 
@@ -89,6 +96,8 @@ def main() -> int:
                     help="keep fixtures here instead of a temp dir (inspect failures)")
     ap.add_argument("--states", nargs="+", default=None,
                     help="subset of control states to run (default: all)")
+    ap.add_argument("--keep", action="store_true",
+                    help="keep every fixture (default: only failed controls are kept)")
     args = ap.parse_args()
 
     sys.path.insert(0, str(HERE))
@@ -118,7 +127,7 @@ def main() -> int:
 
         def one(job):
             task, state, expected = job
-            ok, result = check(adapter, task, state, expected, tmp)
+            ok, result = check(adapter, task, state, expected, tmp, keep=args.keep)
             want = "resolve" if expected else "NOT resolve"
             mark = "ok  " if ok else "FAIL"
             print(
