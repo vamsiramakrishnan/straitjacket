@@ -25,6 +25,21 @@ more per session and read 21-33% more input for no outcome gain:
   verbatim with the `run:` handle on one trailing line, and the exit status is
   the command's; large output still digests, and the artifact is still stored.
 
+- The large-file Read rewrite widened targeted reads. It set `limit` to the
+  240-line window unconditionally, so a model that asked for `offset=729
+  limit=10` on a 60 KB file got 239 lines: on cattrs the wrapped session
+  landed 106 KB of Read results against 74 KB unwrapped, from the guard that
+  exists to bound them. A cap now keeps the caller's own smaller `limit`
+  (and Grep `head_limit`); it narrows, never widens.
+- Print-mode wraps declare the coding tool surface (`--tools Bash,Read,Edit,
+  Write,MultiEdit,Grep,Glob,Agent`). The host's default catalogue on a hosted
+  session is 16 tools / 154 KB / ~33k cached tokens on every request, of
+  which a headless coding run uses six; measured 45 KB after. `--tools` is
+  the one flag that drops a schema from the prompt (`--disallowedTools` on a
+  deferred tool makes Claude Code inline all of them). Interactive sessions
+  and a caller's own `--tools` are untouched; `CTX_WRAP_NO_TOOL_DIET=1` opts
+  out.
+
 And the mechanisms so that class of defect is measured rather than found by
 accident (docs/HOST-CAPABILITIES.md, "Host prefix bytes"):
 

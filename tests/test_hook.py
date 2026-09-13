@@ -339,3 +339,24 @@ def test_ctx_run_door_keeps_the_secret_path_guarantee(tmp_path):
     safety one."""
     assert _cmd("ctx run -- cat secrets.json", tmp_path)["decision"] == "force_ask"
     assert _cmd("ctx run -- pytest -q", tmp_path)["decision"] == "allow"
+
+
+# ------------------------------------------------------- caps never widen
+def test_large_file_read_keeps_the_callers_smaller_limit(tmp_path):
+    """The large-file rewrite bounds a Read to `max_inline_lines`. Measured on
+    DeepSWE (cattrs, haiku): the model asked `offset=729 limit=10` on a 60 KB
+    file and got 239 lines back — the guard meant to bound reads had widened
+    every targeted one into a 10 KB page. A cap narrows; it never widens."""
+    big = tmp_path / "converters.py"
+    big.write_text("\n".join(f"line {i}" for i in range(4000)), encoding="utf-8")
+    assert big.stat().st_size > 16384
+
+    d = _classify("Read", {"file_path": str(big), "offset": 729, "limit": 10}, tmp_path)
+    assert d["rewrite"]["updatedInput"]["limit"] == 10  # caller asked for less: kept
+    assert d["rewrite"]["updatedInput"]["offset"] == 729
+
+    d = _classify("Read", {"file_path": str(big), "offset": 729, "limit": 5000}, tmp_path)
+    assert d["rewrite"]["updatedInput"]["limit"] == 240  # over the cap: capped
+
+    d = _classify("Read", {"file_path": str(big)}, tmp_path)
+    assert d["rewrite"]["updatedInput"]["limit"] == 240  # no limit asked: the cap

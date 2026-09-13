@@ -2034,6 +2034,11 @@ def classify_read(
 _APPLY_ROOT: dict[str, Any] = {}
 
 
+#: Rewrite fields that are upper bounds on a result (Read `limit`, Grep
+#: `head_limit`). The caller's own smaller value is kept.
+_CAP_FIELDS = frozenset({"limit", "head_limit"})
+
+
 def _apply_rewrite(
     decision: dict[str, Any],
     tool_input: dict[str, Any],
@@ -2053,7 +2058,21 @@ def _apply_rewrite(
             return decision  # no command field to substitute: keep plain decision
         updated[command_key] = hint["command"]
     else:
-        updated.update(hint.get("fields", {}))
+        for key, cap in hint.get("fields", {}).items():
+            own = tool_input.get(key)
+            if (
+                key in _CAP_FIELDS
+                and isinstance(own, int) and not isinstance(own, bool)
+                and 0 < own <= cap
+            ):
+                # A cap narrows a read; it never widens one. Measured on
+                # DeepSWE (cattrs, haiku): the model asked `offset=729
+                # limit=10` on a 60 KB file and the large-file rewrite handed
+                # it 239 lines — every targeted read became a 10 KB page,
+                # 106 KB of Read results against naive's 74 KB, from the
+                # guard that exists to bound them.
+                continue
+            updated[key] = cap
     decision["rewrite"] = {"updatedInput": updated, "reason": hint["reason"]}
     if "command" in hint:
         # Carried for hosts that cannot substitute input and have to name the
