@@ -92,8 +92,15 @@ def cmd_run(ws, ns) -> int:
     except Exception:
         render_kwargs = {}
 
+    # `--passthrough` (the hook rewrite's mode): output that is complete and
+    # fits the inline budget reaches the transcript verbatim, so the digest
+    # is stored and addressable but never emitted — record it as raw->raw
+    # rather than booking a saving the model never received.
+    passthrough = bool(getattr(ns, "passthrough", False))
+    verbatim = passthrough and _passthrough_fits(ws, capture.manifest)
     digest, manifest = render_run_digest(
-        store, ws, capture.manifest, focus=ns.focus, dense=dense, **render_kwargs
+        store, ws, capture.manifest, focus=ns.focus, dense=dense,
+        contained=not verbatim, **render_kwargs
     )
     # A digest that omitted content is an intervention (hypothesis: the model
     # uses the digest, not a re-run). Record it so the reflex arc can score
@@ -115,7 +122,59 @@ def cmd_run(ws, ns) -> int:
         from ctx.reflex import DENSIFY_HEADER
 
         digest = DENSIFY_HEADER + "\n" + digest
-    return _emit_run_digest(ws, digest, manifest, store=store, signature=sig)
+    if verbatim:
+        return _emit_passthrough(ws, store, manifest)
+    rc = _emit_run_digest(ws, digest, manifest, store=store, signature=sig)
+    # Under a hook rewrite the host renders our exit status as the command's.
+    # ctx's own `3` ("the thing you asked about failed") is right for a human
+    # or a script that called ctx on purpose; for a rewritten tool call it
+    # reads as a foreign failure code, and the model cannot see the real one.
+    return _native_exit(manifest) if passthrough else rc
+
+
+def _native_exit(manifest: dict) -> int:
+    """The wrapped command's own status: 124 on timeout, else its exit code."""
+    result = manifest["result"]
+    if result.get("timedOut"):
+        return 124
+    code = result.get("exitCode")
+    return code if isinstance(code, int) and 0 <= code <= 255 else 1
+
+
+def _passthrough_fits(ws, manifest: dict) -> bool:
+    """Can this capture be emitted as the shell would have, byte for byte?
+    Text streams only, nothing timed out, and the whole output inside the
+    inline budget — the same bound the emission gate uses for a native tool
+    result, so passthrough never lets more into the transcript than a plain
+    Bash call would."""
+    try:
+        streams = manifest["streams"]
+        total = sum(int(s["bytes"]) for s in streams.values())
+        if total > ws.config.budgets.max_inline_bytes:
+            return False
+        if manifest["result"].get("timedOut"):
+            return False
+        return not any(
+            str(s.get("mediaType", "")).startswith("application/octet-stream")
+            for s in streams.values() if int(s["bytes"])
+        )
+    except Exception:
+        return False
+
+
+def _emit_passthrough(ws, store, manifest: dict) -> int:
+    """Print the captured output verbatim (redacted like a digest would be),
+    then the run handle on one line so the artifact stays retrievable."""
+    from ctx.digest.base import DigestContext
+    from ctx.textutil import sanitize_for_model, short_id, write_exact
+
+    ctx = DigestContext.load(store, ws, manifest, focus=None)
+    parts = [v.text for v in (ctx.stdout, ctx.stderr) if v.bytes]
+    text = "".join(p if p.endswith("\n") else p + "\n" for p in parts)
+    text, _redactions = sanitize_for_model(text, ws.config.redaction)
+    code = _native_exit(manifest)
+    write_exact(text + f"[ctx run:{short_id(manifest['id'])} · exit {code}]", newline=True)
+    return code
 
 
 def _run_bg(ws, store, ns, command: list[str]) -> int:

@@ -405,6 +405,12 @@ def _build_parser():
     p_run.add_argument("--focus", help="deterministic evidence-selection query")
     p_run.add_argument("--cwd", help="working directory relative to the workspace")
     p_run.add_argument("--shell", action="store_true", help="run one string through the shell")
+    p_run.add_argument(
+        "--passthrough", action="store_true",
+        help="hook mode: exit with the wrapped command's own status, and when the "
+             "whole output fits the inline budget print it verbatim (the run: "
+             "handle follows on one line) instead of a receipt",
+    )
     p_run.add_argument("--timeout", type=float, default=600.0)
     p_run.add_argument(
         "--bg", action="store_true",

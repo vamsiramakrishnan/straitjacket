@@ -307,3 +307,36 @@ def test_cli_wrap_print_config(capsys):
     assert rc == 0
     settings = json.loads(capsys.readouterr().out)
     assert "hook claude-code pre-tool-use" in json.dumps(settings)
+
+
+# ---------------------------------------------------------------- proxy env
+# Claude Code turns deferred tool loading off for any non-first-party
+# ANTHROPIC_BASE_URL. The observer proxy is a byte-for-byte relay, so when its
+# upstream is Anthropic itself the wrapper must say so, or every request pays
+# the full tool catalogue (measured: ~15k cached tokens per call, 41 inline
+# tool schemas instead of 16).
+def test_proxy_child_env_keeps_tool_deferral_for_first_party_upstream(monkeypatch):
+    from ctx.wrap import _proxy_child_env
+
+    monkeypatch.delenv("ENABLE_TOOL_SEARCH", raising=False)
+    env = _proxy_child_env(4242, "https://api.anthropic.com")
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4242"
+    assert env["ENABLE_TOOL_SEARCH"] == "true"
+    assert "ENABLE_TOOL_SEARCH" not in os.environ  # parent untouched
+
+
+def test_proxy_child_env_respects_a_user_choice(monkeypatch):
+    from ctx.wrap import _proxy_child_env
+
+    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "auto:3")
+    assert _proxy_child_env(4242, "https://api.anthropic.com")["ENABLE_TOOL_SEARCH"] == "auto:3"
+    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")
+    assert _proxy_child_env(4242, "https://api.anthropic.com")["ENABLE_TOOL_SEARCH"] == "false"
+
+
+def test_proxy_child_env_never_forces_a_third_party_gateway(monkeypatch):
+    from ctx.wrap import _proxy_child_env
+
+    monkeypatch.delenv("ENABLE_TOOL_SEARCH", raising=False)
+    for upstream in ("http://127.0.0.1:9", "https://gateway.example.com/v1", "not a url"):
+        assert "ENABLE_TOOL_SEARCH" not in _proxy_child_env(4242, upstream), upstream

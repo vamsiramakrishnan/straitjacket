@@ -537,7 +537,12 @@ ctx wrap claude --proxy -- -p "fix the failing tests"
 ```
 
 The wrapper injects host settings for the session and removes them when the process
-ends.
+ends. With `--proxy` the session's `ANTHROPIC_BASE_URL` points at a loopback
+relay; because Claude Code turns deferred tool loading off for any non-Anthropic
+base URL, the wrapper also sets `ENABLE_TOOL_SEARCH=true` when the relay's
+upstream is Anthropic itself (a value you set yourself is left alone, and a
+third-party upstream is never forced). Without that, every request carried the
+full tool catalogue — measured at ~15k extra cached tokens per call.
 
 ### Antigravity
 
@@ -605,7 +610,7 @@ used, and they answer three different questions.
 | `0` | Success | Continue |
 | `1` | **ctx** failed | Not your invocation's fault: an internal error, an unreadable store, an engine that would not start. Retry or run `ctx doctor` |
 | `2` | ctx **rejected the invocation** | Fix the arguments. Unknown command or flag, a malformed selector (`--lines nope`), an ungrammatical reference (`zzz:xyz`), a missing required argument, a workspace that will not resolve, or a handle that no longer resolves because `ctx gc` or the retention window collected it |
-| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output |
+| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output. Exception: `ctx run --passthrough` (the form the hooks rewrite tool calls into) exits with the child's own status, and prints small, complete output verbatim with the `run:` handle on one trailing line, so a rewritten tool call looks to the host exactly like the native one |
 | `124` | Timed out | The child exceeded `--timeout` (or `ctx job --wait` gave up). Matches `timeout(1)` |
 | `127` | Not found | The program ctx was asked to launch or wrap is not on `PATH`. Matches the shell's convention |
 

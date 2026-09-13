@@ -322,6 +322,15 @@ _GATE_FAILURE_HEAD_BYTES = 2048  # bounded excerpt inside a gate-failure digest
 _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
 
 _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
+# A transparent rewrite must be native-shaped where capture buys nothing.
+# Measured on DeepSWE (evals/agentbench, haiku): the agent's own commands
+# produced a median of 91-277 bytes, yet every routed one came back as a
+# receipt (header, command echo, status line) and a failing `python -c`
+# reported ctx's exit 3 instead of the command's 1 — results grew 2-8x and
+# the model re-ran identical failing checks. `--passthrough` makes `ctx run`
+# print small, complete output verbatim (handle on one trailing line) and
+# exit with the wrapped command's own status; large output still digests.
+_REWRITE_FLAGS = " --passthrough"
 
 # --- Tool-kind classification -------------------------------------------------
 # Which guard branch a tool name takes (edit / command / read / search), matched
@@ -1101,7 +1110,7 @@ def _deny_cmd(
     # A never-terminating command must not be steered into a blocking capture.
     bg = " --bg" if _follows_forever(argv) else ""
     if has_meta and original:
-        cmd = f"ctx run{bg} --shell -- " + shlex.quote(original)
+        cmd = f"ctx run{bg}{_REWRITE_FLAGS} --shell -- " + shlex.quote(original)
     else:
         # Classification deliberately unwraps ``env``, ``timeout``, ``nice``
         # and similar launchers to see the real program. Execution must retain
@@ -1109,7 +1118,7 @@ def _deny_cmd(
         # semantics. Reparse the already validated original string only for a
         # metacharacter-free direct argv rewrite.
         routed_argv = shlex.split(original) if original else argv
-        cmd = f"ctx run{bg} -- " + " ".join(shlex.quote(a) for a in routed_argv)
+        cmd = f"ctx run{bg}{_REWRITE_FLAGS} -- " + " ".join(shlex.quote(a) for a in routed_argv)
     reason = _REWRITE_REASON
     if bg:
         reason = (
@@ -1629,7 +1638,7 @@ def _classify_command_inner(
         if _steering_allows(policy):
             bg = " --bg" if _follows_forever(argv) else ""  # fix: never-terminating piped command needs --bg too
             fa["_rewrite"] = {
-                "command": "ctx run --shell" + bg + " -- " + shlex.quote(stripped),
+                "command": "ctx run" + bg + _REWRITE_FLAGS + " --shell -- " + shlex.quote(stripped),
                 "reason": _REWRITE_REASON,
             }
         return fa

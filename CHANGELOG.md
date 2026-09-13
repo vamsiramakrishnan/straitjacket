@@ -4,6 +4,27 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [Unreleased]
+
+Two wrapper defects found by the first DeepSWE v1.1 receipt
+(`evals/agentbench/`, haiku, `naive` vs `sj`), where the wrapped arm cost 13-32%
+more per session and read 21-33% more input for no outcome gain:
+
+- `ctx wrap claude --proxy` silently cost ~15k cached tokens on every request.
+  Claude Code treats a non-Anthropic `ANTHROPIC_BASE_URL` as a gateway that may
+  not forward its `tool_reference` beta and turns deferred tool loading off, so
+  the prompt carried 41 inline tool schemas instead of 16. The relay forwards
+  bytes verbatim, so the wrapper now sets `ENABLE_TOOL_SEARCH=true` when the
+  upstream is Anthropic itself; a user's own value or gateway is left alone.
+  The prefix-budget manifest never saw this, because the bytes were the host's.
+- Hook rewrites now use `ctx run --passthrough`. The agent's own commands
+  produce a median of 91-277 bytes, and every routed one came back as a receipt
+  (header, command echo, status line) with ctx's exit `3` in place of the
+  command's own status; results grew 2-8x and the model re-ran identical
+  failing checks. In passthrough mode small, complete output is printed
+  verbatim with the `run:` handle on one trailing line, and the exit status is
+  the command's; large output still digests, and the artifact is still stored.
+
 ## [0.39.0] - 2026-09-10
 
 `ctx relay` adds a cross-harness relay: the direction the task ledger never

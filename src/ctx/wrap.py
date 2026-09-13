@@ -210,6 +210,42 @@ def _wait_for_port(port: int, timeout: float = 5.0) -> bool:
     return False
 
 
+_FIRST_PARTY_HOST_SUFFIX = ".anthropic.com"
+
+
+def _first_party_upstream(upstream: str) -> bool:
+    """Is the proxy relaying to Anthropic's own API (as opposed to a user's
+    gateway, Bedrock/Vertex shim, or a test double)?"""
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(upstream).hostname or "").lower()
+    except Exception:
+        return False
+    return host == "api.anthropic.com" or host.endswith(_FIRST_PARTY_HOST_SUFFIX)
+
+
+def _proxy_child_env(port: int, upstream: str) -> dict[str, str]:
+    """The environment the wrapped agent runs in when the observer proxy is
+    on. ANTHROPIC_BASE_URL points at the loopback relay; the parent process
+    env is never modified.
+
+    Claude Code treats any non-first-party ANTHROPIC_BASE_URL as a gateway
+    that may not forward its `tool_reference` beta, and silently turns
+    deferred tool loading off. Measured on DeepSWE (evals/agentbench,
+    haiku, 60-turn sessions): the prompt went from 16 deferred-loaded tool
+    schemas to 41 inline ones, about 100 KB and ~15k cached tokens on EVERY
+    request, a 21-33% input-token tax that dwarfed anything the hooks
+    saved. The relay forwards headers and bodies byte-for-byte, so when the
+    upstream is Anthropic itself the beta works through it; say so with
+    ENABLE_TOOL_SEARCH (the CLI's own override) unless the user already
+    chose a value, and leave a user's real gateway alone."""
+    env = {**os.environ, "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}"}
+    if _first_party_upstream(upstream) and not os.environ.get("ENABLE_TOOL_SEARCH"):
+        env["ENABLE_TOOL_SEARCH"] = "true"
+    return env
+
+
 def _start_proxy(
     workspace_root: Path, ctx_exe: str, rescue_pct: float = 0.0
 ) -> tuple[subprocess.Popen | None, dict[str, str] | None]:
@@ -235,7 +271,7 @@ def _start_proxy(
         _stop_proxy(proc)
         print("ctx wrap: observer proxy failed to start; continuing without it", file=sys.stderr)
         return None, None
-    return proc, {**os.environ, "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}"}
+    return proc, _proxy_child_env(port, upstream)
 
 
 def _stop_proxy(proc: subprocess.Popen | None) -> None:
