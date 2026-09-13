@@ -270,6 +270,13 @@ def main() -> int:
     print(f"adapter={args.adapter} tasks={len(tasks)} arms={args.arms} repeats={args.repeats}",
           flush=True)
 
+    if "maki" in args.arms and not os.environ.get("ANTHROPIC_API_KEY"):
+        # maki is not Claude Code: it cannot use Claude Code's login, and a
+        # keyless run returns a JSON error after zero turns. Refuse before
+        # the other arms spend anything.
+        raise SystemExit("the maki arm needs ANTHROPIC_API_KEY in the environment "
+                         "(maki authenticates itself; Claude Code's login does not apply)")
+
     prefix_parity = None
     if args.prefix_parity and "sj" in args.arms:
         # The referee for the wrapper itself: a paid sweep is only worth
