@@ -183,6 +183,9 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=1,
                     help="concurrent (task, arm, repeat) sessions; each has its own "
                          "fixture, config dir and toolchain, so runs cannot share state")
+    ap.add_argument("--label", default=None,
+                    help="free-text tag stored in the payload and shown by report.py, "
+                         "e.g. the wrapper version under test")
     args = ap.parse_args()
 
     import sys
@@ -228,6 +231,7 @@ def main() -> int:
                 "max_turns": args.max_turns,
                 "repeats": args.repeats,
                 "jobs": args.jobs,
+                "label": args.label,
                 "task_ids": [t["id"] for t in tasks],
                 "provenance": "live",
                 "simulated": False,

@@ -118,7 +118,10 @@ def main() -> int:
     for payload in payloads:
         records = payload["results"]
         arms = payload["arms"]
-        L.append(f"## adapter: `{payload['adapter']}`\n")
+        title = f"## adapter: `{payload['adapter']}`"
+        if payload.get("label"):
+            title += f" — {payload['label']}"
+        L.append(title + "\n")
         L.append(f"- Tasks: **{len(payload['task_ids'])}** · repeats: **{payload['repeats']}** "
                  f"· max turns: {payload['max_turns']} · model: {payload.get('model') or 'host default (not recorded)'}")
         L.append("- Arms: plain `claude` vs the full `ctx wrap claude --proxy` intervention; effective prompt/tools may differ")
