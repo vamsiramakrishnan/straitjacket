@@ -151,6 +151,29 @@ def _with_collapse_tool_removal(agent_args: list[str], workspace_root: Path) -> 
     return ["--disallowedTools", *_NATIVE_SEARCH_TOOLS, *agent_args]
 
 
+#: The tool surface of a headless coding run. Measured on this host: the
+#: default catalogue is 16 tools / 154 KB (Artifact alone 71 KB, Agent 16 KB,
+#: Workflow 9 KB, ScheduleWakeup 8 KB ...) and costs ~33k cached tokens on
+#: EVERY request; these eight are 36-50 KB. Claude Code drops a tool that is
+#: not in `--tools` from the prompt entirely, so this is the one prefix lever
+#: that loses nothing the model would read: a coding task never calls
+#: Artifact or ScheduleWakeup, and the explorer agent still rides `Agent`.
+#: Interactive sessions keep everything (the human may want any tool); a
+#: caller's own `--tools` wins; CTX_WRAP_NO_TOOL_DIET=1 opts out.
+_PRINT_TOOL_SURFACE = ("Bash", "Read", "Edit", "Write", "MultiEdit", "Grep", "Glob", "Agent")
+
+
+def _with_tool_diet(agent_args: list[str]) -> list[str]:
+    """Declare the coding tool surface for print-mode runs (see above)."""
+    if os.environ.get("CTX_WRAP_NO_TOOL_DIET"):
+        return agent_args
+    if "--tools" in agent_args:
+        return agent_args  # the caller's own surface wins
+    if "-p" not in agent_args and "--print" not in agent_args:
+        return agent_args  # interactive: leave the human every tool
+    return ["--tools", ",".join(_PRINT_TOOL_SURFACE), *agent_args]
+
+
 def _explorer_agent_source() -> Path:
     """The packaged explorer agent definition (shipped with the plugin)."""
     from ctx.installer import _template_dir
@@ -337,6 +360,7 @@ def wrap_claude(
 
     exe = ctx_exe or _ctx_executable()
     agent_args = _with_output_discipline(agent_args, orchestrate=orchestrate)
+    agent_args = _with_tool_diet(agent_args)
     agent_args = _with_collapse_tool_removal(agent_args, workspace_root)
     settings = prepare_claude(workspace_root, exe)
     # The explorer agent lives alongside the hooks for the session's lifetime.
@@ -959,7 +983,14 @@ def judge_prefix_parity(naive: dict | None, wrapped: dict | None, declared_bytes
     if not naive or not wrapped:
         return {"ok": False, "reason": "no prompt snapshot from one of the sessions", "naive": naive, "wrapped": wrapped}
     delta = (wrapped["system_bytes"] + wrapped["tools_bytes"]) - (naive["system_bytes"] + naive["tools_bytes"])
-    lost = bool(naive["deferral"]) and not wrapped["deferral"]
+    # Lost deferral is a tax only when there is a catalogue to inline. A
+    # wrapped session on the print-mode tool diet has no deferred tools
+    # left, so the marker is legitimately absent — and its catalogue is a
+    # third of naive's, which the byte delta already credits.
+    lost = (
+        bool(naive["deferral"]) and not wrapped["deferral"]
+        and wrapped["tools"] >= _ENVIRONMENT_TAX_MIN_TOOLS
+    )
     allowed = declared_bytes + _PROBE_SLACK_BYTES
     reasons = []
     if lost:

@@ -399,3 +399,32 @@ def test_prompt_snapshot_reads_the_first_request_shape(tmp_path):
     assert snap["system_bytes"] == 4 and snap["tools"] == 2 and snap["deferral"] is True
     assert snap["tool_names"] == ["Bash", "ToolSearch"]
     assert _prompt_snapshot(tmp_path / "nowhere") is None
+
+
+# -------------------------------------------------------------- tool diet
+# The fixed half of every request is the tool catalogue. Measured: 16 tools /
+# 154 KB / ~33k cached tokens per call by default on a hosted session, 6-8
+# tools / 36-50 KB / ~10k with `--tools`. Print mode declares the coding
+# surface; interactive sessions and a caller's own `--tools` are untouched.
+def test_tool_diet_applies_to_print_mode_only(monkeypatch):
+    from ctx.wrap import _PRINT_TOOL_SURFACE, _with_tool_diet
+
+    monkeypatch.delenv("CTX_WRAP_NO_TOOL_DIET", raising=False)
+    out = _with_tool_diet(["-p", "fix it"])
+    assert out[:2] == ["--tools", ",".join(_PRINT_TOOL_SURFACE)] and out[2:] == ["-p", "fix it"]
+    assert "Bash" in _PRINT_TOOL_SURFACE and "Agent" in _PRINT_TOOL_SURFACE  # explorer agent rides Agent
+    assert _with_tool_diet(["--resume", "abc"]) == ["--resume", "abc"]  # interactive: untouched
+    assert _with_tool_diet(["--tools", "Bash", "-p", "x"]) == ["--tools", "Bash", "-p", "x"]  # caller wins
+    monkeypatch.setenv("CTX_WRAP_NO_TOOL_DIET", "1")
+    assert _with_tool_diet(["-p", "x"]) == ["-p", "x"]
+
+
+def test_judge_prefix_parity_credits_the_tool_diet():
+    from ctx.wrap import judge_prefix_parity
+
+    # Print-mode diet: 5 tools, no deferred tools left, so no ToolSearch marker.
+    # That is a 110 KB saving per request, not a lost-deferral tax.
+    naive = {"system_bytes": 14600, "tools": 16, "tools_bytes": 157700, "deferral": True, "tool_names": ["ToolSearch", "Artifact"]}
+    diet = {"system_bytes": 15700, "tools": 5, "tools_bytes": 46000, "deferral": False, "tool_names": ["Bash"]}
+    v = judge_prefix_parity(naive, diet, declared_bytes=3505)
+    assert v["ok"] and not v["deferral_lost"] and v["delta_bytes"] < -100_000
