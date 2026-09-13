@@ -238,7 +238,9 @@ instances with real test lists, and `report.py` refuses simulated payloads.
 Three live receipts are committed: the three-task canary and the one-task
 dogfood mission (host-default model, unrecorded), and the DeepSWE v1.1 sweep
 (eight Python tasks, haiku, one repeat, run twice: before and after the two
-wrapper fixes it found). The DeepSWE referee was proven on 14 of 34 Python
+wrapper fixes it found), plus a single-task iteration loop under
+`results/iterations/` (cattrs, four arms including headroom-ai, one change per
+iteration) that found the print-mode tool diet and the Read-cap widening bug. The DeepSWE referee was proven on 14 of 34 Python
 tasks by `validate.py`; see [`deepswe-2026-09-13.md`](deepswe-2026-09-13.md)
 for the mechanism analysis, the exclusion list, and the per-task tables. All
 are diagnostics, not a broad benchmark or a containment-only ablation. A paid
