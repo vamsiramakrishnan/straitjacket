@@ -47,6 +47,25 @@ more per session and read 21-33% more input for no outcome gain:
   and a caller's own `--tools` are untouched; `CTX_WRAP_NO_TOOL_DIET=1` opts
   out.
 
+Code intelligence, so the outline and the verbs answer for every language the
+roster names rather than for Python:
+
+- Tree-sitter grammars for all sixteen skeleton languages. The roster claimed
+  sixteen and shipped wheels for five; C, C++, C#, Java, Kotlin, Lua, PHP,
+  Ruby, Scala, shell and Swift fell to universal-ctags (absent on most
+  machines) and then to nothing. Each now has a grammar wheel in the `[code]`
+  extra and a declarative walker whose node and field names were read off the
+  grammars (`tests/test_skeleton_languages.py`, one fixture per language);
+  functions inside a namespace stay functions, inside a type become methods.
+- `ctx lsp def|refs|hover`: a bounded JSON-RPC stdio client for whatever
+  language server is on PATH (pyright, jedi-language-server, gopls,
+  rust-analyzer, clangd, typescript-language-server ...), one process per
+  call, positions in ctx's 1-based `path:line:col` or a skeleton symbol,
+  results in `ctx refs` coordinates. `ctx refs` uses it as a rung above jedi
+  and the regex floor whenever a server exists, and discloses `engine lsp
+  (<server>)`; `CTX_LSP=off` removes the rung, `CTX_LSP_SERVERS` overrides
+  the table. `ctx doctor` lists the servers found.
+
 And the mechanisms so that class of defect is measured rather than found by
 accident (docs/HOST-CAPABILITIES.md, "Host prefix bytes"):
 

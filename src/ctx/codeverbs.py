@@ -479,6 +479,16 @@ def resolve_refs(
     # its index no longer describes the tree: that reads identically to never
     # having indexed, and the remedy is one command.
     note = _stale_index_note(ws, store)
+    # Language-server rung: semantic across files for every language that
+    # has a server on PATH (jedi below is Python-only). Off with CTX_LSP=off.
+    if os.environ.get("CTX_LSP", "").lower() not in ("off", "0", "false"):
+        try:
+            hit = _lsp_refs(store, ws, symbol)
+            if hit is not None:
+                sites, server = hit
+                return sites, f"lsp ({server}){note}"
+        except Exception:
+            pass
     if _select_engine() == _ENGINE_JEDI:
         try:
             sites, _ = _jedi_refs(ws, symbol)
@@ -487,6 +497,38 @@ def resolve_refs(
             pass
     sites, _ = _ast_refs(store, ws, symbol, None)
     return sites, f"ast (textual){note}"
+
+
+def _lsp_refs(
+    store: Store, ws: Workspace, symbol: str
+) -> tuple[list[tuple[str, int, str]], str] | None:
+    """References via the language server, or None when no server exists
+    for any file that defines the symbol. The definition site comes from
+    the skeletons (cached per source blob), so the scan is a parse of the
+    repository's source files at most once, and the server is asked exactly
+    one question at that position."""
+    from ctx import lsp as _lsp
+    from ctx.refs import parse_ref
+    from ctx.skeleton import language_for, skeleton_for
+
+    ref = parse_ref("repo:")
+    targets, _, _ = _resolve_repo_targets(store, ws, ref, glob=None, scope=None)
+    for t in targets:
+        language = language_for(t.label)
+        if language is None or _lsp.server_for(language) is None:
+            continue
+        try:
+            rows = skeleton_for(store, ws, t.label).get("symbols") or []
+        except Exception:
+            continue
+        if _match_symbol(rows, symbol) is None:
+            continue
+        pos = _lsp.symbol_position(ws.root, t.label, symbol)
+        if pos is None:
+            continue
+        sites, server = _lsp.query(ws.root, t.label, pos[0], pos[1], "references")
+        return list(sites or []), server
+    return None
 
 
 def _check_refs_symbol(symbol: str) -> None:

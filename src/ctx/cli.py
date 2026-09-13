@@ -174,6 +174,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "map": ("retrieve", "cmd_map", True),
     "def": ("retrieve", "cmd_def", True),
     "refs": ("retrieve", "cmd_refs", True),
+    "lsp": ("retrieve", "cmd_lsp", True),
     "diag": ("retrieve", "cmd_diag", True),
     "callers": ("retrieve", "cmd_callers", True),
     "callees": ("retrieve", "cmd_callees", True),
@@ -712,6 +713,17 @@ def _build_parser():
     p_refs = sub.add_parser("refs", help="reference sites for a symbol")
     p_refs.add_argument("symbol", help="name or Class.method dotted name")
     p_refs.add_argument("--path", help="restrict sites to a subtree")
+
+    p_lsp = sub.add_parser(
+        "lsp", help="ask the language server: definition, references, hover at a position or symbol"
+    )
+    p_lsp.add_argument("what", choices=("def", "refs", "hover"))
+    p_lsp.add_argument(
+        "target",
+        help="<path>:<line>:<col> (1-based) or repo:<path>:<Symbol.dotted> (position from the skeleton)",
+    )
+    p_lsp.add_argument("--timeout", type=float, default=None,
+                       help="seconds to wait for the server (default 20; whole-repo indexers need more)")
 
     p_diag = sub.add_parser("diag", help="deterministic lint/syntax digest")
     p_diag.add_argument("path", nargs="?", help="restrict to a subtree")

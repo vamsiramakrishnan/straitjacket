@@ -160,6 +160,63 @@ def cmd_def(ws, ns) -> int:
     return _code(ws, ns)
 
 
+def cmd_lsp(ws, ns) -> int:
+    """`ctx lsp def|refs|hover <target>`: the language-server tier, explicit.
+    Exit 2 when no server exists for the file's language (an invocation this
+    machine cannot serve, not a ctx failure) and 3 when the server failed."""
+    import re
+
+    from ctx import lsp as _lsp
+    from ctx.store import Store
+    from ctx.textutil import EVIDENCE_LINE_CHARS
+
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    target = ns.target.strip()
+    m = re.match(r"^(?P<path>.+?):(?P<line>\d+):(?P<col>\d+)$", target)
+    if m:
+        rel, line, col = m.group("path"), int(m.group("line")), int(m.group("col"))
+        rel = rel.removeprefix("repo:")
+    else:
+        m = re.match(r"^repo:(?P<path>.+?):(?P<sym>[A-Za-z_][\w.]*)$", target)
+        if not m:
+            print(f"ctx lsp: unparseable target {target!r}; use <path>:<line>:<col> or "
+                  "repo:<path>:<Symbol>", file=sys.stderr)
+            return 2
+        rel = m.group("path")
+        pos = _lsp.symbol_position(ws.root, rel, m.group("sym"))
+        if pos is None:
+            print(f"ctx lsp: symbol {m.group('sym')!r} not in the skeleton of {rel}", file=sys.stderr)
+            return 2
+        line, col = pos
+    try:
+        ws.confine(rel, must_exist=True)
+    except Exception as e:  # noqa: BLE001 - the confinement error is the message
+        print(f"ctx lsp: {e}", file=sys.stderr)
+        return 2
+    what = {"def": "definition", "refs": "references", "hover": "hover"}[ns.what]
+    from ctx.bounds import explicit
+
+    try:
+        answer, server = _lsp.query(
+            ws.root, rel, line, col, what,
+            timeout=float(explicit(ns.timeout, _lsp.DEFAULT_TIMEOUT_S)),  # type: ignore[arg-type]
+        )
+    except _lsp.LspError as e:
+        print(f"ctx lsp: {e}", file=sys.stderr)
+        return 2 if "no language server" in str(e) else 3
+    head = f"[ctx lsp {ns.what} {rel}:L{line}:C{col} · engine lsp ({server})]"
+    if what == "hover":
+        body = (answer or "").strip() or "(no hover information)"
+        out = head + "\n" + body
+    else:
+        sites = answer or []
+        lines = [head]
+        lines.extend(f"repo:{r}:L{ln}: {text[:EVIDENCE_LINE_CHARS]}" for r, ln, text in sites)
+        lines.append(f"coverage:\n  sites: {len(sites)}")
+        out = "\n".join(lines)
+    return _emit_retrieval(ws, store, out)
+
+
 def cmd_refs(ws, ns) -> int:
     return _code(ws, ns)
 

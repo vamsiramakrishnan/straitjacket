@@ -90,6 +90,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("index", "build a compiler-grade index so def/refs answer exactly"),
             ("def", "where a symbol is defined"),
             ("refs", "where a symbol is used"),
+            ("lsp", "ask the language server where a name is defined or used, and what it is"),
             ("callers", "what calls this symbol"),
             ("callees", "what this symbol calls"),
             ("impact", "what breaks if this symbol changes"),

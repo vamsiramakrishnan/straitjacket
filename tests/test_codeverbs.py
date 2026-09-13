@@ -10,6 +10,15 @@ import pytest
 from conftest import make_store, make_ws
 
 
+@pytest.fixture(autouse=True)
+def _no_language_server(monkeypatch):
+    """These tests pin the jedi and textual rungs by their disclosed labels.
+    On a machine with a language server on PATH the ladder's new top rung
+    (`ctx lsp`) would answer first, correctly, and the labels would differ;
+    the tier has its own tests (tests/test_lsp.py)."""
+    monkeypatch.setenv("CTX_LSP", "off")
+
+
 def _has_jedi() -> bool:
     try:
         import jedi  # noqa: F401

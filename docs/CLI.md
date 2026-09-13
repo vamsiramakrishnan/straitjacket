@@ -413,6 +413,31 @@ marked `[unscoped]` so a candidate never reads as a fact. When several
 definitions answer to one name, every one of them is listed before the results
 — an ambiguous question gets an ambiguous answer, out loud.
 
+## Ask the language server: `ctx lsp`
+
+The skeleton (`ctx stats repo:<file>`) says *where* symbols are, from a parser.
+A language server says what a name at a position *means*: its definition across
+files, every reference to it, its type and signature. `ctx lsp` is a bounded
+JSON-RPC client over stdio for any server on `PATH`, one process per call.
+
+```bash
+ctx lsp def   src/app.py:42:13            # definition of the name at line 42, col 13 (1-based)
+ctx lsp refs  repo:src/app.py:Router.dispatch   # references; position taken from the skeleton
+ctx lsp hover src/app.py:42:13 --timeout 60     # type and signature
+```
+
+Output is the same coordinate shape as `ctx refs` (`repo:<path>:L<n>: <text>`),
+workspace-confined, with the engine disclosed in the header (`engine lsp
+(pyright-langserver)`). Servers are looked up per skeleton language: pyright,
+pylsp or jedi-language-server for Python; typescript-language-server; gopls;
+rust-analyzer; clangd; jdtls; kotlin-language-server; lua-language-server;
+intelephense or phpactor; ruby-lsp or solargraph; metals; bash-language-server;
+sourcekit-lsp; csharp-ls or omnisharp. `CTX_LSP_SERVERS` (JSON of the same
+shape, `{"python": [["pylsp"]]}`) replaces the table. `ctx doctor` lists which
+server each language resolved to. No server for a language exits `2`; a server
+that fails or times out exits `3`; `ctx refs` uses the tier as a rung above jedi
+and the textual fallback when a server is present, and says so.
+
 ## Answer a question: `ctx ask`
 
 ```bash
