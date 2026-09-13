@@ -25,7 +25,16 @@ means the host default was used but not recorded. Fixtures carry `ctx.toml` and
 git for both arms so the tree shape is identical.
 
 Arm construction follows `evals/spec3_runner.py` (the frozen referee) so numbers
-from the two harnesses stay comparable. A `headroom` arm is wired for contrast.
+from the two harnesses stay comparable. Two competitor arms are wired for
+contrast, each run with vendor defaults: `headroom` launches Claude Code through
+[headroom-ai](https://pypi.org/project/headroom-ai/)'s compression proxy
+(`pip install "headroom-ai[proxy]"`; set `AGENTBENCH_HEADROOM` to a venv
+binary), and `maki` runs [maki.sh](https://maki.sh), a different agent whose
+`--print` mode is a drop-in for Claude Code's JSON output, on the same model
+(`AGENTBENCH_MAKI` for the binary; needs `ANTHROPIC_API_KEY`, since it is not
+Claude Code and cannot use its login). Every Claude Code session's first-request
+prefix (tool count, catalogue bytes, deferral) is recorded per run, so a
+wrapper that inflates the host prompt shows up in the report, not just in cost.
 
 ## Validate the referee before you spend
 

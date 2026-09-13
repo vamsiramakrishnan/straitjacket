@@ -100,6 +100,26 @@ def _frac(text) -> tuple[int, int]:
         return 0, 0
 
 
+ARM_DESC = {
+    "naive": "plain `claude -p`",
+    "sj": "`ctx wrap claude --proxy` (hooks + observer proxy, this repo)",
+    "headroom": "`headroom wrap claude` (headroom-ai compression proxy, vendor defaults)",
+    "maki": "`maki --print` (maki.sh, a different agent on the same model)",
+}
+
+
+def _prefix_summary(rows: list[dict]) -> str:
+    """Mode of (tools, deferral) and median catalogue KB across sessions."""
+    import statistics
+    pfs = [r.get("prefix") for r in rows if r.get("prefix")]
+    if not pfs:
+        return ""
+    tools = statistics.median(p["tools"] for p in pfs)
+    kb = statistics.median(p["tools_bytes"] for p in pfs) / 1024
+    deferral = sum(1 for p in pfs if p.get("deferral")) * 2 >= len(pfs)
+    return f"{tools:.0f} tools, {kb:.0f} KB, deferral {'on' if deferral else 'off'}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", type=pathlib.Path,
@@ -124,7 +144,7 @@ def main() -> int:
         L.append(title + "\n")
         L.append(f"- Tasks: **{len(payload['task_ids'])}** · repeats: **{payload['repeats']}** "
                  f"· max turns: {payload['max_turns']} · model: {payload.get('model') or 'host default (not recorded)'}")
-        L.append("- Arms: plain `claude` vs the full `ctx wrap claude --proxy` intervention; effective prompt/tools may differ")
+        L.append("- Arms: " + " · ".join(f"`{a}` = {ARM_DESC.get(a, a)}" for a in arms))
         L.append("- Provenance: **live agent sessions** (simulated runs are refused)\n")
 
         summaries = {a: summarise(records, a) for a in arms}
@@ -147,6 +167,11 @@ def main() -> int:
                 L.append(f"- Prefix parity probe: **FAIL** ({pp.get('reason')})")
         L.append("")
 
+        prefixes = {a: _prefix_summary([r for r in records if r["arm"] == a]) for a in arms}
+        if any(prefixes.values()):
+            L.append("- First-request prefix per arm (from each session's transcript): "
+                     + " · ".join(f"`{a}` {prefixes[a]}" for a in arms if prefixes[a]))
+            L.append("")
         L.append("| Arm | Resolved | Median turns | Median cache hit | Total input tok | Output tok | Cost $ | Median wall s | Timeouts |")
         L.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
         for a in arms:

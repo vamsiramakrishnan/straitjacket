@@ -47,10 +47,11 @@ TOOLS = "Bash Read Grep Glob Edit Write"
 MAX_TURNS = 40
 SESSION_TIMEOUT = 2400
 
-ARMS = ("naive", "sj", "headroom")
+ARMS = ("naive", "sj", "headroom", "maki")
 
 
-def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int) -> list[str]:
+def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
+             port: int | None = None) -> list[str]:
     """Build agent commands; the sj prefix activates the full wrapper bundle."""
     base = [
         "claude", "-p", prompt,
@@ -65,8 +66,57 @@ def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int) -> list[s
     if arm == "sj":
         return ["ctx", "wrap", "claude", "--proxy", "--"] + base[1:]
     if arm == "headroom":
-        return ["headroom", "wrap", "claude", "--"] + base[1:]
+        # headroom-ai (pip install "headroom-ai[proxy]"): a compression proxy
+        # between Claude Code and the API, vendor defaults except the port,
+        # which must be unique per concurrent session (their default is 8787
+        # for every wrap). Binary overridable for a venv install.
+        return [os.environ.get("AGENTBENCH_HEADROOM", "headroom"), "wrap", "claude",
+                "--port", str(port or _free_port()), "--"] + base[1:]
+    if arm == "maki":
+        # maki.sh: a different agent, not a wrapper. Its --print mode is a
+        # drop-in for Claude Code's (same JSON result fields), so the same
+        # parser reads cost, usage and turns. Needs ANTHROPIC_API_KEY.
+        return [os.environ.get("AGENTBENCH_MAKI", "maki"), prompt, "--print",
+                "--output-format", "json", "--max-turns", str(max_turns),
+                "--allowed-tools", ",".join(TOOLS.split()), "--yolo", "--trust",
+                *(["--model", _maki_model(model)] if model else [])]
     raise ValueError(f"unknown arm: {arm}")
+
+
+#: Claude Code resolves aliases like `haiku`; maki wants provider/model-id.
+_MAKI_ALIASES = {
+    "haiku": "anthropic/claude-haiku-4-5",
+    "sonnet": "anthropic/claude-sonnet-5",
+    "opus": "anthropic/claude-opus-5",
+}
+
+
+def _maki_model(model: str) -> str:
+    if model in _MAKI_ALIASES:
+        return _MAKI_ALIASES[model]
+    return model if "/" in model else f"anthropic/{model}"
+
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def prompt_prefix(cfg: pathlib.Path) -> dict | None:
+    """First-request prompt shape of a Claude Code session (system bytes,
+    tool count, tool-catalogue bytes, deferral), read from its transcript.
+    This is the per-arm evidence for the prefix tax the DeepSWE receipt found;
+    None for an arm that is not Claude Code (maki keeps no such transcript)."""
+    try:
+        from ctx.wrap import _prompt_snapshot
+    except ImportError:
+        return None
+    snap = _prompt_snapshot(cfg)
+    if not snap:
+        return None
+    return {k: v for k, v in snap.items() if k != "tool_names"}
 
 
 def parse_result_json(text: str) -> dict:
@@ -124,7 +174,9 @@ def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
     # tree materializes inside the workspace being graded.
     cfg = (out / "cfg" / tag).resolve()
     cfg.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg), "PIP_REQUIRE_VIRTUALENV": "1"}
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg), "PIP_REQUIRE_VIRTUALENV": "1",
+           # maki keeps its config under XDG; isolate it the same way.
+           "XDG_CONFIG_HOME": str(cfg / "xdg"), "HEADROOM_HOME": str(cfg / "headroom")}
     # An adapter that builds a per-run toolchain (a venv, an image's ENV) hands
     # it to the agent here. Both arms receive the identical mapping.
     if hasattr(adapter, "session_env"):
@@ -156,6 +208,7 @@ def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
         "timed_out": timed_out,
         "provenance": "live",
         **session_metrics(doc, wall),
+        "prefix": prompt_prefix(cfg),
     }
     # Grading is the adapter's job and never trusts the agent's own claims.
     rec.update(adapter.grade(task, workdir))
