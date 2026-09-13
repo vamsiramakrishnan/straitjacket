@@ -75,3 +75,18 @@ def test_passthrough_output_is_retrievable_by_handle(state_home, workspace_dir, 
     rc = cli_main(["--workspace", str(workspace_dir), "get", f"run:{handle}#stdout"])
     assert rc == 0
     assert "needle-7f3a" in capsys.readouterr().out
+
+
+def test_emission_parity_small_output_is_at_most_raw_plus_one_trailer_line(state_home, workspace_dir, capsys):
+    # The invariant behind the flag: a rewritten command whose output fits
+    # the inline budget may not cost the transcript more than native execution
+    # plus one handle line. This is what bounds the "receipt inflation" the
+    # DeepSWE receipt measured at 2-8x.
+    raw = "line one\nline two\nline three\n"
+    rc = _run(workspace_dir, "--passthrough", "--", sys.executable, "-c", f"import sys; sys.stdout.write({raw!r}); sys.exit(0)")
+    out = capsys.readouterr().out
+    assert rc == 0
+    body, _, trailer = out.rstrip("\n").rpartition("\n")
+    assert body + "\n" == raw
+    assert HANDLE_RE.match(trailer) and len(trailer) <= 40
+    assert len(out) <= len(raw) + 41

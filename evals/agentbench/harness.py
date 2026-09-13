@@ -186,6 +186,12 @@ def main() -> int:
     ap.add_argument("--label", default=None,
                     help="free-text tag stored in the payload and shown by report.py, "
                          "e.g. the wrapper version under test")
+    ap.add_argument("--prefix-parity", action="store_true",
+                    help="before any paid arm, run `ctx wrap claude --probe-prefix` (one naive "
+                         "turn, one wrapped turn) and refuse to run when the wrapper adds more "
+                         "prefix than it declares or loses tool deferral; the verdict is stored "
+                         "in the payload (--allow-prefix-tax runs anyway and records the failure)")
+    ap.add_argument("--allow-prefix-tax", action="store_true")
     args = ap.parse_args()
 
     import sys
@@ -211,6 +217,18 @@ def main() -> int:
     print(f"adapter={args.adapter} tasks={len(tasks)} arms={args.arms} repeats={args.repeats}",
           flush=True)
 
+    prefix_parity = None
+    if args.prefix_parity and "sj" in args.arms:
+        # The referee for the wrapper itself: a paid sweep is only worth
+        # running when the wrapper's per-request cost is what it declares.
+        from ctx.wrap import probe_prefix, render_prefix_parity
+
+        prefix_parity = probe_prefix(work_root, model=args.model or "haiku")
+        print(render_prefix_parity(prefix_parity), flush=True)
+        if not prefix_parity.get("ok") and not args.allow_prefix_tax:
+            raise SystemExit("prefix parity FAILED: the wrapper would tax every request; "
+                             "fix it or pass --allow-prefix-tax to record the failure and run anyway")
+
     records: list[dict] = []
     lock = threading.Lock()
 
@@ -232,6 +250,7 @@ def main() -> int:
                 "repeats": args.repeats,
                 "jobs": args.jobs,
                 "label": args.label,
+                "prefix_parity": prefix_parity,
                 "task_ids": [t["id"] for t in tasks],
                 "provenance": "live",
                 "simulated": False,

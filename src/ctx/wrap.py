@@ -899,3 +899,175 @@ def wrap_opencode(workspace_root: Path, agent_args=None) -> int:
 def wrap_dsh(workspace_root: Path, agent_args=None) -> int:
     from ctx.mcp_hosts import wrap
     return wrap("dsh", workspace_root, agent_args)
+
+
+# ----------------------------------------------------------- prefix parity
+# The prefix-budget manifest (ctx.prefixassets) locks the bytes the harness
+# injects. It cannot see the bytes the HOST adds because of the harness: a
+# wrapper flag that flips a host setting can add tens of KB to every request
+# without touching one manifest asset. Measured on DeepSWE (evals/agentbench):
+# `--proxy` made Claude Code turn deferred tool loading off, 41 inline tool
+# schemas instead of 16, ~15k cached tokens per call, invisible to `ctx gain`.
+# The parity probe is the measurement that catches that class: one naive turn,
+# one wrapped turn, and the first request's composition diffed against what
+# the manifest declares. Two calls to the cheapest model; about one cent.
+
+#: Room for the wrapper's legitimate, undeclared movement in the host prompt:
+#: removing native Grep/Glob under collapse (-6 KB), the session-variable
+#: parts of the system prompt (cwd, date), and JSON encoding noise.
+_PROBE_SLACK_BYTES = 4096
+_PROBE_PROMPT = "Reply with the single word: ok"
+#: Same threshold the scorecard uses for its `prefix tax` flag: a catalogue
+#: this long with no deferral marker is the ~15k-tokens-per-call shape.
+_ENVIRONMENT_TAX_MIN_TOOLS = 24
+
+
+def _prompt_snapshot(config_dir: Path) -> dict | None:
+    """Prefix shape of the first request Claude Code sent from a session run
+    under ``CLAUDE_CONFIG_DIR=config_dir``: the transcript's prompt_snapshot
+    attachment carries the system prompt and the tool list as sent."""
+    import glob as _glob
+
+    for path in sorted(_glob.glob(str(config_dir / "projects" / "*" / "*.jsonl"))):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    att = ev.get("attachment") or {}
+                    if att.get("type") != "prompt_snapshot" or "tools" not in att:
+                        continue
+                    tools = att.get("tools") or []
+                    names = sorted(str(t.get("name") or "") for t in tools if isinstance(t, dict))
+                    return {
+                        "system_bytes": len(str(att.get("systemPrompt", "")).encode("utf-8", "replace")),
+                        "tools": len(tools),
+                        "tools_bytes": len(json.dumps(tools, ensure_ascii=False).encode("utf-8", "replace")),
+                        "deferral": "ToolSearch" in names,
+                        "tool_names": names,
+                    }
+        except OSError:
+            continue
+    return None
+
+
+def judge_prefix_parity(naive: dict | None, wrapped: dict | None, declared_bytes: int) -> dict:
+    """Pure verdict: the wrapped prefix may exceed the naive one by at most the
+    declared resident budget plus slack, and must not lose deferral."""
+    if not naive or not wrapped:
+        return {"ok": False, "reason": "no prompt snapshot from one of the sessions", "naive": naive, "wrapped": wrapped}
+    delta = (wrapped["system_bytes"] + wrapped["tools_bytes"]) - (naive["system_bytes"] + naive["tools_bytes"])
+    lost = bool(naive["deferral"]) and not wrapped["deferral"]
+    allowed = declared_bytes + _PROBE_SLACK_BYTES
+    reasons = []
+    if lost:
+        reasons.append("wrapped session lost tool deferral (the host inlines its whole tool catalogue)")
+    if delta > allowed:
+        reasons.append(f"wrapped prefix is {delta:,} B over naive; declared budget {declared_bytes:,} B + {_PROBE_SLACK_BYTES:,} B slack")
+    # Parity is relative: a tax both sessions pay (ENABLE_TOOL_SEARCH=false in
+    # the environment, a host build without deferral) cancels out of the
+    # delta. It is still a tax, and the wire audit will flag every session,
+    # so name it here rather than let a PASS read as "no tax".
+    environment_tax = (
+        not naive["deferral"] and not wrapped["deferral"]
+        and max(naive["tools"], wrapped["tools"]) >= _ENVIRONMENT_TAX_MIN_TOOLS
+    )
+    return {
+        "ok": not reasons,
+        "reason": "; ".join(reasons),
+        "delta_bytes": delta,
+        "allowed_bytes": allowed,
+        "declared_bytes": declared_bytes,
+        "deferral_lost": lost,
+        "environment_tax": environment_tax,
+        "naive": {k: v for k, v in naive.items() if k != "tool_names"},
+        "wrapped": {k: v for k, v in wrapped.items() if k != "tool_names"},
+        "tools_only_wrapped": sorted(set(wrapped.get("tool_names", [])) - set(naive.get("tool_names", []))),
+        "tools_only_naive": sorted(set(naive.get("tool_names", [])) - set(wrapped.get("tool_names", []))),
+    }
+
+
+def render_prefix_parity(verdict: dict) -> str:
+    n, w = verdict.get("naive"), verdict.get("wrapped")
+    if not n or not w:
+        return f"prefix parity: FAIL — {verdict.get('reason')}"
+    lines = [
+        "prefix parity (first request, bytes as sent):",
+        f"  naive   system {n['system_bytes'] / 1024:.1f} KB · tools {n['tools']} ({n['tools_bytes'] / 1024:.0f} KB) · deferral {'on' if n['deferral'] else 'off'}",
+        f"  wrapped system {w['system_bytes'] / 1024:.1f} KB · tools {w['tools']} ({w['tools_bytes'] / 1024:.0f} KB) · deferral {'on' if w['deferral'] else 'off'}",
+        f"  delta {verdict['delta_bytes']:+,} B · allowed +{verdict['allowed_bytes']:,} B "
+        f"(declared {verdict['declared_bytes']:,} B + slack)",
+    ]
+    if verdict.get("tools_only_wrapped"):
+        lines.append("  tools only in wrapped: " + ", ".join(verdict["tools_only_wrapped"][:12]))
+    if verdict.get("tools_only_naive"):
+        lines.append("  tools only in naive: " + ", ".join(verdict["tools_only_naive"][:12]))
+    if verdict.get("environment_tax"):
+        lines.append(
+            "  ⚠ both sessions inline the whole tool catalogue (deferral off in this "
+            "environment — ENABLE_TOOL_SEARCH, or a host build without it); parity "
+            "holds, the tax does not cancel"
+        )
+    lines.append("  verdict: " + ("PASS" if verdict["ok"] else f"FAIL — {verdict['reason']}"))
+    return "\n".join(lines)
+
+
+def probe_prefix(
+    workspace_root: Path, ctx_exe: str | None = None, *, model: str = "haiku", use_proxy: bool = True
+) -> dict:
+    """Run one naive and one wrapped single-turn session and judge parity.
+
+    Each session gets its own ``CLAUDE_CONFIG_DIR`` so neither can see the
+    other's transcript; the wrapped one goes through ``wrap_claude`` exactly
+    as a real session would (hooks, explorer agent, proxy). Returns the
+    verdict dict from :func:`judge_prefix_parity` plus the raw snapshots."""
+    from ctx.prefixassets import resident_bytes
+
+    claude = shutil.which("claude")
+    if claude is None:
+        return {"ok": False, "reason": "`claude` not found on PATH", "naive": None, "wrapped": None}
+    exe = ctx_exe or _ctx_executable()
+    base_args = ["-p", _PROBE_PROMPT, "--max-turns", "1", "--model", model, "--output-format", "json"]
+    with tempfile.TemporaryDirectory(prefix="ctx-probe-") as tmp:
+        cfg_naive = Path(tmp) / "naive"
+        cfg_wrapped = Path(tmp) / "wrapped"
+        cfg_naive.mkdir()
+        cfg_wrapped.mkdir()
+        subprocess.run(
+            [claude, *base_args],
+            cwd=workspace_root,
+            env={**os.environ, "CLAUDE_CONFIG_DIR": str(cfg_naive)},
+            capture_output=True, text=True, timeout=300,
+        )
+        naive = _prompt_snapshot(cfg_naive)
+        # wrap_claude builds the child env from os.environ; scope the config
+        # dir to this call and restore whatever was there.
+        prior = os.environ.get("CLAUDE_CONFIG_DIR")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(cfg_wrapped)
+        # wrap_claude inherits stdio so interactive sessions work; the probe's
+        # child is not interactive and its JSON result is noise here, so park
+        # fd 1 on /dev/null for the duration (stderr keeps the scorecard).
+        saved_fd = os.dup(1)
+        try:
+            with open(os.devnull, "w") as sink:
+                sys.stdout.flush()
+                os.dup2(sink.fileno(), 1)
+                try:
+                    wrap_claude(workspace_root, list(base_args), ctx_exe=exe, use_proxy=use_proxy)
+                finally:
+                    sys.stdout.flush()
+                    os.dup2(saved_fd, 1)
+        finally:
+            os.close(saved_fd)
+            if prior is None:
+                os.environ.pop("CLAUDE_CONFIG_DIR", None)
+            else:
+                os.environ["CLAUDE_CONFIG_DIR"] = prior
+        wrapped = _prompt_snapshot(cfg_wrapped)
+    declared = sum(resident_bytes().values())
+    verdict = judge_prefix_parity(naive, wrapped, declared)
+    verdict["model"] = model
+    verdict["proxy"] = use_proxy
+    return verdict

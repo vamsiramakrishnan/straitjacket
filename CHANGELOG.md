@@ -25,6 +25,20 @@ more per session and read 21-33% more input for no outcome gain:
   verbatim with the `run:` handle on one trailing line, and the exit status is
   the command's; large output still digests, and the artifact is still stored.
 
+And the mechanisms so that class of defect is measured rather than found by
+accident (docs/HOST-CAPABILITIES.md, "Host prefix bytes"):
+
+- The observer proxy records each request's prefix shape (system-prompt bytes,
+  tool count, tool-catalogue bytes, deferral marker) in `wire.jsonl` and
+  `window.json`; the scorecard prints a `prefix:` line and flags `⚠ prefix tax`
+  when a long catalogue rides every request with no deferral.
+- `ctx wrap claude --probe-prefix`: one naive and one wrapped single-turn
+  session, first-request composition diffed against the declared prefix
+  budget; exit 3 on lost deferral or undeclared growth. The agentbench harness
+  runs it under `--prefix-parity` before paid arms and stores the verdict.
+- `ctx run --passthrough` is pinned by an emission-parity test: small output
+  costs the transcript at most the native bytes plus one handle line.
+
 ## [0.39.0] - 2026-09-10
 
 `ctx relay` adds a cross-harness relay: the direction the task ledger never

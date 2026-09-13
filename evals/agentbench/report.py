@@ -133,6 +133,18 @@ def main() -> int:
             L.append(f"- Model billed (from session usage): {', '.join(f'`{m}`' for m in used)}")
         if payload.get("jobs", 1) > 1:
             L.append(f"- Concurrency: {payload['jobs']} sessions at a time (wall-clock is per session, not per sweep)")
+        pp = payload.get("prefix_parity")
+        if pp:
+            n, w = pp.get("naive") or {}, pp.get("wrapped") or {}
+            if n and w:
+                L.append(f"- Prefix parity probe (first request): naive {n['tools']} tools "
+                         f"({n['tools_bytes'] // 1024} KB, deferral {'on' if n['deferral'] else 'off'}) · "
+                         f"wrapped {w['tools']} tools ({w['tools_bytes'] // 1024} KB, deferral "
+                         f"{'on' if w['deferral'] else 'off'}) · delta {pp['delta_bytes']:+,} B · "
+                         f"**{'PASS' if pp.get('ok') else 'FAIL'}**"
+                         + (f" ({pp['reason']})" if not pp.get("ok") else ""))
+            else:
+                L.append(f"- Prefix parity probe: **FAIL** ({pp.get('reason')})")
         L.append("")
 
         L.append("| Arm | Resolved | Median turns | Median cache hit | Total input tok | Output tok | Cost $ | Median wall s | Timeouts |")

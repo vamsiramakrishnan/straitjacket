@@ -187,6 +187,32 @@ Trade-off worth stating: it is *our* agent, not Google's. When Antigravity ships
 a feature, this shim does not have it. Use `agy` for interactive work; use
 `antigravity-sdk` when something needs to run unattended.
 
+## Host prefix bytes are the host's — and they are audited
+
+Every byte the harness injects into a prompt is locked behind the prefix
+manifest (`ctx.prefixassets`, ~3.5 KB resident). That manifest cannot see the
+bytes the **host** adds because of the harness: a wrapper flag that flips a host
+setting can add tens of KB to every request without touching one manifest
+asset. That happened. Claude Code treats any non-Anthropic `ANTHROPIC_BASE_URL`
+as a gateway that may not forward its `tool_reference` beta and turns deferred
+tool loading off; `ctx wrap claude --proxy` set exactly such a URL, so the
+prompt carried 41 inline tool schemas instead of 16, about 15k cached tokens on
+every one of ~120 calls per session, and `ctx gain` reported the harness as
+876 tokens. The DeepSWE receipt (`evals/agentbench/deepswe-2026-09-13.md`)
+measured it as 82% of a 27% cost regression.
+
+Three mechanisms now cover that class, from cheapest to most decisive:
+
+| mechanism | cost | what it catches |
+|---|---|---|
+| **Wire prefix audit.** The observer proxy records, per request, the system-prompt bytes, tool count, tool-catalogue bytes and whether a deferral marker (`ToolSearch`, or `defer_loading`) is present; `window.json` keeps the first, the scorecard prints a `prefix:` line and flags `⚠ prefix tax` when a long catalogue has no deferral marker. | free, every proxied session | a host that inlines its catalogue, from the first scorecard of the first session |
+| **Prefix parity probe.** `ctx wrap claude --probe-prefix` runs one naive single-turn session and one wrapped one (isolated `CLAUDE_CONFIG_DIR` each), reads the first request's prompt snapshot from both transcripts, and fails (exit 3) when the wrapped prefix exceeds the naive one by more than the manifest declares plus 4 KB slack, or when deferral was lost. `evals/agentbench/harness.py --prefix-parity` runs it before any paid arm and stores the verdict in the payload. | two calls to the cheapest model, about one cent | any wrapper-induced host prefix growth, whether or not it has a name yet |
+| **Emission parity invariant.** `tests/test_run_passthrough.py` pins that a rewritten command whose output fits the inline budget emits at most the native bytes plus one handle line, with the command's own exit status. | free, in CI | receipt-shaped tool results (measured at 2-8x on sub-KB outputs) |
+
+The rule these encode: the harness's cost to a session is measured **on the
+wire, against a naive control**, never inferred from the bytes the harness
+knows it wrote.
+
 ## Checking your own install
 
 ```bash

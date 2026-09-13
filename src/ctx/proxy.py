@@ -75,6 +75,52 @@ def _context_limit(model: str, beta_1m_header: bool) -> int:
 
 
 # ------------------------------------------------------------- observation
+#: The tool a host declares when it loads tool schemas on demand instead of
+#: inlining the whole catalogue (Claude Code's `ToolSearch`). Its presence, or
+#: a `defer_loading` flag on any tool, is the wire-visible proof that deferral
+#: is on. A generic marker, not a host hardcode: any host that defers this way
+#: is read the same.
+_DEFERRAL_TOOL_NAMES = frozenset({"ToolSearch"})
+
+
+def _observe_prefix(doc: dict) -> dict:
+    """Byte facts about the prompt prefix of one /messages request: system
+    prompt bytes, tool count, tool-catalogue bytes, and whether the host is
+    deferring tool schemas.
+
+    The prefix-budget manifest (ctx.prefixassets) locks every byte the harness
+    injects, but the bytes that matter most are the host's own: a wrapper that
+    flips a host setting can add tens of KB per request without touching a
+    single prefix asset. Measured on DeepSWE (evals/agentbench): the observer
+    proxy's loopback base URL made Claude Code turn deferred tool loading off,
+    41 inline tool schemas instead of 16, ~15k cached tokens on every request,
+    and nothing in the harness's own accounting could see it. This is the
+    wire-level audit that would have. Counts only; never text."""
+    sysb = doc.get("system")
+    if isinstance(sysb, str):
+        system_bytes = len(sysb.encode("utf-8", "replace"))
+    elif isinstance(sysb, list):
+        system_bytes = sum(
+            len(str(b.get("text", "")).encode("utf-8", "replace"))
+            for b in sysb if isinstance(b, dict)
+        )
+    else:
+        system_bytes = 0
+    tools = doc.get("tools") or []
+    if not isinstance(tools, list):
+        tools = []
+    names = {str(t.get("name") or "") for t in tools if isinstance(t, dict)}
+    deferral = bool(names & _DEFERRAL_TOOL_NAMES) or any(
+        isinstance(t, dict) and t.get("defer_loading") for t in tools
+    )
+    return {
+        "system_bytes": system_bytes,
+        "tools": len(tools),
+        "tools_bytes": len(json.dumps(tools, ensure_ascii=False).encode("utf-8", "replace")),
+        "deferral": deferral,
+    }
+
+
 def _observe_request(path: str, body: bytes) -> dict:
     """Shape facts about a /messages request body. Fail-open: any parse
     problem degrades to byte counts only. Never returns header or body text."""
@@ -86,6 +132,7 @@ def _observe_request(path: str, body: bytes) -> dict:
         "tool_result_top": [],
         "model": "",
         "stream": False,
+        "prefix": {},
     }
     if not path.split("?", 1)[0].endswith("/messages"):
         return obs
@@ -93,6 +140,7 @@ def _observe_request(path: str, body: bytes) -> dict:
         doc = json.loads(body)
         obs["model"] = str(doc.get("model") or "")
         obs["stream"] = bool(doc.get("stream"))
+        obs["prefix"] = _observe_prefix(doc)
         msgs = doc.get("messages") or []
         obs["messages"] = len(msgs)
         blocks: dict[str, int] = {}
@@ -187,6 +235,9 @@ class _Observer:
         self._lock = threading.Lock()
         self._requests = 0
         self._cum = {"cache_read": 0, "cache_creation": 0, "output": 0}
+        # The first request that carried a tool catalogue: the session's
+        # prefix shape, surfaced in window.json for `ctx doctor`/scorecards.
+        self._prefix: dict | None = None
         self.last_window_pct: float | None = None  # read by the rescue tier
 
     def record(
@@ -232,6 +283,7 @@ class _Observer:
             "blocks": req_obs.get("blocks", {}),
             "tools": req_obs.get("tools", {}),
             "tool_result_top": req_obs.get("tool_result_top", []),
+            "prefix": req_obs.get("prefix", {}),
             "usage": dict(sorted(usage.items())),
             "ms": {k: round(v, 1) for k, v in sorted((ms or {}).items())},
             "reused_conn": reused_conn,
@@ -251,6 +303,9 @@ class _Observer:
             + usage.get("cache_creation_input_tokens", 0)
         )
         limit = _context_limit(model, beta_1m_header)
+        prefix = req_obs.get("prefix") or {}
+        if self._prefix is None and prefix.get("tools"):
+            self._prefix = dict(prefix)
         if not last_input:
             # A response with no parseable usage (HTTP error, truncated
             # stream, non-/messages call) carries no window signal. Writing
@@ -270,6 +325,8 @@ class _Observer:
             "cum_output": self._cum["output"],
             "workspace_id": self._workspace_id,
         }
+        if self._prefix is not None:
+            doc["prefix"] = self._prefix
         # The one name for this file lives in ctx.proxywindow, where its
         # five readers take it from; this is the sole writer.
         tmp = self._dir / (WINDOW_FILENAME + ".tmp")
