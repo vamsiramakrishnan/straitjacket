@@ -47,7 +47,7 @@ TOOLS = "Bash Read Grep Glob Edit Write"
 MAX_TURNS = 40
 SESSION_TIMEOUT = 2400
 
-ARMS = ("naive", "sj", "headroom", "maki")
+ARMS = ("naive", "sj", "sj_rescue", "headroom", "maki")
 
 
 def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
@@ -65,6 +65,13 @@ def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
         return base
     if arm == "sj":
         return ["ctx", "wrap", "claude", "--proxy", "--"] + base[1:]
+    if arm == "sj_rescue":
+        # The full wrapper plus the opt-in Tier-1 rescue: deterministic,
+        # addressable elision of the transcript once the window passes the
+        # threshold. Sessions here peak near 48% of a 200k window, so the
+        # default engages from mid-session; AGENTBENCH_RESCUE_PCT overrides.
+        pct = os.environ.get("AGENTBENCH_RESCUE_PCT", "25")
+        return ["ctx", "wrap", "claude", "--proxy", "--rescue-pct", pct, "--"] + base[1:]
     if arm == "headroom":
         # headroom-ai (pip install "headroom-ai[proxy]"): a compression proxy
         # between Claude Code and the API, vendor defaults except the port,

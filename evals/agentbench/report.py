@@ -103,6 +103,7 @@ def _frac(text) -> tuple[int, int]:
 ARM_DESC = {
     "naive": "plain `claude -p`",
     "sj": "`ctx wrap claude --proxy` (hooks + observer proxy, this repo)",
+    "sj_rescue": "`ctx wrap claude --proxy --rescue-pct N` (sj plus Tier-1 transcript rescue)",
     "headroom": "`headroom wrap claude` (headroom-ai compression proxy, vendor defaults)",
     "maki": "`maki --print` (maki.sh, a different agent on the same model)",
 }
