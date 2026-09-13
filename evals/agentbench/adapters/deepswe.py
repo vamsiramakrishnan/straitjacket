@@ -239,7 +239,7 @@ def _dockerfile_steps(dockerfile: pathlib.Path) -> tuple[dict[str, str], list[st
 
 
 def _venv_paths(workdir: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
-    base = workdir.parent / workdir.name
+    base = workdir.parent / workdir.name  # sidecars sit NEXT TO the checkout, never inside it
     return (pathlib.Path(f"{base}.venv"), pathlib.Path(f"{base}.venv-pristine"),
             pathlib.Path(f"{base}.deepswe.json"))
 
@@ -371,34 +371,22 @@ def control(task: dict, workdir: pathlib.Path, state: str) -> None:
     raise ValueError(state)
 
 
-def grade(task: dict, workdir: pathlib.Path, **kw) -> dict:
-    """Collect the committed patch, re-apply it to a pristine checkout with a
-    pristine venv, run the task's own test.sh/grader.py, read reward.json."""
+def _verify(task: dict, workdir: pathlib.Path, patch: bytes, label: str) -> tuple[dict | None, int]:
+    """Apply `patch` to a pristine checkout at `workdir` (the venv's editable
+    install points there) with the venv restored from its pre-session
+    snapshot, then run the task's own test.sh/grader.py. Returns
+    (reward.json contents or None, test.sh return code). Each call starts
+    from pristine state, so it can run more than once per session."""
     venv, pristine, sidecar = _venv_paths(workdir)
-    meta = json.loads(sidecar.read_text(encoding="utf-8"))
-    session = meta["env"]
+    session = json.loads(sidecar.read_text(encoding="utf-8"))["env"]
     tests_src = pathlib.Path(task["dir"]) / "tests"
 
-    # [[verifier.collect]]: only committed work leaves the agent environment.
-    diff = subprocess.run(["git", "diff", "--binary", task["base_commit"], "HEAD"], cwd=workdir,
-                          capture_output=True)
-    patch = diff.stdout if diff.returncode == 0 else b""
-    uncommitted = bool(_run(["git", "status", "--porcelain"], cwd=workdir).stdout.strip())
-    head_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=workdir, check=False).stdout.strip()
-
-    agent_dir = pathlib.Path(f"{workdir}.agent")
-    if agent_dir.exists():
-        shutil.rmtree(agent_dir)
-    shutil.move(str(workdir), str(agent_dir))
-
-    # Pristine checkout at the SAME path (the venv's editable install points
-    # there) and the venv restored from the pre-session snapshot.
     _materialize(task, workdir)
     if venv.exists():
         shutil.rmtree(venv)
     shutil.copytree(pristine, venv, symlinks=True)
 
-    vdir = pathlib.Path(f"{workdir}.verifier")
+    vdir = pathlib.Path(f"{workdir}.verifier-{label}")
     if vdir.exists():
         shutil.rmtree(vdir)
     tests_dst = vdir / "tests"
@@ -428,16 +416,53 @@ def grade(task: dict, workdir: pathlib.Path, **kw) -> dict:
 
     reward_file = ver / "reward.json"
     reward = json.loads(reward_file.read_text(encoding="utf-8")) if reward_file.is_file() else None
+    return reward, rc
 
-    test_files = set(_patch_paths((tests_src / "test.patch").read_text(encoding="utf-8")))
-    touched = set(_patch_paths(patch.decode("utf-8", errors="replace")))
-    rec = {
+
+def _score(reward: dict | None) -> dict:
+    return {
         "resolved": bool(reward and reward.get("reward") == 1),
         "f2p": f"{reward['f2p_passed']}/{reward['f2p_total']}" if reward else "n/a",
         "p2p": f"{reward['p2p_passed']}/{reward['p2p_total']}" if reward else "n/a",
         "partial": round(float(reward.get("partial", 0.0)), 4) if reward else None,
         "apply_failed": bool(reward and reward.get("apply_failed")),
         "verifier_error": reward is None,
+    }
+
+
+def _worktree_patch(agent_dir: pathlib.Path, base: str) -> bytes:
+    """Everything the agent left in its tree, committed or not (untracked
+    files included; harness state stays out via .git/info/exclude)."""
+    _run(["git", "add", "-A"], cwd=agent_dir, check=False)
+    diff = subprocess.run(["git", "diff", "--binary", "--cached", base], cwd=agent_dir,
+                          capture_output=True)
+    return diff.stdout if diff.returncode == 0 else b""
+
+
+def grade(task: dict, workdir: pathlib.Path, **kw) -> dict:
+    """Official score: the committed patch ([[verifier.collect]] semantics).
+    Diagnostic: when the session left uncommitted work, the whole working
+    tree is graded too under `worktree_*`, so a run that ran out of turns
+    before `git commit` still shows how far it got. `resolved` is never
+    taken from the diagnostic."""
+    # [[verifier.collect]]: only committed work leaves the agent environment.
+    diff = subprocess.run(["git", "diff", "--binary", task["base_commit"], "HEAD"], cwd=workdir,
+                          capture_output=True)
+    patch = diff.stdout if diff.returncode == 0 else b""
+    uncommitted = bool(_run(["git", "status", "--porcelain"], cwd=workdir).stdout.strip())
+    head_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=workdir, check=False).stdout.strip()
+
+    agent_dir = pathlib.Path(f"{workdir}.agent")
+    if agent_dir.exists():
+        shutil.rmtree(agent_dir)
+    shutil.move(str(workdir), str(agent_dir))
+
+    reward, rc = _verify(task, workdir, patch, "committed")
+    tests_src = pathlib.Path(task["dir"]) / "tests"
+    test_files = set(_patch_paths((tests_src / "test.patch").read_text(encoding="utf-8")))
+    touched = set(_patch_paths(patch.decode("utf-8", errors="replace")))
+    rec = {
+        **_score(reward),
         "verifier_rc": rc,
         # Recorded only: the grader resets these files, so touching them
         # cannot change the score -- it is a cheating SIGNAL, not a penalty.
@@ -447,4 +472,56 @@ def grade(task: dict, workdir: pathlib.Path, **kw) -> dict:
         "patch_bytes": len(patch),
         "files_changed": len(touched),
     }
+    if uncommitted and not kw.get("skip_worktree"):
+        rec.update(grade_worktree(task, workdir, agent_dir))
     return rec
+
+
+def grade_worktree(task: dict, workdir: pathlib.Path, agent_dir: pathlib.Path) -> dict:
+    wpatch = _worktree_patch(agent_dir, task["base_commit"])
+    wreward, _ = _verify(task, workdir, wpatch, "worktree")
+    ws = _score(wreward)
+    return {
+        "worktree_resolved": ws["resolved"],
+        "worktree_f2p": ws["f2p"],
+        "worktree_p2p": ws["p2p"],
+        "worktree_partial": ws["partial"],
+        "worktree_apply_failed": ws["apply_failed"],
+        "worktree_patch_bytes": len(wpatch),
+        "worktree_files_changed": len(_patch_paths(wpatch.decode("utf-8", errors="replace"))),
+    }
+
+
+def _cli_regrade(argv: list[str]) -> int:
+    """Back-fill `worktree_*` on a results payload whose `<tag>.agent`
+    workspaces still exist: python adapters/deepswe.py regrade RESULTS.json"""
+    import argparse
+    ap = argparse.ArgumentParser(prog="deepswe.py regrade")
+    ap.add_argument("results", type=pathlib.Path)
+    ap.add_argument("--work-root", type=pathlib.Path, default=None,
+                    help="defaults to the payload's recorded work_root")
+    ap.add_argument("--adapter-arg", action="append", default=[])
+    args = ap.parse_args(argv)
+    payload = json.loads(args.results.read_text(encoding="utf-8"))
+    work_root = args.work_root or pathlib.Path(payload["work_root"])
+    kw = dict(item.partition("=")[::2] for item in args.adapter_arg)
+    kw["ids"] = ",".join(payload["task_ids"])
+    tasks = {t["id"]: t for t in load(0, **kw)}
+    for rec in payload["results"]:
+        tag = f"{rec['task_id']}_{rec['arm']}_r{rec['repeat']}".replace("/", "_")
+        workdir = work_root / tag
+        agent_dir = pathlib.Path(f"{workdir}.agent")
+        if not rec.get("uncommitted_changes") or not agent_dir.is_dir():
+            continue
+        rec.update(grade_worktree(tasks[rec["task_id"]], workdir, agent_dir))
+        print(f"  {tag}: worktree f2p={rec['worktree_f2p']} p2p={rec['worktree_p2p']} "
+              f"partial={rec['worktree_partial']}", flush=True)
+        args.results.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "regrade":
+        raise SystemExit(_cli_regrade(sys.argv[2:]))
+    raise SystemExit("usage: deepswe.py regrade RESULTS.json [--work-root DIR]")
