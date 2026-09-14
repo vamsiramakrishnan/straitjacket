@@ -274,6 +274,8 @@ def main() -> int:
                          "prefix than it declares or loses tool deferral; the verdict is stored "
                          "in the payload (--allow-prefix-tax runs anyway and records the failure)")
     ap.add_argument("--allow-prefix-tax", action="store_true")
+    ap.add_argument("--resume", default=None, metavar="PARTIAL_JSON",
+                    help="seed finished sessions from an interrupted sweep's .partial.json and skip them")
     args = ap.parse_args()
 
     import sys
@@ -319,6 +321,18 @@ def main() -> int:
                              "fix it or pass --allow-prefix-tax to record the failure and run anyway")
 
     records: list[dict] = []
+    done: set[tuple[str, str, int]] = set()
+    if args.resume:
+        # A sweep that died mid-way (a container restart, a killed shell) keeps
+        # the sessions that finished: their records are seeded and their
+        # (task, arm, repeat) cells skipped. Only the in-flight cells are paid
+        # for twice.
+        prior = json.loads(pathlib.Path(args.resume).read_text(encoding="utf-8"))
+        for rec in prior.get("results", []):
+            if not rec.get("session_error") and "harness_error" not in rec:
+                records.append(rec)
+                done.add((rec["task_id"], rec["arm"], int(rec.get("repeat", 1))))
+        print(f"resumed {len(records)} finished sessions from {args.resume}", flush=True)
     lock = threading.Lock()
 
     def record(rec: dict) -> None:
@@ -367,7 +381,8 @@ def main() -> int:
     jobs = [(task, arm, repeat)
             for repeat in range(1, args.repeats + 1)
             for task in tasks
-            for arm in args.arms]
+            for arm in args.arms
+            if (task["id"], arm, repeat) not in done]
     if args.jobs <= 1:
         for job in jobs:
             one(*job)
