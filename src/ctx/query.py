@@ -392,7 +392,7 @@ def parse_query(text: str) -> list[tuple[str, list[str]]]:
 #: Keeping the boolean set (small, enumerable) rather than the value set
 #: means a new value-taking flag is handled correctly by default.
 #: tests/test_query.py pins this against the flags the stages actually read.
-_BOOLEAN_FLAGS = frozenset({"--changed", "--jsonl", "--unscoped"})
+_BOOLEAN_FLAGS = frozenset({"--changed", "--jsonl", "--unscoped", "--line"})
 
 
 def _positionals(args: list[str]) -> list[str]:

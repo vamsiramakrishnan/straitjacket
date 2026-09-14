@@ -253,14 +253,26 @@ async def _run(ws, store, task: str, *, model: str | None, max_turns: int | None
         cli_path=claude_path,
         env=env,
     )
+    from claude_agent_sdk import ProcessError
+
     t0 = time.monotonic()
     result: dict[str, Any] | None = None
     try:
-        async for msg in sdk.query(prompt=prompt, options=options):
-            if isinstance(msg, ResultMessage):
-                result = _result_json(msg, pack_info=pack_info, wall=time.monotonic() - t0)
-            elif stream is not None:
-                stream(msg)
+        try:
+            async for msg in sdk.query(prompt=prompt, options=options):
+                if isinstance(msg, ResultMessage):
+                    result = _result_json(msg, pack_info=pack_info, wall=time.monotonic() - t0)
+                elif stream is not None:
+                    stream(msg)
+        except ProcessError:
+            # The CLI ends a failed run (max turns, an API error) by emitting
+            # its result message and exiting non-zero; the SDK yields the
+            # message and then raises. The result is the record — the same
+            # one `claude -p` prints before its own exit 1 — so it is kept and
+            # the exit status carries the failure. Without a result there is
+            # nothing to report, and the error stands.
+            if result is None:
+                raise
     finally:
         try:
             settings.unlink()
