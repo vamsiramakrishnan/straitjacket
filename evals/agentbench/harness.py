@@ -86,16 +86,16 @@ def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
     if arm in ("sdk", "sdk_nopack"):
         # ctx as the host (src/ctx/agent.py): the Claude Agent SDK driving the
         # same `claude` binary, with a lean built-in surface, ctx's own
-        # retrieval tools in-process, the wrapper's hooks, and a context pack
-        # in the first turn (sdk_nopack: the same without the pack, the
-        # ablation). Needs the [agent] extra; AGENTBENCH_CTX names the ctx
+        # retrieval tools in-process, and the wrapper's hooks; `sdk` adds a
+        # context pack in the first turn, `sdk_nopack` is the runtime's
+        # default (no pack — the uncapped receipt is why). Needs the [agent] extra; AGENTBENCH_CTX names the ctx
         # binary of an environment that has it.
         argv = [os.environ.get("AGENTBENCH_CTX", "ctx"), "agent", "-p", prompt,
                 *turn_cap, "--output-format", "json"]
         if model:
             argv += ["--model", model]
-        if arm == "sdk_nopack":
-            argv.append("--no-pack")
+        if arm == "sdk":
+            argv.append("--pack")
         return argv
     if arm == "maki":
         # maki.sh: a different agent, not a wrapper. Its --print mode is a

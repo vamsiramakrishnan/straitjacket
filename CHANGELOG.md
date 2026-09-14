@@ -40,9 +40,10 @@ after the DeepSWE receipts showed where a harnessed session spends them:
   cut lost to that baseline until presence was verified and prose demoted.
 - **`ctx agent -p "<task>"`**: ctx as the host on the Claude Agent SDK
   (`[agent]` extra): Bash/Read/Edit/Write/MultiEdit plus in-process `search`,
-  `outline`, `get`, `refs`, `pack`, the wrapper's hooks, and a pack in the
-  first turn; the same `claude` binary, login and billing; result JSON in the
-  host's shape. A PreToolUse router refuses shell grep with the equivalent
+  `outline`, `get`, `refs`, `pack`, the wrapper's hooks, and with `--pack` a
+  pack in the first turn (off by default: uncapped on DeepSWE with haiku the
+  packed runtime passed 219 held-out tests to 367 without); the same `claude`
+  binary, login and billing; result JSON in the host's shape. A PreToolUse router refuses shell grep with the equivalent
   `search` call, since the model otherwise routes around the index. agentbench
   gains `sdk` and `sdk_nopack` arms, `--max-turns 0` (uncapped, bounded by
   `--session-timeout`, DeepSWE's own three-hour budget) and `--resume` for a

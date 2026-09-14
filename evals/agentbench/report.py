@@ -106,8 +106,8 @@ ARM_DESC = {
     "sj_rescue": "`ctx wrap claude --proxy --rescue-pct N` (sj plus Tier-1 transcript rescue)",
     "headroom": "`headroom wrap claude` (headroom-ai compression proxy, vendor defaults)",
     "maki": "`maki --print` (maki.sh, a different agent on the same model)",
-    "sdk": "`ctx agent -p` (ctx as the host on the Claude Agent SDK: lean tools, ctx retrieval, a pack at turn one)",
-    "sdk_nopack": "`ctx agent -p --no-pack` (the sdk arm without the turn-one context pack)",
+    "sdk": "`ctx agent -p --pack` (ctx as the host on the Claude Agent SDK: lean tools, ctx retrieval, a pack at turn one)",
+    "sdk_nopack": "`ctx agent -p` (the runtime's default: no turn-one pack)",
 }
 
 

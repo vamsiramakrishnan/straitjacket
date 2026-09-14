@@ -21,7 +21,7 @@ def cmd_agent(ws, ns) -> int:
             print(f"ctx agent: cannot read {task[1:]!r}: {e}", file=sys.stderr)
             return 2
     return run_agent(
-        ws, task, model=ns.model, max_turns=ns.max_turns, pack=not ns.no_pack,
+        ws, task, model=ns.model, max_turns=ns.max_turns, pack=ns.pack,
         pack_budget=ns.pack_budget, output_format=ns.output_format, verbose=ns.verbose,
     )
 

@@ -926,8 +926,9 @@ def _build_parser():
     p_agent.add_argument("--max-turns", type=int, default=None, dest="max_turns")
     p_agent.add_argument("--output-format", choices=("text", "json"), default="text",
                          dest="output_format")
-    p_agent.add_argument("--no-pack", action="store_true", dest="no_pack",
-                         help="do not put a context pack in the first turn")
+    p_agent.add_argument("--pack", action="store_true",
+                         help="put a ctx pack of where to look in the first turn (off by default: "
+                              "on DeepSWE with haiku it cost tests, see the receipt)")
     p_agent.add_argument("--pack-budget", type=int, default=2500, dest="pack_budget")
     p_agent.add_argument("--verbose", action="store_true", help="stream turns to stderr")
 

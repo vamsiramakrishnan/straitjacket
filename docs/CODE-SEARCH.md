@@ -242,8 +242,10 @@ explicit (`ctx index --text`) and reported (`ctx doctor`).
 is the other end of the same idea on the [Claude Agent
 SDK](https://docs.claude.com/en/api/agent-sdk/overview): ctx owns the tool
 surface (Bash, Read, Edit, Write, MultiEdit plus in-process `search`,
-`outline`, `get`, `refs`, `pack`), the system prompt, the first turn (the task
-and a pack), and the same PreToolUse/PostToolUse containment the wrapper
+`outline`, `get`, `refs`, `pack`), the system prompt, the first turn (the task;
+with `--pack` a pack too — off by default, because the uncapped DeepSWE
+receipt found haiku follows the pack's ranking into the wrong file and passes
+fewer tests), and the same PreToolUse/PostToolUse containment the wrapper
 installs — with no proxy and no native Grep/Glob for the model to reach for
 first. It does not call the Messages API itself: the SDK drives the same
 `claude` binary `claude -p` runs, so sessions are billed, cached and
@@ -252,7 +254,7 @@ transcribed the way the host does it, on the host's own login.
 ```bash
 pip install 'ctx-harness[agent]'
 ctx agent -p "Add partial_structure to BaseConverter …" --model haiku --max-turns 60 --output-format json
-ctx agent -p @task.md --no-pack        # the ablation
+ctx agent -p @task.md --pack           # a ctx pack in the first turn (off by default)
 ```
 
 A model trained on `grep` reaches for `grep`: in the first DeepSWE sessions of

@@ -158,8 +158,13 @@ sharper counterexample: under v0.39.0 the wrapped arm cost 27% more and read
 36% more input than plain Claude for no gain, and the transcripts put both
 numbers on the wrapper — the observer proxy had switched Claude Code's deferred
 tool loading off, and small tool results came back as receipts. With those
-fixed the input gap is 3% and the wrapped arm passes more held-out tests. See
-the [DeepSWE receipt](evals/agentbench/deepswe-2026-09-13.md).
+fixed the input gap is 3% and the wrapped arm passes more held-out tests. Run
+again with no turn cap under DeepSWE's own three-hour budget, no arm resolved a
+task outright with haiku and every session stopped on its own; ctx as the host
+(`ctx agent`, its own indexed retrieval tools, no turn-one pack) passed 25% more
+held-out tests than plain Claude at the same cost, in more turns — more turns
+did not mean more money. See the
+[DeepSWE receipt](evals/agentbench/deepswe-2026-09-13.md).
 
 That boundary matters. straitjacket is most useful when output is large, early,
 repeated, or likely to survive many turns. A short task with small, hot-cached

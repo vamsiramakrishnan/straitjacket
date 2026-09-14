@@ -4,7 +4,9 @@ harness's own retrieval tools, its hooks, and a context pack at turn one.
 `ctx wrap claude` keeps the host and shapes what flows through it. This is
 the other end of the same idea: ctx *is* the host. It owns the tool surface
 (a lean built-in set plus in-process ``ctx`` tools), the system prompt, the
-first turn (the task and a `ctx pack` of where to look), and the same
+first turn (the task, and with ``--pack`` a `ctx pack` of where to look —
+off by default: the uncapped DeepSWE receipt found haiku follows the pack's
+ranking into the wrong file), and the same
 PreToolUse/PostToolUse containment the wrapper installs — with no proxy, no
 prefix tax, and no native Grep/Glob for the model to reach for first.
 
@@ -371,7 +373,7 @@ async def _run(ws, store, task: str, *, model: str | None, max_turns: int | None
 
 
 def run_agent(ws, task: str, *, model: str | None = None, max_turns: int | None = None,
-              pack: bool = True, pack_budget: int = 2500, output_format: str = "text",
+              pack: bool = False, pack_budget: int = 2500, output_format: str = "text",
               verbose: bool = False) -> int:
     """Run one print-mode session; print the result in ``output_format``
     (``json`` is the host's result shape, ``text`` is the final answer)."""

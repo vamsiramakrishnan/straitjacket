@@ -551,13 +551,14 @@ files DeepSWE reference solutions actually change (docs/CODE-SEARCH.md).
 ```bash
 pip install 'ctx-harness[agent]'
 ctx agent -p "the task" --model haiku --max-turns 60 --output-format json
-ctx agent -p @task.md --no-pack --verbose
+ctx agent -p @task.md --pack --verbose
 ```
 
 Runs a print-mode session on the Claude Agent SDK with ctx as the host: a lean
 built-in surface (Bash, Read, Edit, Write, MultiEdit), the retrieval verbs as
 in-process tools (`search`, `outline`, `get`, `refs`, `pack`), the wrapper's
-hooks, and a context pack in the first turn. The SDK drives the same `claude`
+hooks, and with `--pack` a context pack in the first turn (off by default: on
+DeepSWE with haiku it cost held-out tests, see the receipt). The SDK drives the same `claude`
 binary, so billing, caching and the login are the host's; the result JSON is
 the host's shape plus `pack` and `runtime`. Exit 2 without the extra.
 
