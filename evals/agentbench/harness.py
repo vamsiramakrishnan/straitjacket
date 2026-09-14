@@ -53,9 +53,13 @@ ARMS = ("naive", "sj", "sj_rescue", "headroom", "maki", "sdk", "sdk_nopack")
 def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
              port: int | None = None) -> list[str]:
     """Build agent commands; the sj prefix activates the full wrapper bundle."""
+    # max_turns <= 0 means uncapped: the session runs until the agent stops,
+    # bounded only by the wall-clock budget (DeepSWE's official runner gives
+    # three hours and no turn limit; --session-timeout sets it).
+    turn_cap = ["--max-turns", str(max_turns)] if max_turns and max_turns > 0 else []
     base = [
         "claude", "-p", prompt,
-        "--max-turns", str(max_turns),
+        *turn_cap,
         "--output-format", "json",
         "--allowedTools", TOOLS,
     ]
@@ -87,7 +91,7 @@ def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
         # ablation). Needs the [agent] extra; AGENTBENCH_CTX names the ctx
         # binary of an environment that has it.
         argv = [os.environ.get("AGENTBENCH_CTX", "ctx"), "agent", "-p", prompt,
-                "--max-turns", str(max_turns), "--output-format", "json"]
+                *turn_cap, "--output-format", "json"]
         if model:
             argv += ["--model", model]
         if arm == "sdk_nopack":
@@ -98,7 +102,7 @@ def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
         # drop-in for Claude Code's (same JSON result fields), so the same
         # parser reads cost, usage and turns. Needs ANTHROPIC_API_KEY.
         return [os.environ.get("AGENTBENCH_MAKI", "maki"), prompt, "--print",
-                "--output-format", "json", "--max-turns", str(max_turns),
+                "--output-format", "json", *(["--max-turns", str(max_turns)] if turn_cap else []),
                 "--allowed-tools", ",".join(TOOLS.split()), "--yolo", "--trust",
                 *(["--model", _maki_model(model)] if model else [])]
     raise ValueError(f"unknown arm: {arm}")
@@ -176,7 +180,8 @@ def session_metrics(doc: dict, wall: float) -> dict:
 
 
 def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
-            max_turns: int, repeat: int, work_root: pathlib.Path) -> dict:
+            max_turns: int, repeat: int, work_root: pathlib.Path,
+            session_timeout: float = SESSION_TIMEOUT) -> dict:
     """One (task, arm, repeat): materialize, run the agent, grade."""
     tag = f"{task['id']}_{arm}_r{repeat}".replace("/", "_")
     # Fixtures live OUTSIDE the repository under test. An agent whose cwd sits
@@ -208,7 +213,7 @@ def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
         proc = subprocess.run(
             arm_argv(arm, prompt, model, max_turns),
             cwd=workdir, env=env, capture_output=True, text=True,
-            timeout=SESSION_TIMEOUT,
+            timeout=session_timeout,
         )
         stdout, stderr, timed_out = proc.stdout, proc.stderr, False
     except subprocess.TimeoutExpired as exc:
@@ -247,7 +252,10 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--model", default=None, help="passed to --model; default = host default")
-    ap.add_argument("--max-turns", type=int, default=MAX_TURNS)
+    ap.add_argument("--max-turns", type=int, default=MAX_TURNS,
+                    help="turn cap per session; 0 = uncapped (the wall-clock budget bounds it)")
+    ap.add_argument("--session-timeout", type=float, default=SESSION_TIMEOUT, dest="session_timeout",
+                    help="wall-clock budget per session in seconds (DeepSWE's official budget is 10800)")
     ap.add_argument("--out", type=pathlib.Path, default=HERE / "results")
     ap.add_argument("--work-root", type=pathlib.Path, default=None,
                     help="where fixtures are materialized; defaults to a temp dir "
@@ -328,6 +336,7 @@ def main() -> int:
                 "arms": args.arms,
                 "model": args.model,
                 "max_turns": args.max_turns,
+                "session_timeout_s": args.session_timeout,
                 "repeats": args.repeats,
                 "jobs": args.jobs,
                 "label": args.label,
@@ -348,7 +357,8 @@ def main() -> int:
     def one(task: dict, arm: str, repeat: int) -> None:
         try:
             rec = run_one(adapter, task, arm, args.model, args.out,
-                          args.max_turns, repeat, work_root)
+                          args.max_turns, repeat, work_root,
+                          session_timeout=args.session_timeout)
         except Exception as exc:  # noqa: BLE001 - a broken fixture is a row, not a crash
             rec = {"task_id": task["id"], "arm": arm, "repeat": repeat, "provenance": "live",
                    "resolved": False, "session_error": True, "harness_error": repr(exc)[:500]}
