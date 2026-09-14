@@ -36,6 +36,18 @@ Claude Code and cannot use its login). Every Claude Code session's first-request
 prefix (tool count, catalogue bytes, deferral) is recorded per run, so a
 wrapper that inflates the host prompt shows up in the report, not just in cost.
 
+Two more arms make ctx the host rather than a wrapper: `sdk` runs
+`ctx agent -p` (the Claude Agent SDK driving the same `claude` binary with a
+lean built-in surface, ctx's retrieval verbs as in-process tools, the wrapper's
+hooks and a `ctx pack` in the first turn; `pip install 'ctx-harness[agent]'`,
+`AGENTBENCH_CTX` names the `ctx` of an environment that has it) and
+`sdk_nopack` is the same without the pack — the ablation.
+
+`pack_recall.py` is the model-free referee for the pack itself: for each
+validated DeepSWE task it ranks the checkout with `ctx pack` and scores recall
+of the source files the reference solution changes, against a keyword-count
+baseline (`results/pack_recall.json`; docs/CODE-SEARCH.md).
+
 ## Validate the referee before you spend
 
 An agent benchmark is only as trustworthy as its grader. The suite that started

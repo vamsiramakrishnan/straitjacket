@@ -46,6 +46,7 @@ retrieval returns bounded regions on demand
 | Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
 | Connect Hermes, OMP, OpenCode, or DSH | [Agent integrations](AGENT-INTEGRATIONS.md) |
 | Understand handles, spans, and profiles | [Core concepts](CONCEPTS.md) |
+| Search with filters, cite history, get a context pack, run ctx as the host | [Code search](CODE-SEARCH.md) |
 | Apply, verify, and expand an observed edit | [Edit loop](EDIT-LOOP.md) |
 | Understand content-stable repository addresses | [Anchors](ANCHORS.md) |
 | Route work across hosts and models | [Routing](ROUTING.md) |
@@ -92,6 +93,9 @@ path is clear.
 
 ### Evidence and retrieval
 
+- [Code search](CODE-SEARCH.md) — the text index and its staleness contract,
+  the query language, history as evidence, SCIP per-file currency, `ctx pack`
+  and `ctx agent`.
 - [Priced context](PRICED-CONTEXT.md) — when another retrieval is worth its
   prompt cost.
 - [Lossless rescue](LOSSLESS-RESCUE.md) — freeing an overloaded transcript

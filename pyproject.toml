@@ -72,6 +72,10 @@ scip = ["protobuf>=5.26"]
 # hermetically (local rules, --metrics=off, no registry fetch); absence is
 # a declared skip, never an error.
 sem = ["semgrep>=1.60"]
+# `ctx agent`: ctx as the host on the Claude Agent SDK (drives the same
+# `claude` binary `ctx wrap claude` does). Its dependency tree (mcp, anyio,
+# cryptography) is why it is an extra and not a dependency.
+agent = ["claude-agent-sdk>=0.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ctx"]

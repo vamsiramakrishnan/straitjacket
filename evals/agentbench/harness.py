@@ -47,7 +47,7 @@ TOOLS = "Bash Read Grep Glob Edit Write"
 MAX_TURNS = 40
 SESSION_TIMEOUT = 2400
 
-ARMS = ("naive", "sj", "sj_rescue", "headroom", "maki")
+ARMS = ("naive", "sj", "sj_rescue", "headroom", "maki", "sdk", "sdk_nopack")
 
 
 def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
@@ -79,6 +79,20 @@ def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
         # for every wrap). Binary overridable for a venv install.
         return [os.environ.get("AGENTBENCH_HEADROOM", "headroom"), "wrap", "claude",
                 "--port", str(port or _free_port()), "--"] + base[1:]
+    if arm in ("sdk", "sdk_nopack"):
+        # ctx as the host (src/ctx/agent.py): the Claude Agent SDK driving the
+        # same `claude` binary, with a lean built-in surface, ctx's own
+        # retrieval tools in-process, the wrapper's hooks, and a context pack
+        # in the first turn (sdk_nopack: the same without the pack, the
+        # ablation). Needs the [agent] extra; AGENTBENCH_CTX names the ctx
+        # binary of an environment that has it.
+        argv = [os.environ.get("AGENTBENCH_CTX", "ctx"), "agent", "-p", prompt,
+                "--max-turns", str(max_turns), "--output-format", "json"]
+        if model:
+            argv += ["--model", model]
+        if arm == "sdk_nopack":
+            argv.append("--no-pack")
+        return argv
     if arm == "maki":
         # maki.sh: a different agent, not a wrapper. Its --print mode is a
         # drop-in for Claude Code's (same JSON result fields), so the same

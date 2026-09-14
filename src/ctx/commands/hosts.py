@@ -7,6 +7,25 @@ all), so they run before the dispatcher resolves one."""
 from __future__ import annotations
 
 
+def cmd_agent(ws, ns) -> int:
+    """`ctx agent -p "<task>"` — ctx as the runtime (docs/CODE-SEARCH.md)."""
+    import sys
+
+    from ctx.agent import run_agent
+
+    task = ns.task
+    if task.startswith("@"):
+        try:
+            task = ws.confine(task[1:], must_exist=True).read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"ctx agent: cannot read {task[1:]!r}: {e}", file=sys.stderr)
+            return 2
+    return run_agent(
+        ws, task, model=ns.model, max_turns=ns.max_turns, pack=not ns.no_pack,
+        pack_budget=ns.pack_budget, output_format=ns.output_format, verbose=ns.verbose,
+    )
+
+
 def cmd_wrap(ns) -> int:
     """`ctx wrap <host>` — hook the harness into a coding agent. Resolves its
     own workspace, because `--print-config` must work outside one."""

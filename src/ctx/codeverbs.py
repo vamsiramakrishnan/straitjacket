@@ -167,6 +167,11 @@ def _scip_def(store: Store, ws: Workspace, rel: str, symbol: str):
         from ctx import scip_ingest
 
         sites = scip_ingest.refs(ws, symbol, definitions_only=True, store=store)
+        if sites is None:
+            # Per-file currency (see resolve_refs): exact for a definition in
+            # a file the index still describes.
+            partial = scip_ingest.refs_partial(ws, symbol, definitions_only=True, store=store)
+            sites = partial[0] if partial is not None else None
     except Exception:
         return None
     if not sites:
@@ -473,6 +478,22 @@ def resolve_refs(
         # answer with a wrong one, the failure this ladder exists to avoid.
         if scip_sites is not None:
             return scip_sites, "scip (exact)"
+        # Per-file currency: an index built by `ctx index` knows which files
+        # it described. The unchanged ones are still answered exactly; the
+        # changed ones by the textual rung, restricted to those files, and
+        # the header says how many. Complete, and honest about each part.
+        partial = scip_ingest.refs_partial(ws, symbol, store=store)
+        if partial is not None:
+            exact_sites, stale = partial
+            stale_set = set(stale)
+            textual, _ = _ast_refs(store, ws, symbol, None)
+            merged = {(f, ln): t for f, ln, t in exact_sites}
+            for f, ln, t in textual:
+                if f in stale_set:
+                    merged.setdefault((f, ln), t)
+            sites = sorted((f, ln, t) for (f, ln), t in merged.items())
+            n = len(stale)
+            return sites, f"scip (exact) · {n} changed file{'s' if n != 1 else ''} via ast (textual)"
     except Exception:
         pass
     # Whichever lower rung answers, say if the exact one was skipped because

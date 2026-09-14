@@ -182,6 +182,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "impls": ("retrieve", "cmd_impls", True),
     "cycles": ("retrieve", "cmd_cycles", True),
     "q": ("retrieve", "cmd_q", True),
+    "pack": ("retrieve", "cmd_pack", True),
     "edit": ("edit", "cmd_edit", True),
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
@@ -205,6 +206,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "setup": ("hosts", "cmd_setup", False),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
+    "agent": ("hosts", "cmd_agent", True),
     "antigravity": ("hosts", "cmd_antigravity", False),
     "proxy": ("hosts", "cmd_proxy", False),
 }
@@ -707,6 +709,17 @@ def _build_parser():
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
     p_map.add_argument("--focus", help="boost files whose path or symbols match")
 
+    p_pack = sub.add_parser(
+        "pack", help="ranked, budgeted context pack for a task (files, symbols, history)"
+    )
+    p_pack.add_argument("task", help="the task text, @path to read it from a file, or - for stdin")
+    p_pack.add_argument("--budget", type=int, default=None, help="token budget (default 2500)")
+    p_pack.add_argument("--files", type=int, default=None, dest="max_files",
+                        help="files to rank into the pack (default 8)")
+    p_pack.add_argument("--no-history", action="store_true", dest="no_history",
+                        help="skip the git history signal")
+    p_pack.add_argument("--json", action="store_true", dest="as_json", help="machine-readable pack")
+
     p_def = sub.add_parser("def", help="symbol definition site (snapshot + span)")
     p_def.add_argument("target", help="repo:<path>:<Symbol.dotted>")
 
@@ -861,6 +874,13 @@ def _build_parser():
         help="show which indexers are installed, and what this workspace needs",
     )
     p_index.add_argument("--timeout", type=float, default=900.0)
+    p_index.add_argument(
+        "--text", action="store_true",
+        help="build or refresh only the text index (trigrams, symbols, fingerprints)",
+    )
+    p_index.add_argument(
+        "--status", action="store_true", help="report what is indexed and how current it is"
+    )
 
     p_doctor = sub.add_parser("doctor", help="validate installation and store health")
     p_doctor.add_argument("--antigravity", action="store_true")
@@ -896,6 +916,20 @@ def _build_parser():
         help="opt-in Tier-1 lossless rescue: at this window %%, elide old "
         "large tool_results to file-backed stubs (0 = pure observer)",
     )
+
+    p_agent = sub.add_parser(
+        "agent", help="run a task with ctx as the host: lean tools, ctx retrieval, a pack at turn one"
+    )
+    p_agent.add_argument("-p", "--print", dest="task", required=True,
+                         help="the task (print mode; @path reads it from a file)")
+    p_agent.add_argument("--model", default=None)
+    p_agent.add_argument("--max-turns", type=int, default=None, dest="max_turns")
+    p_agent.add_argument("--output-format", choices=("text", "json"), default="text",
+                         dest="output_format")
+    p_agent.add_argument("--no-pack", action="store_true", dest="no_pack",
+                         help="do not put a context pack in the first turn")
+    p_agent.add_argument("--pack-budget", type=int, default=2500, dest="pack_budget")
+    p_agent.add_argument("--verbose", action="store_true", help="stream turns to stderr")
 
     p_wrap = sub.add_parser(
         "wrap",

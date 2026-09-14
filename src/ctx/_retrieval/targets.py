@@ -119,8 +119,11 @@ def _resolve_repo_targets(
     glob: str | None,
     scope: str | None,
     max_files: int = 5000,
+    keep=None,
 ) -> tuple[list[SearchTarget], int, int]:
-    """Returns (targets, files_considered, files_skipped_binary)."""
+    """Returns (targets, files_considered, files_skipped_binary). ``keep``
+    is an optional per-path predicate (the query language's path and
+    language filters) applied after the glob."""
     roots: list[str | None]
     if scope:
         scoped = ws.config.scopes.get(scope)
@@ -145,6 +148,8 @@ def _resolve_repo_targets(
     ]
     if glob:
         rels = [r for r in rels if _glob_match(r, glob)]
+    if keep is not None:
+        rels = [r for r in rels if keep(r)]
     total_before_cap = len(rels)  # considered must reflect pre-cap size, not the capped list
     rels = rels[:max_files]
 

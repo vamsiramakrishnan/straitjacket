@@ -6,6 +6,44 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+A retrieval substrate for the first ten turns (docs/CODE-SEARCH.md), built
+after the DeepSWE receipts showed where a harnessed session spends them:
+
+- **A text index** (`src/ctx/codeindex.py`): Zoekt-shaped trigrams over the
+  lowercased bytes, a symbol table and a fingerprint per file, in immutable
+  segments under the store — never the worktree. It is a candidate generator
+  only: a stat sweep re-indexes what changed before every query (6 ms per 870
+  files; 6 s first build), candidates are verified against the live bytes, and
+  a regex contributes only the literal runs it must contain. `ctx search`,
+  the `q` search stage and `ctx pack` narrow through it; `ctx index --text`
+  builds it explicitly above the implicit-build size guard, `ctx index
+  --status` and `ctx doctor` report it, `CTX_SEARCH_INDEX=off` disables it.
+- **A query language** in the pattern list, one grammar everywhere: `file:`
+  `!file:` `lang:` `case:no` `sym:` `type:commit|diff` `after:` `before:`
+  `author:` `rev:`. `sym:Name` alone answers the definition sites from the
+  symbol table; `type:commit`/`type:diff` return commits as evidence rows
+  (hash, date, author, subject, files touched) minted as a `blob:`. New `q`
+  stages `commits`, `touched` and `history [--line]` compose git history with
+  everything else.
+- **SCIP per-file currency**: `ctx index` records each source file's content
+  hash, so an edited tree keeps its exact answers for the files that did not
+  change and answers the changed ones textually, labelled (`scip (exact) · 1
+  changed file via ast (textual)`), instead of discarding the index at the
+  first edit. `ctx impls` gains an exact rung from the index's
+  `is_implementation` edges; `ctx index --status` names the changed files.
+- **`ctx pack "<task>"`**: a ranked, budgeted context pack — files by task
+  terms (idf from the index, whole-word counts in the bytes), symbols the
+  terms name, paths, and commits whose message names them, each row with its
+  reason and outline. Measured by `evals/agentbench/pack_recall.py` against the
+  source files DeepSWE reference solutions change: recall@8 0.54 and MRR 0.64
+  over 14 tasks, against 0.43 / 0.55 for a keyword-count baseline; the first
+  cut lost to that baseline until presence was verified and prose demoted.
+- **`ctx agent -p "<task>"`**: ctx as the host on the Claude Agent SDK
+  (`[agent]` extra): Bash/Read/Edit/Write/MultiEdit plus in-process `search`,
+  `outline`, `get`, `refs`, `pack`, the wrapper's hooks, and a pack in the
+  first turn; the same `claude` binary, login and billing; result JSON in the
+  host's shape. agentbench gains `sdk` and `sdk_nopack` arms.
+
 Two wrapper defects found by the first DeepSWE v1.1 receipt
 (`evals/agentbench/`, haiku, `naive` vs `sj`), where the wrapped arm cost 13-32%
 more per session and read 21-33% more input for no outcome gain:

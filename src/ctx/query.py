@@ -567,26 +567,35 @@ def _stage_impact(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
 
 
 def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
-    pattern = _need_arg(args, "search", "a <pattern>")
-    glob = _flag(args, "--glob", None)
+    """``search <pattern> [filters…] [--glob G]`` — regex over repo files.
+
+    Filters are the query language's (``file:`` ``!file:`` ``lang:`` ``sym:``
+    ``case:``; docs/CODE-SEARCH.md). The text index narrows the corpus to
+    trigram candidates when it can; every candidate is verified against the
+    live file, so the index is a speed-up, never an answer."""
+    from ctx import searchq
+
+    pos = _positionals(args)
+    if not pos:
+        raise QueryError("ctx q: stage 'search' needs a <pattern>")
     try:
-        rx = re.compile(pattern)
+        sq = searchq.parse(pos)
+    except searchq.QueryError as e:
+        raise QueryError(f"ctx q: search: {e}") from e
+    if sq.kind != "code":
+        raise QueryError("ctx q: search: history is the 'commits' stage (type: is not a search filter here)")
+    if not sq.patterns:
+        raise QueryError("ctx q: stage 'search' needs a <pattern> (filters alone select nothing)")
+    pattern = sq.patterns[0]
+    glob = _flag(args, "--glob", None)
+    flags = re.IGNORECASE if sq.case is False else 0
+    try:
+        rx = re.compile(pattern, flags)
     except re.error as e:
         raise QueryError(f"ctx q: invalid search pattern {pattern!r} ({e})") from e
-    from ctx.refs import parse_ref
-    from ctx.retrieval import _resolve_repo_targets
-
-    targets, _, _ = _resolve_repo_targets(
-        qc.store, qc.ws, parse_ref("repo:"), glob=glob, scope=None
-    )
+    targets = _search_targets(qc, sq, pattern, glob)
     rows = []
     for t in targets:  # targets arrive path-sorted
-        # The session ledger is bookkeeping, never evidence (hook.py rule;
-        # execution.py excludes it from generation hashing likewise) — and
-        # since the q dry-run guard rail records pipeline texts there, a
-        # ledger-scanning search would match its own guard state.
-        if LEDGER_DIR_NAME in str(t.label).replace("\\", "/").split("/"):
-            continue
         for i, ln in enumerate(index_lines(t.text), start=1):  # \n-only split to match store's line_index geometry
             m = rx.search(ln)
             if m:
@@ -602,6 +611,135 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
                     }
                 )
     return Stream("sites", rows)
+
+
+def _search_targets(qc: _Ctx, sq, pattern: str, glob: str | None):
+    """The files a search stage reads: index candidates when the index can
+    narrow, else the whole (filtered) corpus."""
+    from ctx import codeindex, searchq
+    from ctx.refs import parse_ref
+    from ctx.retrieval import _resolve_repo_targets
+
+    keep = (lambda rel: searchq.keep_path(rel, sq)) if sq.has_filters else None
+    expr = codeindex.expr_for_regex(pattern)
+    idx = None
+    if not codeindex.is_unrestricted(expr) or sq.syms:
+        try:
+            idx = codeindex.open_index(qc.store, qc.ws)
+        except Exception:
+            idx = None
+    if idx is None:
+        targets, _, _ = _resolve_repo_targets(
+            qc.store, qc.ws, parse_ref("repo:"), glob=glob, scope=None, keep=keep
+        )
+        # The session ledger is bookkeeping, never evidence (hook.py rule;
+        # execution.py excludes it from generation hashing likewise) — and
+        # since the q dry-run guard rail records pipeline texts there, a
+        # ledger-scanning search would match its own guard state.
+        return [t for t in targets
+                if LEDGER_DIR_NAME not in str(t.label).replace("\\", "/").split("/")]
+    try:
+        from ctx._retrieval.targets import _glob_match
+
+        subset = [r for r in idx.files if not glob or _glob_match(r, glob)]
+        if keep is not None:
+            subset = [r for r in subset if keep(r)]
+        if sq.syms:
+            defining = set()
+            for name in sq.syms:
+                defining.update(rel for rel, _k, _l in idx.files_defining(name))
+            subset = [r for r in subset if r in defining]
+        rels = idx.candidates(expr, subset=subset)
+    finally:
+        idx.close()
+    from ctx._retrieval.targets import SearchTarget
+
+    out = []
+    for rel in rels:
+        try:
+            data = (qc.ws.root / rel).read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in data[:8192]:
+            continue
+        out.append(SearchTarget(label=rel, text=data.decode("utf-8", "replace")))
+    return out
+
+
+# ------------------------------------------------------------ history stages
+HISTORY_FILE_CAP = 24  # files annotated per ``history`` stage
+
+
+def _stage_commits(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """``commits <text> [type:diff] [after:D] [before:D] [author:A] [file:P]
+    [--max N]`` — commits as evidence rows (git log). ``type:commit`` (the
+    default) matches messages; ``type:diff`` matches what changed."""
+    from ctx import searchq
+
+    pos = _positionals(args)
+    try:
+        sq = searchq.parse(pos)
+    except searchq.QueryError as e:
+        raise QueryError(f"ctx q: commits: {e}") from e
+    if sq.kind == "code":
+        sq.kind = "commit"
+    cap = _flag(args, "--max", DEFAULT_ROW_CAP, int)
+    try:
+        rows = searchq.history(qc.ws, sq, max_count=max(1, cap))
+    except searchq.QueryError as e:
+        raise QueryError(f"ctx q: commits: {e}") from e
+    out = [
+        {"sha": r.sha, "date": r.date, "author": r.author, "subject": r.subject,
+         "n_files": len(r.files), "files": ",".join(r.files), "_files": list(r.files)}
+        for r in rows
+    ]
+    return Stream("records", out)
+
+
+def _stage_touched(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """``touched`` — the files the commit rows name, counted per file
+    (most-touched first, then path)."""
+    counts: dict[str, int] = {}
+    for r in stream.rows:
+        files = r.get("_files")
+        if files is None:
+            files = [f for f in str(r.get("files", "")).split(",") if f]
+        for f in files:
+            counts[f] = counts.get(f, 0) + 1
+    rows = [{"file": f, "commits": n} for f, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return Stream("files", rows, omitted=stream.omitted)
+
+
+def _stage_history(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
+    """``history [--line]`` — annotate sites/files with the commit that last
+    changed the file (or, with ``--line``, that line: git blame). Bounded to
+    the first HISTORY_FILE_CAP distinct files; the rest carry no annotation
+    and the omission is declared in the note."""
+    from ctx import searchq
+
+    by_line = "--line" in args
+    cache: dict[tuple[str, int | None], object] = {}
+    files_seen: list[str] = []
+    rows = []
+    for r in stream.rows:
+        rel = str(r.get("file", ""))
+        key = (rel, int(r["line"]) if by_line and r.get("line") else None)
+        if rel not in files_seen:
+            files_seen.append(rel)
+        if len(files_seen) > HISTORY_FILE_CAP and rel == files_seen[-1] and rel not in {k[0] for k in cache}:
+            rows.append(dict(r))
+            continue
+        if key not in cache:
+            cache[key] = searchq.last_change(qc.ws, rel, line=key[1])
+        c = cache[key]
+        row = dict(r)
+        if c is not None:
+            row.update({"commit": c.sha, "date": c.date, "author": c.author, "subject": c.subject})
+        rows.append(row)
+    out = Stream(stream.kind, rows, omitted=stream.omitted, groups=stream.groups)
+    if len(files_seen) > HISTORY_FILE_CAP:
+        out.note = f"history annotated the first {HISTORY_FILE_CAP} files of {len(files_seen)}"
+    return out
 
 
 def _stage_corpus(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
@@ -967,7 +1105,18 @@ register_stage("callees", _stage_callees, input_kinds=(), output_kind="sites",
 register_stage("impact", _stage_impact, input_kinds=(), output_kind="sites",
                doc="impact <Symbol> [--depth N] — transitive callers, depth≤6")
 register_stage("search", _stage_search, input_kinds=(), output_kind="sites",
-               doc="search <pattern> [--glob G] — regex over repo files")
+               doc="search <pattern> [file:P] [!file:P] [lang:L] [sym:S] [case:no] "
+                   "[--glob G] — regex over repo files (index-narrowed, verified)")
+register_stage("commits", _stage_commits, input_kinds=(), output_kind="records",
+               doc="commits <text> [type:diff] [after:D] [before:D] [author:A] "
+                   "[file:P] [--max N] — commits as evidence (git log)",
+               empty_hint="no commit matched — try type:diff for a change to the "
+                          "code rather than the message, or widen after:/file:")
+register_stage("touched", _stage_touched, input_kinds=("records",), output_kind="files",
+               doc="touched — files the commit rows name, most-touched first")
+register_stage("history", _stage_history, input_kinds=("sites", "files"), output_kind=SAME,
+               doc=f"history [--line] — annotate with the last commit per file "
+                   f"(or per line: blame), first {HISTORY_FILE_CAP} files")
 register_stage("corpus", _stage_corpus, input_kinds=(), output_kind="files",
                doc="corpus [--ext E]… [--glob G]… [--exclude G]… [--changed] "
                    "[--max N] — bounded eligible file set (git → fd → walk)",
@@ -1126,13 +1275,16 @@ def _qdry_note(root, pipeline: str, is_empty: bool, hint: str | None) -> str | N
 
 
 def _row_line(kind: str, r: dict) -> str:
+    hist = f" · {r['commit']} {r['date']} {r['author']}" if "commit" in r else ""
     if kind == "sites":
         what = str(r.get("text") or r.get("symbol") or "")
         depth = f" · depth {r['depth']}" if "depth" in r else ""
-        return f"repo:{r.get('file','')}:L{r.get('line','?')}: {what}{depth}"
+        return f"repo:{r.get('file','')}:L{r.get('line','?')}: {what}{depth}{hist}"
     if kind == "files":
+        if "commits" in r:
+            return f"{r.get('file','')} · {fmt_int(int(r.get('commits', 0)))} commits{hist}"
         if "n" in r:
-            return f"{r.get('file','')} · {fmt_int(int(r.get('n', 0)))} sites"
+            return f"{r.get('file','')} · {fmt_int(int(r.get('n', 0)))} sites{hist}"
         if "size" in r:
             return f"{r.get('file','')} · {fmt_int(int(r.get('size', 0)))} B"
         return str(r.get("file", ""))

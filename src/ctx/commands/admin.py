@@ -302,6 +302,64 @@ def _raw_ladders_config(ws) -> dict:
         return {}
 
 
+def _index_text(ws, store) -> int:
+    from ctx import codeindex
+    from ctx.textutil import fmt_bytes, fmt_int
+
+    if not codeindex.enabled():
+        print("ctx index: text index is off (CTX_SEARCH_INDEX=off)", file=sys.stderr)
+        return 1
+    idx = codeindex.open_index(store, ws, build=True)
+    assert idx is not None
+    try:
+        rc, st = idx.last_sync, idx.status()
+    finally:
+        idx.close()
+    print(f"[ctx index · text · {fmt_int(st['files'])} files · {fmt_bytes(st['bytes'])} · "
+          f"{st['segments']} segment{'s' if st['segments'] != 1 else ''}]")
+    print(f"synced: {rc['indexed']} indexed · {rc['removed']} removed · "
+          f"{rc['binary']} binary skipped · {rc['ms']:.0f} ms"
+          + (" · compacted" if rc.get("compacted") else ""))
+    langs = ", ".join(f"{k} {v}" for k, v in sorted(st["languages"].items(), key=lambda kv: (-kv[1], kv[0])))
+    print(f"languages: {langs}")
+    return 0
+
+
+def _index_status(ws, store) -> int:
+    from ctx import codeindex, scip_ingest
+    from ctx.textutil import fmt_bytes, fmt_int
+
+    idx = codeindex.Index(store, ws)
+    try:
+        st = idx.status()
+        n, nbytes = idx.corpus_estimate()
+    finally:
+        idx.close()
+    print("[ctx index · status]")
+    if st["built"]:
+        print(f"  text: {fmt_int(st['files'])} files indexed · {st['segments']} segments · "
+              f"{fmt_bytes(st['bytes'])} · synced before every query (stat sweep)")
+    else:
+        big = n > codeindex.IMPLICIT_BUILD_MAX_FILES or nbytes > codeindex.IMPLICIT_BUILD_MAX_BYTES
+        print(f"  text: not built · corpus {fmt_int(n)} files / {fmt_bytes(nbytes)} · "
+              + ("too large to build inside a query; run ctx index --text" if big
+                 else "builds on first search"))
+    index = scip_ingest.find_index(ws, store)
+    if index is None:
+        print("  scip: none (ctx index --list for indexers)")
+    else:
+        current = scip_ingest.index_is_current(ws, index)
+        stale = scip_ingest.stale_files(ws, index)
+        if current:
+            print("  scip: present · current")
+        elif stale is None:
+            print("  scip: present · stale (no per-file basis; re-run ctx index)")
+        else:
+            print(f"  scip: present · {len(stale)} file(s) changed since indexing — "
+                  "answered per file from the lower rungs, the rest exact")
+    return 0
+
+
 def cmd_index(ws, ns) -> int:
     """`ctx index` — build the SCIP index the precise tier reads.
 
@@ -315,6 +373,16 @@ def cmd_index(ws, ns) -> int:
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
+        if getattr(ns, "status", False):
+            return _index_status(ws, store)
+        # The text index (docs/CODE-SEARCH.md) needs no toolchain, so every
+        # `ctx index` refreshes it first; --text stops there. It is what
+        # `ctx search`, the q search stage and `ctx pack` narrow with, synced
+        # again before every query, so this is a warm-up, not a requirement.
+        if not getattr(ns, "list_indexers", False):
+            text_rc = _index_text(ws, store)
+            if getattr(ns, "text", False):
+                return text_rc
         if getattr(ns, "list_indexers", False):
             print("[ctx index · available indexers]")
             for lang, binary in scip_index.roster().items():

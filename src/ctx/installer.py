@@ -902,6 +902,32 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
         check("language servers", True, f"probe failed: {type(e).__name__}: {e}")
 
+    # The text index (docs/CODE-SEARCH.md) is what search, the q search
+    # stage and `ctx pack` narrow with. It builds itself on first use below a
+    # size guard; above it, `ctx index --text` is one command, and a
+    # workspace that needs it should be told so.
+    try:
+        from ctx import codeindex
+        from ctx.store import Store as _Store
+
+        _st = _Store(ws.workspace_id)
+        try:
+            _idx = codeindex.Index(_st, ws)
+            _status = _idx.status()
+            if _status["built"]:
+                detail = f"{_status['files']} files · {_status['segments']} segment(s) · synced before every query"
+            else:
+                n, nbytes = _idx.corpus_estimate()
+                big = n > codeindex.IMPLICIT_BUILD_MAX_FILES or nbytes > codeindex.IMPLICIT_BUILD_MAX_BYTES
+                detail = (f"not built · {n} files; run ctx index --text (too large to build inside a query)"
+                          if big else f"not built · {n} files; builds on first search")
+            _idx.close()
+        finally:
+            _st.close()
+        check("text index", True, detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("text index", True, f"probe failed: {type(e).__name__}: {e}")
+
     # The exact tier of the refs/def ladders needs an index, and for years
     # nothing in ctx made one — so it was unreachable and every answer came
     # from the regex floor without saying so. Same rule as the row above:

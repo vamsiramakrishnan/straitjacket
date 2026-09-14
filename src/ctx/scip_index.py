@@ -180,11 +180,16 @@ def build(
     # Record the tree this index describes. Without it the only currency
     # signal is the index file's own mtime, which cannot see a deletion that
     # touched no surviving file — see `scip_ingest.index_is_current`.
-    from ctx.scip_ingest import _SIDECAR_NAME, _source_state
+    # ...and, per file, the content it described: with that, a later edit
+    # makes the index partially usable (exact for the untouched files, a
+    # lower rung for the changed ones, disclosed) instead of useless — see
+    # `scip_ingest.refs_partial`.
+    from ctx.scip_ingest import _SIDECAR_NAME, _source_state, content_hashes
 
     count, newest = _source_state(ws)
     out.with_name(_SIDECAR_NAME).write_text(
-        json.dumps({"language": language, "files": count, "max_mtime_ns": newest}),
+        json.dumps({"language": language, "files": count, "max_mtime_ns": newest,
+                    "files_sha": content_hashes(ws, store)}),
         encoding="utf-8",
     )
     return out, out.stat().st_size
