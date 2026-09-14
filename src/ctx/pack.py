@@ -366,7 +366,7 @@ def build_pack(
         # outlines from the current bytes, matched symbols first
         for r in rows:
             r.outline, r.symbol_count = _outline(idx, r)
-        note = f"index trigram · {len(idx.files)} files · {idx.last_sync.get('ms', 0):.0f} ms sync"
+        note = f"index trigram · {len(idx.files)} files"
     finally:
         idx.close()
     return Pack(task=task, terms=terms, rows=rows, corpus_files=n_files, index_note=note,

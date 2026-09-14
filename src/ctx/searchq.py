@@ -22,7 +22,6 @@ history index (``git log -S/-G/--grep``), and the shell-out is bounded by
 
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 import subprocess
@@ -156,10 +155,14 @@ def parse(tokens: list[str]) -> Query:
 
 # ------------------------------------------------------------- path filters
 def _path_matches(rel: str, spec: str) -> bool:
-    """``file:`` semantics: a glob when it looks like one, else a regex
+    """``file:`` semantics: a glob when it looks like one (the tool's one
+    gitwildmatch dialect, :mod:`ctx.pathglob`, so ``*`` stops at ``/`` here
+    exactly as it does for ``--glob`` and the ignore matcher), else a regex
     searched anywhere in the path (Sourcegraph's ``file:`` is a regex)."""
     if any(ch in spec for ch in "*?["):
-        return fnmatch.fnmatch(rel, spec) or fnmatch.fnmatch(rel, f"*{spec}") or fnmatch.fnmatch(rel, f"{spec}*")
+        from ctx.pathglob import matches
+
+        return matches(rel, spec)
     try:
         return re.search(spec, rel) is not None
     except re.error:

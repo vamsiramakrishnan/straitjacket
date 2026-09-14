@@ -529,9 +529,9 @@ def _index_candidates(
             keep = [r for r in keep if r in defining]
         considered = len(keep)
         rels = idx.candidates(expr, subset=keep)
-        note = f"index trigram · {idx.last_sync.get('ms', 0):.0f} ms sync"
-        if idx.last_sync.get("indexed"):
-            note += f" · {idx.last_sync['indexed']} re-indexed"
+        # Byte-stable on an unchanged tree: no timings, no "re-indexed"
+        # counts (search results are content-addressed and cached on them).
+        note = "index trigram"
     finally:
         idx.close()
     targets: list[SearchTarget] = []
