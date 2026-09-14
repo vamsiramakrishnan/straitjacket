@@ -42,7 +42,11 @@ after the DeepSWE receipts showed where a harnessed session spends them:
   (`[agent]` extra): Bash/Read/Edit/Write/MultiEdit plus in-process `search`,
   `outline`, `get`, `refs`, `pack`, the wrapper's hooks, and a pack in the
   first turn; the same `claude` binary, login and billing; result JSON in the
-  host's shape. agentbench gains `sdk` and `sdk_nopack` arms.
+  host's shape. A PreToolUse router refuses shell grep with the equivalent
+  `search` call, since the model otherwise routes around the index. agentbench
+  gains `sdk` and `sdk_nopack` arms, `--max-turns 0` (uncapped, bounded by
+  `--session-timeout`, DeepSWE's own three-hour budget) and `--resume` for a
+  sweep interrupted mid-way.
 
 Two wrapper defects found by the first DeepSWE v1.1 receipt
 (`evals/agentbench/`, haiku, `naive` vs `sj`), where the wrapped arm cost 13-32%

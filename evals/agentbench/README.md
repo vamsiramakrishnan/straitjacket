@@ -43,6 +43,10 @@ hooks and a `ctx pack` in the first turn; `pip install 'ctx-harness[agent]'`,
 `AGENTBENCH_CTX` names the `ctx` of an environment that has it) and
 `sdk_nopack` is the same without the pack — the ablation.
 
+`--max-turns 0` lifts the turn cap (the session runs until the agent stops;
+`--session-timeout` is the wall-clock budget, 10800 s being DeepSWE's own), and
+`--resume PARTIAL.json` seeds the sessions a killed sweep had finished.
+
 `pack_recall.py` is the model-free referee for the pack itself: for each
 validated DeepSWE task it ranks the checkout with `ctx pack` and scores recall
 of the source files the reference solution changes, against a keyword-count

@@ -131,6 +131,9 @@ def main() -> int:
     args = ap.parse_args()
 
     payloads = [json.loads(p.read_text()) for p in sorted(args.results.glob("*.json"))]
+    # Only run payloads render here; the directory also holds other receipts
+    # (pack_recall.json is the pack's own referee) with their own schema.
+    payloads = [p for p in payloads if str(p.get("schema", "")).startswith("agentbench.run/")]
     if not payloads:
         raise SystemExit(f"no results in {args.results}")
     bad = [p.get("adapter") for p in payloads if p.get("simulated") or p.get("provenance") != "live"]

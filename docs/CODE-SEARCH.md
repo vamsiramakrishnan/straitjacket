@@ -255,6 +255,15 @@ ctx agent -p "Add partial_structure to BaseConverter …" --model haiku --max-tu
 ctx agent -p @task.md --no-pack        # the ablation
 ```
 
+A model trained on `grep` reaches for `grep`: in the first DeepSWE sessions of
+this runtime the ctx tools were called 0 to 6 times against 5 to 13 shell greps
+through Bash, so the arm measured naive-without-Grep, not the index. The
+runtime therefore carries an in-process PreToolUse router: `grep`, `rg`, `ag`
+and `git grep` in Bash are refused with a reason that contains the translated
+`search` call (the pattern, paths as `file:` filters, `-i` as `case:no`), and
+the model's next call goes through the index. Measured on the sessions that
+ran with it, ctx tool calls rose to 2–16 per session with `search` at 2–11.
+
 The result JSON is the host's shape (`num_turns`, `usage`, `total_cost_usd`,
 `modelUsage`) plus `pack` (the files the first turn carried) and `runtime`, so
 `evals/agentbench/harness.py` reads a `ctx agent` session like a `claude -p`
