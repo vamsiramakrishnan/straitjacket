@@ -97,3 +97,29 @@ def test_agent_module_imports_without_the_sdk(monkeypatch):
     importlib.reload(agent)
     with pytest.raises(agent.AgentUnavailable):
         agent._sdk()
+
+
+def test_shell_grep_is_translated_to_the_search_tool():
+    from ctx.agent import _search_equivalent
+
+    assert _search_equivalent('grep -rn "taint" bandit/core') == 'search {"query": "taint file:bandit/core"}'
+    assert _search_equivalent("grep -i source bandit/ tests/") == 'search {"query": "source case:no file:bandit file:tests"}'
+    assert _search_equivalent("cd /x && rg -n 'class Foo' src | head") == 'search {"query": "\'class Foo\' file:src"}'
+    assert _search_equivalent("git grep -e request.args -- bandit") == 'search {"query": "request.args file:bandit"}'
+    assert _search_equivalent("grep -rn --include=*.py execute .") == 'search {"query": "execute file:*.py"}'
+    assert _search_equivalent("ls bandit/plugins") is None
+    assert _search_equivalent("python -m pytest -q") is None
+    assert _search_equivalent("grep") is None
+    assert _search_equivalent("echo 'unbalanced") is None
+
+
+def test_bash_router_denies_grep_and_passes_everything_else():
+    import asyncio
+
+    from ctx.agent import _route_bash
+
+    out = asyncio.run(_route_bash({"tool_input": {"command": "grep -rn foo src"}}, "t1", None))
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny" and 'search {"query": "foo file:src"}' in hso["permissionDecisionReason"]
+    assert asyncio.run(_route_bash({"tool_input": {"command": "pytest -q"}}, "t2", None)) == {}
+    assert asyncio.run(_route_bash({"tool_input": {}}, "t3", None)) == {}

@@ -43,9 +43,93 @@ _TOOL_GUIDE = (
     "symbol next, never the whole file), `get` (a bounded slice by lines or by symbol), "
     "`refs` (where a name is used), `pack` (where to look first for a task). "
     "Results carry handles (run:/blob:/snapshot:) you can open with `get`. "
-    "Prefer `outline` then `get --symbol` over reading whole files; prefer `search` "
-    "over shell grep."
+    "Use `outline` then `get` by symbol instead of reading whole files. "
+    "Do not run grep, rg, ag or git grep in Bash: the harness refuses them and answers with "
+    "the equivalent `search` call; searching goes through the index."
 )
+
+#: Shell search commands the router refuses in favour of the `search` tool.
+_SEARCH_HEADS = ("grep", "rg", "ag", "egrep", "fgrep")
+
+
+def _search_equivalent(command: str) -> str | None:
+    """The `search` tool call that answers a shell grep, or None when the
+    command is not a search. Understands the common spellings: flags, a
+    ``-e`` pattern, ``-i``, ``--include=GLOB``, paths, ``git grep``, and a
+    leading ``cd DIR &&``."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    # `cd x && grep ...` / `grep ... | head`: the search is the first segment
+    # whose head is a grep; everything after a pipe is the model's own filter.
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok in ("&&", "||", ";", "|"):
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+    seg = None
+    for cand in segments:
+        if cand and (cand[0] in _SEARCH_HEADS or (cand[0] == "git" and len(cand) > 1 and cand[1] == "grep")):
+            seg = cand
+            break
+    if seg is None:
+        return None
+    args = seg[2:] if seg[0] == "git" else seg[1:]
+    pattern: str | None = None
+    paths: list[str] = []
+    filters: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "-e" and i + 1 < len(args):
+            pattern = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("--include="):
+            filters.append(f"file:{a.split('=', 1)[1]}")
+        elif a == "--include" and i + 1 < len(args):
+            filters.append(f"file:{args[i + 1]}")
+            i += 1
+        elif a.startswith("-") and a != "-":
+            if "i" in a.lstrip("-") and not a.startswith("--"):
+                filters.append("case:no")
+        elif pattern is None:
+            pattern = a
+        else:
+            paths.append(a)
+        i += 1
+    if not pattern:
+        return None
+    filters += [f"file:{p.rstrip('/')}" for p in paths if p not in (".", "./")]
+    query = " ".join([shlex.quote(pattern) if " " in pattern else pattern, *dict.fromkeys(filters)])
+    return f'search {{"query": "{query}"}}'
+
+
+async def _route_bash(input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+    """PreToolUse router: a shell grep is refused and the equivalent `search`
+    call is handed back as the reason, so the model's next call goes through
+    the index (docs/CODE-SEARCH.md). Everything else passes to the ctx hook
+    installed through the settings file."""
+    tool_input = input_data.get("tool_input") or {}
+    command = str(tool_input.get("command") or "")
+    equivalent = _search_equivalent(command)
+    if equivalent is None:
+        return {}
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "CTX_ROUTE: shell grep is not used here; the repository is indexed. "
+                f"Call the search tool instead: {equivalent}. Filters: file:PATH !file:PATH "
+                "lang:python case:no sym:NAME; type:commit / type:diff search history."
+            ),
+        }
+    }
 
 
 class AgentUnavailable(RuntimeError):
@@ -226,7 +310,7 @@ async def _run(ws, store, task: str, *, model: str | None, max_turns: int | None
                pack: bool, pack_budget: int, output_format: str, ctx_exe: str,
                claude_path: str | None, stream) -> dict[str, Any]:
     sdk = _sdk()
-    from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
+    from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, ResultMessage
 
     prompt, pack_info = _first_turn(ws, store, task, pack=pack, budget=pack_budget)
     settings = _hook_settings_file(ctx_exe)
@@ -252,6 +336,7 @@ async def _run(ws, store, task: str, *, model: str | None, max_turns: int | None
         settings=str(settings),
         cli_path=claude_path,
         env=env,
+        hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[_route_bash], timeout=5)]},
     )
     from claude_agent_sdk import ProcessError
 
