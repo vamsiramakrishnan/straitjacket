@@ -35,6 +35,7 @@ regress containment or evidence preservation.
 ```bash
 pip install -e '.[dev]'
 python evals/headroom_needle_v2.py     # needle-survival head-to-head vs Headroom
+python evals/headroom_proof_table.py --headroom-repo /path/to/headroom  # their published proof table, sj in the third column
 python evals/field_needle.py           # seven strategies on identical hostile bytes
 python evals/coverage_corpus.py        # replay real hostile outputs through stub binaries
 python evals/plan_collapse.py          # rounds collapse, byte-stable digest
