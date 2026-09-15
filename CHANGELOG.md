@@ -6,6 +6,16 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- **headroom's proof table, rematched** (`evals/headroom_proof_table.py`,
+  receipt `evals/headroom-proof-table-2026-09-15.md`): their four seeded
+  scenarios, tokenizer and before-count, run through their `compress()` and
+  through the emission gate, with the needles each scenario plants counted in
+  what the model still sees. headroom: 41% saved, 194/217 needles visible, the
+  rest dropped without an address. `ctx`: 98% saved, 31/217 visible, all 27
+  hidden needles tried retrieved verbatim for a median 139 tokens each.
+  docs/COMPARISONS.md carries the table and the caveats (no model, no task,
+  synthetic JSON).
+
 A retrieval substrate for the first ten turns (docs/CODE-SEARCH.md), built
 after the DeepSWE receipts showed where a harnessed session spends them:
 

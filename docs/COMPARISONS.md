@@ -148,6 +148,37 @@ line, drawn out under each approach:
 
 </div>
 
+### Their proof table, with straitjacket in the third column (2026-09-15)
+
+Headroom's README publishes one table as its proof: four synthetic scenarios,
+tokens before and after `compress()`, 21–57% saved. It is a compression ratio
+on seeded JSON, with no model, no task and no check on what the compressed text
+still contains. [`evals/headroom_proof_table.py`](../evals/headroom_proof_table.py)
+runs the same generators, seed and tokenizer through headroom (current
+checkout) and through `ctx`'s emission gate, and counts the needles each
+scenario plants (ERROR trace ids, anomalous rows, open bugs, real paths,
+distinct repositories) that are still visible to the model
+([receipt](../evals/headroom-proof-table-2026-09-15.md)):
+
+| scenario | before | headroom: after (saved) · needles | `ctx` gate: after (saved) · needles |
+|---|---:|---:|---:|
+| Code search (100 results) | 17,199 | 13,597 (21%) · 12/12 | 496 (97%) · 4/12 |
+| SRE incident debugging | 55,957 | 24,340 (56%) · 97/108 | 1,018 (98%) · 6/108 |
+| Codebase exploration | 58,801 | 33,895 (42%) · 19/31 | 1,154 (98%) · 15/31 |
+| GitHub issue triage | 46,067 | 32,429 (30%) · 66/66 | 1,391 (97%) · 6/66 |
+| **total** | 178,024 | 104,261 (41%) · 194/217 | 4,059 (98%) · 31/217 |
+
+Headroom's column reproduces its README to the token and drops 23 needles with
+no address. `ctx` shows 31 in the digest; every hidden one was retrieved
+verbatim by `ctx search run:<id>#stdout <needle>` (27 of 27 tried) for a median
+139 tokens. The two are on different axes: headroom is 41% of the tokens with
+89% of the evidence in view, `ctx` is 2% of the tokens with all of the
+evidence one named lookup away. A session that needs a handful of specific
+facts is an order of magnitude cheaper under `ctx`; one that must scan
+everything pays for the range it asks for, and knows the size before it does.
+Neither number says how well a model *uses* either shape; that is what the
+[DeepSWE receipt](../evals/agentbench/deepswe-2026-09-13.md) measures.
+
 ## One hostile payload across seven containment strategies
 
 The broader model-free comparison sends the same 302,628-`o200k_base`-token log
