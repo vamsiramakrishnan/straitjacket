@@ -71,7 +71,7 @@ def test_pytest_rewrite_antigravity_dialect(tmp_path):
     # rewrite cannot be applied transparently: it degrades to a deny whose
     # reason names the contained command for the agent to re-issue.
     assert out["decision"] == "deny"
-    assert "ctx run -- pytest -q" in out["reason"]
+    assert "ctx run --passthrough -- pytest -q" in out["reason"]
     assert "updatedInput" not in out
     assert set(out) <= {"decision", "reason", "permissionOverrides"}
 
@@ -84,7 +84,7 @@ def test_pytest_rewrite_claude_code_dialect(tmp_path):
     hso = out["hookSpecificOutput"]
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["permissionDecision"] == "allow"
-    assert hso["updatedInput"]["command"] == "ctx run -- pytest -q"
+    assert hso["updatedInput"]["command"] == "ctx run --passthrough -- pytest -q"
     assert "bounded capture" in hso["permissionDecisionReason"]
 
 
@@ -125,7 +125,7 @@ def test_single_named_pytest_stays_captured_without_output_substitution(tmp_path
         flavor="antigravity",
     )
     assert out["decision"] == "deny"
-    assert "ctx run -- pytest" in out["reason"]
+    assert "ctx run --passthrough -- pytest" in out["reason"]
 
 
 def test_speculative_native_can_be_disabled(tmp_path):
@@ -140,7 +140,7 @@ def test_speculative_native_can_be_disabled(tmp_path):
         ),
         flavor="claude-code",
     )
-    assert "ctx run -- pytest" in out["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "ctx run --passthrough -- pytest" in out["hookSpecificOutput"]["updatedInput"]["command"]
 
 
 def test_original_command_key_name_preserved(tmp_path):
@@ -148,7 +148,7 @@ def test_original_command_key_name_preserved(tmp_path):
         d = _classify("run_command", {key: "pytest -q", "Cwd": str(tmp_path)}, tmp_path)
         assert d["decision"] == "deny"  # canonical layer stays deny (doctor contract)
         updated = d["rewrite"]["updatedInput"]
-        assert updated[key] == "ctx run -- pytest -q"
+        assert updated[key] == "ctx run --passthrough -- pytest -q"
         assert set(updated) == {key, "Cwd"}
 
 
@@ -164,7 +164,7 @@ def test_extra_input_fields_survive_in_updated_input(tmp_path):
         tmp_path,
     )
     updated = d["rewrite"]["updatedInput"]
-    assert updated["command"] == "ctx run -- pytest -q"
+    assert updated["command"] == "ctx run --passthrough -- pytest -q"
     assert updated["description"] == "run the test suite"
     assert updated["timeout"] == 120000
 
@@ -192,11 +192,11 @@ def test_metachar_pipeline_rewrites_to_ctx_run_shell(tmp_path):
     d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
     assert d["decision"] == "force_ask"  # canonical layer unchanged
     assert d["rewrite"]["updatedInput"]["CommandLine"] == (
-        "ctx run --shell -- " + shlex.quote(cmd)
+        "ctx run --passthrough --shell -- " + shlex.quote(cmd)
     )
     out = _invoke_hook(_payload({"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path))
     assert out["decision"] == "deny"  # no input substitution on this host
-    assert "ctx run --shell -- 'cat x | head -n 5'" in out["reason"]
+    assert "ctx run --passthrough --shell -- 'cat x | head -n 5'" in out["reason"]
 
 
 def test_grep_single_file_gets_match_cap_injected(tmp_path):
@@ -255,7 +255,7 @@ def test_sed_outside_the_collapsible_range_shape_still_steers_to_ctx_run(tmp_pat
         tmp_path,
     )
     assert d["decision"] == "deny"  # canonical layer: unbounded output
-    assert d["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run -- sed")
+    assert d["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --passthrough -- sed")
 
 
 def test_sed_inplace_force_asks_with_preview_remediation(tmp_path):
@@ -286,7 +286,7 @@ def test_awk_inplace_force_asks_readonly_steers(tmp_path):
         tmp_path,
     )
     assert d2["decision"] == "force_ask"
-    assert d2["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --shell -- ")
+    assert d2["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --passthrough --shell -- ")
     # Braceless read-only awk (-f progfile) takes the plain-argv rung.
     d3 = _classify(
         "run_command",
@@ -294,7 +294,7 @@ def test_awk_inplace_force_asks_readonly_steers(tmp_path):
         tmp_path,
     )
     assert d3["decision"] == "deny"
-    assert d3["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run -- awk")
+    assert d3["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --passthrough -- awk")
 
 
 # ----------------------------------------------------------- read rewrites

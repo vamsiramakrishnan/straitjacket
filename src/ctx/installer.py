@@ -278,7 +278,7 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
     if host == "claude":
         files[".ctx-surface/gateway.claude.json"] = json.dumps(
             {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args}}}, indent=2) + "\n"
-        launch = f"claude --strict-mcp-config --mcp-config .ctx-surface/gateway.claude.json"
+        launch = "claude --strict-mcp-config --mcp-config .ctx-surface/gateway.claude.json"
     elif host == "codex":
         args_toml = ", ".join(json.dumps(a) for a in gw_args)
         files[".ctx-surface/config.codex.gateway.toml"] = (
@@ -286,13 +286,13 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
             "# backends recorded in .ctx-surface/backends.json.\n"
             f"[mcp_servers.{_GATEWAY_NAME}]\n"
             f'command = "{exe}"\nargs = [{args_toml}]\n')
-        launch = f"codex --config .ctx-surface/config.codex.gateway.toml"
+        launch = "codex --config .ctx-surface/config.codex.gateway.toml"
     elif host == "antigravity":
         files[".ctx-surface/mcp_config.gateway.json"] = json.dumps(
             {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args, "disabled": False}}},
             indent=2) + "\n"
         launch = ("point ~/.gemini/antigravity-cli at "
-                  f".ctx-surface/mcp_config.gateway.json, then Refresh MCP servers")
+                  ".ctx-surface/mcp_config.gateway.json, then Refresh MCP servers")
     else:
         return f"unknown host {host!r}; one of claude, codex, antigravity"
 
@@ -883,6 +883,50 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         check("code intelligence", len(dark) < len(roster), detail)
     except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
         check("code intelligence", False, f"{type(e).__name__}: {e}")
+
+    # The language-server tier (`ctx lsp`, the refs ladder's semantic rung)
+    # is whatever servers are on PATH. Optional like the parsers, and for the
+    # same reason never silent: a machine without one answers `ctx refs`
+    # from jedi or the regex floor, and the header says so.
+    try:
+        from ctx.lsp import roster as lsp_roster
+
+        servers = lsp_roster()
+        found = {lang: exe for lang, exe in servers.items() if exe != "none"}
+        detail = (
+            f"{len(found)}/{len(servers)} languages: "
+            + ", ".join(f"{lang}={exe}" for lang, exe in sorted(found.items()))
+            if found else "no language server on PATH (ctx lsp unavailable; refs use jedi/regex)"
+        )
+        check("language servers", True, detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("language servers", True, f"probe failed: {type(e).__name__}: {e}")
+
+    # The text index (docs/CODE-SEARCH.md) is what search, the q search
+    # stage and `ctx pack` narrow with. It builds itself on first use below a
+    # size guard; above it, `ctx index --text` is one command, and a
+    # workspace that needs it should be told so.
+    try:
+        from ctx import codeindex
+        from ctx.store import Store as _Store
+
+        _st = _Store(ws.workspace_id)
+        try:
+            _idx = codeindex.Index(_st, ws)
+            _status = _idx.status()
+            if _status["built"]:
+                detail = f"{_status['files']} files · {_status['segments']} segment(s) · synced before every query"
+            else:
+                n, nbytes = _idx.corpus_estimate()
+                big = n > codeindex.IMPLICIT_BUILD_MAX_FILES or nbytes > codeindex.IMPLICIT_BUILD_MAX_BYTES
+                detail = (f"not built · {n} files; run ctx index --text (too large to build inside a query)"
+                          if big else f"not built · {n} files; builds on first search")
+            _idx.close()
+        finally:
+            _st.close()
+        check("text index", True, detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("text index", True, f"probe failed: {type(e).__name__}: {e}")
 
     # The exact tier of the refs/def ladders needs an index, and for years
     # nothing in ctx made one — so it was unreachable and every answer came

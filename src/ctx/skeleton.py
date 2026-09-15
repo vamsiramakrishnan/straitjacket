@@ -497,8 +497,12 @@ def _ctags_extract(
 
 
 # ------------------------------------------------------------ tree-sitter
-_TS_PACK_NAMES = {"python": "python", "javascript": "javascript", "typescript": "typescript",
-                  "go": "go", "rust": "rust"}
+_TS_PACK_NAMES = {
+    "python": "python", "javascript": "javascript", "typescript": "typescript",
+    "go": "go", "rust": "rust", "c": "c", "c++": "cpp", "c#": "csharp",
+    "java": "java", "kotlin": "kotlin", "lua": "lua", "php": "php",
+    "ruby": "ruby", "scala": "scala", "shell": "bash", "swift": "swift",
+}
 
 
 # Individual grammar wheels for the modern tree-sitter API (0.22+): each
@@ -506,7 +510,10 @@ _TS_PACK_NAMES = {"python": "python", "javascript": "javascript", "typescript": 
 # ``tree_sitter.Language`` wraps. This is the maintained path — the bundle
 # packages (language_pack, languages) lag the core API and, in sandboxed
 # environments, language_pack fetches parsers at runtime (a network 403
-# here). Grammar wheels are self-contained.
+# here). Grammar wheels are self-contained. Every language ``language_for``
+# can name has a wheel here: the roster used to claim sixteen languages and
+# ship grammars for five, so a C, Java or Ruby file silently fell to ctags
+# (absent on most machines) and then to nothing.
 _TS_GRAMMAR_MODULES = {
     "python": ("tree_sitter_python",),
     "javascript": ("tree_sitter_javascript",),
@@ -514,7 +521,21 @@ _TS_GRAMMAR_MODULES = {
     "typescript": ("tree_sitter_typescript",),
     "go": ("tree_sitter_go",),
     "rust": ("tree_sitter_rust",),
+    "c": ("tree_sitter_c",),
+    "c++": ("tree_sitter_cpp",),
+    "c#": ("tree_sitter_c_sharp",),
+    "java": ("tree_sitter_java",),
+    "kotlin": ("tree_sitter_kotlin",),
+    "lua": ("tree_sitter_lua",),
+    # tree-sitter-php exposes language_php (with HTML) and language_php_only.
+    "php": ("tree_sitter_php",),
+    "ruby": ("tree_sitter_ruby",),
+    "scala": ("tree_sitter_scala",),
+    "shell": ("tree_sitter_bash",),
+    "swift": ("tree_sitter_swift",),
 }
+#: Grammar modules whose entry point is not the plain ``language()``.
+_TS_LANGUAGE_FN = {"tree_sitter_typescript": "language_typescript", "tree_sitter_php": "language_php"}
 
 
 def _ts_grammar_parser(language: str):
@@ -530,9 +551,7 @@ def _ts_grammar_parser(language: str):
     for mod_name in mods:
         try:
             mod = __import__(mod_name)
-            lang_fn = getattr(mod, "language", None) or getattr(
-                mod, "language_typescript", None
-            )
+            lang_fn = getattr(mod, _TS_LANGUAGE_FN.get(mod_name, "language"), None)
             if lang_fn is None:
                 continue
             return _ts.Parser(_ts.Language(lang_fn()))
@@ -563,6 +582,246 @@ def _ts_parser(language: str):
         except Exception:
             continue
     raise BackendUnavailable("tree-sitter bindings not importable ([code] extra)")
+
+
+# A declarative walker for the languages whose declarations all follow the
+# same shape (a declaration node, a ``name`` field, an optional body that
+# nests more declarations). Node and field names below were read off the
+# grammars themselves (tests/test_skeleton_languages.py parses one fixture
+# per language), not remembered. Per language:
+#   decl        node type -> kind. "function" becomes "method" under a scope.
+#   containers  node types whose body (field ``body``) is walked with the
+#               declaration's name as the scope.
+#   transparent node types walked through without changing scope (template
+#               wrappers, namespaces declared without a body, export lists,
+#               and tree-sitter's ERROR nodes, so a partial parse still
+#               yields the symbols around the error).
+#   imports     node type -> how to read the imported name.
+_GENERIC_SPECS: dict[str, dict[str, Any]] = {
+    "c": {
+        "decl": {"function_definition": "function", "struct_specifier": "struct",
+                 "union_specifier": "union", "enum_specifier": "enum", "type_definition": "type",
+                 "declaration": "function"},
+        "containers": {},
+        "transparent": {"preproc_ifdef", "preproc_if", "preproc_else", "linkage_specification"},
+        "imports": {"preproc_include": "path"},
+    },
+    "c++": {
+        "decl": {"function_definition": "function", "class_specifier": "class",
+                 "struct_specifier": "struct", "union_specifier": "union", "enum_specifier": "enum",
+                 "type_definition": "type", "alias_declaration": "type",
+                 "declaration": "function", "field_declaration": "function"},
+        "containers": {"class_specifier", "struct_specifier", "namespace_definition"},
+        "transparent": {"template_declaration", "preproc_ifdef", "preproc_if", "preproc_else",
+                        "linkage_specification"},
+        "imports": {"preproc_include": "path"},
+    },
+    "c#": {
+        "decl": {"class_declaration": "class", "interface_declaration": "interface",
+                 "struct_declaration": "struct", "enum_declaration": "enum",
+                 "record_declaration": "record", "method_declaration": "method",
+                 "constructor_declaration": "method", "property_declaration": "property",
+                 "delegate_declaration": "type"},
+        "containers": {"class_declaration", "interface_declaration", "struct_declaration",
+                       "record_declaration", "namespace_declaration"},
+        "transparent": {"file_scoped_namespace_declaration"},
+        "imports": {"using_directive": "text:using"},
+    },
+    "java": {
+        "decl": {"class_declaration": "class", "interface_declaration": "interface",
+                 "enum_declaration": "enum", "record_declaration": "record",
+                 "annotation_type_declaration": "type", "method_declaration": "method",
+                 "constructor_declaration": "method"},
+        "containers": {"class_declaration", "interface_declaration", "enum_declaration",
+                       "record_declaration"},
+        "transparent": set(),
+        "imports": {"import_declaration": "text:import"},
+    },
+    "kotlin": {
+        "decl": {"class_declaration": "class", "object_declaration": "object",
+                 "function_declaration": "function", "type_alias": "type"},
+        "containers": {"class_declaration", "object_declaration"},
+        "transparent": set(),
+        "imports": {"import": "text:import"},
+    },
+    "lua": {
+        "decl": {"function_declaration": "function"},
+        "containers": {},
+        "transparent": set(),
+        "imports": {},
+    },
+    "php": {
+        "decl": {"class_declaration": "class", "interface_declaration": "interface",
+                 "trait_declaration": "trait", "enum_declaration": "enum",
+                 "function_definition": "function", "method_declaration": "method"},
+        "containers": {"class_declaration", "interface_declaration", "trait_declaration",
+                       "enum_declaration", "namespace_definition"},
+        "transparent": set(),
+        "imports": {"namespace_use_declaration": "text:use"},
+    },
+    "ruby": {
+        "decl": {"class": "class", "module": "module", "method": "function",
+                 "singleton_method": "function"},
+        "containers": {"class", "module"},
+        "transparent": set(),
+        "imports": {"call": "ruby-require"},
+    },
+    "scala": {
+        "decl": {"class_definition": "class", "object_definition": "object",
+                 "trait_definition": "trait", "function_definition": "function",
+                 "function_declaration": "function", "type_definition": "type"},
+        "containers": {"class_definition", "object_definition", "trait_definition"},
+        "transparent": set(),
+        "imports": {"import_declaration": "text:import"},
+    },
+    "shell": {
+        "decl": {"function_definition": "function"},
+        "containers": {},
+        "transparent": set(),
+        "imports": {"command": "shell-source"},
+    },
+    "swift": {
+        "decl": {"class_declaration": "class", "protocol_declaration": "protocol",
+                 "function_declaration": "function", "init_declaration": "method",
+                 "typealias_declaration": "type"},
+        "containers": {"class_declaration", "protocol_declaration"},
+        "transparent": set(),
+        "imports": {"import_declaration": "text:import"},
+    },
+}
+#: Swift folds class/struct/enum/actor/extension into one node type; the
+#: keyword child says which. Kotlin does the same for interface.
+_KEYWORD_KINDS = {"class", "struct", "enum", "actor", "extension", "interface", "object"}
+_IDENTIFIER_TYPES = {"identifier", "field_identifier", "type_identifier", "qualified_identifier",
+                     "destructor_name", "operator_name", "namespace_identifier", "constant",
+                     "simple_identifier", "name", "word"}
+#: Body node types, for grammars whose declaration bodies are children but
+#: not a ``body`` field (Kotlin's class_body, C#'s declaration_list).
+_BODY_TYPES = {"class_body", "declaration_list", "enum_body", "interface_body", "enum_class_body",
+               "field_declaration_list", "template_body", "body_statement", "protocol_body",
+               "enum_declaration_list", "block"}
+
+
+def _body_of(node):
+    body = node.child_by_field_name("body")
+    if body is not None:
+        return body
+    for ch in node.children:
+        if ch.type in _BODY_TYPES:
+            return ch
+    return None
+
+
+def _c_declarator_name(node, text) -> str | None:
+    """The declared name behind a C/C++ ``declarator`` chain, or None when
+    the declaration is not a function (a plain variable, a field)."""
+    cur = node.child_by_field_name("declarator")
+    seen_function = node.type == "function_definition"
+    while cur is not None:
+        if cur.type == "function_declarator":
+            seen_function = True
+        nxt = cur.child_by_field_name("declarator")
+        if nxt is None:
+            break
+        cur = nxt
+    if cur is None or not seen_function:
+        return None
+    if cur.type in _IDENTIFIER_TYPES:
+        name = text(cur)
+        return name.rsplit("::", 1)[-1] if "::" in name else name
+    return None
+
+
+def _generic_walk(root, language: str, text, add, imports: list[str]) -> None:
+    spec = _GENERIC_SPECS[language]
+    decl, containers = spec["decl"], spec["containers"]
+    transparent, import_rules = spec["transparent"], spec["imports"]
+
+    def keyword_kind(node) -> str | None:
+        for ch in node.children:
+            if not ch.is_named and ch.type in _KEYWORD_KINDS:
+                return ch.type
+        return None
+
+    def name_of(node) -> str | None:
+        if language in ("c", "c++") and node.type in (
+            "function_definition", "declaration", "field_declaration"
+        ):
+            return _c_declarator_name(node, text)
+        if node.type == "type_definition":  # C typedef: the name is the declarator
+            d = node.child_by_field_name("declarator")
+            return text(d) if d is not None else None
+        child = node.child_by_field_name("name")
+        if child is None:
+            return None
+        name = text(child).strip()
+        if language == "lua":
+            name = name.replace(":", ".")
+        return name or None
+
+    def record_import(node) -> None:
+        rule = import_rules.get(node.type)
+        if rule is None:
+            return
+        if rule == "path":
+            p = node.child_by_field_name("path")
+            if p is not None:
+                imports.append(text(p).strip("<>\"' "))
+        elif rule.startswith("text:"):
+            raw = text(node).split("\n", 1)[0].strip().rstrip(";")
+            for kw in (rule[5:], "static"):
+                if raw.startswith(kw + " "):
+                    raw = raw[len(kw) + 1:].strip()
+            imports.append(raw)
+        elif rule == "ruby-require":
+            kids = node.named_children
+            if kids and kids[0].type == "identifier" and text(kids[0]) in ("require", "require_relative"):
+                for arg in kids[1:]:
+                    if arg.type == "argument_list" and arg.named_children:
+                        imports.append(text(arg.named_children[0]).strip("\"'"))
+        elif rule == "shell-source":
+            kids = node.named_children
+            if len(kids) >= 2 and kids[0].type == "command_name" and text(kids[0]) in ("source", "."):
+                imports.append(text(kids[1]).strip("\"'"))
+
+    def walk(node, scope: str | None, in_type: bool) -> None:
+        # ``in_type``: the enclosing container is a type (class, struct,
+        # trait, object ...), so a function here is a method. A namespace or
+        # module is a scope but not a type: functions in it stay functions.
+        for child in node.children:
+            t = child.type
+            if t == "ERROR" or t in transparent:
+                walk(child, scope, in_type)
+                continue
+            if t in import_rules:
+                record_import(child)
+                continue
+            if t not in decl:
+                if t in containers:
+                    # A scoping container that is not a symbol of its own
+                    # (a namespace): its body is walked under its name. One
+                    # declared without a body (`namespace App;`) has nothing
+                    # to descend into and file-level symbols keep None.
+                    body = _body_of(child)
+                    if body is not None:
+                        walk(body, name_of(child) or scope, False)
+                continue
+            name = name_of(child)
+            if not name:
+                continue
+            kind = decl[t]
+            kw = keyword_kind(child) if t in ("class_declaration", "object_declaration") else None
+            if kw and kw != "class":
+                kind = kw
+            if kind == "function" and in_type:
+                kind = "method"
+            add(child, name, kind, scope)
+            if t in containers:
+                body = _body_of(child)
+                if body is not None:
+                    walk(body, name, kind not in ("function", "method"))
+
+    walk(root, None, False)
 
 
 def _tree_sitter_extract(source: str, language: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -703,6 +962,8 @@ def _tree_sitter_extract(source: str, language: str) -> tuple[list[dict[str, Any
                         imports.append(text(arg))
 
         walk_rust(root, None)
+    elif language in _GENERIC_SPECS:
+        _generic_walk(root, language, text, add, imports)
     else:  # javascript / typescript
         classy = {"class_declaration", "abstract_class_declaration"}
         fn_values = {"arrow_function", "function_expression", "function", "generator_function"}

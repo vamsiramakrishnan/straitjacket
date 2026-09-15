@@ -4,6 +4,125 @@ All notable changes to ctx-harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is 0.x
 with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
+## [Unreleased]
+
+A retrieval substrate for the first ten turns (docs/CODE-SEARCH.md), built
+after the DeepSWE receipts showed where a harnessed session spends them:
+
+- **A text index** (`src/ctx/codeindex.py`): Zoekt-shaped trigrams over the
+  lowercased bytes, a symbol table and a fingerprint per file, in immutable
+  segments under the store — never the worktree. It is a candidate generator
+  only: a stat sweep re-indexes what changed before every query (6 ms per 870
+  files; 6 s first build), candidates are verified against the live bytes, and
+  a regex contributes only the literal runs it must contain. `ctx search`,
+  the `q` search stage and `ctx pack` narrow through it; `ctx index --text`
+  builds it explicitly above the implicit-build size guard, `ctx index
+  --status` and `ctx doctor` report it, `CTX_SEARCH_INDEX=off` disables it.
+- **A query language** in the pattern list, one grammar everywhere: `file:`
+  `!file:` `lang:` `case:no` `sym:` `type:commit|diff` `after:` `before:`
+  `author:` `rev:`. `sym:Name` alone answers the definition sites from the
+  symbol table; `type:commit`/`type:diff` return commits as evidence rows
+  (hash, date, author, subject, files touched) minted as a `blob:`. New `q`
+  stages `commits`, `touched` and `history [--line]` compose git history with
+  everything else.
+- **SCIP per-file currency**: `ctx index` records each source file's content
+  hash, so an edited tree keeps its exact answers for the files that did not
+  change and answers the changed ones textually, labelled (`scip (exact) · 1
+  changed file via ast (textual)`), instead of discarding the index at the
+  first edit. `ctx impls` gains an exact rung from the index's
+  `is_implementation` edges; `ctx index --status` names the changed files.
+- **`ctx pack "<task>"`**: a ranked, budgeted context pack — files by task
+  terms (idf from the index, whole-word counts in the bytes), symbols the
+  terms name, paths, and commits whose message names them, each row with its
+  reason and outline. Measured by `evals/agentbench/pack_recall.py` against the
+  source files DeepSWE reference solutions change: recall@8 0.54 and MRR 0.64
+  over 14 tasks, against 0.43 / 0.55 for a keyword-count baseline; the first
+  cut lost to that baseline until presence was verified and prose demoted.
+- **`ctx agent -p "<task>"`**: ctx as the host on the Claude Agent SDK
+  (`[agent]` extra): Bash/Read/Edit/Write/MultiEdit plus in-process `search`,
+  `outline`, `get`, `refs`, `pack`, the wrapper's hooks, and with `--pack` a
+  pack in the first turn (off by default: uncapped on DeepSWE with haiku the
+  packed runtime passed 219 held-out tests to 367 without); the same `claude`
+  binary, login and billing; result JSON in the host's shape. A PreToolUse router refuses shell grep with the equivalent
+  `search` call, since the model otherwise routes around the index. agentbench
+  gains `sdk` and `sdk_nopack` arms, `--max-turns 0` (uncapped, bounded by
+  `--session-timeout`, DeepSWE's own three-hour budget) and `--resume` for a
+  sweep interrupted mid-way.
+
+Two wrapper defects found by the first DeepSWE v1.1 receipt
+(`evals/agentbench/`, haiku, `naive` vs `sj`), where the wrapped arm cost 13-32%
+more per session and read 21-33% more input for no outcome gain:
+
+- `ctx wrap claude --proxy` silently cost ~15k cached tokens on every request.
+  Claude Code treats a non-Anthropic `ANTHROPIC_BASE_URL` as a gateway that may
+  not forward its `tool_reference` beta and turns deferred tool loading off, so
+  the prompt carried 41 inline tool schemas instead of 16. The relay forwards
+  bytes verbatim, so the wrapper now sets `ENABLE_TOOL_SEARCH=true` when the
+  upstream is Anthropic itself; a user's own value or gateway is left alone.
+  The prefix-budget manifest never saw this, because the bytes were the host's.
+- Hook rewrites now use `ctx run --passthrough`. The agent's own commands
+  produce a median of 91-277 bytes, and every routed one came back as a receipt
+  (header, command echo, status line) with ctx's exit `3` in place of the
+  command's own status; results grew 2-8x and the model re-ran identical
+  failing checks. In passthrough mode small, complete output is printed
+  verbatim with the `run:` handle on one trailing line, and the exit status is
+  the command's; large output still digests, and the artifact is still stored.
+
+- The large-file Read rewrite widened targeted reads. It set `limit` to the
+  240-line window unconditionally, so a model that asked for `offset=729
+  limit=10` on a 60 KB file got 239 lines: on cattrs the wrapped session
+  landed 106 KB of Read results against 74 KB unwrapped, from the guard that
+  exists to bound them. A cap now keeps the caller's own smaller `limit`
+  (and Grep `head_limit`); it narrows, never widens.
+- A whole-file Read of a large code file is answered with the file's skeleton
+  (every symbol with kind, line range and a minted span; tree-sitter, ctags
+  or stdlib ast) instead of its first 240 lines. Measured on cattrs: the 64 KB
+  `converters.py` outlines to ~1k tokens for 83 symbols where the first page
+  was ~2.5k tokens showing 14% of the file, and the outline makes the next
+  read a range or a `--symbol` fetch instead of the next page. Slice reads
+  (offset/limit) and files without a parser are untouched; fail-open.
+- Print-mode wraps declare the coding tool surface (`--tools Bash,Read,Edit,
+  Write,MultiEdit,Grep,Glob,Agent`). The host's default catalogue on a hosted
+  session is 16 tools / 154 KB / ~33k cached tokens on every request, of
+  which a headless coding run uses six; measured 45 KB after. `--tools` is
+  the one flag that drops a schema from the prompt (`--disallowedTools` on a
+  deferred tool makes Claude Code inline all of them). Interactive sessions
+  and a caller's own `--tools` are untouched; `CTX_WRAP_NO_TOOL_DIET=1` opts
+  out.
+
+Code intelligence, so the outline and the verbs answer for every language the
+roster names rather than for Python:
+
+- Tree-sitter grammars for all sixteen skeleton languages. The roster claimed
+  sixteen and shipped wheels for five; C, C++, C#, Java, Kotlin, Lua, PHP,
+  Ruby, Scala, shell and Swift fell to universal-ctags (absent on most
+  machines) and then to nothing. Each now has a grammar wheel in the `[code]`
+  extra and a declarative walker whose node and field names were read off the
+  grammars (`tests/test_skeleton_languages.py`, one fixture per language);
+  functions inside a namespace stay functions, inside a type become methods.
+- `ctx lsp def|refs|hover`: a bounded JSON-RPC stdio client for whatever
+  language server is on PATH (pyright, jedi-language-server, gopls,
+  rust-analyzer, clangd, typescript-language-server ...), one process per
+  call, positions in ctx's 1-based `path:line:col` or a skeleton symbol,
+  results in `ctx refs` coordinates. `ctx refs` uses it as a rung above jedi
+  and the regex floor whenever a server exists, and discloses `engine lsp
+  (<server>)`; `CTX_LSP=off` removes the rung, `CTX_LSP_SERVERS` overrides
+  the table. `ctx doctor` lists the servers found.
+
+And the mechanisms so that class of defect is measured rather than found by
+accident (docs/HOST-CAPABILITIES.md, "Host prefix bytes"):
+
+- The observer proxy records each request's prefix shape (system-prompt bytes,
+  tool count, tool-catalogue bytes, deferral marker) in `wire.jsonl` and
+  `window.json`; the scorecard prints a `prefix:` line and flags `⚠ prefix tax`
+  when a long catalogue rides every request with no deferral.
+- `ctx wrap claude --probe-prefix`: one naive and one wrapped single-turn
+  session, first-request composition diffed against the declared prefix
+  budget; exit 3 on lost deferral or undeclared growth. The agentbench harness
+  runs it under `--prefix-parity` before paid arms and stores the verdict.
+- `ctx run --passthrough` is pinned by an emission-parity test: small output
+  costs the transcript at most the native bytes plus one handle line.
+
 ## [0.39.0] - 2026-09-10
 
 `ctx relay` adds a cross-harness relay: the direction the task ledger never

@@ -174,6 +174,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "map": ("retrieve", "cmd_map", True),
     "def": ("retrieve", "cmd_def", True),
     "refs": ("retrieve", "cmd_refs", True),
+    "lsp": ("retrieve", "cmd_lsp", True),
     "diag": ("retrieve", "cmd_diag", True),
     "callers": ("retrieve", "cmd_callers", True),
     "callees": ("retrieve", "cmd_callees", True),
@@ -181,6 +182,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "impls": ("retrieve", "cmd_impls", True),
     "cycles": ("retrieve", "cmd_cycles", True),
     "q": ("retrieve", "cmd_q", True),
+    "pack": ("retrieve", "cmd_pack", True),
     "edit": ("edit", "cmd_edit", True),
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
@@ -204,6 +206,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "setup": ("hosts", "cmd_setup", False),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
+    "agent": ("hosts", "cmd_agent", True),
     "antigravity": ("hosts", "cmd_antigravity", False),
     "proxy": ("hosts", "cmd_proxy", False),
 }
@@ -405,6 +408,12 @@ def _build_parser():
     p_run.add_argument("--focus", help="deterministic evidence-selection query")
     p_run.add_argument("--cwd", help="working directory relative to the workspace")
     p_run.add_argument("--shell", action="store_true", help="run one string through the shell")
+    p_run.add_argument(
+        "--passthrough", action="store_true",
+        help="hook mode: exit with the wrapped command's own status, and when the "
+             "whole output fits the inline budget print it verbatim (the run: "
+             "handle follows on one line) instead of a receipt",
+    )
     p_run.add_argument("--timeout", type=float, default=600.0)
     p_run.add_argument(
         "--bg", action="store_true",
@@ -700,12 +709,34 @@ def _build_parser():
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
     p_map.add_argument("--focus", help="boost files whose path or symbols match")
 
+    p_pack = sub.add_parser(
+        "pack", help="ranked, budgeted context pack for a task (files, symbols, history)"
+    )
+    p_pack.add_argument("task", help="the task text, @path to read it from a file, or - for stdin")
+    p_pack.add_argument("--budget", type=int, default=None, help="token budget (default 2500)")
+    p_pack.add_argument("--files", type=int, default=None, dest="max_files",
+                        help="files to rank into the pack (default 8)")
+    p_pack.add_argument("--no-history", action="store_true", dest="no_history",
+                        help="skip the git history signal")
+    p_pack.add_argument("--json", action="store_true", dest="as_json", help="machine-readable pack")
+
     p_def = sub.add_parser("def", help="symbol definition site (snapshot + span)")
     p_def.add_argument("target", help="repo:<path>:<Symbol.dotted>")
 
     p_refs = sub.add_parser("refs", help="reference sites for a symbol")
     p_refs.add_argument("symbol", help="name or Class.method dotted name")
     p_refs.add_argument("--path", help="restrict sites to a subtree")
+
+    p_lsp = sub.add_parser(
+        "lsp", help="ask the language server: definition, references, hover at a position or symbol"
+    )
+    p_lsp.add_argument("what", choices=("def", "refs", "hover"))
+    p_lsp.add_argument(
+        "target",
+        help="<path>:<line>:<col> (1-based) or repo:<path>:<Symbol.dotted> (position from the skeleton)",
+    )
+    p_lsp.add_argument("--timeout", type=float, default=None,
+                       help="seconds to wait for the server (default 20; whole-repo indexers need more)")
 
     p_diag = sub.add_parser("diag", help="deterministic lint/syntax digest")
     p_diag.add_argument("path", nargs="?", help="restrict to a subtree")
@@ -843,6 +874,13 @@ def _build_parser():
         help="show which indexers are installed, and what this workspace needs",
     )
     p_index.add_argument("--timeout", type=float, default=900.0)
+    p_index.add_argument(
+        "--text", action="store_true",
+        help="build or refresh only the text index (trigrams, symbols, fingerprints)",
+    )
+    p_index.add_argument(
+        "--status", action="store_true", help="report what is indexed and how current it is"
+    )
 
     p_doctor = sub.add_parser("doctor", help="validate installation and store health")
     p_doctor.add_argument("--antigravity", action="store_true")
@@ -878,6 +916,21 @@ def _build_parser():
         help="opt-in Tier-1 lossless rescue: at this window %%, elide old "
         "large tool_results to file-backed stubs (0 = pure observer)",
     )
+
+    p_agent = sub.add_parser(
+        "agent", help="run a task with ctx as the host: lean tools, ctx retrieval, a pack at turn one"
+    )
+    p_agent.add_argument("-p", "--print", dest="task", required=True,
+                         help="the task (print mode; @path reads it from a file)")
+    p_agent.add_argument("--model", default=None)
+    p_agent.add_argument("--max-turns", type=int, default=None, dest="max_turns")
+    p_agent.add_argument("--output-format", choices=("text", "json"), default="text",
+                         dest="output_format")
+    p_agent.add_argument("--pack", action="store_true",
+                         help="put a ctx pack of where to look in the first turn (off by default: "
+                              "on DeepSWE with haiku it cost tests, see the receipt)")
+    p_agent.add_argument("--pack-budget", type=int, default=2500, dest="pack_budget")
+    p_agent.add_argument("--verbose", action="store_true", help="stream turns to stderr")
 
     p_wrap = sub.add_parser(
         "wrap",

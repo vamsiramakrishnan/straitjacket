@@ -307,3 +307,124 @@ def test_cli_wrap_print_config(capsys):
     assert rc == 0
     settings = json.loads(capsys.readouterr().out)
     assert "hook claude-code pre-tool-use" in json.dumps(settings)
+
+
+# ---------------------------------------------------------------- proxy env
+# Claude Code turns deferred tool loading off for any non-first-party
+# ANTHROPIC_BASE_URL. The observer proxy is a byte-for-byte relay, so when its
+# upstream is Anthropic itself the wrapper must say so, or every request pays
+# the full tool catalogue (measured: ~15k cached tokens per call, 41 inline
+# tool schemas instead of 16).
+def test_proxy_child_env_keeps_tool_deferral_for_first_party_upstream(monkeypatch):
+    from ctx.wrap import _proxy_child_env
+
+    monkeypatch.delenv("ENABLE_TOOL_SEARCH", raising=False)
+    env = _proxy_child_env(4242, "https://api.anthropic.com")
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4242"
+    assert env["ENABLE_TOOL_SEARCH"] == "true"
+    assert "ENABLE_TOOL_SEARCH" not in os.environ  # parent untouched
+
+
+def test_proxy_child_env_respects_a_user_choice(monkeypatch):
+    from ctx.wrap import _proxy_child_env
+
+    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "auto:3")
+    assert _proxy_child_env(4242, "https://api.anthropic.com")["ENABLE_TOOL_SEARCH"] == "auto:3"
+    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")
+    assert _proxy_child_env(4242, "https://api.anthropic.com")["ENABLE_TOOL_SEARCH"] == "false"
+
+
+def test_proxy_child_env_never_forces_a_third_party_gateway(monkeypatch):
+    from ctx.wrap import _proxy_child_env
+
+    monkeypatch.delenv("ENABLE_TOOL_SEARCH", raising=False)
+    for upstream in ("http://127.0.0.1:9", "https://gateway.example.com/v1", "not a url"):
+        assert "ENABLE_TOOL_SEARCH" not in _proxy_child_env(4242, upstream), upstream
+
+
+# ---------------------------------------------------------- prefix parity
+# The manifest locks the bytes the harness injects; the probe measures the
+# bytes the host adds because of the harness. Pure parts tested here; the two
+# live single-turn sessions need a `claude` and credentials.
+def test_judge_prefix_parity_passes_within_declared_budget():
+    from ctx.wrap import judge_prefix_parity
+
+    naive = {"system_bytes": 14600, "tools": 18, "tools_bytes": 164400, "deferral": True, "tool_names": ["Bash", "Grep", "ToolSearch"]}
+    wrapped = {"system_bytes": 15900, "tools": 16, "tools_bytes": 157700, "deferral": True, "tool_names": ["Bash", "ToolSearch"]}
+    v = judge_prefix_parity(naive, wrapped, declared_bytes=3505)
+    assert v["ok"] and v["delta_bytes"] < 0 and v["tools_only_naive"] == ["Grep"]
+
+
+def test_judge_prefix_parity_fails_on_lost_deferral_and_on_tax():
+    from ctx.wrap import judge_prefix_parity, render_prefix_parity
+
+    naive = {"system_bytes": 14600, "tools": 18, "tools_bytes": 164400, "deferral": True, "tool_names": ["ToolSearch"]}
+    wrapped = {"system_bytes": 15900, "tools": 41, "tools_bytes": 257500, "deferral": False, "tool_names": ["Monitor", "CronCreate"]}
+    v = judge_prefix_parity(naive, wrapped, declared_bytes=3505)
+    assert not v["ok"] and v["deferral_lost"] and "lost tool deferral" in v["reason"] and "over naive" in v["reason"]
+    text = render_prefix_parity(v)
+    assert "FAIL" in text and "deferral off" in text and "Monitor" in text
+    # Same catalogue, deferral kept, but 20 KB more prefix than declared: still a tax.
+    v2 = judge_prefix_parity(naive, {**naive, "system_bytes": 14600 + 20000}, declared_bytes=3505)
+    assert not v2["ok"] and not v2["deferral_lost"]
+    assert judge_prefix_parity(None, wrapped, 0)["ok"] is False
+
+
+def test_judge_prefix_parity_names_a_tax_both_sessions_pay():
+    from ctx.wrap import judge_prefix_parity, render_prefix_parity
+
+    # ENABLE_TOOL_SEARCH=false in the environment: both sides inline 41 tools.
+    # Relative parity holds (the wrapper added nothing), but the ~15k/call tax
+    # is real and must be named, not hidden behind PASS.
+    off = {"system_bytes": 14600, "tools": 41, "tools_bytes": 251000, "deferral": False, "tool_names": []}
+    v = judge_prefix_parity(off, {**off, "system_bytes": 15500}, declared_bytes=3505)
+    assert v["ok"] and v["environment_tax"] and not v["deferral_lost"]
+    assert "both sessions inline" in render_prefix_parity(v)
+    small = {"system_bytes": 2000, "tools": 6, "tools_bytes": 9000, "deferral": False, "tool_names": []}
+    assert judge_prefix_parity(small, small, 3505)["environment_tax"] is False
+
+
+def test_prompt_snapshot_reads_the_first_request_shape(tmp_path):
+    from ctx.wrap import _prompt_snapshot
+
+    proj = tmp_path / "projects" / "-x"
+    proj.mkdir(parents=True)
+    rows = [
+        {"type": "attachment", "attachment": {"type": "prompt_snapshot", "systemPrompt": "abc"}},
+        {"type": "attachment", "attachment": {"type": "prompt_snapshot", "systemPrompt": "abcd",
+                                              "tools": [{"name": "Bash"}, {"name": "ToolSearch"}]}},
+    ]
+    (proj / "s.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    snap = _prompt_snapshot(tmp_path)
+    assert snap["system_bytes"] == 4 and snap["tools"] == 2 and snap["deferral"] is True
+    assert snap["tool_names"] == ["Bash", "ToolSearch"]
+    assert _prompt_snapshot(tmp_path / "nowhere") is None
+
+
+# -------------------------------------------------------------- tool diet
+# The fixed half of every request is the tool catalogue. Measured: 16 tools /
+# 154 KB / ~33k cached tokens per call by default on a hosted session, 6-8
+# tools / 36-50 KB / ~10k with `--tools`. Print mode declares the coding
+# surface; interactive sessions and a caller's own `--tools` are untouched.
+def test_tool_diet_applies_to_print_mode_only(monkeypatch):
+    from ctx.wrap import _PRINT_TOOL_SURFACE, _with_tool_diet
+
+    monkeypatch.delenv("CTX_WRAP_NO_TOOL_DIET", raising=False)
+    out = _with_tool_diet(["-p", "fix it"])
+    assert out[:2] == ["--tools", ",".join(_PRINT_TOOL_SURFACE)] and out[2:] == ["-p", "fix it"]
+    assert "Bash" in _PRINT_TOOL_SURFACE and "Agent" in _PRINT_TOOL_SURFACE  # explorer agent rides Agent
+    assert _with_tool_diet(["--resume", "abc"]) == ["--resume", "abc"]  # interactive: untouched
+    assert _with_tool_diet(["--tools", "Bash", "-p", "x"]) == ["--tools", "Bash", "-p", "x"]  # caller wins
+    monkeypatch.setenv("CTX_WRAP_NO_TOOL_DIET", "1")
+    assert _with_tool_diet(["-p", "x"]) == ["-p", "x"]
+
+
+def test_judge_prefix_parity_credits_the_tool_diet():
+    from ctx.wrap import judge_prefix_parity
+
+    # Print-mode diet: 5 tools, no deferred tools left, so no ToolSearch marker.
+    # That is a 110 KB saving per request, not a lost-deferral tax.
+    naive = {"system_bytes": 14600, "tools": 16, "tools_bytes": 157700, "deferral": True, "tool_names": ["ToolSearch", "Artifact"]}
+    diet = {"system_bytes": 15700, "tools": 5, "tools_bytes": 46000, "deferral": False, "tool_names": ["Bash"]}
+    v = judge_prefix_parity(naive, diet, declared_bytes=3505)
+    assert v["ok"] and not v["deferral_lost"] and v["delta_bytes"] < -100_000

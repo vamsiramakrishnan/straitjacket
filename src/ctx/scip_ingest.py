@@ -141,6 +141,64 @@ def index_is_current(ws: Workspace, index: Path) -> bool:
     return recorded_count is None or recorded_count == count
 
 
+def file_basis(index: Path) -> dict[str, str] | None:
+    """rel → content hash of every source file at indexing time, from the
+    sidecar `ctx index` writes. None for an index without one (a project's
+    own, or one built before the sidecar carried it): such an index is
+    current or it is nothing, as :func:`index_is_current` decides."""
+    try:
+        meta = json.loads(index.with_name(_SIDECAR_NAME).read_text(encoding="utf-8"))
+        basis = meta.get("files_sha")
+        return {str(k): str(v) for k, v in basis.items()} if isinstance(basis, dict) else None
+    except Exception:
+        return None
+
+
+def content_hashes(ws: Workspace, store=None) -> dict[str, str]:
+    """rel → hash for the workspace's source files, from the text index's
+    catalog when it is built (the same sweep every search runs), else hashed
+    directly. One hash function for both (:func:`ctx.codeindex._sha12`)."""
+    from ctx.codeindex import _sha12, enabled
+    from ctx.skeleton import language_for
+
+    out: dict[str, str] = {}
+    if store is not None and enabled():
+        try:
+            from ctx.codeindex import Index
+
+            idx = Index(store, ws)
+            if idx.built:
+                idx.sync()
+                out = {rel: ent[4] for rel, ent in idx.files.items() if language_for(rel)}
+                idx.close()
+                return out
+            idx.close()
+        except Exception:
+            out = {}
+    root = ws.root
+    for rel in ws.list_files(None):
+        if language_for(rel) is None:
+            continue
+        try:
+            out[rel] = _sha12((root / rel).read_bytes())
+        except OSError:
+            continue
+    return out
+
+
+def stale_files(ws: Workspace, index: Path, store=None) -> list[str] | None:
+    """Source files the index does not describe any more: changed since it
+    was built, or new. None when the index has no per-file basis. Deleted
+    files are not listed (they have no sites to answer for) but they do make
+    the index non-current, which callers handle by filtering sites to files
+    whose hash still matches."""
+    basis = file_basis(index)
+    if basis is None:
+        return None
+    now = content_hashes(ws, store)
+    return sorted(rel for rel, sha in now.items() if basis.get(rel) != sha)
+
+
 def find_index(ws: Workspace, store=None) -> Path | None:
     """The workspace's SCIP index, or None. ``$CTX_SCIP_INDEX`` overrides
     (absolute, or relative to the workspace root).
@@ -329,3 +387,106 @@ def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False, store=No
         # cheaper can settle it.
         return [] if load_index(index) is not None else None
     return [(f, ln, hits[(f, ln)]) for (f, ln) in sorted(hits)]
+
+
+def _matches(occ: Occurrence, want: str, qualifier: str | None) -> bool:
+    if occ.name != want:
+        return False
+    if qualifier is not None:
+        tokens = _IDENT_RE.findall(occ.symbol)
+        if len(tokens) < 2 or tokens[-2] != qualifier:
+            return False
+    return True
+
+
+def _line_text(ws: Workspace, cache: dict[str, list[str]], rel: str, line: int) -> str:
+    lines = cache.get(rel)
+    if lines is None:
+        try:
+            lines = (ws.root / rel).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        cache[rel] = lines
+    return lines[line - 1].strip() if 0 < line <= len(lines) else ""
+
+
+def refs_partial(
+    ws: Workspace, symbol: str, *, definitions_only: bool = False, store=None
+):
+    """Per-file currency: the exact sites from every file the index still
+    describes (its content hash unchanged since `ctx index`), plus the list
+    of source files it does not, for a lower rung to answer.
+
+    :func:`refs` is all-or-nothing on purpose — a stale index may not speak
+    in the exact tier's voice about the *tree*. But it can still speak about
+    the files that have not changed, as long as the caller answers the
+    changed ones another way and says so. That is what this returns:
+    ``(sites, stale_files)``, or None when there is no index, no protobuf
+    runtime, or no per-file basis to make the split with.
+    """
+    index = find_index(ws, store)
+    if index is None or not available():
+        return None
+    stale = stale_files(ws, index, store)
+    if stale is None:
+        return None
+    basis = file_basis(index) or {}
+    now = content_hashes(ws, store)
+    exact_ok = {rel for rel, sha in now.items() if basis.get(rel) == sha}
+    subject, _, want = symbol.rpartition(".")
+    qualifier = subject.rsplit(".", 1)[-1] if subject else None
+    hits: dict[tuple[str, int], str] = {}
+    cache: dict[str, list[str]] = {}
+    for occ in iter_occurrences(index):
+        if occ.file not in exact_ok or not _matches(occ, want, qualifier):
+            continue
+        if definitions_only and not occ.is_definition:
+            continue
+        key = (occ.file, occ.line)
+        if key not in hits:
+            hits[key] = _line_text(ws, cache, occ.file, occ.line)
+    if not hits and load_index(index) is None:
+        return None
+    sites = sorted((f, ln, t) for (f, ln), t in hits.items())
+    return sites, stale
+
+
+def implementations(ws: Workspace, symbol: str, *, store=None):
+    """What implements or extends ``symbol``, from the index's own
+    relationship edges (``is_implementation``): ``(sites, stale_files)`` with
+    each site the implementing symbol's definition, or None when no usable
+    index answers. Sites are taken only from files the index still
+    describes; ``stale_files`` names the ones it does not."""
+    index = find_index(ws, store)
+    if index is None or not available():
+        return None
+    if index_is_current(ws, index):
+        stale: list[str] = []
+        exact_ok = None
+    else:
+        stale = stale_files(ws, index, store) or []
+        if not file_basis(index):
+            return None
+        basis = file_basis(index) or {}
+        exact_ok = {rel for rel, sha in content_hashes(ws, store).items() if basis.get(rel) == sha}
+    idx = load_index(index)
+    if idx is None:
+        return None
+    want = symbol.rpartition(".")[2]
+    sites: dict[tuple[str, int], str] = {}
+    cache: dict[str, list[str]] = {}
+    for doc in idx.documents:
+        rel = str(doc.relative_path).replace("\\", "/")
+        if exact_ok is not None and rel not in exact_ok:
+            continue
+        impls = {
+            si.symbol for si in doc.symbols
+            if any(r.is_implementation and descriptor_name(r.symbol) == want for r in si.relationships)
+        }
+        if not impls:
+            continue
+        for occ in doc.occurrences:
+            if occ.symbol in impls and occ.symbol_roles & _DEFINITION_ROLE:
+                line, _ca, _cb = _range_1indexed(occ.range)
+                sites.setdefault((rel, line), _line_text(ws, cache, rel, line))
+    return sorted((f, ln, t) for (f, ln), t in sites.items()), stale

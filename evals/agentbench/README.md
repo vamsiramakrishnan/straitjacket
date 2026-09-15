@@ -25,7 +25,32 @@ means the host default was used but not recorded. Fixtures carry `ctx.toml` and
 git for both arms so the tree shape is identical.
 
 Arm construction follows `evals/spec3_runner.py` (the frozen referee) so numbers
-from the two harnesses stay comparable. A `headroom` arm is wired for contrast.
+from the two harnesses stay comparable. Two competitor arms are wired for
+contrast, each run with vendor defaults: `headroom` launches Claude Code through
+[headroom-ai](https://pypi.org/project/headroom-ai/)'s compression proxy
+(`pip install "headroom-ai[proxy]"`; set `AGENTBENCH_HEADROOM` to a venv
+binary), and `maki` runs [maki.sh](https://maki.sh), a different agent whose
+`--print` mode is a drop-in for Claude Code's JSON output, on the same model
+(`AGENTBENCH_MAKI` for the binary; needs `ANTHROPIC_API_KEY`, since it is not
+Claude Code and cannot use its login). Every Claude Code session's first-request
+prefix (tool count, catalogue bytes, deferral) is recorded per run, so a
+wrapper that inflates the host prompt shows up in the report, not just in cost.
+
+Two more arms make ctx the host rather than a wrapper: `sdk` runs
+`ctx agent -p` (the Claude Agent SDK driving the same `claude` binary with a
+lean built-in surface, ctx's retrieval verbs as in-process tools, the wrapper's
+hooks, with `--pack` a `ctx pack` in the first turn; `pip install
+'ctx-harness[agent]'`, `AGENTBENCH_CTX` names the `ctx` of an environment that
+has it) and `sdk_nopack` is the runtime's default, without the pack.
+
+`--max-turns 0` lifts the turn cap (the session runs until the agent stops;
+`--session-timeout` is the wall-clock budget, 10800 s being DeepSWE's own), and
+`--resume PARTIAL.json` seeds the sessions a killed sweep had finished.
+
+`pack_recall.py` is the model-free referee for the pack itself: for each
+validated DeepSWE task it ranks the checkout with `ctx pack` and scores recall
+of the source files the reference solution changes, against a keyword-count
+baseline (`results/pack_recall.json`; docs/CODE-SEARCH.md).
 
 ## Validate the referee before you spend
 
@@ -99,6 +124,43 @@ python evals/agentbench/harness.py --adapter swebench --n 60 --repeats 3 \
 comparable numbers. `exec=local` with `--adapter-arg python=<path>` is faster
 and needs no docker, but you own the dependencies; a wrong environment shows up
 as `p2p` failures at baseline, which `validate.py` reports rather than hides.
+
+### `deepswe` — DeepSWE v1.1, graded by the task's own verifier
+
+[DeepSWE](https://github.com/datacurve-ai/deep-swe) is 113 original,
+long-horizon feature tasks on active repositories (TypeScript, Go, Python,
+JavaScript, Rust), each with a held-out program verifier. v1.1 grades **only
+committed work**, extracted as `git diff --binary <base> HEAD`, re-applied to a
+pristine checkout in a separate environment, with the held-out `test.patch`
+applied afterwards and a whitelist of test ids scored from JUnit/CTRF. Editing
+tests cannot help; leaving edits uncommitted loses them.
+
+The adapter reproduces that pipeline without docker: the image's `RUN`/`ENV`
+lines are replayed into a per-run virtualenv, the agent gets that venv on
+`PATH`, and grading runs the task's own `tests/test.sh` + `grader.py` against a
+pristine checkout and a pristine copy of the venv snapshotted before the
+session. Python tasks only (the other language images need toolchain steps the
+replay does not translate); tasks whose image needs `apt-get` fail to build
+here and are excluded by validation rather than silently scored 0.
+
+```bash
+python evals/agentbench/validate.py --adapter deepswe --jobs 6          # model-free, all 34 python tasks
+python evals/agentbench/harness.py --adapter deepswe --model haiku --max-turns 60 --jobs 4 \
+    --arms naive sj --adapter-arg ids=cattrs-partial-structuring-recovery,httpx-streaming-json-iteration
+```
+
+`validate.py` uses the adapter's own controls, because DeepSWE's cheat
+surface differs from SWE-bench's: `baseline` (no patch), `gold` (reference
+patch, committed like a submission), `tampered` (**no fix**, every held-out
+test file rewritten to pass trivially — must score 0, which proves the grader
+resets them), and `vandal` (gold applied, then the solution's source files
+replaced with `raise` — must score 0, which proves tests actually execute).
+
+Two deviations from the official runner are deliberate and recorded in the
+results: the agent's network is not cut (the task's `no-network` mode cannot
+be enforced outside a container), and the interpreter is a uv-managed CPython
+3.12 (`DEEPSWE_PYTHON` overrides) rather than the image's own build. The
+corpus commit is stored on every task record.
 
 ### Not yet written
 
@@ -189,8 +251,14 @@ one of those dollars noise.
 
 The model-free canary referee passes 12/12, the SWE-bench adapter loads real
 instances with real test lists, and `report.py` refuses simulated payloads.
-Two live, one-repeat receipts are committed: the three-task canary and the
-one-task dogfood mission. Both compare plain Claude with the full wrapper
-bundle, and both used an unrecorded host-default model; they are diagnostics,
-not a broad benchmark or a containment-only ablation. A paid SWE-bench sweep
-has not been run and still needs a machine with Claude credentials and Docker.
+Three live receipts are committed: the three-task canary and the one-task
+dogfood mission (host-default model, unrecorded), and the DeepSWE v1.1 sweep
+(eight Python tasks, haiku, one repeat, run twice: before and after the two
+wrapper fixes it found), plus a single-task iteration loop under
+`results/iterations/` (cattrs, four arms including headroom-ai, one change per
+iteration) that found the print-mode tool diet and the Read-cap widening bug. The DeepSWE referee was proven on 14 of 34 Python
+tasks by `validate.py`; see [`deepswe-2026-09-13.md`](deepswe-2026-09-13.md)
+for the mechanism analysis, the exclusion list, and the per-task tables. All
+are diagnostics, not a broad benchmark or a containment-only ablation. A paid
+SWE-bench sweep has not been run and still needs a machine with Claude
+credentials and Docker.

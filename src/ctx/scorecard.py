@@ -382,6 +382,12 @@ def _interventions_v2(session_reads_dir: Path) -> dict | None:
     return result
 
 
+#: An inline tool catalogue this long with no deferral marker is the prefix-tax
+#: shape. Claude Code inlines 41 tools when deferral is off and 16-18 with it
+#: on; a host with a small catalogue and no deferral is simply small.
+_PREFIX_TAX_MIN_TOOLS = 24
+
+
 def compute_scorecard(proxy_state_dir: Path) -> dict | None:
     """Fold wire.jsonl into a scorecard dict. None when no observations.
 
@@ -409,6 +415,7 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
     est_cost = 0.0
     first_rescued_round: int | None = None
     rescued_blocks = 0
+    prefix: dict | None = None  # the first request that carried a tool catalogue
     try:
         lines = wire.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -424,6 +431,11 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
         if not usage:
             continue
         requests += 1
+        pf = rec.get("prefix") or {}
+        if pf.get("tools"):
+            # Latest, not first: wire.jsonl accumulates across sessions of one
+            # workspace, and the session being scored is the most recent.
+            prefix = dict(pf)
         if rec.get("messages", 0) > 1:
             rounds += 1
             if rec.get("rescued"):
@@ -493,6 +505,27 @@ def compute_scorecard(proxy_state_dir: Path) -> dict | None:
         "edit_share_pct": round(100 * edits / total_tools, 1) if total_tools else 0.0,
         "per_model": {k: dict(v) for k, v in sorted(per_model.items())},
     }
+    # window.json is written by the proxy process of the session being scored
+    # and carries the first tool-bearing request of THAT session; the wire log
+    # is the fallback for a state dir whose window was never written.
+    try:
+        win = json.loads((Path(proxy_state_dir) / "window.json").read_text(encoding="utf-8"))
+        if isinstance(win.get("prefix"), dict) and win["prefix"].get("tools"):
+            prefix = dict(win["prefix"])
+    except (OSError, ValueError, AttributeError):
+        pass
+    if prefix is not None:
+        # Host prefix audit (wire ground truth): the bytes every request
+        # re-reads, which the harness's own prefix manifest cannot see.
+        # `tax` is the one shape known to cost ~15k tokens per call: a host
+        # that stopped deferring tool schemas and inlines the catalogue.
+        sc["prefix"] = {
+            "system_bytes": int(prefix.get("system_bytes", 0)),
+            "tools": int(prefix.get("tools", 0)),
+            "tools_bytes": int(prefix.get("tools_bytes", 0)),
+            "deferral": bool(prefix.get("deferral")),
+            "tax": (not prefix.get("deferral")) and int(prefix.get("tools", 0)) >= _PREFIX_TAX_MIN_TOOLS,
+        }
     try:
         anomalies = _behavioral_anomalies(Path(proxy_state_dir).parent)
         if anomalies:
@@ -534,6 +567,9 @@ def render_scorecard(sc: dict) -> str:
     if sc["tools"]:
         census = " ".join(f"{k}×{v}" for k, v in list(sc["tools"].items())[:8])
         lines.append(f"  effort: edit-share {sc['edit_share_pct']}% · {census}")
+    pf = sc.get("prefix")
+    if pf:
+        lines.append(_render_prefix(pf))
     an = sc.get("anomalies")
     if an:
         # Behavioral anomalies (REFLEX axis discovery): rendered only when
@@ -651,6 +687,21 @@ def _render_interventions(iv: dict) -> list[str]:
     return lines
 
 
+def _render_prefix(pf: dict) -> str:
+    line = (
+        f"  prefix: system {pf['system_bytes'] / 1024:.1f} KB · "
+        f"tools {pf['tools']} ({pf['tools_bytes'] / 1024:.0f} KB) · "
+        f"deferral {'on' if pf['deferral'] else 'off'}"
+    )
+    if pf.get("tax"):
+        line += (
+            " — ⚠ the whole tool catalogue rides every request; under "
+            "`ctx wrap claude --proxy` this means the host lost tool deferral "
+            "(see docs/HOST-CAPABILITIES.md, 'Host prefix bytes')"
+        )
+    return line
+
+
 def summary_line(sc: dict) -> str:
     """One-liner for wrap's session-end stderr note."""
     line = (
@@ -677,6 +728,9 @@ def summary_line(sc: dict) -> str:
         # Flagged only when starvation happened — landings alone are the
         # system working and earn no warning glyph.
         line += f" · ⚠ {an['starvation']} starvation/{an['landings']} landings"
+    pf = sc.get("prefix")
+    if pf and pf.get("tax"):
+        line += f" · ⚠ prefix tax: {pf['tools']} tools inline ({pf['tools_bytes'] / 1024:.0f} KB), deferral off"
     return line
 
 

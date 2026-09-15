@@ -85,11 +85,13 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ("ask", "ask a question about this repo; get one evidence-backed answer"),
             ("q", "chain retrieval steps into one query"),
+            ("pack", "where to look first for a task: ranked files, symbols and commits in one page"),
             ("plan", "build, price and run a multi-step evidence plan"),
             ("semantic", "ask a model about selected evidence, with explicit budgets and saved progress"),
             ("index", "build a compiler-grade index so def/refs answer exactly"),
             ("def", "where a symbol is defined"),
             ("refs", "where a symbol is used"),
+            ("lsp", "ask the language server where a name is defined or used, and what it is"),
             ("callers", "what calls this symbol"),
             ("callees", "what this symbol calls"),
             ("impact", "what breaks if this symbol changes"),
@@ -136,6 +138,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("proxy", "watch API traffic to measure what a session really spent"),
             ("antigravity", "install the Antigravity workspace plugin"),
             ("wrap", "advanced per-host setup and ephemeral launch modes"),
+            ("agent", "run a task with ctx as the host: its own retrieval tools and a pack at turn one"),
         ),
     ),
 )

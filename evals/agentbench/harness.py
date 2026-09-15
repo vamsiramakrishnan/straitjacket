@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import importlib
 import json
 import os
@@ -36,6 +37,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -45,14 +47,19 @@ TOOLS = "Bash Read Grep Glob Edit Write"
 MAX_TURNS = 40
 SESSION_TIMEOUT = 2400
 
-ARMS = ("naive", "sj", "headroom")
+ARMS = ("naive", "sj", "sj_rescue", "headroom", "maki", "sdk", "sdk_nopack")
 
 
-def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int) -> list[str]:
+def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int,
+             port: int | None = None) -> list[str]:
     """Build agent commands; the sj prefix activates the full wrapper bundle."""
+    # max_turns <= 0 means uncapped: the session runs until the agent stops,
+    # bounded only by the wall-clock budget (DeepSWE's official runner gives
+    # three hours and no turn limit; --session-timeout sets it).
+    turn_cap = ["--max-turns", str(max_turns)] if max_turns and max_turns > 0 else []
     base = [
         "claude", "-p", prompt,
-        "--max-turns", str(max_turns),
+        *turn_cap,
         "--output-format", "json",
         "--allowedTools", TOOLS,
     ]
@@ -62,9 +69,79 @@ def arm_argv(arm: str, prompt: str, model: str | None, max_turns: int) -> list[s
         return base
     if arm == "sj":
         return ["ctx", "wrap", "claude", "--proxy", "--"] + base[1:]
+    if arm == "sj_rescue":
+        # The full wrapper plus the opt-in Tier-1 rescue: deterministic,
+        # addressable elision of the transcript once the window passes the
+        # threshold. Sessions here peak near 48% of a 200k window, so the
+        # default engages from mid-session; AGENTBENCH_RESCUE_PCT overrides.
+        pct = os.environ.get("AGENTBENCH_RESCUE_PCT", "25")
+        return ["ctx", "wrap", "claude", "--proxy", "--rescue-pct", pct, "--"] + base[1:]
     if arm == "headroom":
-        return ["headroom", "wrap", "claude", "--"] + base[1:]
+        # headroom-ai (pip install "headroom-ai[proxy]"): a compression proxy
+        # between Claude Code and the API, vendor defaults except the port,
+        # which must be unique per concurrent session (their default is 8787
+        # for every wrap). Binary overridable for a venv install.
+        return [os.environ.get("AGENTBENCH_HEADROOM", "headroom"), "wrap", "claude",
+                "--port", str(port or _free_port()), "--"] + base[1:]
+    if arm in ("sdk", "sdk_nopack"):
+        # ctx as the host (src/ctx/agent.py): the Claude Agent SDK driving the
+        # same `claude` binary, with a lean built-in surface, ctx's own
+        # retrieval tools in-process, and the wrapper's hooks; `sdk` adds a
+        # context pack in the first turn, `sdk_nopack` is the runtime's
+        # default (no pack — the uncapped receipt is why). Needs the [agent] extra; AGENTBENCH_CTX names the ctx
+        # binary of an environment that has it.
+        argv = [os.environ.get("AGENTBENCH_CTX", "ctx"), "agent", "-p", prompt,
+                *turn_cap, "--output-format", "json"]
+        if model:
+            argv += ["--model", model]
+        if arm == "sdk":
+            argv.append("--pack")
+        return argv
+    if arm == "maki":
+        # maki.sh: a different agent, not a wrapper. Its --print mode is a
+        # drop-in for Claude Code's (same JSON result fields), so the same
+        # parser reads cost, usage and turns. Needs ANTHROPIC_API_KEY.
+        return [os.environ.get("AGENTBENCH_MAKI", "maki"), prompt, "--print",
+                "--output-format", "json", *(["--max-turns", str(max_turns)] if turn_cap else []),
+                "--allowed-tools", ",".join(TOOLS.split()), "--yolo", "--trust",
+                *(["--model", _maki_model(model)] if model else [])]
     raise ValueError(f"unknown arm: {arm}")
+
+
+#: Claude Code resolves aliases like `haiku`; maki wants provider/model-id.
+_MAKI_ALIASES = {
+    "haiku": "anthropic/claude-haiku-4-5",
+    "sonnet": "anthropic/claude-sonnet-5",
+    "opus": "anthropic/claude-opus-5",
+}
+
+
+def _maki_model(model: str) -> str:
+    if model in _MAKI_ALIASES:
+        return _MAKI_ALIASES[model]
+    return model if "/" in model else f"anthropic/{model}"
+
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def prompt_prefix(cfg: pathlib.Path) -> dict | None:
+    """First-request prompt shape of a Claude Code session (system bytes,
+    tool count, tool-catalogue bytes, deferral), read from its transcript.
+    This is the per-arm evidence for the prefix tax the DeepSWE receipt found;
+    None for an arm that is not Claude Code (maki keeps no such transcript)."""
+    try:
+        from ctx.wrap import _prompt_snapshot
+    except ImportError:
+        return None
+    snap = _prompt_snapshot(cfg)
+    if not snap:
+        return None
+    return {k: v for k, v in snap.items() if k != "tool_names"}
 
 
 def parse_result_json(text: str) -> dict:
@@ -84,7 +161,11 @@ def session_metrics(doc: dict, wall: float) -> dict:
     writes = u.get("cache_creation_input_tokens") or 0
     uncached = u.get("input_tokens") or 0
     denom = reads + writes + uncached
+    # The host resolves aliases like `haiku`; record what it actually billed
+    # so model parity is auditable from the record, not from the flag.
+    used = sorted((doc.get("modelUsage") or {}).keys())
     return {
+        "model_used": ",".join(used) if used else None,
         "turns": doc.get("num_turns"),
         "cost_usd": round(doc.get("total_cost_usd") or 0.0, 4),
         "api_duration_s": round((doc.get("duration_ms") or 0) / 1000, 1),
@@ -99,7 +180,8 @@ def session_metrics(doc: dict, wall: float) -> dict:
 
 
 def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
-            max_turns: int, repeat: int, work_root: pathlib.Path) -> dict:
+            max_turns: int, repeat: int, work_root: pathlib.Path,
+            session_timeout: float = SESSION_TIMEOUT) -> dict:
     """One (task, arm, repeat): materialize, run the agent, grade."""
     tag = f"{task['id']}_{arm}_r{repeat}".replace("/", "_")
     # Fixtures live OUTSIDE the repository under test. An agent whose cwd sits
@@ -118,14 +200,20 @@ def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
     # tree materializes inside the workspace being graded.
     cfg = (out / "cfg" / tag).resolve()
     cfg.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg), "PIP_REQUIRE_VIRTUALENV": "1"}
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(cfg), "PIP_REQUIRE_VIRTUALENV": "1",
+           # maki keeps its config under XDG; isolate it the same way.
+           "XDG_CONFIG_HOME": str(cfg / "xdg"), "HEADROOM_HOME": str(cfg / "headroom")}
+    # An adapter that builds a per-run toolchain (a venv, an image's ENV) hands
+    # it to the agent here. Both arms receive the identical mapping.
+    if hasattr(adapter, "session_env"):
+        env.update(adapter.session_env(task, workdir))
 
     t0 = time.monotonic()
     try:
         proc = subprocess.run(
             arm_argv(arm, prompt, model, max_turns),
             cwd=workdir, env=env, capture_output=True, text=True,
-            timeout=SESSION_TIMEOUT,
+            timeout=session_timeout,
         )
         stdout, stderr, timed_out = proc.stdout, proc.stderr, False
     except subprocess.TimeoutExpired as exc:
@@ -146,6 +234,7 @@ def run_one(adapter, task: dict, arm: str, model: str | None, out: pathlib.Path,
         "timed_out": timed_out,
         "provenance": "live",
         **session_metrics(doc, wall),
+        "prefix": prompt_prefix(cfg),
     }
     # Grading is the adapter's job and never trusts the agent's own claims.
     rec.update(adapter.grade(task, workdir))
@@ -158,18 +247,35 @@ def load_adapter(name: str):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--adapter", required=True, help="canary | swebench")
+    ap.add_argument("--adapter", required=True, help="canary | swebench | deepswe | dogfood")
     ap.add_argument("--arms", nargs="+", default=["naive", "sj"], choices=ARMS)
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--model", default=None, help="passed to --model; default = host default")
-    ap.add_argument("--max-turns", type=int, default=MAX_TURNS)
+    ap.add_argument("--max-turns", type=int, default=MAX_TURNS,
+                    help="turn cap per session; 0 = uncapped (the wall-clock budget bounds it)")
+    ap.add_argument("--session-timeout", type=float, default=SESSION_TIMEOUT, dest="session_timeout",
+                    help="wall-clock budget per session in seconds (DeepSWE's official budget is 10800)")
     ap.add_argument("--out", type=pathlib.Path, default=HERE / "results")
     ap.add_argument("--work-root", type=pathlib.Path, default=None,
                     help="where fixtures are materialized; defaults to a temp dir "
                          "OUTSIDE this repo so an agent cannot reach the repo under test")
     ap.add_argument("--adapter-arg", action="append", default=[],
                     help="key=value passed through to the adapter's load()")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="concurrent (task, arm, repeat) sessions; each has its own "
+                         "fixture, config dir and toolchain, so runs cannot share state")
+    ap.add_argument("--label", default=None,
+                    help="free-text tag stored in the payload and shown by report.py, "
+                         "e.g. the wrapper version under test")
+    ap.add_argument("--prefix-parity", action="store_true",
+                    help="before any paid arm, run `ctx wrap claude --probe-prefix` (one naive "
+                         "turn, one wrapped turn) and refuse to run when the wrapper adds more "
+                         "prefix than it declares or loses tool deferral; the verdict is stored "
+                         "in the payload (--allow-prefix-tax runs anyway and records the failure)")
+    ap.add_argument("--allow-prefix-tax", action="store_true")
+    ap.add_argument("--resume", default=None, metavar="PARTIAL_JSON",
+                    help="seed finished sessions from an interrupted sweep's .partial.json and skip them")
     args = ap.parse_args()
 
     import sys
@@ -195,38 +301,94 @@ def main() -> int:
     print(f"adapter={args.adapter} tasks={len(tasks)} arms={args.arms} repeats={args.repeats}",
           flush=True)
 
-    records = []
-    for repeat in range(1, args.repeats + 1):
-        for task in tasks:
-            for arm in args.arms:
-                rec = run_one(adapter, task, arm, args.model, args.out,
-                              args.max_turns, repeat, work_root)
+    if "maki" in args.arms and not os.environ.get("ANTHROPIC_API_KEY"):
+        # maki is not Claude Code: it cannot use Claude Code's login, and a
+        # keyless run returns a JSON error after zero turns. Refuse before
+        # the other arms spend anything.
+        raise SystemExit("the maki arm needs ANTHROPIC_API_KEY in the environment "
+                         "(maki authenticates itself; Claude Code's login does not apply)")
+
+    prefix_parity = None
+    if args.prefix_parity and "sj" in args.arms:
+        # The referee for the wrapper itself: a paid sweep is only worth
+        # running when the wrapper's per-request cost is what it declares.
+        from ctx.wrap import probe_prefix, render_prefix_parity
+
+        prefix_parity = probe_prefix(work_root, model=args.model or "haiku")
+        print(render_prefix_parity(prefix_parity), flush=True)
+        if not prefix_parity.get("ok") and not args.allow_prefix_tax:
+            raise SystemExit("prefix parity FAILED: the wrapper would tax every request; "
+                             "fix it or pass --allow-prefix-tax to record the failure and run anyway")
+
+    records: list[dict] = []
+    done: set[tuple[str, str, int]] = set()
+    if args.resume:
+        # A sweep that died mid-way (a container restart, a killed shell) keeps
+        # the sessions that finished: their records are seeded and their
+        # (task, arm, repeat) cells skipped. Only the in-flight cells are paid
+        # for twice.
+        prior = json.loads(pathlib.Path(args.resume).read_text(encoding="utf-8"))
+        for rec in prior.get("results", []):
+            if not rec.get("session_error") and "harness_error" not in rec:
                 records.append(rec)
-                print(
-                    f"  [{arm}] r{repeat} {task['id']:44s} "
-                    f"resolved={str(rec.get('resolved')):5s} turns={rec.get('turns')} "
-                    f"cache={rec.get('cache_hit_pct')}% {rec.get('wall_s')}s",
-                    flush=True,
-                )
-                payload = {
-                    "schema": "agentbench.run/v1",
-                    "adapter": args.adapter,
-                    "arms": args.arms,
-                    "model": args.model,
-                    "max_turns": args.max_turns,
-                    "repeats": args.repeats,
-                    "task_ids": [t["id"] for t in tasks],
-                    "provenance": "live",
-                    "simulated": False,
-                    "work_root": str(work_root),
-                    "results": records,
-                }
-                # In-flight runs write to a .partial file: a results file
-                # named like a finished one, holding half the arms, reads as a
-                # complete eval to anything that globs the directory -- report.py
-                # included. Renamed to the real name only once every arm lands.
-                (args.out / f"{args.adapter}.partial.json").write_text(
-                    json.dumps(payload, indent=1), encoding="utf-8")
+                done.add((rec["task_id"], rec["arm"], int(rec.get("repeat", 1))))
+        print(f"resumed {len(records)} finished sessions from {args.resume}", flush=True)
+    lock = threading.Lock()
+
+    def record(rec: dict) -> None:
+        with lock:
+            records.append(rec)
+            print(
+                f"  [{rec['arm']}] r{rec['repeat']} {rec['task_id']:44s} "
+                f"resolved={str(rec.get('resolved')):5s} turns={rec.get('turns')} "
+                f"cache={rec.get('cache_hit_pct')}% {rec.get('wall_s')}s",
+                flush=True,
+            )
+            payload = {
+                "schema": "agentbench.run/v1",
+                "adapter": args.adapter,
+                "arms": args.arms,
+                "model": args.model,
+                "max_turns": args.max_turns,
+                "session_timeout_s": args.session_timeout,
+                "repeats": args.repeats,
+                "jobs": args.jobs,
+                "label": args.label,
+                "prefix_parity": prefix_parity,
+                "task_ids": [t["id"] for t in tasks],
+                "provenance": "live",
+                "simulated": False,
+                "work_root": str(work_root),
+                "results": records,
+            }
+            # In-flight runs write to a .partial file: a results file
+            # named like a finished one, holding half the arms, reads as a
+            # complete eval to anything that globs the directory -- report.py
+            # included. Renamed to the real name only once every arm lands.
+            (args.out / f"{args.adapter}.partial.json").write_text(
+                json.dumps(payload, indent=1), encoding="utf-8")
+
+    def one(task: dict, arm: str, repeat: int) -> None:
+        try:
+            rec = run_one(adapter, task, arm, args.model, args.out,
+                          args.max_turns, repeat, work_root,
+                          session_timeout=args.session_timeout)
+        except Exception as exc:  # noqa: BLE001 - a broken fixture is a row, not a crash
+            rec = {"task_id": task["id"], "arm": arm, "repeat": repeat, "provenance": "live",
+                   "resolved": False, "session_error": True, "harness_error": repr(exc)[:500]}
+        record(rec)
+
+    jobs = [(task, arm, repeat)
+            for repeat in range(1, args.repeats + 1)
+            for task in tasks
+            for arm in args.arms
+            if (task["id"], arm, repeat) not in done]
+    if args.jobs <= 1:
+        for job in jobs:
+            one(*job)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            list(pool.map(lambda j: one(*j), jobs))
 
     partial = args.out / f"{args.adapter}.partial.json"
     final = args.out / f"{args.adapter}.json"

@@ -322,6 +322,15 @@ _GATE_FAILURE_HEAD_BYTES = 2048  # bounded excerpt inside a gate-failure digest
 _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
 
 _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
+# A transparent rewrite must be native-shaped where capture buys nothing.
+# Measured on DeepSWE (evals/agentbench, haiku): the agent's own commands
+# produced a median of 91-277 bytes, yet every routed one came back as a
+# receipt (header, command echo, status line) and a failing `python -c`
+# reported ctx's exit 3 instead of the command's 1 — results grew 2-8x and
+# the model re-ran identical failing checks. `--passthrough` makes `ctx run`
+# print small, complete output verbatim (handle on one trailing line) and
+# exit with the wrapped command's own status; large output still digests.
+_REWRITE_FLAGS = " --passthrough"
 
 # --- Tool-kind classification -------------------------------------------------
 # Which guard branch a tool name takes (edit / command / read / search), matched
@@ -1101,7 +1110,7 @@ def _deny_cmd(
     # A never-terminating command must not be steered into a blocking capture.
     bg = " --bg" if _follows_forever(argv) else ""
     if has_meta and original:
-        cmd = f"ctx run{bg} --shell -- " + shlex.quote(original)
+        cmd = f"ctx run{bg}{_REWRITE_FLAGS} --shell -- " + shlex.quote(original)
     else:
         # Classification deliberately unwraps ``env``, ``timeout``, ``nice``
         # and similar launchers to see the real program. Execution must retain
@@ -1109,7 +1118,7 @@ def _deny_cmd(
         # semantics. Reparse the already validated original string only for a
         # metacharacter-free direct argv rewrite.
         routed_argv = shlex.split(original) if original else argv
-        cmd = f"ctx run{bg} -- " + " ".join(shlex.quote(a) for a in routed_argv)
+        cmd = f"ctx run{bg}{_REWRITE_FLAGS} -- " + " ".join(shlex.quote(a) for a in routed_argv)
     reason = _REWRITE_REASON
     if bg:
         reason = (
@@ -1629,7 +1638,7 @@ def _classify_command_inner(
         if _steering_allows(policy):
             bg = " --bg" if _follows_forever(argv) else ""  # fix: never-terminating piped command needs --bg too
             fa["_rewrite"] = {
-                "command": "ctx run --shell" + bg + " -- " + shlex.quote(stripped),
+                "command": "ctx run" + bg + _REWRITE_FLAGS + " --shell -- " + shlex.quote(stripped),
                 "reason": _REWRITE_REASON,
             }
         return fa
@@ -1942,11 +1951,66 @@ def _pressured_window(max_lines: int, total: int, budget: int) -> int:
     return max(_OVER_BUDGET_MIN_LINES, int(max_lines / (4 * over)))
 
 
+#: Token budget for the outline that answers a whole-file read. A 64 KB
+#: Python module (~16k tok) outlines to ~1k tok at this budget; the first
+#: 240-line page it replaces was ~2.5k tok and showed 14% of the file.
+_OUTLINE_BUDGET_TOKENS = 1200
+
+
+def _whole_file_read(tool_input: dict[str, Any] | None) -> bool:
+    """A Read that asked for the file, not a slice of it."""
+    if not tool_input:
+        return False
+    return not any(
+        isinstance(tool_input.get(k), int) and not isinstance(tool_input.get(k), bool)
+        and tool_input.get(k) > 0
+        for k in ("offset", "limit", "start_line", "end_line", "StartLine", "EndLine")
+    )
+
+
+def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int) -> str | None:
+    """The map of a large code file, for a Read that wanted all of it.
+
+    Measured on DeepSWE (cattrs, haiku): every whole-file Read of the 64 KB
+    converters.py came back as its first 240 lines, ~2.5k tokens showing 14%
+    of the file and no structure, and the session paged on from there. The
+    skeleton (tree-sitter / ctags / stdlib ast, with line ranges and minted
+    spans) is ~1k tokens for all 83 symbols and makes the next read a
+    targeted one. Slice reads (offset/limit) are never touched. Fail-open:
+    any problem returns None and the bounded first page applies as before."""
+    if not workspace_root:
+        return None
+    try:
+        from ctx.skeleton import language_for, skeleton_for, skeleton_outline
+
+        rel = os.path.relpath(path_str, workspace_root).replace(os.sep, "/")
+        if rel.startswith("..") or not language_for(rel):
+            return None
+        from ctx.store import Store
+        from ctx.workspace import resolve_workspace
+
+        ws = resolve_workspace(workspace_root)
+        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+        sk = skeleton_for(store, ws, rel)
+        if not sk.get("symbols"):
+            return None
+        outline = skeleton_outline(sk, _OUTLINE_BUDGET_TOKENS)
+        return (
+            f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte code file "
+            f"(~{size // 4:,} tok). Its map is below instead of the first page; "
+            "read what you need by range (Read with offset and limit) or by "
+            f"symbol (ctx get repo:{rel} --symbol <Name>).\n" + outline
+        )
+    except Exception:
+        return None
+
+
 def classify_read(
     path_str: str,
     workspace_root: str | None,
     policy: dict[str, Any],
     session_id: str = "unknown",
+    tool_input: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     if workspace_root and not os.path.isabs(path_str):
         path_str = os.path.join(workspace_root, path_str)  # fix: resolve relative paths against workspace_root, not process CWD
@@ -1980,6 +2044,13 @@ def classify_read(
     # which _pressured_window reads as "no pressure").
     seen = 0 if in_ledger else _ledger_charge(workspace_root, session_id, 0)
     if size > limit:
+        if not in_ledger and _whole_file_read(tool_input):
+            outline = _skeleton_outline_for(path_str, workspace_root, size)
+            if outline:
+                # A deny whose reason IS the answer: the outline reaches the
+                # model as the tool's text on every host, and no rewrite is
+                # attached so the first-page fallback never overrides it.
+                return _deny(outline)
         price = _price_note(size, workspace_root)
         decision: dict[str, Any] = _deny(
             f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline budget).\n"
@@ -2025,6 +2096,11 @@ def classify_read(
 _APPLY_ROOT: dict[str, Any] = {}
 
 
+#: Rewrite fields that are upper bounds on a result (Read `limit`, Grep
+#: `head_limit`). The caller's own smaller value is kept.
+_CAP_FIELDS = frozenset({"limit", "head_limit"})
+
+
 def _apply_rewrite(
     decision: dict[str, Any],
     tool_input: dict[str, Any],
@@ -2044,7 +2120,21 @@ def _apply_rewrite(
             return decision  # no command field to substitute: keep plain decision
         updated[command_key] = hint["command"]
     else:
-        updated.update(hint.get("fields", {}))
+        for key, cap in hint.get("fields", {}).items():
+            own = tool_input.get(key)
+            if (
+                key in _CAP_FIELDS
+                and isinstance(own, int) and not isinstance(own, bool)
+                and 0 < own <= cap
+            ):
+                # A cap narrows a read; it never widens one. Measured on
+                # DeepSWE (cattrs, haiku): the model asked `offset=729
+                # limit=10` on a 60 KB file and the large-file rewrite handed
+                # it 239 lines — every targeted read became a 10 KB page,
+                # 106 KB of Read results against naive's 74 KB, from the
+                # guard that exists to bound them.
+                continue
+            updated[key] = cap
     decision["rewrite"] = {"updatedInput": updated, "reason": hint["reason"]}
     if "command" in hint:
         # Carried for hosts that cannot substitute input and have to name the
@@ -2258,7 +2348,8 @@ def classify(
             v = tool_input.get(key)
             if isinstance(v, str) and v:
                 return _apply_rewrite(
-                    classify_read(v, workspace_root, policy, session_id), tool_input
+                    classify_read(v, workspace_root, policy, session_id, tool_input=tool_input),
+                    tool_input,
                 )
         return dict(DECISION_ALLOW)
 

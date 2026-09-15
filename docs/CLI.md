@@ -301,13 +301,40 @@ ctx search run:8d8335db6848 'authorization failed'
 Searching an artifact is cheaper and more trustworthy than rerunning a command merely
 to recover text the harness already captured.
 
+### Search the repository: filters, symbols, history
+
+Repository searches take the query language (docs/CODE-SEARCH.md): filters ride
+in the pattern list, the text index narrows the corpus to trigram candidates
+(synced by fingerprint before every query, verified against the live bytes),
+and history is a search target like any other.
+
+```bash
+ctx search repo: TokenBucket file:src/ '!file:tests' lang:python
+ctx search repo: 'rate limit' case:no
+ctx search repo: sym:resolve_refs                  # definition sites from the symbol table
+ctx search repo: type:commit "prefix tax"          # commits whose message says so
+ctx search repo: type:diff ENABLE_TOOL_SEARCH file:src/   # commits whose change carries it
+```
+
+The coverage line names the engine (`index trigram · 45 ms sync`, ripgrep, or
+the Python scan) and, for the index, how many of the corpus's files were read
+to verify. `CTX_SEARCH_ENGINE=rg|python` bypasses the index for one call;
+`CTX_SEARCH_INDEX=off` disables it.
+
 ## Answer exactly, not approximately: `ctx index`
 
 ```bash
 ctx index --list                 # which indexers are installed, what this repo needs
-ctx index                        # index the workspace's dominant language
+ctx index                        # refresh the text index, then index the dominant language
 ctx index --language rust        # or name one
+ctx index --text                 # only the text index (trigrams, symbols, fingerprints)
+ctx index --status               # what is indexed, and how current it is
 ```
+
+Two indexes live here. The **text index** (docs/CODE-SEARCH.md) needs no
+toolchain, builds itself on first search below a size guard (4,000 files /
+48 MB) and is re-synced by a stat sweep before every query, so `--text` is a
+warm-up, not a requirement. The **SCIP index** is the exact tier below.
 
 `ctx def` and `ctx refs` run an engine ladder, and the top rung is a SCIP index
 — the answer the language's own compiler front end gives. ctx has read those
@@ -358,6 +385,18 @@ That check walks the source files, which measured ~220 ms on a 4,700-file
 worktree. It is charged on every `refs`/`def` call in an indexed repository,
 and it buys the difference between an exact answer and a plausible one — when
 the verdict is "stale", the textual scan that runs instead costs far more.
+
+An index `ctx index` built also records the content hash of every source file
+it described, and that makes a stale index *partially* usable instead of
+useless: files whose hash still matches are answered exactly, the changed or
+new ones by the textual rung restricted to them, and the header says how many:
+
+```
+[ctx refs helper · engine scip (exact) · 1 changed file via ast (textual)]
+```
+
+`ctx index --status` lists the files the index no longer describes; `ctx impls`
+has an exact rung from the index's own implementation edges.
 
 Nothing about this is required. With no index the ladder keeps its lower rungs
 and every answer still discloses which engine produced it. `ctx doctor` carries
@@ -413,6 +452,31 @@ marked `[unscoped]` so a candidate never reads as a fact. When several
 definitions answer to one name, every one of them is listed before the results
 — an ambiguous question gets an ambiguous answer, out loud.
 
+## Ask the language server: `ctx lsp`
+
+The skeleton (`ctx stats repo:<file>`) says *where* symbols are, from a parser.
+A language server says what a name at a position *means*: its definition across
+files, every reference to it, its type and signature. `ctx lsp` is a bounded
+JSON-RPC client over stdio for any server on `PATH`, one process per call.
+
+```bash
+ctx lsp def   src/app.py:42:13            # definition of the name at line 42, col 13 (1-based)
+ctx lsp refs  repo:src/app.py:Router.dispatch   # references; position taken from the skeleton
+ctx lsp hover src/app.py:42:13 --timeout 60     # type and signature
+```
+
+Output is the same coordinate shape as `ctx refs` (`repo:<path>:L<n>: <text>`),
+workspace-confined, with the engine disclosed in the header (`engine lsp
+(pyright-langserver)`). Servers are looked up per skeleton language: pyright,
+pylsp or jedi-language-server for Python; typescript-language-server; gopls;
+rust-analyzer; clangd; jdtls; kotlin-language-server; lua-language-server;
+intelephense or phpactor; ruby-lsp or solargraph; metals; bash-language-server;
+sourcekit-lsp; csharp-ls or omnisharp. `CTX_LSP_SERVERS` (JSON of the same
+shape, `{"python": [["pylsp"]]}`) replaces the table. `ctx doctor` lists which
+server each language resolved to. No server for a language exits `2`; a server
+that fails or times out exits `3`; `ctx refs` uses the tier as a rung above jedi
+and the textual fallback when a server is present, and says so.
+
 ## Answer a question: `ctx ask`
 
 ```bash
@@ -447,7 +511,16 @@ ctx q 'records run:8d8335db6848#stdout --jsonl | group level | count'
 ctx q 'search TODO --glob "src/*.py" | histogram file'
 ```
 
+```bash
+ctx q 'commits "rate limit" | touched | top 5 | outline'   # commits → files they touched → outlines
+ctx q 'search TokenBucket file:src | history'              # each site with the commit that last changed its file
+ctx q 'search retry lang:python | history --line'          # per line (git blame)
+```
+
 `ctx q` operates over typed record streams such as failures, symbols, files, and sites.
+The `search` stage takes the query language's filters and narrows through the text
+index; `commits` turns git history into records, `touched` into the files they name,
+and `history` annotates sites or files with their last commit (docs/CODE-SEARCH.md).
 `corpus` selects a bounded eligible file set with a coverage receipt (`--changed` binds
 to worktree generations, never mtime); `records` opens a stored JSON/JSONL artifact as a
 record stream; `distinct` and `histogram` summarize any field.
@@ -456,6 +529,38 @@ costs statically boundable and every stage’s result addressable.
 
 Use `ctx py` when the control flow is genuinely computational. Use `ctx q` when the
 intent is a bounded composition of repository and evidence facts.
+
+## Where to look first: `ctx pack`
+
+```bash
+ctx pack "Add partial_structure to BaseConverter; return a PartialResult …"
+ctx pack @task.md --files 10 --budget 3000
+ctx pack - --json < task.md
+```
+
+A ranked, budgeted context pack for a task: the files the task's terms, the
+symbol table, the paths and the history point at, each with its outline and the
+reason it is there (`why: terms … · defines … · commit …`). Terms are weighted
+by rarity from the text index and verified as whole-word counts in the file's
+bytes; tests and prose are demoted unless the task is about them. Deterministic
+for a tree state; `evals/agentbench/pack_recall.py` measures it against the
+files DeepSWE reference solutions actually change (docs/CODE-SEARCH.md).
+
+## ctx as the host: `ctx agent`
+
+```bash
+pip install 'ctx-harness[agent]'
+ctx agent -p "the task" --model haiku --max-turns 60 --output-format json
+ctx agent -p @task.md --pack --verbose
+```
+
+Runs a print-mode session on the Claude Agent SDK with ctx as the host: a lean
+built-in surface (Bash, Read, Edit, Write, MultiEdit), the retrieval verbs as
+in-process tools (`search`, `outline`, `get`, `refs`, `pack`), the wrapper's
+hooks, and with `--pack` a context pack in the first turn (off by default: on
+DeepSWE with haiku it cost held-out tests, see the receipt). The SDK drives the same `claude`
+binary, so billing, caching and the login are the host's; the result JSON is
+the host's shape plus `pack` and `runtime`. Exit 2 without the extra.
 
 ## Compare runs: `ctx diff`
 
@@ -537,7 +642,12 @@ ctx wrap claude --proxy -- -p "fix the failing tests"
 ```
 
 The wrapper injects host settings for the session and removes them when the process
-ends.
+ends. With `--proxy` the session's `ANTHROPIC_BASE_URL` points at a loopback
+relay; because Claude Code turns deferred tool loading off for any non-Anthropic
+base URL, the wrapper also sets `ENABLE_TOOL_SEARCH=true` when the relay's
+upstream is Anthropic itself (a value you set yourself is left alone, and a
+third-party upstream is never forced). Without that, every request carried the
+full tool catalogue — measured at ~15k extra cached tokens per call.
 
 ### Antigravity
 
@@ -605,7 +715,7 @@ used, and they answer three different questions.
 | `0` | Success | Continue |
 | `1` | **ctx** failed | Not your invocation's fault: an internal error, an unreadable store, an engine that would not start. Retry or run `ctx doctor` |
 | `2` | ctx **rejected the invocation** | Fix the arguments. Unknown command or flag, a malformed selector (`--lines nope`), an ungrammatical reference (`zzz:xyz`), a missing required argument, a workspace that will not resolve, or a handle that no longer resolves because `ctx gc` or the retention window collected it |
-| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output |
+| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output. Exception: `ctx run --passthrough` (the form the hooks rewrite tool calls into) exits with the child's own status, and prints small, complete output verbatim with the `run:` handle on one trailing line, so a rewritten tool call looks to the host exactly like the native one |
 | `124` | Timed out | The child exceeded `--timeout` (or `ctx job --wait` gave up). Matches `timeout(1)` |
 | `127` | Not found | The program ctx was asked to launch or wrap is not on `PATH`. Matches the shell's convention |
 

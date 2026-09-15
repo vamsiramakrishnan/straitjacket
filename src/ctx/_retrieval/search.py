@@ -196,6 +196,7 @@ def _render_search(
     cap: int,
     snapshots: bool,
     telemetry_bytes: int,
+    filters: str = "",
 ) -> str:
     """The one ``ctx search`` rendering: header, hit body, coverage, result
     provenance, snapshot notes, continuation, emission and telemetry.
@@ -204,11 +205,13 @@ def _render_search(
     number of matches found, ``scanned`` the engine's own coverage line — the
     only part of the output the two engines legitimately disagree about,
     because "complete over corpus, N deep-searched" and "N targets, M lines"
-    are different true statements about different work.
+    are different true statements about different work. ``filters`` is the
+    query language's own spelling of the filters that applied.
     """
     out: list[str] = [f"[ctx search {ref.display()}]"]
     out.append(
         "patterns: " + " ".join(repr(p) for p in patterns) + (" (all)" if mode_all else " (any)")
+        + (f" · {filters}" if filters else "")
     )
 
     last_target = None
@@ -306,8 +309,28 @@ def search(
     # answers "is it a sane count".
     cap = bounds.count(bounds.explicit(max_matches, ws.config.budgets.max_matches))
 
+    # -------- the query language: filters ride in the pattern list
+    # (docs/CODE-SEARCH.md). Only repo searches have paths, languages,
+    # symbols and history to filter on; a run:/blob: search keeps every
+    # token as a pattern.
+    from ctx import searchq
+
+    query = None
+    if ref.kind == "repo":
+        try:
+            query = searchq.parse(list(patterns))
+        except searchq.QueryError as e:
+            raise RetrievalError(str(e)) from e
+        patterns = list(query.patterns)
+        if query.kind != "code":
+            return _search_history(store, ws, ref, ref_text, query, cap=cap)
+        if not patterns and not query.syms:
+            raise RetrievalError("at least one pattern is required (filters alone select nothing)")
+
     # MULTILINE keeps ^/$ line-anchored now that matching runs whole-text.
     flags = re.MULTILINE
+    if query is not None and query.case is False:
+        flags |= re.IGNORECASE
     try:
         rxs = [
             re.compile(re.escape(p) if fixed else p, flags)
@@ -316,8 +339,22 @@ def search(
     except re.error as e:
         raise RetrievalError(f"invalid pattern: {e}") from e
 
-    # -------- repo searches prefer ripgrep when installed (auto-fallback)
-    if ref.kind == "repo" and _rg_available():
+    # -------- repo searches: the text index narrows the corpus first
+    # (candidates from trigrams, verified below against the live bytes), then
+    # ripgrep when installed, then the Python engine. A pattern with no
+    # literal run of three bytes has no trigrams and skips the index.
+    index_targets = None
+    if ref.kind == "repo" and query is not None:
+        index_targets = _index_candidates(
+            store, ws, ref, query, rxs, fixed=fixed, mode_all=mode_all, glob=glob, scope=scope
+        )
+        if index_targets is not None and not patterns:
+            # sym:Name alone: the answer is the definition sites themselves.
+            return _render_symbol_sites(store, ws, ref, ref_text, query, index_targets, cap=cap)
+
+    if index_targets is None and ref.kind == "repo" and _rg_available() and not (
+        query is not None and query.has_filters
+    ):
         if scope:
             scoped = ws.config.scopes.get(scope)
             if not scoped:
@@ -340,7 +377,10 @@ def search(
         # else: fall through to the Python engine
 
     skipped_binary = 0
-    if ref.kind == "run":
+    engine_note = ""
+    if index_targets is not None:
+        targets, considered, skipped_binary, engine_note = index_targets
+    elif ref.kind == "run":
         targets, skipped_binary = _resolve_run_targets(store, ref, glob=glob)
         considered = len(targets) + skipped_binary
     elif ref.kind == "blob":
@@ -353,7 +393,8 @@ def search(
         considered = 1
     elif ref.kind == "repo":
         targets, considered, skipped_binary = _resolve_repo_targets(
-            store, ws, ref, glob=glob, scope=scope
+            store, ws, ref, glob=glob, scope=scope,
+            keep=(lambda rel: searchq.keep_path(rel, query)) if query is not None and query.has_filters else None,
         )
     else:
         raise RetrievalError(f"cannot search reference kind {ref.kind!r}")
@@ -423,20 +464,172 @@ def search(
             )
         )
 
+    if engine_note:
+        scanned = (
+            f"  scanned: {fmt_int(len(targets))} of {fmt_int(considered)} targets · "
+            f"{fmt_int(scanned_lines)} lines · {engine_note}"
+        )
+    else:
+        scanned = (
+            f"  scanned: {fmt_int(considered)} targets · {fmt_int(scanned_lines)} lines"
+            + (f" · {skipped_binary} binary skipped" if skipped_binary else "")
+        )
     return _render_search(
         store, ws, ref, ref_text, patterns, rows,
         mode_all=mode_all,
         total=len(matches),
-        scanned=(
-            f"  scanned: {fmt_int(considered)} targets · {fmt_int(scanned_lines)} lines"
-            + (f" · {skipped_binary} binary skipped" if skipped_binary else "")
-        ),
+        scanned=scanned,
         cap=cap,
         # Snapshot-on-read for repo evidence (SPEC §6.3) — only repo targets
         # have a workspace file to pin.
         snapshots=ref.kind == "repo",
         telemetry_bytes=sum(len(t.text) for t in targets),
+        filters=query.describe() if query is not None else "",
     )
+
+
+def _index_candidates(
+    store: Store, ws: Workspace, ref: Ref, query, rxs, *, fixed: bool, mode_all: bool,
+    glob: str | None, scope: str | None,
+) -> tuple[list[SearchTarget], int, int, str] | None:
+    """The text-index rung: candidate files from trigrams (and ``sym:``),
+    read for verification. None when the index is off, unbuilt and too big
+    to build implicitly, or when nothing in the query has a trigram to
+    offer — the lower rungs then scan the corpus as before.
+
+    Returns ``(targets, corpus size, binary skipped, engine note)``."""
+    import os
+
+    from ctx import codeindex, searchq
+
+    if os.environ.get("CTX_SEARCH_ENGINE", "auto") not in ("auto", "index"):
+        return None
+    if fixed:
+        exprs = [codeindex.expr_for_literal(_unescape(rx.pattern)) for rx in rxs]
+    else:
+        exprs = [codeindex.expr_for_regex(rx.pattern) for rx in rxs]
+    expr = codeindex._and(exprs) if (mode_all or len(exprs) == 1) else codeindex._or(exprs)
+    if codeindex.is_unrestricted(expr) and not query.syms and not query.has_filters:
+        return None
+    try:
+        idx = codeindex.open_index(store, ws)
+    except Exception:
+        return None
+    if idx is None:
+        return None
+    try:
+        # The corpus the search is over: the subtree/scope/glob, then the
+        # query's own path and language filters.
+        subset = _corpus_rels(ws, ref, glob=glob, scope=scope)
+        keep = [r for r in subset if searchq.keep_path(r, query)] if query.has_filters else subset
+        if query.syms:
+            defining = set()
+            for name in query.syms:
+                defining.update(rel for rel, _k, _l in idx.files_defining(name))
+            keep = [r for r in keep if r in defining]
+        considered = len(keep)
+        rels = idx.candidates(expr, subset=keep)
+        # Byte-stable on an unchanged tree: no timings, no "re-indexed"
+        # counts (search results are content-addressed and cached on them).
+        note = "index trigram"
+    finally:
+        idx.close()
+    targets: list[SearchTarget] = []
+    skipped_binary = 0
+    for rel in rels:
+        try:
+            data = (ws.root / rel).read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in data[:8192]:
+            skipped_binary += 1
+            continue
+        targets.append(SearchTarget(label=rel, text=data.decode("utf-8", "replace")))
+    return targets, considered, skipped_binary, note
+
+
+def _unescape(pattern: str) -> str:
+    """``re.escape`` undone for the fixed-string case, so the literal's own
+    trigrams are looked up rather than its backslashes'."""
+    return re.sub(r"\\(.)", r"\1", pattern)
+
+
+def _corpus_rels(ws: Workspace, ref: Ref, *, glob: str | None, scope: str | None) -> list[str]:
+    from ctx.sessiondir import LEDGER_DIR_NAME
+
+    from .targets import _glob_match
+
+    if scope:
+        scoped = ws.config.scopes.get(scope)
+        if not scoped:
+            raise RetrievalError(
+                f"unknown scope {scope!r}; configured: {sorted(ws.config.scopes) or 'none'}"
+            )
+        roots = list(scoped)
+    else:
+        roots = [ref.path]
+    rels: list[str] = []
+    for root in roots:
+        rels.extend(ws.list_files(root))
+    rels = sorted(dict.fromkeys(rels))
+    rels = [r for r in rels if r.replace("\\", "/").split("/")[0] != LEDGER_DIR_NAME]
+    if glob:
+        rels = [r for r in rels if _glob_match(r, glob)]
+    return rels
+
+
+def _render_symbol_sites(
+    store: Store, ws: Workspace, ref: Ref, ref_text: str, query, index_targets, *, cap: int
+) -> str:
+    """``sym:Name`` with no pattern: the definition sites, from the index's
+    symbol table, each verified against the file's current line."""
+    from ctx import codeindex
+
+    targets, considered, skipped_binary, note = index_targets
+    idx = codeindex.Index(store, ws)
+    rows: list[RenderRow] = []
+    try:
+        by_label = {t.label: t for t in targets}
+        sites = []
+        for name in query.syms:
+            sites.extend((rel, kind, line, name) for rel, kind, line in idx.files_defining(name)
+                         if rel in by_label)
+        sites.sort()
+        for rel, kind, line, name in sites[:cap]:
+            lines = by_label[rel].text.split("\n")
+            text = lines[line - 1].strip()[:_LINE_CHARS] if 0 < line <= len(lines) else ""
+            col = text.find(name) + 1 if name in text else 0
+            rows.append(RenderRow(target=rel, line_no=line, col_a=col, col_b=col + len(name) if col else 0,
+                                  text=text, before=[], after=[], contextual=False))
+    finally:
+        idx.close()
+    return _render_search(
+        store, ws, ref, ref_text, [f"sym:{s}" for s in query.syms], rows,
+        mode_all=False, total=len(sites), cap=cap,
+        scanned=f"  scanned: {fmt_int(len(targets))} of {fmt_int(considered)} targets · symbol table · {note}",
+        snapshots=True, telemetry_bytes=sum(len(t.text) for t in targets),
+        filters=query.describe(),
+    )
+
+
+def _search_history(store: Store, ws: Workspace, ref: Ref, ref_text: str, query, *, cap: int) -> str:
+    """``type:commit`` / ``type:diff``: commits as evidence rows. The
+    history renderer is the query language's own (:mod:`ctx.searchq`); a
+    commit is not a hit and does not wear a hit's format."""
+    from ctx import searchq
+
+    try:
+        rows = searchq.history(ws, query, max_count=max(cap, 1))
+    except searchq.QueryError as e:
+        raise RetrievalError(str(e)) from e
+    except OSError as e:
+        raise RetrievalError(f"git: {e}") from e
+    payload = {"query": query.describe(), "patterns": query.patterns, "rows": [r.payload() for r in rows]}
+    blob = short_id(store.put_blob(canonical_json(payload)))
+    text = searchq.render_history(ref.display(), query, rows, cap=cap, blob=blob)
+    result = _emit(ws, text, ws.config.budgets.result_tokens, None, handle=ref_text)
+    record_telemetry(store, "search", sum(len(r.subject) for r in rows), len(result.encode("utf-8")))
+    return result
 
 
 def _render_rg_search(
