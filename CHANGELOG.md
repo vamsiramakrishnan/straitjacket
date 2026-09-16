@@ -6,6 +6,15 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- **`ctx capsule`** (`src/ctx/capsule.py`): evidence that travels. One file
+  holding the manifests a set of cited handles names and the blobs they
+  reference, so a `run:` address in a pull request still resolves on the
+  reviewer's machine and after this container is gone. `export` closes
+  transitively and reports any cited handle that resolved to nothing;
+  `import` verifies every member against both the capsule index and its own
+  content address, and writes nothing if one fails; the file is byte-stable,
+  so two capsules of one task compare by hash. Carries no task text.
+
 - **memvid, measured before adoption** (`evals/memvid_fidelity.py`, receipt
   `evals/memvid-fidelity-2026-09-16.md`): a `.mv2` capsule looked like the right
   container for portable evidence, so the round trip was checked first. One case

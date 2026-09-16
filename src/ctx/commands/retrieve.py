@@ -362,3 +362,59 @@ def cmd_q(ws, ns) -> int:
     )
     _emit_bounded_digest(ws, store, text, plan)
     return 0
+
+
+def cmd_capsule(ws, ns) -> int:
+    """`ctx capsule export|verify|import` — evidence that travels (ctx.capsule).
+
+    A citation is only worth what it resolves to, and a `run:` handle
+    resolves in exactly one store. These three verbs move the bytes behind a
+    set of handles into one file and back out again, verifying every member
+    against two independent records of its hash on the way in.
+    """
+    import json as _json
+    from pathlib import Path
+
+    from ctx import capsule
+    from ctx.store import Store
+
+    path = Path(ns.path)
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    try:
+        if ns.action == "verify":
+            index, members, problems = capsule.verify(path)
+            if ns.as_json:
+                print(_json.dumps(
+                    {"path": str(path), "members": len(members), "problems": problems,
+                     "handles": index.get("handles") or []},
+                    indent=2, sort_keys=True))
+            elif problems:
+                print(f"ctx capsule verify {path.name}: {len(problems)} problem(s)", file=sys.stderr)
+                for p in problems:
+                    print(f"  {p}", file=sys.stderr)
+            else:
+                print(f"[ctx capsule verify {path.name}]\n"
+                      f"{len(members)} member(s) · every byte matches its recorded hash "
+                      f"and its own address")
+            return 1 if problems else 0
+
+        if ns.action == "import":
+            report = capsule.import_capsule(store, path, pin=not ns.no_pin)
+            action = "import"
+        else:
+            handles = list(ns.handle or [])
+            if ns.task:
+                handles = capsule.handles_from_ledger(ws.root, ns.task) + handles
+            if not handles:
+                print("ctx capsule export: give --handle or --task", file=sys.stderr)
+                return 2
+            report = capsule.export(store, handles, path, note=ns.note)
+            action = "export"
+    except capsule.CapsuleError as e:
+        print(f"ctx capsule {ns.action}: {e}", file=sys.stderr)
+        return 2
+
+    if ns.as_json:
+        print(_json.dumps(report.as_json(), indent=2, sort_keys=True))
+        return 0
+    return _emit_retrieval(ws, store, capsule.render_report(report, action=action))
