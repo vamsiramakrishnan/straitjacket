@@ -102,11 +102,11 @@ def test_a_capsule_is_byte_stable(state_home, repo, tmp_path):
     a, b = tmp_path / "a.ctxcap", tmp_path / "b.ctxcap"
     capsule.export(store, handles, a)
     capsule.export(store, handles, b)
-    index_a = json.loads(tarfile.open(a).extractfile("capsule.json").read())
-    index_b = json.loads(tarfile.open(b).extractfile("capsule.json").read())
-    assert index_a["members"] == index_b["members"]
-    del index_a["created_at"], index_b["created_at"]
-    assert index_a == index_b
+    # The files themselves, not their parsed indexes: a wall-clock field in
+    # the index would pass a parsed comparison and still break the promise.
+    assert a.read_bytes() == b.read_bytes()
+    index = json.loads(tarfile.open(a).extractfile("capsule.json").read())
+    assert "created_at" not in index
 
 
 # ---------------------------------------------------------------- integrity
@@ -143,7 +143,7 @@ def test_altered_bytes_are_caught_even_when_the_index_agrees(state_home, repo, t
     assert tampered != payload and len(tampered) == len(payload) + 1
 
     # The index rewritten to match, the way a lossy store's own checks would.
-    new_index = json.loads(members["capsule.json"]) if "capsule.json" in members else index
+    new_index = json.loads(tarfile.open(path).extractfile("capsule.json").read())
     for m in new_index["members"]:
         if m["name"] == blob_name:
             m["sha256"] = __import__("hashlib").sha256(tampered).hexdigest()
@@ -227,3 +227,97 @@ def test_handles_come_off_the_ledger_in_citation_order(state_home, repo):
         "run:abc123def456#stdout",
         "run:0123456789ab#stderr",
     ]
+
+
+# ------------------------------------------------- completeness, not just integrity
+def test_a_capsule_missing_a_blob_is_caught_even_if_the_index_was_repacked(state_home, repo, tmp_path):
+    """Every member can hash correctly while the capsule cannot answer the
+    handle it advertises: drop a blob *and* its index row and the name-level
+    checks agree with each other. The recorded closure is what notices."""
+    store = make_store(make_ws(repo))
+    run_id = _run(store, b"the evidence the argument rests on\n")
+    path = tmp_path / "f.ctxcap"
+    capsule.export(store, [f"run:{run_id[:12]}#stdout"], path)
+
+    index, members, problems = capsule.verify(path)
+    assert problems == []
+
+    blob_name = next(n for n in members if n.startswith("blobs/") and b"argument" in members[n])
+    kept = {n: d for n, d in members.items() if n != blob_name}
+    new_index = json.loads(tarfile.open(path).extractfile("capsule.json").read())
+    new_index["members"] = [m for m in new_index["members"] if m["name"] != blob_name]
+    kept.pop("capsule.json", None)
+    kept["capsule.json"] = (json.dumps(new_index, indent=1, sort_keys=True) + "\n").encode()
+
+    import io as _io
+    with tarfile.open(path, "w", format=tarfile.PAX_FORMAT) as tar:
+        for name in sorted(kept):
+            info = tarfile.TarInfo(name)
+            info.size = len(kept[name])
+            tar.addfile(info, _io.BytesIO(kept[name]))
+
+    _, _, problems = capsule.verify(path)
+    assert any("in the closure, missing from the capsule" in p for p in problems)
+    with pytest.raises(capsule.CapsuleError, match="nothing imported"):
+        capsule.import_capsule(_elsewhere("hole"), path)
+
+
+def test_a_capsule_with_no_closure_is_not_trusted(state_home, repo, tmp_path):
+    store = make_store(make_ws(repo))
+    run_id = _run(store, b"evidence\n")
+    path = tmp_path / "g.ctxcap"
+    capsule.export(store, [f"run:{run_id[:12]}#stdout"], path)
+    index = json.loads(tarfile.open(path).extractfile("capsule.json").read())
+    del index["closure"]
+    _rewrite(path, {"capsule.json": (json.dumps(index, indent=1, sort_keys=True) + "\n").encode()})
+    _, _, problems = capsule.verify(path)
+    assert any("records no closure" in p for p in problems)
+
+
+# ------------------------------------------------------- checkpoints and task text
+def test_a_checkpoint_brings_its_evidence_but_not_its_prose(state_home, repo, tmp_path):
+    """A checkpoint stores evidence refs abbreviated to 12 characters, and
+    its own body is the goal and reasoning in the operator's words. Export
+    has to follow the short refs, and must not ship the prose."""
+    from ctx.checkpoint import create_checkpoint
+
+    ws = make_ws(repo)
+    store = make_store(ws)
+    run_id = _run(store, b"stack trace the checkpoint cites\n")
+    cp_id, _doc = create_checkpoint(
+        store, ws,
+        goal="SECRET GOAL: rewrite the billing path before the audit",
+        state="halfway",
+        decisions=["CONFIDENTIAL decision about a customer"],
+        evidence=[f"run:{run_id[:12]}#stdout the failing case"],
+    )
+
+    path = tmp_path / "cp.ctxcap"
+    report = capsule.export(store, [f"checkpoint:{cp_id[:12]}"], path)
+
+    # The evidence travelled...
+    assert report.manifests == 1 and report.blobs == 2
+    assert report.excluded and report.excluded[0]["schema"] == "ctx.checkpoint/v1"
+    blob = capsule.verify(path)[1]
+    body = b"".join(blob.values())
+    assert b"stack trace the checkpoint cites" in body
+    # ...and the prose did not.
+    assert b"SECRET GOAL" not in body and b"CONFIDENTIAL" not in body
+
+    other = _elsewhere("cp")
+    capsule.import_capsule(other, path)
+    assert other.get_manifest(run_id)["streams"]["stdout"]
+
+
+def test_include_task_text_is_available_when_asked_for(state_home, repo, tmp_path):
+    from ctx.checkpoint import create_checkpoint
+
+    ws = make_ws(repo)
+    store = make_store(ws)
+    run_id = _run(store, b"evidence\n")
+    cp_id, _ = create_checkpoint(store, ws, goal="THE GOAL", evidence=[f"run:{run_id[:12]}#stdout"])
+    path = tmp_path / "cp2.ctxcap"
+    report = capsule.export(store, [f"checkpoint:{cp_id[:12]}"], path, include_task_text=True)
+    assert report.manifests == 2 and not report.excluded
+    body = b"".join(capsule.verify(path)[1].values())
+    assert b"THE GOAL" in body

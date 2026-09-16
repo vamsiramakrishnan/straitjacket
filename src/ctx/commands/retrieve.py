@@ -408,7 +408,8 @@ def cmd_capsule(ws, ns) -> int:
             if not handles:
                 print("ctx capsule export: give --handle or --task", file=sys.stderr)
                 return 2
-            report = capsule.export(store, handles, path, note=ns.note)
+            report = capsule.export(store, handles, path, note=ns.note,
+                                    include_task_text=bool(getattr(ns, "include_task_text", False)))
             action = "export"
     except capsule.CapsuleError as e:
         print(f"ctx capsule {ns.action}: {e}", file=sys.stderr)

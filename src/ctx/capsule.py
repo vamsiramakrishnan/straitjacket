@@ -39,8 +39,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import tarfile
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -86,6 +86,7 @@ class CapsuleReport:
     bytes_total: int = 0
     file_bytes: int = 0
     unresolved: list[dict[str, str]] = field(default_factory=list)
+    excluded: list[dict[str, str]] = field(default_factory=list)
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -97,6 +98,7 @@ class CapsuleReport:
             "evidence_bytes": self.bytes_total,
             "file_bytes": self.file_bytes,
             "unresolved": list(self.unresolved),
+            "excluded": list(self.excluded),
         }
 
 
@@ -113,20 +115,53 @@ def manifest_id_for(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json(body)).hexdigest()
 
 
-def _blob_ids(manifest: dict[str, Any]) -> set[str]:
-    """Blob ids a manifest references, by the store's own structural walk.
+#: Prose-bearing manifest kinds. A checkpoint records the goal, state,
+#: decisions, hypotheses and attempted searches in the operator's own words
+#: — the task text a capsule promises not to carry. Traversed for the
+#: evidence it cites, not included, unless the caller asks.
+TASK_TEXT_SCHEMAS = ("ctx.checkpoint/v1", "ctx.investigation/v1")
 
-    Reuses ``Store``'s collector rather than reading known stream fields: a
-    capsule that learns each manifest kind by hand is one new kind away from
-    shipping a manifest whose evidence it silently left behind.
+#: A reference inside a manifest, e.g. `run:8d8335db6848#stdout`. Checkpoints
+#: deliberately store the abbreviated form, so a walk that only matched full
+#: 64-hex hashes found the checkpoint and none of the evidence it cited.
+_REF_RE = re.compile(r"\b(?:run|blob|snapshot|checkpoint):([0-9a-fA-F]{6,64})\b")
+
+
+def _walk_strings(node: object, _depth: int = 0) -> list[str]:
+    """Every string anywhere in a manifest, depth-bounded like the store's
+    own collector."""
+    if _depth > 16:
+        return []
+    if isinstance(node, str):
+        return [node]
+    if isinstance(node, dict):
+        return [s for v in node.values() for s in _walk_strings(v, _depth + 1)]
+    if isinstance(node, (list, tuple)):
+        return [s for v in node for s in _walk_strings(v, _depth + 1)]
+    return []
+
+
+def _blob_ids(manifest: dict[str, Any]) -> set[str]:
+    """Ids a manifest references, full and abbreviated.
+
+    Reuses ``Store``'s collector for full hashes rather than reading known
+    stream fields — a capsule that learns each manifest kind by hand is one
+    new kind away from shipping a manifest whose evidence it silently left
+    behind — and adds the abbreviated `kind:id` form, because that is what a
+    checkpoint stores and it is 12 characters, not 64.
     """
     from ctx.store import _referenced_blobs
 
-    return _referenced_blobs(manifest)
+    found = _referenced_blobs(manifest)
+    for text in _walk_strings(manifest):
+        found.update(m.group(1).lower() for m in _REF_RE.finditer(text))
+    return found
 
 
-def collect(store: Store, handles: list[str]) -> tuple[dict[str, dict], set[str], list[dict[str, str]]]:
-    """Resolve handles to (manifests by id, blob ids, unresolved reasons).
+def collect(
+    store: Store, handles: list[str], *, include_task_text: bool = False
+) -> tuple[dict[str, dict], set[str], list[dict[str, str]], dict[str, str]]:
+    """Resolve handles to (manifests, blob ids, unresolved, traversed).
 
     The closure is transitive and classifies each id by what the store
     actually holds, because a manifest's references are not all of one kind:
@@ -142,7 +177,11 @@ def collect(store: Store, handles: list[str]) -> tuple[dict[str, dict], set[str]
     manifests: dict[str, dict] = {}
     blobs: set[str] = set()
     unresolved: list[dict[str, str]] = []
-    # (full id, the handle that pulled it in, whether a caller cited it).
+    #: Prose-bearing manifests walked for their evidence but deliberately
+    #: left out: {id: schema}. Reported, never silently dropped.
+    traversed: dict[str, str] = {}
+    # (id — full or abbreviated, the handle that pulled it in, whether a
+    # caller cited it).
     # The distinction matters at the end: a cited handle that resolves to
     # nothing is a hole in the argument and gets reported. An id discovered
     # by walking a manifest may not be an object at all — `digest.bytesHash`,
@@ -172,8 +211,14 @@ def collect(store: Store, handles: list[str]) -> tuple[dict[str, dict], set[str]
             unresolved.append({"handle": text, "reason": f"{type(e).__name__}: {e}"})
 
     while queue:
-        full, origin, cited = queue.pop()
-        if full in manifests or full in blobs:
+        ident, origin, cited = queue.pop()
+        try:
+            full = ident if len(ident) == 64 else store.resolve_id(ident)
+        except Exception as e:
+            if cited:
+                unresolved.append({"handle": origin, "reason": f"{type(e).__name__}: {e}"})
+            continue
+        if full in manifests or full in blobs or full in traversed:
             continue
         if store.blob_path(full).is_file():
             blobs.add(full)
@@ -186,10 +231,15 @@ def collect(store: Store, handles: list[str]) -> tuple[dict[str, dict], set[str]
                     {"handle": origin, "reason": f"{short_id(full)}: {type(e).__name__}: {e}"}
                 )
             continue
-        manifests[full] = manifest
+        if not include_task_text and str(manifest.get("schema") or "") in TASK_TEXT_SCHEMAS:
+            # Walked for the evidence it cites, left out of the capsule: its
+            # prose is the task text this format promises not to carry.
+            traversed[full] = str(manifest.get("schema") or "")
+        else:
+            manifests[full] = manifest
         queue.extend((ref_id, origin, False) for ref_id in _blob_ids(manifest) if ref_id != full)
 
-    return manifests, blobs, unresolved
+    return manifests, blobs, unresolved, traversed
 
 
 # ----------------------------------------------------------------- building
@@ -223,9 +273,20 @@ def _write_tar(path: Path, index: dict[str, Any], members: list[Member]) -> None
     tmp.replace(path)
 
 
-def export(store: Store, handles: list[str], path: Path, *, note: str | None = None) -> CapsuleReport:
-    """Write a capsule closing over ``handles``. Returns what went in it."""
-    manifests, blobs, unresolved = collect(store, handles)
+def export(
+    store: Store, handles: list[str], path: Path, *, note: str | None = None,
+    include_task_text: bool = False,
+) -> CapsuleReport:
+    """Write a capsule closing over ``handles``. Returns what went in it.
+
+    The index carries no wall-clock field. A capsule's bytes are a function
+    of the evidence in it and nothing else, so two exports of one task are
+    identical files and comparable by hash; an export time would make that
+    promise false at millisecond resolution.
+    """
+    manifests, blobs, unresolved, traversed = collect(
+        store, handles, include_task_text=include_task_text
+    )
     if not manifests and not blobs:
         raise CapsuleError(
             "nothing to export: no handle resolved to a stored manifest or blob"
@@ -234,10 +295,18 @@ def export(store: Store, handles: list[str], path: Path, *, note: str | None = N
     index = {
         "schema": SCHEMA,
         "version": CAPSULE_VERSION,
-        "created_at": round(time.time(), 3),
         "note": note or "",
         "handles": list(handles),
         "unresolved": unresolved,
+        "excluded": [{"id": k, "schema": v, "why": "carries task text"} for k, v in sorted(traversed.items())],
+        # The closure, named explicitly. Verification needs to know what the
+        # capsule claims to hold; without it, a repack that drops a blob
+        # *and* its index row leaves nothing to notice the hole, and the
+        # first read of a cited handle is where it surfaces.
+        "closure": {
+            "manifests": sorted(manifests),
+            "blobs": sorted(blobs),
+        },
         "members": [{"name": m.name, "sha256": m.sha256, "bytes": len(m.data)} for m in members],
     }
     _write_tar(path, index, members)
@@ -249,6 +318,7 @@ def export(store: Store, handles: list[str], path: Path, *, note: str | None = N
         bytes_total=sum(len(m.data) for m in members),
         file_bytes=path.stat().st_size,
         unresolved=unresolved,
+        excluded=[{"id": short_id(k), "schema": v} for k, v in sorted(traversed.items())],
     )
 
 
@@ -321,6 +391,45 @@ def verify(path: Path) -> tuple[dict[str, Any], dict[str, bytes], list[str]]:
                 continue
             if addr != stem:
                 problems.append(f"{name}: content addresses to {addr[:12]}, name says {stem[:12]}")
+
+    # Integrity is not completeness. Every member can hash correctly while
+    # the capsule is missing the blob a cited handle actually reads, if a
+    # repack dropped the blob and its index row together. The closure the
+    # exporter recorded is what the capsule claims to hold; check it.
+    closure = index.get("closure") or {}
+    if not closure:
+        problems.append(
+            "capsule.json records no closure: cannot tell whether the evidence is complete"
+        )
+    for mid in closure.get("manifests") or []:
+        if f"manifests/{mid}.json" not in members:
+            problems.append(f"manifests/{mid}.json: in the closure, missing from the capsule")
+    for bid in closure.get("blobs") or []:
+        if f"blobs/{bid}" not in members:
+            problems.append(f"blobs/{bid}: in the closure, missing from the capsule")
+
+    # And every handle the capsule claims to answer must be one it can —
+    # except the ones it says it left out, which is a disclosure, not a hole.
+    reported = {u.get("handle") for u in index.get("unresolved") or []}
+    left_out = {str(e.get("id") or "").lower() for e in index.get("excluded") or []}
+    for text in index.get("handles") or []:
+        head = text.split(None, 1)[0] if text.split() else ""
+        if not head or text in reported:
+            continue
+        try:
+            ref = parse_ref(head)
+        except RefError:
+            continue
+        if ref.kind == "repo" or not ref.id:
+            continue
+        ident = ref.id.lower()
+        if any(out.startswith(ident) or ident.startswith(out) for out in left_out if out):
+            continue
+        if not any(
+            Path(name).stem.startswith(ident) or Path(name).name.startswith(ident)
+            for name in members
+        ):
+            problems.append(f"{text}: cited, but nothing in the capsule answers it")
     return index, members, problems
 
 
@@ -399,6 +508,11 @@ def render_report(report: CapsuleReport, *, action: str) -> str:
         f"holds: {report.manifests} manifest(s) · {report.blobs} blob(s) · "
         f"{report.bytes_total:,} B of evidence in {report.file_bytes:,} B"
     )
+    if report.excluded:
+        lines.append(f"walked for evidence, not included ({len(report.excluded)}):")
+        for e in report.excluded[:6]:
+            lines.append(f"  {e.get('id', '')} {e.get('schema', '')} — carries task text")
+        lines.append("  (--include-task-text to keep them)")
     if report.unresolved:
         lines.append(f"unresolved: {len(report.unresolved)}")
         for u in report.unresolved[:6]:

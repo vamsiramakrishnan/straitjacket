@@ -731,6 +731,9 @@ def _build_parser():
     p_cap.add_argument("--task", default=None,
                        help="close over every address a task ledger cited")
     p_cap.add_argument("--note", default=None, help="one line recorded in the capsule index")
+    p_cap.add_argument("--include-task-text", action="store_true", dest="include_task_text",
+                       help="also include checkpoint manifests, which carry the goal and "
+                            "reasoning in your own words (excluded by default)")
     p_cap.add_argument("--no-pin", action="store_true", dest="no_pin",
                        help="on import, do not pin the manifests against gc")
     p_cap.add_argument("--json", action="store_true", dest="as_json", help="machine-readable report")

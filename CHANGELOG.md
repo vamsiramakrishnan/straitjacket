@@ -23,8 +23,13 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
   reviewer's machine and after this container is gone. `export` closes
   transitively and reports any cited handle that resolved to nothing;
   `import` verifies every member against both the capsule index and its own
-  content address, and writes nothing if one fails; the file is byte-stable,
-  so two capsules of one task compare by hash. Carries no task text.
+  content address, and checks completeness against the closure the exporter
+  recorded, because a repack that drops a blob and its index row together
+  leaves the remaining names agreeing with each other; nothing is written if
+  one check fails. Prose-bearing manifests (a checkpoint's goal, decisions
+  and hypotheses) are walked for the evidence they cite and left out, named
+  in the report, unless `--include-task-text` asks for them. The file carries
+  no wall-clock field, so two exports of one task are identical files.
 
 - **memvid, measured before adoption** (`evals/memvid_fidelity.py`, receipt
   `evals/memvid-fidelity-2026-09-16.md`): a `.mv2` capsule looked like the right
