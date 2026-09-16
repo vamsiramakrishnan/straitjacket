@@ -6,6 +6,15 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- **memvid, measured before adoption** (`evals/memvid_fidelity.py`, receipt
+  `evals/memvid-fidelity-2026-09-16.md`): a `.mv2` capsule looked like the right
+  container for portable evidence, so the round trip was checked first. One case
+  in seven returns the bytes that were stored: per-line trailing whitespace and
+  carriage returns are normalized away, trailing newlines are dropped, and a
+  payload below the page threshold has no byte path at all, while
+  `verify(deep=True)` passes every check. It can index evidence; it cannot hold
+  it.
+
 - **headroom's proof table, rematched** (`evals/headroom_proof_table.py`,
   receipt `evals/headroom-proof-table-2026-09-15.md`): their four seeded
   scenarios, tokenizer and before-count, run through their `compress()` and
