@@ -258,7 +258,10 @@ wrapper fixes it found), plus a single-task iteration loop under
 `results/iterations/` (cattrs, four arms including headroom-ai, one change per
 iteration) that found the print-mode tool diet and the Read-cap widening bug. The DeepSWE referee was proven on 14 of 34 Python
 tasks by `validate.py`; see [`deepswe-2026-09-13.md`](deepswe-2026-09-13.md)
-for the mechanism analysis, the exclusion list, and the per-task tables. All
-are diagnostics, not a broad benchmark or a containment-only ablation. A paid
+for the mechanism analysis, the exclusion list, and the per-task tables.
+[`deepswe-decision-2026-09-16.md`](deepswe-decision-2026-09-16.md) is the
+two-repeat rematch that the uncapped sweep's n=1 result called for: naive vs
+the `ctx agent` runtime, and the measurement of how much of the gap is noise.
+All are diagnostics, not a broad benchmark or a containment-only ablation. A paid
 SWE-bench sweep has not been run and still needs a machine with Claude
 credentials and Docker.

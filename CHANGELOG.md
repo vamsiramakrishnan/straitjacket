@@ -6,6 +6,17 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- **The decision rule on `ctx agent`** (receipt
+  `evals/agentbench/deepswe-decision-2026-09-16.md`, record
+  `evals/agentbench/results/deepswe-decision.json`): naive vs the runtime,
+  eight DeepSWE tasks, two repeats each, uncapped, $33.20. The runtime earns
+  more partial test credit for less money (347 vs 302 fail-to-pass at the
+  median of repeats, $8.07 vs $8.53), wins six of eight tasks and costs 16%
+  less per turn — and the repeat-to-repeat spread within one arm (median 9
+  and 16 tests, worst 42) is larger than the gap between arms (mean +5.6).
+  Direction consistent over three runs, magnitude not established. Kept, with
+  the claim stated as a lean.
+
 - **`ctx capsule`** (`src/ctx/capsule.py`): evidence that travels. One file
   holding the manifests a set of cited handles names and the blobs they
   reference, so a `run:` address in a pull request still resolves on the
