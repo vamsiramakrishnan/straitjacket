@@ -275,7 +275,9 @@ def main() -> int:
                          "in the payload (--allow-prefix-tax runs anyway and records the failure)")
     ap.add_argument("--allow-prefix-tax", action="store_true")
     ap.add_argument("--resume", default=None, metavar="PARTIAL_JSON",
-                    help="seed finished sessions from an interrupted sweep's .partial.json and skip them")
+                    help="seed finished sessions from an interrupted sweep's .partial.json and skip "
+                         "them; a path that does not exist yet simply resumes nothing, so the same "
+                         "command line serves both the first launch and every relaunch")
     args = ap.parse_args()
 
     import sys
@@ -327,12 +329,17 @@ def main() -> int:
         # the sessions that finished: their records are seeded and their
         # (task, arm, repeat) cells skipped. Only the in-flight cells are paid
         # for twice.
-        prior = json.loads(pathlib.Path(args.resume).read_text(encoding="utf-8"))
+        # A missing file means there is nothing to resume yet, not an error:
+        # the same command line has to work on the first launch and on every
+        # relaunch after a restart, or the flag cannot be baked into a script.
+        resume_path = pathlib.Path(args.resume)
+        prior = json.loads(resume_path.read_text(encoding="utf-8")) if resume_path.is_file() else {}
         for rec in prior.get("results", []):
             if not rec.get("session_error") and "harness_error" not in rec:
                 records.append(rec)
                 done.add((rec["task_id"], rec["arm"], int(rec.get("repeat", 1))))
-        print(f"resumed {len(records)} finished sessions from {args.resume}", flush=True)
+        print(f"resumed {len(records)} finished sessions from {args.resume}"
+              if prior else f"nothing to resume yet at {args.resume}", flush=True)
     lock = threading.Lock()
 
     def record(rec: dict) -> None:

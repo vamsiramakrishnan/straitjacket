@@ -6,6 +6,50 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- **The decision rule on `ctx agent`** (receipt
+  `evals/agentbench/deepswe-decision-2026-09-16.md`, record
+  `evals/agentbench/results/deepswe-decision.json`): naive vs the runtime,
+  eight DeepSWE tasks, two repeats each, uncapped, $33.20. The runtime earns
+  more partial test credit for less money (347 vs 302 fail-to-pass at the
+  median of repeats, $8.07 vs $8.53), wins six of eight tasks and costs 16%
+  less per turn — and the repeat-to-repeat spread within one arm (median 9
+  and 16 tests, worst 42) is larger than the gap between arms (mean +5.6).
+  Direction consistent over three runs, magnitude not established. Kept, with
+  the claim stated as a lean.
+
+- **`ctx capsule`** (`src/ctx/capsule.py`): evidence that travels. One file
+  holding the manifests a set of cited handles names and the blobs they
+  reference, so a `run:` address in a pull request still resolves on the
+  reviewer's machine and after this container is gone. `export` closes
+  transitively and reports any cited handle that resolved to nothing;
+  `import` verifies every member against both the capsule index and its own
+  content address, and checks completeness against the closure the exporter
+  recorded, because a repack that drops a blob and its index row together
+  leaves the remaining names agreeing with each other; nothing is written if
+  one check fails. Prose-bearing manifests (a checkpoint's goal, decisions
+  and hypotheses) are walked for the evidence they cite and left out, named
+  in the report, unless `--include-task-text` asks for them. The file carries
+  no wall-clock field, so two exports of one task are identical files.
+
+- **memvid, measured before adoption** (`evals/memvid_fidelity.py`, receipt
+  `evals/memvid-fidelity-2026-09-16.md`): a `.mv2` capsule looked like the right
+  container for portable evidence, so the round trip was checked first. One case
+  in seven returns the bytes that were stored: per-line trailing whitespace and
+  carriage returns are normalized away, trailing newlines are dropped, and a
+  payload below the page threshold has no byte path at all, while
+  `verify(deep=True)` passes every check. It can index evidence; it cannot hold
+  it.
+
+- **headroom's proof table, rematched** (`evals/headroom_proof_table.py`,
+  receipt `evals/headroom-proof-table-2026-09-15.md`): their four seeded
+  scenarios, tokenizer and before-count, run through their `compress()` and
+  through the emission gate, with the needles each scenario plants counted in
+  what the model still sees. headroom: 41% saved, 194/217 needles visible, the
+  rest dropped without an address. `ctx`: 98% saved, 31/217 visible, all 27
+  hidden needles tried retrieved verbatim for a median 139 tokens each.
+  docs/COMPARISONS.md carries the table and the caveats (no model, no task,
+  synthetic JSON).
+
 A retrieval substrate for the first ten turns (docs/CODE-SEARCH.md), built
 after the DeepSWE receipts showed where a harnessed session spends them:
 

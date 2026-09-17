@@ -571,6 +571,45 @@ ctx diff run:8d8335db6848 run:5a67c9de0123
 The comparison should answer the verification question directly: what failures,
 templates, exits, signals, or stream sizes changed? New evidence receives coordinates.
 
+## Evidence that travels: `ctx capsule`
+
+A `run:` handle resolves in exactly one store. Cited in a pull request, it is
+a claim a reviewer cannot check; cited from a container that has since been
+reclaimed, it is a claim nobody can check. A capsule is one file holding the
+manifests a set of handles names and the blobs those manifests reference —
+no task text, no prompts, no transcript, the same export-safe rule the task
+ledger follows.
+
+```bash
+ctx capsule export evidence.ctxcap --handle run:8d8335db6848#stdout
+ctx capsule export evidence.ctxcap --task task-19f3c2a1b0e   # everything that task cited
+ctx capsule verify evidence.ctxcap
+ctx capsule import evidence.ctxcap    # then every cited handle resolves here
+```
+
+Export closes transitively over what the manifests reference, following both
+full hashes and the abbreviated `run:8d8335db6848` form a checkpoint stores,
+and reports any cited handle that resolved to nothing rather than shipping a
+capsule with a hole in it. A manifest that carries task text in your own words
+— a checkpoint's goal, decisions and hypotheses — is walked for the evidence
+it cites and left out, named in the report; `--include-task-text` keeps it.
+The file is a POSIX tar with fixed member metadata and no wall-clock field,
+so the same evidence always produces the same bytes and two capsules of one
+task are identical files.
+
+Every read verifies. `verify` recomputes each member's `sha256` and checks it
+against two independent records: the capsule index, and the member's own
+address, which for a blob is the hash of its bytes and for a manifest is the
+id the store derives from them. It also checks completeness against the closure the exporter
+recorded, because integrity is not completeness: a repack that drops a blob
+*and* its index row leaves the remaining names agreeing with each other, and
+the hole would otherwise surface at the first read of a cited handle.
+`import` refuses to write anything at all if one check fails, because a
+partial import leaves a handle resolving to bytes nobody vouched for. That check is not habit: `evals/memvid_fidelity.py` found
+a single-file memory format returning altered bytes for six of seven payloads
+while its own deep verification passed, because those checks covered its index
+rather than its content.
+
 ## Inspect binary evidence: `ctx image`
 
 ```bash

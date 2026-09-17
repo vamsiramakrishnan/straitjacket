@@ -183,6 +183,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "cycles": ("retrieve", "cmd_cycles", True),
     "q": ("retrieve", "cmd_q", True),
     "pack": ("retrieve", "cmd_pack", True),
+    "capsule": ("retrieve", "cmd_capsule", True),
     "edit": ("edit", "cmd_edit", True),
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
@@ -719,6 +720,23 @@ def _build_parser():
     p_pack.add_argument("--no-history", action="store_true", dest="no_history",
                         help="skip the git history signal")
     p_pack.add_argument("--json", action="store_true", dest="as_json", help="machine-readable pack")
+
+    p_cap = sub.add_parser(
+        "capsule", help="evidence that travels: pack cited handles into one verifiable file"
+    )
+    p_cap.add_argument("action", choices=("export", "verify", "import"))
+    p_cap.add_argument("path", help="the capsule file to write or read")
+    p_cap.add_argument("--handle", action="append", default=None,
+                       help="a handle to close over (repeatable); e.g. run:8d8335db6848#stdout")
+    p_cap.add_argument("--task", default=None,
+                       help="close over every address a task ledger cited")
+    p_cap.add_argument("--note", default=None, help="one line recorded in the capsule index")
+    p_cap.add_argument("--include-task-text", action="store_true", dest="include_task_text",
+                       help="also include checkpoint manifests, which carry the goal and "
+                            "reasoning in your own words (excluded by default)")
+    p_cap.add_argument("--no-pin", action="store_true", dest="no_pin",
+                       help="on import, do not pin the manifests against gc")
+    p_cap.add_argument("--json", action="store_true", dest="as_json", help="machine-readable report")
 
     p_def = sub.add_parser("def", help="symbol definition site (snapshot + span)")
     p_def.add_argument("target", help="repo:<path>:<Symbol.dotted>")

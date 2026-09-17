@@ -1,0 +1,439 @@
+{
+ "schema": "sj.headroom_proof_table/v1",
+ "seed": 20260902,
+ "model": "gpt-5.6",
+ "tokenizer": "tiktoken via headroom OpenAICompatibleTokenCounter",
+ "gate_bytes": 16384,
+ "headroom_repo": "/home/user/headroomlabs-ai/headroom",
+ "rows": [
+  {
+   "scenario": "Code search (100 results)",
+   "tools": [
+    "github_search_code"
+   ],
+   "before": 17199,
+   "modes": {
+    "headroom default (protect_recent=4)": {
+     "after": 13597,
+     "savings_pct": 20.9,
+     "needles_visible": 12,
+     "needles_total": 12,
+     "per_tool_after": [
+      13597
+     ],
+     "transforms": [
+      "router:mixed:0.82",
+      "router:protected:user_message"
+     ]
+    },
+    "headroom full (protect_recent=0)": {
+     "after": 13597,
+     "savings_pct": 20.9,
+     "needles_visible": 12,
+     "needles_total": 12,
+     "per_tool_after": [
+      13597
+     ],
+     "transforms": [
+      "router:mixed:0.82",
+      "router:protected:user_message"
+     ]
+    },
+    "sj emission gate (16 KB, digest + handle)": {
+     "after": 496,
+     "savings_pct": 97.1,
+     "needles_visible": 4,
+     "needles_total": 12,
+     "per_tool_after": [
+      496
+     ],
+     "gated": 1,
+     "passed_through": 0,
+     "retrievals": [
+      {
+       "needle": "apache/spark",
+       "found": true,
+       "tokens": 134
+      },
+      {
+       "needle": "docker/docker-ce",
+       "found": true,
+       "tokens": 135
+      },
+      {
+       "needle": "elastic/elasticsearch",
+       "found": true,
+       "tokens": 136
+      }
+     ],
+     "retrieval_found": 3,
+     "retrieval_tokens_median": 135
+    }
+   },
+   "needles": [
+    {
+     "tool": "github_search_code",
+     "what": "distinct repositories in the results",
+     "n": 12
+    }
+   ]
+  },
+  {
+   "scenario": "SRE incident debugging",
+   "tools": [
+    "search_logs",
+    "database_query",
+    "search_files"
+   ],
+   "before": 55957,
+   "modes": {
+    "headroom default (protect_recent=4)": {
+     "after": 24340,
+     "savings_pct": 56.5,
+     "needles_visible": 97,
+     "needles_total": 108,
+     "per_tool_after": [
+      14562,
+      8660,
+      1118
+     ],
+     "transforms": [
+      "router:mixed:0.10",
+      "router:mixed:0.53",
+      "router:protected:user_message",
+      "router:smart_crusher:0.40"
+     ]
+    },
+    "headroom full (protect_recent=0)": {
+     "after": 24340,
+     "savings_pct": 56.5,
+     "needles_visible": 97,
+     "needles_total": 108,
+     "per_tool_after": [
+      14562,
+      8660,
+      1118
+     ],
+     "transforms": [
+      "router:mixed:0.10",
+      "router:mixed:0.53",
+      "router:protected:user_message",
+      "router:smart_crusher:0.40"
+     ]
+    },
+    "sj emission gate (16 KB, digest + handle)": {
+     "after": 1018,
+     "savings_pct": 98.2,
+     "needles_visible": 6,
+     "needles_total": 108,
+     "per_tool_after": [
+      444,
+      220,
+      354
+     ],
+     "gated": 3,
+     "passed_through": 0,
+     "retrievals": [
+      {
+       "needle": "e4da3b7fbbce2345",
+       "found": true,
+       "tokens": 155
+      },
+      {
+       "needle": "c20ad4d76fe97759",
+       "found": true,
+       "tokens": 156
+      },
+      {
+       "needle": "6f4922f45568161a",
+       "found": true,
+       "tokens": 155
+      },
+      {
+       "needle": "user_10004",
+       "found": true,
+       "tokens": 140
+      },
+      {
+       "needle": "user_10005",
+       "found": true,
+       "tokens": 139
+      },
+      {
+       "needle": "user_10014",
+       "found": true,
+       "tokens": 138
+      },
+      {
+       "needle": "src/services/email_sender.py",
+       "found": true,
+       "tokens": 146
+      },
+      {
+       "needle": "src/middleware/rate_limiter.py",
+       "found": true,
+       "tokens": 151
+      },
+      {
+       "needle": "src/middleware/auth_middleware.py",
+       "found": true,
+       "tokens": 150
+      }
+     ],
+     "retrieval_found": 9,
+     "retrieval_tokens_median": 150
+    }
+   },
+   "needles": [
+    {
+     "tool": "search_logs",
+     "what": "trace ids of the ERROR entries",
+     "n": 47
+    },
+    {
+     "tool": "database_query",
+     "what": "anomalous rows (revenue \u2265 50k or suspended)",
+     "n": 47
+    },
+    {
+     "tool": "search_files",
+     "what": "the real (non-template) file paths",
+     "n": 14
+    }
+   ]
+  },
+  {
+   "scenario": "Codebase exploration",
+   "tools": [
+    "filesystem_tree",
+    "search_files",
+    "github_search_code"
+   ],
+   "before": 58801,
+   "modes": {
+    "headroom default (protect_recent=4)": {
+     "after": 33895,
+     "savings_pct": 42.4,
+     "needles_visible": 19,
+     "needles_total": 31,
+     "per_tool_after": [
+      19150,
+      1132,
+      13613
+     ],
+     "transforms": [
+      "router:mixed:0.07",
+      "router:mixed:0.82",
+      "router:protected:user_message",
+      "router:smart_crusher:0.91"
+     ]
+    },
+    "headroom full (protect_recent=0)": {
+     "after": 33895,
+     "savings_pct": 42.4,
+     "needles_visible": 19,
+     "needles_total": 31,
+     "per_tool_after": [
+      19150,
+      1132,
+      13613
+     ],
+     "transforms": [
+      "router:mixed:0.07",
+      "router:mixed:0.82",
+      "router:protected:user_message",
+      "router:smart_crusher:0.91"
+     ]
+    },
+    "sj emission gate (16 KB, digest + handle)": {
+     "after": 1154,
+     "savings_pct": 98.0,
+     "needles_visible": 15,
+     "needles_total": 31,
+     "per_tool_after": [
+      289,
+      358,
+      507
+     ],
+     "gated": 3,
+     "passed_through": 0,
+     "retrievals": [
+      {
+       "needle": "src/services/email_sender.py",
+       "found": true,
+       "tokens": 149
+      },
+      {
+       "needle": "src/middleware/rate_limiter.py",
+       "found": true,
+       "tokens": 151
+      },
+      {
+       "needle": "src/middleware/auth_middleware.py",
+       "found": true,
+       "tokens": 152
+      },
+      {
+       "needle": "docker/docker-ce",
+       "found": true,
+       "tokens": 127
+      },
+      {
+       "needle": "facebook/react",
+       "found": true,
+       "tokens": 126
+      },
+      {
+       "needle": "golang/go",
+       "found": true,
+       "tokens": 126
+      }
+     ],
+     "retrieval_found": 6,
+     "retrieval_tokens_median": 149
+    }
+   },
+   "needles": [
+    {
+     "tool": "filesystem_tree",
+     "what": "top-level directories",
+     "n": 5
+    },
+    {
+     "tool": "search_files",
+     "what": "the real (non-template) file paths",
+     "n": 14
+    },
+    {
+     "tool": "github_search_code",
+     "what": "distinct repositories in the results",
+     "n": 12
+    }
+   ]
+  },
+  {
+   "scenario": "GitHub issue triage",
+   "tools": [
+    "github_list_issues",
+    "github_search_code",
+    "search_logs"
+   ],
+   "before": 46067,
+   "modes": {
+    "headroom default (protect_recent=4)": {
+     "after": 32429,
+     "savings_pct": 29.6,
+     "needles_visible": 66,
+     "needles_total": 66,
+     "per_tool_after": [
+      12414,
+      10319,
+      9696
+     ],
+     "transforms": [
+      "router:mixed:0.53",
+      "router:mixed:0.76",
+      "router:mixed:0.80",
+      "router:protected:user_message"
+     ]
+    },
+    "headroom full (protect_recent=0)": {
+     "after": 32429,
+     "savings_pct": 29.6,
+     "needles_visible": 66,
+     "needles_total": 66,
+     "per_tool_after": [
+      12414,
+      10319,
+      9696
+     ],
+     "transforms": [
+      "router:mixed:0.53",
+      "router:mixed:0.76",
+      "router:mixed:0.80",
+      "router:protected:user_message"
+     ]
+    },
+    "sj emission gate (16 KB, digest + handle)": {
+     "after": 1391,
+     "savings_pct": 97.0,
+     "needles_visible": 6,
+     "needles_total": 66,
+     "per_tool_after": [
+      457,
+      484,
+      450
+     ],
+     "gated": 3,
+     "passed_through": 0,
+     "retrievals": [
+      {
+       "needle": "1000",
+       "found": true,
+       "tokens": 135
+      },
+      {
+       "needle": "1003",
+       "found": true,
+       "tokens": 132
+      },
+      {
+       "needle": "1010",
+       "found": true,
+       "tokens": 131
+      },
+      {
+       "needle": "elastic/elasticsearch",
+       "found": true,
+       "tokens": 131
+      },
+      {
+       "needle": "facebook/react",
+       "found": true,
+       "tokens": 129
+      },
+      {
+       "needle": "grafana/grafana",
+       "found": true,
+       "tokens": 136
+      },
+      {
+       "needle": "8f14e45fceea167a",
+       "found": true,
+       "tokens": 158
+      },
+      {
+       "needle": "c9f0f895fb98ab91",
+       "found": true,
+       "tokens": 155
+      },
+      {
+       "needle": "02e74f10e0327ad8",
+       "found": true,
+       "tokens": 154
+      }
+     ],
+     "retrieval_found": 9,
+     "retrieval_tokens_median": 135
+    }
+   },
+   "needles": [
+    {
+     "tool": "github_list_issues",
+     "what": "open issues labelled bug",
+     "n": 18
+    },
+    {
+     "tool": "github_search_code",
+     "what": "distinct repositories in the results",
+     "n": 12
+    },
+    {
+     "tool": "search_logs",
+     "what": "trace ids of the ERROR entries",
+     "n": 36
+    }
+   ]
+  }
+ ]
+}
