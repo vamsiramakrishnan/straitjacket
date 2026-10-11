@@ -34,6 +34,32 @@ def test_json_launch_error_never_claims_command_exit(state_home, workspace_dir, 
     assert result["error"] == "launch_failed"
 
 
+@pytest.mark.parametrize("mode", [[], ["--json"], ["--passthrough"], ["--bg"], ["--bg-after", "1"]])
+def test_shell_argument_error_is_rejected_before_capture_or_background_launch(
+    state_home, workspace_dir, capsys, monkeypatch, mode,
+):
+    import ctx.store
+
+    def unexpected_store(*args, **kwargs):
+        pytest.fail("invalid shell input must be rejected before opening the store")
+
+    monkeypatch.setattr(ctx.store, "Store", unexpected_store)
+    assert main(["--workspace", str(workspace_dir), "run", *mode, "--shell", "--", "echo", "hi"]) == 2
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "--shell mode takes exactly one command string" in output.err
+    assert "launch_failed" not in output.err
+
+
+def test_json_shell_accepts_one_complete_command_string(state_home, workspace_dir, capsys):
+    assert main(["--workspace", str(workspace_dir), "run", "--json", "--shell", "--", "printf 'one two\\n'"]) == 0
+    output = capsys.readouterr()
+    assert not output.err
+    result = json.loads(output.out)
+    jsonschema.validate(result, SCHEMA)
+    assert result["command_exit_code"] == 0 and result["stdout"] == "one two\n"
+
+
 @pytest.mark.parametrize("flag", ["--bg","--passthrough","--bg-after"])
 def test_json_rejects_ambiguous_execution_before_launch(state_home,workspace_dir,capsys,flag):
     args = [flag,"1"] if flag=="--bg-after" else [flag]

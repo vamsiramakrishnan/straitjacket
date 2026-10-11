@@ -23,6 +23,9 @@ def cmd_run(ws, ns) -> int:
     if not command:
         print("ctx run: no command given (use: ctx run -- <command> [args...])", file=sys.stderr)
         return 2
+    if ns.shell and len(command) != 1:
+        print("ctx run: --shell mode takes exactly one command string", file=sys.stderr)
+        return 2
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
 
