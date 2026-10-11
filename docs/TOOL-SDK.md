@@ -25,7 +25,8 @@ asyncio.run(investigate())
 
 `run` accepts argv or an explicit Bash command string. Prefer argv for a single
 executable. `working_directory` is confined to the session workspace, including
-symlinks. `timeout_seconds` must be finite, positive and no greater than the
+symlinks. This embedding boundary always keeps one root, even if the CLI policy
+permits outside reads. `timeout_seconds` must be finite, positive and no greater than the
 session timeout. The session timeout caps each command; it is not a shared task
 budget. Use [Task execution](TASK-EXECUTION.md) for durable root reservations,
 resumable investigations and shared budgets.

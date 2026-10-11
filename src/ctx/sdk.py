@@ -63,6 +63,11 @@ class ToolSession:
         # Refresh gitHead and committed policy after edits/commits. Keep budgets
         # on a per-call copy; parallel tools cannot loosen one another's policy.
         ws = resolve_workspace(str(self.root))
+        # The embedding API promises one root even when the interactive CLI's
+        # committed policy permits outside reads. Tighten the existing path
+        # mechanism rather than translating an outside cwd back into the root.
+        ws = replace(ws, config=replace(ws.config,
+            workspace=replace(ws.config.workspace, allow_outside_root=False)))
         if self.max_tokens is not None:
             b = ws.config.budgets
             ws = replace(ws, config=replace(ws.config, budgets=replace(b,

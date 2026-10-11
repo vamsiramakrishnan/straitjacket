@@ -147,6 +147,17 @@ def test_refuses_escape_and_mutation_through_retrieval(state_home, workspace_dir
     assert not (workspace_dir / "bad").exists()
 
 
+def test_session_root_stays_confined_when_cli_policy_allows_outside(state_home, workspace_dir, tmp_path):
+    outside = tmp_path / "outside"; outside.mkdir(); (outside / "value.txt").write_text("outside-evidence")
+    (workspace_dir / "escape").symlink_to(outside, target_is_directory=True)
+    (workspace_dir / "ctx.toml").write_text("version=1\n[workspace]\nallow_outside_root=true\n")
+    session = ToolSession(workspace_dir)
+    with pytest.raises(Exception, match="outside|escapes"):
+        run(session.run([sys.executable, "-c", "pass"], working_directory=str(outside)))
+    with pytest.raises(Exception, match="outside|escapes"):
+        run(session.get("repo:escape/value.txt", start_line=1, end_line=1))
+
+
 def test_capsule_round_trip_without_private_store_copy(state_home, workspace_dir, tmp_path):
     from ctx.capsule import import_capsule, verify
     from ctx.store import Store
