@@ -244,7 +244,7 @@ def test_the_supervisor_stays_dependency_free():
             names += [a.name for a in node.names]
         elif isinstance(node, ast.ImportFrom):
             names.append(node.module or "")
-    assert names == ["__future__", "os", "signal", "subprocess"]
+    assert names == ["__future__", "os", "signal", "subprocess", "time"]
     assert not any(n.startswith("ctx") for n in names)
 
 

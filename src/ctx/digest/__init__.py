@@ -169,6 +169,7 @@ def render_run_digest(
     plan: Any = None,
     contained: bool = True,
     producer: str | None = None,
+    record_delivery: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Produce the bounded deterministic digest for a captured invocation and
     republish the manifest with its final digest identity.
@@ -227,7 +228,8 @@ def render_run_digest(
     # as "emitted" would book a saving that never happened — so the event is
     # recorded at raw->raw, a real event with an honest zero gain.
     emitted = len(digest.encode("utf-8")) if contained else raw
-    record_telemetry(store, op, raw, emitted)
+    if record_delivery:
+        record_telemetry(store, op, raw, emitted)
 
     # Graduated engagement (mechanism C): an output too large to inline is
     # the measured proof the task outgrew "small" — graduate the session.

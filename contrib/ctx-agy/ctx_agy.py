@@ -31,24 +31,18 @@ where this shim does the work.
 
 What is replaced
 ----------------
-Disabled builtins -> ctx-backed tools returning bounded, addressed output:
-
-  RUN_COMMAND       -> run_command   (ctx run: digest + `ctx get run:<id>` refs)
-  VIEW_FILE         -> view_file     (ctx get repo:<path>, bounded by line span)
-  SEARCH_DIR        -> search_dir    (ctx search: bounded hit census)
-  LIST_DIR          -> list_dir      (ctx stats: bounded tree summary)
-  FIND_FILE         -> find_file     (ctx search over paths)
-
-Left native (they do not flood): CREATE_FILE, EDIT_FILE, ASK_QUESTION, FINISH.
-Also exposed: ``ctx_query`` so the agent can resolve any omitted bytes by the
-address a digest printed.
+The command-output profile replaces RUN_COMMAND and exposes ctx_get/ctx_search.
+File reading, search and editing stay native. --tool-profile full also replaces
+VIEW_FILE, SEARCH_DIR, LIST_DIR and FIND_FILE through the same public ToolSession.
+All tools are async; command termination is typed and cancellation belongs to
+shared capture. No private manifest directory or printed-header parsing.
 
 Install
 -------
 The SDK conflicts with the system PyJWT, so it lives in its own venv::
 
     python -m venv /tmp/agy-venv
-    /tmp/agy-venv/bin/pip install google-antigravity
+    /tmp/agy-venv/bin/pip install google-antigravity ctx-harness
     GEMINI_API_KEY=... /tmp/agy-venv/bin/python contrib/ctx-agy/ctx_agy.py \
         -p "fix the failing test" --model gemini-3.6-flash
 
@@ -63,92 +57,82 @@ import asyncio
 import json
 import os
 import pathlib
-import subprocess
 import sys
 
-from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
-from google.antigravity.hooks import policy
-from google.antigravity.types import BuiltinTools
-
-# Every builtin that can put unbounded bytes into the transcript. Writes and
-# control-flow builtins are left alone: they do not flood, and replacing them
-# would only add failure modes.
-FLOODING_BUILTINS = [
-    BuiltinTools.RUN_COMMAND,
-    BuiltinTools.VIEW_FILE,
-    BuiltinTools.SEARCH_DIR,
-    BuiltinTools.LIST_DIR,
-    BuiltinTools.FIND_FILE,
-]
+# Provider imports are inside run(); local tool tests need no vendor SDK.
+FLOODING_BUILTINS = ("RUN_COMMAND", "VIEW_FILE", "SEARCH_DIR", "LIST_DIR", "FIND_FILE")
 
 SYSTEM = (
-    "You are an autonomous coding agent working in a real repository. Your "
-    "shell, file-view and search tools return a BOUNDED DIGEST, not raw output: "
-    "the full bytes are stored and every omitted span keeps an address. When a "
-    "digest is not enough, call `ctx_query` with the address it printed (e.g. "
-    "'get run:<id>#stdout --lines 1200:1260' or 'search run:<id> Error') to pull "
-    "the exact original bytes. Do not try to defeat the digest by re-running a "
-    "command to see more of it — retrieve by address instead. Work step by step "
-    "and keep going until the task is complete."
+    "Shell commands return a structured result. command_exit_code is the "
+    "underlying command status; signal and timed_out describe other termination. "
+    "Small complete output stays inline. Large output has a deterministic digest "
+    "and a run address. Use ctx_get or ctx_search to retrieve omitted evidence "
+    "instead of rerunning a command merely to print more output. File tools stay "
+    "native in the command-output profile. Complete the original task normally."
 )
 
-MAX_TOOL_CHARS = 200_000  # guardrail: one pathological result cannot 400 the API
 
+def make_tools(root: pathlib.Path, *, timeout=600.0, profile="command-output", session=None):
+    """Async tools on the public, provider-independent Straitjacket runtime."""
+    from ctx.sdk import ToolSession
+    if profile not in {"command-output", "full"}:
+        raise ValueError("unknown tool profile")
+    session = session or ToolSession(root, timeout=timeout, producer="antigravity-sdk")
+    command_timeout = min(600, timeout)
 
-def _ctx(root: pathlib.Path, *args: str) -> str:
-    """Run a ctx verb in the workspace and return its bounded output."""
-    p = subprocess.run(["ctx", *args], capture_output=True, text=True, cwd=str(root))
-    return ((p.stdout or "") + (p.stderr or ""))[:MAX_TOOL_CHARS]
+    async def run_command(command: str, working_directory: str = "", timeout_seconds: float = command_timeout) -> str:
+        """Execute a command with typed status and bounded output. Working directory
+        is within the workspace; retrieve omitted evidence with ctx_get/search."""
+        result = await session.run(command, working_directory=working_directory, timeout_seconds=timeout_seconds)
+        return result.to_json()
 
+    async def ctx_get(address: str, start_line: int, end_line: int) -> str:
+        """Retrieve a bounded, inclusive line range from an evidence address."""
+        return await session.get(address, start_line=start_line, end_line=end_line)
 
-def make_tools(root: pathlib.Path):
-    """The ctx-backed replacements for the disabled builtins.
+    async def ctx_search(address: str, pattern: str) -> str:
+        """Search stored evidence or repository files for a regex, with context."""
+        return await session.search(address, pattern)
 
-    Each one is a real tool the model sees; the containment happens inside it,
-    so there is nothing to substitute afterwards and nothing that can leak past
-    a hook that is only allowed to inspect.
-    """
+    if profile == "command-output":
+        return [run_command, ctx_get, ctx_search]
 
-    def run_command(command: str) -> str:
-        """Execute a shell command in the workspace. Returns a bounded digest of
-        the output; use ctx_query with the printed address for omitted bytes."""
-        return _ctx(root, "run", "--", "bash", "-lc", command)
+    async def view_file(path: str, start_line: int = 1, end_line: int = 200) -> str:
+        """Read a bounded, 1-indexed file span; omitted evidence remains addressable."""
+        return await session.get(f"repo:{path}", start_line=start_line, end_line=end_line)
 
-    def view_file(path: str, start_line: int = 0, end_line: int = 0) -> str:
-        """Read a file. Returns bounded content; large files are summarised with
-        a retrieval address. Optionally pass a 1-indexed line span."""
-        args = ["get", f"repo:{path}"]
-        if start_line or end_line:
-            args += ["--lines", f"{start_line or 1}:{end_line or (start_line or 1) + 200}"]
-        return _ctx(root, *args)
+    async def search_dir(pattern: str, path: str = "") -> str:
+        """Search repository files with a bounded hit census."""
+        return await session.search(f"repo:{path}", pattern)
 
-    def search_dir(pattern: str, path: str = "") -> str:
-        """Search the repository for a regex. Returns a bounded hit census with
-        addresses rather than every matching line."""
-        return _ctx(root, "search", f"repo:{path}", pattern)
+    async def list_dir(path: str = "") -> str:
+        """Summarise a directory's file counts, languages and size."""
+        return await session.retrieve("stats", ref=f"repo:{path}")
 
-    def list_dir(path: str = "") -> str:
-        """Summarise a directory: file count, size, languages, largest files."""
-        return _ctx(root, "stats", f"repo:{path}")
+    async def find_file(name: str) -> str:
+        """List files matching a path glob, including empty files."""
+        import shlex
+        return await session.query(f"corpus --glob {shlex.quote(name)}")
 
-    def find_file(name: str) -> str:
-        """Find files whose path matches a glob, e.g. '*.py'. Returns a bounded
-        listing (the search census names the files that matched)."""
-        return _ctx(root, "search", "repo:", ".", "--glob", name, "--max-matches", "1")
+    async def ctx_query(pipeline: str) -> str:
+        """Compose observation in one bounded query, e.g. refs Foo | group file | top 3."""
+        return await session.query(pipeline)
 
-    def ctx_query(args: str) -> str:
-        """Resolve omitted bytes by address. Pass a ctx retrieval command, e.g.
-        'get run:8d8335db6848#stdout --lines 1284:1300' or
-        'search run:8d8335db6848 Traceback'."""
-        return _ctx(root, *args.split())
-
-    return [run_command, view_file, search_dir, list_dir, find_file, ctx_query]
+    return [run_command, ctx_get, ctx_search, view_file, search_dir, list_dir, find_file, ctx_query]
 
 
 async def run(prompt: str, root: pathlib.Path, model: str, timeout: float,
-              contain: bool) -> dict:
-    tools = make_tools(root) if contain else []
-    disabled = FLOODING_BUILTINS if contain else []
+              contain: bool, profile="command-output", usage_semantics="unknown", evidence_output=None) -> dict:
+    from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
+    from google.antigravity.hooks import policy
+    from google.antigravity.types import BuiltinTools
+    from ctx.sdk import ToolSession
+    from ctx.tooltelemetry import usage_record
+
+    session = ToolSession(root, timeout=timeout, producer="antigravity-sdk") if contain else None
+    tools = make_tools(root, timeout=timeout, profile=profile, session=session) if contain else []
+    names = FLOODING_BUILTINS if profile == "full" else ("RUN_COMMAND",)
+    disabled = [getattr(BuiltinTools, name) for name in names] if contain else []
     cfg = LocalAgentConfig(
         model=model,
         api_key=os.environ["GEMINI_API_KEY"],
@@ -169,11 +153,15 @@ async def run(prompt: str, root: pathlib.Path, model: str, timeout: float,
         except Exception as e:  # noqa: BLE001
             error = f"{type(e).__name__}: {e}"[:300]
         u = agent.conversation.total_usage
+    usage = usage_record(u, input_semantics=usage_semantics)
+    if evidence_output is not None and session is not None and session.handles:
+        await session.export(evidence_output)
     return {
         "text": text,
-        "input_tokens": u.prompt_token_count or 0,
-        "output_tokens": u.candidates_token_count or 0,
-        "total_tokens": u.total_token_count or 0,
+        "input_tokens": usage["raw"]["prompt_token_count"],
+        "output_tokens": usage["raw"]["candidates_token_count"],
+        "total_tokens": usage["raw"]["total_token_count"],
+        "usage": usage,
         "timed_out": timed_out,
         "error": error,
     }
@@ -192,6 +180,9 @@ def main() -> int:
     ap.add_argument("--no-contain", action="store_true",
                     help="run with the native builtins instead of the ctx-backed "
                          "tools (the uncontained baseline, for A/B only)")
+    ap.add_argument("--tool-profile", choices=("command-output", "full"), default="command-output")
+    ap.add_argument("--usage-input-semantics", choices=("unknown", "includes_cache", "excludes_cache"), default="unknown")
+    ap.add_argument("--evidence-output", type=pathlib.Path, help="export observed evidence as a portable capsule")
     ap.add_argument("--json", action="store_true", help="print the usage record too")
     ns = ap.parse_args()
 
@@ -199,7 +190,8 @@ def main() -> int:
         print("error: GEMINI_API_KEY not set", file=sys.stderr)
         return 2
     root = pathlib.Path(ns.add_dir).resolve()
-    result = asyncio.run(run(ns.prompt, root, ns.model, ns.timeout, not ns.no_contain))
+    result = asyncio.run(run(ns.prompt, root, ns.model, ns.timeout, not ns.no_contain,
+        profile=ns.tool_profile, usage_semantics=ns.usage_input_semantics, evidence_output=ns.evidence_output))
     print(result["text"])
     if ns.json:
         print(json.dumps({k: v for k, v in result.items() if k != "text"}))

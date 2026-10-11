@@ -133,3 +133,29 @@ def test_both_hosts_are_offered_by_the_cli(name):
     parser = _build_parser()
     ns = parser.parse_args(["wrap", name])
     assert ns.host == name
+
+
+def test_managed_launcher_loads_only_ctx_into_an_isolated_interpreter(tmp_path, monkeypatch):
+    """A parent site-packages entry would defeat provider dependency isolation."""
+    import subprocess
+    import sys
+    import venv
+    import ctx.agysdk as agysdk
+
+    isolated = tmp_path / "isolated"
+    venv.EnvBuilder(with_pip=False).create(isolated)
+    py = isolated / "bin" / "python"
+    monkeypatch.setenv("CTX_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(agysdk, "venv_python", lambda: py)
+    probe = tmp_path / "probe.py"
+    probe.write_text("import asyncio,sys; from pathlib import Path; from ctx.sdk import ToolSession; "
+                     "assert not any('straitjacket/src' in p for p in sys.path); "
+                     "root=Path(sys.argv[1]); session=ToolSession(root); "
+                     "result=asyncio.run(session.run([sys.executable,'-c','print(42)'])); "
+                     "assert result.stdout=='42\\n'; print('isolated OK')")
+    monkeypatch.setattr(agysdk, "shim_source", lambda: probe)
+    launcher = agysdk._write_launcher()
+    root = tmp_path / "workspace"; root.mkdir(); (root / "ctx.toml").write_text("version=1\n")
+    result = subprocess.run([str(launcher), str(root)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "isolated OK"

@@ -6,6 +6,15 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- **Public tool boundary**: `ctx.sdk.ToolSession` and `ctx run --json` return
+  typed command termination and complete small text or bounded evidence.
+  Async cancellation stops the owned process group and retains partial output;
+  session export uses verified capsules. The Antigravity shim uses this runtime
+  with native file tools by default. Signal status mapping, bounded digest reads,
+  actual-delivery telemetry and explicit cache/thinking usage records close gaps
+  found in the supplied benchmark. Model-free replay and source observations:
+  `evals/tool-boundary-2026-10-12.md`. Requires a build containing this change.
+
 - **The decision rule on `ctx agent`** (receipt
   `evals/agentbench/deepswe-decision-2026-09-16.md`, record
   `evals/agentbench/results/deepswe-decision.json`): naive vs the runtime,

@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Straitjacket command result",
+  "type": "object",
+  "required": [
+    "schema",
+    "ref",
+    "command_exit_code",
+    "signal",
+    "timed_out",
+    "cancelled"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ctx.command-result/v1"
+    },
+    "ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^run:[0-9a-f]{64}$"
+    },
+    "command_exit_code": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 255
+    },
+    "signal": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timed_out": {
+      "type": "boolean"
+    },
+    "cancelled": {
+      "type": "boolean"
+    },
+    "delivery": {
+      "enum": [
+        "inline",
+        "digest"
+      ]
+    },
+    "stdout": {
+      "type": "string"
+    },
+    "stderr": {
+      "type": "string"
+    },
+    "digest": {
+      "type": "string"
+    },
+    "redactions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "error": {
+      "const": "launch_failed"
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "delivery",
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "delivery": {
+          "const": "inline"
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "digest"
+            ]
+          },
+          {
+            "required": [
+              "error"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "delivery",
+        "digest"
+      ],
+      "properties": {
+        "delivery": {
+          "const": "digest"
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "stdout"
+            ]
+          },
+          {
+            "required": [
+              "stderr"
+            ]
+          },
+          {
+            "required": [
+              "error"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "ref": {
+          "type": "null"
+        },
+        "command_exit_code": {
+          "type": "null"
+        }
+      },
+      "not": {
+        "required": [
+          "delivery"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false
+}

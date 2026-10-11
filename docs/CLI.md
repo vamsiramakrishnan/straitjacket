@@ -140,6 +140,14 @@ A run has two products:
 
 The digest header contains the run handle. Use it for later retrieval, search, or diff.
 
+For an embedding tool, `ctx run --json -- <command>` prints one
+`ctx.command-result/v1` object with the command's exit code or signal, timeout
+state and a full run reference. Complete small text streams remain separate;
+large output uses the existing bounded digest. The CLI still exits `3` on a
+failed command and `124` on timeout. Read the JSON command status instead of
+inferring it from ctx's exit code. This foreground mode rejects `--bg`,
+`--bg-after` and `--passthrough`. See [Tool SDK](TOOL-SDK.md) for the contract.
+
 ### Shell syntax
 
 Use shell mode only when shell semantics are part of the operation:

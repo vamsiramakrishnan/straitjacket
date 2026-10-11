@@ -1,0 +1,418 @@
+{
+  "claim": "single_attempt_observations_not_causal_or_billing_evidence",
+  "command_sizes": {
+    "at_most_1kib": 708,
+    "at_most_4kib": 878,
+    "empty": 66,
+    "known": 984,
+    "unknown": 0
+  },
+  "pairs": [
+    {
+      "baseline": {
+        "agent_wall_seconds": 2515.192,
+        "billed_model_usd": null,
+        "estimate_source": "cost-estimate.json",
+        "estimated_model_usd": 5.3549226,
+        "gross_tokens_derived": 20840184,
+        "reward": 1,
+        "run": "run-20260922T061353Z-e34d2178"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 3134.755,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 4.75696305,
+        "gross_tokens_derived": 19259586,
+        "reward": 1,
+        "run": "run-20260928T165058Z-d406460b"
+      },
+      "task": "fastapi-implicit-head-options"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 2550.009,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 3.849213975,
+        "gross_tokens_derived": 20722223,
+        "reward": 1,
+        "run": "run-20260928T175507Z-718473f1"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 2028.53,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 3.97361625,
+        "gross_tokens_derived": 24342581,
+        "reward": 1,
+        "run": "run-20260928T185101Z-9c1ccf56"
+      },
+      "task": "expr-try-catch-errors"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 2603.053,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 1.972574025,
+        "gross_tokens_derived": 6896889,
+        "reward": 1,
+        "run": "run-20260929T100905Z-ccdec70c"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 3584.24,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.58505545,
+        "gross_tokens_derived": 11303613,
+        "reward": 1,
+        "run": "run-20260929T105839Z-0f2f9d3b"
+      },
+      "task": "kcp-go-multiplexed-kcp-streams"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1530.371,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.7893223,
+        "gross_tokens_derived": 13350486,
+        "reward": 1,
+        "run": "run-20260929T134346Z-bc37268e"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1342.346,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.188816575,
+        "gross_tokens_derived": 10347255,
+        "reward": 1,
+        "run": "run-20260929T142813Z-8bfc753f"
+      },
+      "task": "langchain-request-coalescing"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1193.105,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.029866975,
+        "gross_tokens_derived": 10595103,
+        "reward": 1,
+        "run": "run-20260929T154052Z-85212ef3"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1497.092,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 1.97158275,
+        "gross_tokens_derived": 10405264,
+        "reward": 1,
+        "run": "run-20260929T161840Z-29122c9a"
+      },
+      "task": "dasel-html-document-format"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 2432.247,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 4.116784275,
+        "gross_tokens_derived": 19736120,
+        "reward": 0,
+        "run": "run-20260930T133759Z-2bcfa884"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 2018.136,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.88376455,
+        "gross_tokens_derived": 15893836,
+        "reward": 0,
+        "run": "run-20260930T145330Z-711909a4"
+      },
+      "task": "helm-array-merge-strategies"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1287.425,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.17818165,
+        "gross_tokens_derived": 8909696,
+        "reward": 1,
+        "run": "run-20261002T125642Z-75c14ee3"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1640.117,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 3.0499362,
+        "gross_tokens_derived": 12649487,
+        "reward": 1,
+        "run": "run-20261002T192325Z-ffa70f10"
+      },
+      "task": "bandit-incremental-cache-control"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1963.744,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.83037925,
+        "gross_tokens_derived": 16313026,
+        "reward": 1,
+        "run": "run-20261002T224205Z-003edc91"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 3375.086,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 3.705985275,
+        "gross_tokens_derived": 20144535,
+        "reward": 1,
+        "run": "run-20261002T231635Z-4e69ea01"
+      },
+      "task": "kysely-window-grouping-helpers"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1901.915,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 3.871359,
+        "gross_tokens_derived": 20125803,
+        "reward": 1,
+        "run": "run-20261003T001401Z-3cba4f71"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1442.534,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.9087931,
+        "gross_tokens_derived": 16615459,
+        "reward": 1,
+        "run": "run-20261003T004635Z-3ab3a1f9"
+      },
+      "task": "tengo-callable-instance-isolation"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1236.806,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.31486525,
+        "gross_tokens_derived": 11145186,
+        "reward": 1,
+        "run": "run-20261004T052552Z-324a144a"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1568.976,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.71867545,
+        "gross_tokens_derived": 13096440,
+        "reward": 1,
+        "run": "run-20261004T054742Z-3e190616"
+      },
+      "task": "obsidian-linter-scoped-ignore-markers"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1168.155,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.183688225,
+        "gross_tokens_derived": 10135033,
+        "reward": 0,
+        "run": "run-20261004T061453Z-fe1e3852"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1443.105,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.85235815,
+        "gross_tokens_derived": 16171422,
+        "reward": 0,
+        "run": "run-20261004T063515Z-d1a66297"
+      },
+      "task": "httpx-multipart-response-parsing"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1307.341,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.574238875,
+        "gross_tokens_derived": 15026084,
+        "reward": 1,
+        "run": "run-20261004T070002Z-c810ab86"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1237.475,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.195105325,
+        "gross_tokens_derived": 11688262,
+        "reward": 1,
+        "run": "run-20261004T072404Z-c1f900cc"
+      },
+      "task": "opa-rego-rule-profiling"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1181.779,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 1.922170575,
+        "gross_tokens_derived": 8106772,
+        "reward": 0,
+        "run": "run-20261005T090459Z-1d7e4d97"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1365.313,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.1566766,
+        "gross_tokens_derived": 9011325,
+        "reward": 0,
+        "run": "run-20261005T130854Z-0654f0c1"
+      },
+      "task": "igel-persist-feature-schema"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1734.963,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 3.679722825,
+        "gross_tokens_derived": 19117107,
+        "reward": 0,
+        "run": "run-20261005T094945Z-dde9d2fe"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1969.767,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 3.47271225,
+        "gross_tokens_derived": 16169070,
+        "reward": 1,
+        "run": "run-20261005T101929Z-f2c4c60a"
+      },
+      "task": "cliffy-config-file-parsing"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 3675.798,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 4.613333025,
+        "gross_tokens_derived": 22501013,
+        "reward": 1,
+        "run": "run-20261005T105304Z-1d0dcf80"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 3307.409,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 4.5322806,
+        "gross_tokens_derived": 24656214,
+        "reward": 0,
+        "run": "run-20261005T120038Z-bcc5b238"
+      },
+      "task": "oxvg-structural-selector-preservation"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 3093.836,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 5.64634575,
+        "gross_tokens_derived": 31261707,
+        "reward": 1,
+        "run": "run-20261005T140607Z-e6886a44"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 2414.76,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.65467405,
+        "gross_tokens_derived": 11678526,
+        "reward": 1,
+        "run": "run-20261005T150517Z-d0c6d48b"
+      },
+      "task": "numba-stencil-boundary-modes"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 1520.969,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 1.791825825,
+        "gross_tokens_derived": 8597598,
+        "reward": 1,
+        "run": "run-20261005T155252Z-04ef2d02"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1352.335,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 1.81919985,
+        "gross_tokens_derived": 7382054,
+        "reward": 1,
+        "run": "run-20261005T161855Z-6709180c"
+      },
+      "task": "ofetch-per-origin-circuit-breaker"
+    },
+    {
+      "baseline": {
+        "agent_wall_seconds": 2965.765,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 3.54748095,
+        "gross_tokens_derived": 14611027,
+        "reward": 1,
+        "run": "run-20261005T184852Z-224105de"
+      },
+      "straitjacket": {
+        "agent_wall_seconds": 1187.49,
+        "billed_model_usd": null,
+        "estimate_source": "metrics.json",
+        "estimated_model_usd": 2.222641275,
+        "gross_tokens_derived": 12420023,
+        "reward": 1,
+        "run": "run-20261006T025726Z-691ebe82"
+      },
+      "task": "csstree-shorthand-expansion-compression"
+    }
+  ],
+  "schema": "ctx.agy-reference/v1",
+  "selected_totals": {
+    "baseline": {
+      "agent_wall_seconds": 35862.473,
+      "attempts": 18,
+      "billed_model_usd": null,
+      "estimated_model_usd": 57.26627535,
+      "gross_tokens_derived": 277991057,
+      "resolved": 14
+    },
+    "straitjacket": {
+      "agent_wall_seconds": 35909.466,
+      "attempts": 18,
+      "billed_model_usd": null,
+      "estimated_model_usd": 52.64883675,
+      "gross_tokens_derived": 263234952,
+      "resolved": 14
+    }
+  },
+  "source_report_sha256": "bf2864d18fa519911d377608f33cccc2d49eaf39421597874236a969c9b573d1",
+  "task_regressions": [
+    "oxvg-structural-selector-preservation"
+  ],
+  "tool_calls": {
+    "get": 68,
+    "run": 984,
+    "search": 20
+  }
+}

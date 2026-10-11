@@ -107,7 +107,11 @@ class DigestContext:
             if size == 0:
                 views[name] = StreamView(name, 0, 0, meta["mediaType"], "", True)
                 continue
-            data = store.get_blob(blob_hash)
+            # Bound the READ, not only the subsequent parse. get_blob() loaded
+            # the entire spool before slicing, so a GiB log needed GiB RAM.
+            path = store.blob_path(store.resolve_id(blob_hash, kinds=("blob",)))
+            with path.open("rb") as stream:
+                data = stream.read(MAX_PARSE_BYTES + 1)
             head = data[:64]
             parsed_fully = len(data) <= MAX_PARSE_BYTES
             if not parsed_fully:

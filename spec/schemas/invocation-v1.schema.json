@@ -59,6 +59,12 @@
         },
         "timedOut": {
           "type": "boolean"
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "outputLimited": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

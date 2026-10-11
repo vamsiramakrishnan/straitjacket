@@ -38,8 +38,9 @@ from __future__ import annotations
 import os
 import signal as signal_mod
 import subprocess
+import time
 
-__all__ = ["exit_status", "kill_and_reap", "wait_or_kill"]
+__all__ = ["exit_status", "native_exit_status", "kill_and_reap", "wait_or_kill"]
 
 
 def kill_and_reap(proc: subprocess.Popen) -> None:
@@ -57,7 +58,7 @@ def kill_and_reap(proc: subprocess.Popen) -> None:
     proc.wait()
 
 
-def wait_or_kill(proc: subprocess.Popen, timeout: float | None) -> bool:
+def wait_or_kill(proc: subprocess.Popen, timeout: float | None, *, cancelled=None) -> bool:
     """Wait for ``proc``; on timeout SIGKILL its process group and reap it.
 
     Returns True iff the timeout expired. ``timeout=None`` waits forever.
@@ -72,7 +73,23 @@ def wait_or_kill(proc: subprocess.Popen, timeout: float | None) -> bool:
     optional — without it the killed child stays a zombie.
     """
     try:
-        proc.wait(timeout=timeout)
+        if cancelled is None:
+            proc.wait(timeout=timeout)
+        else:
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while True:
+                if cancelled():
+                    kill_and_reap(proc)
+                    return False
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    kill_and_reap(proc)
+                    return True
+                try:
+                    proc.wait(timeout=min(0.05, remaining) if remaining is not None else 0.05)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
     except subprocess.TimeoutExpired:
         kill_and_reap(proc)
         return True
@@ -103,3 +120,25 @@ def exit_status(returncode: int | None) -> tuple[int | None, str | None]:
         except ValueError:  # pragma: no cover - exotic signal number
             return None, f"SIG{-returncode}"
     return returncode, None
+
+
+def native_exit_status(result: dict) -> int:
+    """Shell-facing status, distinct from the command's typed termination.
+
+    A timeout is 124. A signal is 128+N, while the manifest continues to
+    carry exitCode=null and signal=SIGNAME. Unknown status must fail.
+    """
+    if result.get("timedOut"):
+        return 124
+    name = result.get("signal")
+    if name:
+        try:
+            number = int(signal_mod.Signals[str(name)])
+        except (KeyError, ValueError):
+            try:
+                number = int(str(name).removeprefix("SIG"))
+            except ValueError:
+                return 1
+        return 128 + number if 0 < number < 128 else 1
+    code = result.get("exitCode")
+    return code if type(code) is int and 0 <= code <= 255 else 1

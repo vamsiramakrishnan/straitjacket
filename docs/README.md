@@ -45,6 +45,7 @@ retrieval returns bounded regions on demand
 | Configure budgets, storage, or redaction | [Configuration](CONFIGURATION.md) |
 | Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
 | Connect Hermes, OMP, OpenCode, or DSH | [Agent integrations](AGENT-INTEGRATIONS.md) |
+| Embed bounded tools in your own harness | [Tool SDK](TOOL-SDK.md) |
 | Understand handles, spans, and profiles | [Core concepts](CONCEPTS.md) |
 | Search with filters, cite history, get a context pack, run ctx as the host | [Code search](CODE-SEARCH.md) |
 | Apply, verify, and expand an observed edit | [Edit loop](EDIT-LOOP.md) |

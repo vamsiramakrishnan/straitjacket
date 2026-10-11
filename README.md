@@ -84,6 +84,12 @@ Start with capture and retrieval. Add editing or orchestration when the task
 needs their contracts. See the [verified edit loop](docs/EDIT-LOOP.md) for
 snapshot-based replacements, typed recovery, and prewalk handoffs.
 
+If your harness owns its tools, use the provider-independent
+[tool SDK](docs/TOOL-SDK.md): `ToolSession.run/get/search/query` returns bounded
+evidence with explicit command termination, supports async cancellation, and
+exports observed artifacts as a capsule. Other languages can use
+`ctx run --json`. These entry points require a build containing the change.
+
 [Semantic analysis](docs/SEMANTIC.md) is an explicit depth-one map over frozen
 evidence through a caller-configured model driver. Its findings are labeled
 inferences; complete processing does not establish complete evidence selection

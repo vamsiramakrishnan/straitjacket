@@ -1,0 +1,78 @@
+{
+  "kind": "model_free_delivery_ablation",
+  "passed": true,
+  "provider_calls": 0,
+  "rows": [
+    {
+      "auto_delivery": "inline",
+      "auto_wire_bytes": 227,
+      "captured_bytes": 0,
+      "case": "empty",
+      "digest_wire_bytes": 468,
+      "inline_streams_exact": true,
+      "retrieval_ok": true,
+      "status_ok": true
+    },
+    {
+      "auto_delivery": "inline",
+      "auto_wire_bytes": 234,
+      "captured_bytes": 6,
+      "case": "small",
+      "digest_wire_bytes": 294,
+      "inline_streams_exact": true,
+      "retrieval_ok": true,
+      "status_ok": true
+    },
+    {
+      "auto_delivery": "inline",
+      "auto_wire_bytes": 236,
+      "captured_bytes": 9,
+      "case": "stderr-no-newline",
+      "digest_wire_bytes": 316,
+      "inline_streams_exact": true,
+      "retrieval_ok": true,
+      "status_ok": true
+    },
+    {
+      "auto_delivery": "inline",
+      "auto_wire_bytes": 241,
+      "captured_bytes": 13,
+      "case": "failure",
+      "digest_wire_bytes": 301,
+      "inline_streams_exact": true,
+      "retrieval_ok": true,
+      "status_ok": true
+    },
+    {
+      "auto_delivery": "inline",
+      "auto_wire_bytes": 235,
+      "captured_bytes": 0,
+      "case": "signal",
+      "digest_wire_bytes": 541,
+      "inline_streams_exact": true,
+      "retrieval_ok": true,
+      "status_ok": true
+    },
+    {
+      "auto_delivery": "digest",
+      "auto_wire_bytes": 4081,
+      "captured_bytes": 3000,
+      "case": "escaped-json",
+      "digest_wire_bytes": 4081,
+      "inline_streams_exact": true,
+      "retrieval_ok": true,
+      "status_ok": true
+    },
+    {
+      "auto_delivery": "digest",
+      "auto_wire_bytes": 1117,
+      "captured_bytes": 88885,
+      "case": "flood",
+      "digest_wire_bytes": 1117,
+      "inline_streams_exact": true,
+      "retrieval_ok": true,
+      "status_ok": true
+    }
+  ],
+  "schema": "ctx.tool-boundary-replay/v1"
+}
