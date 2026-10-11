@@ -409,6 +409,8 @@ def _build_parser():
     p_run.add_argument("--focus", help="deterministic evidence-selection query")
     p_run.add_argument("--cwd", help="working directory relative to the workspace")
     p_run.add_argument("--shell", action="store_true", help="run one string through the shell")
+    p_run.add_argument("--json", action="store_true",
+                       help="one ctx.command-result/v1 object with typed command status and bounded output")
     p_run.add_argument(
         "--passthrough", action="store_true",
         help="hook mode: exit with the wrapped command's own status, and when the "

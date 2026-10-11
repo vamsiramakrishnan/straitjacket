@@ -160,11 +160,20 @@ def _resolve_cached(workspace_arg: str | None) -> tuple[Any, Any]:
 
 
 def _dispatch(args: dict[str, Any]) -> str:
+    ws, store = _resolve_cached(args.get("workspace"))
+    return dispatch_bounded(ws, store, args)
+
+
+def dispatch_bounded(ws, store, args: dict[str, Any]) -> str:
+    """Shared bounded retrieval dispatch; callers own workspace and connection.
+
+    The SDK uses a fresh Store per worker, so SQLite connections and the MCP
+    server's process-local workspace cache never cross thread boundaries.
+    """
     # Heavy modules load lazily so server startup stays fast.
     from ctx.retrieval import Selector, RetrievalError, get, search, stats, charge_turn_budget, _span, _span_anchored
 
     op = args.get("op")
-    ws, store = _resolve_cached(args.get("workspace"))
 
     max_tokens = args.get("maxTokens")
     if isinstance(max_tokens, int):

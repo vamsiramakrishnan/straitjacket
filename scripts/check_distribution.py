@@ -29,6 +29,9 @@ REQUIRED_FILES = {
     "ctx/data/native-hooks/opencode.mjs",
     "ctx/data/native-hooks/dsh.mjs",
     "ctx/acp.py",
+    "ctx/sdk.py",
+    "ctx/toolresult.py",
+    "ctx/tooltelemetry.py",
     "ctx/mcp_edits.py",
     "ctx/commands/semantic.py",
     "ctx/semantic/__init__.py",
@@ -201,6 +204,26 @@ finally:
                     raise RuntimeError(f"{host} renderer returned no configuration")
                 if host in ("hermes", "omp", "opencode", "dsh"):
                     json.loads(rendered)
+
+            # Public tool runtime from the wheel, with no source checkout or
+            # provider dependency. Status, stream identity and retrieval must
+            # survive the same package boundary as an embedding application.
+            _run(python, clean_root, "-c", """
+import asyncio, json, os, pathlib, sys
+from ctx.sdk import ToolSession
+root = pathlib.Path('tool-sdk-workspace')
+root.mkdir()
+(root / 'ctx.toml').write_text('version=1\\n')
+os.environ['CTX_STATE_HOME'] = str(root / 'state')
+async def probe():
+    session = ToolSession(root)
+    result = await session.run([sys.executable, '-c', "import sys; sys.stdout.write('installed-evidence'); sys.exit(4)"])
+    assert result.command_exit_code == 4 and result.delivery == 'inline'
+    assert result.stdout == 'installed-evidence' and result.stderr == ''
+    assert 'installed-evidence' in await session.get(result.ref, start_line=1, end_line=1)
+    await session.export(root / 'evidence.tar')
+asyncio.run(probe())
+""")
 
             # Exercise the two Codex contracts that are easy to get subtly
             # wrong and otherwise fail only when the next Codex session starts.

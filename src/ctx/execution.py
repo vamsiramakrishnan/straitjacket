@@ -145,6 +145,7 @@ def run_capture(
     runtime=None,
     operation_key: str | None = None,
     cancelled=None,
+    env: dict[str, str] | None = None,
 ) -> CaptureResult:
     """Execute a command, streaming stdout/stderr into distinct immutable
     blobs, and publish a ``ctx.invocation/v1`` manifest.
@@ -167,14 +168,18 @@ def run_capture(
             capture = run_capture(ws, argv, cwd=cwd, shell=shell, timeout=allowance,
                 store=store, stdin_bytes=stdin_bytes, record_argv=record_argv,
                 output_bytes=runtime.limits.capture_bytes if output_bytes is None else output_bytes,
-                cancelled=runtime.cancelled)
+                cancelled=runtime.cancelled, env=env)
             result = capture.manifest["result"]
             return OperationResult({"manifest_id": capture.manifest_id, "manifest": capture.manifest},
                 succeeded=not any(result.get(k) for k in ("timedOut", "outputLimited", "cancelled")))
-        result = runtime.perform(operation_key, "command.run", {
+        inputs = {
             "argv": argv, "cwd": cwd or ".", "shell": shell,
             "workspace": hashlib.sha256(str(ws.root.resolve()).encode()).hexdigest(),
-            "stdin": hashlib.sha256(stdin_bytes or b"").hexdigest()}, execute,
+            "stdin": hashlib.sha256(stdin_bytes or b"").hexdigest()}
+        if env is not None:
+            from ctx.store import canonical_json
+            inputs["environmentHash"] = hashlib.sha256(canonical_json(env)).hexdigest()
+        result = runtime.perform(operation_key, "command.run", inputs, execute,
             kind="execute", timeout=timeout)
         return CaptureResult(**result)
 
@@ -183,7 +188,7 @@ def run_capture(
             raise ExecutionError("bounded task commands use explicit argv, not a shell")
         return _run_limited(ws, store, argv, cwd=cwd, timeout=timeout,
                             stdin_bytes=stdin_bytes, output_bytes=output_bytes,
-                            record_argv=record_argv, cancelled=cancelled)
+                            record_argv=record_argv, cancelled=cancelled, env=env)
 
     workdir = ws.confine(cwd or ".", must_exist=True)
     rel_cwd = ws.relativize(workdir) or "."
@@ -203,6 +208,13 @@ def run_capture(
         in_path = tmpdir / "stdin"
         in_path.write_bytes(stdin_bytes)
     timed_out = False
+    was_cancelled = False
+
+    def stop_requested():
+        nonlocal was_cancelled
+        was_cancelled = bool(cancelled())
+        return was_cancelled
+
     try:
         in_fh = in_path.open("rb") if in_path is not None else None
         try:
@@ -216,6 +228,7 @@ def run_capture(
                         stderr=err_fh,
                         stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
                         start_new_session=True,
+                        env=env,
                     )
                 except FileNotFoundError as e:
                     raise ExecutionError(f"command not found: {argv[0]}") from e
@@ -223,7 +236,10 @@ def run_capture(
                     if in_fh is not None:
                         in_fh.close()
                         in_fh = None
-                timed_out = wait_or_kill(proc, timeout)
+                if cancelled is not None:
+                    timed_out = wait_or_kill(proc, timeout, cancelled=stop_requested)
+                else:
+                    timed_out = wait_or_kill(proc, timeout)
         finally:
             # in_fh stayed open if the stdout/stderr spool `with` failed before
             # the inner try ever ran (e.g. out_path.open raising) -- close it here too.
@@ -253,18 +269,20 @@ def run_capture(
         timed_out=timed_out,
         streams=streams,
     )
+    if was_cancelled:
+        manifest["result"]["cancelled"] = True
     manifest_id = store.put_manifest(manifest, kind="run")
     manifest["id"] = f"sha256:{manifest_id}"
     return CaptureResult(manifest_id=manifest_id, manifest=manifest)
 
 
-def _run_limited(ws, store, argv, *, cwd, timeout, stdin_bytes, output_bytes, record_argv, cancelled):
+def _run_limited(ws, store, argv, *, cwd, timeout, stdin_bytes, output_bytes, record_argv, cancelled, env=None):
     """Bound both pipes before publication. Overflow is an execution failure."""
     from ctx.semantic.worker import CommandWorker
     if isinstance(output_bytes, bool) or not isinstance(output_bytes, int) or not 1 <= output_bytes <= 8 * 1024 * 1024:
         raise ExecutionError("output_bytes must be 1..8388608")
     workdir = ws.confine(cwd or ".", must_exist=True)
-    result = CommandWorker(argv, cwd=workdir, stderr_bytes=output_bytes, cancelled=cancelled)(
+    result = CommandWorker(argv, cwd=workdir, env=env, stderr_bytes=output_bytes, cancelled=cancelled)(
         stdin_bytes or b"", timeout=600 if timeout is None else timeout, response_bytes=output_bytes)
     if result.error == "launch_failed":
         raise ExecutionError("command could not be launched")

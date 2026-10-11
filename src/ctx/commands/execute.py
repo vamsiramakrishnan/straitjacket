@@ -23,8 +23,16 @@ def cmd_run(ws, ns) -> int:
     if not command:
         print("ctx run: no command given (use: ctx run -- <command> [args...])", file=sys.stderr)
         return 2
+    if ns.shell and len(command) != 1:
+        print("ctx run: --shell mode takes exactly one command string", file=sys.stderr)
+        return 2
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+
+    structured = bool(getattr(ns, "json", False))
+    if structured and (ns.bg or ns.bg_after is not None or getattr(ns, "passthrough", False)):
+        print("ctx run: --json requires a foreground run without --passthrough", file=sys.stderr)
+        return 2
 
     if ns.bg or ns.bg_after is not None:
         return _run_bg(ws, store, ns, command)
@@ -44,8 +52,25 @@ def cmd_run(ws, ns) -> int:
         # the identical ExecutionError to 127; `ctx run` returned a bare 1,
         # so the same failure reported differently depending on which verb
         # you reached it through. One behaviour, two doors, again.
-        print(f"ctx run: {e}", file=sys.stderr)
+        if structured:
+            import json
+            print(json.dumps({"schema": "ctx.command-result/v1", "ref": None,
+                "command_exit_code": None, "signal": None, "timed_out": False,
+                "cancelled": False, "error": "launch_failed"}, separators=(",", ":")))
+        else:
+            print(f"ctx run: {e}", file=sys.stderr)
         return 127
+
+    if structured:
+        from ctx.toolresult import render_command_result
+        from ctx.retrieval import record_telemetry
+        result = render_command_result(ws, store, capture, focus=ns.focus,
+            delivery="digest" if ns.focus else "auto")
+        text = result.to_json()
+        record_telemetry(store, "run", sum(s["bytes"] for s in capture.manifest["streams"].values()),
+                         len(text.encode()) + 1)
+        print(text)
+        return 124 if result.timed_out else 0 if result.command_exit_code == 0 else 3
 
     # Reflex arc (docs/REFLEX.md layer 3): a signature already intervened on
     # this session re-arriving here IS the starvation loop — check_command
@@ -100,7 +125,7 @@ def cmd_run(ws, ns) -> int:
     verbatim = passthrough and _passthrough_fits(ws, capture.manifest)
     digest, manifest = render_run_digest(
         store, ws, capture.manifest, focus=ns.focus, dense=dense,
-        contained=not verbatim, **render_kwargs
+        contained=not verbatim, record_delivery=not verbatim, **render_kwargs
     )
     # A digest that omitted content is an intervention (hypothesis: the model
     # uses the digest, not a re-run). Record it so the reflex arc can score
@@ -134,11 +159,9 @@ def cmd_run(ws, ns) -> int:
 
 def _native_exit(manifest: dict) -> int:
     """The wrapped command's own status: 124 on timeout, else its exit code."""
-    result = manifest["result"]
-    if result.get("timedOut"):
-        return 124
-    code = result.get("exitCode")
-    return code if isinstance(code, int) and 0 <= code <= 255 else 1
+    from ctx._proc import native_exit_status
+
+    return native_exit_status(manifest["result"])
 
 
 def _passthrough_fits(ws, manifest: dict) -> bool:
@@ -152,7 +175,9 @@ def _passthrough_fits(ws, manifest: dict) -> bool:
         total = sum(int(s["bytes"]) for s in streams.values())
         if total > ws.config.budgets.max_inline_bytes:
             return False
-        if manifest["result"].get("timedOut"):
+        if any(manifest["result"].get(k) for k in ("timedOut", "cancelled", "outputLimited")):
+            return False
+        if sum(int(s["lines"]) for s in streams.values()) > ws.config.budgets.max_inline_lines:
             return False
         return not any(
             str(s.get("mediaType", "")).startswith("application/octet-stream")
@@ -173,7 +198,11 @@ def _emit_passthrough(ws, store, manifest: dict) -> int:
     text = "".join(p if p.endswith("\n") else p + "\n" for p in parts)
     text, _redactions = sanitize_for_model(text, ws.config.redaction)
     code = _native_exit(manifest)
-    write_exact(text + f"[ctx run:{short_id(manifest['id'])} · exit {code}]", newline=True)
+    emitted = text + f"[ctx run:{short_id(manifest['id'])} · exit {code}]"
+    from ctx.retrieval import record_telemetry
+    record_telemetry(store, "run", sum(s["bytes"] for s in manifest["streams"].values()),
+                     len(emitted.encode("utf-8")) + 1)
+    write_exact(emitted, newline=True)
     return code
 
 

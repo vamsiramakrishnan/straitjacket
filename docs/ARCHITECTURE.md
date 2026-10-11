@@ -68,6 +68,7 @@ No behavioural signal may weaken anything here.
 | Module | Responsibility |
 |---|---|
 | `execution.py` | Birth-time capture runner; output spools to disk and is content-addressed before the model sees it (SPEC §6.2, §7). |
+| `sdk.py`, `toolresult.py`, `tooltelemetry.py` | Provider-independent async tool session, typed command results, serialized-size-aware delivery and operational observations. Shares execution, retrieval, resolver and capsule mechanisms. |
 | `store.py` | The content-addressed artifact store and quota enforcement (SPEC §12). |
 | `jobs.py` | Long-runner backgrounding: `ctx run --bg`, `ctx job(s)`. |
 | `seq.py` | `ctx seq` — declared command trees (round economy without losing gates). |
