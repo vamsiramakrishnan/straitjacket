@@ -201,6 +201,36 @@ def test_shim_tools_use_public_runtime_and_preserve_quoted_patterns(state_home, 
     (workspace_dir / "with space.py").write_text("def hello():\n    return 'quoted value'\n")
     assert "empty.py" in run(tools["find_file"]("*.py"))
     assert "quoted value" in run(tools["ctx_search"]("repo:", "quoted value"))
-    command = json.loads(run(tools["run_command"]("printf tiny")))
+    compact = run(tools["run_command"]("printf tiny"))
+    assert "exit=0" in compact and "stdout:\ntiny" in compact
+    json_tools = {f.__name__: f for f in module.make_tools(workspace_dir, result_format="json")}
+    command = json.loads(run(json_tools["run_command"]("printf tiny")))
     assert command["stdout"] == "tiny" and command["command_exit_code"] == 0
-    assert len(module.make_tools(workspace_dir)) == 3
+    assert {f.__name__ for f in module.make_tools(workspace_dir)} == {
+        "run_command", "ctx_get", "ctx_search", "ctx_repair", "ctx_navigate", "ctx_query", "ctx_investigate"}
+
+
+def test_default_shim_repair_applies_then_checks_with_bounded_proof(state_home, workspace_dir):
+    import re
+    import shlex
+    from ctx import anchors
+    path = Path(__file__).resolve().parents[1] / "contrib/ctx-agy/ctx_agy.py"
+    spec = importlib.util.spec_from_file_location("repair_shim", path)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    session = ToolSession(workspace_dir, durable=True)
+    tools = {f.__name__: f for f in module.make_tools(workspace_dir, session=session)}
+    (workspace_dir / "m.py").write_text("value = 1\n")
+    check = shlex.join([sys.executable, "-B", "-c", "from m import value; assert value == 2"])
+    failed = run(tools["run_command"](check))
+    ref = re.search(r"run:[0-9a-f]{64}", failed).group()
+    summary = run(tools["ctx_repair"](ref, "m.py", "1:1@" + anchors.anchor(["value = 1"]),
+                  "value = 2\n", check, shlex.join([sys.executable, "-m", "py_compile", "m.py"]), "repair-once"))
+    assert "outcome=passed" in summary and "targeted behavior: passed" in summary
+    assert "regression behavior: passed" in summary and "checks completed: 2/2" in summary
+    assert "proof: blob:" in summary and len(summary.encode()) <= 4800
+    store = make_store(make_ws(workspace_dir))
+    try:
+        row = json.loads((store.audit_dir / "tool-calls.jsonl").read_text().splitlines()[-1])
+        assert row["op"] == "repair" and row["delivered_bytes"] == len(summary.encode())
+    finally:
+        store.close()

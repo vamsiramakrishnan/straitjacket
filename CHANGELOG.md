@@ -6,6 +6,15 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- **0.40.0 tool workflow candidate**: compact model delivery keeps rich SDK JSON;
+  progressive snapshot navigation and default query/plan tools reduce separate
+  evidence operations. Explicit context epochs enable content-aware read reuse.
+  ToolSession can reopen the existing TaskRuntime journal, sharing allowances
+  across reads, commands, plan leaves and CAS repair verification. Unknown
+  mutations block retries; verification binds targeted/regression checks to
+  exact input hashes. Pinned repeated benchmark profiles and model-free receipt:
+  `evals/workflow-2026-10-18.md`. Live cost and turn reductions remain unmeasured.
+
 - **Public tool boundary**: `ctx.sdk.ToolSession` and `ctx run --json` return
   typed command termination and complete small text or bounded evidence.
   Async cancellation stops the owned process group and retains partial output;

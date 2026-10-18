@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -76,15 +77,23 @@ def applied_files(ws, receipt) -> dict[str, str]:
     return expected
 
 
-def verify_edit(ws, store, receipt_ref: str, checks: list[Check], *, witnesses=(), runner=None) -> dict:
-    """Run a bounded set of explicit checks and persist the resulting proof."""
+def validate_checks(checks):
     if not checks or len(checks) > 8:
         raise VerificationError("provide between one and eight checks")
     for check in checks:
-        if check.kind not in {"syntax", "types", "behavior"} or not check.argv:
+        if (not isinstance(check, Check) or check.kind not in {"syntax", "types", "behavior"}
+                or not isinstance(check.argv, (tuple, list)) or not check.argv
+                or not all(isinstance(a, str) and "\x00" not in a for a in check.argv)
+                or not check.argv[0]):
             raise VerificationError("check needs a kind and nonempty argv")
-        if not 0 < check.timeout <= 600:
+        if (isinstance(check.timeout, bool) or not isinstance(check.timeout, (int, float))
+                or not math.isfinite(check.timeout) or not 0 < check.timeout <= 600):
             raise VerificationError("check timeout must be in (0, 600] seconds")
+
+
+def verify_edit(ws, store, receipt_ref: str, checks: list[Check], *, witnesses=(), runner=None) -> dict:
+    """Run a bounded set of explicit checks and persist the resulting proof."""
+    validate_checks(checks)
     receipt = read_evidence(store, receipt_ref, "ctx.edit-receipt/v1")
     expected = applied_files(ws, receipt)
     inputs = file_digests(ws, [*expected, *witnesses])

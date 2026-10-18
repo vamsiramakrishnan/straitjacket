@@ -1,0 +1,112 @@
+{
+  "claim": "delivery_and_evidence_only_not_task_cost_or_turn_reductions",
+  "commands": {
+    "kind": "model_free_delivery_ablation",
+    "passed": true,
+    "provider_calls": 0,
+    "rows": [
+      {
+        "auto_delivery": "inline",
+        "auto_wire_bytes": 227,
+        "captured_bytes": 0,
+        "case": "empty",
+        "compact_status_and_ref": true,
+        "compact_wire_bytes": 93,
+        "digest_wire_bytes": 468,
+        "inline_streams_exact": true,
+        "retrieval_ok": true,
+        "status_ok": true
+      },
+      {
+        "auto_delivery": "inline",
+        "auto_wire_bytes": 234,
+        "captured_bytes": 6,
+        "case": "small",
+        "compact_status_and_ref": true,
+        "compact_wire_bytes": 96,
+        "digest_wire_bytes": 294,
+        "inline_streams_exact": true,
+        "retrieval_ok": true,
+        "status_ok": true
+      },
+      {
+        "auto_delivery": "inline",
+        "auto_wire_bytes": 236,
+        "captured_bytes": 9,
+        "case": "stderr-no-newline",
+        "compact_status_and_ref": true,
+        "compact_wire_bytes": 108,
+        "digest_wire_bytes": 316,
+        "inline_streams_exact": true,
+        "retrieval_ok": true,
+        "status_ok": true
+      },
+      {
+        "auto_delivery": "inline",
+        "auto_wire_bytes": 241,
+        "captured_bytes": 13,
+        "case": "failure",
+        "compact_status_and_ref": true,
+        "compact_wire_bytes": 103,
+        "digest_wire_bytes": 301,
+        "inline_streams_exact": true,
+        "retrieval_ok": true,
+        "status_ok": true
+      },
+      {
+        "auto_delivery": "inline",
+        "auto_wire_bytes": 235,
+        "captured_bytes": 0,
+        "case": "signal",
+        "compact_status_and_ref": true,
+        "compact_wire_bytes": 111,
+        "digest_wire_bytes": 541,
+        "inline_streams_exact": true,
+        "retrieval_ok": true,
+        "status_ok": true
+      },
+      {
+        "auto_delivery": "digest",
+        "auto_wire_bytes": 4081,
+        "captured_bytes": 3000,
+        "case": "escaped-json",
+        "compact_status_and_ref": true,
+        "compact_wire_bytes": 2082,
+        "digest_wire_bytes": 4081,
+        "inline_streams_exact": true,
+        "retrieval_ok": true,
+        "status_ok": true
+      },
+      {
+        "auto_delivery": "digest",
+        "auto_wire_bytes": 1117,
+        "captured_bytes": 88885,
+        "case": "flood",
+        "compact_status_and_ref": true,
+        "compact_wire_bytes": 938,
+        "digest_wire_bytes": 1117,
+        "inline_streams_exact": true,
+        "retrieval_ok": true,
+        "status_ok": true
+      }
+    ],
+    "schema": "ctx.tool-boundary-replay/v1"
+  },
+  "kind": "model_free",
+  "navigation": {
+    "changed_bytes": 337,
+    "changed_line_delivered": true,
+    "composed_needle_delivered": true,
+    "epoch_restored_lines": true,
+    "first_bytes": 2116,
+    "model_requests": 0,
+    "outline_then_symbol": true,
+    "repeat_body_suppressed": true,
+    "repeated_bytes": 307,
+    "reset_bytes": 2070,
+    "scripted_custom_tool_calls": 7
+  },
+  "passed": true,
+  "provider_calls": 0,
+  "schema": "ctx.workflow-replay/v1"
+}

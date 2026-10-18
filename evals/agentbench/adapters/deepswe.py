@@ -62,7 +62,7 @@ CORPUS_URL = "https://github.com/datacurve-ai/deep-swe.git"
 # everything" cannot sweep harness state into model.patch. The working tree
 # both arms see is otherwise identical.
 WORKSPACE_EXCLUDES = (
-    "ctx.toml", ".ctxignore", ".ctx/", ".ctx-session-reads/", ".ctx-surface/",
+    "ctx.toml", ".ctxignore", ".ctx/", ".ctx-session-reads/", ".ctx-surface/", ".agdata/",
     ".claude/", "CLAUDE.md", "AGENTS.md",
 )
 

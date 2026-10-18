@@ -164,7 +164,7 @@ def _dispatch(args: dict[str, Any]) -> str:
     return dispatch_bounded(ws, store, args)
 
 
-def dispatch_bounded(ws, store, args: dict[str, Any]) -> str:
+def dispatch_bounded(ws, store, args: dict[str, Any], *, runtime=None) -> str:
     """Shared bounded retrieval dispatch; callers own workspace and connection.
 
     The SDK uses a fresh Store per worker, so SQLite connections and the MCP
@@ -292,7 +292,7 @@ def dispatch_bounded(ws, store, args: dict[str, Any]) -> str:
             )
         # Bounded-only by construction (SPEC §10.4): the MCP tier validates
         # at tier='mcp', so execute-class ops are typed rejections here.
-        result, _code = execute_plan(ws, store, plan_doc, tier="mcp")
+        result, _code = execute_plan(ws, store, plan_doc, tier="mcp", runtime=runtime)
     elif op == "q":
         # The composition algebra, finally on the bounded tier. `ctx q` shipped
         # CLI-only on the stated grounds that MCP wiring would churn the prefix

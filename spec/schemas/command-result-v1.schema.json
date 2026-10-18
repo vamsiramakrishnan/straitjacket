@@ -41,6 +41,9 @@
     "cancelled": {
       "type": "boolean"
     },
+    "output_limited": {
+      "type": "boolean"
+    },
     "delivery": {
       "enum": [
         "inline",
