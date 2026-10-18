@@ -201,13 +201,15 @@ def test_repair_joins_failure_edit_targeted_regression_and_exact_hashes(state_ho
         store.close()
 
 
-def test_invalid_repair_check_is_rejected_before_mutation(state_home, workspace_dir):
+@pytest.mark.parametrize("bad_check", [Check("syntax", (sys.executable, "-c", "pass"), timeout=True),
+                                      Check("behavior", "python -c pass")])
+def test_invalid_repair_check_is_rejected_before_mutation(state_home, workspace_dir, bad_check):
     argv, request = repair_fixture(workspace_dir)
     session = ToolSession(workspace_dir)
     failure = run(session.run(argv))
     with pytest.raises(VerificationError):
         run(session.repair(failure.ref, request=request, targeted=[Check("behavior", argv)],
-            regression=[Check("syntax", (sys.executable, "-c", "pass"), timeout=True)]))
+            regression=[bad_check]))
     assert (workspace_dir / "m.py").read_text() == "value = 1\n"
 
 

@@ -82,7 +82,8 @@ def validate_checks(checks):
         raise VerificationError("provide between one and eight checks")
     for check in checks:
         if (not isinstance(check, Check) or check.kind not in {"syntax", "types", "behavior"}
-                or not check.argv or not all(isinstance(a, str) and "\x00" not in a for a in check.argv)
+                or not isinstance(check.argv, (tuple, list)) or not check.argv
+                or not all(isinstance(a, str) and "\x00" not in a for a in check.argv)
                 or not check.argv[0]):
             raise VerificationError("check needs a kind and nonempty argv")
         if (isinstance(check.timeout, bool) or not isinstance(check.timeout, (int, float))
