@@ -28,6 +28,7 @@ class CommandResult:
     stderr: str = ""
     digest: str = ""
     redactions: tuple[str, ...] = ()
+    output_limited: bool = False
 
     @property
     def native_exit_code(self) -> int:
@@ -45,10 +46,54 @@ class CommandResult:
             value["digest"] = self.digest
         if self.redactions:
             value["redactions"] = list(self.redactions)
+        if self.output_limited:
+            value["output_limited"] = True
         return value
 
     def to_json(self) -> str:
         return json.dumps(self.as_dict(), ensure_ascii=True, separators=(",", ":"))
+
+    @classmethod
+    def from_dict(cls, value):
+        return cls(**{k: (tuple(v) if k == "redactions" else v)
+                      for k, v in value.items() if k != "schema"})
+
+    def to_model(self, *, max_bytes=4800) -> str:
+        """Compact human/model view; ``to_json`` remains the machine contract.
+
+        Always retain the canonical handle and termination, even if the body
+        needs another budget cut. Stream labels prevent stderr becoming stdout.
+        """
+        flags = [f"exit={self.command_exit_code if self.command_exit_code is not None else 'null'}"]
+        if self.signal:
+            flags.append("signal=" + self.signal)
+        for name in ("timed_out", "cancelled", "output_limited"):
+            if getattr(self, name):
+                flags.append(name + "=true")
+        if self.redactions:
+            flags.append("redactions=" + ",".join(self.redactions))
+        head = "[ctx " + self.ref + " " + " ".join(flags) + "]\n"
+        body = self.digest if self.delivery == "digest" else "\n".join(
+            name + ":\n" + value for name, value in (("stdout", self.stdout), ("stderr", self.stderr)) if value)
+        return fit_model_view(head, body or "[no output]", self.ref, max_bytes)
+
+
+def fit_model_view(head: str, body: str, ref: str, max_bytes: int) -> str:
+    """Bound UTF-8 delivery, declaring the exact body-byte omission."""
+    cap = max(512, max_bytes)
+    if len((head + body).encode()) <= cap:
+        return head + body
+    total = len(body.encode())
+    low, high = 0, len(body)
+    while low < high:
+        n = (low + high + 1) // 2
+        notice = f"\n[ctx:omitted {total - len(body[:n].encode())} body bytes]\nnext: ctx get {ref}"
+        if len((head + body[:n] + notice).encode()) <= cap:
+            low = n
+        else:
+            high = n - 1
+    notice = f"\n[ctx:omitted {total - len(body[:low].encode())} body bytes]\nnext: ctx get {ref}"
+    return head + body[:low] + notice
 
 
 def render_command_result(ws, store, capture, *, focus=None, delivery="auto") -> CommandResult:
@@ -64,7 +109,8 @@ def render_command_result(ws, store, capture, *, focus=None, delivery="auto") ->
     status = manifest["result"]
     values = dict(ref="run:" + capture.manifest_id,
         command_exit_code=status.get("exitCode"), signal=status.get("signal"),
-        timed_out=bool(status.get("timedOut")), cancelled=bool(status.get("cancelled")))
+        timed_out=bool(status.get("timedOut")), cancelled=bool(status.get("cancelled")),
+        output_limited=bool(status.get("outputLimited")))
     streams = manifest["streams"]
     budgets = ws.config.budgets
     raw = sum(s["bytes"] for s in streams.values())

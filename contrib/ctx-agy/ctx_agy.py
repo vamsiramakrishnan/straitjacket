@@ -63,8 +63,7 @@ import sys
 FLOODING_BUILTINS = ("RUN_COMMAND", "VIEW_FILE", "SEARCH_DIR", "LIST_DIR", "FIND_FILE")
 
 SYSTEM = (
-    "Shell commands return a structured result. command_exit_code is the "
-    "underlying command status; signal and timed_out describe other termination. "
+    "Shell results name the underlying command exit status, signal and timeout. "
     "Small complete output stays inline. Large output has a deterministic digest "
     "and a run address. Use ctx_get or ctx_search to retrieve omitted evidence "
     "instead of rerunning a command merely to print more output. File tools stay "
@@ -72,19 +71,33 @@ SYSTEM = (
 )
 
 
-def make_tools(root: pathlib.Path, *, timeout=600.0, profile="command-output", session=None):
+def system_instructions(*, navigation=True, composition=True):
+    text = SYSTEM
+    if navigation:
+        text += " Use ctx_navigate for a small direct read, large file outline, or symbol body; explicit line ranges read directly."
+    if composition:
+        text += " ctx_query composes locate/narrow/read, e.g. refs Foo | group file | top 3 | get --context 5."
+    return text
+
+
+def make_tools(root: pathlib.Path, *, timeout=600.0, profile="command-output", session=None,
+               result_format="compact", navigation=True, composition=True):
     """Async tools on the public, provider-independent Straitjacket runtime."""
     from ctx.sdk import ToolSession
     if profile not in {"command-output", "full"}:
         raise ValueError("unknown tool profile")
+    if result_format not in {"compact", "json"}:
+        raise ValueError("unknown result format")
     session = session or ToolSession(root, timeout=timeout, producer="antigravity-sdk")
     command_timeout = min(600, timeout)
 
-    async def run_command(command: str, working_directory: str = "", timeout_seconds: float = command_timeout) -> str:
+    async def run_command(command: str, working_directory: str = "", timeout_seconds: float = command_timeout, operation_key: str = "") -> str:
         """Execute a command with typed status and bounded output. Working directory
-        is within the workspace; retrieve omitted evidence with ctx_get/search."""
-        result = await session.run(command, working_directory=working_directory, timeout_seconds=timeout_seconds)
-        return result.to_json()
+        is within the workspace; retrieve omitted evidence with ctx_get/search.
+        Reusing operation_key replays its original result; use a new key after edits."""
+        if result_format == "compact":
+            return await session.run_model(command, working_directory=working_directory, timeout_seconds=timeout_seconds, operation_key=operation_key or None)
+        return (await session.run(command, working_directory=working_directory, timeout_seconds=timeout_seconds, operation_key=operation_key or None)).to_json()
 
     async def ctx_get(address: str, start_line: int, end_line: int) -> str:
         """Retrieve a bounded, inclusive line range from an evidence address."""
@@ -94,12 +107,48 @@ def make_tools(root: pathlib.Path, *, timeout=600.0, profile="command-output", s
         """Search stored evidence or repository files for a regex, with context."""
         return await session.search(address, pattern)
 
-    if profile == "command-output":
-        return [run_command, ctx_get, ctx_search]
+    async def ctx_navigate(path: str, symbol: str = "", start_line: int = 0, end_line: int = 0, fresh: bool = False) -> str:
+        """Read a small file directly, outline a large file, or read one symbol.
+        Optional inclusive lines bypass outlines; fresh re-emits prior context."""
+        kwargs = {"start_line": start_line, "end_line": end_line} if start_line or end_line else {}
+        return await session.navigate(path, symbol=symbol or None, fresh=fresh, **kwargs)
 
-    async def view_file(path: str, start_line: int = 1, end_line: int = 200) -> str:
-        """Read a bounded, 1-indexed file span; omitted evidence remains addressable."""
-        return await session.get(f"repo:{path}", start_line=start_line, end_line=end_line)
+    async def ctx_query(pipeline: str) -> str:
+        """Compose observations in one bounded query: refs Foo | group file | top 3 | get --context 5."""
+        return await session.query(pipeline)
+
+    async def ctx_investigate(plan: dict) -> str:
+        """Run an observe-only ctx.plan/v1 evidence plan with aggregate budgets. No shell or edits."""
+        return await session.investigate(plan)
+
+    async def ctx_repair(failure_address: str, path: str, span: str, replacement: str,
+                         targeted_command: str, regression_command: str, operation_key: str = "") -> str:
+        """Apply one previously observed A:B@anchor span, rerun the failing shell
+        command, then a regression command. Returns exact-byte verification proof.
+        This tool writes source and executes caller-supplied commands."""
+        from ctx.edit_verification import Check
+        if not targeted_command.strip() or not regression_command.strip():
+            raise ValueError("repair needs nonempty targeted and regression commands")
+        request = {"schema": "ctx.edit-request/v1", "edits": [
+            {"path": path, "span": span, "replacement": replacement}]}
+        return await session.repair_model(failure_address, request=request,
+            targeted=[Check("behavior", ("bash", "-lc", targeted_command), command_timeout)],
+            regression=[Check("behavior", ("bash", "-lc", regression_command), command_timeout)],
+            operation_key=operation_key or None)
+
+    tools = [run_command, ctx_get, ctx_search, ctx_repair]
+    if navigation:
+        tools.append(ctx_navigate)
+    if composition:
+        tools.extend([ctx_query, ctx_investigate])
+    if profile == "command-output":
+        return tools
+
+    async def view_file(path: str, start_line: int = 0, end_line: int = 0) -> str:
+        """Navigate a file progressively; explicit 1-indexed ranges read directly."""
+        if navigation:
+            return await ctx_navigate(path, start_line=start_line, end_line=end_line)
+        return await session.get(f"repo:{path}", start_line=start_line or 1, end_line=end_line or 200, fresh=True)
 
     async def search_dir(pattern: str, path: str = "") -> str:
         """Search repository files with a bounded hit census."""
@@ -114,23 +163,24 @@ def make_tools(root: pathlib.Path, *, timeout=600.0, profile="command-output", s
         import shlex
         return await session.query(f"corpus --glob {shlex.quote(name)}")
 
-    async def ctx_query(pipeline: str) -> str:
-        """Compose observation in one bounded query, e.g. refs Foo | group file | top 3."""
-        return await session.query(pipeline)
-
-    return [run_command, ctx_get, ctx_search, view_file, search_dir, list_dir, find_file, ctx_query]
+    return [*tools, view_file, search_dir, list_dir, find_file]
 
 
 async def run(prompt: str, root: pathlib.Path, model: str, timeout: float,
-              contain: bool, profile="command-output", usage_semantics="unknown", evidence_output=None) -> dict:
+              contain: bool, profile="command-output", usage_semantics="unknown", evidence_output=None,
+              result_format="compact", navigation=True, composition=True, task_id=None, context_epoch=None) -> dict:
     from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
     from google.antigravity.hooks import policy
     from google.antigravity.types import BuiltinTools
     from ctx.sdk import ToolSession
     from ctx.tooltelemetry import usage_record
+    from ctx.task_runtime import ExecutionLimits
 
-    session = ToolSession(root, timeout=timeout, producer="antigravity-sdk") if contain else None
-    tools = make_tools(root, timeout=timeout, profile=profile, session=session) if contain else []
+    limits = ExecutionLimits(wall_seconds=timeout, call_seconds=min(600, timeout), max_steps=4096, capture_bytes=8*1024*1024)
+    session = ToolSession(root, timeout=timeout, producer="antigravity-sdk", durable=True,
+        task_id=task_id, limits=None if task_id else limits, context_epoch=context_epoch) if contain else None
+    tools = make_tools(root, timeout=timeout, profile=profile, session=session,
+        result_format=result_format, navigation=navigation, composition=composition) if contain else []
     names = FLOODING_BUILTINS if profile == "full" else ("RUN_COMMAND",)
     disabled = [getattr(BuiltinTools, name) for name in names] if contain else []
     cfg = LocalAgentConfig(
@@ -140,7 +190,7 @@ async def run(prompt: str, root: pathlib.Path, model: str, timeout: float,
         tools=tools,
         capabilities=CapabilitiesConfig(disabled_tools=disabled),
         policies=[policy.allow_all()],
-        system_instructions=SYSTEM if contain else None,
+        system_instructions=system_instructions(navigation=navigation, composition=composition) if contain else None,
         app_data_dir=str(root / ".agdata"),
     )
     text, timed_out, error = "", False, ""
@@ -162,6 +212,11 @@ async def run(prompt: str, root: pathlib.Path, model: str, timeout: float,
         "output_tokens": usage["raw"]["candidates_token_count"],
         "total_tokens": usage["raw"]["total_token_count"],
         "usage": usage,
+        "task_id": session.task_id if session else None,
+        "model_requests": None,  # Aggregate usage does not expose request boundaries.
+        **(session.metrics if session else {"custom_tool_calls": 0, "delivered_bytes": 0, "retrieval_calls": 0}),
+        "all_tool_calls": None,  # Native edits/other builtins are not intercepted.
+        "delivery": {"format": result_format, "navigation": navigation, "composition": composition},
         "timed_out": timed_out,
         "error": error,
     }
@@ -181,6 +236,11 @@ def main() -> int:
                     help="run with the native builtins instead of the ctx-backed "
                          "tools (the uncontained baseline, for A/B only)")
     ap.add_argument("--tool-profile", choices=("command-output", "full"), default="command-output")
+    ap.add_argument("--result-format", choices=("compact", "json"), default="compact")
+    ap.add_argument("--no-navigation", action="store_true")
+    ap.add_argument("--no-composition", action="store_true")
+    ap.add_argument("--task-id", help="resume a durable tool task (operation keys are required for exact replay)")
+    ap.add_argument("--context-epoch", help="enable read reuse; advance this value after any model context loss")
     ap.add_argument("--usage-input-semantics", choices=("unknown", "includes_cache", "excludes_cache"), default="unknown")
     ap.add_argument("--evidence-output", type=pathlib.Path, help="export observed evidence as a portable capsule")
     ap.add_argument("--json", action="store_true", help="print the usage record too")
@@ -191,7 +251,9 @@ def main() -> int:
         return 2
     root = pathlib.Path(ns.add_dir).resolve()
     result = asyncio.run(run(ns.prompt, root, ns.model, ns.timeout, not ns.no_contain,
-        profile=ns.tool_profile, usage_semantics=ns.usage_input_semantics, evidence_output=ns.evidence_output))
+        profile=ns.tool_profile, usage_semantics=ns.usage_input_semantics, evidence_output=ns.evidence_output,
+        result_format=ns.result_format, navigation=not ns.no_navigation, composition=not ns.no_composition,
+        task_id=ns.task_id, context_epoch=ns.context_epoch))
     print(result["text"])
     if ns.json:
         print(json.dumps({k: v for k, v in result.items() if k != "text"}))

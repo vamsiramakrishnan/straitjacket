@@ -49,13 +49,15 @@ def evaluate(root: Path, state: Path) -> dict:
                 retrieval_ok = "quiet-needle" in get(store, ws, auto.ref + "#stdout", Selector(lines=(2137, 2137)))
             rows.append({"case": name, "captured_bytes": sum(map(len, raw.values())),
                 "auto_delivery": auto.delivery, "auto_wire_bytes": len(auto.to_json().encode()),
+                "compact_wire_bytes": len(auto.to_model().encode()),
+                "compact_status_and_ref": auto.ref in auto.to_model() and f"exit={expected_exit if expected_exit is not None else 'null'}" in auto.to_model(),
                 "digest_wire_bytes": len(digest.to_json().encode()),
                 "status_ok": status_ok, "inline_streams_exact": inline_ok, "retrieval_ok": retrieval_ok})
     finally:
         store.close()
     return {"schema": "ctx.tool-boundary-replay/v1", "kind": "model_free_delivery_ablation",
             "provider_calls": 0, "rows": rows,
-            "passed": all(r["status_ok"] and r["inline_streams_exact"] and r["retrieval_ok"] for r in rows)}
+            "passed": all(r["status_ok"] and r["compact_status_and_ref"] and r["inline_streams_exact"] and r["retrieval_ok"] for r in rows)}
 
 
 def main():

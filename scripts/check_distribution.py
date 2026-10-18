@@ -32,6 +32,8 @@ REQUIRED_FILES = {
     "ctx/sdk.py",
     "ctx/toolresult.py",
     "ctx/tooltelemetry.py",
+    "ctx/toolviews.py",
+    "ctx/toolrepair.py",
     "ctx/mcp_edits.py",
     "ctx/commands/semantic.py",
     "ctx/semantic/__init__.py",
@@ -216,14 +218,24 @@ root.mkdir()
 (root / 'ctx.toml').write_text('version=1\\n')
 os.environ['CTX_STATE_HOME'] = str(root / 'state')
 async def probe():
-    session = ToolSession(root)
+    session = ToolSession(root, durable=True, context_epoch='wheel-smoke')
     result = await session.run([sys.executable, '-c', "import sys; sys.stdout.write('installed-evidence'); sys.exit(4)"])
     assert result.command_exit_code == 4 and result.delivery == 'inline'
     assert result.stdout == 'installed-evidence' and result.stderr == ''
     assert 'installed-evidence' in await session.get(result.ref, start_line=1, end_line=1)
+    compact = await session.run_model([sys.executable, '-c', "print('compact-evidence')"])
+    assert 'exit=0' in compact and 'stdout:\\ncompact-evidence' in compact
+    (root / 'source.py').write_text('answer = 42\\n')
+    assert 'L1: answer = 42' in await session.navigate('source.py')
+    resumed = ToolSession(root, task_id=session.task_id, context_epoch='wheel-smoke')
+    assert 'reused: 1' in await resumed.navigate('source.py')
+    resumed.set_context_epoch('wheel-smoke-reset')
+    assert 'L1: answer = 42' in await resumed.navigate('source.py')
+    from ctx.toolrepair import repair
     await session.export(root / 'evidence.tar')
 asyncio.run(probe())
 """)
+            _run(python, clean_root, "-m", "ctx.data.ctx_agy", "--help")
 
             # Exercise the two Codex contracts that are easy to get subtly
             # wrong and otherwise fail only when the next Codex session starts.

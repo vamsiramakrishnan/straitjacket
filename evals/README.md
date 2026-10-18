@@ -40,6 +40,7 @@ python evals/memvid_fidelity.py        # does memvid's .mv2 return the bytes you
 python evals/field_needle.py           # seven strategies on identical hostile bytes
 python evals/coverage_corpus.py        # replay real hostile outputs through stub binaries
 python evals/plan_collapse.py          # rounds collapse, byte-stable digest
+python evals/workflow_replay.py        # compact views, navigation and epoch reuse; no model
 python evals/anchor_drift.py           # how often a repo: address goes silently stale
 python evals/edit_repair.py            # how much of a failed host edit is recoverable
 python evals/task_ledger_replay.py     # resume, typed recovery, budget-against-actuals
