@@ -1,0 +1,56 @@
+{
+  "schema": "ctx.pack-workflow/v1",
+  "baseline_commit": "ba617485563bc5d93913df5b7177653c33164479",
+  "baseline_pack_sha256": "eeab047a972e10021276309d63d8a8d6dadc1c375e3488c90b61bf84c4f5818c",
+  "source_sha256": {
+    "pack.py": "36d58871dcb07f8045e71a87d5724d9cf0be61cc005382cc4edd19bde3254658",
+    "callgraph.py": "cff600d6c4d674a73ead4faa0b8212c516492b80acf1b0938fb2da747939270c",
+    "codeindex.py": "a0da174b7a49a71c0522679f9bcbac073cb9e64f8c8ecb8259ff89dbe9f3bb2f"
+  },
+  "fixture_sha256": "6c0040ebf02721eee9e3964f2efa0ce72a76e3bd37248b2cd07b28d879785c29",
+  "task": "Update transform_event in events.py",
+  "checks": {
+    "source_in_bundle": true,
+    "caller_in_bundle": true,
+    "callee_in_bundle": true,
+    "snapshot_address_in_bundle": true,
+    "unrelated_caller_excluded": true,
+    "baseline_source_and_callers_available": true,
+    "within_estimated_budget": true
+  },
+  "passed": true,
+  "coverage_observations": {
+    "aliased_import_caller_discovered": false,
+    "relationship_backend": "static callgraph, not language-server resolution"
+  },
+  "baseline_pack_only": {
+    "scripted_operations": 1,
+    "result_bytes": 871,
+    "estimated_result_tokens": 215,
+    "outputs_sha256": [
+      "8e5806504fcce82c76ccd182ca28d2a0a561f7eb5efe69d54995331184296af3"
+    ]
+  },
+  "baseline_pack_plus_source_and_callers": {
+    "scripted_operations": 3,
+    "result_bytes": 1385,
+    "estimated_result_tokens": 343,
+    "outputs_sha256": [
+      "8e5806504fcce82c76ccd182ca28d2a0a561f7eb5efe69d54995331184296af3",
+      "7ec610082e7659169d8f09dc3a26c707d9f6b5a7329a09598af67fc14f76d0e4",
+      "670e125473f9ffad2d78b5bcf4e8d9d52f866d5fce791f4849bec36912a511d0"
+    ]
+  },
+  "bundled_pack": {
+    "scripted_operations": 1,
+    "result_bytes": 1715,
+    "estimated_result_tokens": 426,
+    "outputs_sha256": [
+      "fa123b4a36fe5dfe1ed36c1731753a3e3f98dfecd768657d0e7fd5eaf26242ae"
+    ]
+  },
+  "model_calls": 0,
+  "agent_turns": null,
+  "provider_cost": null,
+  "accounting": "characters/4 estimate; scripted operations are not model turns; baseline uses current shared index and graph backends"
+}

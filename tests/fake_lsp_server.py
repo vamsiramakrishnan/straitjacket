@@ -50,11 +50,17 @@ def main() -> int:
                 log.write(json.dumps({'pid': os.getpid(), 'method': method}) + '\n')
         if method == "initialize":
             root = Path(params['rootPath'])
-            _write({"jsonrpc": "2.0", "id": rid, "result": {"capabilities": {
+            _write({"jsonrpc": "2.0", "id": rid, "result": {
+                "serverInfo": {"name": "rust-analyzer" if os.environ.get('CTX_TEST_LSP_STATUS') else "fake"},
+                "capabilities": {
+                "diagnosticProvider": bool(os.environ.get('CTX_TEST_LSP_PULL')),
                 "definitionProvider": True, "textDocumentSync": 2,
                 "renameProvider": True, "codeActionProvider": True}}})
             # A server→client request the client must answer (with null).
             _write({"jsonrpc": "2.0", "id": 999, "method": "workspace/configuration", "params": {"items": []}})
+        elif method == 'initialized' and os.environ.get('CTX_TEST_LSP_STATUS'):
+            _write({'jsonrpc': '2.0', 'method': 'experimental/serverStatus',
+                    'params': {'health': 'ok', 'quiescent': os.environ['CTX_TEST_LSP_STATUS'] == 'ready'}})
         elif method in {"textDocument/didOpen", "textDocument/didChange"}:
             td = params["textDocument"]
             opened[td["uri"]] = td.get("text", params.get('contentChanges', [{}])[0].get('text', ''))
@@ -65,6 +71,8 @@ def main() -> int:
             if not os.environ.get('CTX_TEST_LSP_UNVERSIONED'):
                 report['version'] = td['version']
             _write({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics', 'params': report})
+        elif method == 'textDocument/diagnostic':
+            _write({'jsonrpc': '2.0', 'id': rid, 'result': {'kind': 'full', 'items': []}})
         elif method == 'textDocument/rename':
             changes = []
             for path in sorted(root.glob('*.py')):
@@ -76,7 +84,8 @@ def main() -> int:
                                                 'end': {'line': line, 'character': hit.end()}},
                                       'newText': params['newName']})
                 if edits:
-                    changes.append({'textDocument': {'uri': uri, 'version': versions.get(uri)}, 'edits': edits})
+                    version = versions.get(uri, 0 if os.environ.get('CTX_TEST_LSP_CLOSED_ZERO') else None)
+                    changes.append({'textDocument': {'uri': uri, 'version': version}, 'edits': edits})
             _write({'jsonrpc': '2.0', 'id': rid, 'result': {'documentChanges': changes}})
         elif method == 'textDocument/codeAction':
             uri = params['textDocument']['uri']

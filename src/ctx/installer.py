@@ -882,7 +882,7 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         dark = sorted(lang for lang, rungs in roster.items() if rungs == "none")
         detail = f"{len(roster) - len(dark)}/{len(roster)} languages parseable"
         if _ctags_path() is None:
-            detail += "; no universal-ctags (non-Python symbols unavailable)"
+            detail += "; no universal-ctags fallback"
         if dark:
             detail += f"; no backend for {', '.join(dark)}"
         check("code intelligence", len(dark) < len(roster), detail)

@@ -98,6 +98,31 @@ def dispatch(client: Client, request: dict) -> dict:
         params = _pos(uri, line, col)
         params['newName'] = name
         answer = client.request('textDocument/rename', params)
+        # Some servers (gopls) attach version 0 to unopened files. Establish
+        # actual client versions and ask again, never treat 0 as a wildcard.
+        documents = answer.get('documentChanges', []) if isinstance(answer, dict) else []
+        unopened = set()
+        for item in documents if isinstance(documents, list) else []:
+            document = item.get('textDocument', {}) if isinstance(item, dict) else {}
+            target = document.get('uri')
+            if isinstance(target, str) and document.get('version') is not None and target not in client.documents:
+                unopened.add(target)
+        if unopened:
+            from ctx.lsp import _rel_of
+            from ctx.workspace import resolve_workspace
+
+            if len(client.documents) + len(unopened) > 64:
+                raise LspError('rename needs more than 64 open documents; narrow the workspace')
+            ws = resolve_workspace(str(client.root))
+            for target in sorted(unopened):
+                target_rel = _rel_of(target, client.root)
+                if target_rel is None or ws.is_ignored(target_rel):
+                    raise LspError('rename target is outside or excluded from the workspace')
+                path = ws.confine(target_rel, must_exist=True)
+                if path.is_symlink():
+                    raise LspError('rename target is a symlink')
+                client.open(target_rel, language_for(target_rel) or '')
+            answer = client.request('textDocument/rename', params)
     else:
         if not client.capabilities.get('codeActionProvider'):
             raise LspError('server does not advertise code actions')

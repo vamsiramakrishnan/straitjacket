@@ -156,6 +156,7 @@ class Client:
         self.diagnostics: dict[str, dict] = {}
         self.capabilities: dict = {}
         self._document_seq = 0
+        self._server_status: dict | None = None
 
     # ----------------------------------------------------------- lifecycle
     def __enter__(self) -> Client:
@@ -183,6 +184,7 @@ class Client:
             "workspaceFolders": [{"uri": self.root.as_uri(), "name": self.root.name}],
             "initializationOptions": {},
             "capabilities": {
+                "experimental": {"serverStatusNotification": True},
                 "textDocument": {
                     "synchronization": {"didSave": True},
                     "hover": {"contentFormat": ["plaintext", "markdown"]},
@@ -211,6 +213,16 @@ class Client:
         # file for a symbol used across the repository). Other servers
         # ignore keys they do not know.
         self.notify("workspace/didChangeConfiguration", {"settings": _SETTINGS})
+        if (result.get('serverInfo') or {}).get('name') == 'rust-analyzer':
+            # rust-analyzer can answer empty results while loading the crate
+            # graph. Its status extension gives a bounded readiness signal.
+            deadline = time.monotonic() + self.timeout
+            while time.monotonic() < deadline and not self._dead.is_set():
+                if self._server_status and self._server_status.get('quiescent'):
+                    break
+                time.sleep(0.02)
+            else:
+                raise LspError('rust-analyzer did not finish loading the workspace')
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -296,6 +308,9 @@ class Client:
                 if isinstance(msg, dict) and "id" in msg and ("result" in msg or "error" in msg):
                     if msg["id"] == self._seq:
                         self._responses[int(msg["id"])] = msg
+                elif isinstance(msg, dict) and msg.get('method') == 'experimental/serverStatus':
+                    if isinstance(msg.get('params'), dict):
+                        self._server_status = msg['params']
                 elif isinstance(msg, dict) and msg.get("method") == "textDocument/publishDiagnostics":
                     uri = str((msg.get("params") or {}).get("uri") or "")
                     if uri in self.documents:
@@ -371,7 +386,7 @@ class Client:
             self.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version},
                                                     "contentChanges": [change]})
         else:
-            if len(self.documents) >= 64:
+            if len(self.documents) > 64:
                 oldest = next(iter(self.documents))
                 self.notify("textDocument/didClose", {"textDocument": {"uri": oldest}})
                 del self.documents[oldest]
@@ -397,7 +412,15 @@ class Client:
         if self.capabilities.get("diagnosticProvider"):
             report = self.request("textDocument/diagnostic", {"textDocument": {"uri": uri}})
             if report.get("kind") == "full":
-                return {"items": report.get("items", []), "version": version,
+                # Servers may split native pull diagnostics and compiler push
+                # diagnostics. An empty pull result must not erase fresh errors.
+                items = list(report.get("items", []))
+                pushed = self.diagnostics.get(uri, {})
+                if pushed.get('version') == version:
+                    for item in pushed.get('diagnostics', []):
+                        if item not in items:
+                            items.append(item)
+                return {"items": items, "version": version,
                         "digest": hashlib.sha256(text.encode()).hexdigest(), "fresh": True}
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline and not self._dead.is_set():

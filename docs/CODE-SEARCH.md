@@ -68,6 +68,27 @@ re-reading the live files (the cheapest correct merge, and it re-verifies).
 `CTX_SEARCH_INDEX=off` disables the whole tier; `CTX_SEARCH_ENGINE=rg|python`
 bypasses it for one search.
 
+### Branch catalogs
+
+Git workspaces keep a separate trigram and symbol catalog for each branch.
+The key is a hash of the worktree's HEAD reference, so branch names never become
+paths. Detached HEAD uses the commit ID. Linked worktrees have separate workspace
+stores and use their own HEAD file. An open index detects a branch switch again
+at sync, closes its old segments and loads the matching catalog.
+
+Switching back still checks every live file. Unchanged content reuses its segment
+and parsed symbols even if checkout changed its timestamp; edits, additions and
+deletions update that branch's catalog. Dirty files are included, so this is a
+cache of the working tree, not a committed-code snapshot or cross-branch search.
+`ctx index --status` includes the selected branch and catalog directory.
+
+Catalogs persist in `indexes/trigram/branches/` within the workspace store. Each
+catalog compacts its own segments, but inactive branch and detached-commit
+catalogs are not automatically evicted. They are disposable caches: when no
+index commands are running, removing an inactive catalog directory only costs
+a rebuild on its next use. This does not partition SCIP databases or claim
+branch-aware type resolution for external language servers.
+
 ## The query language
 
 Filters ride in the pattern list, so the same grammar serves `ctx search`,
@@ -184,6 +205,62 @@ Signals, all from things ctx already has (nothing embedded, nothing learned):
 
 The rendering is budgeted (`--budget`, default 2,500 tokens) and the omission
 is declared; `--json` is the machine form the agent runtime uses.
+The text renderer caps output at four characters per requested token, including
+headers and the continuation. This is an estimate, not a model tokenizer count.
+JSON retains the bounded selected records and is not fitted to the text budget.
+
+The first three files now include up to eight lines near a matched definition
+or term when the excerpt budget permits. Each excerpt comes through ordinary
+`ctx get`, including its immutable snapshot address, so the original bytes stay
+retrievable after an edit while the artifact is retained. At most half of the
+requested budget is allocated to excerpts; ranking and outlines keep priority.
+
+For those matched definitions, the pack also loads the existing cached call
+graph once and includes up to four scoped caller/callee sites each. The lookup
+uses the definition's file and line, so unrelated same-named functions do not
+merge. Relationship rows report their local/import resolution tier and any
+remaining ambiguity. Repository-wide name guesses are excluded. These are
+static, AST-derived facts, not LSP type-resolution guarantees. The graph's
+5,000-file cap and the languages of installed parsers still apply. A first pack
+can therefore cost more than the historical index-only timings above; later
+packs reuse graph extraction. No embedding service or model call is involved.
+The local replay `python -m evals.pack_workflow --output /tmp/pack-workflow.json`
+compares a prior pack plus source/caller reads with the bundled pack. It measures
+scripted operations and character-based token estimates, not live agent turns
+or provider savings. Its alias-import observation documents a current static
+graph limitation; use LSP-backed references when exact name resolution matters.
+
+### From discovery to a verified repair
+
+Use `ctx pack "repair structure_attrs for missing fields"` to discover entry
+points, source and relationships in one request. An SDK host can then use the
+existing `ToolSession.repair_model` operation to apply a multi-file anchored
+request and run targeted plus regression checks in one call:
+
+```python
+from ctx.edit_verification import Check
+
+# session is a ToolSession; failure_ref names an observed failing run.
+# anchored_request contains the reviewed edits with their source anchors.
+result = await session.repair_model(
+    failure_ref,
+    request=anchored_request,
+    targeted=[Check("behavior", ("python", "-m", "pytest", "tests/test_repair.py"))],
+    regression=[Check("behavior", ("python", "-m", "pytest", "tests/"))],
+    witnesses=["tests/test_repair.py"],
+    operation_key="repair-missing-fields",
+)
+```
+
+The first targeted command must match the observed failing command. The request
+uses the existing compare-and-swap edit transaction; changed anchors are refused.
+Checks run against the applied bytes, and failure stops subsequent checks.
+The bounded result names the complete proof rather than requiring a verification
+read per file. Syntax or LSP diagnostics do not substitute for behavioral tests.
+Use `repair` for the structured full receipt or `edit_receipt=` to verify an
+already applied transaction. This SDK operation needs local edit/command
+authority; the bounded MCP retrieval tool does not gain mutation permissions.
+See [the SDK repair contract](TOOL-SDK.md#repair-with-evidence).
 
 ### What a Cody-style context engine gets wrong, measured
 

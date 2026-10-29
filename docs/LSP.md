@@ -14,7 +14,8 @@ ctx lsp diagnostics src/example.py:1:1
 Positions use one-based lines and UTF-16 columns. The server registry covers
 Python, TypeScript/JavaScript, Go, Rust, C/C++, C#, Java, Kotlin, Lua, PHP, Ruby,
 Scala, shell and Swift. Install the corresponding server on PATH. Registry
-coverage is not certification of every server; the live replay uses Pyright.
+coverage is not certification of every server. Local replay covers Pyright and
+the TypeScript, Go and Rust combinations listed below.
 `CTX_LSP_SERVERS` accepts a JSON map from language IDs to candidate command arrays.
 
 ## Reuse and freshness
@@ -36,6 +37,12 @@ version, or returns a full pull-diagnostic response for the synchronized file.
 Receipts also check the file digest before and after diagnostics. Unversioned or
 missing push reports cannot establish a clean result. `ctx lsp diagnostics`
 returns exit 3 for issues, stale reports or unavailable diagnostics.
+
+A full pull response can cover only the server's native checks. Matching-version
+push diagnostics are included when available, but an empty response does not
+replace a project compiler or test run. TypeScript language server 6.0.2 sends
+unversioned diagnostics; ctx reports their freshness as unavailable even when
+the displayed message is useful.
 
 After a ctx-owned edit, available LSP checks join the existing builtin syntax
 checks. The transaction shares an eight-second scheduling allowance, with short
@@ -86,9 +93,27 @@ The replay compares three fresh-server lookups with three reused-server lookups,
 checks equal answers, introduces an error, then performs and executes a cross-file
 rename. It records latency, response bytes, process reuse and verification status.
 It does not measure autonomous coding success, agent turns or model cost. Those
-remain null rather than inferred from lookup speed. Broader language-server and
-task-separated agent replays are required before policy promotion.
+remain null rather than inferred from lookup speed. Task-separated agent replays
+are required before policy promotion.
 
 The [complex edit comparison](../evals/lsp-edit-comparison-2026-10-29.md) includes
 both an explicit-edit workflow and direct Jedi rename as non-LSP baselines.
 It separates measured tool-traffic tokens from hypothetical billing scenarios.
+
+Run the additional language checks with installed servers and compilers:
+
+```sh
+python -m evals.lsp_languages --output evals/lsp-languages-local.json
+```
+
+The [local receipt](../evals/lsp-languages-2026-10-29.json) records versions,
+fixture and implementation hashes, cross-file rename, unchanged unrelated names,
+stale-plan rejection, an intentionally failing compiler check and restored
+executable behavior. The pinned combinations are TypeScript 6.0.3 with
+typescript-language-server 6.0.2, Go 1.27.3 with gopls 0.21.1, and Rust with
+rust-analyzer 1.93.1. The installed-server CI workflow repeats these checks.
+
+The default gate requires successful edits and compiler/runtime verification;
+diagnostic freshness has a separate result. Add `--require-fresh-diagnostics`
+to require that stronger gate, which the pinned TypeScript server cannot satisfy.
+This verifies small fixed fixtures, not arbitrary projects or every refactoring.
