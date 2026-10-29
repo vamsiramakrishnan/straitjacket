@@ -33,3 +33,27 @@ local experiments and unmeasured provider economics.
 
 Decisions and their evidence are recorded in
 [`improvements-2026-10-29.tsv`](improvements-2026-10-29.tsv).
+
+## Results
+
+- LSP: [real server receipts](lsp-languages-2026-10-29.md) verify TypeScript,
+  Go and Rust edits, stale-plan refusal and executable behavior. Go/Rust error
+  freshness passes; TypeScript's unversioned diagnostics remain unavailable.
+- Context: [the pack replay](pack-workflow-2026-10-29.json) passes seven evidence
+  checks. Three scripted retrieval operations become one, with estimated result
+  tokens increasing from 343 to 426. The extra information is not free.
+- Indexing: tests cover branch switch-back reuse, dirty changes, detached HEAD
+  and linked worktrees. Static call relationships still miss some import aliases;
+  installed LSP references remain the stronger option for those cases.
+- Accounting: `python -m ctx.session_economics` imports final response usage and
+  tool events. Tests reject duplicate responses, malformed counts, mismatched
+  observed models and invalid savings comparisons. No provider rate is invented.
+- Comparison: [pinned tool replays](tool-comparison-2026-10-29.md) exercise actual
+  interfaces on common fixtures. ctx and Serena pass all three tasks. TokenSave
+  passes bug fix and logs and safely refuses the ambiguous rename. Headroom
+  recovers the quiet log through CCR; its editor cells are unsupported. WozCode
+  is unavailable in this environment.
+
+Live agent turns, billed savings and the WozCode host trial remain unmeasured.
+These local results do not establish an end-to-end winner. No hosted model or
+GPU inference was invoked for this work.

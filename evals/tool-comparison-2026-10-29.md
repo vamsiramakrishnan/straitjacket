@@ -15,7 +15,7 @@ turns and dollars are null.
 
 | Tool | Rename | Bug fix | Quiet log record |
 | --- | --- | --- | --- |
-| ctx CLI, source based on ba61748 | Passed | Passed | Passed |
+| ctx CLI, 0.42.0 integration source | Passed | Passed | Passed |
 | Serena 2.1.1.dev0, ede329aa | Passed | Passed | Passed |
 | TokenSave 7.16.0 | Safely refused ambiguous graph sites | Passed | Passed |
 | Headroom 0.42.0, a2d4fe72 | No native edit adapter | No native edit adapter | Passed after CCR retrieval |
@@ -60,7 +60,8 @@ PYTHONPATH=src python -m evals.tool_comparison \
 PYTHONPATH=src python -m pytest tests/test_session_economics.py tests/test_tool_comparison.py
 ```
 
-The runner refuses changed binary hashes and changed/dirty upstream source.
+The runner refuses changed binary hashes, changed/dirty upstream source and
+changes to the pinned loaded Serena/Headroom Python package source.
 ctx source hashes identify code under test, including unreleased code. No global
 agent integration or git hooks are installed. TokenSave subprocesses disable
 update checks and use a closed HTTP proxy to prevent counter uploads.

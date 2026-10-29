@@ -3,8 +3,8 @@
     "command": [
       "/home/user/anaconda3/bin/python"
     ],
-    "version": "0.41.0+ba61748",
-    "revision": "ba61748",
+    "version": "0.42.0",
+    "revision": "baf4be3b3064ab640d296086ddf343c30f1067dd",
     "source": "https://github.com/vamsiramakrishnan/straitjacket",
     "binary_sha256": "b474f42c3d8cfb7bf4e8da012ce4df1029ec3343b44bdb805882c8e10078a072"
   },
@@ -16,7 +16,9 @@
     "version": "2.1.1.dev0",
     "source": "https://github.com/oraios/serena",
     "revision": "ede329aaf0c824bea75455a2926f01420d7aa620",
-    "binary_sha256": "0b6d5bd01ac8a189e4cc609c3cbb99f4fec7f6d6ac5a9512495550a4deb0d034"
+    "binary_sha256": "0b6d5bd01ac8a189e4cc609c3cbb99f4fec7f6d6ac5a9512495550a4deb0d034",
+    "package_root": "/tmp/ctx-compare-env/lib/python3.11/site-packages/serena",
+    "package_sha256": "aa14693fcabf87917b5b96a0c6a7157e48733e3bc52024ac6c28f297354d6286"
   },
   "headroom": {
     "command": [
@@ -26,7 +28,9 @@
     "version": "0.42.0",
     "source": "https://github.com/headroomlabs-ai/headroom",
     "revision": "a2d4fe72381e186651466ee94e92ce9d8d1396cc",
-    "binary_sha256": "b474f42c3d8cfb7bf4e8da012ce4df1029ec3343b44bdb805882c8e10078a072"
+    "binary_sha256": "b474f42c3d8cfb7bf4e8da012ce4df1029ec3343b44bdb805882c8e10078a072",
+    "package_root": "/tmp/ctx-compare-headroom-env/lib/python3.11/site-packages/headroom",
+    "package_sha256": "b3e045e8eb1d374ae8154461f524454a64b6b67c57b5f4a981288f0cbee6c2e2"
   },
   "tokensave": {
     "command": [

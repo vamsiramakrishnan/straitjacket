@@ -248,8 +248,16 @@ def check_pin(pin):
     return None
 
 
+def source_hashes():
+    root = Path(__file__).resolve().parents[1]
+    paths = [Path(__file__), root / 'evals' / 'lsp_edit_comparison.py',
+             *sorted((root / 'src' / 'ctx').rglob('*.py'))]
+    return {str(p.relative_to(root)): sha(p.read_bytes()) for p in paths}
+
+
 def evaluate(pins, *, repeats=1, selected=None):
     import tiktoken
+    observed_sources = source_hashes()
     encoding = tiktoken.get_encoding('cl100k_base')
     rows = []
     prior = {k: os.environ.get(k) for k in ('CTX_STATE_HOME', 'CTX_LSP', 'CTX_LSP_IDLE_S')}
@@ -304,11 +312,14 @@ def evaluate(pins, *, repeats=1, selected=None):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+    if source_hashes() != observed_sources:
+        raise RuntimeError('comparison implementation changed during replay; discard and rerun')
     return {'schema': 'ctx.tool-comparison/v1', 'mode': 'scripted-offline',
             'tokenizer': {'name': 'cl100k_base', 'version': importlib.metadata.version('tiktoken')},
-            'runner_sha256': sha(Path(__file__).read_bytes()),
-            'ctx_source_sha256': {str(p.relative_to(Path(__file__).resolve().parents[1])): sha(p.read_bytes())
-                                  for p in sorted((Path(__file__).resolve().parents[1] / 'src' / 'ctx').rglob('*.py'))},
+            'runner_sha256': observed_sources['evals/tool_comparison.py'],
+            'ctx_source_sha256': {k: v for k, v in observed_sources.items() if k.startswith('src/ctx/')},
+            'source_unchanged': True,
+            'fixture_source_sha256': observed_sources['evals/lsp_edit_comparison.py'],
             'rows': rows,
             'limitations': ['No model calls, billed usage, agent turns or whole-session savings measured.',
                             'Fixed task-specific script knows symbol/file and repair; not a discovery or reasoning benchmark.',

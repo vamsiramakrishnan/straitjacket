@@ -1,4 +1,8 @@
 import json
+import sys
+from types import SimpleNamespace
+
+import pytest
 
 from evals.tool_comparison import acceptance, check_pin, files_for, FIXED_BODY, LOG_NEEDLE, Trace
 
@@ -35,3 +39,13 @@ def test_trace_counts_actual_serialized_response():
     response = {'content': 'actual tool output', 'isError': False}
     trace.record('tool', {'q': 'x'}, response)
     assert trace.events[0]['result_tokens'] == len(json.dumps(response, sort_keys=True))
+
+
+def test_replay_refuses_implementation_changes(monkeypatch):
+    from evals import tool_comparison
+
+    observations = iter([{'source': 'before'}, {'source': 'after'}])
+    monkeypatch.setattr(tool_comparison, 'source_hashes', lambda: next(observations))
+    monkeypatch.setitem(sys.modules, 'tiktoken', SimpleNamespace(get_encoding=lambda name: None))
+    with pytest.raises(RuntimeError, match='changed during replay'):
+        tool_comparison.evaluate({'wozcode': {'unavailable': 'not installed'}})

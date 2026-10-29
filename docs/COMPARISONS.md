@@ -25,11 +25,12 @@ promises. Follow each receipt for its fixture, method, and limitations.
 | [**WozCode**](https://www.wozcode.com/how-it-works) (Claude Code plugin) | combines glob/regex/read into ranked snippets; fuzzy batch edits with post-write syntax checks; SQL graph and session recall | its advertised savings use a different workload and accounting boundary; plugin execution needs the supported host | sealed multi-file `ctx edit` transactions, post-write diagnostics and separate behavioral verification; SQL graph workflows remain a gap |
 | [**oh-my-pi**](https://github.com/can1357/oh-my-pi) (owned agent runtime) | hash-anchored edits, post-write LSP feedback, isolated typed subagents, provider-aware visual compaction, and mid-stream rules | several mechanisms require ownership of edits or the model stream and therefore cannot be promised through every ctx host hook | sealed `ctx edit` transactions, fresh diagnostic receipts, and opt-in isolated typed workers; visual-cold and stream-rule code remain inactive experimental seams |
 
-*Rows for TokenSave and WozCode are desk research, not head-to-head runs —
-their figures are their own claims. Marked as such in
-[`evals/field-devex-2026-08-02.md`](../evals/field-devex-2026-08-02.md), which
-is the receipt for this section and is explicitly not allowed to move any
-performance number we publish.*
+The [2026-10-29 pinned tool replay](../evals/tool-comparison-2026-10-29.md)
+executes actual ctx, Serena, TokenSave and Headroom interfaces on common edit
+and log fixtures. WozCode remains unavailable. This scripted capability replay
+does not establish whole-session token savings or agent quality. Earlier
+[field research](../evals/field-devex-2026-08-02.md) and upstream marketing
+figures must not change published performance claims.
 
 What each still does better than us is listed explicitly below; these are
 product gaps, not design victories.

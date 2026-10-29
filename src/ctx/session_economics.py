@@ -45,7 +45,8 @@ def normalize_usage(provider: str, usage: dict) -> dict:
                    cache_write_tokens=0, output_tokens=usage.get('output_tokens'),
                    reasoning_tokens=(usage.get('output_tokens_details') or {}).get('reasoning_tokens'))
     elif provider == 'gemini':
-        candidates, thoughts = usage.get('candidatesTokenCount'), usage.get('thoughtsTokenCount')
+        candidates = _number(usage.get('candidatesTokenCount'), 'candidatesTokenCount')
+        thoughts = _number(usage.get('thoughtsTokenCount'), 'thoughtsTokenCount')
         raw = dict(input_tokens=usage.get('promptTokenCount'), cache_read_tokens=usage.get('cachedContentTokenCount'),
                    cache_write_tokens=None,
                    output_tokens=(None if candidates is None or thoughts is None else candidates + thoughts),
@@ -142,6 +143,7 @@ def compare(baseline: dict, candidate: dict, *, baseline_identity: dict, candida
     """Only accepted, completely observed, matched sessions support cost savings."""
     required = ('fixture_sha256', 'acceptance_sha256', 'model', 'host', 'budget')
     matched = all(baseline_identity.get(k) is not None and baseline_identity.get(k) == candidate_identity.get(k) for k in required)
+    matched = matched and baseline.get('models') == candidate.get('models') == [baseline_identity.get('model')]
     valid = matched and baseline.get('accepted') is True and candidate.get('accepted') is True
     before, after = baseline.get('cost_usd'), candidate.get('cost_usd')
     measurable = valid and baseline.get('usage_complete') and candidate.get('usage_complete') and before is not None and after is not None

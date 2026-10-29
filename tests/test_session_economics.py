@@ -50,12 +50,31 @@ def test_duplicate_final_responses_rejected():
 
 def test_failed_or_mismatched_session_has_no_savings():
     identity = dict(fixture_sha256='abc', acceptance_sha256='def', model='x', host='h', budget=5)
-    baseline = dict(accepted=True, cost_usd=1, usage_complete=True)
-    candidate = dict(accepted=False, cost_usd=.1, usage_complete=True)
+    baseline = dict(accepted=True, cost_usd=1, usage_complete=True, models=['x'])
+    candidate = dict(accepted=False, cost_usd=.1, usage_complete=True, models=['x'])
     assert compare(baseline, candidate, baseline_identity=identity, candidate_identity=identity)['cost_savings_usd'] is None
     candidate['accepted'] = True
     assert compare(baseline, candidate, baseline_identity=identity, candidate_identity=identity)['cost_savings_usd'] == .9
     assert compare(baseline, candidate, baseline_identity=identity, candidate_identity={**identity, 'model': 'y'})['cost_savings_usd'] is None
+
+
+def test_comparison_requires_observed_model_to_match_declared_identity():
+    identity = dict(fixture_sha256='abc', acceptance_sha256='def', model='claimed', host='h', budget=5)
+    baseline = dict(accepted=True, cost_usd=1, usage_complete=True, models=['actual-A'])
+    candidate = dict(accepted=True, cost_usd=.5, usage_complete=True, models=['actual-B'])
+    for observed in (['actual-B'], ['actual-A'], [], None):
+        candidate['models'] = observed
+        result = compare(baseline, candidate, baseline_identity=identity, candidate_identity=identity)
+        assert not result['matched']
+        assert result['cost_savings_usd'] is None
+
+
+@pytest.mark.parametrize('bad', [True, -1, 0.5, '3', float('nan')])
+@pytest.mark.parametrize('field', ['candidatesTokenCount', 'thoughtsTokenCount'])
+def test_gemini_validates_each_output_component_before_combining(field, bad):
+    usage = {'candidatesTokenCount': 3, 'thoughtsTokenCount': 2, field: bad}
+    with pytest.raises(ValueError):
+        normalize_usage('gemini', usage)
 
 
 def test_normalizers_keep_missing_categories_unknown():

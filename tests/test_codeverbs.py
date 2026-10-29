@@ -2,6 +2,7 @@
 provenance contract — every emitted site snapshot-backed and span-tagged."""
 
 import builtins
+import os
 import re
 import sys
 
@@ -28,7 +29,10 @@ def _has_jedi() -> bool:
         return False
 
 
-jedi_required = pytest.mark.skipif(not _has_jedi(), reason="jedi not installed")
+jedi_required = pytest.mark.skipif(
+    not _has_jedi() or os.environ.get("CTX_CODE_ENGINE") == "ast",
+    reason="jedi not installed or explicitly disabled by the builtin-engine run",
+)
 
 
 def _seed_pkg(root):

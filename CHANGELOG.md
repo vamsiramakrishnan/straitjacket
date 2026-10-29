@@ -6,6 +6,8 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-29
+
 - Reuse language-server sessions across CLI calls through a private local
   broker, with document updates, project-change notifications, timeouts and idle
   expiry. `ctx lsp diagnostics` reports version-checked errors; ctx-owned edit
@@ -15,6 +17,20 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
   resource operations, server commands, unknown versions and overlapping edits.
   Local real-Pyright replay checks reuse, error detection, cross-file rename and
   executable verification; it makes no claim about agent turns or provider cost.
+- Real TypeScript, Go and Rust replays verify cross-file rename, stale-plan
+  refusal and compiler/runtime checks. Go versions are established before a
+  rename is recomputed; Rust startup waits for its workspace load, and matching
+  compiler push errors supplement native pull diagnostics. Unversioned
+  TypeScript diagnostics remain explicitly unverified.
+- `ctx pack` includes snapshot-backed source snippets and scoped static call
+  relationships within its rendering budget. Index catalogs reuse branch-local
+  symbol/trigram state and refresh dirty files. The local workflow replay uses
+  fewer scripted operations but returns more text; no billing win is inferred.
+- Session economics import normalized or raw provider usage, separating input,
+  cache reads/writes, output, reasoning and tool payloads. Missing observations
+  remain unknown, and failed or mismatched sessions cannot produce cost-savings
+  claims. Pinned local tool replays cover ctx, Serena, TokenSave and Headroom;
+  WozCode is unavailable in the evaluation environment. No model calls are made.
 
 ## [0.41.0] - 2026-10-29
 
