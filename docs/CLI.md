@@ -554,6 +554,13 @@ bytes; tests and prose are demoted unless the task is about them. Deterministic
 for a tree state; `evals/agentbench/pack_recall.py` measures it against the
 files DeepSWE reference solutions actually change (docs/CODE-SEARCH.md).
 
+The first three ranked files can also carry short source excerpts with snapshot
+addresses. Matched entry points include bounded, file-scoped caller/callee rows
+from the static graph. These are AST-derived relationships, not LSP guarantees;
+ambiguous targets retain their candidate counts. Small budgets omit excerpts.
+The index keeps separate branch catalogs and resyncs dirty files on every query.
+See [code search](CODE-SEARCH.md) for cache lifetime and the edit/verify workflow.
+
 ## ctx as the host: `ctx agent`
 
 ```bash

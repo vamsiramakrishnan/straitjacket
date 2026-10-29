@@ -740,6 +740,10 @@ def _resolve_target(g: _Graph, symbol: str) -> list[str]:
     ambiguity note is suppressed exactly when it is most needed (v1 carried
     this guard; losing it silently narrowed `render` to one of two).
     """
+    if ":" in symbol:
+        path, _, name = symbol.rpartition(":")
+        path = path.removeprefix("repo:")
+        return [nid for nid in _resolve_target(g, name) if g.nodes[nid].rel == path]
     if "." in symbol:
         # Every file whose qual is exactly this -- not the first one found.
         # Node ids are file-scoped now, so a dotted name that two files both
@@ -855,6 +859,46 @@ def _rows(g: _Graph, entries: list[tuple[str, int, str]]) -> list[str]:
         if len(group) > _MAX_ROWS:
             out.append(f"    … +{fmt_int(len(group) - _MAX_ROWS)} more")
     return out
+
+
+def context_neighbors(
+    store: Store, ws: Workspace, sites: list[tuple[str, int]], *, limit: int = 4,
+) -> dict[tuple[str, int], dict[str, Any]]:
+    """Bounded, file-scoped neighbors for context packs, with resolution tiers.
+
+    Repository-wide name guesses are excluded, as in the default callers view.
+    The existing graph cache supplies both directions in one load.
+    """
+    if not sites:
+        return {}
+    g = _load_graph(store, ws)
+    result = {}
+    for site in sites:
+        targets = sorted(nid for nid, d in g.nodes.items() if (d.rel, d.lineno) == site)
+        neighbors = []
+        for target in targets:
+            for nid, line, tier in g.in_edges.get(target, []):
+                if tier == _TIER_REPO or nid not in g.nodes:
+                    continue
+                d = g.nodes[nid]
+                neighbors.append({"direction": "caller", "symbol": d.qual,
+                                  "file": d.rel, "line": line, "tier": tier})
+            for _name, line, ids, tier in g.out_edges.get(target, []):
+                if tier == _TIER_REPO:
+                    continue
+                for nid in ids:
+                    d = g.nodes.get(nid)
+                    if d:
+                        neighbors.append({"direction": "callee", "symbol": d.qual,
+                                          "file": d.rel, "line": d.lineno,
+                                          "call_line": line, "tier": tier,
+                                          "candidates": len(ids)})
+        # Preserve distinct call sites but avoid duplicated edges from ambiguous targets.
+        unique = {json.dumps(row, sort_keys=True): row for row in neighbors}
+        rows = sorted(unique.values(), key=lambda r: (r["direction"], r["file"], r["line"], r["symbol"]))
+        result[site] = {"rows": rows[:limit], "omitted": max(0, len(rows) - limit),
+                        "engine": dict(g.engines), "file_cap": _MAX_FILES}
+    return result
 
 
 def cmd_callers(store: Store, ws: Workspace, symbol: str, unscoped: bool = False) -> str:

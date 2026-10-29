@@ -345,6 +345,20 @@ def index_dir(store: Store) -> Path:
     return store.root / "indexes" / "trigram"
 
 
+def _branch_identity(ws: Workspace) -> str | None:
+    """Read the worktree's HEAD without spawning Git on every retrieval."""
+    from ctx.workspace import _git_dir
+
+    git_dir = _git_dir(ws.root)
+    if git_dir is None:
+        return None
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return head or None
+
+
 def _sha12(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
 
@@ -379,13 +393,31 @@ class Index:
     def __init__(self, store: Store, ws: Workspace):
         self.store = store
         self.ws = ws
-        self.dir = index_dir(store)
+        self.branch = _branch_identity(ws)
+        self.dir = self._directory(self.branch)
         self.catalog_path = self.dir / "catalog.json"
         self.catalog: dict[str, Any] = self._load_catalog()
         self._segments: dict[str, Segment] = {}
         self.last_sync: dict[str, Any] = {}
 
     # ------------------------------------------------------------- state
+    def _directory(self, branch: str | None) -> Path:
+        base = index_dir(self.store)
+        if branch is None:
+            return base
+        return base / "branches" / hashlib.sha256(branch.encode()).hexdigest()[:24]
+
+    def _refresh_branch(self) -> bool:
+        branch = _branch_identity(self.ws)
+        if branch == self.branch:
+            return False
+        self.close()
+        self.branch = branch
+        self.dir = self._directory(branch)
+        self.catalog_path = self.dir / "catalog.json"
+        self.catalog = self._load_catalog()
+        return True
+
     def _load_catalog(self) -> dict[str, Any]:
         try:
             doc = json.loads(self.catalog_path.read_text(encoding="utf-8"))
@@ -397,6 +429,7 @@ class Index:
 
     def _save_catalog(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
+        self.catalog["branch"] = self.branch
         _atomic_write(
             self.catalog_path,
             json.dumps(self.catalog, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
@@ -443,6 +476,7 @@ class Index:
         re-index the changed ones into a new segment, drop the deleted ones,
         compact when segments pile up. Returns a receipt."""
         t0 = time.monotonic()
+        branch_changed = self._refresh_branch()
         root = self.ws.root
         files = self.files
         rels = self._listing()
@@ -458,6 +492,8 @@ class Index:
             except OSError:
                 continue
             if st.st_size > MAX_FILE_BYTES:
+                if files.pop(rel, None) is not None:
+                    removed.append(rel)
                 continue
             ent = files.get(rel)
             if ent is None or force or ent[2] != st.st_size or ent[3] != st.st_mtime_ns:
@@ -514,6 +550,7 @@ class Index:
             "removed": len(removed), "binary": skipped_binary,
             "segments": len(self.catalog["segments"]), "compacted": compacted,
             "ms": round((time.monotonic() - t0) * 1000, 1),
+            "branch": self.branch, "branch_changed": branch_changed,
         }
         return self.last_sync
 
@@ -650,6 +687,7 @@ class Index:
             "built": self.built, "files": len(self.files), "segments": len(segs),
             "bytes": size, "dir": str(self.dir), "languages": by_lang,
             "max_file_bytes": MAX_FILE_BYTES, "synced_at": self.catalog.get("synced_at"),
+            "branch": self.branch,
         }
 
 

@@ -148,3 +148,61 @@ def test_pack_refuses_when_the_index_is_off(state_home, repo, monkeypatch, capsy
     monkeypatch.setenv("CTX_SEARCH_INDEX", "off")
     rc = main(["--workspace", str(repo), "pack", "anything"])
     assert rc == 2 and "index is off" in capsys.readouterr().err
+
+
+def test_pack_bundles_source_and_scoped_relationships(state_home, repo):
+    from ctx.pack import build_pack, render_pack
+
+    ws = make_ws(repo)
+    pack = build_pack(make_store(ws), ws, "structure_attrs", history=False)
+    row = next(r for r in pack.rows if r.rel == "src/converters.py")
+    assert "def structure_attrs" in row.context and "snapshot:" in row.context
+    assert any(r["direction"] == "caller" and r["file"] == "tests/test_converters.py"
+               for r in row.relationships)
+    assert all(r["tier"] != "repo" for r in row.relationships)
+    rendered = render_pack(pack)
+    assert "caller:" in rendered and "snapshot:" in rendered
+    assert "scoped static callers/callees" in rendered
+
+
+def test_pack_context_snapshot_survives_source_edit(state_home, repo):
+    from ctx.pack import build_pack
+    from ctx.retrieval import Selector, get
+    import re
+
+    ws = make_ws(repo)
+    store = make_store(ws)
+    pack = build_pack(store, ws, "structure_attrs", history=False)
+    row = next(r for r in pack.rows if r.rel == "src/converters.py")
+    snapshot = re.search(r"snapshot:([a-f0-9]+)", row.context).group(0)
+    (repo / row.rel).write_text("# changed after discovery\n")
+    recovered = get(store, ws, snapshot, Selector(lines=(1, 20)))
+    assert "def structure_attrs" in recovered
+
+
+def test_relationships_do_not_merge_same_named_functions(state_home, repo):
+    from ctx.callgraph import cmd_callers, context_neighbors
+
+    (repo / "a.py").write_text("def shared():\n    return 1\ndef caller_a():\n    return shared()\n")
+    (repo / "b.py").write_text("def shared():\n    return 2\ndef caller_b():\n    return shared()\n")
+    ws = make_ws(repo)
+    result = context_neighbors(make_store(ws), ws, [("a.py", 1)])
+    callers = result[("a.py", 1)]["rows"]
+    assert [r["symbol"] for r in callers] == ["caller_a"]
+    scoped = cmd_callers(make_store(ws), ws, "a.py:shared")
+    assert "caller_a" in scoped and "caller_b" not in scoped
+
+
+@pytest.mark.parametrize("budget", [0, 1, 60, 300, 2500])
+def test_pack_respects_budget_with_source_and_many_relationships(state_home, repo, budget):
+    from ctx.pack import build_pack, render_pack
+
+    (repo / "many.py").write_text(
+        "from src.converters import structure_attrs\n" +
+        "\n".join(f"def caller_{i}():\n    return structure_attrs({{}}, dict)" for i in range(20)))
+    ws = make_ws(repo)
+    pack = build_pack(make_store(ws), ws, "structure_attrs", budget_tokens=budget, history=False)
+    out = render_pack(pack)
+    assert len(out) <= budget * 4
+    if budget >= 60:
+        assert "next:" in out

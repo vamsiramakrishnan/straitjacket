@@ -108,6 +108,9 @@ class PackRow:
     size: int = 0
     lang: str | None = None
     symbol_count: int = 0
+    context: str = ""
+    relationships: list[dict[str, Any]] = field(default_factory=list)
+    relationships_omitted: int = 0
 
     def why(self) -> str:
         parts: list[str] = []
@@ -128,6 +131,8 @@ class PackRow:
             "symbols": [list(s) for s in self.symbols], "path_terms": self.path_terms,
             "commits": [list(c) for c in self.commits], "lines": self.lines, "size": self.size,
             "language": self.lang, "symbol_count": self.symbol_count, "outline": self.outline,
+            "context": self.context, "relationships": self.relationships,
+            "relationships_omitted": self.relationships_omitted,
         }
 
 
@@ -141,6 +146,7 @@ class Pack:
     history: list[tuple[str, str, str]]   # (sha, date, subject)
     budget_tokens: int
     considered: int
+    relationship_note: str = ""
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -152,6 +158,7 @@ class Pack:
             "history": [list(h) for h in self.history],
             "corpus_files": self.corpus_files, "considered": self.considered,
             "budget_tokens": self.budget_tokens, "index": self.index_note,
+            "relationships": self.relationship_note,
         }
 
 
@@ -367,10 +374,52 @@ def build_pack(
         for r in rows:
             r.outline, r.symbol_count = _outline(idx, r)
         note = f"index trigram · {len(idx.files)} files"
+        if idx.branch:
+            note += f" · {idx.branch}"
     finally:
         idx.close()
+    relationship_note = _add_context(store, ws, rows, budget_tokens)
     return Pack(task=task, terms=terms, rows=rows, corpus_files=n_files, index_note=note,
-                history=commits[:5], budget_tokens=budget_tokens, considered=considered)
+                history=commits[:5], budget_tokens=budget_tokens, considered=considered,
+                relationship_note=relationship_note)
+
+
+def _add_context(store: Store, ws: Workspace, rows: list[PackRow], budget: int) -> str:
+    """Materialize a few entry points, leaving most of the budget for discovery."""
+    from ctx.callgraph import context_neighbors
+    from ctx.retrieval import RetrievalError, Selector, get
+
+    remaining = max(0, budget // 2)
+    selected = rows[:3] if remaining >= 150 else []
+    for row in selected:
+        line = row.symbols[0][2] if row.symbols else 1
+        if not row.symbols and row.terms:
+            try:
+                lines = (ws.root / row.rel).read_text(encoding="utf-8").splitlines()
+                rx = re.compile(r"\b(?:" + "|".join(re.escape(t) for t in row.terms) + r")\b", re.I)
+                line = next((i for i, text in enumerate(lines, 1) if rx.search(text)), 1)
+            except (OSError, UnicodeDecodeError):
+                continue
+        try:
+            text = get(store, ws, f"repo:{row.rel}", Selector(lines=(line, line + 7)))
+        except (OSError, ValueError, RetrievalError):
+            continue
+        cost = _approx_tokens(text)
+        if cost <= remaining:
+            row.context = text
+            remaining -= cost
+
+    sites = [(r.rel, r.symbols[0][2]) for r in selected if r.symbols]
+    if not sites:
+        return "not requested: no matched entry point or insufficient budget"
+    neighbors = context_neighbors(store, ws, sites, limit=4)
+    for row in selected:
+        if not row.symbols:
+            continue
+        result = neighbors.get((row.rel, row.symbols[0][2]), {})
+        row.relationships = result.get("rows", [])
+        row.relationships_omitted = result.get("omitted", 0)
+    return "scoped static callers/callees (AST-derived, not LSP); up to 5000 files; unscoped name guesses excluded"
 
 
 def _defining_ci(idx, key: str) -> list[tuple[str, str, int]]:
@@ -413,38 +462,61 @@ def _approx_tokens(text: str) -> int:
 def render_pack(pack: Pack) -> str:
     from ctx.textutil import fmt_int
 
+    limit = max(0, pack.budget_tokens) * 4
     title = " ".join(pack.task.split())[:72]
     out: list[str] = [f"[ctx pack · {len(pack.rows)} of {fmt_int(pack.considered)} candidate files · {pack.index_note}]"]
     out.append(f"task: {title}{'…' if len(pack.task) > 72 else ''}")
     shown_terms = [t for t in pack.terms if t.idf > 0.05][:10]
     out.append("terms: " + " ".join(f"{t.text}({t.idf:.1f})" for t in shown_terms))
-    used = _approx_tokens("\n".join(out))
-    for i, r in enumerate(pack.rows, start=1):
-        block = [f"{i}. repo:{r.rel} · {fmt_int(r.lines)} lines · score {r.score:.1f}"]
-        why = r.why()
-        if why:
-            block.append(f"   why: {why}")
-        for ln in r.outline:
-            block.append(f"   {ln}")
-        cost = _approx_tokens("\n".join(block))
-        if used + cost > pack.budget_tokens and i > 3:
-            out.append(f"+{len(pack.rows) - i + 1} more files within the candidates; raise --budget or ask for them: "
-                       + ", ".join(x.rel for x in pack.rows[i - 1:i + 2]))
-            break
-        out.extend(block)
-        used += cost
-    if pack.history:
-        out.append("history:")
-        for sha, date, subject in pack.history[:3]:
-            out.append(f"  {sha} {date} · {subject[:80]}")
-    out.append("next:")
+    footer: list[str] = []
     if pack.rows:
         top = pack.rows[0]
         sym = top.symbols[0][0] if top.symbols else None
-        if sym:
-            out.append(f"  ctx get repo:{top.rel} --symbol {sym}")
-        else:
-            out.append(f"  ctx stats repo:{top.rel}")
-    if shown_terms:
-        out.append("  ctx search repo: " + " ".join(f"'{t.text}'" for t in shown_terms[:2]) + " --all")
-    return "\n".join(out)
+        command = f"ctx get repo:{top.rel}" + (f" --symbol {sym}" if sym else " --lines 1:8")
+        footer = ["next:", "  " + command]
+    omission = f"+{len(pack.rows)} more files within the candidates; raise --budget"
+
+    def fits(lines: list[str], *, reserve: bool = True) -> bool:
+        tail = [omission] + footer if reserve else footer
+        return len("\n".join(lines + tail)) <= limit
+
+    if not fits(out):
+        out = ["[ctx pack]"]
+    shown = 0
+    for i, r in enumerate(pack.rows, start=1):
+        block = [f"{i}. repo:{r.rel} · {fmt_int(r.lines)} lines · score {r.score:.1f}"]
+        if not fits(out + block):
+            break
+        why = r.why()
+        details = ([f"   why: {why}"] if why else []) + [f"   {ln}" for ln in r.outline]
+        for rel in r.relationships:
+            ambiguity = f" ({rel['candidates']} candidates)" if rel.get("candidates", 1) > 1 else ""
+            details.append(f"   {rel['direction']}: {rel['symbol']} repo:{rel['file']}:{rel['line']}"
+                           f" [static/{rel['tier']}]{ambiguity}")
+        if r.relationships_omitted:
+            details.append(f"   +{r.relationships_omitted} relationships; "
+                           f"ctx callers {r.rel}:{r.symbols[0][0]}")
+        for line in details:
+            if fits(out + block + [line]):
+                block.append(line)
+        context = ["   " + line for line in r.context.splitlines()] if r.context else []
+        if context and fits(out + block + context):
+            block.extend(context)
+        out.extend(block)
+        shown += 1
+    if shown < len(pack.rows):
+        out.append(f"+{len(pack.rows) - shown} more files within the candidates; raise --budget")
+    if any(r.relationships for r in pack.rows):
+        note = "relationships: " + pack.relationship_note
+        if fits(out + [note], reserve=False):
+            out.append(note)
+    for sha, date, subject in pack.history[:3]:
+        line = f"history: {sha} {date} · {subject[:80]}"
+        if fits(out + [line], reserve=False):
+            out.append(line)
+    result = "\n".join(out + footer)
+    if len(result) <= limit:
+        return result
+    # A direct Python caller can request less than even a continuation costs.
+    # Do not emit a cut-off coordinate in that case.
+    return "[ctx pack: raise --budget]" if limit >= 25 else ""

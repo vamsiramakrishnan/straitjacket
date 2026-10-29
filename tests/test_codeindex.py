@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 
 import pytest
 
@@ -36,6 +37,67 @@ def _index(repo, state_home):
     ws = make_ws(repo)
     store = make_store(ws)
     return Index(store, ws)
+
+
+def _git(root, *args):
+    return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_branch_catalogs_reuse_symbols_and_resync_dirty_files(state_home, git_workspace):
+    from ctx.codeindex import expr_for_literal
+
+    root = git_workspace
+    path = root / "hello.py"
+    path.write_text("def original_symbol():\n    return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "original")
+    original_branch = _git(root, "branch", "--show-current")
+    idx = _index(root, state_home)
+    idx.sync()
+    original_dir = idx.dir
+    original_segment = idx.files["hello.py"][0]
+    assert idx.files_defining("original_symbol")
+
+    _git(root, "switch", "-qc", "topic")
+    path.write_text("def topic_symbol():\n    return 2\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "topic")
+    receipt = idx.sync()
+    assert receipt["branch_changed"] and idx.dir != original_dir
+    assert idx.files_defining("topic_symbol") and not idx.files_defining("original_symbol")
+    assert idx.candidates(expr_for_literal("original_symbol")) == []
+
+    _git(root, "switch", "-q", original_branch)
+    receipt = idx.sync()
+    assert idx.dir == original_dir and receipt["indexed"] == 0
+    assert idx.files["hello.py"][0] == original_segment
+    assert idx.files_defining("original_symbol") and not idx.files_defining("topic_symbol")
+    path.write_text("def dirty_symbol():\n    return 3\n")
+    idx.sync()
+    assert idx.files_defining("dirty_symbol") and not idx.files_defining("original_symbol")
+    idx.close()
+
+
+def test_detached_heads_and_linked_worktrees_have_separate_indexes(state_home, git_workspace, tmp_path):
+    root = git_workspace
+    idx = _index(root, state_home)
+    idx.sync()
+    attached_dir = idx.dir
+    _git(root, "checkout", "-q", "--detach")
+    idx.sync()
+    assert idx.branch == _git(root, "rev-parse", "HEAD")
+    assert idx.dir != attached_dir
+    linked = tmp_path / "linked"
+    _git(root, "worktree", "add", "-qb", "linked-topic", str(linked))
+    (linked / "hello.py").write_text("def linked_symbol():\n    return 1\n")
+    other = _index(linked, state_home)
+    other.sync()
+    assert other.branch == "ref: refs/heads/linked-topic"
+    assert other.dir != idx.dir
+    assert other.files_defining("linked_symbol")
+    assert not idx.files_defining("linked_symbol")
+    other.close()
+    idx.close()
 
 
 # ------------------------------------------------------------ trigrams
