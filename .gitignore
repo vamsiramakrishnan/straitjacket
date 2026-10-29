@@ -13,6 +13,7 @@ native/ctx-hook-native/target/
 
 # Runtime session state (never source)
 .ctx-session-reads/
+/.ctx/
 
 # Eval working dirs (fixtures embed their own .git; receipts are committed
 # separately under evals/*.md)

@@ -6,6 +6,22 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-29
+
+- Local query-aware block selection preserves required evidence, heading and
+  fence context, and original retrieval addresses. `ctx compress` exposes the
+  selector and deterministic prompt-prefix wrapping without provider calls.
+- Native agy sessions retain explicit model/conversation identities, durable
+  completion events, bounded any/all waits, cancellation and deadline handling.
+  Terminal events feed the existing relay; task completion still requires
+  separate evidence and verification. Isolated native guide/continuation stages
+  require an owned first edit and a passing recorded check.
+- Session-private task hints improve focused generic output selection. Quoted
+  shell operators remain part of their argument when classifying command chains.
+- AlphaEvolve block-selection experiments keep search/holdout/adversarial splits
+  separate. No evolved candidate was promoted: the managed trial did not beat
+  the seed, and downstream task-quality and cost improvements remain unmeasured.
+
 - **0.40.0 tool workflow candidate**: compact model delivery keeps rich SDK JSON;
   progressive snapshot navigation and default query/plan tools reduce separate
   evidence operations. Explicit context epochs enable content-aware read reuse.

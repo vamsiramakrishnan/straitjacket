@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "setup-policy",
+  "experiment_module": "evals.alphaevolve.setup_policy.evaluate",
+  "metric": "completion_adjusted_setup_friction",
+  "dataset_fingerprint": "fe4b809def42cd64",
+  "config": {
+    "title": "straitjacket setup and repair DevEx",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T133021Z",
+  "programs_ranked": 50,
+  "top_programs": [
+    {
+      "program": "16543489536324143037",
+      "score": 104.360664,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164958061",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164957287",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164960609",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164959061",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164958287",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164957513",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164959191",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164960304",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "15412464370164959756",
+      "score": 104.360664,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T133021Z-setup-policy-winner.py"
+}

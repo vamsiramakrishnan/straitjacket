@@ -1,0 +1,88 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "evidence-selection",
+  "experiment_module": "evals.alphaevolve.evaluate",
+  "metric": "evidence_utility",
+  "dataset_fingerprint": "6b7665d723cd00a9",
+  "config": {
+    "title": "straitjacket generic evidence selection",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 14,
+      "concurrency": 3
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 1.0
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T114718Z",
+  "programs_ranked": 15,
+  "top_programs": [
+    {
+      "program": "5776163212015338159",
+      "score": 94.44444,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015339727",
+      "score": 94.44444,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015337657",
+      "score": 91.94444,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015338814",
+      "score": 90.520836,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015338951",
+      "score": 89.32449,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015340474",
+      "score": 86.80556,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015339652",
+      "score": 86.72619,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015338372",
+      "score": 86.64141,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015339347",
+      "score": 85.35669,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5776163212015340535",
+      "score": 85.24306,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T114718Z-evidence-selection-winner.py"
+}

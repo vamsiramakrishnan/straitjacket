@@ -99,6 +99,13 @@ def test_changed_target_refuses_without_writing(state_home, workspace_dir):
     assert "changed or disappeared" in str(caught.value)
     assert caught.value.receipt["outcome"] == "refused"
     assert path.read_text(encoding="utf-8") == changed
+    assert caught.value.receipt["recovery"][0]["action"] == "read_current_context_then_replan"
+    fresh = create_edit_plan(
+        ws, store, _request(_edit("m.py", changed.splitlines(), 2, 2, "TWO\n"))
+    )
+    preview_edit_plan(ws, store, fresh)
+    apply_edit_plan(ws, fresh)
+    assert path.read_text(encoding="utf-8") == "one\nTWO\nthree\n"
 
 
 def test_deleted_target_returns_a_refusal_receipt(state_home, workspace_dir):

@@ -51,6 +51,46 @@ def test_under_threshold_passes_through(ws):
     assert d == {}  # byte-identical no-op
 
 
+@pytest.mark.parametrize("reported_error", [False, True])
+def test_codex_containment_distinguishes_tool_error_and_preserves_retrieval(ws, reported_error):
+    import re
+    from ctx.retrieval import Selector, get
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+
+    text = _big_json()
+    payload = {"tool_name": "webrun", "cwd": str(ws),
+               "tool_response": {"isError": reported_error,
+                                 "content": [{"type": "text", "text": text}]}}
+    result = _run_post(payload, flavor="codex")
+    assert result["decision"] == "block"
+    reason = result["reason"]
+    assert reason.startswith("[ctx output-contained] capture=stored;")
+    expected = "reported_error" if reported_error else "not_reported"
+    assert f"tool_error={expected}" in reason
+    assert "before retrying" in reason
+    assert "check which later calls ran" in reason
+    ref = re.search(r"run:([0-9a-f]{12})", reason)
+    assert ref
+    workspace = resolve_workspace(str(ws))
+    recovered = get(Store(workspace.workspace_id), workspace,
+                    f"run:{ref[1]}#stdout", Selector(json_pointer="/0"))
+    assert json.loads(recovered[recovered.index("{"):])["sha"] == "c0000"
+    assert _run_post(_mcp_payload(ws, reason + "x" * 40000), flavor="codex") == {}
+
+
+def test_codex_gate_failure_is_not_reported_as_stored(ws, monkeypatch):
+    from ctx import hook
+
+    def fail(*args):
+        raise RuntimeError("capture unavailable")
+
+    monkeypatch.setattr(hook, "_emission_gate", fail)
+    result = _run_post(_mcp_payload(ws, _big_json()), flavor="codex")
+    assert "gate-failed" in result["reason"]
+    assert "capture=stored" not in result["reason"]
+
+
 def test_over_threshold_replaces_with_digest(ws):
     d = _run_post(_mcp_payload(ws, _big_json()))
     hso = d["hookSpecificOutput"]

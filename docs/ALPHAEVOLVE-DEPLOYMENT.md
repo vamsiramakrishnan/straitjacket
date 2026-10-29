@@ -9,8 +9,8 @@ safety or measurement rules used to judge it.
 
 The versioned registry in `evals/alphaevolve/registry.py` currently contains:
 
-- 31 production levers;
-- 28 mutable levers mapped to 20 experiment families;
+- 33 production levers;
+- 30 mutable levers mapped to 22 experiment families;
 - three immutable oracle planes: actual-usage accounting, secret/workspace
   guards, and receipt integrity.
 
@@ -18,9 +18,10 @@ The experiment families cover evidence selection, context budgets, next-turn
 policy, routing, naive fast paths, receipt replay, recovery, capability
 surfaces, profile detection, output delivery, retrieval, birth-gate policy,
 engagement/reflex behavior, plan compilation, repository context, background
-execution, and cache materialization.
+execution, cache materialization, and cross-harness task routing.
 The four newest families optimize orchestration waves, mutation isolation,
-checkpoint handoff budgets, and verification routing.
+checkpoint handoff budgets, verification routing, and which harness executes
+each delegated task.
 
 Each registry entry names its production seam, candidate API, evidence class,
 risk, deployment wave, and strongest permitted rollout stage. Dataset files are
@@ -131,6 +132,48 @@ python -m evals.alphaevolve.portfolio retrieval-policy \
   --run --confirm-spend --max-programs 12 --concurrency 2
 ```
 
+Blend the documented fast/deep generation models by weight, exactly as
+Google's client examples do (`gemini-3.1-pro-preview` is served from `global`
+only; unknown names fail closed before any billed experiment starts):
+
+```bash
+python -m evals.alphaevolve.portfolio context-budget \
+  --run --confirm-spend --max-programs 12 \
+  --model-mix 'gemini-3.5-flash:0.7,gemini-3.1-pro-preview:0.3'
+```
+
+The same mixture can be supplied through the environment as `MODEL_MIX`, or as
+`MODEL_1`/`MODEL_1_WEIGHT` and `MODEL_2`/`MODEL_2_WEIGHT`.
+
+For long campaigns, `evals/alphaevolve/campaign_driver.py` runs repeated
+bounded rounds per experiment — round 1 creates, later rounds reconnect via
+`--resume-experiment` with fresh budget each — rotating the flash/pro mixture
+from exploration-heavy to exploitation-heavy and stopping only on a real
+plateau (default 30 evaluated programs without improvement) or an absolute
+guard (`--max-rounds`, `--max-total-programs`, `--wall-hours`):
+
+```bash
+python -m evals.alphaevolve.campaign_driver turn-policy \
+  --confirm-spend --round-programs 100 --concurrency 8
+```
+
+Cross-harness delegation itself is coordinated natively by
+`ctx collab` (tasks with ownership leases, completion packets, cross-harness
+reviews, and an integration gate in `.ctx/collab/ledger.jsonl`) and is
+searchable as the `collab-policy` experiment family.
+
+Managed campaigns run through a memoized campaign harness: duplicate candidate
+source is evaluated once and replayed locally (measured 12x cheaper on an
+all-duplicate campaign), every evaluation submits the primary scalar plus
+per-metric component gains as separate named scores so the program database can
+rank on any axis, failures return typed hint text that the upstream loop feeds
+back to steer the next generation, and each finished or resumed run persists a
+dated summary plus its best program under `evals/alphaevolve/results/`. The
+full fleet scorecard evaluates all experiments concurrently in isolated child
+processes and is byte-identical to serial evaluation (7.44 s to 2.60 s wall for
+the whole registry). Method, denominators, and limits are in the
+[revamp receipt](../evals/alphaevolve/2026-08-24-optimizer-revamp.md).
+
 ## Waves
 
 | Wave | Experiments | Default rollout |
@@ -143,6 +186,7 @@ python -m evals.alphaevolve.portfolio retrieval-policy \
 | context | repository fileset/context selection | shadow |
 | execution | backgrounding and cache freshness | shadow |
 | orchestration | fast paths, routes, DAGs, recovery | matched live canary |
+| devex | setup fast no-op and managed repair | canary |
 
 Within the orchestration wave, production parallelizes independent read-only
 frontier nodes up to the configured worker/provider limit. Shared-workspace
@@ -180,6 +224,12 @@ the existing guard boundary after a 57,313-case deterministic matrix; unknown
 and mutating commands remain approval events. Every broader birth-gate,
 retrieval, context, execution, and routing mutation remains shadow or canary
 only according to the table above.
+
+The 2026-08-24 optimizer revamp upgrades the search harness only — campaign
+memoization, model-mixture configuration, multi-metric score submission,
+structured failure insights, dated campaign artifacts, and the concurrent fleet
+scorecard. It changes how candidates are evaluated and recorded, not any
+production seam, gate, or promotion rule; no new production claim is implied.
 
 No AlphaEvolve result currently supports a general billed-production savings
 claim. The next gate is a matched live canary joining semantic completion to

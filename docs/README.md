@@ -57,6 +57,8 @@ retrieval returns bounded regions on demand
 | Analyze frozen evidence with explicit model calls | [Semantic analysis](SEMANTIC.md) |
 | Investigate a bug and verify a repair under one durable budget | [Task execution](TASK-EXECUTION.md) |
 | Hand a frontier model's edit off to a cheaper one | [Prewalk](PREWALK.md) |
+| Track native agy conversations and completion events | [Native agy sessions](NATIVE-AGY-SESSIONS.md) |
+| Select local evidence and wrap a stable prompt prefix | [Query-aware selection](QUERY-AWARE-SELECTION.md) |
 | See module ownership and data flow | [Architecture](ARCHITECTURE.md) |
 | Add a typed digest | [Writing a profile](WRITING-A-PROFILE.md) |
 | Inspect measurements and counterexamples | [Evaluation receipts](../evals/) |

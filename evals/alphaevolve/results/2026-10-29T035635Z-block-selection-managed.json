@@ -1,0 +1,60 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "block-selection",
+  "experiment_module": "evals.alphaevolve.block_selection.evaluate",
+  "metric": "retained_answer_blocks",
+  "dataset_fingerprint": "00c3dd26c7fa4da4",
+  "config": {
+    "title": "Query-aware addressed block ranking",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 6,
+      "concurrency": 1,
+      "max_duration": "1800s"
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.8-flash",
+          "weight": 0.7
+        },
+        {
+          "name": "gemini-4-argon",
+          "weight": 0.3
+        }
+      ]
+    },
+    "experiment_resource": "projects/440790012685/locations/global/collections/default_collection/engines/alpha-evolve-straitjacket/sessions/2969674059555146770/alphaEvolveExperiments/10134924543544101561",
+    "dataset_fingerprint_at_start": "00c3dd26c7fa4da4",
+    "evaluator_changed_during_run": false
+  },
+  "recorded_at": "2026-10-29T035635Z",
+  "programs_ranked": 4,
+  "top_programs": [
+    {
+      "program": "10134924543544101745",
+      "score": 91.666664,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5651963604019902872",
+      "score": 91.666664,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5651963604019901001",
+      "score": 83.333336,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5651963604019904232",
+      "score": 83.333336,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-10-29T035635Z-block-selection-winner.py"
+}

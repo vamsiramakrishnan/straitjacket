@@ -793,6 +793,7 @@ def _launch_host(
     max_turns: int = 0,
     idle_timeout: float = 0.0,
     edit_attempt: str = "",
+    task_query: str = "",
 ) -> tuple[int, str, str, ActualUsage | None]:
     """Run one harness in print mode with captured output, inside the harnessed
     workspace. Claude gets the ephemeral --settings hook injection; Codex /
@@ -804,6 +805,9 @@ def _launch_host(
     switches Claude to ``stream-json`` so its per-event lines are the beacon;
     Codex ``exec --json`` already streams. Never raises."""
     spec = host.spec
+    task_env = {k: v for k, v in os.environ.items()
+                if k not in ("CTX_TASK_CONTEXT_FILE", "CTX_TASK_QUERY")}
+    task_env["CTX_TASK_QUERY"] = task_query[:4096]
     if host.acp is not None:
         from ctx.acp import launch as launch_acp
         from ctx.native_hooks import worker_files, PATHS
@@ -828,7 +832,7 @@ def _launch_host(
                                   # running codex ACP node, and a queued
                                   # report reaches it through its prompt.
                                   relay_subscriber=spec.name,
-                                  env={**os.environ, "CTX_MODEL": endpoint.model,
+                                   env={**task_env, "CTX_MODEL": endpoint.model,
                                        "CTX_HOST": spec.name, "CTX_EDIT_ATTEMPT": edit_attempt})
         except (OSError, ValueError) as exc:
             return 2, "", f"ACP worker setup: {exc}", None
@@ -897,7 +901,7 @@ def _launch_host(
         # Name the model and host for the hooks the launched process will
         # run: the edit-outcome ledger splits by model, and a PostToolUse
         # payload carries no model of its own.
-        env = {**os.environ, "CTX_MODEL": model or spec.default_model or "",
+        env = {**task_env, "CTX_MODEL": model or spec.default_model or "",
                "CTX_HOST": spec.name, "CTX_EDIT_ATTEMPT": edit_attempt}
         if spec.name == "claude":
             # Print mode kills background subagents 600 s after the main
@@ -1124,6 +1128,7 @@ def invoke_coordinator(
                 exe,
                 timeout=timeout,
                 model=coord.spec.coord_model,
+                **({"task_query": task} if launch is _launch_host else {}),
             )
         )
         if usage_sink is not None and usage_index is not None:
@@ -1725,11 +1730,12 @@ def run_route(
             ))
             return True
 
-    def _do_launch(host, work_root, prompt: str, model, edit_attempt: str = ""):
+    def _do_launch(host, work_root, prompt: str, model, edit_attempt: str = "", task_query: str = ""):
         # The extra bounds are keyword-only on the real launcher; an injected
         # launcher (tests, evals) keeps the historical signature.
         extra: dict = {}
         if launch is _launch_host:
+            extra["task_query"] = task_query
             if edit_attempt:
                 extra["edit_attempt"] = edit_attempt
             if turn_ceiling > 0:
@@ -1851,7 +1857,7 @@ def run_route(
                             attempt_prompt += f"\nEdit-format policy unavailable ({type(exc).__name__}); use native."
                     code, out, err, usage = _launch_result(_do_launch(
                         host, work_root, attempt_prompt, model,
-                        edit_attempt=attempt_key if prewalk_enabled else ""))
+                        edit_attempt=attempt_key if prewalk_enabled else "", task_query=a.node.goal))
                     node_usage.append(usage)
                     from ctx import prewalk as _prewalk
                     prewalk_requested = (prewalk_enabled and attempt == first_attempt

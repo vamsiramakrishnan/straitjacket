@@ -14,6 +14,7 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parent
 
 EXPERIMENT_MODULES: dict[str, str] = {
+    "block-selection": "evals.alphaevolve.block_selection.evaluate",
     "context-budget": "evals.alphaevolve.context_budget.evaluate",
     "turn-policy": "evals.alphaevolve.turn_policy.evaluate",
     "route-policy": "evals.alphaevolve.route_policy.evaluate",
@@ -35,6 +36,7 @@ EXPERIMENT_MODULES: dict[str, str] = {
     "mutation-policy": "evals.alphaevolve.mutation_policy.evaluate",
     "handoff-policy": "evals.alphaevolve.handoff_policy.evaluate",
     "verification-policy": "evals.alphaevolve.verification_policy.evaluate",
+    "collab-policy": "evals.alphaevolve.collab_policy.evaluate",
 }
 
 
@@ -72,6 +74,7 @@ def _lever(
 
 
 LEVERS: tuple[LeverSpec, ...] = (
+    _lever("query-block-selection", "block-selection", "containment", "medium", "synthetic", "offline", "src/ctx/digest/block_selection.py", "rank_blocks(items)"),
     _lever("capability-surface", "surface-policy", "containment", "medium", "replay", "shadow", "src/ctx/surface_profiles.py:select", "choose_surface(state, options)"),
     _lever("small-result-pass-through", "emission-policy", "containment", "low", "corpus", "offline", "src/ctx/digest/__init__.py:_pass_through_if_digest_earned_nothing", "choose_emission(state, options)"),
     _lever("profile-detection", "profile-policy", "containment", "medium", "corpus", "shadow", "src/ctx/digest/__init__.py:detect_profile", "choose_profile(state, options)"),
@@ -97,6 +100,7 @@ LEVERS: tuple[LeverSpec, ...] = (
     _lever("mutation-isolation", "mutation-policy", "orchestration", "high", "adversarial", "shadow", "src/ctx/orchestrator.py:run_route", "choose_mutation_isolation(state, options)"),
     _lever("handoff-budget", "handoff-policy", "orchestration", "medium", "route-replay", "shadow", "src/ctx/orchestrator.py:_checkpoint_node", "choose_handoff(state, options)"),
     _lever("verification-route", "verification-policy", "orchestration", "high", "actual-usage", "shadow", "src/ctx/orchestrator.py:build_route_plan", "choose_verification(state, options)"),
+    _lever("harness-routing", "collab-policy", "orchestration", "medium", "replay", "shadow", "src/ctx/collab.py;src/ctx/hosts.py:harnessable_hosts", "choose_harness(task, hosts)"),
     _lever("backgrounding", "execution-policy", "execution", "medium", "replay", "shadow", "src/ctx/jobs.py;src/ctx/execution.py", "choose_execution(state, options)"),
     _lever("cache-materialization", "execution-policy", "execution", "high", "adversarial", "shadow", "src/ctx/store.py;src/ctx/skeleton.py", "choose_execution(state, options)"),
     _lever("setup-fast-noop", "setup-policy", "devex", "low", "setup-receipt", "canary", "src/ctx/wrap.py:guided_setup;src/ctx/setup_telemetry.py", "choose_setup(state, options)"),
@@ -131,6 +135,8 @@ def experiment_fingerprint(name: str) -> str:
         if path.is_file() and path.suffix in {".py", ".md", ".json"}:
             digest.update(path.name.encode("utf-8"))
             digest.update(path.read_bytes())
+    if name == "block-selection":
+        digest.update((ROOT.parent.parent / "src/ctx/digest/block_selection.py").read_bytes())
     return digest.hexdigest()[:16]
 
 

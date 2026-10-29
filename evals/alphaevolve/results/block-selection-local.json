@@ -1,0 +1,369 @@
+{
+  "schema": "ctx.block-selection-benchmark/v1",
+  "dataset_fingerprint": "34adeab356333d60",
+  "evidence": "18 synthetic cases; no measured agent turns or task success",
+  "promotion_ready": false,
+  "results": {
+    "seed": {
+      "source_sha256": "3d1c900cef1085e82d1b9e827fc804b87b394a5d76f4e8f7e4cdbd3bad23e972",
+      "search": {
+        "score": 91.66666666666667,
+        "error": null,
+        "cases": {
+          "0": {
+            "answer_recall": 1.0,
+            "bytes": 16,
+            "budget": 50,
+            "kept": [
+              1
+            ]
+          },
+          "1": {
+            "answer_recall": 1.0,
+            "bytes": 50,
+            "budget": 50,
+            "kept": [
+              0,
+              1,
+              2
+            ]
+          },
+          "2": {
+            "answer_recall": 0.5,
+            "bytes": 70,
+            "budget": 70,
+            "kept": [
+              0,
+              1
+            ]
+          },
+          "3": {
+            "answer_recall": 1.0,
+            "bytes": 25,
+            "budget": 28,
+            "kept": [
+              1
+            ]
+          },
+          "4": {
+            "answer_recall": 1.0,
+            "bytes": 29,
+            "budget": 30,
+            "kept": [
+              0
+            ]
+          },
+          "5": {
+            "answer_recall": 1.0,
+            "bytes": 70,
+            "budget": 100,
+            "kept": [
+              0,
+              1
+            ]
+          }
+        },
+        "elapsed_ms": 0.02470299978085677
+      },
+      "holdout": {
+        "score": 83.33333333333333,
+        "error": null,
+        "cases": {
+          "0": {
+            "answer_recall": 1.0,
+            "bytes": 15,
+            "budget": 40,
+            "kept": [
+              1
+            ]
+          },
+          "1": {
+            "answer_recall": 1.0,
+            "bytes": 38,
+            "budget": 40,
+            "kept": [
+              0,
+              1,
+              2
+            ]
+          },
+          "2": {
+            "answer_recall": 0.0,
+            "bytes": 56,
+            "budget": 65,
+            "kept": [
+              0
+            ]
+          },
+          "3": {
+            "answer_recall": 1.0,
+            "bytes": 22,
+            "budget": 25,
+            "kept": [
+              1
+            ]
+          },
+          "4": {
+            "answer_recall": 1.0,
+            "bytes": 45,
+            "budget": 48,
+            "kept": [
+              0
+            ]
+          },
+          "5": {
+            "answer_recall": 1.0,
+            "bytes": 58,
+            "budget": 100,
+            "kept": [
+              0,
+              1,
+              2
+            ]
+          }
+        },
+        "elapsed_ms": 0.0237270000980061
+      },
+      "adversarial": {
+        "score": 100.0,
+        "error": null,
+        "cases": {
+          "0": {
+            "answer_recall": 1.0,
+            "bytes": 14,
+            "budget": 30,
+            "kept": [
+              1
+            ]
+          },
+          "1": {
+            "answer_recall": 1.0,
+            "bytes": 35,
+            "budget": 40,
+            "kept": [
+              0,
+              1,
+              2
+            ]
+          },
+          "2": {
+            "answer_recall": 1.0,
+            "bytes": 21,
+            "budget": 30,
+            "kept": [
+              1
+            ]
+          },
+          "3": {
+            "answer_recall": 1.0,
+            "bytes": 42,
+            "budget": 44,
+            "kept": [
+              0
+            ]
+          },
+          "4": {
+            "answer_recall": 1.0,
+            "bytes": 54,
+            "budget": 60,
+            "kept": [
+              0,
+              1
+            ]
+          },
+          "5": {
+            "answer_recall": 1.0,
+            "bytes": 57,
+            "budget": 80,
+            "kept": [
+              0,
+              1
+            ]
+          }
+        },
+        "elapsed_ms": 0.021281999579514377
+      }
+    },
+    "density": {
+      "source_sha256": "09a76dab0790f4a4d8bd71957b8f4b677fa135b2bd94cb5c99418eef0818f1a5",
+      "search": {
+        "score": 83.33333333333333,
+        "error": null,
+        "cases": {
+          "0": {
+            "answer_recall": 1.0,
+            "bytes": 16,
+            "budget": 50,
+            "kept": [
+              1
+            ]
+          },
+          "1": {
+            "answer_recall": 1.0,
+            "bytes": 50,
+            "budget": 50,
+            "kept": [
+              0,
+              1,
+              2
+            ]
+          },
+          "2": {
+            "answer_recall": 1.0,
+            "bytes": 44,
+            "budget": 70,
+            "kept": [
+              1,
+              2
+            ]
+          },
+          "3": {
+            "answer_recall": 1.0,
+            "bytes": 25,
+            "budget": 28,
+            "kept": [
+              1
+            ]
+          },
+          "4": {
+            "answer_recall": 0.0,
+            "bytes": 24,
+            "budget": 30,
+            "kept": [
+              1
+            ]
+          },
+          "5": {
+            "answer_recall": 1.0,
+            "bytes": 70,
+            "budget": 100,
+            "kept": [
+              0,
+              1
+            ]
+          }
+        },
+        "elapsed_ms": 0.027068999770563096
+      },
+      "holdout": {
+        "score": 83.33333333333333,
+        "error": null,
+        "cases": {
+          "0": {
+            "answer_recall": 1.0,
+            "bytes": 15,
+            "budget": 40,
+            "kept": [
+              1
+            ]
+          },
+          "1": {
+            "answer_recall": 1.0,
+            "bytes": 38,
+            "budget": 40,
+            "kept": [
+              0,
+              1,
+              2
+            ]
+          },
+          "2": {
+            "answer_recall": 1.0,
+            "bytes": 38,
+            "budget": 65,
+            "kept": [
+              1,
+              2
+            ]
+          },
+          "3": {
+            "answer_recall": 1.0,
+            "bytes": 22,
+            "budget": 25,
+            "kept": [
+              1
+            ]
+          },
+          "4": {
+            "answer_recall": 0.0,
+            "bytes": 20,
+            "budget": 48,
+            "kept": [
+              1
+            ]
+          },
+          "5": {
+            "answer_recall": 1.0,
+            "bytes": 58,
+            "budget": 100,
+            "kept": [
+              0,
+              1,
+              2
+            ]
+          }
+        },
+        "elapsed_ms": 0.02755800005616038
+      },
+      "adversarial": {
+        "score": 83.33333333333333,
+        "error": null,
+        "cases": {
+          "0": {
+            "answer_recall": 1.0,
+            "bytes": 14,
+            "budget": 30,
+            "kept": [
+              1
+            ]
+          },
+          "1": {
+            "answer_recall": 1.0,
+            "bytes": 35,
+            "budget": 40,
+            "kept": [
+              0,
+              1,
+              2
+            ]
+          },
+          "2": {
+            "answer_recall": 1.0,
+            "bytes": 21,
+            "budget": 30,
+            "kept": [
+              1
+            ]
+          },
+          "3": {
+            "answer_recall": 0.0,
+            "bytes": 17,
+            "budget": 44,
+            "kept": [
+              1
+            ]
+          },
+          "4": {
+            "answer_recall": 1.0,
+            "bytes": 54,
+            "budget": 60,
+            "kept": [
+              0,
+              1
+            ]
+          },
+          "5": {
+            "answer_recall": 1.0,
+            "bytes": 57,
+            "budget": 80,
+            "kept": [
+              0,
+              1
+            ]
+          }
+        },
+        "elapsed_ms": 0.02549700002418831
+      }
+    }
+  }
+}

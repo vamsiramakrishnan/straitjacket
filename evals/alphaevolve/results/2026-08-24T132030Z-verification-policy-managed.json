@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "verification-policy",
+  "experiment_module": "evals.alphaevolve.verification_policy.evaluate",
+  "metric": "risk_adjusted_verification_efficiency",
+  "dataset_fingerprint": "db047da8cf3de749",
+  "config": {
+    "title": "straitjacket verification route selection",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T132030Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "529723438499540062",
+      "score": 107.06912,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482796501",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482794313",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482795267",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482796221",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482793079",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482794033",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482793924",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482794878",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "6421501409482796843",
+      "score": 107.06912,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T132030Z-verification-policy-winner.py"
+}

@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "archive-policy",
+  "experiment_module": "evals.alphaevolve.archive_policy.evaluate",
+  "metric": "completion_adjusted_cold_context",
+  "dataset_fingerprint": "aea376128275431b",
+  "config": {
+    "title": "straitjacket cold-context archive selector",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T132652Z",
+  "programs_ranked": 49,
+  "top_programs": [
+    {
+      "program": "16702656719070481418",
+      "score": 126.66691,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695240099",
+      "score": 126.66691,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695239734",
+      "score": 126.66691,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695243320",
+      "score": 126.66691,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695241099",
+      "score": 126.66691,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695242373",
+      "score": 126.66691,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695243267",
+      "score": -101000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695240754",
+      "score": -101000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695240990",
+      "score": -101000,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "1544498742695240753",
+      "score": -101000,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T132652Z-archive-policy-winner.py"
+}

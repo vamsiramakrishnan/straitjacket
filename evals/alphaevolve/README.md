@@ -32,8 +32,12 @@ fixture, denominators, safety boundary, verification, and limitations.
 
 The first bounded run is recorded in
 [`2026-08-17-result.md`](2026-08-17-result.md). It completed 19 evolved
-candidates and improved the frozen objective from 75.419820 to 91.116070; the
-winner remains unpromoted pending independent holdout evaluation.
+candidates and improved the frozen objective from 75.419820 to 91.116070.
+A 14-program rerun on 2026-08-24 reached **94.44** and then cleared
+independently authored holdout/adversarial gates plus a real-output
+exploration-scale corpus; its policy is translated into the generic digest
+fallback. See
+[`2026-08-24-evidence-selection-holdout.md`](2026-08-24-evidence-selection-holdout.md).
 
 The completion/context/turn/route portfolio and naive-fast-path campaigns are
 recorded in
@@ -102,7 +106,7 @@ python -m evals.alphaevolve.portfolio route-replay --local
 python -m evals.alphaevolve.portfolio escalation-policy --local
 ```
 
-The complete registry now spans 31 production levers and 20 experiment
+The registry includes production and experimental levers across 23 experiment
 families. Use the registry and wave commands instead of maintaining a manual
 command list:
 
@@ -135,6 +139,48 @@ Each new experiment defaults to the charter's 12-program, concurrency-2 cap:
 python -m evals.alphaevolve.portfolio context-budget \
   --run --confirm-spend
 ```
+
+Blend `gemini-3.8-flash` and `gemini-4-argon` by weight. Both are listed for
+`global`, `us`, and `eu` in Google's
+[API reference](https://docs.cloud.google.com/gemini/enterprise/docs/alphaevolve/reference-guide/api-reference).
+Unsupported names and nonfinite weights fail before cloud creation:
+
+```bash
+python -m evals.alphaevolve.portfolio context-budget \
+  --run --confirm-spend --max-programs 12 \
+  --model-mix 'gemini-3.8-flash:0.7,gemini-4-argon:0.3'
+```
+
+The portfolio runner validates the seed before creating cloud resources and sets
+`max_duration` to 1800 seconds. `--env-file .alphaevolve.env` loads literal
+`KEY=value` settings without executing shell code. Model weights are sampling
+probabilities, not a guarantee that both models appear in a small campaign.
+
+The live Discovery Engine v1alpha schema and a create/get round trip on
+2026-10-29 expose `maxPrograms`, `concurrency`, and `maxDuration`, but omit the
+reference guide's `idleTimeout`. The runner therefore does not rely on an idle
+timeout. Stopping a local controller does not prove that remote generation
+stopped; inspect the remote state and retain the experiment resource receipt.
+The local controller allows 300 seconds of inactivity. A remote state other than
+COMPLETED produces an incomplete receipt and a nonzero runner exit, including
+after resume. See the [October experiment receipt](2026-10-29-block-selection.md).
+
+`block-selection` is an experimental 18-case synthetic corpus. It intentionally
+reports `promotion_ready: false` pending real task replay, even when local
+checks pass. Its read-only local comparison is:
+
+```bash
+python -m evals.alphaevolve.block_selection.benchmark --output evals/alphaevolve/results/block-selection-local.json
+```
+
+Managed campaigns run through the memoized campaign harness in
+[`campaign.py`](campaign.py): duplicate candidate source is evaluated once and
+replayed (measured 12x cheaper on an all-duplicate campaign), each evaluation
+submits the primary scalar plus per-metric component gains as separate named
+scores, failures return typed hint text for the next generation, and every
+finished or resumed run writes a dated summary plus its best program to
+`results/`. See the [revamp receipt](2026-08-24-optimizer-revamp.md) for
+method and limits.
 
 It checks the seed locally and reads enabled-service state. License assignment,
 IAM bindings, engine identity, and Application Default Credentials remain manual

@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "context-policy",
+  "experiment_module": "evals.alphaevolve.context_policy.evaluate",
+  "metric": "completion_adjusted_repository_context",
+  "dataset_fingerprint": "3d49fdea2f77ca84",
+  "config": {
+    "title": "straitjacket repository-context selector",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T132449Z",
+  "programs_ranked": 50,
+  "top_programs": [
+    {
+      "program": "67297806867482818",
+      "score": 122.37314,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274994673",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274995703",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274995727",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274996757",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274994865",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274994398",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274997093",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274993584",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "12213371456274996722",
+      "score": 122.37314,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T132449Z-context-policy-winner.py"
+}

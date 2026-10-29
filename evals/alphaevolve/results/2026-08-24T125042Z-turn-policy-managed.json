@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "turn-policy",
+  "experiment_module": "evals.alphaevolve.turn_policy.evaluate",
+  "metric": "completion_adjusted_turn_efficiency",
+  "dataset_fingerprint": "c810e3757180fe8c",
+  "config": {
+    "title": "straitjacket turn-minimizing next action",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T125042Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "16921031023991452681",
+      "score": 93.38333,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576627094",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576630732",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576630274",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576628900",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576628442",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576628390",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576629051",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576626761",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "16345916528576630399",
+      "score": 93.38333,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T125042Z-turn-policy-winner.py"
+}

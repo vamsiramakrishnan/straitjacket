@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "escalation-policy",
+  "experiment_module": "evals.alphaevolve.escalation_policy.evaluate",
+  "metric": "completion_adjusted_recovery_efficiency",
+  "dataset_fingerprint": "d6da771b6f1a81f5",
+  "config": {
+    "title": "straitjacket completion-adjusted escalation policy",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T130713Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "11145539845526829084",
+      "score": 117.7925,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648699385",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648701399",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648699317",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648701331",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648699249",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648701263",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648699181",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648699440",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5570134860648699304",
+      "score": 117.7925,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T130713Z-escalation-policy-winner.py"
+}

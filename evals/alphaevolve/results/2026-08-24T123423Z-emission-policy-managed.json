@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "emission-policy",
+  "experiment_module": "evals.alphaevolve.emission_policy.evaluate",
+  "metric": "completion_adjusted_emission_efficiency",
+  "dataset_fingerprint": "5b87d333e8212a48",
+  "config": {
+    "title": "straitjacket output delivery policy",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T123423Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "8854259705965056808",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8854259705965058303",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8854259705965059805",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8854259705965058759",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8854259705965057925",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8854259705965058547",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8854259705965059109",
+      "score": 140.2381,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "3161393376765810628",
+      "score": 139.93793,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8854259705965057430",
+      "score": 139.93793,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "8854259705965058052",
+      "score": 139.93793,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T123423Z-emission-policy-winner.py"
+}

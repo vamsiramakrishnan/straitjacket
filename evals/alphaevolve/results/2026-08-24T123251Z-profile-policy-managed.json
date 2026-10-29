@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "profile-policy",
+  "experiment_module": "evals.alphaevolve.profile_policy.evaluate",
+  "metric": "completion_adjusted_profile_efficiency",
+  "dataset_fingerprint": "13290115aaf267fb",
+  "config": {
+    "title": "straitjacket digest-profile classifier",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T123251Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "6511523122710034935",
+      "score": 100.757286,
+      "evolved": false,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456488421",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456489377",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456490333",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456491289",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456489719",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456487947",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456488017",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456490543",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "14149047747456490885",
+      "score": 100.757286,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T123251Z-profile-policy-winner.py"
+}

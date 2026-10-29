@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.alphaevolve-managed-campaign/v1",
+  "experiment": "mutation-policy",
+  "experiment_module": "evals.alphaevolve.mutation_policy.evaluate",
+  "metric": "safety_adjusted_mutation_parallelism",
+  "dataset_fingerprint": "93365cabfdc1e002",
+  "config": {
+    "title": "straitjacket mutation isolation",
+    "program_language": "python",
+    "run_settings": {
+      "max_programs": 48,
+      "concurrency": 8
+    },
+    "generation_settings": {
+      "models": [
+        {
+          "name": "gemini-3.5-flash",
+          "weight": 0.8
+        },
+        {
+          "name": "gemini-3.1-pro-preview",
+          "weight": 0.2
+        }
+      ]
+    }
+  },
+  "recorded_at": "2026-08-24T131357Z",
+  "programs_ranked": 48,
+  "top_programs": [
+    {
+      "program": "5582725547665045263",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665044270",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665045654",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665044125",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665046692",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665045230",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665046681",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665045498",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665044248",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    },
+    {
+      "program": "5582725547665045632",
+      "score": 101.54698,
+      "evolved": true,
+      "state": "COMPLETED"
+    }
+  ],
+  "winner_artifact": "/home/user/straitjacket/evals/alphaevolve/results/2026-08-24T131357Z-mutation-policy-winner.py"
+}

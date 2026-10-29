@@ -1,0 +1,761 @@
+src/ctx/post_edit_diagnostics.py:91:def _owned_path(workspace_root: Path, path: Path | str) -> tuple[Path, str]:
+src/ctx/post_edit_diagnostics.py:92:    root = Path(workspace_root).resolve()
+src/ctx/post_edit_diagnostics.py:100:        raise ValueError("diagnostic target must be inside the workspace") from exc
+src/ctx/post_edit_diagnostics.py:137:    workspace_root: Path,
+src/ctx/post_edit_diagnostics.py:144:    target, relative = _owned_path(workspace_root, path)
+src/ctx/post_edit_diagnostics.py:306:def _receipt_dir(workspace_root: Path) -> Path:
+src/ctx/post_edit_diagnostics.py:307:    return session_reads_path(workspace_root, "post-edit-diagnostics")
+src/ctx/post_edit_diagnostics.py:310:def persist_receipt(workspace_root: Path, receipt: dict[str, Any]) -> Path:
+src/ctx/post_edit_diagnostics.py:316:    target_dir = _receipt_dir(workspace_root)
+src/ctx/post_edit_diagnostics.py:331:def load_receipt(workspace_root: Path, receipt_id: str) -> dict[str, Any]:
+src/ctx/post_edit_diagnostics.py:334:    path = _receipt_dir(workspace_root) / f"{receipt_id}.json"
+src/ctx/post_edit_diagnostics.py:345:    workspace_root: Path,
+src/ctx/post_edit_diagnostics.py:355:    target, relative = _owned_path(workspace_root, path)
+src/ctx/post_edit_diagnostics.py:411:        persist_receipt(workspace_root, receipt)
+src/ctx/debt.py:7:committed workspace state (like ctx-policy.toml), so debt survives
+src/ctx/debt.py:22:def _path(workspace_root: Path) -> Path:
+src/ctx/debt.py:23:    return Path(workspace_root) / DEBT_FILENAME
+src/ctx/debt.py:26:def _load(workspace_root: Path) -> list[dict]:
+src/ctx/debt.py:28:    p = _path(workspace_root)
+src/ctx/debt.py:41:def add(workspace_root: Path, note: str, *, ref: str = "") -> str:
+src/ctx/debt.py:55:    entries = _load(workspace_root)
+src/ctx/debt.py:58:    with _path(workspace_root).open("a", encoding="utf-8") as fh:
+src/ctx/debt.py:69:def resolve(workspace_root: Path, entry_id: str) -> bool:
+src/ctx/debt.py:71:    entries = _load(workspace_root)
+src/ctx/debt.py:75:    with _path(workspace_root).open("a", encoding="utf-8") as fh:
+src/ctx/debt.py:80:def outstanding(workspace_root: Path) -> list[dict]:
+src/ctx/debt.py:82:    entries = _load(workspace_root)
+src/ctx/debt.py:89:def render(workspace_root: Path) -> str:
+src/ctx/debt.py:90:    open_entries = outstanding(workspace_root)
+src/ctx/debt.py:91:    all_entries = _load(workspace_root)
+src/ctx/surface_reconcile.py:119:# ------------------------------------------------------- workspace adapter
+src/ctx/surface_reconcile.py:144:def signals_from_workspace(ws_root: Path | str, *, intent: str = "",
+src/ctx/surface_reconcile.py:205:    sig = signals_from_workspace(ws_root, intent=intent, phase=phase)
+src/ctx/surface_reconcile.py:294:    "Action", "Signals", "reconcile", "signals_from_workspace", "run_reconcile",
+src/ctx/pyeval.py:30:from ctx.workspace import Workspace
+src/ctx/scip_ingest.py:3:Opportunistic, precise cross-references. When a workspace carries a SCIP
+src/ctx/scip_ingest.py:33:from ctx.workspace import Workspace
+src/ctx/scip_ingest.py:57:    """The workspace's SCIP index, or None. ``$CTX_SCIP_INDEX`` overrides
+src/ctx/scip_ingest.py:58:    (absolute, or relative to the workspace root)."""
+src/ctx/scip_ingest.py:90:    file: str  # workspace-relative posix path
+src/ctx/scip_ingest.py:139:    """Precise reference sites for ``symbol`` from the workspace's SCIP
+src/ctx/reflex.py:21:State: ``<workspace>/.ctx-session-reads/reflex.json`` —
+src/ctx/plan_exec.py:40:from ctx.workspace import Workspace, stat_fingerprint
+src/ctx/plan_exec.py:76:def _workspace_fingerprint(ws: Workspace) -> str | None:
+src/ctx/plan_exec.py:77:    """Content-sensitive workspace identity for node-cache keys.
+src/ctx/plan_exec.py:83:    (:func:`ctx.workspace.stat_fingerprint`: size, mtime_ns, ctime_ns) for
+src/ctx/plan_exec.py:122:    (op/args/input) plus ``_workspace_fingerprint`` — HEAD, raw porcelain
+src/ctx/plan_exec.py:283:    ws_fingerprint = _workspace_fingerprint(ws)
+src/ctx/plan_exec.py:429:        "workspaceId": ws.workspace_id,
+src/ctx/pricing.py:30:Overridable per repo: a ``.ctx-prices.json`` at the workspace root, on the
+src/ctx/pricing.py:126:def load_table(workspace_root: Path | str | None = None) -> dict[str, Any]:
+src/ctx/pricing.py:134:    if workspace_root is not None:
+src/ctx/pricing.py:135:        override = _read_json(Path(workspace_root) / _REPO_OVERRIDE)
+src/ctx/pricing.py:156:    workspace_root: Path | str | None = None,
+src/ctx/pricing.py:161:    tbl = table if table is not None else load_table(workspace_root)
+src/ctx/pricing.py:173:    workspace_root: Path | str | None = None,
+src/ctx/pricing.py:177:    p = price_for(model, table=table, workspace_root=workspace_root)
+src/ctx/filesets.py:10:* **git rung** — a git workspace with gitignore semantics lists via
+src/ctx/filesets.py:38:from ctx.workspace import Workspace
+src/ctx/filesets.py:62:    if ws.config.workspace.follow_symlinks:
+src/ctx/filesets.py:89:    git_rung = ws.git is not None and ws.config.workspace.respect_gitignore
+src/ctx/_retrieval/stats.py:15:from ctx.workspace import Workspace
+src/ctx/_retrieval/stats.py:17:from .common import RetrievalError, _emit, _parse, _route_workspace
+src/ctx/_retrieval/stats.py:116:    store, ws = _route_workspace(store, ws, ref)
+src/ctx/_retrieval/spans.py:15:from ctx.workspace import Workspace
+src/ctx/_retrieval/search.py:14:from ctx.workspace import Workspace
+src/ctx/_retrieval/search.py:16:from .common import RetrievalError, _emit, _parse, _route_workspace
+src/ctx/_retrieval/search.py:301:    store, ws = _route_workspace(store, ws, ref)
+src/ctx/_retrieval/search.py:331:            ws.confine(r, must_exist=True)  # workspace confinement still applies
+src/ctx/_retrieval/search.py:436:        # have a workspace file to pin.
+src/ctx/_retrieval/targets.py:13:from ctx.workspace import Workspace
+src/ctx/_retrieval/common.py:12:from ctx.workspace import Workspace
+src/ctx/_retrieval/common.py:102:def _route_workspace(store: Store, ws: Workspace, ref: Ref) -> tuple[Store, Workspace]:
+src/ctx/_retrieval/common.py:103:    """Resolve a ws:<alias>/ reference to its target workspace and store.
+src/ctx/_retrieval/common.py:106:    current workspace (wrong-repository evidence). Unknown aliases are
+src/ctx/_retrieval/common.py:109:    if ref.workspace_alias is None:
+src/ctx/_retrieval/common.py:113:    from ctx.workspace import resolve_workspace
+src/ctx/_retrieval/common.py:115:    path = ws.config.aliases.get(ref.workspace_alias)
+src/ctx/_retrieval/common.py:119:            f"unknown workspace alias {ref.workspace_alias!r} (known: {known}); "
+src/ctx/_retrieval/common.py:120:            "define it under [aliases] in ctx.toml or pass --workspace"
+src/ctx/_retrieval/common.py:125:    target = resolve_workspace(str(target_path))
+src/ctx/_retrieval/common.py:126:    return Store(target.workspace_id), target
+src/ctx/_retrieval/rg_engine.py:12:from ctx.workspace import Workspace
+src/ctx/_retrieval/rg_engine.py:61:    if not (ws.git is not None and ws.config.workspace.respect_gitignore):
+src/ctx/_retrieval/rg_engine.py:63:    if not ws.config.workspace.follow_symlinks:
+src/ctx/_retrieval/telemetry.py:11:from ctx.workspace import Workspace
+src/ctx/_retrieval/get.py:16:from ctx.workspace import Workspace
+src/ctx/_retrieval/get.py:18:from .common import RetrievalError, _emit, _parse, _peek_blob, _read_bytes_range, _route_workspace
+src/ctx/_retrieval/get.py:202:    store, ws = _route_workspace(store, ws, ref)
+src/ctx/ask.py:376:    q_text = (question or "").strip() or f"{it.name}: {symbol or run or 'workspace'}"
+src/ctx/query.py:39:* Dry-run guard rail: the workspace remembers (``.ctx-session-reads/
+src/ctx/query.py:80:from ctx.workspace import Workspace
+src/ctx/query.py:625:            "workspace (changed binds to generation facts, never mtime); "
+src/ctx/plan_ops.py:37:from ctx.workspace import Workspace
+src/ctx/plan_ops.py:205:        meta["note"] = "no generation (non-git workspace or git unavailable)"
+src/ctx/plan_ops.py:888:                doc=f"semgrep {_mode} with a committed workspace-local rules file "
+src/ctx/pathglob.py:6:* ``workspace.is_ignored`` and ``rg --glob`` use the **gitwildmatch**
+src/ctx/plan_ir.py:248:    The workspace policy is foreign input: it comes from ctx.toml, which a
+src/ctx/commands/edit.py:21:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/plans.py:14:    """Plan JSON from a workspace file or stdin ('-'). None ⇒ usage error
+src/ctx/commands/plans.py:139:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/plans.py:213:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/hosts.py:4:All but `orchestrate` resolve their own workspace (or need none at
+src/ctx/commands/hosts.py:12:    own workspace, because `--print-config` must work outside one."""
+src/ctx/commands/hosts.py:16:    from ctx.workspace import resolve_workspace
+src/ctx/commands/hosts.py:60:    ws = resolve_workspace(ns.workspace)
+src/ctx/commands/hosts.py:90:            print(install_claude(resolve_workspace(str(ws.root))))
+src/ctx/commands/hosts.py:95:            print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
+src/ctx/commands/hosts.py:105:    # persistent installs whose wrapper takes the workspace alone.
+src/ctx/commands/hosts.py:114:        print(install_claude(resolve_workspace(str(ws.root))))
+src/ctx/commands/hosts.py:116:        print("Claude Code sessions in this workspace are now harnessed. "
+src/ctx/commands/hosts.py:129:    from ctx.workspace import resolve_workspace
+src/ctx/commands/hosts.py:141:        resolve_workspace(ns.workspace).root,
+src/ctx/commands/hosts.py:162:    its own workspace: the global `--workspace` falls back to the
+src/ctx/commands/hosts.py:163:    subcommand's own `--workspace`."""
+src/ctx/commands/hosts.py:165:    from ctx.workspace import resolve_workspace
+src/ctx/commands/hosts.py:167:    ws = resolve_workspace(ns.workspace or ns.agy_workspace)
+src/ctx/commands/hosts.py:174:    resolves a workspace: the state dir is passed explicitly."""
+src/ctx/commands/hosts.py:183:        ns.workspace_id,
+src/ctx/commands/retrieve.py:39:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:99:                "no wire observations for this workspace "
+src/ctx/commands/retrieve.py:112:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:126:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:144:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:174:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:183:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:192:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:205:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:221:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/retrieve.py:235:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/admin.py:10:    from ctx.installer import init_workspace
+src/ctx/commands/admin.py:12:    print("\n".join(init_workspace(ws.root)) or "nothing to do")
+src/ctx/commands/admin.py:34:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/admin.py:56:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/admin.py:73:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/admin.py:128:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/admin.py:149:            "ctx gain: no telemetry for this workspace yet.\n"
+src/ctx/commands/admin.py:165:    print(f"[ctx gain · workspace {ws.workspace_id[:12]}]")
+src/ctx/commands/admin.py:180:        p = pricing.price_for(model, workspace_root=ws.root)
+src/ctx/commands/admin.py:221:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/admin.py:249:        roots = _ladders.discover_workspaces(corpus)
+src/ctx/commands/admin.py:254:                "workspaces": len(roots),
+src/ctx/commands/execute.py:27:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/execute.py:132:    from ctx.workspace import WorkspaceError
+src/ctx/commands/execute.py:167:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/execute.py:208:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/execute.py:236:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/execute.py:275:    store = _Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/commands/history.py:10:    """`ctx replay` — workspace-free by design: history replay must run on
+src/ctx/commands/history.py:33:            from ctx.workspace import resolve_workspace as _rw
+src/ctx/commands/history.py:35:            _ws = _rw(ns.workspace)
+src/ctx/commands/binary.py:8:def _read_workspace_file(ws, value: str) -> tuple[str, bytes] | None:
+src/ctx/commands/binary.py:31:            loaded = _read_workspace_file(ws, value)
+src/ctx/commands/binary.py:43:    loaded = [_read_workspace_file(ws, value) for value in ns.files]
+src/ctx/commands/collab.py:17:        ledger_for_workspace,
+src/ctx/commands/collab.py:21:    ledger: Ledger = ledger_for_workspace(ws)
+src/ctx/commands/rewrite.py:18:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/execution.py:21:from ctx.workspace import Workspace
+src/ctx/execution.py:101:        "workspaceId": ws.workspace_id,
+src/ctx/execution.py:156:    store = store or Store(ws.workspace_id)
+src/ctx/execution.py:225:    """Stable hash of dirty-state summary; None for non-git workspaces."""
+src/ctx/execution.py:246:# appear in porcelain, so real workspaces sit far below this; the cap only
+src/ctx/execution.py:336:    """Snapshot-on-read: pin the current bytes of a workspace file so later
+src/ctx/execution.py:359:        "workspaceId": ws.workspace_id,
+src/ctx/codeverbs.py:28:from ctx.workspace import Workspace
+src/ctx/codeverbs.py:47:    """Repo-relative POSIX path when inside the workspace, else None."""
+src/ctx/codeverbs.py:116:            f"definition of {symbol!r} resolves outside the workspace"
+src/ctx/codeverbs.py:207:    """Reference sites across the workspace via jedi; raises to trigger the
+src/ctx/codeverbs.py:432:    """Deterministic diagnostics digest over the workspace's Python files:
+src/ctx/jobs.py:56:from ctx.workspace import Workspace
+src/ctx/jobs.py:97:        raise JobError(f"unknown job {ref!r} in this workspace (see `ctx jobs`)")
+src/ctx/jobs.py:112:        raise JobError(f"unknown job {jobdir.name!r} in this workspace") from None
+src/ctx/jobs.py:166:    resolve inside the workspace root before anything is spawned.
+src/ctx/jobs.py:221:    cwd, timeout) is read from meta.json; it never resolves a workspace or
+src/ctx/jobs.py:570:        return "no jobs for this workspace"
+src/ctx/orchestrator.py:790:    workspace. Claude gets the ephemeral --settings hook injection; Codex /
+src/ctx/orchestrator.py:791:    Antigravity discover their hooks from the workspace tree. ``model`` pins the
+src/ctx/orchestrator.py:847:            workspace_root=ws_root,
+src/ctx/orchestrator.py:960:    isolation: str = "shared_workspace"
+src/ctx/orchestrator.py:1058:                "shared_workspace_mutations_serialized": all(
+src/ctx/orchestrator.py:1163:            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/orchestrator.py:1233:            "blocked by the read-only workspace",
+src/ctx/orchestrator.py:1235:            "unable to make changes due to workspace constraints",
+src/ctx/orchestrator.py:1312:            "shared_workspace": True,
+src/ctx/orchestrator.py:1330:    if mutations and isolation == "serial_workspace":
+src/ctx/orchestrator.py:1367:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/orchestrator.py:1467:            isolation="git_worktree" if use_isolation else "shared_workspace",
+src/ctx/orchestrator.py:1521:        # preflights against the unchanged real workspace before any is applied.
+src/ctx/orchestrator.py:1678:    hosts = installed_harnessable(workspace_root=ws.root)
+src/ctx/astgrep.py:41:from ctx.workspace import Workspace
+src/ctx/astgrep.py:487:    found both doors in: a non-git workspace, where generation_hash is always
+src/ctx/astgrep.py:499:    The stat basis is ``workspace.stat_fingerprint``, not a local fold. This
+src/ctx/astgrep.py:510:    from ctx.workspace import stat_fingerprint
+src/ctx/refs.py:6:    repo:                      current workspace
+src/ctx/refs.py:9:    ws:api/repo:src/main.py    explicit workspace alias
+src/ctx/refs.py:28:    workspace_alias: str | None = None
+src/ctx/refs.py:37:        if self.workspace_alias:
+src/ctx/refs.py:38:            return f"ws:{self.workspace_alias}/{base}"
+src/ctx/refs.py:55:        return Ref(kind="repo", path=None, workspace_alias=alias)
+src/ctx/refs.py:60:        return Ref(kind="repo", path=path or None, workspace_alias=alias)
+src/ctx/refs.py:78:            return Ref(kind=kind, id=rest.lower(), stream=stream, workspace_alias=alias)
+src/ctx/proxywindow.py:5:contained bytes — to ``<workspace>/.ctx-session-reads/proxy/window.json``.
+src/ctx/proxywindow.py:20:workspace root, missing file, IO error, malformed JSON, or a document that
+src/ctx/proxywindow.py:50:def window_path(workspace_root) -> str:
+src/ctx/proxywindow.py:52:    return session_reads_dir(workspace_root, PROXY_SUBDIR, WINDOW_FILENAME)
+src/ctx/proxywindow.py:55:def read_window_doc(workspace_root) -> dict:
+src/ctx/proxywindow.py:64:    if not workspace_root:
+src/ctx/proxywindow.py:67:        with open(window_path(workspace_root), "r", encoding="utf-8") as fh:
+src/ctx/hook.py:47:by default (a broken guard must not brick the workspace, SPEC §10.2),
+src/ctx/hook.py:84:outside-workspace force_asks, and interactive-suspect commands (pagers,
+src/ctx/hook.py:91:``<workspace>/.ctx-session-reads/<session_id>.count`` (a single ASCII
+src/ctx/hook.py:103:context-window fullness to ``<workspace>/.ctx-session-reads/proxy/window.json``
+src/ctx/hook.py:113:Learned policy epochs: ``<workspace>/ctx-policy.toml`` (compiled by
+src/ctx/hook.py:255:    when they land inside the workspace, and in full when they land outside.
+src/ctx/hook.py:281:    Inside the workspace: the workspace-relative part. Outside (or with no
+src/ctx/hook.py:282:    workspace): the whole thing.
+src/ctx/hook.py:451:def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
+src/ctx/hook.py:491:    if not workspace_root:
+src/ctx/hook.py:493:    path = os.path.join(workspace_root, "ctx.toml")
+src/ctx/hook.py:494:    ppath = os.path.join(workspace_root, _POLICY_FILENAME)
+src/ctx/hook.py:499:    cache_path = session_reads_dir(workspace_root, _POLICY_CACHE_NAME)
+src/ctx/hook.py:558:            # ctx.toml must not brick the workspace), but record that the
+src/ctx/hook.py:600:def _window_pct(workspace_root: str | None) -> float | None:
+src/ctx/hook.py:602:    ``<workspace>/.ctx-session-reads/proxy/window.json``. Fail-open by
+src/ctx/hook.py:605:    pct = read_window_doc(workspace_root).get("window_pct")
+src/ctx/hook.py:612:    policy: dict[str, Any], workspace_root: str | None
+src/ctx/hook.py:627:    pct = _window_pct(workspace_root)
+src/ctx/hook.py:801:def _note_eval_opportunity(workspace_root: str | None, taught: bool) -> None:
+src/ctx/hook.py:803:    line to ``<workspace>/.ctx-session-reads/eval-adoption.jsonl``. This is
+src/ctx/hook.py:807:    if not workspace_root:
+src/ctx/hook.py:812:        ledger_dir = session_reads_dir(workspace_root)
+src/ctx/hook.py:849:def _note_records_opportunity(workspace_root: str | None, taught: bool) -> None:
+src/ctx/hook.py:851:    to ``<workspace>/.ctx-session-reads/records-adoption.jsonl`` — the
+src/ctx/hook.py:854:    if not workspace_root:
+src/ctx/hook.py:859:        ledger_dir = session_reads_dir(workspace_root)
+src/ctx/hook.py:880:def _failure_available(workspace_root: str | None) -> bool:
+src/ctx/hook.py:897:    if not workspace_root:
+src/ctx/hook.py:899:    ledger_dir = session_reads_dir(workspace_root)
+src/ctx/hook.py:965:def _symbols_resolvable(workspace_root: str | None) -> bool:
+src/ctx/hook.py:984:    if not workspace_root:
+src/ctx/hook.py:987:        if (os.path.isfile(os.path.join(workspace_root, "index.scip"))
+src/ctx/hook.py:988:                or os.path.isfile(os.path.join(workspace_root, ".ctx", "index.scip"))):
+src/ctx/hook.py:990:        queue = [workspace_root]
+src/ctx/hook.py:1021:def _note_collapse(workspace_root: str | None, shape: str, rung: str) -> None:
+src/ctx/hook.py:1023:    substitution to ``<workspace>/.ctx-session-reads/collapse.jsonl`` — the
+src/ctx/hook.py:1025:    if not workspace_root:
+src/ctx/hook.py:1030:        ledger_dir = session_reads_dir(workspace_root)
+src/ctx/hook.py:1041:    workspace_root: str | None, *, op: str, stage: str, exc: BaseException
+src/ctx/hook.py:1044:    ``<workspace>/.ctx-session-reads/guard-failures.jsonl``.
+src/ctx/hook.py:1054:    if not workspace_root:
+src/ctx/hook.py:1059:        ledger_dir = session_reads_dir(workspace_root)
+src/ctx/hook.py:1211:def _resolve_workspace_root(payload: dict[str, Any]) -> str | None:
+src/ctx/hook.py:1212:    """Longest containing workspacePath match against Cwd/Path/TargetFile
+src/ctx/hook.py:1222:        payload.get("workspacePaths")
+src/ctx/hook.py:1223:        or payload.get("workspace_paths")
+src/ctx/hook.py:1224:        or payload.get("workspaces")
+src/ctx/hook.py:1244:def _path_outside(path_str: str, workspace_root: str | None) -> bool:
+src/ctx/hook.py:1245:    if not workspace_root:
+src/ctx/hook.py:1248:    root = os.path.abspath(os.path.realpath(workspace_root))
+src/ctx/hook.py:1273:def _decay_taught_reason(decision: dict[str, Any], workspace_root: str | None) -> None:
+src/ctx/hook.py:1278:    just in bounded form. Safety-class outcomes (secret paths, workspace
+src/ctx/hook.py:1283:    if workspace_root is None or not isinstance(decision, dict):
+src/ctx/hook.py:1298:            if note_taught(workspace_root, _lesson_key(reason)):
+src/ctx/hook.py:1462:        # capture instead (secret/outside-workspace force_asks never are).
+src/ctx/hook.py:1628:def _ledger_charge(workspace_root: str | None, session_id: str, nbytes: int) -> int:
+src/ctx/hook.py:1631:    ``<workspace>/.ctx-session-reads/<session_id>.count``. Fail-open by
+src/ctx/hook.py:1634:    if not workspace_root:
+src/ctx/hook.py:1638:        ledger_dir = session_reads_dir(workspace_root)
+src/ctx/hook.py:1670:def _price_note(size_bytes: int, workspace_root: str | None) -> str:
+src/ctx/hook.py:1683:        limit = read_window_doc(workspace_root).get("context_limit")
+src/ctx/hook.py:1798:    workspace_root: str | None,
+src/ctx/hook.py:1802:    if _is_secret_path(path_str, workspace_root):
+src/ctx/hook.py:1807:    if _path_outside(path_str, workspace_root):
+src/ctx/hook.py:1809:            "CTX_CONTEXT_GUARD: path resolves outside the active workspace. "
+src/ctx/hook.py:1810:            "Confirm outside-root access explicitly or pass --workspace."
+src/ctx/hook.py:1830:    seen = 0 if in_ledger else _ledger_charge(workspace_root, session_id, 0)
+src/ctx/hook.py:1832:        price = _price_note(size, workspace_root)
+src/ctx/hook.py:1853:                _ledger_charge(workspace_root, session_id, limit)
+src/ctx/hook.py:1857:    total = _ledger_charge(workspace_root, session_id, size)
+src/ctx/hook.py:1871:# The workspace root for the decision currently being built. classify() is the
+src/ctx/hook.py:1920:    workspace_root = _resolve_workspace_root(payload)
+src/ctx/hook.py:1922:        policy = _load_guard_policy(workspace_root)
+src/ctx/hook.py:1926:    policy["_ws_root"] = workspace_root
+src/ctx/hook.py:1927:    _APPLY_ROOT["root"] = workspace_root
+src/ctx/hook.py:1935:    policy = _apply_window_pressure(policy, workspace_root)
+src/ctx/hook.py:1944:            workspace_root,
+src/ctx/hook.py:1964:            reflex.note_edit(workspace_root)
+src/ctx/hook.py:1983:        decision = classify_command(command, policy, cwd=cwd or workspace_root)
+src/ctx/hook.py:2001:                    failure_available=lambda: _failure_available(workspace_root),
+src/ctx/hook.py:2002:                    symbols_resolvable=lambda: _symbols_resolvable(workspace_root))
+src/ctx/hook.py:2022:                    _note_collapse(workspace_root, sub.shape, sub.rung)
+src/ctx/hook.py:2036:            _note_eval_opportunity(workspace_root, taught)
+src/ctx/hook.py:2046:            _note_records_opportunity(workspace_root, taught)
+src/ctx/hook.py:2059:                reflex.note_landing(workspace_root, handle)
+src/ctx/hook.py:2061:                reflex.check_command(workspace_root, command)
+src/ctx/hook.py:2077:                reflex.note_steer_shadow(workspace_root, command)
+src/ctx/hook.py:2084:                    and reflex.steering_would_bypass(workspace_root, command)
+src/ctx/hook.py:2087:                        workspace_root,
+src/ctx/hook.py:2105:                    classify_read(v, workspace_root, policy, session_id), tool_input
+src/ctx/hook.py:2327:        workspace_root = _resolve_workspace_root(payload)
+src/ctx/hook.py:2328:        if not workspace_root:
+src/ctx/hook.py:2330:        doc = read_window_doc(workspace_root)
+src/ctx/hook.py:2335:        policy = _load_guard_policy(workspace_root)
+src/ctx/hook.py:2345:        if not claim_emission_tier(workspace_root, tier):
+src/ctx/hook.py:2428:        workspace_root = _resolve_workspace_root(payload)
+src/ctx/hook.py:2429:        if not workspace_root:
+src/ctx/hook.py:2433:        distinct, fired = note_symbol_grep(workspace_root, symbol)
+src/ctx/hook.py:2465:    workspace_root = _resolve_workspace_root(payload)
+src/ctx/hook.py:2466:    if not workspace_root:
+src/ctx/hook.py:2488:        workspace_root,
+src/ctx/hook.py:2594:        from ctx.workspace import resolve_workspace
+src/ctx/hook.py:2596:        ws = resolve_workspace(ws_root or ".")
+src/ctx/hook.py:2598:            ws.workspace_id, retention_days=ws.config.store.retention_days
+src/ctx/hook.py:2690:        ws_root = _resolve_workspace_root(payload)
+src/ctx/hook.py:2692:        _note_guard_failure(None, op="emission_gate", stage="workspace", exc=exc)
+src/ctx/hook.py:2754:        from ctx.workspace import resolve_workspace
+src/ctx/hook.py:2756:        ws = resolve_workspace(ws_root or ".")
+src/ctx/hook.py:2757:        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/hook.py:2822:        ws = _resolve_workspace_root(payload)
+src/ctx/hook.py:3027:            ws_root = _resolve_workspace_root(payload)
+src/ctx/_proc.py:20:never resolves a workspace or opens the store; importing these two helpers
+src/ctx/_proc.py:21:out of :mod:`ctx.execution` would have dragged the store, the workspace
+src/ctx/digest/__init__.py:36:from ctx.workspace import Workspace
+src/ctx/digest/__init__.py:294:        "workspaceId": ws.workspace_id,
+src/ctx/digest/moreprofs.py:355:                        # workspace has no repo-relative form, and the
+src/ctx/digest/base.py:17:from ctx.workspace import Workspace
+src/ctx/edit_outcomes.py:132:    workspace_root: Path,
+src/ctx/edit_outcomes.py:161:        target = _ledger_path(workspace_root)
+src/ctx/edit_outcomes.py:169:def _ledger_path(workspace_root: Path) -> Path:
+src/ctx/edit_outcomes.py:177:    return session_reads_path(workspace_root, "edit-outcomes.jsonl")
+src/ctx/edit_outcomes.py:180:def _rows(workspace_root: Path) -> Iterable[dict[str, Any]]:
+src/ctx/edit_outcomes.py:182:        with _ledger_path(workspace_root).open(encoding="utf-8") as handle:
+src/ctx/edit_outcomes.py:194:def edit_summary(workspace_root: Path) -> dict[str, Any]:
+src/ctx/edit_outcomes.py:195:    """The measured edit-failure picture for this workspace.
+src/ctx/edit_outcomes.py:208:    for row in _rows(workspace_root):
+src/ctx/usage.py:72:    workspace_root: Path | str | None,
+src/ctx/usage.py:96:            else pricing.cost_usd(tokens, model, workspace_root=workspace_root)
+src/ctx/usage.py:107:    workspace_root: Path | str | None = None,
+src/ctx/usage.py:120:        workspace_root=workspace_root,
+src/ctx/usage.py:139:    workspace_root: Path | str | None = None,
+src/ctx/usage.py:183:            workspace_root=workspace_root,
+src/ctx/usage.py:197:    workspace_root: Path | str | None = None,
+src/ctx/usage.py:211:        workspace_root=workspace_root,
+src/ctx/usage.py:224:    workspace_root: Path | str | None = None,
+src/ctx/usage.py:228:        return parse_claude_json(stdout, model=model, workspace_root=workspace_root)
+src/ctx/usage.py:230:        return parse_codex_jsonl(stdout, model=model, workspace_root=workspace_root)
+src/ctx/usage.py:233:            stdout, model=model, workspace_root=workspace_root
+src/ctx/worktree_isolation.py:6:and only then applied to the real workspace.  The temporary worktree is always
+src/ctx/retrieval.py:25:    _route_workspace,
+src/ctx/retrieval.py:70:    "_route_workspace",
+src/ctx/proxy.py:184:    def __init__(self, state_dir: Path, workspace_id: str) -> None:
+src/ctx/proxy.py:186:        self._workspace_id = workspace_id
+src/ctx/proxy.py:271:            "workspace_id": self._workspace_id,
+src/ctx/proxy.py:515:    workspace_id: str = "",
+src/ctx/proxy.py:524:    server.ctx_observer = _Observer(state_dir, workspace_id)
+src/ctx/proxy.py:539:    workspace_id: str = "",
+src/ctx/proxy.py:543:    server = _make_server(port, upstream, state_dir, workspace_id, rescue_pct)
+src/ctx/workspace.py:28:    """A path or symlink resolves outside the workspace root (invariant 6)."""
+src/ctx/workspace.py:40:    workspace_id: str
+src/ctx/workspace.py:64:        """Resolve a path against the workspace root and refuse any escape
+src/ctx/workspace.py:70:        if not self.config.workspace.allow_outside_root:
+src/ctx/workspace.py:73:                    f"path resolves outside the workspace: {self.relativize(p)!s}"
+src/ctx/workspace.py:75:            if not self.config.workspace.follow_symlinks:
+src/ctx/workspace.py:90:                        # workspace is an escape even when a later hop lands
+src/ctx/workspace.py:100:                                f"symlink escapes the workspace: {self.relativize(probe)!s}"
+src/ctx/workspace.py:104:            raise WorkspaceError(f"no such path in workspace: {self.relativize(p)!s}")
+src/ctx/workspace.py:134:        """Repo-relative path, or None when it is not in this workspace.
+src/ctx/workspace.py:141:        paths and its files are often outside the workspace, so the fact
+src/ctx/workspace.py:208:        if self.git is not None and self.config.workspace.respect_gitignore:
+src/ctx/workspace.py:218:                follow = self.config.workspace.follow_symlinks
+src/ctx/workspace.py:248:                if full.is_symlink() and not self.config.workspace.follow_symlinks:
+src/ctx/workspace.py:272:    Skipping made a vanished file hash identically to a workspace where it
+src/ctx/workspace.py:389:def stable_workspace_id(root: Path, config: Config, git: GitInfo | None) -> str:
+src/ctx/workspace.py:390:    """Opaque workspace id. With a committed ``repo_key`` (or a normalized
+src/ctx/workspace.py:398:def resolve_workspace(
+src/ctx/workspace.py:402:    hook_workspace_paths: list[str] | None = None,
+src/ctx/workspace.py:407:    1. explicit ``--workspace``;
+src/ctx/workspace.py:408:    2. longest containing hook workspacePath vs target/cwd;
+src/ctx/workspace.py:412:    6. cwd as plain-folder workspace.
+src/ctx/workspace.py:420:            raise WorkspaceError(f"--workspace is not a directory: {explicit}")
+src/ctx/workspace.py:421:    elif hook_workspace_paths:
+src/ctx/workspace.py:424:        for wp in hook_workspace_paths:
+src/ctx/workspace.py:430:        elif len(hook_workspace_paths) == 1:
+src/ctx/workspace.py:431:            root = Path(hook_workspace_paths[0]).expanduser().resolve()
+src/ctx/workspace.py:434:                "multiple workspaces are plausible; pass --workspace or ws:<alias>"
+src/ctx/workspace.py:454:    workspace_id = stable_workspace_id(root, config, git)
+src/ctx/workspace.py:455:    # Store selection remains lazy (workspace discovery is read-only), but the
+src/ctx/workspace.py:457:    # durable workspace-local fallback in restricted environments.
+src/ctx/workspace.py:458:    from ctx.store import register_workspace_store
+src/ctx/workspace.py:460:    register_workspace_store(workspace_id, root, config.store.backend)
+src/ctx/workspace.py:463:        workspace_id=workspace_id,
+src/ctx/ladders.py:29:than a literal, a workspace can shorten a ladder it does not want climbed:
+src/ctx/ladders.py:174:                "the resolved mode for this workspace. A point sample, not a "
+src/ctx/ladders.py:176:                "workspaces, which is what `ctx ladders --corpus` answers"
+src/ctx/ladders.py:211:                "workspace, not from a ledger. Static per workspace, so the "
+src/ctx/ladders.py:235:    Narrowing only. A workspace may drop rungs it never wants climbed —
+src/ctx/ladders.py:376:    """Which enforcement tier is actually installed in this workspace.
+src/ctx/ladders.py:399:    """Observed traversal for one ladder, from this workspace's ledgers.
+src/ctx/ladders.py:485:                "workspace) — the instrument exists; it has seen nothing"
+src/ctx/ladders.py:515:def discover_workspaces(root: Path | str) -> list[Path]:
+src/ctx/ladders.py:516:    """Every workspace under ``root`` that carries a session ledger directory.
+src/ctx/ladders.py:530:    """``measure`` summed across many workspaces.
+src/ctx/ladders.py:532:    Two of these ladders are *static per workspace* — guard mode is set once
+src/ctx/ladders.py:533:    in ctx.toml, deployment tier once at install — so a single workspace can
+src/ctx/ladders.py:534:    only ever report one value. Their distribution is a cross-workspace
+src/ctx/ladders.py:535:    question, and this is the instrument that can ask it. `workspaces` is
+src/ctx/ladders.py:536:    reported beside the counts because "18 workspaces all say guarded" and
+src/ctx/ladders.py:537:    "18 sessions in one workspace" are very different evidence.
+src/ctx/ladders.py:560:        "workspaces": len(roots),
+src/ctx/ladders.py:561:        "workspaces_with_data": seen_ws,
+src/ctx/ladders.py:567:    roots = discover_workspaces(root)
+src/ctx/ladders.py:570:        f"[ctx ladders · corpus of {len(roots)} workspace(s) under {root}]",
+src/ctx/ladders.py:585:                "records in any workspace"
+src/ctx/ladders.py:592:            f"{m['workspaces_with_data']}/{m['workspaces']} workspaces"
+src/ctx/checkpoint.py:18:from ctx.workspace import Workspace
+src/ctx/checkpoint.py:62:        "workspaceId": ws.workspace_id,
+src/ctx/repomap.py:29:from ctx.workspace import Workspace, stat_fingerprint
+src/ctx/repomap.py:240:    """Top-level import targets discovered from the workspace: directories
+src/ctx/repomap.py:266:    relative imports, src-layouts). The workspace root (and ``src/``) is
+src/ctx/repomap.py:436:    plus ``ctx.workspace.stat_fingerprint`` over the listed files (shared
+src/ctx/repomap.py:453:    """Deterministic, budget-fitted map of the workspace. Byte-identical for
+src/ctx/hosts.py:438:        self, workspace_root: Path | str | None = None
+src/ctx/hosts.py:441:        return price_for(self.spec.coord_model, workspace_root=workspace_root)
+src/ctx/hosts.py:443:    def model_price(self, model_id: str, workspace_root: Path | str | None = None) -> Price:
+src/ctx/hosts.py:444:        return price_for(model_id, workspace_root=workspace_root)
+src/ctx/hosts.py:487:    workspace_root: Path | str | None = None,
+src/ctx/hosts.py:515:    price = price_for(model, workspace_root=workspace_root)
+src/ctx/hosts.py:529:    workspace_root: Path | str | None = None,
+src/ctx/hosts.py:539:            workspace_root=workspace_root,
+src/ctx/hosts.py:553:    workspace_root: Path | str | None = None,
+src/ctx/hosts.py:561:        for d in detect_all(workspace_root=workspace_root, env=env, which=which)
+src/ctx/wave_policy.py:9:    """Choose bounded concurrency without overlapping shared-workspace writes."""
+src/ctx/sessiondir.py:3:``.ctx-session-reads/`` is the workspace-local bookkeeping area: the session
+src/ctx/sessiondir.py:37:def session_reads_dir(workspace_root, *parts: str) -> str:
+src/ctx/sessiondir.py:38:    """``<workspace_root>/.ctx-session-reads[/parts...]`` as a plain string.
+src/ctx/sessiondir.py:45:    return os.path.join(str(workspace_root), LEDGER_DIR_NAME, *parts)
+src/ctx/sessiondir.py:48:def session_reads_path(workspace_root, *parts: str):
+src/ctx/sessiondir.py:59:    return Path(session_reads_dir(workspace_root, *parts))
+src/ctx/semgrep_engine.py:9:the workspace), ``--metrics=off``, no version check, no registry fetch —
+src/ctx/semgrep_engine.py:29:from ctx.workspace import Workspace
+src/ctx/semgrep_engine.py:102:    """Run one hermetic scan with a workspace-local rules file. Returns
+src/ctx/mutation_policy.py:20:    return "serial_workspace"
+src/ctx/cli.py:54:        if "--workspace" in args:
+src/ctx/cli.py:55:            i = args.index("--workspace")
+src/ctx/cli.py:61:    # `ctx run --bg`; it must not resolve a workspace or parse the full CLI.
+src/ctx/cli.py:76:    """Fast path for `ctx statusline <host> [--rollout PATH] [--workspace W]`.
+src/ctx/cli.py:92:        elif rest[i] == "--workspace" and i + 1 < len(rest):
+src/ctx/cli.py:99:            line = statusline.codex_rollout_summary(rollout, workspace_root=ws)
+src/ctx/cli.py:105:                    _json_dig(payload, "workspace.current_dir", "workspace.project_dir", "cwd")
+src/ctx/cli.py:112:                line = statusline.codex_rollout_summary(tp, workspace_root=ws)
+src/ctx/cli.py:114:                line = statusline.render(host, payload, workspace_root=ws)
+src/ctx/cli.py:139:# handler, and whether the dispatcher resolves the workspace for it.
+src/ctx/cli.py:147:# wants_workspace=False means the handler resolves its own workspace (wrap,
+src/ctx/cli.py:149:# `resolve_workspace` in the chain and still do.
+src/ctx/cli.py:155:    # module      function            wants_workspace
+src/ctx/cli.py:211:    from ctx.workspace import WorkspaceError, resolve_workspace
+src/ctx/cli.py:214:        handler, wants_workspace = _handler_for(ns.cmd)
+src/ctx/cli.py:218:        if not wants_workspace:
+src/ctx/cli.py:220:        return handler(resolve_workspace(ns.workspace), ns)
+src/ctx/cli.py:222:        print(f"ctx: workspace error: {e}", file=sys.stderr)
+src/ctx/cli.py:276:    workspace); (None, False) for a name the table does not know."""
+src/ctx/cli.py:280:    module, func, wants_workspace = entry
+src/ctx/cli.py:283:    return getattr(import_module("ctx.commands." + module), func), wants_workspace
+src/ctx/cli.py:305:        if not (args and args[0] == "--workspace"):  # --workspace PATH cmd
+src/ctx/cli.py:330:        usage="ctx [--workspace PATH] <command> [args]",
+src/ctx/cli.py:344:        "--workspace", metavar="PATH",
+src/ctx/cli.py:368:    p_run.add_argument("--cwd", help="working directory relative to the workspace")
+src/ctx/cli.py:419:    p_image.add_argument("files", nargs="+", help="workspace-relative file path(s)")
+src/ctx/cli.py:428:    p_edit_plan.add_argument("file", help="workspace-relative ctx.edit-request/v1 JSON")
+src/ctx/cli.py:429:    p_edit_plan.add_argument("--out", required=True, help="workspace-relative plan JSON path")
+src/ctx/cli.py:434:        p_edit_action.add_argument("file", help="workspace-relative plan JSON path")
+src/ctx/cli.py:436:            "--receipt", help="also write the safe receipt to this workspace-relative path"
+src/ctx/cli.py:464:    p_py.add_argument("--file", help="read the script from a workspace file")
+src/ctx/cli.py:465:    p_py.add_argument("--cwd", help="working directory relative to the workspace")
+src/ctx/cli.py:479:    sub.add_parser("jobs", help="list this workspace's backgrounded runs")
+src/ctx/cli.py:552:        help="with --outcomes: append the events to the workspace "
+src/ctx/cli.py:620:             "what this workspace actually recorded climbing",
+src/ctx/cli.py:625:                       help="aggregate across every workspace under DIR "
+src/ctx/cli.py:628:                            "value per workspace, so their distribution is only "
+src/ctx/cli.py:795:    p_proxy.add_argument("--workspace-id", default="", dest="workspace_id")
+src/ctx/cli.py:838:    p_install.add_argument("--scope", default="workspace", choices=["workspace"])
+src/ctx/cli.py:839:    p_install.add_argument("--workspace", dest="agy_workspace", default=".")
+src/ctx/skeleton.py:38:from ctx.workspace import Workspace
+src/ctx/skeleton.py:362:    no absolute path (temp or workspace) ever enters the result."""
+src/ctx/setup_telemetry.py:32:def setup_fingerprint(workspace_root: Path) -> str:
+src/ctx/setup_telemetry.py:53:        path = workspace_root / relative
+src/ctx/setup_telemetry.py:64:def load_setup_receipt(workspace_root: Path) -> dict[str, Any] | None:
+src/ctx/setup_telemetry.py:65:    path = session_reads_path(workspace_root, _RECEIPT_NAME)
+src/ctx/setup_telemetry.py:73:def setup_is_current(workspace_root: Path, hosts: Iterable[str]) -> bool:
+src/ctx/setup_telemetry.py:74:    receipt = load_setup_receipt(workspace_root)
+src/ctx/setup_telemetry.py:75:    receipt_parent = session_reads_path(workspace_root, _RECEIPT_NAME).parent
+src/ctx/setup_telemetry.py:82:        and receipt.get("fingerprint") == setup_fingerprint(workspace_root)
+src/ctx/setup_telemetry.py:87:    workspace_root: Path,
+src/ctx/setup_telemetry.py:109:        "fingerprint": setup_fingerprint(workspace_root),
+src/ctx/setup_telemetry.py:111:    path = session_reads_path(workspace_root, _RECEIPT_NAME)
+src/ctx/rescue.py:56:    """A path for stubs that RESOLVES from the agent's workspace cwd.
+src/ctx/rescue.py:59:    construction, so the workspace-relative prefix is
+src/ctx/seq.py:22:from ctx.workspace import Workspace
+src/ctx/catalog.py:20:Overridable per repo with a ``.ctx-catalog.json`` at the workspace root, in the
+src/ctx/catalog.py:41:def load_catalog(workspace_root: Path | str | None = None) -> dict[str, Any]:
+src/ctx/catalog.py:42:    """The shipped catalog, overlaid by a workspace ``.ctx-catalog.json``.
+src/ctx/catalog.py:52:    if workspace_root:
+src/ctx/catalog.py:53:        override = Path(workspace_root) / CATALOG_FILENAME
+src/ctx/catalog.py:86:              workspace_root: Path | str | None = None) -> dict[str, Any]:
+src/ctx/catalog.py:92:    tbl = table if table is not None else load_catalog(workspace_root)
+src/ctx/wrap.py:6:Antigravity discovers plugins from the workspace, so wrapping it delegates
+src/ctx/wrap.py:87:def _collapse_enabled(workspace_root: Path) -> bool:
+src/ctx/wrap.py:89:    the doors the harness controls unless a workspace breaks glass with
+src/ctx/wrap.py:99:    return bool(load_config(workspace_root).guard.collapse)
+src/ctx/wrap.py:102:def _with_collapse_tool_removal(agent_args: list[str], workspace_root: Path) -> list[str]:
+src/ctx/wrap.py:107:    if "--disallowedTools" in agent_args or not _collapse_enabled(workspace_root):
+src/ctx/wrap.py:119:def _install_explorer_agent(workspace_root: Path) -> Path | None:
+src/ctx/wrap.py:124:    dest = workspace_root / ".claude" / "agents" / _AGENT_FILENAME
+src/ctx/wrap.py:143:def prepare_claude(workspace_root: Path, ctx_exe: str) -> dict:
+src/ctx/wrap.py:172:    workspace_root: Path, ctx_exe: str, rescue_pct: float = 0.0
+src/ctx/wrap.py:181:    state_dir = session_reads_path(workspace_root, PROXY_SUBDIR)
+src/ctx/wrap.py:191:    proc = subprocess.Popen(argv, cwd=workspace_root)
+src/ctx/wrap.py:211:def _emit_scorecard(workspace_root: Path) -> None:
+src/ctx/wrap.py:223:        sc = compute_scorecard(session_reads_path(workspace_root, PROXY_SUBDIR))
+src/ctx/wrap.py:226:        attach_deliverable(sc, workspace_root)
+src/ctx/wrap.py:227:        append_history(workspace_root, sc)
+src/ctx/wrap.py:242:    workspace_root: Path,
+src/ctx/wrap.py:262:    agent_args = _with_collapse_tool_removal(agent_args, workspace_root)
+src/ctx/wrap.py:263:    settings = prepare_claude(workspace_root, exe)
+src/ctx/wrap.py:265:    agent_file = _install_explorer_agent(workspace_root)
+src/ctx/wrap.py:270:            proxy_proc, child_env = _start_proxy(workspace_root, exe, rescue_pct)
+src/ctx/wrap.py:277:            return _wrap_claude_merged(workspace_root, settings, claude, agent_args, child_env)
+src/ctx/wrap.py:288:                cwd=workspace_root,
+src/ctx/wrap.py:298:            _emit_scorecard(workspace_root)
+src/ctx/wrap.py:303:    workspace_root: Path,
+src/ctx/wrap.py:310:    workspace settings file, run, then restore the previous state exactly."""
+src/ctx/wrap.py:317:    path = workspace_root / ".claude" / "settings.json"
+src/ctx/wrap.py:350:            [claude, *agent_args], cwd=workspace_root, env=child_env
+src/ctx/wrap.py:361:def wrap_antigravity(workspace_root: Path, ctx_exe: str | None = None) -> int:
+src/ctx/wrap.py:362:    """Persistent install: Antigravity discovers plugins from the workspace."""
+src/ctx/wrap.py:364:    from ctx.workspace import resolve_workspace
+src/ctx/wrap.py:366:    ws = resolve_workspace(str(workspace_root))
+src/ctx/wrap.py:369:    print("Antigravity sessions in this workspace are now harnessed.")
+src/ctx/wrap.py:372:        "the workspace tree); `ctx wrap claude` is ephemeral by contrast — "
+src/ctx/wrap.py:378:def wrap_agy_sdk(workspace_root: Path, ctx_exe: str | None = None) -> int:
+src/ctx/wrap.py:415:def wrap_codex(workspace_root: Path, ctx_exe: str | None = None) -> int:
+src/ctx/wrap.py:417:    from the workspace tree."""
+src/ctx/wrap.py:419:    from ctx.workspace import resolve_workspace
+src/ctx/wrap.py:421:    ws = resolve_workspace(str(workspace_root))
+src/ctx/wrap.py:424:    print("Codex sessions in this workspace are now harnessed "
+src/ctx/wrap.py:476:def wrap_detect(workspace_root: Path, *, probe_version: bool = False) -> int:
+src/ctx/wrap.py:482:    detected = detect_all(workspace_root=workspace_root, probe_version=probe_version)
+src/ctx/wrap.py:495:    detected = [d for d in detect_all(workspace_root=ws.root) if d.harnessable]
+src/ctx/wrap.py:677:    workspace_root: Path,
+src/ctx/wrap.py:696:    from ctx.workspace import resolve_workspace
+src/ctx/wrap.py:698:    ws = resolve_workspace(str(workspace_root))
+src/ctx/wrap.py:708:        detected = detect_all(workspace_root=ws.root)
+src/ctx/wrap.py:724:        # Nothing detected: configure all supported hosts so the workspace is
+src/ctx/wrap.py:743:                "# Render the repo-scoped plugin (persistent, workspace-discovered):",
+src/ctx/wrap.py:744:                "ctx antigravity install --scope workspace --workspace .",
+src/ctx/scorecard.py:679:def attach_deliverable(sc: dict, workspace_root: Path) -> dict:
+src/ctx/scorecard.py:690:            cwd=workspace_root, capture_output=True, text=True, timeout=20,
+src/ctx/scorecard.py:704:            cwd=workspace_root, capture_output=True, timeout=20,
+src/ctx/scorecard.py:718:            p = Path(workspace_root) / rel
+src/ctx/scorecard.py:738:def append_history(workspace_root: Path, sc: dict) -> None:
+src/ctx/scorecard.py:741:        path = session_reads_path(workspace_root, "scorecards.jsonl")
+src/ctx/installer.py:4:``<workspace>/.agents/plugins/ctx-harness/`` with the absolute ``ctx``
+src/ctx/installer.py:19:from ctx.workspace import Workspace
+src/ctx/installer.py:28:[workspace]
+src/ctx/installer.py:99:def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
+src/ctx/installer.py:100:    """Render the plugin into ``<workspace>/.agents/plugins/ctx-harness/``."""
+src/ctx/installer.py:104:    skills_standalone = workspace_root / ".agents" / "skills" / PLUGIN_DIRNAME
+src/ctx/installer.py:111:    dest = workspace_root / ".agents" / "plugins" / PLUGIN_DIRNAME
+src/ctx/installer.py:172:        lines.extend(init_workspace(ws.root, quiet=True))
+src/ctx/installer.py:182:def init_workspace(root: Path, *, quiet: bool = False) -> list[str]:
+src/ctx/installer.py:268:    gw_args = ["surface", "gateway", "--workspace", str(root)]
+src/ctx/installer.py:499:        lines.extend(init_workspace(root, quiet=True))
+src/ctx/installer.py:611:This workspace is harnessed by `{exe}`. Noisy command and file output is
+src/ctx/installer.py:715:        lines.extend(init_workspace(root, quiet=True))
+src/ctx/installer.py:789:    check("workspace resolved", True, f"id={ws.workspace_id} root=<workspace>")
+src/ctx/installer.py:799:        store = Store(ws.workspace_id)
+src/ctx/installer.py:844:    # these files, so it happily printed OK for a workspace where the hooks
+src/ctx/installer.py:903:            _store = _S(ws.workspace_id)
+src/ctx/installer.py:935:                "workspacePaths": [str(ws.root)],
+src/ctx/installer.py:955:        t = telemetry_summary(_Store(ws.workspace_id))
+src/ctx/installer.py:982:    There is nothing workspace-scoped to write: this host has no hooks, no
+src/ctx/installer.py:985:    machine-scoped, so this is idempotent across workspaces.
+src/ctx/cliux.py:133:            ("antigravity", "install the Antigravity workspace plugin"),
+src/ctx/cliux.py:176:        "usage: ctx [--workspace PATH] <command> [args]",
+src/ctx/cliux.py:205:        "override with --workspace."
+src/ctx/route_telemetry.py:44:def load_route_runs(workspace_root: Path) -> list[dict[str, Any]]:
+src/ctx/route_telemetry.py:48:        for row in _jsonl(session_reads_path(workspace_root, "route.jsonl"))
+src/ctx/route_telemetry.py:53:def load_route_labels(workspace_root: Path) -> dict[str, dict[str, Any]]:
+src/ctx/route_telemetry.py:56:    for row in _jsonl(session_reads_path(workspace_root, "route-labels.jsonl")):
+src/ctx/route_telemetry.py:64:    workspace_root: Path,
+src/ctx/route_telemetry.py:71:    runs = {row["run_id"] for row in load_route_runs(workspace_root)}
+src/ctx/route_telemetry.py:83:    path = session_reads_path(workspace_root, "route-labels.jsonl")
+src/ctx/route_telemetry.py:90:def labeled_route_runs(workspace_root: Path) -> list[dict[str, Any]]:
+src/ctx/route_telemetry.py:92:    labels = load_route_labels(workspace_root)
+src/ctx/route_telemetry.py:94:    for run in load_route_runs(workspace_root):
+src/ctx/route_telemetry.py:107:def route_summary(workspace_root: Path) -> dict[str, Any]:
+src/ctx/route_telemetry.py:109:    runs = load_route_runs(workspace_root)
+src/ctx/route_telemetry.py:110:    labels = load_route_labels(workspace_root)
+src/ctx/route_telemetry.py:145:def export_route_observations(workspace_root: Path) -> dict[str, Any]:
+src/ctx/route_telemetry.py:153:    for run in labeled_route_runs(workspace_root):
+src/ctx/surface_gateway.py:3:A single stdio MCP server that fronts the workspace's backend MCP servers and
+src/ctx/surface.py:99:    source: str          # workspace-relative path
+src/ctx/surface.py:363:    the workspace. Deterministic (sorted), fail-open."""
+src/ctx/surface.py:382:    workspace's sessions. Fail-open to empty."""
+src/ctx/surface.py:563:    in this workspace. Fail-open (re-reads sources; missing text ⇒ no refs)."""
+src/ctx/surface.py:700:        "workspace": str(ws_root),
+src/ctx/callgraph.py:1:"""Deterministic call graph over the workspace (``ctx callers/callees/impact/impls``).
+src/ctx/callgraph.py:65:from ctx.workspace import Workspace, stat_fingerprint
+src/ctx/callgraph.py:843:        out.append(f"  no definition matching {symbol!r} in the workspace")
+src/ctx/callgraph.py:864:        out.append(f"  no definition matching {symbol!r} in the workspace")
+src/ctx/callgraph.py:962:        out.append(f"  no definition matching {symbol!r} in the workspace")
+src/ctx/callgraph.py:1123:        out.append(f"  no definition matching {symbol!r} in the workspace")
+src/ctx/store.py:5:    <XDG_STATE_HOME>/ctx/workspaces/<workspace-id>/
+src/ctx/store.py:108:    """Resolved store placement for one workspace.
+src/ctx/store.py:122:        if self.backend == "workspace-local-fallback":
+src/ctx/store.py:124:            return f"workspace-local fallback{suffix}"
+src/ctx/store.py:125:        if self.backend == "workspace-local":
+src/ctx/store.py:126:            return "workspace-local backend"
+src/ctx/store.py:137:def register_workspace_store(workspace_id: str, workspace_root: Path, backend: str) -> None:
+src/ctx/store.py:138:    """Register enough workspace context for lazy, writable store selection.
+src/ctx/store.py:142:    workspace-local fallback so future processes keep resolving run handles.
+src/ctx/store.py:147:    # workspace resolutions while retaining the same stable workspace id.
+src/ctx/store.py:148:    _STORE_LOCATIONS.pop(workspace_id, None)
+src/ctx/store.py:149:    _STORE_POLICIES[workspace_id] = (workspace_root.resolve(), backend)
+src/ctx/store.py:176:def _workspace_store_root(workspace_root: Path) -> Path:
+src/ctx/store.py:177:    return session_reads_path(workspace_root, "store")
+src/ctx/store.py:180:def _fallback_marker(workspace_root: Path) -> Path:
+src/ctx/store.py:181:    return session_reads_path(workspace_root, _FALLBACK_MARKER)
+src/ctx/store.py:184:def _marker_requests_fallback(workspace_root: Path) -> bool:
+src/ctx/store.py:185:    marker = _fallback_marker(workspace_root)
+src/ctx/store.py:190:    return value.get("version") == 1 and value.get("backend") == "workspace-local-fallback"
+src/ctx/store.py:193:def _record_fallback(workspace_root: Path) -> None:
+src/ctx/store.py:194:    marker = _fallback_marker(workspace_root)
+src/ctx/store.py:197:        canonical_json({"backend": "workspace-local-fallback", "version": 1}) + b"\n",
+src/ctx/store.py:201:def _resolve_store_location(workspace_id: str) -> StoreLocation:
+src/ctx/store.py:202:    cached = _STORE_LOCATIONS.get(workspace_id)
+src/ctx/store.py:206:    policy = _STORE_POLICIES.get(workspace_id)
+src/ctx/store.py:209:        _STORE_LOCATIONS[workspace_id] = location
+src/ctx/store.py:212:    workspace_root, requested = policy
+src/ctx/store.py:213:    local_root = _workspace_store_root(workspace_root)
+src/ctx/store.py:214:    local_workspace_root = local_root / "workspaces" / workspace_id
+src/ctx/store.py:216:        _probe_writable(local_workspace_root)
+src/ctx/store.py:217:        location = StoreLocation(local_root, "workspace-local", requested)
+src/ctx/store.py:218:    elif _marker_requests_fallback(workspace_root):
+src/ctx/store.py:219:        _probe_writable(local_workspace_root)
+src/ctx/store.py:221:            local_root, "workspace-local-fallback", requested, sticky=True
+src/ctx/store.py:226:            _probe_writable(user_root / "workspaces" / workspace_id)
+src/ctx/store.py:230:                _probe_writable(local_workspace_root)
+src/ctx/store.py:231:                _record_fallback(workspace_root)
+src/ctx/store.py:234:                    "no writable ctx store backend: user-state and workspace-local "
+src/ctx/store.py:238:            location = StoreLocation(local_root, "workspace-local-fallback", requested)
+src/ctx/store.py:240:    _STORE_LOCATIONS[workspace_id] = location
+src/ctx/store.py:244:def effective_store_location(workspace_id: str) -> StoreLocation:
+src/ctx/store.py:247:    return _resolve_store_location(workspace_id)
+src/ctx/store.py:327:    """Per-workspace artifact store. Handles are scoped to the workspace
+src/ctx/store.py:332:        workspace_id: str,
+src/ctx/store.py:336:        self.workspace_id = workspace_id
+src/ctx/store.py:341:            self.location = effective_store_location(workspace_id)
+src/ctx/store.py:342:        self.root = self.location.root / "workspaces" / workspace_id
+src/ctx/store.py:571:                f"no object matches id prefix {short!r} in this workspace; it was "
+src/ctx/store.py:598:        (``ctx gc --retention-days N``) rather than the workspace default.
+src/ctx/store.py:729:                f"unknown span {span_id!r} in this workspace; span tokens come "
+src/ctx/collab.py:5:append-only ledger in the workspace (``.ctx/collab/ledger.jsonl``), without an
+src/ctx/collab.py:255:def ledger_for_workspace(ws: Any) -> Ledger:
+src/ctx/engagement.py:35:State: one flock-guarded JSON blob per workspace at
+src/ctx/engagement.py:90:def _state_path(workspace_root: Path | str) -> str:
+src/ctx/engagement.py:91:    return session_reads_dir(workspace_root, _STATE_NAME)
+src/ctx/engagement.py:94:def _mutate_state(workspace_root: Path | str, fn) -> dict[str, Any]:
+src/ctx/engagement.py:98:        path = _state_path(workspace_root)
+src/ctx/engagement.py:130:def read_state(workspace_root: Path | str) -> dict[str, Any]:
+src/ctx/engagement.py:132:        with open(_state_path(workspace_root), encoding="utf-8") as fh:
+src/ctx/engagement.py:139:def session_model(workspace_root: Path | str) -> str:
+src/ctx/engagement.py:140:    return str(read_window_doc(workspace_root).get("model") or "")
+src/ctx/engagement.py:160:def is_lean_model(workspace_root: Path | str, lean_models=DEFAULT_LEAN_MODELS) -> bool:
+src/ctx/engagement.py:161:    return model_matches_lean(session_model(workspace_root), lean_models)
+src/ctx/engagement.py:165:    workspace_root: Path | str | None,
+src/ctx/engagement.py:173:    if workspace_root is None or mode == "active":
+src/ctx/engagement.py:178:    window_doc = read_window_doc(workspace_root)
+src/ctx/engagement.py:197:    return str(_mutate_state(workspace_root, step).get("level", "active"))
+src/ctx/engagement.py:200:def note_truncation(workspace_root: Path | str | None) -> None:
+src/ctx/engagement.py:203:    if workspace_root is None:
+src/ctx/engagement.py:212:    _mutate_state(workspace_root, step)
+src/ctx/engagement.py:215:def claim_emission_tier(workspace_root: Path | str | None, tier: int) -> bool:
+src/ctx/engagement.py:219:    if workspace_root is None or tier < 1:
+src/ctx/engagement.py:230:    _mutate_state(workspace_root, step)
+src/ctx/engagement.py:234:def note_symbol_grep(workspace_root: Path | str | None, symbol: str) -> tuple[int, bool]:
+src/ctx/engagement.py:237:    if workspace_root is None:
+src/ctx/engagement.py:256:    _mutate_state(workspace_root, step)
+src/ctx/engagement.py:285:    workspace_root: Path | str | None,
+src/ctx/engagement.py:291:    if workspace_root is None:
+src/ctx/engagement.py:297:        level = str(read_state(workspace_root).get("level") or "passive")
+src/ctx/engagement.py:300:    if is_lean_model(workspace_root, lean_models):
+src/ctx/engagement.py:305:def note_taught(workspace_root: Path | str | None, lesson: str) -> bool:
+src/ctx/engagement.py:316:    if workspace_root is None or not lesson:
+src/ctx/engagement.py:331:        _mutate_state(workspace_root, _fn)
+src/ctx/policy.py:38:from ctx.workspace import Workspace
+src/ctx/policy.py:257:    workspace's ``budgets.max_inline_bytes``) is promoted. Any single
+src/ctx/policy.py:434:    """Write the rendered epoch to ``<workspace>/ctx-policy.toml`` and return
+src/ctx/config.py:199:    workspace: WorkspacePolicy = field(default_factory=WorkspacePolicy)
+src/ctx/config.py:209:    # ws:<alias> routing targets: alias -> workspace path (absolute, or
+src/ctx/config.py:210:    # relative to this workspace root). Committed in ctx.toml [aliases].
+src/ctx/config.py:274:def load_config(workspace_root: Path | None) -> Config:
+src/ctx/config.py:275:    """Load ``ctx.toml`` from the workspace root; malformed files degrade to
+src/ctx/config.py:277:    if workspace_root is None:
+src/ctx/config.py:279:    path = workspace_root / CONFIG_FILENAME
+src/ctx/config.py:323:    ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
+src/ctx/config.py:367:        workspace=ws,
+src/ctx/config.py:381:def load_ctxignore(workspace_root: Path | None) -> tuple[str, ...]:
+src/ctx/config.py:384:    if workspace_root is not None:
+src/ctx/config.py:385:        path = workspace_root / IGNORE_FILENAME
+src/ctx/rundiff.py:20:from ctx.workspace import Workspace
+src/ctx/facts.py:4:queryable per-workspace SQLite store (``facts.sqlite`` beside the catalog,
+src/ctx/facts.py:50:derivable run at all in a pytest-shaped workspace it runs the family's
+src/ctx/facts.py:77:from ctx.workspace import Workspace
+src/ctx/facts.py:179:    """``facts.sqlite`` lives beside the catalog in the workspace store."""
+src/ctx/facts.py:548:        store = store or Store(ws.workspace_id)
+src/ctx/facts.py:551:            return result  # non-git workspace / git unavailable: no generation plane
+src/ctx/facts.py:1101:    """Deterministic pytest-family detection. A workspace is pytest-shaped
+src/ctx/facts.py:1213:    workspace is not pytest-shaped / the capture fails). Never raises."""
+src/ctx/replay.py:48:live A/B evals. Replay is read-only: simulation uses a throwaway workspace
+src/ctx/replay.py:50:samples pass through the workspace redaction patterns.
+src/ctx/replay.py:190:    Uses a throwaway workspace/store so replay never writes into the
+src/ctx/replay.py:197:    from ctx.workspace import resolve_workspace
+src/ctx/replay.py:202:    ws = resolve_workspace(str(td))
+src/ctx/statusline.py:95:                  workspace_root: Path | str | None) -> tuple[float | None, bool]:
+src/ctx/statusline.py:104:        return pricing.cost_usd(tokens, model, workspace_root=workspace_root), False
+src/ctx/statusline.py:109:           workspace_root: Path | str | None = None) -> str:
+src/ctx/statusline.py:130:        cost, reported = _session_cost(host, payload, model, workspace_root)
+src/ctx/statusline.py:140:        branch = _dig(payload, "vcs.branch", "git.branch", "workspace.branch")
+src/ctx/statusline.py:147:        seg = _harness_segment(workspace_root)
+src/ctx/statusline.py:184:def _harness_segment(workspace_root: Path | str | None) -> str | None:
+src/ctx/statusline.py:197:    None only when there is no workspace to speak about at all."""
+src/ctx/statusline.py:198:    if workspace_root is None:
+src/ctx/statusline.py:201:        root = Path(workspace_root)
+src/ctx/statusline.py:210:def _harness_saved(workspace_root: Path | str | None) -> str | None:
+src/ctx/statusline.py:219:    if workspace_root is None:
+src/ctx/statusline.py:221:    root = Path(workspace_root)
+src/ctx/statusline.py:241:        from ctx.workspace import resolve_workspace
+src/ctx/statusline.py:245:        ws = resolve_workspace(str(root))
+src/ctx/statusline.py:246:        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/statusline.py:285:                          workspace_root: Path | str | None = None) -> str:
+src/ctx/statusline.py:318:        cost = pricing.cost_usd(tokens, model, workspace_root=workspace_root)
+src/ctx/edit_transactions.py:39:from ctx.workspace import Workspace, WorkspaceError
+src/ctx/edit_transactions.py:162:    if plan.get("workspaceId") != ws.workspace_id:
+src/ctx/edit_transactions.py:163:        raise EditTransactionError("plan belongs to a different workspace")
+src/ctx/edit_transactions.py:249:        "workspaceId": ws.workspace_id,
+src/ctx/mcp.py:43:        "repo (workspace summary), doctor (health), investigate (one observe-class "
+src/ctx/mcp.py:72:            "workspace": {"type": "string", "description": "workspace path or alias"},
+src/ctx/mcp.py:102:# Long-lived server: cache workspace resolution + store connections so each
+src/ctx/mcp.py:106:# sqlite connection per distinct workspace/alias ever seen by a long-lived
+src/ctx/mcp.py:107:# server process — in a multi-workspace session (`ws:<alias>` roots) that
+src/ctx/mcp.py:133:def _resolve_cached(workspace_arg: str | None) -> tuple[Any, Any]:
+src/ctx/mcp.py:137:    from ctx.workspace import resolve_workspace
+src/ctx/mcp.py:141:    hit = _WS_CACHE.get(workspace_arg)
+src/ctx/mcp.py:143:        _WS_CACHE.move_to_end(workspace_arg)
+src/ctx/mcp.py:145:    ws = resolve_workspace(workspace_arg)
+src/ctx/mcp.py:146:    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+src/ctx/mcp.py:147:    _WS_CACHE[workspace_arg] = (now, ws, store)
+src/ctx/mcp.py:148:    _WS_CACHE.move_to_end(workspace_arg)
+src/ctx/mcp.py:159:    ws, store = _resolve_cached(args.get("workspace"))
+src/ctx/mcp.py:169:        # on a per-call copy so the cached workspace stays pristine.

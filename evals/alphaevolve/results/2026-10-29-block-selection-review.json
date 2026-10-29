@@ -1,0 +1,786 @@
+{
+  "experiment": "projects/440790012685/locations/global/collections/default_collection/engines/alpha-evolve-straitjacket/sessions/2969674059555146770/alphaEvolveExperiments/10134924543544101561",
+  "promotion_ready": false,
+  "remote": {
+    "name": "projects/440790012685/locations/global/collections/default_collection/engines/alpha-evolve-straitjacket/sessions/2969674059555146770/alphaEvolveExperiments/10134924543544101561",
+    "createTime": "2026-10-29T03:53:16.764036Z",
+    "config": {
+      "title": "Query-aware addressed block ranking",
+      "problemDescription": "# Query-aware block ranking\n\nImplement rank_blocks(items), returning a permutation of integer block IDs.\nItems contain id, byte cost, relevance and query-hit count. Maximize retained\nanswer evidence under a fixed byte budget. Only the EVOLVE-BLOCK is mutable.\nSegmentation, dependency closure, budget enforcement, and evaluation are fixed.\nThe evaluator corpus and required-evidence labels are not candidate inputs.\nNo I/O, subprocesses, network, or access to evaluation code is permitted.\nThis is a synthetic ranking experiment, not a downstream coding-success test.\n\nCandidate code runs in the repository's restricted Python evaluator. Use only\npure functions and the allowed builtins; do not use imports outside collections,\nheapq, math, re, statistics, string, typing. No classes, reflection, try/raise,\nglobal state, or filesystem access. Return every input id exactly once as a list\nof integers. Rank by relative evidence value: preferring short blocks can lose\nlong but necessary evidence. Scores range from 0 to 100; invalid programs receive\na negative score. The byte budget and dependency closure are fixed outside your\nfunction, and the same candidate must produce identical results on replay.\n",
+      "programLanguage": "python",
+      "runSettings": {
+        "maxPrograms": 6,
+        "concurrency": 1,
+        "maxDuration": "1800s"
+      },
+      "generationSettings": {
+        "models": [
+          {
+            "name": "gemini-3.8-flash",
+            "weight": 0.7
+          },
+          {
+            "name": "gemini-4-argon",
+            "weight": 0.3
+          }
+        ]
+      }
+    },
+    "stats": {
+      "candidatesCount": 4,
+      "evaluatedCandidatesCount": 4,
+      "inputTokenCount": "3144",
+      "outputTokenCount": "2451"
+    },
+    "state": "RUNNING",
+    "initialAlphaEvolveProgram": "projects/440790012685/locations/global/collections/default_collection/engines/alpha-evolve-straitjacket/sessions/2969674059555146770/alphaEvolveExperiments/10134924543544101561/alphaEvolvePrograms/10134924543544101745"
+  },
+  "programs": [
+    {
+      "program": "10134924543544101745",
+      "score": 91.666664,
+      "evolved": false,
+      "state": "COMPLETED",
+      "content": "# EVOLVE-BLOCK-START\ndef rank_blocks(items):\n    return [item[\"id\"] for item in sorted(\n        items, key=lambda item: (-item[\"relevance\"], item[\"id\"]))]\n# EVOLVE-BLOCK-END\n",
+      "local": {
+        "search": {
+          "score": 91.66666666666667,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 16,
+              "budget": 50,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 50,
+              "budget": 50,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 0.5,
+              "bytes": 70,
+              "budget": 70,
+              "kept": [
+                0,
+                1
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 25,
+              "budget": 28,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 1.0,
+              "bytes": 29,
+              "budget": 30,
+              "kept": [
+                0
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 70,
+              "budget": 100,
+              "kept": [
+                0,
+                1
+              ]
+            }
+          },
+          "elapsed_ms": 0.03276899951742962
+        },
+        "holdout": {
+          "score": 83.33333333333333,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 15,
+              "budget": 40,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 38,
+              "budget": 40,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 0.0,
+              "bytes": 56,
+              "budget": 65,
+              "kept": [
+                0
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 22,
+              "budget": 25,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 1.0,
+              "bytes": 45,
+              "budget": 48,
+              "kept": [
+                0
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 58,
+              "budget": 100,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "elapsed_ms": 0.02074799976981012
+        },
+        "adversarial": {
+          "score": 100.0,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 14,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 35,
+              "budget": 40,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 1.0,
+              "bytes": 21,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 42,
+              "budget": 44,
+              "kept": [
+                0
+              ]
+            },
+            "4": {
+              "answer_recall": 1.0,
+              "bytes": 54,
+              "budget": 60,
+              "kept": [
+                0,
+                1
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 57,
+              "budget": 80,
+              "kept": [
+                0,
+                1
+              ]
+            }
+          },
+          "elapsed_ms": 0.021984999875712674
+        }
+      }
+    },
+    {
+      "program": "5651963604019902872",
+      "score": 91.666664,
+      "evolved": true,
+      "state": "COMPLETED",
+      "content": "# EVOLVE-BLOCK-START\ndef rank_blocks(items):\n    return [item[\"id\"] for item in sorted(\n        items, key=lambda x: (-x[\"relevance\"], -x.get(\"query_hits\", x.get(\"hits\", 0)), x[\"id\"]))]\n# EVOLVE-BLOCK-END\n",
+      "local": {
+        "search": {
+          "score": 91.66666666666667,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 16,
+              "budget": 50,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 50,
+              "budget": 50,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 0.5,
+              "bytes": 70,
+              "budget": 70,
+              "kept": [
+                0,
+                1
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 25,
+              "budget": 28,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 1.0,
+              "bytes": 29,
+              "budget": 30,
+              "kept": [
+                0
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 70,
+              "budget": 100,
+              "kept": [
+                0,
+                1
+              ]
+            }
+          },
+          "elapsed_ms": 0.025205999918398447
+        },
+        "holdout": {
+          "score": 83.33333333333333,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 15,
+              "budget": 40,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 38,
+              "budget": 40,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 0.0,
+              "bytes": 56,
+              "budget": 65,
+              "kept": [
+                0
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 22,
+              "budget": 25,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 1.0,
+              "bytes": 45,
+              "budget": 48,
+              "kept": [
+                0
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 58,
+              "budget": 100,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "elapsed_ms": 0.026902000172412954
+        },
+        "adversarial": {
+          "score": 100.0,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 14,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 35,
+              "budget": 40,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 1.0,
+              "bytes": 21,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 42,
+              "budget": 44,
+              "kept": [
+                0
+              ]
+            },
+            "4": {
+              "answer_recall": 1.0,
+              "bytes": 54,
+              "budget": 60,
+              "kept": [
+                0,
+                1
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 57,
+              "budget": 80,
+              "kept": [
+                0,
+                1
+              ]
+            }
+          },
+          "elapsed_ms": 0.02485699951648712
+        }
+      }
+    },
+    {
+      "program": "5651963604019901001",
+      "score": 83.333336,
+      "evolved": true,
+      "state": "COMPLETED",
+      "content": "# EVOLVE-BLOCK-START\nimport math\n\n\ndef rank_blocks(items):\n    n = len(items)\n    if n == 0:\n        return []\n\n    # Extract raw signals safely across potential schema key names\n    base_energy = []\n    masses = []\n    for it in items:\n        rel = float(it.get(\"relevance\", 0.0))\n        hits = float(\n            it.get(\"query_hits\", it.get(\"query_hit_count\", it.get(\"hits\", 0)))\n        )\n        cost = float(\n            it.get(\"byte_cost\", it.get(\"bytes\", it.get(\"cost\", it.get(\"size\", 100))))\n        )\n        # Non-linear synergy between relevance and query hit count\n        energy = rel * (1.0 + 0.35 * math.log1p(max(0.0, hits))) + 0.08 * hits\n        base_energy.append(energy)\n        masses.append(max(1.0, cost))\n\n    # Relativistic 1D gravitational aura diffusion across neighboring blocks\n    aura = [0.0] * n\n    decay = 0.618033988749895  # Golden ratio conjugate harmonic decay\n    for i in range(n):\n        e_i = base_energy[i]\n        for dist in range(1, min(4, n)):\n            w = (decay ** dist) * 0.12\n            if i - dist >= 0:\n                aura[i] += w * base_energy[i - dist]\n            if i + dist < n:\n                aura[i] += w * base_energy[i + dist]\n        aura[i] += e_i\n\n    # Relativistic event-horizon mass penalty: mild logarithmic dampening\n    # so long necessary evidence blocks are preserved unless relevance is near-tie\n    scored = []\n    for i, it in enumerate(items):\n        horizon_mass = 1.0 + 0.05 * math.log1p(masses[i] / 64.0)\n        rel_score = aura[i] / horizon_mass\n        scored.append((-rel_score, - float(it.get(\"relevance\", 0.0)), it[\"id\"]))\n\n    scored.sort()\n    return [t[2] for t in scored]\n# EVOLVE-BLOCK-END\n",
+      "local": {
+        "search": {
+          "score": 83.33333333333333,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 16,
+              "budget": 50,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 50,
+              "budget": 50,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 1.0,
+              "bytes": 44,
+              "budget": 70,
+              "kept": [
+                1,
+                2
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 25,
+              "budget": 28,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 0.0,
+              "bytes": 24,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 70,
+              "budget": 100,
+              "kept": [
+                0,
+                1
+              ]
+            }
+          },
+          "elapsed_ms": 0.10917700001300545
+        },
+        "holdout": {
+          "score": 83.33333333333333,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 15,
+              "budget": 40,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 38,
+              "budget": 40,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 1.0,
+              "bytes": 38,
+              "budget": 65,
+              "kept": [
+                1,
+                2
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 22,
+              "budget": 25,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 0.0,
+              "bytes": 20,
+              "budget": 48,
+              "kept": [
+                1
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 58,
+              "budget": 100,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "elapsed_ms": 0.09218099967256421
+        },
+        "adversarial": {
+          "score": 83.33333333333333,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 14,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 35,
+              "budget": 40,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 1.0,
+              "bytes": 21,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "3": {
+              "answer_recall": 0.0,
+              "bytes": 17,
+              "budget": 44,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 1.0,
+              "bytes": 54,
+              "budget": 60,
+              "kept": [
+                0,
+                1
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 57,
+              "budget": 80,
+              "kept": [
+                0,
+                1
+              ]
+            }
+          },
+          "elapsed_ms": 0.08296000032714801
+        }
+      }
+    },
+    {
+      "program": "5651963604019904232",
+      "score": 83.333336,
+      "evolved": true,
+      "state": "COMPLETED",
+      "content": "# EVOLVE-BLOCK-START\nimport math\n\ndef rank_blocks(items):\n    n = len(items)\n    if n == 0:\n        return []\n\n    # Step 1: Compute \"Intrinsic Rest Mass\" for each block\n    masses = {}\n    costs = {}\n    for item in items:\n        bid = item[\"id\"]\n        rel = item.get(\"relevance\", 0.0)\n        hits = item.get(\"query_hits\", item.get(\"hits\", item.get(\"query_hit_count\", 0)))\n        cost = item.get(\"byte_cost\", item.get(\"bytes\", item.get(\"cost\", item.get(\"size\", 100))))\n        \n        # Combine relevance and query hits non-linearly\n        # Hits act as a relativistic booster to base relevance\n        intrinsic_energy = (rel ** 1.5) * (1.0 + 0.35 * math.log1p(max(0, hits))) + 0.05 * math.sqrt(max(0, hits))\n        masses[bid] = intrinsic_energy\n        costs[bid] = max(1, cost)\n\n    # Step 2: Compute 1D Gravitational Field across block ID space\n    # Blocks surrounded by high-energy evidence absorb gravitational potential\n    potentials = {}\n    for item in items:\n        bid = item[\"id\"]\n        field = 0.0\n        for other in items:\n            oid = other[\"id\"]\n            if oid != bid:\n                dist = abs(bid - oid)\n                # Inverse-square-like decay along block ID distance\n                if dist <= 8:\n                    field += masses[oid] / ((dist ** 1.6) + 1.0)\n        \n        # Total relativistic score damped very gently by log-byte-cost\n        # so long essential blocks aren't lost, while absurdly huge low-value blocks sink\n        total_energy = masses[bid] + 0.12 * field\n        cost_damping = (math.log(costs[bid] + 10.0)) ** 0.35\n        potentials[bid] = total_energy / cost_damping\n\n    return [\n        item[\"id\"]\n        for item in sorted(\n            items,\n            key=lambda x: (\n                -potentials[x[\"id\"]],\n                -x.get(\"relevance\", 0.0),\n                x[\"id\"],\n            ),\n        )\n    ]\n# EVOLVE-BLOCK-END\n",
+      "local": {
+        "search": {
+          "score": 83.33333333333333,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 16,
+              "budget": 50,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 50,
+              "budget": 50,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 1.0,
+              "bytes": 44,
+              "budget": 70,
+              "kept": [
+                1,
+                2
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 25,
+              "budget": 28,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 0.0,
+              "bytes": 24,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 70,
+              "budget": 100,
+              "kept": [
+                0,
+                1
+              ]
+            }
+          },
+          "elapsed_ms": 0.1389760000165552
+        },
+        "holdout": {
+          "score": 83.33333333333333,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 15,
+              "budget": 40,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 38,
+              "budget": 40,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 1.0,
+              "bytes": 38,
+              "budget": 65,
+              "kept": [
+                1,
+                2
+              ]
+            },
+            "3": {
+              "answer_recall": 1.0,
+              "bytes": 22,
+              "budget": 25,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 0.0,
+              "bytes": 20,
+              "budget": 48,
+              "kept": [
+                1
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 58,
+              "budget": 100,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "elapsed_ms": 0.09419600064575206
+        },
+        "adversarial": {
+          "score": 83.33333333333333,
+          "error": null,
+          "cases": {
+            "0": {
+              "answer_recall": 1.0,
+              "bytes": 14,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "1": {
+              "answer_recall": 1.0,
+              "bytes": 35,
+              "budget": 40,
+              "kept": [
+                0,
+                1,
+                2
+              ]
+            },
+            "2": {
+              "answer_recall": 1.0,
+              "bytes": 21,
+              "budget": 30,
+              "kept": [
+                1
+              ]
+            },
+            "3": {
+              "answer_recall": 0.0,
+              "bytes": 17,
+              "budget": 44,
+              "kept": [
+                1
+              ]
+            },
+            "4": {
+              "answer_recall": 1.0,
+              "bytes": 54,
+              "budget": 60,
+              "kept": [
+                0,
+                1
+              ]
+            },
+            "5": {
+              "answer_recall": 1.0,
+              "bytes": 57,
+              "budget": 80,
+              "kept": [
+                0,
+                1
+              ]
+            }
+          },
+          "elapsed_ms": 0.08770600015850505
+        }
+      }
+    }
+  ]
+}

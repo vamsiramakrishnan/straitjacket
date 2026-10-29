@@ -67,6 +67,24 @@ silently substitutes `ctx run -- pytest -q`, and the agent never sees a refusal.
 The Codex implementation targets the same experience; call it live only after a
 version-pinned Codex run records both gates.
 
+## Codex containment and batch recovery
+
+Codex's output adapter uses `decision: "block"` to replace oversized output.
+Some tool runners expose this as an exception or "Script failed", even though
+the tool returned data. Successful capture now starts with
+`[ctx output-contained] capture=stored`, followed by a retrieval handle.
+`tool_error=reported_error` preserves an explicit tool error flag;
+`tool_error=not_reported` means no error flag was supplied, not proof that a
+website or command succeeded. Inspect the captured result to determine that.
+Capture failures remain labelled `gate-failed` and do not claim stored output.
+
+Retrieve the existing result before retrying the tool. In a batch, check which
+calls completed before resuming; never replay mutations merely because the
+wrapper reported an exception. JavaScript callers can use `Promise.allSettled`
+for independent calls so one containment exception does not discard other
+results. Dependent calls must wait for the retrieved result. The hook cannot
+change the host runner's exception semantics.
+
 ## Why Antigravity is different
 
 Antigravity's [published hook contract](https://antigravity.google/docs/hooks)
