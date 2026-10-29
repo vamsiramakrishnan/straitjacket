@@ -2,7 +2,7 @@
   "schema": "ctx.lsp-languages/v1",
   "scope": "fixed local fixtures; no model calls or autonomous agent trial",
   "source_sha256": {
-    "lsp.py": "8314d9b165e2d932b7db972eb4bffb3286dc1f2189fcefc9742b58584f910540",
+    "lsp.py": "7393f5e32a531938fe6f72ed2ffec07977932625b1249786ff4214b318786e5b",
     "lsp_service.py": "3d064604f4e45dc0079d095b0bc7ec7cf80cbdcae144bc53ac95b54498a3994b",
     "lsp_edits.py": "56fa9ca97637d613a1d0ce1acd6a78d9f793fd5cb7256eb8bd015dfba0960e81",
     "edit_transactions.py": "ae14849119add375e7009c05c589a3aeabcff935664a7ee78cb8df2a67cf38da"
@@ -136,7 +136,7 @@
       "edit_passed": true,
       "diagnostic_status": "unavailable_unversioned",
       "status": "passed",
-      "seconds": 9.874
+      "seconds": 11.198
     },
     {
       "language": "go",
@@ -251,7 +251,7 @@
       "edit_passed": true,
       "diagnostic_status": "passed",
       "status": "passed",
-      "seconds": 3.545
+      "seconds": 3.549
     },
     {
       "language": "rust",
@@ -372,7 +372,7 @@
       "edit_passed": true,
       "diagnostic_status": "passed",
       "status": "passed",
-      "seconds": 8.04
+      "seconds": 8.619
     }
   ],
   "fresh_diagnostics_required": false,

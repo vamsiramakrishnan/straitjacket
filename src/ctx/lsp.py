@@ -386,7 +386,7 @@ class Client:
             self.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version},
                                                     "contentChanges": [change]})
         else:
-            if len(self.documents) >= 64:
+            if len(self.documents) > 64:
                 oldest = next(iter(self.documents))
                 self.notify("textDocument/didClose", {"textDocument": {"uri": oldest}})
                 del self.documents[oldest]

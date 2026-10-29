@@ -144,6 +144,15 @@ def test_versioned_rename_refuses_more_than_document_limit(project, monkeypatch)
     assert 'hello' in (ws.root / 'mod.py').read_text()
 
 
+def test_versioned_rename_at_document_limit_keeps_origin_open(project, monkeypatch):
+    ws, store = project
+    monkeypatch.setenv('CTX_TEST_LSP_CLOSED_ZERO', '1')
+    for index in range(62):
+        (ws.root / f'extra{index}.py').write_text('from mod import hello\n')
+    plan = propose(ws, store, 'mod.py', 'rename', new_name='greet')['plan']
+    assert len(plan['edits']) == 64
+
+
 def test_cross_language_rename_is_refused_until_all_targets_are_observed(project, monkeypatch):
     ws, store = project
     path = ws.root / 'main.js'
