@@ -15,12 +15,74 @@ from evals.alphaevolve.ensemble import DEFAULT_MODEL, model_mixture, parse_model
 from evals.alphaevolve.sandbox import INVALID_SCORE
 
 
+@pytest.mark.parametrize('state,complete', [('RUNNING', False), ('PAUSED', False),
+                                          ('FAILED', False), ('COMPLETED', True)])
+def test_campaign_completion_requires_remote_confirmation(state, complete):
+    from types import SimpleNamespace
+    experiment = SimpleNamespace(experiment_name='experiment', client=SimpleNamespace(
+        get_alpha_evolve_experiment=lambda name: {'state': state, 'stats': {}}))
+    assert portfolio.campaign_outcome(experiment)['complete'] is complete
+
+
+def test_unknown_remote_state_is_not_success():
+    from types import SimpleNamespace
+    experiment = SimpleNamespace(experiment_name='experiment', client=SimpleNamespace(
+        get_alpha_evolve_experiment=lambda name: None))
+    assert portfolio.campaign_outcome(experiment)['complete'] is False
+
+
+@pytest.mark.parametrize('state', ['RUNNING', 'COMPLETED'])
+def test_controller_exit_persists_receipt_and_rejects_incomplete_run(monkeypatch, state):
+    from types import SimpleNamespace
+    module = portfolio.load_experiment('block-selection')
+    monkeypatch.setattr(module, 'score_candidate', lambda code: {'score': 91.0, 'error': None})
+    experiment = SimpleNamespace(
+        experiment_name='projects/test/experiment',
+        create_experiment=lambda config: None,
+        create_initial_program=lambda program: None,
+        start_experiment=lambda: None,
+        client=SimpleNamespace(get_alpha_evolve_experiment=lambda name: {'state': state}))
+    monkeypatch.setattr(portfolio, '_cloud_objects', lambda *args: (experiment, None, None))
+    monkeypatch.setattr(portfolio, '_run_loop', lambda *args: None)
+    monkeypatch.setattr(portfolio, '_ranking', lambda *args: [])
+    receipts = []
+    monkeypatch.setattr(portfolio, '_persist_campaign', lambda *args: receipts.append(args[-1]))
+    if state == 'RUNNING':
+        with pytest.raises(RuntimeError, match='campaign incomplete'):
+            portfolio.start(module, 6, 1, [{'name': 'gemini-3.8-flash', 'weight': 1.0}])
+    else:
+        portfolio.start(module, 6, 1, [{'name': 'gemini-3.8-flash', 'weight': 1.0}])
+    assert len(receipts) == 1
+    assert receipts[0]['remote_state'] == state
+    assert receipts[0]['complete'] is (state == 'COMPLETED')
+    assert receipts[0]['experiment_resource'] == experiment.experiment_name
+
+
+def test_env_file_is_literal_and_validates_before_updating(tmp_path, monkeypatch):
+    monkeypatch.delenv("AE_TEST_VALUE", raising=False)
+    path = tmp_path / "campaign.env"
+    path.write_text("export AE_TEST_VALUE='$(touch no-such-file)' # literal\n")
+    portfolio.load_env_file(str(path))
+    import os
+    assert os.environ["AE_TEST_VALUE"] == "$(touch no-such-file)"
+    path.write_text("AE_TEST_VALUE=changed\ninvalid line\n")
+    with pytest.raises(ValueError, match="line 2"):
+        portfolio.load_env_file(str(path))
+    assert os.environ["AE_TEST_VALUE"] == "$(touch no-such-file)"
+
+
 def test_parse_model_mix_accepts_upstream_flash_pro_blend():
     entries = parse_model_mix("gemini-3.5-flash:0.7,gemini-3.1-pro-preview:0.3")
     assert [entry["name"] for entry in entries] == [
         "gemini-3.5-flash",
         "gemini-3.1-pro-preview",
     ]
+
+
+def test_current_flash_argon_mixture():
+    entries = model_mixture("gemini-3.8-flash:0.7,gemini-4-argon:0.3", location="eu")
+    assert entries == [{"name": "gemini-3.8-flash", "weight": 0.7},
+                       {"name": "gemini-4-argon", "weight": 0.3}]
 
 
 @pytest.mark.parametrize(
@@ -30,6 +92,8 @@ def test_parse_model_mix_accepts_upstream_flash_pro_blend():
         "gpt-4:1",
         "gemini-3.5-flash:0",
         "gemini-3.5-flash:-1",
+        "gemini-3.5-flash:nan",
+        "gemini-3.5-flash:inf",
         "gemini-3.5-flash:0.5,gemini-3.5-flash:0.5",
         "gemini-3.5-flash",
     ),
@@ -161,7 +225,8 @@ def test_experiment_config_embeds_the_requested_mixture():
     mix = model_mixture("gemini-3.5-flash:0.7,gemini-3.1-pro-preview:0.3")
     config = portfolio.experiment_config(module, max_programs=12, concurrency=2, model_mix=mix)
     assert config["generation_settings"]["models"] == mix
-    assert config["run_settings"] == {"max_programs": 12, "concurrency": 2}
+    assert config["run_settings"] == {"max_programs": 12, "concurrency": 2,
+                                      "max_duration": "1800s"}
     assert "problem_description" in config
 
 

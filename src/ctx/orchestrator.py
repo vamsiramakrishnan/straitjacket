@@ -785,6 +785,7 @@ def _launch_host(
     *,
     timeout: float,
     model: str = "",
+    task_query: str = "",
 ) -> tuple[int, str, str, ActualUsage | None]:
     """Run one harness in print mode with captured output, inside the harnessed
     workspace. Claude gets the ephemeral --settings hook injection; Codex /
@@ -838,7 +839,11 @@ def _launch_host(
             argv = [*prefix, "--json", *spec.print_flag, prompt]
         proc = subprocess.run(
             argv, cwd=ws_root, capture_output=True, text=True,
-            timeout=timeout, env={**os.environ},
+            timeout=timeout, env={
+                **{k: v for k, v in os.environ.items()
+                   if k not in ("CTX_TASK_CONTEXT_FILE", "CTX_TASK_QUERY")},
+                "CTX_TASK_QUERY": task_query[:4096],
+            },
         )
         stdout, usage = parse_host_output(
             spec.name,
@@ -932,6 +937,7 @@ def invoke_coordinator(
                 exe,
                 timeout=timeout,
                 model=coord.spec.coord_model,
+                **({"task_query": task} if launch is _launch_host else {}),
             )
         )
         if usage_sink is not None and usage_index is not None:
@@ -1410,6 +1416,7 @@ def run_route(
                         resolved_exe,
                         timeout=timeout,
                         model=model.launch_id,
+                        **({"task_query": a.node.goal} if launch is _launch_host else {}),
                     )
                 )
                 node_usage.append(usage)
@@ -1435,6 +1442,7 @@ def run_route(
                                 resolved_exe,
                                 timeout=timeout,
                                 model=model.launch_id,
+                                **({"task_query": a.node.goal} if launch is _launch_host else {}),
                             )
                         )
                         node_usage.append(usage)

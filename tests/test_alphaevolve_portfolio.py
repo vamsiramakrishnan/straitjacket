@@ -42,7 +42,10 @@ def test_portfolio_seed_passes_every_completion_gate(experiment):
     result = experiment.score_candidate(experiment.INITIAL_PROGRAM_CODE)
     assert result["error"] is None, result
     assert result["score"] > 0
-    assert all(row["completion"] == 1.0 for row in result["cases"].values())
+    if getattr(experiment, "PROMOTION_REQUIRES_REPLAY", False):
+        assert all(row["bytes"] <= row["budget"] for row in result["cases"].values())
+    else:
+        assert all(row["completion"] == 1.0 for row in result["cases"].values())
 
 
 @pytest.mark.parametrize(
@@ -197,7 +200,10 @@ def test_portfolio_wide_local_scorecard_runs_every_promotion_gate():
     scorecard = local_scorecard()
     assert scorecard["schema"] == "ctx.alphaevolve-local-scorecard/v1"
     assert set(scorecard["experiments"]) == set(EXPERIMENTS)
-    assert scorecard["all_gates_pass"] is True
+    assert scorecard["all_gates_pass"] is False
+    assert scorecard["experiments"]["block-selection"]["promotion_ready"] is False
+    assert all(row["promotion_ready"] for name, row in scorecard["experiments"].items()
+               if name != "block-selection")
     assert all(
         gate["passed"]
         for row in scorecard["experiments"].values()

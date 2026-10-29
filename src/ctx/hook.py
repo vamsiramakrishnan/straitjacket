@@ -1172,12 +1172,30 @@ def _split_simple_chain(stripped: str) -> list[str] | None:
     are the separators ``;``, ``&&``, ``||``. Returns None when any other
     metacharacter (``| > < ` $ ( ) { } \\`` or a lone ``&``) remains in a
     segment, so pipelines and substitutions never take this path."""
-    parts = re.split(r";|&&|\|\|", stripped)
-    if len(parts) < 2:
+    parts = []
+    start = index = 0
+    quote = None
+    while index < len(stripped):
+        char = stripped[index]
+        if quote:
+            if char == quote:
+                quote = None
+            elif char == "\\" and quote == '"':
+                index += 1
+        elif char in "\"'":
+            quote = char
+        elif char == ";" or stripped[index:index + 2] in {"&&", "||"}:
+            parts.append(stripped[start:index].strip())
+            index += 1 if char == ";" else 2
+            start = index
+            continue
+        elif _SHELL_META_RE.search(char):
+            return None
+        index += 1
+    if quote or not parts:
         return None
-    if any(_SHELL_META_RE.search(p) for p in parts):
-        return None
-    return [p.strip() for p in parts if p.strip()]
+    parts.append(stripped[start:].strip())
+    return [part for part in parts if part]
 
 
 def _grep_single_file_rewrite(argv: list[str], cwd: str | None) -> str | None:
@@ -2728,6 +2746,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         payload.get("is_error")
         or payload.get("isError")
         or (isinstance(tr, dict) and tr.get("is_error"))
+        or (isinstance(tr, dict) and tr.get("isError"))
     )
     if size <= threshold:
         if can_substitute and _single_named_pytest(command or ""):
@@ -2789,6 +2808,15 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         # digest_output has now persisted the raw bytes. A host that cannot
         # substitute gets None — the transcript keeps the raw result, but the
         # artifact exists and is addressable.
+        if can_substitute and flavor == "codex":
+            outcome = "reported_error" if is_error else "not_reported"
+            text = (
+                "[ctx output-contained] capture=stored; tool_error=" + outcome + "\n"
+                "The tool returned output. Codex uses a post-tool block to display "
+                "this digest; that block is not evidence of a tool failure. "
+                "Retrieve the captured result below before retrying. If a batch "
+                "stopped here, check which later calls ran before resuming.\n" + text
+            )
         return text if can_substitute else None
     except Exception as exc:
         _note_guard_failure(ws_root, op="emission_gate", stage="digest", exc=exc)

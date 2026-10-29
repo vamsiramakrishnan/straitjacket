@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from ctx.digest.base import DigestContext, Profile, StreamView
@@ -74,6 +75,33 @@ def _signal_rank(line: str) -> int:
     return rank
 
 
+def _focused_lines(ctx: DigestContext) -> tuple[list[tuple[str, int, str]], int, int]:
+    """Select at most four exact lines; two slots protect non-query signals.
+
+    Query coverage outranks repetition. Stream/line order breaks ties. This
+    policy only sees parsed text; coverage reporting owns parse-cap disclosure.
+    """
+    terms = tuple(sorted(set(ctx.focus_terms)))
+    rows = []
+    for view in (ctx.stderr, ctx.stdout):
+        for number, line in enumerate(view.text_lines, 1):
+            relevance = sum(term in line.lower() for term in terms)
+            rows.append((view.name, number, line, relevance, _signal_rank(line)))
+    signals = [row for row in rows if row[4] > 0]
+    protected = sorted(signals, key=lambda row: -row[4])[:1]
+    if signals and signals[-1] not in protected:
+        protected.append(signals[-1])
+    matches = [row for row in rows if row[3] > 0]
+    ranked = sorted(matches, key=lambda row: (-row[3], -row[4]))
+    chosen = list(protected)
+    for row in ranked:
+        if len(chosen) >= 4:
+            break
+        if row not in chosen:
+            chosen.append(row)
+    return [(row[0], row[1], row[2]) for row in chosen], len(rows), len(matches)
+
+
 class TextProfile(Profile):
     version = "text/v1"
 
@@ -129,7 +157,59 @@ class TextProfile(Profile):
         if binary:
             summary.append("  binary stream · raw bytes preserved in artifact store")
 
-        spans = ctx.focus_spans()
+        spans = []
+        if ctx.focus_terms:
+            # Focus is an opt-in ranking hint, never permission to hide failures.
+            ctx.meta_profile_version = "text/focus-v2"
+            selected, scanned, matches = _focused_lines(ctx)
+            if selected:
+                query_id = hashlib.sha256(
+                    "\0".join(sorted(set(ctx.focus_terms))).encode("utf-8")
+                ).hexdigest()[:12]
+                summary.append(
+                    f"  selection: focus/v2 · query={query_id} · "
+                    f"scanned={scanned} · matches={matches} · selected={len(selected)}"
+                )
+                # Preserve local structure when all selected evidence fits; retain
+                # addressed line fallback for giant paragraphs or tiny budgets.
+                from ctx.context_compression import compress_context
+                streams = [view for view in (ctx.stderr, ctx.stdout)
+                           if any(row[0] == view.name for row in selected)]
+                block_budget = min(2048, ctx.ws.config.budgets.digest_tokens * 2)
+                expanded = []
+                for view in streams:
+                    required = tuple(number for name, number, _ in selected if name == view.name)
+                    result = compress_context(view.text, " ".join(ctx.focus_terms),
+                                              block_budget // len(streams), required)
+                    if result["status"] != "selected":
+                        expanded = []
+                        break
+                    expanded.append((view, result))
+                if expanded:
+                    ctx.meta_profile_version = "text/focus-v3"
+                    summary.append("  structure: complete blocks with heading dependencies")
+                    suggestions = []
+                    shown_lines = 0
+                    for view, result in expanded:
+                        for span in result["kept"]:
+                            a, b = span["start"], span["end"]
+                            summary.append(f"  evidence {view.name}:L{a}-L{b}:")
+                            summary.extend("    " + line for line in view.text_lines[a - 1:b])
+                            shown_lines += b - a + 1
+                            suggestions.append(f"ctx get run:PENDING#{view.name} --lines {a}:{b}")
+                    return "\n".join(lines + summary + self.coverage_lines(ctx, shown_lines)
+                                     + self.next_lines(ctx, suggestions))
+                for stream, number, sample in selected:
+                    summary.append(f"  evidence {stream}:L{number}: {sample[:EVIDENCE_LINE_CHARS]}")
+                suggestions = [
+                    f"ctx get run:PENDING#{stream} --lines {max(1, number - 1)}:{number}"
+                    for stream, number, _ in selected
+                ]
+                return "\n".join(
+                    lines + summary + self.coverage_lines(ctx, len(selected))
+                    + self.next_lines(ctx, suggestions)
+                )
+            spans = []
         if spans:
             for stream, a, b, sample in spans:
                 summary.append(f"  focus {stream}:L{a}-L{b}: {sample}")

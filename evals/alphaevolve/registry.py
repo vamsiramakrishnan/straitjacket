@@ -14,6 +14,7 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parent
 
 EXPERIMENT_MODULES: dict[str, str] = {
+    "block-selection": "evals.alphaevolve.block_selection.evaluate",
     "context-budget": "evals.alphaevolve.context_budget.evaluate",
     "turn-policy": "evals.alphaevolve.turn_policy.evaluate",
     "route-policy": "evals.alphaevolve.route_policy.evaluate",
@@ -73,6 +74,7 @@ def _lever(
 
 
 LEVERS: tuple[LeverSpec, ...] = (
+    _lever("query-block-selection", "block-selection", "containment", "medium", "synthetic", "offline", "src/ctx/digest/block_selection.py", "rank_blocks(items)"),
     _lever("capability-surface", "surface-policy", "containment", "medium", "replay", "shadow", "src/ctx/surface_profiles.py:select", "choose_surface(state, options)"),
     _lever("small-result-pass-through", "emission-policy", "containment", "low", "corpus", "offline", "src/ctx/digest/__init__.py:_pass_through_if_digest_earned_nothing", "choose_emission(state, options)"),
     _lever("profile-detection", "profile-policy", "containment", "medium", "corpus", "shadow", "src/ctx/digest/__init__.py:detect_profile", "choose_profile(state, options)"),
@@ -133,6 +135,8 @@ def experiment_fingerprint(name: str) -> str:
         if path.is_file() and path.suffix in {".py", ".md", ".json"}:
             digest.update(path.name.encode("utf-8"))
             digest.update(path.read_bytes())
+    if name == "block-selection":
+        digest.update((ROOT.parent.parent / "src/ctx/digest/block_selection.py").read_bytes())
     return digest.hexdigest()[:16]
 
 

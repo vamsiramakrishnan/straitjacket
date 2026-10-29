@@ -265,9 +265,14 @@ def wrap_claude(
     agent_file = _install_explorer_agent(workspace_root)
     proxy_proc: subprocess.Popen | None = None
     child_env: dict[str, str] | None = None
+    task_file = tempfile.NamedTemporaryFile(prefix="ctx-task-", suffix=".json", delete=False)
+    task_file.close()
     try:
         if use_proxy:
             proxy_proc, child_env = _start_proxy(workspace_root, exe, rescue_pct)
+        child_env = {**(child_env if child_env is not None else os.environ),
+                     "CTX_TASK_CONTEXT_FILE": task_file.name}
+        child_env.pop("CTX_TASK_QUERY", None)
         if not _claude_supports_settings(claude):
             print(
                 "ctx wrap: this claude build lacks --settings; "
@@ -293,6 +298,8 @@ def wrap_claude(
             with contextlib.suppress(OSError):
                 os.unlink(tmp.name)
     finally:
+        with contextlib.suppress(OSError):
+            os.unlink(task_file.name)
         _stop_proxy(proxy_proc)
         if proxy_proc is not None:
             _emit_scorecard(workspace_root)

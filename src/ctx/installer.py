@@ -202,6 +202,11 @@ def claude_hook_settings(ctx_exe: str) -> dict:
     for ephemeral runs and `install_claude` for the persistent install."""
     return {
         "hooks": {
+            "UserPromptSubmit": [{"hooks": [{
+                "type": "command",
+                "command": f"{ctx_exe} hook claude-code user-prompt-submit",
+                "timeout": 10,
+            }]}],
             "PreToolUse": [
                 {
                     "matcher": "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",

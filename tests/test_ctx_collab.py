@@ -60,6 +60,8 @@ def test_task_claim_complete_review_integration_lifecycle(ledger):
     assert state["last_completion"]["files_changed"] == ["tests/parser/test_edges.py"]
 
     ledger.review(tid, "gemini", verdict="approve", evidence="tests are real and pass")
+    ledger.verify(tid, ledger.dir.parent.parent,
+                  runner=lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="9 passed", stderr=""))
     ledger.integrate(tid, accepted=True, note="merged after review")
     assert ledger.state()[tid]["status"] == "integrated"
 

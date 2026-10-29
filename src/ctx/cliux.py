@@ -109,7 +109,8 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("orchestrate", "split one task across your agents, cheapest model that fits "
                             "(usually a wrap mode, not something you type)"),
             ("collab", "hand tasks between your coding agents with leases, completion "
-                       "packets, and cross-reviews"),
+                       "packets, async events, native continuation, and cross-reviews"),
+            ("compress", "select local evidence with an original-content retrieval address"),
         ),
     ),
     (

@@ -1,0 +1,92 @@
+{
+  "schema": "ctx.dogfood/v1",
+  "source_fingerprint": "86796d5832978855da43d4508f1e31b87b31328ea53767ee50b8f86e6b876de1",
+  "source_unchanged": true,
+  "cases": [
+    {
+      "case": "ownership-and-stale-verification",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 0.465,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:cc99b0578e95",
+      "tests": [
+        "tests/test_ctx_collab.py",
+        "tests/test_collab_safety.py"
+      ]
+    },
+    {
+      "case": "events-cancellation-and-resume",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 1.689,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:1b1ec19b9e99",
+      "tests": [
+        "tests/test_collab_sessions.py",
+        "tests/test_prewalk.py"
+      ]
+    },
+    {
+      "case": "compression-and-exact-retrieval",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 0.579,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:fac1ff5f8d68",
+      "tests": [
+        "tests/test_context_compression.py",
+        "tests/test_block_selection.py"
+      ]
+    },
+    {
+      "case": "automatic-task-context",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 0.785,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:b211ec7f534d",
+      "tests": [
+        "tests/test_task_context.py",
+        "tests/test_digest_focus_policy.py"
+      ]
+    },
+    {
+      "case": "capture-and-edit-recovery",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 1.073,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:c27e5dba8ff7",
+      "tests": [
+        "tests/test_emission_gate.py",
+        "tests/test_edit_transactions.py"
+      ]
+    }
+  ],
+  "passed": true,
+  "measurement_scope": "local regression workflows; not agent task-completion benchmarking",
+  "agent_turns": null,
+  "provider_dollars": null,
+  "provider_tokens": null,
+  "agy_observation": {
+    "session_id": "cf78e6a4235c496b80de914aaefd0ece",
+    "status": "completed",
+    "conversation_id": "65a64803-f9fe-450d-8756-0e23fddd8dcb",
+    "task_completed": false,
+    "reported_turns": 2,
+    "reported_usage": {
+      "input_tokens": 26956,
+      "output_tokens": 6305,
+      "thinking_tokens": 3090,
+      "cache_read_tokens": 0,
+      "total_tokens": 33261
+    },
+    "usage_scope": "native conversation report; may include preceding turns"
+  }
+}

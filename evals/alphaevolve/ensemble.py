@@ -13,11 +13,13 @@ only. Unknown model names fail closed before any billed experiment starts.
 from __future__ import annotations
 
 import os
+import math
 from typing import Any
 
-KNOWN_MODELS = frozenset({"gemini-3.5-flash", "gemini-3.1-pro-preview"})
+KNOWN_MODELS = frozenset({"gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash",
+                          "gemini-3.5-flash", "gemini-3.1-pro-preview"})
 GLOBAL_ONLY_MODELS = frozenset({"gemini-3.1-pro-preview"})
-DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 def parse_model_mix(spec: str) -> list[dict[str, Any]]:
@@ -42,7 +44,7 @@ def parse_model_mix(spec: str) -> list[dict[str, Any]]:
             raise ValueError(
                 f"unsupported model {name!r}; supported: {', '.join(sorted(KNOWN_MODELS))}"
             )
-        if weight <= 0:
+        if not math.isfinite(weight) or weight <= 0:
             raise ValueError(f"model {name!r} weight must be positive")
         if name in seen:
             raise ValueError(f"model {name!r} appears twice in the mixture")
@@ -80,7 +82,8 @@ def model_mixture(cli_spec: str | None = None, location: str | None = None) -> l
                 f"{entry['name']} is served from 'global' only; "
                 f"set LOCATION=global or drop it from the mixture"
             )
-    total = float(sum(entry["weight"] for entry in entries))
+    scale = max(entry["weight"] for entry in entries)
+    total = sum(entry["weight"] / scale for entry in entries)
     return [
-        {"name": entry["name"], "weight": entry["weight"] / total} for entry in entries
+        {"name": entry["name"], "weight": (entry["weight"] / scale) / total} for entry in entries
     ]

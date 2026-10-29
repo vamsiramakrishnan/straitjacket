@@ -194,6 +194,17 @@ def render_run_digest(
     ctx.plan = plan
     profile, reason = detect_profile(ctx)
 
+    # Resolve automatic hints only for the generic selector. Structured profiles
+    # retain their existing behavior; explicit focus (including "") always wins.
+    if focus is None and profile.version == "text/v1":
+        from ctx.task_context import current_query
+
+        focus = current_query()
+        if focus:
+            focused = DigestContext.load(store, ws, manifest, focus=focus)
+            focused.dense, focused.plan = ctx.dense, ctx.plan
+            ctx = focused
+
     body = profile.render(ctx)
     body = _pass_through_if_digest_earned_nothing(ctx, body, ws)
     body, redactions = sanitize_for_model(body, ws.config.redaction)

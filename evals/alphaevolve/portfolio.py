@@ -10,7 +10,9 @@ import logging
 import multiprocessing
 import os
 import queue
+import shlex
 import time
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -31,6 +33,24 @@ from evals.alphaevolve.registry import (
 
 EXPERIMENTS = EXPERIMENT_MODULES
 _SCORECARD_TIMEOUT_SECONDS = 120.0
+
+
+def load_env_file(path: str) -> None:
+    """Load literal KEY=value settings without executing shell code."""
+    settings = {}
+    for number, line in enumerate(Path(path).read_text().splitlines(), 1):
+        parts = shlex.split(line, comments=True)
+        if parts and parts[0] == "export":
+            parts = parts[1:]
+        if not parts:
+            continue
+        if len(parts) != 1 or "=" not in parts[0]:
+            raise ValueError(f"invalid environment assignment at line {number}")
+        key, value = parts[0].split("=", 1)
+        if not key.isidentifier() or not key.isascii():
+            raise ValueError(f"invalid environment key at line {number}")
+        settings[key] = value
+    os.environ.update(settings)
 
 
 def load_experiment(name: str) -> ModuleType:
@@ -73,7 +93,8 @@ def _experiment_row(name: str) -> tuple[str, Any]:
             }
             for gate, result in gates.items()
         },
-        "promotion_ready": all(result.get("error") is None for result in gates.values()),
+        "promotion_ready": (not getattr(module, "PROMOTION_REQUIRES_REPLAY", False)
+                            and all(result.get("error") is None for result in gates.values())),
     }
 
 
@@ -230,11 +251,14 @@ def experiment_config(
     model_mix: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the managed experiment configuration (pure; unit-testable)."""
+    if not 2 <= max_programs <= 500 or not 1 <= concurrency <= 8:
+        raise ValueError("invalid program or concurrency limit")
     return {
         "title": module.TITLE,
         "problem_description": module.PROBLEM_PATH.read_text(encoding="utf-8"),
         "program_language": "python",
-        "run_settings": {"max_programs": max_programs, "concurrency": concurrency},
+        "run_settings": {"max_programs": max_programs, "concurrency": concurrency,
+                         "max_duration": "1800s"},
         "generation_settings": {
             "models": model_mix if model_mix is not None else model_mixture()
         },
@@ -279,8 +303,16 @@ def _run_loop(experiment: Any, controller: Any, concurrency: int) -> None:
             experiment,
             num_samplers=concurrency,
             num_evaluators=concurrency,
+            idle_timeout_s=300,
         )
     )
+
+
+def campaign_outcome(experiment: Any) -> dict[str, Any]:
+    remote = experiment.client.get_alpha_evolve_experiment(experiment.experiment_name) or {}
+    state = remote.get("state", "UNKNOWN")
+    return {"remote_state": state, "remote_stats": remote.get("stats", {}),
+            "complete": state == "COMPLETED"}
 
 
 def _ranking(experiment: Any, module: ModuleType) -> list[dict[str, Any]]:
@@ -331,7 +363,7 @@ def _persist_campaign(
         name,
         ranking,
         config=config,
-        fingerprint=experiment_fingerprint(name),
+        fingerprint=(config or {}).get("dataset_fingerprint_at_start") or experiment_fingerprint(name),
     )
     print(f"artifacts: {json.dumps(artifacts)}", flush=True)
     top = [
@@ -347,13 +379,14 @@ def start(
     concurrency: int,
     model_mix: list[dict[str, Any]] | None = None,
 ) -> None:
-    experiment, controller, evaluator = _cloud_objects(module, max_programs, concurrency)
     config = experiment_config(module, max_programs, concurrency, model_mix)
-    experiment.create_experiment(config)
-    print(f"experiment: {experiment.experiment_name}", flush=True)
+    fingerprint = experiment_fingerprint(_experiment_name_for(module))
     seed = module.score_candidate(module.INITIAL_PROGRAM_CODE)
     if seed.get("error"):
         raise RuntimeError(f"seed failed local evaluator: {seed['error']}")
+    experiment, controller, evaluator = _cloud_objects(module, max_programs, concurrency)
+    experiment.create_experiment(config)
+    print(f"experiment: {experiment.experiment_name}", flush=True)
     initial_program = {
         "content": {
             "files": [{"path": "program.py", "content": module.INITIAL_PROGRAM_CODE}]
@@ -366,14 +399,20 @@ def start(
     }
     experiment.create_initial_program(initial_program)
     experiment.start_experiment()
-    _run_loop(experiment, controller, concurrency)
-    _persist_campaign(
-        module,
-        _experiment_name_for(module),
-        evaluator,
-        _ranking(experiment, module),
-        {key: value for key, value in config.items() if key != "problem_description"},
-    )
+    try:
+        _run_loop(experiment, controller, concurrency)
+    finally:
+        receipt = {key: value for key, value in config.items() if key != "problem_description"}
+        receipt.update(experiment_resource=experiment.experiment_name,
+                       dataset_fingerprint_at_start=fingerprint,
+                       evaluator_changed_during_run=(fingerprint != experiment_fingerprint(_experiment_name_for(module))))
+        outcome = campaign_outcome(experiment)
+        receipt.update(outcome)
+        _persist_campaign(module, _experiment_name_for(module), evaluator,
+                          _ranking(experiment, module), receipt)
+    if not outcome["complete"]:
+        raise RuntimeError(f"campaign incomplete: remote state {outcome['remote_state']}; "
+                           "inspect the recorded resource before resuming")
 
 
 def resume(
@@ -403,14 +442,18 @@ def resume(
         already,
         max_programs - 1,
     )
-    _run_loop(experiment, controller, concurrency)
-    _persist_campaign(
-        module,
-        _experiment_name_for(module),
-        evaluator,
-        _ranking(experiment, module),
-        {"resumed_experiment": experiment_name},
-    )
+    fingerprint = experiment_fingerprint(_experiment_name_for(module))
+    try:
+        _run_loop(experiment, controller, concurrency)
+    finally:
+        outcome = campaign_outcome(experiment)
+        _persist_campaign(module, _experiment_name_for(module), evaluator,
+                          _ranking(experiment, module),
+                          {"resumed_experiment": experiment_name,
+                           "dataset_fingerprint_at_start": fingerprint, **outcome})
+    if not outcome["complete"]:
+        raise RuntimeError(f"campaign incomplete: remote state {outcome['remote_state']}; "
+                           "inspect the recorded resource before resuming")
 
 
 def _experiment_name_for(module: ModuleType) -> str:
@@ -480,17 +523,20 @@ def main() -> None:
     parser.add_argument("--inspect-experiment")
     parser.add_argument("--inspect-program")
     parser.add_argument("--confirm-spend", action="store_true")
+    parser.add_argument("--env-file", help="literal KEY=value settings; no shell expansion")
     parser.add_argument("--max-programs", type=int, default=12)
     parser.add_argument("--concurrency", type=int, default=2)
     parser.add_argument(
         "--model-mix",
         help=(
             "generation model mixture, e.g. "
-            "'gemini-3.5-flash:0.7,gemini-3.1-pro-preview:0.3' "
+            "'gemini-3.8-flash:0.7,gemini-4-argon:0.3' "
             "(or MODEL_MIX/MODEL_1/MODEL_2 env)"
         ),
     )
     args = parser.parse_args()
+    if args.env_file:
+        load_env_file(args.env_file)
     if args.list:
         print("\n".join(EXPERIMENTS))
         return

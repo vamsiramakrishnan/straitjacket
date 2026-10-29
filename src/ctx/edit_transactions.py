@@ -261,6 +261,15 @@ def _refusal(plan: dict[str, Any], operation: str, reason: str) -> EditTransacti
             "planId": plan.get("id"),
             "outcome": "refused",
             "reason": reason,
+            "recovery": {
+                "action": "refresh_and_replan",
+                "retrySamePlan": False,
+                "steps": [
+                    "Read the current target with ctx get and obtain fresh anchors.",
+                    "Create a new edit plan against the current content.",
+                    "Preview the new plan before applying it.",
+                ],
+            },
             "files": [],
         },
     )

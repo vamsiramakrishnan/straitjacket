@@ -106,7 +106,7 @@ python -m evals.alphaevolve.portfolio route-replay --local
 python -m evals.alphaevolve.portfolio escalation-policy --local
 ```
 
-The complete registry now spans 33 production levers and 22 experiment
+The registry includes production and experimental levers across 23 experiment
 families. Use the registry and wave commands instead of maintaining a manual
 command list:
 
@@ -140,14 +140,37 @@ python -m evals.alphaevolve.portfolio context-budget \
   --run --confirm-spend
 ```
 
-Blend Google's documented fast/deep generation models by weight instead of
-searching with one model (`gemini-3.1-pro-preview` is served from `global`
-only, and unsupported names fail closed before any spend):
+Blend `gemini-3.8-flash` and `gemini-4-argon` by weight. Both are listed for
+`global`, `us`, and `eu` in Google's
+[API reference](https://docs.cloud.google.com/gemini/enterprise/docs/alphaevolve/reference-guide/api-reference).
+Unsupported names and nonfinite weights fail before cloud creation:
 
 ```bash
 python -m evals.alphaevolve.portfolio context-budget \
   --run --confirm-spend --max-programs 12 \
-  --model-mix 'gemini-3.5-flash:0.7,gemini-3.1-pro-preview:0.3'
+  --model-mix 'gemini-3.8-flash:0.7,gemini-4-argon:0.3'
+```
+
+The portfolio runner validates the seed before creating cloud resources and sets
+`max_duration` to 1800 seconds. `--env-file .alphaevolve.env` loads literal
+`KEY=value` settings without executing shell code. Model weights are sampling
+probabilities, not a guarantee that both models appear in a small campaign.
+
+The live Discovery Engine v1alpha schema and a create/get round trip on
+2026-10-29 expose `maxPrograms`, `concurrency`, and `maxDuration`, but omit the
+reference guide's `idleTimeout`. The runner therefore does not rely on an idle
+timeout. Stopping a local controller does not prove that remote generation
+stopped; inspect the remote state and retain the experiment resource receipt.
+The local controller allows 300 seconds of inactivity. A remote state other than
+COMPLETED produces an incomplete receipt and a nonzero runner exit, including
+after resume. See the [October experiment receipt](2026-10-29-block-selection.md).
+
+`block-selection` is an experimental 18-case synthetic corpus. It intentionally
+reports `promotion_ready: false` pending real task replay, even when local
+checks pass. Its read-only local comparison is:
+
+```bash
+python -m evals.alphaevolve.block_selection.benchmark --output evals/alphaevolve/results/block-selection-local.json
 ```
 
 Managed campaigns run through the memoized campaign harness in

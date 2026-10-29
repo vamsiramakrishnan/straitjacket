@@ -8,6 +8,21 @@
 > New to the vocabulary? Read [How it works](HOW-IT-WORKS.md) and
 > [Concepts](CONCEPTS.md) first.
 
+## Recovering a refused edit
+
+Inspired by [The Harness Problem](https://stencil.so/blog/the-harness-problem),
+the edit interface should make recovery explicit rather than require repeated
+attempts to reproduce old text. Straitjacket already uses content anchors and
+sealed edit plans. Refusal receipts now include a `recovery` object with
+`action: "refresh_and_replan"`, `retrySamePlan: false`, and the steps to read
+fresh anchors, create a new plan, and preview it before applying.
+
+This does not relax stale-content or ambiguity checks. A refused edit leaves
+the file unchanged. A missing file or permission problem must be resolved
+before replanning; the recovery instructions do not authorize restoring or
+overwriting a target. This is an interface improvement, not a measured increase
+in coding benchmark scores.
+
 ## The promise that had a hole in it
 
 straitjacket's second house rule is *omission keeps an address*. For frozen
