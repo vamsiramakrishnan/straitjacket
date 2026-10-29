@@ -176,9 +176,9 @@ def test_scip_absent_runtime_degrades(state_home, workspace_dir, monkeypatch):
     _repo_with_index(workspace_dir)
     monkeypatch.setattr(scip_ingest, "_scip_pb2", lambda: None)
     assert scip_ingest.refs(ws, "helper") is None
-    # ladder still resolves (via jedi/ast over the real source)
+    # The real-source ladder can use an installed language server before jedi/ast.
     _sites, engine = codeverbs.resolve_refs(store, ws, "helper")
-    assert engine in ("jedi", "ast (textual)")
+    assert engine in ("jedi", "ast (textual)") or engine.startswith("lsp (")
 
 
 def test_scip_extra_matches_the_vendored_gencode_floor():
