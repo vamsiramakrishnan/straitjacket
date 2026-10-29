@@ -1,0 +1,47 @@
+name: Installed language-server replay
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/ctx/lsp*.py"
+      - "src/ctx/edit_transactions.py"
+      - "evals/lsp_languages.py"
+      - ".github/workflows/lsp-languages.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: "1.93.1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: false
+      - name: Install pinned servers and compilers
+        run: |
+          pip install -e .
+          npm install --global typescript@6.0.3 typescript-language-server@6.0.2
+          go install golang.org/x/tools/gopls@v0.21.1
+          rustup toolchain install 1.93.1 --profile minimal --component rust-analyzer --component rust-src
+      - name: Verify rename, freshness and behavior in all three languages
+        run: python -m evals.lsp_languages --output lsp-languages.json
+      - name: Retain the complete replay receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lsp-languages
+          path: lsp-languages.json
+          if-no-files-found: warn

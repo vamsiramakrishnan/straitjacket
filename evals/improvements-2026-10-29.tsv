@@ -1,0 +1,3 @@
+ts	phase	decision	why	evidence	result
+2026-10-29T08:23:50Z	frame	Five workstreams with isolated implementation checkouts	Release only verified changes and separate offline measurements from billed usage	PR48; evals/lsp-edit-comparison-2026-10-29.md	open
+2026-10-29T08:26:11Z	lsp	Merged PR48 after existing full CI passed	The initial edit loop is verified independently of the follow-up work	ac9e41a; run:b94de70fa965	24 focused tests passed
