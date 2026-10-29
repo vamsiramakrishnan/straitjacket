@@ -594,7 +594,7 @@ def test_prewalk_keeps_the_isolated_worktree_edit_instead_of_resetting_it(
 
     def launch(host, root, prompt, exe, *, timeout, model=""):
         if "node \'build\'" in prompt and model == assigned.model.launch_id:
-            return 0, _verified_prewalk(root, prompt, "foo.py", "new\n"), "", _usage(cost=0.3)
+            return 0, _verified_prewalk(root, prompt, "foo.py", "new = 1\n"), "", _usage(cost=0.3)
         if "node \'build\'" in prompt:
             seen_on_continuation["foo.py"] = (root / "foo.py").read_text(encoding="utf-8")
         return 0, "done", "", _usage(cost=0.02)
@@ -602,8 +602,8 @@ def test_prewalk_keeps_the_isolated_worktree_edit_instead_of_resetting_it(
     result = run_route(ws, plan, cfg, launch=launch)
     by_id = {o.node_id: o for o in result.outcomes}
     assert by_id["build"].status == "ok"
-    assert seen_on_continuation["foo.py"] == "new\n"   # not reset back to "old"
-    assert (git_workspace / "foo.py").read_text(encoding="utf-8") == "new\n"
+    assert seen_on_continuation["foo.py"] == "new = 1\n"   # not reset back to "old"
+    assert (git_workspace / "foo.py").read_text(encoding="utf-8") == "new = 1\n"
 
 
 def test_prewalk_does_not_arm_without_a_second_attempt_or_a_cheaper_model(

@@ -193,8 +193,35 @@ def cmd_lsp(ws, ns) -> int:
     except Exception as e:  # noqa: BLE001 - the confinement error is the message
         print(f"ctx lsp: {e}", file=sys.stderr)
         return 2
-    what = {"def": "definition", "refs": "references", "hover": "hover"}[ns.what]
+    what = {"def": "definition", "refs": "references"}.get(ns.what, ns.what)
     from ctx.bounds import explicit
+
+    if what in {"rename", "actions", "diagnostics"}:
+        import json
+        from ctx.edit_transactions import EditTransactionError, write_json
+        from ctx.lsp_edits import propose
+
+        try:
+            timeout = float(explicit(ns.timeout, _lsp.DEFAULT_TIMEOUT_S))
+            if what == "diagnostics":
+                from ctx.post_edit_diagnostics import capture_baseline, verify_post_edit
+                result = verify_post_edit(ws.root, rel, capture_baseline(ws.root, rel),
+                    providers=[_lsp.diagnostic_provider(ws.root, timeout=timeout)], run_builtin=False)
+            else:
+                if (what == "rename" or ns.action_index is not None) and not ns.out:
+                    raise EditTransactionError("--out is required; LSP edits must be previewed before apply")
+                result = propose(ws, store, rel, what, line=line, col=col,
+                                 new_name=ns.new_name, action_index=ns.action_index, timeout=timeout)
+                if 'plan' in result:
+                    write_json(ws.confine(ns.out), result.pop('plan'))
+                    result['plan_file'] = ns.out
+                    result['next'] = ['ctx edit preview ' + ns.out, 'ctx edit apply ' + ns.out]
+            out = json.dumps(result, ensure_ascii=False, indent=2)
+            _emit_retrieval(ws, store, out)
+            return 0 if what != 'diagnostics' or result['outcome'] == 'clean' else 3
+        except (EditTransactionError, _lsp.LspError, OSError, ValueError) as exc:
+            print(f"ctx lsp: {exc}", file=sys.stderr)
+            return 2
 
     try:
         answer, server = _lsp.query(

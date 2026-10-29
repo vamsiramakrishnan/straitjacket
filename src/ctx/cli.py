@@ -849,7 +849,10 @@ def _build_parser():
     p_lsp = sub.add_parser(
         "lsp", help="ask the language server: definition, references, hover at a position or symbol"
     )
-    p_lsp.add_argument("what", choices=("def", "refs", "hover"))
+    p_lsp.add_argument("what", choices=("def", "refs", "hover", "diagnostics", "rename", "actions"))
+    p_lsp.add_argument("--new-name", help="replacement symbol name for rename")
+    p_lsp.add_argument("--action-index", type=int, help="plan this code action from the current response")
+    p_lsp.add_argument("--out", help="write a sealed edit plan; use ctx edit preview/apply afterwards")
     p_lsp.add_argument(
         "target",
         help="<path>:<line>:<col> (1-based) or repo:<path>:<Symbol.dotted> (position from the skeleton)",

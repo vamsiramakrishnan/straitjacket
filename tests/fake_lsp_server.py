@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import sys
+import os
+import re
+from pathlib import Path
 
 
 def _read() -> dict | None:
@@ -33,6 +36,8 @@ def _write(msg: dict) -> None:
 
 def main() -> int:
     opened: dict[str, str] = {}
+    versions = {}
+    root = None
     while True:
         msg = _read()
         if msg is None:
@@ -40,13 +45,45 @@ def main() -> int:
         method = msg.get("method")
         rid = msg.get("id")
         params = msg.get("params") or {}
+        if os.environ.get('CTX_TEST_LSP_LOG'):
+            with open(os.environ['CTX_TEST_LSP_LOG'], 'a') as log:
+                log.write(json.dumps({'pid': os.getpid(), 'method': method}) + '\n')
         if method == "initialize":
-            _write({"jsonrpc": "2.0", "id": rid, "result": {"capabilities": {"definitionProvider": True}}})
+            root = Path(params['rootPath'])
+            _write({"jsonrpc": "2.0", "id": rid, "result": {"capabilities": {
+                "definitionProvider": True, "textDocumentSync": 2,
+                "renameProvider": True, "codeActionProvider": True}}})
             # A server→client request the client must answer (with null).
             _write({"jsonrpc": "2.0", "id": 999, "method": "workspace/configuration", "params": {"items": []}})
-        elif method == "textDocument/didOpen":
+        elif method in {"textDocument/didOpen", "textDocument/didChange"}:
             td = params["textDocument"]
-            opened[td["uri"]] = td["text"]
+            opened[td["uri"]] = td.get("text", params.get('contentChanges', [{}])[0].get('text', ''))
+            versions[td['uri']] = td['version']
+            diagnostics = [{'message': 'unknown name BROKEN', 'severity': 1,
+                            'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 6}}}] if 'BROKEN' in opened[td['uri']] else []
+            report = {'uri': td['uri'], 'diagnostics': diagnostics}
+            if not os.environ.get('CTX_TEST_LSP_UNVERSIONED'):
+                report['version'] = td['version']
+            _write({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics', 'params': report})
+        elif method == 'textDocument/rename':
+            changes = []
+            for path in sorted(root.glob('*.py')):
+                uri = path.as_uri()
+                edits = []
+                for line, text in enumerate(opened.get(uri, path.read_text()).splitlines()):
+                    for hit in re.finditer(r'\bhello\b', text):
+                        edits.append({'range': {'start': {'line': line, 'character': hit.start()},
+                                                'end': {'line': line, 'character': hit.end()}},
+                                      'newText': params['newName']})
+                if edits:
+                    changes.append({'textDocument': {'uri': uri, 'version': versions.get(uri)}, 'edits': edits})
+            _write({'jsonrpc': '2.0', 'id': rid, 'result': {'documentChanges': changes}})
+        elif method == 'textDocument/codeAction':
+            uri = params['textDocument']['uri']
+            edit = {'range': {'start': {'line': 0, 'character': 4}, 'end': {'line': 0, 'character': 9}}, 'newText': 'greet'}
+            _write({'jsonrpc': '2.0', 'id': rid, 'result': [
+                {'title': 'Rename declaration', 'edit': {'changes': {uri: [edit]}}},
+                {'title': 'Run arbitrary command', 'command': {'command': 'unsafe'}}]})
         elif method == "textDocument/definition":
             uri = params["textDocument"]["uri"]
             _write({"jsonrpc": "2.0", "id": rid, "result": {

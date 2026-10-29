@@ -12,8 +12,9 @@ Design rules, all measured elsewhere in this repo:
   crashes, or one that times out returns ``None``/raises ``LspError``; the
   caller falls to the next rung and says so in the output header. The
   harness never blocks on a language server.
-- **Bounded.** One server process per call, ``initialize`` → the one
-  request → ``shutdown``; a request that outlasts ``timeout`` is a failure.
+- **Bounded.** A private local broker reuses one serialized server session per
+  workspace/configuration, expiring after idle time. A request that outlasts
+  ``timeout`` is a failure; ``CTX_LSP_REUSE=off`` uses one process per call.
   Servers that index whole projects (pyright, rust-analyzer) can take a few
   seconds on first contact; the default budget allows that and no more.
 - **Coordinates are the interchange.** Positions in are ``line:col``
@@ -28,6 +29,8 @@ Design rules, all measured elsewhere in this repo:
 from __future__ import annotations
 
 import json
+import hashlib
+import signal
 import os
 import shutil
 import subprocess
@@ -136,7 +139,7 @@ def roster() -> dict[str, str]:
 
 
 class Client:
-    """One language-server process, JSON-RPC over stdio, for one call."""
+    """One serialized language-server session, with versioned open documents."""
 
     def __init__(self, argv: list[str], root: Path, *, timeout: float = DEFAULT_TIMEOUT_S) -> None:
         self.argv = argv
@@ -149,6 +152,10 @@ class Client:
         self._reader: threading.Thread | None = None
         self._dead = threading.Event()
         self._diagnosed: set[str] = set()
+        self.documents: dict[str, tuple[int, str]] = {}
+        self.diagnostics: dict[str, dict] = {}
+        self.capabilities: dict = {}
+        self._document_seq = 0
 
     # ----------------------------------------------------------- lifecycle
     def __enter__(self) -> Client:
@@ -156,12 +163,20 @@ class Client:
             self._proc = subprocess.Popen(
                 self.argv, cwd=self.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
+                start_new_session=os.name == 'posix',
             )
         except OSError as exc:
             raise LspError(f"cannot start {self.argv[0]}: {exc}") from None
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
-        self.request("initialize", {
+        try:
+            return self._initialize()
+        except BaseException:
+            self.close()
+            raise
+
+    def _initialize(self) -> Client:
+        result = self.request("initialize", {
             "processId": os.getpid(),
             "rootUri": self.root.as_uri(),
             "rootPath": str(self.root),
@@ -171,7 +186,11 @@ class Client:
                 "textDocument": {
                     "synchronization": {"didSave": True},
                     "hover": {"contentFormat": ["plaintext", "markdown"]},
-                    "definition": {}, "references": {}, "publishDiagnostics": {},
+                    "definition": {}, "references": {},
+                    "publishDiagnostics": {"versionSupport": True},
+                    "rename": {"prepareSupport": True},
+                    "codeAction": {"codeActionLiteralSupport": {
+                        "codeActionKind": {"valueSet": ["quickfix", "refactor"]}}},
                 },
                 # Advertise configuration support and then send empty
                 # settings: pyright asks for its settings before it will
@@ -183,6 +202,9 @@ class Client:
                 },
             },
         })
+        self.capabilities = (result or {}).get("capabilities", {})
+        if self.capabilities.get("positionEncoding", "utf-16") != "utf-16":
+            raise LspError("server selected an unsupported position encoding")
         self.notify("initialized", {})
         # Workspace-wide analysis: pyright's default `openFilesOnly` answers
         # references from the open document alone (measured: 2 sites in one
@@ -208,14 +230,30 @@ class Client:
             return
         try:
             if p.poll() is None:
-                p.terminate()
+                if os.name == 'posix':
+                    os.killpg(p.pid, signal.SIGTERM)
+                else:
+                    p.terminate()
                 try:
                     p.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    p.kill()
+                    if os.name == 'posix':
+                        os.killpg(p.pid, signal.SIGKILL)
+                    else:
+                        p.kill()
+                    p.wait(timeout=2)
         except OSError:
             pass
+        if os.name == 'posix':
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         self._dead.set()
+        for stream in (p.stdin, p.stdout):
+            if stream:
+                stream.close()
+        self._proc = None
 
     # ------------------------------------------------------------- framing
     def _send(self, payload: dict[str, Any]) -> None:
@@ -246,6 +284,8 @@ class Client:
                         length = int(line.split(b":", 1)[1].strip())
                 if length is None:
                     continue
+                if not 0 <= length <= 8 * 1024 * 1024:
+                    return
                 body = out.read(length)
                 if not body:
                     return
@@ -254,11 +294,13 @@ class Client:
                 except ValueError:
                     continue
                 if isinstance(msg, dict) and "id" in msg and ("result" in msg or "error" in msg):
-                    self._responses[int(msg["id"])] = msg
+                    if msg["id"] == self._seq:
+                        self._responses[int(msg["id"])] = msg
                 elif isinstance(msg, dict) and msg.get("method") == "textDocument/publishDiagnostics":
                     uri = str((msg.get("params") or {}).get("uri") or "")
-                    if uri:
+                    if uri in self.documents:
                         self._diagnosed.add(uri)
+                        self.diagnostics[uri] = msg["params"]
                 elif isinstance(msg, dict) and "id" in msg and "method" in msg:
                     # A server→client request: answer so the server never
                     # blocks on us. workspace/configuration wants one entry
@@ -266,6 +308,8 @@ class Client:
                     # everything else (registerCapability, workDoneProgress/
                     # create) takes null.
                     result: Any = None
+                    if msg["method"] == "workspace/applyEdit":
+                        result = {"applied": False, "failureReason": "ctx requires a previewed edit plan"}
                     if msg["method"] == "workspace/configuration":
                         items = (msg.get("params") or {}).get("items") or []
                         result = [_configuration_for(it) for it in items]
@@ -298,12 +342,44 @@ class Client:
 
     # ------------------------------------------------------------- documents
     def open(self, rel: str, language: str) -> str:
-        path = self.root / rel
-        text = path.read_text(encoding="utf-8", errors="replace")
+        path = (self.root / rel).resolve()
+        if not path.is_relative_to(self.root) or not path.is_file():
+            raise LspError("document must be a file inside the workspace")
+        if path.stat().st_size > 2 * 1024 * 1024:
+            raise LspError("document exceeds the 2 MiB LSP limit")
+        text = path.read_bytes().decode("utf-8")
         uri = path.as_uri()
-        self.notify("textDocument/didOpen", {"textDocument": {
-            "uri": uri, "languageId": _LANGUAGE_IDS.get(language, language), "version": 1, "text": text,
-        }})
+        previous = self.documents.get(uri)
+        if previous and previous[1] == text:
+            return uri
+        self._diagnosed.discard(uri)
+        self.diagnostics.pop(uri, None)
+        self._document_seq += 1
+        version = self._document_seq
+        self.documents[uri] = (version, text)
+        if previous:
+            sync = self.capabilities.get("textDocumentSync", 0)
+            kind = sync.get("change", 0) if isinstance(sync, dict) else sync
+            if kind not in (1, 2):
+                raise LspError("server does not support document changes")
+            change = {"text": text}
+            if kind == 2:
+                old_lines = previous[1].split("\n")
+                change["range"] = {"start": {"line": 0, "character": 0}, "end": {
+                    "line": len(old_lines) - 1,
+                    "character": len(old_lines[-1].encode("utf-16-le")) // 2}}
+            self.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version},
+                                                    "contentChanges": [change]})
+        else:
+            if len(self.documents) >= 64:
+                oldest = next(iter(self.documents))
+                self.notify("textDocument/didClose", {"textDocument": {"uri": oldest}})
+                del self.documents[oldest]
+                self.diagnostics.pop(oldest, None)
+                self._diagnosed.discard(oldest)
+            self.notify("textDocument/didOpen", {"textDocument": {
+                "uri": uri, "languageId": _LANGUAGE_IDS.get(language, language), "version": version, "text": text,
+            }})
         # Let the server settle before the question. A server applies the
         # settings it asked for asynchronously after `initialized`; asked
         # too early, pyright answered references from the open file only
@@ -311,10 +387,29 @@ class Client:
         # (32 sites in 6 files). Its diagnostics for the opened document are
         # the signal that settings are applied and the file is analyzed;
         # a server that never publishes costs at most the settle budget.
-        deadline = time.monotonic() + settle_seconds()
+        deadline = time.monotonic() + min(self.timeout, max(0, settle_seconds()))
         while time.monotonic() < deadline and uri not in self._diagnosed and not self._dead.is_set():
             time.sleep(0.02)
         return uri
+
+    def diagnostic_report(self, uri: str) -> dict:
+        version, text = self.documents[uri]
+        if self.capabilities.get("diagnosticProvider"):
+            report = self.request("textDocument/diagnostic", {"textDocument": {"uri": uri}})
+            if report.get("kind") == "full":
+                return {"items": report.get("items", []), "version": version,
+                        "digest": hashlib.sha256(text.encode()).hexdigest(), "fresh": True}
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline and not self._dead.is_set():
+            report = self.diagnostics.get(uri)
+            if report and report.get("version") == version:
+                return {"items": report.get("diagnostics", []), "version": version,
+                        "digest": hashlib.sha256(text.encode()).hexdigest(), "fresh": True}
+            if report and report.get("version") is None:
+                return {"items": report.get("diagnostics", []), "fresh": False,
+                        "reason": "server omitted diagnostic version"}
+            time.sleep(0.02)
+        return {"items": [], "fresh": False, "reason": "no current diagnostic report"}
 
     # --------------------------------------------------------------- queries
     def definition(self, uri: str, line: int, col: int) -> list[dict[str, Any]]:
@@ -400,25 +495,56 @@ def _sites(locs: list[dict[str, Any]], root: Path) -> list[tuple[str, int, str]]
 def query(
     root: Path, rel: str, line: int, col: int, what: str, *, timeout: float = DEFAULT_TIMEOUT_S
 ) -> tuple[list[tuple[str, int, str]] | str | None, str]:
-    """One semantic question at a position. Returns ``(answer, server_name)``:
+    """A semantic question at a position. Returns ``(answer, server_name)``:
     sites for ``definition``/``references``, text for ``hover``. Raises
     ``LspError`` when no server exists for the file's language or the server
     fails; the caller decides what rung comes next."""
-    from ctx.skeleton import language_for
+    result = semantic_request(root, rel, what, line=line, col=col, timeout=timeout)
+    answer = result['answer']
+    if what in {'definition', 'references'}:
+        answer = [tuple(row) for row in answer]
+    return answer, result['server']
 
+
+def semantic_request(root: Path, rel: str, operation: str, *, line=1, col=1,
+                     timeout=DEFAULT_TIMEOUT_S, **options) -> dict:
+    from ctx.skeleton import language_for
+    from ctx.lsp_service import dispatch, request
+
+    if not 0 < timeout <= 120:
+        raise LspError('timeout must be greater than 0 and at most 120 seconds')
     language = language_for(rel)
     argv = server_for(language)
     if argv is None:
         raise LspError(f"no language server on PATH for {language or 'this file'}")
-    with Client(argv, root, timeout=timeout) as client:
-        uri = client.open(rel, language or "")
-        if what == "definition":
-            return _sites(client.definition(uri, line, col), root), Path(argv[0]).name
-        if what == "references":
-            return _sites(client.references(uri, line, col), root), Path(argv[0]).name
-        if what == "hover":
-            return client.hover(uri, line, col), Path(argv[0]).name
-    raise LspError(f"unknown query {what!r}")
+    payload = dict(rel=rel, operation=operation, line=line, col=col, **options)
+    try:
+        if os.name == 'posix' and os.environ.get('CTX_LSP_REUSE', '').lower() not in {'off', '0', 'false'}:
+            return request(Path(root), argv, payload, timeout)
+        with Client(argv, root, timeout=timeout) as client:
+            return dispatch(client, payload)
+    except (OSError, ValueError) as exc:
+        raise LspError(str(exc)) from exc
+
+
+def diagnostic_provider(root: Path, *, timeout: float = 5):
+    """Adapt version-checked server diagnostics to the edit receipt contract."""
+    from ctx.post_edit_diagnostics import Diagnostic, DiagnosticSnapshot
+
+    def collect(path, baseline):
+        report = semantic_request(root, path.relative_to(root).as_posix(), 'diagnostics', timeout=timeout)
+        answer = report['answer']
+        diagnostics = tuple(Diagnostic(
+            message=str(item.get('message', ''))[:500],
+            severity={1: 'error', 2: 'warning', 3: 'information', 4: 'hint'}.get(item.get('severity', 1), 'error'),
+            line=item.get('range', {}).get('start', {}).get('line', 0) + 1,
+            column=item.get('range', {}).get('start', {}).get('character', 0) + 1,
+            code=str(item['code']) if 'code' in item else None,
+        ) for item in answer['items'])
+        return DiagnosticSnapshot(source='lsp:' + report['server'], diagnostics=diagnostics,
+                                  document_digest=answer.get('digest') if answer['fresh'] else None,
+                                  reason=answer.get('reason'))
+    return collect
 
 
 def symbol_position(root: Path, rel: str, symbol: str) -> tuple[int, int] | None:

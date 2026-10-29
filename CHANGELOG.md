@@ -6,6 +6,16 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- Reuse language-server sessions across CLI calls through a private local
+  broker, with document updates, project-change notifications, timeouts and idle
+  expiry. `ctx lsp diagnostics` reports version-checked errors; ctx-owned edit
+  receipts also collect available LSP diagnostics within a bounded allowance.
+- `ctx lsp rename` and `actions` produce sealed edit plans for preview/apply.
+  Semantic plans refuse any changed source file, out-of-workspace targets,
+  resource operations, server commands, unknown versions and overlapping edits.
+  Local real-Pyright replay checks reuse, error detection, cross-file rename and
+  executable verification; it makes no claim about agent turns or provider cost.
+
 ## [0.41.0] - 2026-10-29
 
 - Local query-aware block selection preserves required evidence, heading and

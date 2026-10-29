@@ -39,6 +39,7 @@ const PAGES = [
   ['AGENT-INTEGRATIONS.md', 'guides/agent-integrations', 'Agent integrations', 'Keep your agent: connect Hermes, OMP, OpenCode, and DeepSeek Harness.'],
   ['ACP.md', 'guides/acp', 'ACP orchestration', 'Configure agent endpoints, permissions, and verified edit tools.'],
   ['EDIT-LOOP.md', 'guides/edit-loop', 'Edit and verify', 'Observed source, anchored edits, verification, and evidence-gated continuation.'],
+  ['LSP.md', 'guides/lsp', 'Language servers', 'Reused semantic queries, fresh diagnostics, and guarded rename and code-action plans.'],
   ['SEMANTIC.md', 'guides/semantic', 'Semantic analysis', 'Explicit model calls over frozen evidence, with budgets and resumable findings.'],
   ['TOOL-SDK.md', 'guides/tool-sdk', 'Tool SDK', 'Async capture, typed command status, bounded retrieval and portable evidence for embedding harnesses.'],
   // Start here

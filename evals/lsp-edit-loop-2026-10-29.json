@@ -1,0 +1,79 @@
+{
+  "schema": "ctx.lsp-replay/v1",
+  "server": "pyright-langserver",
+  "source_sha256": {
+    "lsp.py": "d6cf95082aaf40cc63a3e9a4f758e378435e98b98c755c638b76cdb37fa20462",
+    "lsp_service.py": "af50fe6fbd2d9529c8f53a4b02cd5acbdc95d1a58f2c5cd0fbb785672e4b745b",
+    "lsp_edits.py": "56fa9ca97637d613a1d0ce1acd6a78d9f793fd5cb7256eb8bd015dfba0960e81",
+    "edit_transactions.py": "ae14849119add375e7009c05c589a3aeabcff935664a7ee78cb8df2a67cf38da"
+  },
+  "server_command": [
+    "/home/user/.local/bin/pyright-langserver",
+    "--stdio"
+  ],
+  "queries": [
+    {
+      "reuse": "off",
+      "repeat": 0,
+      "pid": 266686,
+      "seconds": 0.8465,
+      "answer": "(function) def hello() -> int",
+      "evidence_bytes": 31
+    },
+    {
+      "reuse": "off",
+      "repeat": 1,
+      "pid": 266701,
+      "seconds": 0.8681,
+      "answer": "(function) def hello() -> int",
+      "evidence_bytes": 31
+    },
+    {
+      "reuse": "off",
+      "repeat": 2,
+      "pid": 266734,
+      "seconds": 0.9474,
+      "answer": "(function) def hello() -> int",
+      "evidence_bytes": 31
+    },
+    {
+      "reuse": "on",
+      "repeat": 0,
+      "pid": 266764,
+      "seconds": 0.9167,
+      "answer": "(function) def hello() -> int",
+      "evidence_bytes": 31
+    },
+    {
+      "reuse": "on",
+      "repeat": 1,
+      "pid": 266764,
+      "seconds": 0.0149,
+      "answer": "(function) def hello() -> int",
+      "evidence_bytes": 31
+    },
+    {
+      "reuse": "on",
+      "repeat": 2,
+      "pid": 266764,
+      "seconds": 0.0143,
+      "answer": "(function) def hello() -> int",
+      "evidence_bytes": 31
+    }
+  ],
+  "warm_processes": 1,
+  "cold_processes": 3,
+  "cold_median_seconds": 0.8681,
+  "warm_repeat_median_seconds": 0.0146,
+  "same_answers": true,
+  "fresh_error_detected": true,
+  "renamed_files": 2,
+  "preview_outcome": "ready",
+  "apply_outcome": "applied",
+  "verification_exit": 0,
+  "agent_turns": null,
+  "provider_cost": null,
+  "scope": "fixed local Python replay; not autonomous coding success",
+  "passed": true,
+  "source_unchanged": true
+}
