@@ -1,0 +1,45 @@
+{
+  "ctx": {
+    "command": [
+      "/home/user/anaconda3/bin/python"
+    ],
+    "version": "0.41.0+ba61748",
+    "revision": "ba61748",
+    "source": "https://github.com/vamsiramakrishnan/straitjacket",
+    "binary_sha256": "b474f42c3d8cfb7bf4e8da012ce4df1029ec3343b44bdb805882c8e10078a072"
+  },
+  "serena": {
+    "command": [
+      "/tmp/ctx-compare-env/bin/serena"
+    ],
+    "repo": "/tmp/ctx-compare-serena",
+    "version": "2.1.1.dev0",
+    "source": "https://github.com/oraios/serena",
+    "revision": "ede329aaf0c824bea75455a2926f01420d7aa620",
+    "binary_sha256": "0b6d5bd01ac8a189e4cc609c3cbb99f4fec7f6d6ac5a9512495550a4deb0d034"
+  },
+  "headroom": {
+    "command": [
+      "/tmp/ctx-compare-headroom-env/bin/python"
+    ],
+    "repo": "/tmp/ctx-compare-headroom",
+    "version": "0.42.0",
+    "source": "https://github.com/headroomlabs-ai/headroom",
+    "revision": "a2d4fe72381e186651466ee94e92ce9d8d1396cc",
+    "binary_sha256": "b474f42c3d8cfb7bf4e8da012ce4df1029ec3343b44bdb805882c8e10078a072"
+  },
+  "tokensave": {
+    "command": [
+      "/tmp/ctx-compare-tokensave/tokensave"
+    ],
+    "repo": "/tmp/ctx-compare-tokensave-src",
+    "version": "7.16.0",
+    "source": "https://github.com/aovestdipaperino/tokensave",
+    "revision": "6ab9ca2c23b41cf99f60400bab1fb08dd766a05d",
+    "binary_sha256": "f7229fa0e4061dc32561cf12f9a8f055a742cb5724ca271ce25c96cdee3a73fa"
+  },
+  "wozcode": {
+    "unavailable": "Claude Code proprietary plugin not installed/configured; no substitute implementation used",
+    "source": "https://www.wozcode.com/how-it-works"
+  }
+}
