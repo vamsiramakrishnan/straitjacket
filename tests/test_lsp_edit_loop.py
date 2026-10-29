@@ -61,6 +61,15 @@ def test_unversioned_diagnostics_cannot_prove_clean(project, monkeypatch):
     assert result['outcome'] == 'stale'
 
 
+def test_empty_pull_diagnostics_do_not_hide_versioned_push_errors(project, monkeypatch):
+    ws, _ = project
+    monkeypatch.setenv('CTX_TEST_LSP_PULL', '1')
+    (ws.root / 'mod.py').write_text('BROKEN\n')
+    result = lsp.semantic_request(ws.root, 'mod.py', 'diagnostics', timeout=2)['answer']
+    assert result['fresh'] is True
+    assert result['items'][0]['severity'] == 1
+
+
 def test_diagnostic_error_after_display_limit_is_not_hidden(project, monkeypatch):
     import hashlib
 
@@ -112,6 +121,67 @@ def test_document_version_mismatch_is_refused(project):
     edit = {'documentChanges': [{'textDocument': {'uri': path.as_uri(), 'version': 99}, 'edits': []}]}
     with pytest.raises(EditTransactionError, match='stale LSP document version'):
         workspace_edit_plan(ws, store, edit, {'mod.py': path.read_bytes()}, {path.as_uri(): 1})
+
+
+def test_versioned_closed_files_are_opened_and_rename_recomputed(project, monkeypatch):
+    ws, store = project
+    monkeypatch.setenv('CTX_TEST_LSP_CLOSED_ZERO', '1')
+    plan = propose(ws, store, 'mod.py', 'rename', new_name='greet')['plan']
+    assert len(plan['edits']) == 2
+    assert apply_edit_plan(ws, plan)['outcome'] == 'applied'
+    events = [json.loads(line)['method'] for line in Path(os.environ['CTX_TEST_LSP_LOG']).read_text().splitlines()]
+    assert events.count('textDocument/rename') == 2
+    assert events.count('textDocument/didOpen') >= 2
+
+
+def test_versioned_rename_refuses_more_than_document_limit(project, monkeypatch):
+    ws, store = project
+    monkeypatch.setenv('CTX_TEST_LSP_CLOSED_ZERO', '1')
+    for index in range(64):
+        (ws.root / f'extra{index}.py').write_text('from mod import hello\n')
+    with pytest.raises(lsp.LspError, match='more than 64 open documents'):
+        propose(ws, store, 'mod.py', 'rename', new_name='greet')
+    assert 'hello' in (ws.root / 'mod.py').read_text()
+
+
+def test_cross_language_rename_is_refused_until_all_targets_are_observed(project, monkeypatch):
+    ws, store = project
+    path = ws.root / 'main.js'
+    path.write_text('hello();\n')
+    item = {'range': {'start': {'line': 0, 'character': 0},
+                      'end': {'line': 0, 'character': 5}}, 'newText': 'greet'}
+    monkeypatch.setattr(lsp, 'semantic_request', lambda *a, **kw: {
+        'server': 'fake', 'versions': {}, 'answer': {'changes': {path.as_uri(): [item]}}})
+    with pytest.raises(EditTransactionError, match='unobserved'):
+        propose(ws, store, 'mod.py', 'rename', new_name='greet')
+    assert path.read_text() == 'hello();\n'
+
+
+@pytest.mark.parametrize('status', ['ready', 'loading'])
+def test_rust_workspace_loading_is_bounded(project, monkeypatch, status):
+    ws, _ = project
+    monkeypatch.setenv('CTX_TEST_LSP_STATUS', status)
+    argv = lsp.server_for('python')
+    if status == 'loading':
+        client = lsp.Client(argv, ws.root, timeout=.2)
+        with pytest.raises(lsp.LspError, match='did not finish loading'):
+            with client:
+                pass
+        assert client._proc is None
+    else:
+        with lsp.Client(argv, ws.root, timeout=.2) as client:
+            assert client._server_status['quiescent'] is True
+
+
+def test_pull_diagnostics_never_merge_stale_push(project, monkeypatch):
+    ws, _ = project
+    client = lsp.Client(['fake'], ws.root)
+    uri = (ws.root / 'mod.py').as_uri()
+    client.documents[uri] = (2, 'new text')
+    client.capabilities['diagnosticProvider'] = True
+    client.diagnostics[uri] = {'version': 1, 'diagnostics': [{'severity': 1, 'message': 'old error'}]}
+    monkeypatch.setattr(client, 'request', lambda *a: {'kind': 'full', 'items': []})
+    assert client.diagnostic_report(uri)['items'] == []
 
 
 def test_code_action_only_plans_literal_edits(project):

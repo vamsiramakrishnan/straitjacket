@@ -1,0 +1,380 @@
+{
+  "schema": "ctx.lsp-languages/v1",
+  "scope": "fixed local fixtures; no model calls or autonomous agent trial",
+  "source_sha256": {
+    "lsp.py": "8314d9b165e2d932b7db972eb4bffb3286dc1f2189fcefc9742b58584f910540",
+    "lsp_service.py": "3d064604f4e45dc0079d095b0bc7ec7cf80cbdcae144bc53ac95b54498a3994b",
+    "lsp_edits.py": "56fa9ca97637d613a1d0ce1acd6a78d9f793fd5cb7256eb8bd015dfba0960e81",
+    "edit_transactions.py": "ae14849119add375e7009c05c589a3aeabcff935664a7ee78cb8df2a67cf38da"
+  },
+  "source_unchanged": true,
+  "languages": [
+    {
+      "language": "typescript",
+      "passed": true,
+      "agent_turns": null,
+      "provider_cost": null,
+      "server_command": [
+        "/tmp/ctx-lsp-tools/node_modules/.bin/typescript-language-server",
+        "--stdio"
+      ],
+      "fixture_sha256": {
+        "tsconfig.json": "14644b4188ddce35be8e0b5e678cb86dbe1c86996726e2ccd789ce36a0d51c1f",
+        "mod.ts": "eb9977e0cc6e8b906e07b11361da6fb37e6bf9ce5f5b118aa61fedf3359e53dc",
+        "main.ts": "2dc11fb95ef559c90078f035eafe7d22c1ef0b9a4301a88d10fa88aaa7a83468",
+        "unrelated.ts": "3110592adc366a7060ca58e72625979a32ee155e0bbc3b865d51eaa154697655"
+      },
+      "server_version": {
+        "argv": [
+          "typescript-language-server",
+          "--version"
+        ],
+        "exit": 0,
+        "stdout": "6.0.2\n",
+        "stderr": ""
+      },
+      "compiler_version": {
+        "argv": [
+          "tsc",
+          "--version"
+        ],
+        "exit": 0,
+        "stdout": "Version 6.0.3\n",
+        "stderr": ""
+      },
+      "baseline": [
+        {
+          "argv": [
+            "tsc",
+            "--project",
+            "."
+          ],
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "node",
+            "dist/main.js"
+          ],
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "broken_compiler_check": {
+        "argv": [
+          "tsc",
+          "--project",
+          "."
+        ],
+        "exit": 2,
+        "stdout": "mod.ts(1,36): error TS2322: Type 'string' is not assignable to type 'number'.\n",
+        "stderr": ""
+      },
+      "diagnostics": {
+        "items": [
+          {
+            "range": {
+              "start": {
+                "line": 0,
+                "character": 35
+              },
+              "end": {
+                "line": 0,
+                "character": 41
+              }
+            },
+            "message": "Type 'string' is not assignable to type 'number'.",
+            "severity": 1,
+            "code": 2322,
+            "source": "typescript"
+          }
+        ],
+        "fresh": false,
+        "reason": "server omitted diagnostic version"
+      },
+      "clean_diagnostics": {
+        "items": [],
+        "fresh": false,
+        "reason": "server omitted diagnostic version"
+      },
+      "preview": "ready",
+      "renamed_files": [
+        "main.ts",
+        "mod.ts"
+      ],
+      "stale_edit_refused": true,
+      "stale_refusal": "semantic edit source file changed; replan",
+      "refusal_wrote_nothing": true,
+      "apply": "applied",
+      "verification": [
+        {
+          "argv": [
+            "tsc",
+            "--project",
+            "."
+          ],
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "node",
+            "dist/main.js"
+          ],
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "unrelated_unchanged": true,
+      "fresh_error_detected": false,
+      "fresh_error_cleared": false,
+      "edit_passed": true,
+      "diagnostic_status": "unavailable_unversioned",
+      "status": "passed",
+      "seconds": 9.874
+    },
+    {
+      "language": "go",
+      "passed": true,
+      "agent_turns": null,
+      "provider_cost": null,
+      "server_command": [
+        "/home/user/go/bin/gopls"
+      ],
+      "fixture_sha256": {
+        "go.mod": "31a8a0fb99972867faef60e2113c3878611fceabdbec468e6fe1c22635398725",
+        "mod.go": "c256716b1b566b89c73710f6127169ce001720a5649b34ec058e073a97eae56c",
+        "main.go": "2911e9bcd606791c9addd5655a4e58d3ee16936670ee5a2c019c518ac174c531",
+        "unrelated.go": "85a78bf12ff3d2119863f7caeac1638415e37d2c26b18ccbbb38e2bc45c76758"
+      },
+      "server_version": {
+        "argv": [
+          "gopls",
+          "version"
+        ],
+        "exit": 0,
+        "stdout": "golang.org/x/tools/gopls v0.21.1\n",
+        "stderr": ""
+      },
+      "compiler_version": {
+        "argv": [
+          "go",
+          "version"
+        ],
+        "exit": 0,
+        "stdout": "go version go1.27.3 linux/amd64\n",
+        "stderr": ""
+      },
+      "baseline": [
+        {
+          "argv": [
+            "go",
+            "run",
+            "."
+          ],
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "broken_compiler_check": {
+        "argv": [
+          "go",
+          "run",
+          "."
+        ],
+        "exit": 1,
+        "stdout": "",
+        "stderr": "# example.com/ctxreplay\n./mod.go:2:28: cannot use \"wrong\" (untyped string constant) as int value in return statement\n"
+      },
+      "diagnostics": {
+        "items": [
+          {
+            "range": {
+              "start": {
+                "line": 1,
+                "character": 27
+              },
+              "end": {
+                "line": 1,
+                "character": 34
+              }
+            },
+            "severity": 1,
+            "code": "IncompatibleAssign",
+            "codeDescription": {
+              "href": "https://pkg.go.dev/golang.org/x/tools/internal/typesinternal#IncompatibleAssign"
+            },
+            "source": "compiler",
+            "message": "cannot use \"wrong\" (untyped string constant) as int value in return statement"
+          }
+        ],
+        "version": 1,
+        "digest": "42b4d7afc87649d4977b22a7908453571204ac9ad5c2b8fc133c3d07a84b1a40",
+        "fresh": true
+      },
+      "clean_diagnostics": {
+        "items": [],
+        "version": 2,
+        "digest": "c256716b1b566b89c73710f6127169ce001720a5649b34ec058e073a97eae56c",
+        "fresh": true
+      },
+      "preview": "ready",
+      "renamed_files": [
+        "main.go",
+        "mod.go"
+      ],
+      "stale_edit_refused": true,
+      "stale_refusal": "semantic edit source file changed; replan",
+      "refusal_wrote_nothing": true,
+      "apply": "applied",
+      "verification": [
+        {
+          "argv": [
+            "go",
+            "run",
+            "."
+          ],
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "unrelated_unchanged": true,
+      "fresh_error_detected": true,
+      "fresh_error_cleared": true,
+      "edit_passed": true,
+      "diagnostic_status": "passed",
+      "status": "passed",
+      "seconds": 3.545
+    },
+    {
+      "language": "rust",
+      "passed": true,
+      "agent_turns": null,
+      "provider_cost": null,
+      "server_command": [
+        "/home/user/.cargo/bin/rust-analyzer"
+      ],
+      "fixture_sha256": {
+        "Cargo.toml": "bc4f07deda4c282a43c30fce373ade528a28950a375779e726514b29b7c1c97e",
+        "src/mod.rs": "a079e0cbc123be43da28c50a99f1f648867192ae113ea6a35c8bec688359703b",
+        "src/main.rs": "18fe7c9d2aa9143a5138857e6af87e4b0b212578bb3ae5b9e5a6a4323a6c6106",
+        "src/unrelated.rs": "e8118aae9f3a5ce043fd4dfb0b346ad75f9c8db6c902402ebdb6632e15964e58"
+      },
+      "server_version": {
+        "argv": [
+          "rust-analyzer",
+          "--version"
+        ],
+        "exit": 0,
+        "stdout": "rust-analyzer 1.93.1 (01f6ddf 2026-02-11)\n",
+        "stderr": ""
+      },
+      "compiler_version": {
+        "argv": [
+          "rustc",
+          "--version"
+        ],
+        "exit": 0,
+        "stdout": "rustc 1.93.1 (01f6ddf75 2026-02-11)\n",
+        "stderr": ""
+      },
+      "baseline": [
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--offline",
+            "--quiet"
+          ],
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "broken_compiler_check": {
+        "argv": [
+          "cargo",
+          "run",
+          "--offline",
+          "--quiet"
+        ],
+        "exit": 101,
+        "stdout": "",
+        "stderr": "error[E0425]: cannot find function `missing_name` in this scope\n --> src/mod.rs:1:26\n  |\n1 | pub fn answer() -> i32 { missing_name() }\n  |                          ^^^^^^^^^^^^ not found in this scope\n\nFor more information about this error, try `rustc --explain E0425`.\nerror: could not compile `ctx-replay` (bin \"ctx-replay\") due to 1 previous error\n"
+      },
+      "diagnostics": {
+        "items": [
+          {
+            "range": {
+              "start": {
+                "line": 0,
+                "character": 25
+              },
+              "end": {
+                "line": 0,
+                "character": 37
+              }
+            },
+            "severity": 1,
+            "code": "E0425",
+            "codeDescription": {
+              "href": "https://doc.rust-lang.org/error-index.html#E0425"
+            },
+            "source": "rustc",
+            "message": "cannot find function `missing_name` in this scope\nnot found in this scope",
+            "data": {
+              "rendered": "error[E0425]: cannot find function `missing_name` in this scope\n --> src/mod.rs:1:26\n  |\n1 | pub fn answer() -> i32 { missing_name() }\n  |                          ^^^^^^^^^^^^ not found in this scope\n\n"
+            }
+          }
+        ],
+        "version": 1,
+        "digest": "2a12426c91af14d6620612b0277bc5cda118a7406748f0cccd1aa922de12fbdc",
+        "fresh": true
+      },
+      "clean_diagnostics": {
+        "items": [],
+        "version": 2,
+        "digest": "a079e0cbc123be43da28c50a99f1f648867192ae113ea6a35c8bec688359703b",
+        "fresh": true
+      },
+      "preview": "ready",
+      "renamed_files": [
+        "src/main.rs",
+        "src/mod.rs"
+      ],
+      "stale_edit_refused": true,
+      "stale_refusal": "semantic edit source file changed; replan",
+      "refusal_wrote_nothing": true,
+      "apply": "applied",
+      "verification": [
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--offline",
+            "--quiet"
+          ],
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "unrelated_unchanged": true,
+      "fresh_error_detected": true,
+      "fresh_error_cleared": true,
+      "edit_passed": true,
+      "diagnostic_status": "passed",
+      "status": "passed",
+      "seconds": 8.04
+    }
+  ],
+  "fresh_diagnostics_required": false,
+  "passed": true
+}
