@@ -53,8 +53,11 @@ crossings latch further epochs; sets only grow; state survives restarts.
 
 - *Nothing is destroyed*: every elided block's full bytes are persisted to
   `<state>/elided/<sha256>.txt` **before** the stub exists; the stub carries
-  the hash, byte count, and retrieval path. (Contrast: the rewriting
-  proxy's needle drop left no trace at any price.)
+  the hash, byte count, retrieval path, and (v0.38.0) the first line of the
+  block it replaced — a harnessed tool_result opens with its digest header,
+  so the transcript stays a readable index, headlong-style, without a
+  model writing a summary. (Contrast: the rewriting proxy's needle drop
+  left no trace at any price.)
 - *Determinism is the cache strategy*: property-tested — same transcript →
   byte-identical rewrite; grown transcript → byte-identical shared prefix.
 - *Disclosure everywhere*: `rescued: N` on each wire record, a stderr

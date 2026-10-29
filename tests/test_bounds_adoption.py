@@ -68,6 +68,11 @@ ALLOWED: dict[str, str] = {
     "skeleton.py": "1-indexed line clamp",
     "commands/admin.py": "divide-by-zero denominator guards",
     "plan_ops.py": "1-indexed line arithmetic for context windows",
+    "snapcompact.py": (
+        "pixel-geometry floors, not caller bounds: a font's own metrics "
+        "clamped to a positive cell size, and post-downscale dimensions "
+        "clamped so a degenerate image never rounds to a zero-token size"
+    ),
 }
 
 #: file -> why a ``x or DEFAULT`` on a bound-ish name is correct there.

@@ -41,7 +41,8 @@ def _dominant_array(doc: Any) -> tuple[list[Any], str] | None:
         for k in sorted(doc.keys()):
             v = doc[k]
             if isinstance(v, list) and v:
-                return v, f"/{k}"
+                escaped = k.replace("~", "~0").replace("/", "~1")  # RFC 6901: escape ~ and / in the pointer segment
+                return v, f"/{escaped}"
     return None
 
 

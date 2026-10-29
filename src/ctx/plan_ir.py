@@ -238,7 +238,7 @@ def parse_plan(text_or_doc: str | dict[str, Any]) -> EvidencePlan:
 def _budget_int(budget: dict[str, Any], key: str, default: int) -> int:
     try:
         return int(budget.get(key, default))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # int(inf) raises OverflowError, not ValueError
         return -1
 
 

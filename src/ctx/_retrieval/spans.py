@@ -11,7 +11,7 @@ omission and hands out coordinates.
 from __future__ import annotations
 
 from ctx.store import Store
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
+from ctx.textutil import index_lines, EVIDENCE_LINE_CHARS, fmt_int
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit
@@ -28,7 +28,7 @@ def _resolve_span(store: Store, ws: Workspace, ref_text: str, label: str, span_i
         total = b - a + 1
         if total <= budget.max_inline_lines:
             chunk = store.read_blob_lines(blob, a, b)
-            lines = chunk.decode("utf-8", "replace").splitlines()
+            lines = index_lines(chunk.decode("utf-8", "replace"))
             out.append(f"region: L{a}:{b} ({fmt_int(total)} lines, complete)")
             out.extend(f"L{a + i}: {ln}" for i, ln in enumerate(lines))
         else:
@@ -39,7 +39,7 @@ def _resolve_span(store: Store, ws: Workspace, ref_text: str, label: str, span_i
         from ctx.digest.logprof import mask_line
 
         data = store.get_blob(blob)
-        all_lines = data.decode("utf-8", "replace").splitlines()
+        all_lines = index_lines(data.decode("utf-8", "replace"))
         occurrences = [
             (i, raw)
             for i, raw in enumerate(all_lines, start=1)
@@ -68,7 +68,7 @@ def _zoom_region(store: Store, blob: str, a: int, b: int, inline_cap: int) -> li
     from ctx.digest.logprof import mine_templates
 
     chunk = store.read_blob_lines(blob, a, b)
-    lines = chunk.decode("utf-8", "replace").splitlines()
+    lines = index_lines(chunk.decode("utf-8", "replace"))
     templates, mined = mine_templates(lines, first_line_no=a)
 
     out: list[str] = []

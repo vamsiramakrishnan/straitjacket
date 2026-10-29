@@ -23,8 +23,16 @@ def cmd_run(ws, ns) -> int:
     if not command:
         print("ctx run: no command given (use: ctx run -- <command> [args...])", file=sys.stderr)
         return 2
+    if ns.shell and len(command) != 1:
+        print("ctx run: --shell mode takes exactly one command string", file=sys.stderr)
+        return 2
 
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+
+    structured = bool(getattr(ns, "json", False))
+    if structured and (ns.bg or ns.bg_after is not None or getattr(ns, "passthrough", False)):
+        print("ctx run: --json requires a foreground run without --passthrough", file=sys.stderr)
+        return 2
 
     if ns.bg or ns.bg_after is not None:
         return _run_bg(ws, store, ns, command)
@@ -44,8 +52,25 @@ def cmd_run(ws, ns) -> int:
         # the identical ExecutionError to 127; `ctx run` returned a bare 1,
         # so the same failure reported differently depending on which verb
         # you reached it through. One behaviour, two doors, again.
-        print(f"ctx run: {e}", file=sys.stderr)
+        if structured:
+            import json
+            print(json.dumps({"schema": "ctx.command-result/v1", "ref": None,
+                "command_exit_code": None, "signal": None, "timed_out": False,
+                "cancelled": False, "error": "launch_failed"}, separators=(",", ":")))
+        else:
+            print(f"ctx run: {e}", file=sys.stderr)
         return 127
+
+    if structured:
+        from ctx.toolresult import render_command_result
+        from ctx.retrieval import record_telemetry
+        result = render_command_result(ws, store, capture, focus=ns.focus,
+            delivery="digest" if ns.focus else "auto")
+        text = result.to_json()
+        record_telemetry(store, "run", sum(s["bytes"] for s in capture.manifest["streams"].values()),
+                         len(text.encode()) + 1)
+        print(text)
+        return 124 if result.timed_out else 0 if result.command_exit_code == 0 else 3
 
     # Reflex arc (docs/REFLEX.md layer 3): a signature already intervened on
     # this session re-arriving here IS the starvation loop — check_command
@@ -92,8 +117,15 @@ def cmd_run(ws, ns) -> int:
     except Exception:
         render_kwargs = {}
 
+    # `--passthrough` (the hook rewrite's mode): output that is complete and
+    # fits the inline budget reaches the transcript verbatim, so the digest
+    # is stored and addressable but never emitted — record it as raw->raw
+    # rather than booking a saving the model never received.
+    passthrough = bool(getattr(ns, "passthrough", False))
+    verbatim = passthrough and _passthrough_fits(ws, capture.manifest)
     digest, manifest = render_run_digest(
-        store, ws, capture.manifest, focus=ns.focus, dense=dense, **render_kwargs
+        store, ws, capture.manifest, focus=ns.focus, dense=dense,
+        contained=not verbatim, record_delivery=not verbatim, **render_kwargs
     )
     # A digest that omitted content is an intervention (hypothesis: the model
     # uses the digest, not a re-run). Record it so the reflex arc can score
@@ -115,7 +147,63 @@ def cmd_run(ws, ns) -> int:
         from ctx.reflex import DENSIFY_HEADER
 
         digest = DENSIFY_HEADER + "\n" + digest
-    return _emit_run_digest(ws, digest, manifest, store=store, signature=sig)
+    if verbatim:
+        return _emit_passthrough(ws, store, manifest)
+    rc = _emit_run_digest(ws, digest, manifest, store=store, signature=sig)
+    # Under a hook rewrite the host renders our exit status as the command's.
+    # ctx's own `3` ("the thing you asked about failed") is right for a human
+    # or a script that called ctx on purpose; for a rewritten tool call it
+    # reads as a foreign failure code, and the model cannot see the real one.
+    return _native_exit(manifest) if passthrough else rc
+
+
+def _native_exit(manifest: dict) -> int:
+    """The wrapped command's own status: 124 on timeout, else its exit code."""
+    from ctx._proc import native_exit_status
+
+    return native_exit_status(manifest["result"])
+
+
+def _passthrough_fits(ws, manifest: dict) -> bool:
+    """Can this capture be emitted as the shell would have, byte for byte?
+    Text streams only, nothing timed out, and the whole output inside the
+    inline budget — the same bound the emission gate uses for a native tool
+    result, so passthrough never lets more into the transcript than a plain
+    Bash call would."""
+    try:
+        streams = manifest["streams"]
+        total = sum(int(s["bytes"]) for s in streams.values())
+        if total > ws.config.budgets.max_inline_bytes:
+            return False
+        if any(manifest["result"].get(k) for k in ("timedOut", "cancelled", "outputLimited")):
+            return False
+        if sum(int(s["lines"]) for s in streams.values()) > ws.config.budgets.max_inline_lines:
+            return False
+        return not any(
+            str(s.get("mediaType", "")).startswith("application/octet-stream")
+            for s in streams.values() if int(s["bytes"])
+        )
+    except Exception:
+        return False
+
+
+def _emit_passthrough(ws, store, manifest: dict) -> int:
+    """Print the captured output verbatim (redacted like a digest would be),
+    then the run handle on one line so the artifact stays retrievable."""
+    from ctx.digest.base import DigestContext
+    from ctx.textutil import sanitize_for_model, short_id, write_exact
+
+    ctx = DigestContext.load(store, ws, manifest, focus=None)
+    parts = [v.text for v in (ctx.stdout, ctx.stderr) if v.bytes]
+    text = "".join(p if p.endswith("\n") else p + "\n" for p in parts)
+    text, _redactions = sanitize_for_model(text, ws.config.redaction)
+    code = _native_exit(manifest)
+    emitted = text + f"[ctx run:{short_id(manifest['id'])} · exit {code}]"
+    from ctx.retrieval import record_telemetry
+    record_telemetry(store, "run", sum(s["bytes"] for s in manifest["streams"].values()),
+                     len(emitted.encode("utf-8")) + 1)
+    write_exact(emitted, newline=True)
+    return code
 
 
 def _run_bg(ws, store, ns, command: list[str]) -> int:
@@ -131,7 +219,13 @@ def _run_bg(ws, store, ns, command: list[str]) -> int:
     )
     from ctx.workspace import WorkspaceError
 
-    patience = ns.bg_after if ns.bg_after is not None else 0.0  # --bg ⇒ 0
+    # `--bg` promises a handle ("background immediately: … transcript gets a
+    # job handle"), so it must not race its own supervisor. Expressed as a
+    # zero patience window it did: `wait_for_done` checks job state before it
+    # checks the deadline, so a child that finished before the first poll —
+    # `echo` on a loaded runner — finalized inline and the transcript got no
+    # address at all. Only `--bg-after` has a window to wait out.
+    patience = ns.bg_after
     try:
         job_id = start_job(
             ws, store, command,
@@ -141,7 +235,9 @@ def _run_bg(ws, store, ns, command: list[str]) -> int:
         print(f"ctx run: {e}", file=sys.stderr)
         return 1
     try:
-        if wait_for_done(store, job_id, timeout=max(0.0, patience)):
+        if patience is not None and wait_for_done(
+            store, job_id, timeout=max(0.0, patience)
+        ):
             digest, manifest = finalize_job(ws, store, job_id)
             return _emit_run_digest(ws, digest, manifest, store=store)
         print(backgrounded_status(store, job_id))
@@ -167,6 +263,19 @@ def cmd_job(ws, ns) -> int:
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
     try:
         job_id = resolve_job_id(store, ns.job_id)
+        if getattr(ns, "announce", False):
+            # The detached completion hook the supervisor spawns. Prints the
+            # queued signals rather than the digest: nothing is watching this
+            # process's stdout, and the digest is what the *receiver* will
+            # fetch from the address it is handed.
+            from ctx.jobs import announce_job
+
+            queued = announce_job(ws, store, job_id)
+            for row in queued:
+                print(f"queued {row['kind']} for {row['to']} · {row['signal_id']}")
+            if not queued:
+                print(f"job {job_id} finalized · nobody watching, nothing queued")
+            return 0
         if ns.kill:
             digest, manifest = kill_job(ws, store, job_id)
             short = short_id(manifest["id"])
@@ -186,8 +295,10 @@ def cmd_job(ws, ns) -> int:
             digest, manifest = finalize_job(ws, store, job_id)
             short = short_id(manifest["id"])
             print(f"[ctx job:{job_id} finalized → run:{short}]")
-            _emit_run_digest(ws, digest, manifest, store=store)
-            return 0
+            # The plain query was the one branch that computed the run's
+            # exit code and then returned 0: `ctx run --bg -- false`, then a
+            # later bare `ctx job <id>`, reported success.
+            return _emit_run_digest(ws, digest, manifest, store=store)
         status = job_status(store, job_id, tail=ns.tail)
         print(status)
         # 3, not 1: "the thing you asked about failed" is not "ctx failed".

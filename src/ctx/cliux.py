@@ -77,6 +77,8 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("stats", "size, shape and schema of a file or saved output"),
             ("map", "a ranked tour of the codebase that fits a token budget"),
             ("diff", "what changed between two saved runs"),
+            ("capsule", "pack the evidence behind cited handles into one file "
+                        "that still resolves on someone else's machine"),
             ("image", "inspect image/PDF structure or compare two image renders"),
         ),
     ),
@@ -85,9 +87,13 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ("ask", "ask a question about this repo; get one evidence-backed answer"),
             ("q", "chain retrieval steps into one query"),
+            ("pack", "where to look first for a task: ranked files, symbols and commits in one page"),
             ("plan", "build, price and run a multi-step evidence plan"),
+            ("semantic", "ask a model about selected evidence, with explicit budgets and saved progress"),
+            ("index", "build a compiler-grade index so def/refs answer exactly"),
             ("def", "where a symbol is defined"),
             ("refs", "where a symbol is used"),
+            ("lsp", "ask the language server where a name is defined or used, and what it is"),
             ("callers", "what calls this symbol"),
             ("callees", "what this symbol calls"),
             ("impact", "what breaks if this symbol changes"),
@@ -108,18 +114,21 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ("orchestrate", "split one task across your agents, cheapest model that fits "
                             "(usually a wrap mode, not something you type)"),
-            ("collab", "hand tasks between your coding agents with leases, completion "
-                       "packets, async events, native continuation, and cross-reviews"),
-            ("compress", "select local evidence with an original-content retrieval address"),
+            ("relay", "tell another agent something between turns: a finished job, "
+                      "a finding, or a stop"),
         ),
     ),
     (
         "Keep track",
         (
             ("checkpoint", "save task state so a fresh session can pick the work up"),
+            ("task", "the task ledger: how your agents collaborated, and resume it"),
+            ("collab", "coordinate isolated native agy sessions and completion events"),
+            ("compress", "select local evidence with an original-content retrieval address"),
             ("debt", "track work you deliberately deferred"),
             ("ladders", "audit where the harness escalates, and what it measured"),
             ("surface", "see and trim the tools your agent exposes (they cost tokens too)"),
+            ("prune", "defer the tools, skills and agents this repo does not use, at setup"),
         ),
     ),
     (
@@ -133,6 +142,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("proxy", "watch API traffic to measure what a session really spent"),
             ("antigravity", "install the Antigravity workspace plugin"),
             ("wrap", "advanced per-host setup and ephemeral launch modes"),
+            ("agent", "run a task with ctx as the host: its own retrieval tools and a pack at turn one"),
         ),
     ),
 )

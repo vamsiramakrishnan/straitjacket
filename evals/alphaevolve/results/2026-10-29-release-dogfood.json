@@ -1,0 +1,114 @@
+{
+  "schema": "ctx.dogfood/v1",
+  "source_fingerprint": "397905be8be535c5d6b0803cdb29d5d64ec046444c7b5735f732a4653f7ce30d",
+  "source_unchanged": true,
+  "cases": [
+    {
+      "case": "ownership-and-stale-verification",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 0.582,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:cc99b0578e95",
+      "tests": [
+        "tests/test_ctx_collab.py",
+        "tests/test_collab_safety.py"
+      ]
+    },
+    {
+      "case": "events-cancellation-and-resume",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 2.016,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:d637f406534e",
+      "tests": [
+        "tests/test_collab_sessions.py",
+        "tests/test_prewalk.py"
+      ]
+    },
+    {
+      "case": "compression-and-exact-retrieval",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 0.752,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:fac1ff5f8d68",
+      "tests": [
+        "tests/test_context_compression.py",
+        "tests/test_block_selection.py"
+      ]
+    },
+    {
+      "case": "automatic-task-context",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 1.188,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:c3a6a3bb1ac2",
+      "tests": [
+        "tests/test_task_context.py",
+        "tests/test_digest_focus_policy.py"
+      ]
+    },
+    {
+      "case": "capture-and-edit-recovery",
+      "passed": true,
+      "returncode": 0,
+      "seconds": 1.831,
+      "raw_bytes": 80,
+      "visible_bytes": 149,
+      "evidence": "run:86625cdf8647",
+      "tests": [
+        "tests/test_emission_gate.py",
+        "tests/test_edit_transactions.py"
+      ]
+    }
+  ],
+  "passed": true,
+  "measurement_scope": "local regression workflows; not agent task-completion benchmarking",
+  "agent_turns": null,
+  "provider_dollars": null,
+  "provider_tokens": null,
+  "comparison": [
+    {
+      "case": "ownership-and-stale-verification",
+      "passed_before": true,
+      "passed_after": true,
+      "visible_bytes_delta": 0,
+      "seconds_delta": 0.117
+    },
+    {
+      "case": "events-cancellation-and-resume",
+      "passed_before": true,
+      "passed_after": true,
+      "visible_bytes_delta": 0,
+      "seconds_delta": 0.327
+    },
+    {
+      "case": "compression-and-exact-retrieval",
+      "passed_before": true,
+      "passed_after": true,
+      "visible_bytes_delta": 0,
+      "seconds_delta": 0.173
+    },
+    {
+      "case": "automatic-task-context",
+      "passed_before": true,
+      "passed_after": true,
+      "visible_bytes_delta": 0,
+      "seconds_delta": 0.403
+    },
+    {
+      "case": "capture-and-edit-recovery",
+      "passed_before": true,
+      "passed_after": true,
+      "visible_bytes_delta": 0,
+      "seconds_delta": 0.758
+    }
+  ]
+}

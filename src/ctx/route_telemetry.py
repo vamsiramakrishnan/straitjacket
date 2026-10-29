@@ -130,7 +130,8 @@ def route_summary(workspace_root: Path) -> dict[str, Any]:
         },
         "kinds": {
             kind: sum(
-                1 for row in runs if row.get("task_profile", {}).get("kind") == kind
+                1 for row in runs
+                if str(row.get("task_profile", {}).get("kind", "unknown")) == kind  # match the same "unknown" default used to build the key set
             )
             for kind in sorted(
                 {

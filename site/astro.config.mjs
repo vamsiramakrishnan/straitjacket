@@ -8,8 +8,7 @@ import rehypeKatex from 'rehype-katex';
 export default defineConfig({
   site: 'https://vamsiramakrishnan.github.io',
   base: '/straitjacket',
-  // Render the \( … \) and \[ … \] math in the design docs (currently only
-  // WHY-STRAITJACKET) instead of leaking raw TeX onto the page.
+  // Render math in the design notes instead of leaking raw TeX onto the page.
   markdown: {
     remarkPlugins: [remarkMath],
     rehypePlugins: [rehypeKatex],
@@ -18,7 +17,7 @@ export default defineConfig({
     starlight({
       title: 'straitjacket',
       description:
-        'Artifact-backed context containment harness for coding agents. Unbounded tool output becomes an immutable artifact plus a bounded, span-addressed digest.',
+        'Context and evidence sidecar for coding agents. Keep your harness; add bounded tool output, retrievable evidence, and verified edits.',
       social: [
         {
           icon: 'github',
@@ -30,6 +29,7 @@ export default defineConfig({
         {
           label: 'Start here',
           items: [
+            { label: 'Why straitjacket', slug: 'guides/why-straitjacket' },
             { label: 'How it works', slug: 'start/how-it-works' },
             { label: 'Getting started', slug: 'start/getting-started' },
             { label: 'Core concepts', slug: 'start/concepts' },
@@ -39,12 +39,15 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Use cases', slug: 'guides/use-cases' },
+            { label: 'Edit and verify', slug: 'guides/edit-loop' },
+            { label: 'Host capabilities', slug: 'guides/host-capabilities' },
+            { label: 'Agent integrations', slug: 'guides/agent-integrations' },
+            { label: 'Tool SDK', slug: 'guides/tool-sdk' },
+            { label: 'ACP orchestration', slug: 'guides/acp' },
+            { label: 'Anchored addresses', slug: 'guides/anchors' },
             { label: 'CLI guide', slug: 'guides/cli' },
             { label: 'Configuration', slug: 'guides/configuration' },
             { label: 'Troubleshooting & FAQ', slug: 'guides/troubleshooting' },
-            { label: 'Why straitjacket', slug: 'guides/why-straitjacket' },
-            { label: 'Comparisons', slug: 'guides/comparisons' },
-            { label: 'AlphaEvolve benefits', slug: 'guides/alphaevolve-benefits' },
           ],
         },
         {
@@ -75,7 +78,7 @@ export default defineConfig({
           ],
         },
       ],
-      customCss: ['katex/dist/katex.min.css', './src/styles/brutalist.css'],
+      customCss: ['katex/dist/katex.min.css', './src/styles/docs.css'],
     }),
   ],
 });

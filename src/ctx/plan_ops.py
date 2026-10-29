@@ -71,6 +71,7 @@ class OpSpec:
     # expected baseline coverage in [0,1]). Additive: {} means the op makes
     # no declared dimension claim and ranks on priors + cost alone.
     provides: Mapping[str, float] = field(default_factory=dict)
+    composite: bool = False
 
 
 OPS: dict[str, OpSpec] = {}
@@ -93,6 +94,7 @@ def register_op(
     cacheable: bool = False,
     input_optional: bool = False,
     provides: Mapping[str, float] | None = None,
+    composite: bool = False,
 ) -> None:
     OPS[name] = OpSpec(
         name,
@@ -110,6 +112,7 @@ def register_op(
         cacheable,
         input_optional,
         dict(provides or {}),
+        composite,
     )
 
 
@@ -120,6 +123,9 @@ class PlanContext:
     timeout: float = 600.0
     generation: str | None = None
     trace: list[str] = field(default_factory=list)
+    runtime: Any = None
+    evidence: Any = None
+    worker: Any = None
 
 
 def payload(
@@ -711,7 +717,7 @@ def _op_code_context(pc: PlanContext, args: dict, inp: dict | None) -> dict[str,
 
     rows_in = list((inp or {}).get("rows") or [])
     kind_in = str((inp or {}).get("kind") or "sites")
-    context = max(0, int(args.get("context", 3) or 3))
+    context = max(0, int(args.get("context") if args.get("context") is not None else 3))  # `or 3` silently widened an explicit 0 to the default
     cap = min(bounds.count(args.get("cap", 8)), OUTLINE_FILE_CAP)
     take = rows_in[:cap]
     omitted = max(0, len(rows_in) - len(take))
@@ -919,3 +925,8 @@ __all__ = [
     "payload",
     "ops_census",
 ]
+
+# These are ordinary registered plan operations, also available to SDK
+# consumers. Model and command composites require an explicit execution context.
+from ctx.evidence_ops import install as _install_evidence_ops
+_install_evidence_ops()

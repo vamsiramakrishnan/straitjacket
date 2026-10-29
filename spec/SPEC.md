@@ -1,8 +1,20 @@
-# CTX Harness for Antigravity — Normative Specification
+# CTX core and Antigravity integration — Draft target specification
 
 **Version:** 0.1-draft  
 **Date:** 2026-07-15  
 **Keywords:** MUST, MUST NOT, SHOULD, SHOULD NOT, MAY follow RFC 2119 semantics.
+
+**Status:** target design, not a complete description of the current release.
+Known gaps include plaintext raw artifacts, configurable redaction, and the
+absence of the `--execute-without-capture` escape path described below. For
+shipped behavior, use the changelog, CLI and host-capability docs, code, and
+tests.
+
+**Scope:** core runtime behavior and Antigravity packaging. Host-hook statements
+in this document are Antigravity-specific. Claude Code and Codex use their own
+published hook contracts, the host adapters in `src/ctx`, and executable
+acceptance tests. [ADR 005](adr/005-antigravity-hook-contract.md) records the
+current Antigravity boundary.
 
 ## 1. Problem
 
@@ -243,6 +255,51 @@ Compiled evidence plans (`ctx.plan/v1`, docs/EVIDENCE-PLANS.md): a model-authore
 - Physical engine selection is the harness's choice, deterministic given availability, and disclosed per node; the plan IR carries no engine field.
 - Execute-class ops (`test.run`, `ast.rewrite.*`) run only on the CLI tier under the standard guard; the MCP `investigate` op MUST reject them at validation (bounded-only surface, §10.4). `ast.rewrite.apply` MUST be transactional and MUST refuse when the source-state generation changed since preview.
 - The digest renders against `contracts/investigate.toml` through the shared resolver; the counterevidence section is REQUIRED in every outcome, including the empty form.
+
+### 6.7 `ctx orchestrate` / `ctx task` — the task ledger
+
+Multi-harness collaboration (docs/TASK-LEDGER.md) is recorded on a per-task,
+append-only ledger of schema-versioned rows: `ctx.task/v1`, `ctx.claim/v1`,
+`ctx.handback/v1`, `ctx.steward/v1`, `ctx.verdict/v1`, `ctx.inbox/v1`.
+
+- Harnesses MUST NOT address each other directly; collaboration state MUST
+  flow through the ledger, and the orchestrator MUST be one reader among
+  others.
+- Every launch MUST be preceded by a claim row and followed by a handback row
+  whose `reason` and `failure_kind` are drawn from the closed vocabularies in
+  `ctx.taskledger`. A row outside the contract MUST be refused, not stored.
+- A handback other than `done` MUST be decided by the steward, and the
+  decision row MUST be appended before the decision is acted on.
+- Only actions that exist for the node MAY be offered to the recovery policy.
+  A stop chosen because no applicable action existed MUST be recorded as
+  `stop_blocked`, never as `stop_budget`.
+- Budget MUST be evaluated against ledger actuals where every attempt was
+  priced, and MUST NOT fall below the estimate where any attempt was not. A
+  claim whose estimate exceeds the remaining budget MUST be refused before
+  launch.
+- A claim MUST reserve its expected cost until its handback, and the budget
+  check and the claim MUST be one atomic step, so nodes claimed in parallel
+  cannot each pass against the same remaining balance.
+- An accepted coordinator re-plan MUST be appended as a further `ctx.task/v1`
+  row carrying the nodes it added.
+- `--resume <task>` MUST fold every task row, MUST restore nodes with a
+  `done` handback without re-running them, and MUST re-run nodes claimed but
+  never handed back. `ctx orchestrate --resume <task>` MUST NOT require a
+  task argument.
+- Ledger rows MUST NOT carry task text or node output; the goal is a `blob:`
+  address, output is a `checkpoint:` address. The inbox `note` is the only
+  free-text field, bounded and control-stripped. An inbox `ref` MUST parse as
+  an address under §6.1, MAY be followed only by `ctx get` options, MUST be
+  bounded, and a row whose `ref` is not an address MUST be refused.
+- Prewalk (opt-in, `[orchestrate] prewalk`, docs/PREWALK.md): a node the
+  router assigned a frontier model with a mutation role MAY be asked to plan,
+  make one edit, then hand off. That handback MUST use `reason:
+  prewalk_handoff` and MUST NOT be routed through the failure-recovery
+  policy; the steward MUST decide it deterministically (the cheapest
+  installed model below the current tier, or `stop_blocked` if none is
+  installed) and MUST still record a `ctx.steward/v1` row before acting. The
+  worktree of a node handed off this way MUST NOT be reset before its next
+  attempt — its edit is progress, not a failed attempt to discard.
 
 ## 7. Invocation and artifact data model
 

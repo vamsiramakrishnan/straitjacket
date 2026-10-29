@@ -119,12 +119,39 @@ class OrchestratePolicy:
     max_replans: int = 2
     budget_usd: float = 0.0     # 0 = unbounded (still bounded by nodes/waves)
     node_timeout: float = 900.0
+    # Opt-in inactivity bound (headlong's shellm: a run that goes silent is
+    # dead, a run that is still emitting is allowed its wall clock). Seconds
+    # without a byte of host output before the node is killed as `stalled`,
+    # distinct from `wall_timeout` (still active when node_timeout ran out).
+    # 0 = off: only the wall clock bounds a node. Claude nodes stream their
+    # events (--output-format stream-json) only while this is on, so the
+    # default launch stays byte-identical.
+    idle_timeout: float = 0.0
     # Opt-in: independent mutation nodes with explicit disjoint targets run in
     # detached Git worktrees and merge only after every patch preflights.
     isolated_worktrees: bool = False
     # A per-node strict_output_schema remains authoritative; this setting makes
     # every declared output_schema fail closed without changing untyped nodes.
     strict_worker_yields: bool = False
+    # Task-ledger steward bounds (docs/TASK-LEDGER.md). ``max_attempts`` is
+    # how many times one node may be claimed before the steward stops trying
+    # (2 preserves the historical "escalate once" shape). ``expected_turns``
+    # is the per-node claim the steward compares actual turns against; going
+    # past it is the over-turns feedback signal. ``turn_ceiling`` > 0 also
+    # HARD-bounds Claude nodes at launch via --max-turns; 0 observes only.
+    max_attempts: int = 2
+    expected_turns: int = 12
+    turn_ceiling: int = 0
+    # Opt-in: a frontier model assigned to a mutation node is asked to plan,
+    # make one validated edit, then hand off; on that signal the SAME node's
+    # next attempt runs on the cheapest installed model below frontier,
+    # carrying the plan and the first edit forward (docs/PREWALK.md). A
+    # model that ignores the instruction may finish itself. Extra planning
+    # and verification can cost more; savings require a matched evaluation.
+    prewalk: bool = False
+    # Optional paired evaluation JSONL. Native remains the default without evidence.
+    edit_policy_file: str = ""
+    prewalk_policy_file: str = ""
     # Complexity-adaptive implementation tier for the deterministic fallback:
     # "standard" (Gemini-3.6-flash) for real work, "economy" (3.5-flash-lite) for
     # simple edits. A live coordinator overrides this per task.
@@ -294,10 +321,14 @@ def load_config(workspace_root: Path | None) -> Config:
         if isinstance(roots, list):
             scopes[str(name)] = tuple(str(r) for r in roots)
 
-    budgets = _pick(raw.get("budgets") or {}, Budgets)
+    # A scalar section (e.g. `budgets = 5`) is not a dict -- `or {}` only catches
+    # falsy/missing, so guard explicitly against a wrong-typed section too.
+    budgets_raw = raw.get("budgets")
+    budgets = _pick(budgets_raw if isinstance(budgets_raw, dict) else {}, Budgets)
     # Guard is hand-built (not _pick) so list keys coerce to tuples and bools
     # coerce honestly — and so Config models every key the hot-path guard reads.
-    guard_raw = raw.get("guard") or {}
+    guard_raw = raw.get("guard")
+    guard_raw = guard_raw if isinstance(guard_raw, dict) else {}
     gd = Guard()
     guard = Guard(
         mode=str(guard_raw.get("mode", gd.mode)),
@@ -330,8 +361,15 @@ def load_config(workspace_root: Path | None) -> Config:
         activate_after_calls=_coerce_like(
             ed.activate_after_calls, eng_raw.get("activate_after_calls", ed.activate_after_calls)
         ),
-        lean_models=tuple(
-            str(m) for m in eng_raw.get("lean_models", ed.lean_models)
+        # The one list field that still iterated whatever TOML produced:
+        # `lean_models = 42` raised TypeError out of load_config (on every
+        # command's path), and `lean_models = "sonnet"` became six
+        # single-letter models. A non-list keeps the shipped default rather
+        # than emptying the setting, because "no lean models" changes routing.
+        lean_models=(
+            _str_tuple(eng_raw["lean_models"])
+            if isinstance(eng_raw.get("lean_models"), (list, tuple))
+            else ed.lean_models
         ),
         emission_nudge_tokens=_coerce_like(
             ed.emission_nudge_tokens,

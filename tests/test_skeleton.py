@@ -517,3 +517,50 @@ def test_stats_ts_without_any_backend_falls_through(env, monkeypatch):
     out = stats(store, ws, "repo:greeter.ts")
     assert "[ctx skeleton" not in out
     assert "files (exact):" in out
+
+
+# ------------------------------------------- cached degradation (regression)
+@pytest.mark.skipif(not HAS_CTAGS, reason="universal-ctags not installed")
+def test_installing_a_backend_invalidates_a_degraded_skeleton(env, monkeypatch):
+    """A skeleton is a function of the bytes *and* of the backends present.
+
+    Found by ``evals/verb_coverage.py``: `ctx map` advertised 16 C symbols
+    while `ctx def` answered "0 symbols known for this file" for every one of
+    them. The map runs its own ctags pass; the skeleton had been computed
+    earlier in an environment with no ctags, cached under a key made only of
+    the blob hash, and was served unchanged afterwards. Installing the
+    dependency fixed nothing and produced no symptom — the stale hit looks
+    exactly like a correct answer.
+    """
+    import ctx.skeleton as skel
+
+    if skel._ctags_path() is None:
+        pytest.skip("ctags disabled in this environment (CTX_NO_CTAGS)")
+    store, ws = env
+
+    _no_tree_sitter(monkeypatch)
+    _no_ctags(monkeypatch)
+    degraded = skel.skeleton_for(store, ws, "greeter.ts")
+    assert degraded["parser"] == "none" and degraded["symbols"] == []
+
+    monkeypatch.undo()  # ctags arrives; the file on disk never changed
+    _no_tree_sitter(monkeypatch)
+    recovered = skel.skeleton_for(store, ws, "greeter.ts")
+    assert recovered["parser"] == "ctags"
+    assert recovered["symbols"], "a degraded skeleton outlived its environment"
+    assert recovered["blob"] == degraded["blob"], "same bytes, different answer"
+
+
+def test_the_fingerprint_is_per_language_and_claims_only_real_rungs(monkeypatch):
+    """Probed through the same seams ``_extract`` uses, so it cannot advertise
+    a backend that would not actually fire — and computed per language, so a
+    Go grammar arriving does not force every Python skeleton to be reparsed.
+    In the same stripped environment Python still has its stdlib ``ast`` rung
+    and TypeScript has nothing left."""
+    import ctx.skeleton as skel
+
+    _no_tree_sitter(monkeypatch)
+    _no_ctags(monkeypatch)
+    assert skel._backend_fingerprint("python") == "ast"
+    assert skel._backend_fingerprint("typescript") == "none"
+    assert skel._backend_fingerprint(None) == "none"

@@ -7,6 +7,25 @@ all), so they run before the dispatcher resolves one."""
 from __future__ import annotations
 
 
+def cmd_agent(ws, ns) -> int:
+    """`ctx agent -p "<task>"` — ctx as the runtime (docs/CODE-SEARCH.md)."""
+    import sys
+
+    from ctx.agent import run_agent
+
+    task = ns.task
+    if task.startswith("@"):
+        try:
+            task = ws.confine(task[1:], must_exist=True).read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"ctx agent: cannot read {task[1:]!r}: {e}", file=sys.stderr)
+            return 2
+    return run_agent(
+        ws, task, model=ns.model, max_turns=ns.max_turns, pack=ns.pack,
+        pack_budget=ns.pack_budget, output_format=ns.output_format, verbose=ns.verbose,
+    )
+
+
 def cmd_wrap(ns) -> int:
     """`ctx wrap <host>` — hook the harness into a coding agent. Resolves its
     own workspace, because `--print-config` must work outside one."""
@@ -14,8 +33,11 @@ def cmd_wrap(ns) -> int:
 
     from ctx.hosts import harnessable_hosts, host_by_name, wrapper_for
     from ctx.workspace import resolve_workspace
-    from ctx.wrap import print_config, wrap_detect, wrap_setup
+    from ctx.wrap import guided_setup, print_config, wrap_detect, wrap_setup
 
+    selected_spec = host_by_name(ns.host)
+    if selected_spec:
+        ns.host = selected_spec.name
     agent_args = list(ns.agent_args)
     # REMAINDER swallows options placed after the host positional;
     # recognize --print-config there too (but never past the `--`).
@@ -30,6 +52,21 @@ def cmd_wrap(ns) -> int:
         if agent_args.index("--proxy") < tail:
             use_proxy = True
             agent_args.remove("--proxy")
+    if "--probe-prefix" in agent_args:
+        # Two single-turn sessions (naive, wrapped) and a parity verdict on
+        # the first request's prompt composition. Exit 3 when the wrapper
+        # costs more prefix than it declares or loses tool deferral.
+        tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+        if agent_args.index("--probe-prefix") < tail:
+            from ctx.wrap import probe_prefix, render_prefix_parity
+
+            if ns.host != "claude":
+                print("ctx wrap: --probe-prefix is a Claude Code probe (ctx wrap claude --probe-prefix)", file=sys.stderr)
+                return 2
+            ws = resolve_workspace(None)
+            verdict = probe_prefix(ws.root, use_proxy=True)
+            print(render_prefix_parity(verdict))
+            return 0 if verdict.get("ok") else 3
     use_orchestrate = False
     if "--orchestrate" in agent_args:
         tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
@@ -55,6 +92,10 @@ def cmd_wrap(ns) -> int:
             use_proxy = True  # rescue implies the proxy
     if ns.print_config:
         host = "claude" if ns.host in ("setup", "all") else ns.host
+        from ctx.mcp_hosts import HOSTS, render_config
+        if host in HOSTS:
+            print(render_config(host, resolve_workspace(ns.workspace).root))
+            return 0
         print(print_config(host))
         return 0
     ws = resolve_workspace(ns.workspace)
@@ -78,25 +119,35 @@ def cmd_wrap(ns) -> int:
         )
         return 2
 
+    from ctx.mcp_hosts import HOSTS as MCP_HOSTS
+
+    if ns.host in MCP_HOSTS:
+        if use_gateway or use_proxy or use_orchestrate:
+            print(f"ctx wrap {ns.host}: gateway, proxy, and orchestration adapters are not implemented for this host", file=sys.stderr)
+            return 2
+        return wrapper(ws.root, agent_args)
+
     # --gateway: set up the host(s) AND wire the progressive-disclosure
     # gateway, so unrevealed MCP tool schemas never enter context.
     if use_gateway:
-        from ctx.installer import install_claude, install_gateway
+        from ctx.installer import install_gateway
 
-        hosts = wired if ns.host in ("setup", "all") else (ns.host,)
+        hosts = tuple(h for h in wired if h in ("claude", "codex", "antigravity")) if ns.host in ("setup", "all") else (ns.host,)
         if ns.host in ("setup", "all"):
-            wrap_setup(ws.root)
+            setup_status = wrap_setup(ws.root)
         elif ns.host == "claude":
-            print(install_claude(resolve_workspace(str(ws.root))))
+            setup_status = guided_setup(ws, hosts=["claude"])
         else:
-            wrapper(ws.root)
+            setup_status = wrapper(ws.root)
+        if setup_status:
+            return setup_status
         print()
         for h in hosts:
             print(install_gateway(resolve_workspace(str(ws.root)), h, apply=True))
             print()
         return 0
     # Single-command multi-host setup: `setup` detects installed CLIs
-    # and harnesses those; `all` forces every supported host.
+    # and harnesses those; `all` forces the three vendor-host integrations.
     if ns.host in ("setup", "all"):
         return wrap_setup(ws.root, force_all=(ns.host == "all"))
     # The one genuine per-host asymmetry, and it is about capability rather
@@ -109,14 +160,7 @@ def cmd_wrap(ns) -> int:
                 ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct,
                 orchestrate=use_orchestrate,
             )
-        from ctx.installer import install_claude
-
-        print(install_claude(resolve_workspace(str(ws.root))))
-        print()
-        print("Claude Code sessions in this workspace are now harnessed. "
-              "For an ephemeral, zero-residue run instead: "
-              "ctx wrap claude -- -p \"...\"")
-        return 0
+        return guided_setup(ws, hosts=["claude"])
     return wrapper(ws.root)
 
 
@@ -128,7 +172,9 @@ def cmd_setup(ns) -> int:
     from ctx.wrap import wrap_setup
     from ctx.workspace import resolve_workspace
 
-    hosts = list(ns.hosts or [])
+    from ctx.hosts import host_by_name
+
+    hosts = [host_by_name(h).name if host_by_name(h) else h for h in (ns.hosts or [])]
     unknown = sorted(set(hosts) - set(SETUP_HOSTS))
     if unknown:
         print(
@@ -137,24 +183,136 @@ def cmd_setup(ns) -> int:
             file=sys.stderr,
         )
         return 2
-    return wrap_setup(
-        resolve_workspace(ns.workspace).root,
-        hosts or None,
-        force_all=bool(ns.all),
-        force_repair=bool(ns.repair),
-    )
+    root = resolve_workspace(ns.workspace).root
+    prune_targets = []
+    if getattr(ns, "prune", False):
+        from ctx.surface_profiles import HOSTS
+        selected = hosts or (list(SETUP_HOSTS) if ns.all else [])
+        if not selected:
+            from ctx.hosts import installed_harnessable
+            selected = [h.name for h in installed_harnessable(workspace_root=root)]
+            if not selected:
+                selected = [h for h in SETUP_HOSTS if h != "hermes"]
+        prune_targets = [h for h in selected if h in HOSTS]
+        if not prune_targets:
+            print("ctx setup: pruning is not implemented for the selected hosts", file=sys.stderr)
+            return 2
+    if getattr(ns, "acp", False):
+        import json
+        from ctx.acp import configure
+        if len(hosts) != 1 or not ns.acp_model or ns.all:
+            print("ctx setup --acp requires one --host and --acp-model", file=sys.stderr)
+            return 2
+        try:
+            command = json.loads(ns.acp_command) if ns.acp_command else None
+            if command is not None and (not isinstance(command, list) or not command
+                    or not all(isinstance(a, str) and a and "\0" not in a for a in command)):
+                raise ValueError("--acp-command must be a nonempty JSON string array")
+            # ACP configuration is separate from interactive MCP setup. Workers
+            # receive the MCP server in session/new, in their actual worktree.
+            setup_code = wrap_setup(root, hosts, force_repair=bool(ns.repair))
+            if setup_code:
+                return setup_code
+            print(configure(root, hosts[0], ns.acp_model, command=command,
+                            tier=ns.acp_tier, permissions=ns.acp_permissions))
+            return 0
+        except ValueError as exc:
+            print(f"ctx setup: {exc}", file=sys.stderr)
+            return 2
+    code = wrap_setup(root, hosts or None, force_all=bool(ns.all), force_repair=bool(ns.repair))
+    if code == 0 and getattr(ns, "prune", False):
+        # Bound before bloat, at the moment the harness is installed: the
+        # same rule `ctx surface trim` recommends, made the default here.
+        from ctx.prune import interactive_prune, render_prune, run_prune
+        from ctx.surface_profiles import HOSTS
+
+        targets = tuple(prune_targets)
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            interactive_prune(root, ask=input, say=print, hosts=targets)
+        else:
+            print(render_prune(run_prune(root, hosts=targets, apply=True)))
+    return code
 
 
 def cmd_orchestrate(ws, ns) -> int:
     """`ctx orchestrate` — route a task's phases across installed harnesses
-    by model cost. Usually a wrap mode rather than something a human types."""
+    by model cost. Usually a wrap mode rather than something a human types.
+    `--resume TASK` replays a task ledger instead of planning afresh."""
     from ctx.orchestrator import orchestrate
 
+    # `resume` is passed only when set, so an `orchestrate` that predates the
+    # task ledger (injected fakes included) keeps its signature.
+    extra = {"resume": ns.resume} if getattr(ns, "resume", None) else {}
     code, text = orchestrate(
-        ws, ns.task, dry_run=ns.dry_run, force_run=ns.force_run
+        ws, ns.task, dry_run=ns.dry_run, force_run=ns.force_run, **extra
     )
     print(text)
     return code
+
+
+def cmd_task(ws, ns) -> int:
+    """`ctx task ls|show|inbox|send` — read and write the task ledger.
+
+    The ledger is the bus harnesses collaborate over (docs/TASK-LEDGER.md).
+    `send` is the only writer here and it carries an ADDRESS, never content:
+    the receiving node resolves it with `ctx get`."""
+    import sys
+
+    from ctx import taskledger as ledger
+
+    if ns.task_cmd in {"prepare", "run", "resume", "apply", "cancel"}:
+        from ctx.commands.tasks import cmd_execution_task
+        return cmd_execution_task(ws, ns)
+
+    if ns.task_cmd == "ls":
+        ids = ledger.list_tasks(ws.root)
+        if not ids:
+            print("no task ledgers in this workspace (run `ctx orchestrate`)")
+            return 0
+        for tid in ids:
+            st = ledger.task_state(ledger.load(ws.root, tid))
+            if "execution" in st.checkpoints:
+                from ctx.task_runtime import totals
+                usage = totals(st.operations.values())
+                print(f"{tid}  operations {usage['steps']}  model calls {usage['calls']}  "
+                      f"known cost ${usage['known_cost_usd']:.4f}  unknown-cost calls {usage['unknown_cost_calls']}")
+                continue
+            done = sum(1 for n in st.nodes.values() if n.done)
+            print(f"{tid}  nodes {done}/{len(st.nodes)} done  spent ${st.spent_usd:.4f}"
+                  + ("" if st.cost_complete else " (partial)"))
+        return 0
+    if ns.task_cmd == "show":
+        rows = ledger.load(ws.root, ns.task)
+        if "investigation" in ledger.task_state(rows).checkpoints:
+            from ctx.commands.tasks import cmd_execution_task
+            return cmd_execution_task(ws, ns)
+        if not rows:
+            print(f"ctx task: unknown task {ns.task}", file=sys.stderr)
+            return 2
+        print(ledger.render_task(ledger.task_state(rows)))
+        return 0
+    if ns.task_cmd == "inbox":
+        st = ledger.task_state(ledger.load(ws.root, ns.task))
+        msgs = ledger.inbox_for(st, ns.node)
+        if not msgs:
+            print(f"inbox for {ns.node}: empty")
+            return 0
+        for m in msgs:
+            note = f" — {m['note']}" if m.get("note") else ""
+            print(f"from {m.get('from')}: {m.get('ref')}{note}")
+        return 0
+    if ns.task_cmd == "send":
+        try:
+            row = ledger.append(ws.root, ledger.inbox_row(
+                ns.task, to=ns.node, sender=ns.sender, ref=ns.ref, note=ns.note,
+            ))
+        except ledger.LedgerError as e:
+            print(f"ctx task send: {e}", file=sys.stderr)
+            return 2
+        print(f"sent to {row['to']}: {row['ref']}")
+        return 0
+    print(f"ctx task: unknown subcommand {ns.task_cmd}", file=sys.stderr)
+    return 2
 
 
 def cmd_antigravity(ns) -> int:
@@ -183,4 +341,107 @@ def cmd_proxy(ns) -> int:
         ns.workspace_id,
         rescue_pct=ns.rescue_pct,
     )
+    return 0
+
+
+def cmd_relay(ws, ns) -> int:
+    """`ctx relay watch|publish|signal|status|drain|gc` — the cross-harness relay.
+
+    The relay is the direction the task ledger never had: it lets one harness
+    reach another *between* turns instead of only leaving a record for
+    whoever reads next (docs/RELAY.md). Like `ctx task send`, every write
+    here carries an ADDRESS and a bounded note — never content. Delivery
+    happens at the receiving harness's next hook boundary, which is a real
+    bound and is reported as such by `status`.
+    """
+    from ctx import relay
+
+    if ns.relay_cmd == "watch":
+        row = relay.watch(
+            ws.root,
+            subscriber=ns.subscriber,
+            topic=ns.topic,
+            selector=ns.selector or "",
+            action=ns.action,
+            ttl_seconds=ns.ttl,
+        )
+        print(f"watching {row['topic']}"
+              + (f"/{row['selector']}" if row["selector"] else "")
+              + f" as {row['subscriber']} → {row['action']}")
+        print(f"watch: {row['watch_id']}")
+        print(f"retire: ctx relay unwatch {row['watch_id']}")
+        return 0
+
+    if ns.relay_cmd == "unwatch":
+        ok = relay.unwatch(ws.root, ns.watch_id)
+        print(f"retired {ns.watch_id}" if ok else f"no such watch: {ns.watch_id}")
+        return 0 if ok else 1
+
+    if ns.relay_cmd in ("publish", "signal"):
+        if ns.relay_cmd == "signal" and ns.interrupt:
+            row = relay.interrupt(
+                ws.root, to=ns.to, ref=ns.ref, origin=ns.origin,
+                note=ns.note or "", ttl_seconds=ns.ttl,
+            )
+            print(f"interrupt queued for {row['to']} · {row['signal_id']}")
+            print("delivery: at that harness's next tool call (pre-tool-use)")
+            return 0
+        queued = relay.publish(
+            ws.root,
+            topic=ns.topic,
+            selector=ns.selector or "",
+            ref=ns.ref,
+            origin=ns.origin,
+            note=ns.note or "",
+            ttl_seconds=ns.ttl,
+            to=getattr(ns, "to", None) or None,
+        )
+        if not queued:
+            # Not an error: publishing is silent by design, so a producer
+            # never has to know who is listening. Say so, so the operator is
+            # not left wondering whether the write failed.
+            print(f"published {ns.topic} · nobody is watching it, nothing queued")
+            return 0
+        for row in queued:
+            print(f"queued {row['kind']} for {row['to']} · {row['signal_id']}")
+        return 0
+
+    if ns.relay_cmd == "drain":
+        subscriber = relay.subscriber_id(ns.host, ns.session or None)
+        text, signals = relay.drain(
+            ws.root, subscriber, stage="cli", record=not ns.peek
+        )
+        if not signals:
+            print(f"nothing pending for {subscriber}")
+            return 0
+        print(text)
+        if ns.peek:
+            print("\n(peek: not marked delivered)")
+        return 0
+
+    if ns.relay_cmd == "gc":
+        dropped = relay.gc(ws.root)
+        print(f"dropped {dropped} settled row{'s' if dropped != 1 else ''}")
+        return 0
+
+    st = relay.status(ws.root)
+    print(f"[ctx relay] {st['signals']} signals · {st['delivered']} delivered · "
+          f"{st['expired']} expired")
+    print(f"queue: {st['path']}")
+    if st["watches"]:
+        print("watching:")
+        for w in st["watches"]:
+            print(f"  {w['subscriber']:<24} {w['topic']}"
+                  + (f"/{w['selector']}" if w.get("selector") else "")
+                  + f" → {w['action']}  ({w['watch_id']})")
+    else:
+        print("watching: nobody")
+    if st["pending_by_subscriber"]:
+        print("pending:")
+        for sub, n in sorted(st["pending_by_subscriber"].items()):
+            print(f"  {sub:<24} {n}")
+        print("delivery: at each harness's next hook boundary "
+              "(tool call, or turn start)")
+    else:
+        print("pending: nothing")
     return 0

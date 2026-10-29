@@ -1,5 +1,4 @@
-"""Acceptance: single-command multi-host setup (Antigravity/Claude/Codex) and
-the Codex hook dialect (built for Antigravity, works with Claude and Codex)."""
+"""Acceptance tests for Claude, Codex, and Antigravity host setup contracts."""
 
 import io
 import json

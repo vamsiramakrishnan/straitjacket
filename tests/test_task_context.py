@@ -62,7 +62,7 @@ def test_orchestrator_sets_subtask_without_parent_or_checkpoint_leak(monkeypatch
         seen.append(kwargs["env"])
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("ctx.orchestrator.subprocess.run", run)
+    monkeypatch.setattr("ctx.orchestrator._run_bounded", run)
     for goal in ("cache latency", "permissions"):
         _launch_host(host, tmp_path, "prompt with private checkpoint", "ctx",
                      timeout=5, task_query=goal)

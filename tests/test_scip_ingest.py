@@ -198,3 +198,231 @@ def test_scip_extra_matches_the_vendored_gencode_floor():
         map(int, re.search(r"Protobuf Python Version: (\d+)\.(\d+)", generated).groups())
     )
     assert declared >= gencode
+
+
+# ------------------------------------------- the exact tier, made reachable
+# ctx has read SCIP since M-K4 and never produced one, so in any repository
+# that did not index itself the precise rung was unreachable and every answer
+# came from the regex floor. `evals/refs_precision.py` priced that floor on
+# tokio-rs/bytes: 3,637 reported sites where the compiler front end says 806.
+
+
+def test_an_indexed_symbol_with_no_references_is_not_handed_to_the_regex(
+    state_home, workspace_dir
+):
+    """`scip_ingest.refs` distinguishes "no index" (None) from "indexed, and
+    this symbol has no references" ([]). The ladder tested both with `if
+    scip_sites:` and threw the second away, falling through to the textual
+    engine — which then reported comments and string literals as references.
+    Replacing an exact answer with a wrong one is the failure a ladder exists
+    to prevent, so an empty SCIP answer is still a SCIP answer."""
+    from ctx.codeverbs import resolve_refs
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+
+    sites, label = resolve_refs(store, ws, "nosuchsymbol")
+    assert label == "scip (exact)"
+    assert sites == []
+
+
+def test_def_reaches_the_exact_tier_too(state_home, workspace_dir):
+    """`refs` had the compiler-backed rung and `def` did not, so the two verbs
+    disagreed about how precisely ctx could answer the same question about the
+    same tree."""
+    from ctx.codeverbs import cmd_def
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+
+    out = cmd_def(store, ws, "repo:pkg/core.py:helper")
+    assert "engine scip (exact)" in out.splitlines()[0]
+    assert "definition: repo:pkg/core.py L1:" in out
+    assert "def helper" in out
+
+
+def test_a_scip_definition_still_carries_a_body_not_a_point(
+    state_home, workspace_dir
+):
+    """An occurrence is a point; `ctx def` owes the caller a body. The
+    coordinates come from the compiler, the extent from the skeleton the map
+    already agrees with."""
+    import re
+
+    from ctx.codeverbs import cmd_def
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+
+    out = cmd_def(store, ws, "repo:pkg/core.py:use_helper")
+    m = re.search(r"definition: repo:pkg/core\.py L(\d+):(\d+)", out)
+    assert m, out
+    a, b = int(m.group(1)), int(m.group(2))
+    assert b > a, "a definition collapsed to a single line"
+
+
+def test_the_worktrees_own_index_outranks_the_one_ctx_generated(
+    state_home, workspace_dir
+):
+    """A project that indexes itself keeps priority; ctx's copy is the
+    fallback that makes the tier reachable for everyone else."""
+    from ctx import scip_ingest
+
+    ws = make_ws(workspace_dir)
+    _repo_with_index(workspace_dir)
+    assert scip_ingest.find_index(ws) == ws.root / "index.scip"
+
+
+def test_no_index_anywhere_is_none_not_an_error(state_home, workspace_dir):
+    from ctx import scip_ingest
+
+    ws = make_ws(workspace_dir)
+    (workspace_dir / "a.py").write_text("x = 1\n", encoding="utf-8")
+    assert scip_ingest.find_index(ws) is None
+
+
+# ------------------------------------------------- staleness (regression)
+# A SCIP index is a snapshot of one moment, and nothing keeps it in step with
+# edits afterwards. Once `refs` began distinguishing "indexed, no references"
+# ([]) from "no index" (None), a stale index could answer `sites: 0` in the
+# exact tier's voice for a symbol added since indexing — a clean wrong answer
+# where the regex would have given a noisy right one.
+
+
+def _touch_newer_than_index(workspace_dir, rel: str) -> None:
+    """Edit a file so it postdates the index, as any ordinary edit would."""
+    import os
+
+    p = workspace_dir / rel
+    p.write_text(p.read_text(encoding="utf-8") + "\n# edited after indexing\n",
+                 encoding="utf-8")
+    idx = (workspace_dir / "index.scip").stat().st_mtime_ns
+    os.utime(p, ns=(idx + 10**9, idx + 10**9))
+
+
+def test_a_stale_index_does_not_answer_an_authoritative_empty(
+    state_home, workspace_dir
+):
+    """The defect this guard exists for: a symbol added after indexing must
+    not come back as `sites: 0` from the exact tier."""
+    from ctx.codeverbs import resolve_refs
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+    _touch_newer_than_index(workspace_dir, "main.py")
+
+    sites, label = resolve_refs(store, ws, "helper")
+    assert "scip" not in label, f"a stale index still claimed the exact tier: {label}"
+    assert sites, "the ladder did not fall through to an engine that can answer"
+
+
+def test_a_stale_index_does_not_answer_confidently_incomplete_either(
+    state_home, workspace_dir
+):
+    """Trusting hits whose own file is unchanged is cheaper but wrong: a new
+    call site inside the file that *did* change would be missed while the
+    header still said `scip (exact)`. Currency is a property of the tree, not
+    of the files a particular answer happens to cite."""
+    from ctx import scip_ingest
+
+    ws = make_ws(workspace_dir)
+    _repo_with_index(workspace_dir)
+    # `helper`'s sites live in pkg/core.py and main.py; change neither of the
+    # two, and a per-file check would happily still call the answer exact.
+    (workspace_dir / "pkg" / "unrelated.py").write_text(
+        "from pkg.core import helper\n\nhelper(1)\n", encoding="utf-8"
+    )
+    _touch_newer_than_index(workspace_dir, "pkg/unrelated.py")
+
+    assert scip_ingest.refs(ws, "helper") is None
+
+
+def test_a_current_index_still_answers_exactly(state_home, workspace_dir):
+    """The guard must not cost the feature: an untouched tree stays exact."""
+    from ctx.codeverbs import resolve_refs
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+
+    sites, label = resolve_refs(store, ws, "helper")
+    assert label == "scip (exact)"
+    assert {(f, ln) for f, ln, _ in sites} == {
+        ("pkg/core.py", 1), ("pkg/core.py", 6), ("main.py", 1), ("main.py", 12)
+    }
+
+
+def test_a_current_index_that_names_nothing_is_still_authoritative(
+    state_home, workspace_dir
+):
+    """The distinction the guard protects, not erases."""
+    from ctx.codeverbs import resolve_refs
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+
+    sites, label = resolve_refs(store, ws, "nosuchsymbol")
+    assert label == "scip (exact)" and sites == []
+
+
+def test_skipping_a_stale_index_is_disclosed_not_silent(state_home, workspace_dir):
+    """CONTRIBUTING's rule is that a fallback is never anonymous, and here the
+    remedy is one command."""
+    from ctx.codeverbs import cmd_refs
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+    _touch_newer_than_index(workspace_dir, "main.py")
+
+    out = cmd_refs(store, ws, "helper", None)
+    assert "stale index skipped, re-run ctx index" in out.splitlines()[0]
+
+
+def test_a_deletion_alone_is_caught_by_the_sidecar_count(state_home, workspace_dir):
+    """mtime cannot see a file that simply vanished, which is why `ctx index`
+    records how many files it saw."""
+    import json
+
+    from ctx import scip_ingest
+
+    ws = make_ws(workspace_dir)
+    _repo_with_index(workspace_dir)
+    index = workspace_dir / "index.scip"
+    count, newest = scip_ingest._source_state(ws)
+    index.with_name(scip_ingest._SIDECAR_NAME).write_text(
+        json.dumps({"files": count, "max_mtime_ns": newest}), encoding="utf-8"
+    )
+    assert scip_ingest.index_is_current(ws, index)
+
+    (workspace_dir / "main.py").unlink()
+    assert not scip_ingest.index_is_current(ws, index)
+
+
+def test_a_corrupt_index_falls_through_rather_than_answering_zero(
+    state_home, workspace_dir
+):
+    """An unreadable index is not an empty one.
+
+    `iter_occurrences` reports a protobuf parse failure the same silent way it
+    reports a document with no occurrences — by yielding nothing. Once an empty
+    result became authoritative, a truncated or corrupt index would answer
+    `sites: 0` for *every* symbol at `scip (exact)`, with the lower rungs
+    suppressed. Found in review, not by a test, which is why there is one now.
+    """
+    from ctx.codeverbs import resolve_refs
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    _repo_with_index(workspace_dir)
+    index = workspace_dir / "index.scip"
+    index.write_bytes(index.read_bytes()[: len(index.read_bytes()) // 3] + b"\xff\xff")
+
+    sites, label = resolve_refs(store, ws, "helper")
+    assert "scip" not in label, f"a corrupt index still claimed the exact tier: {label}"
+    assert sites, "the ladder did not fall through to an engine that can answer"

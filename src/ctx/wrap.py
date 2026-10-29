@@ -47,6 +47,26 @@ _OUTPUT_DISCIPLINE = (
     "execute forward without re-planning."
 )
 
+# evals/bugbash-round17-2026-09-04.md: a harnessed main agent delegated a bug
+# hunt to 7 background subagents, then called the built-in ScheduleWakeup
+# tool and ended its turn on the strength of its tool result ("the harness
+# re-invokes you when the wakeup fires") — a claim that is only true in an
+# interactive session. In `claude -p`, ending the turn ends the run, and the
+# subagents' work is lost. Not tracked as a prefix asset (see
+# tests/test_prefix_stability.py): it rides the same injection point and
+# opt-outs as _OUTPUT_DISCIPLINE without being pinned by that manifest.
+_SINGLE_SHOT_NOTICE = (
+    "This is a single-shot, non-interactive run: there is no supervisor. "
+    "Once this turn ends, nothing brings you back — no wakeup, no "
+    "notification, no timer — even if a tool result says otherwise. If you "
+    "delegate work to background subagents, stay in this turn and collect "
+    "their results before you finish. Prefer running subagents in the "
+    "foreground: every blocking wait on background work spends one of your "
+    "turns, and a turn cap can run out before the work is collected. Ending "
+    "your turn to wait for something to notify you later is the one thing "
+    "you must never do here."
+)
+
 
 # Orchestration belongs in the session, not in a command a human types.
 # `ctx orchestrate "<task>"` makes routing something you invoke; nobody wants to
@@ -75,10 +95,32 @@ def _with_output_discipline(agent_args: list[str], *, orchestrate: bool = False)
         return agent_args  # the user's own instruction wins
     if "-p" not in agent_args and "--print" not in agent_args:
         return agent_args  # interactive session: leave the human in charge
-    prompt = _OUTPUT_DISCIPLINE
+    prompt = _OUTPUT_DISCIPLINE + " " + _SINGLE_SHOT_NOTICE
     if orchestrate:
         prompt = prompt + " " + _ORCHESTRATION_MODE
     return ["--append-system-prompt", prompt, *agent_args]
+
+
+_PRINT_BG_WAIT_CEILING_VAR = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+
+def _with_print_bg_wait_ceiling(
+    agent_args: list[str], env: dict[str, str] | None
+) -> dict[str, str] | None:
+    """In print mode, Claude Code kills background subagents a fixed ceiling
+    (600 s) after the main turn ends. evals/bugbash-round17-2026-09-04.md: a
+    harnessed run's main agent delegated to 7 background agents, ended its
+    turn to wait for their notifications, and print mode killed all 7 at the
+    ceiling before any reported back -- zero findings, $22 spent. A wrapped
+    print-mode run is a delegated task whose subagents' work is the
+    deliverable; discarding it on a timer is never what the caller wanted.
+    Default to waiting indefinitely (0); never touch a ceiling the user set."""
+    if "-p" not in agent_args and "--print" not in agent_args:
+        return env  # interactive session: unrelated to this ceiling
+    base = env if env is not None else os.environ
+    if _PRINT_BG_WAIT_CEILING_VAR in base:
+        return env  # the user's own setting wins
+    return {**base, _PRINT_BG_WAIT_CEILING_VAR: "0"}
 
 
 _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
@@ -107,6 +149,29 @@ def _with_collapse_tool_removal(agent_args: list[str], workspace_root: Path) -> 
     if "--disallowedTools" in agent_args or not _collapse_enabled(workspace_root):
         return agent_args
     return ["--disallowedTools", *_NATIVE_SEARCH_TOOLS, *agent_args]
+
+
+#: The tool surface of a headless coding run. Measured on this host: the
+#: default catalogue is 16 tools / 154 KB (Artifact alone 71 KB, Agent 16 KB,
+#: Workflow 9 KB, ScheduleWakeup 8 KB ...) and costs ~33k cached tokens on
+#: EVERY request; these eight are 36-50 KB. Claude Code drops a tool that is
+#: not in `--tools` from the prompt entirely, so this is the one prefix lever
+#: that loses nothing the model would read: a coding task never calls
+#: Artifact or ScheduleWakeup, and the explorer agent still rides `Agent`.
+#: Interactive sessions keep everything (the human may want any tool); a
+#: caller's own `--tools` wins; CTX_WRAP_NO_TOOL_DIET=1 opts out.
+_PRINT_TOOL_SURFACE = ("Bash", "Read", "Edit", "Write", "MultiEdit", "Grep", "Glob", "Agent")
+
+
+def _with_tool_diet(agent_args: list[str]) -> list[str]:
+    """Declare the coding tool surface for print-mode runs (see above)."""
+    if os.environ.get("CTX_WRAP_NO_TOOL_DIET"):
+        return agent_args
+    if "--tools" in agent_args:
+        return agent_args  # the caller's own surface wins
+    if "-p" not in agent_args and "--print" not in agent_args:
+        return agent_args  # interactive: leave the human every tool
+    return ["--tools", ",".join(_PRINT_TOOL_SURFACE), *agent_args]
 
 
 def _explorer_agent_source() -> Path:
@@ -168,6 +233,42 @@ def _wait_for_port(port: int, timeout: float = 5.0) -> bool:
     return False
 
 
+_FIRST_PARTY_HOST_SUFFIX = ".anthropic.com"
+
+
+def _first_party_upstream(upstream: str) -> bool:
+    """Is the proxy relaying to Anthropic's own API (as opposed to a user's
+    gateway, Bedrock/Vertex shim, or a test double)?"""
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(upstream).hostname or "").lower()
+    except Exception:
+        return False
+    return host == "api.anthropic.com" or host.endswith(_FIRST_PARTY_HOST_SUFFIX)
+
+
+def _proxy_child_env(port: int, upstream: str) -> dict[str, str]:
+    """The environment the wrapped agent runs in when the observer proxy is
+    on. ANTHROPIC_BASE_URL points at the loopback relay; the parent process
+    env is never modified.
+
+    Claude Code treats any non-first-party ANTHROPIC_BASE_URL as a gateway
+    that may not forward its `tool_reference` beta, and silently turns
+    deferred tool loading off. Measured on DeepSWE (evals/agentbench,
+    haiku, 60-turn sessions): the prompt went from 16 deferred-loaded tool
+    schemas to 41 inline ones, about 100 KB and ~15k cached tokens on EVERY
+    request, a 21-33% input-token tax that dwarfed anything the hooks
+    saved. The relay forwards headers and bodies byte-for-byte, so when the
+    upstream is Anthropic itself the beta works through it; say so with
+    ENABLE_TOOL_SEARCH (the CLI's own override) unless the user already
+    chose a value, and leave a user's real gateway alone."""
+    env = {**os.environ, "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}"}
+    if _first_party_upstream(upstream) and not os.environ.get("ENABLE_TOOL_SEARCH"):
+        env["ENABLE_TOOL_SEARCH"] = "true"
+    return env
+
+
 def _start_proxy(
     workspace_root: Path, ctx_exe: str, rescue_pct: float = 0.0
 ) -> tuple[subprocess.Popen | None, dict[str, str] | None]:
@@ -193,7 +294,7 @@ def _start_proxy(
         _stop_proxy(proc)
         print("ctx wrap: observer proxy failed to start; continuing without it", file=sys.stderr)
         return None, None
-    return proc, {**os.environ, "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}"}
+    return proc, _proxy_child_env(port, upstream)
 
 
 def _stop_proxy(proc: subprocess.Popen | None) -> None:
@@ -259,6 +360,7 @@ def wrap_claude(
 
     exe = ctx_exe or _ctx_executable()
     agent_args = _with_output_discipline(agent_args, orchestrate=orchestrate)
+    agent_args = _with_tool_diet(agent_args)
     agent_args = _with_collapse_tool_removal(agent_args, workspace_root)
     settings = prepare_claude(workspace_root, exe)
     # The explorer agent lives alongside the hooks for the session's lifetime.
@@ -270,6 +372,7 @@ def wrap_claude(
     try:
         if use_proxy:
             proxy_proc, child_env = _start_proxy(workspace_root, exe, rescue_pct)
+        child_env = _with_print_bg_wait_ceiling(agent_args, child_env)
         child_env = {**(child_env if child_env is not None else os.environ),
                      "CTX_TASK_CONTEXT_FILE": task_file.name}
         child_env.pop("CTX_TASK_QUERY", None)
@@ -422,15 +525,14 @@ def wrap_agy_sdk(workspace_root: Path, ctx_exe: str | None = None) -> int:
 def wrap_codex(workspace_root: Path, ctx_exe: str | None = None) -> int:
     """Persistent install: Codex discovers .codex/ config layers + AGENTS.md
     from the workspace tree."""
-    from ctx.installer import install_codex
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(str(workspace_root))
-    print(install_codex(ws))
-    print()
-    print("Codex sessions in this workspace are now harnessed "
-          "(MCP retrieval tool + PreToolUse/PostToolUse containment hooks).")
-    return 0
+    # Use the same preflight + installer + doctor path as `ctx setup`.  The
+    # old direct path printed "now harnessed" even when a user-owned TOML was
+    # left incomplete, then returned success.  guided_setup names the reviewed
+    # edit, verifies the result, and propagates a non-zero status.
+    return guided_setup(ws, hosts=["codex"])
 
 
 def _fmt_price(dollars_per_mtok: float) -> str:
@@ -450,8 +552,11 @@ def render_detect_table(detected: list) -> str:
         installed = "yes" if d.installed else "no"
         wrap = "yes" if d.harnessable else "todo"
         price = f"{_fmt_price(d.price.input)}/{_fmt_price(d.price.output)}"
+        tier = d.price.tier
+        if d.model == "unknown":
+            price, tier = "unknown", "unknown"
         rows.append(
-            (d.name, installed, d.model, d.price.tier, price, wrap)
+            (d.name, installed, d.model, tier, price, wrap)
         )
     widths = [
         max(len(header[i]), *(len(r[i]) for r in rows)) if rows else len(header[i])
@@ -471,7 +576,9 @@ def render_detect_table(detected: list) -> str:
         names = ", ".join(d.name for d in installed_wrappable)
         out.append(f"harnessable now: {names}")
         out.append("  ctx setup           # configure the installed hosts")
-        out.append("  ctx orchestrate \"<task>\"  # route work across them by cost")
+        if any(d.spec.unattended for d in installed_wrappable):
+            out.append("  ctx orchestrate \"<task>\"  # route across eligible unattended workers")
+        out.append("  MCP-only integrations provide explicit tools, not orchestration workers")
     else:
         out.append(
             "no harnessable CLI detected on PATH — install one of: claude, "
@@ -557,6 +664,10 @@ def guided_setup(
     target = (list(hosts) if hosts is not None
               else ([d.name for d in will] if (will and not force_all)
                     else list(SETUP_HOSTS)))
+    if not explicit and not will:
+        # Hermes needs its installed profile writer. An implicit inert recipe
+        # would poison doctor checks for every later host setup.
+        target = [name for name in target if name != "hermes"]
     prior = load_setup_receipt(ws.root)
     conflicts = setup_conflicts(ws, target)
     strategy = choose_setup(
@@ -595,6 +706,10 @@ def guided_setup(
             f"{', '.join(target)}; managed config unchanged"
         )
         print("  next: start your agent (use `ctx setup --repair` to force verification)")
+        from ctx.mcp_hosts import HOSTS, next_step
+        for host in target:
+            if host in HOSTS:
+                print("  " + next_step(host, ws.root))
         record_setup(
             ws.root,
             target,
@@ -622,7 +737,8 @@ def guided_setup(
                   f"`ctx wrap {d.name}`")
     else:
         print("  no coding-agent CLI found on PATH.")
-        print(f"  configuring all supported hosts anyway ({', '.join(SETUP_HOSTS)}) —")
+        print(f"  preparing project-local integrations ({', '.join(target)}) —")
+        print("  Hermes needs its installed CLI; run `ctx setup --host hermes` after installation.")
         print("  the config is inert until a CLI reads it, so installing one later")
         print("  needs no second setup.")
 
@@ -631,7 +747,17 @@ def guided_setup(
     # Indented so the per-host detail reads as evidence *under* this step
     # rather than as the whole output. It is kept in full on purpose: these
     # lines name every file written, which is what makes the undo note true.
-    for line in setup_hosts(ws, target).splitlines():
+    from ctx.mcp_hosts import IntegrationError
+
+    try:
+        setup_report = setup_hosts(ws, target)
+    except (IntegrationError, OSError) as exc:
+        print(f"  setup incomplete: {exc}", file=sys.stderr)
+        record_setup(ws.root, target, strategy=strategy, success=False,
+                     checks_total=1, checks_passed=0,
+                     duration_ms=(time.perf_counter() - started) * 1000)
+        return 1
+    for line in setup_report.splitlines():
         print(f"  {line}" if line.strip() else "")
 
     # ---------------------------------------------------------------- verify
@@ -653,7 +779,7 @@ def guided_setup(
         print("  fix the checks above first — until then containment is partial.")
         print("  most common cause: `ctx` not on PATH for the agent's environment.")
     else:
-        print("  Nothing else to do. Your agent is harnessed from its next session.")
+        print("  Configuration checks passed. Follow the host's start instructions above.")
     print()
     print("  see it work now (no agent needed):")
     print("      ctx run -- <any noisy command, e.g. your test suite>")
@@ -666,8 +792,9 @@ def guided_setup(
         for d in optional:
             print(f"      ctx wrap {d.name}   headless Gemini agent, ctx builds its venv (~40s)")
     print()
-    print("  undo: the per-host lines above name every file written; removing the")
-    print("        ctx entries from them fully uninstalls. Nothing else was touched.")
+    print("  undo: remove only the ctx-owned entries and blocks named above; see")
+    print("        Troubleshooting for status-line and ownership checks. Captured")
+    print("        artifacts and the content-free setup receipt may remain.")
     record_setup(
         ws.root,
         target,
@@ -693,13 +820,14 @@ def wrap_setup(
 
     ``force_all`` (``ctx wrap all``/``--all``) restores the configure-everything
     behaviour; an explicit ``hosts`` list overrides detection entirely. When no
-    harnessable CLI is found on PATH, setup falls back to configuring all
-    supported hosts (config is inert until a CLI reads it) with a note.
+    harnessable CLI is found on PATH, setup prepares project-local integrations
+    with a note. Hermes waits for its installed profile writer.
 
     Output is guided by default (survey → harness → verify → next step); set
     ``CTX_SETUP_PLAIN=1`` for the bare installer report, which is what scripts
     that parse this output want."""
     from ctx.installer import SETUP_HOSTS, setup_hosts
+    from ctx.mcp_hosts import IntegrationError
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(str(workspace_root))
@@ -718,7 +846,11 @@ def wrap_setup(
             d.name for d in detected if d.harnessable and not d.installed
         ]
         if installed:
-            report = setup_hosts(ws, installed)
+            try:
+                report = setup_hosts(ws, installed)
+            except (IntegrationError, OSError) as exc:
+                print(f"ctx setup: {exc}", file=sys.stderr)
+                return 1
             print(report)
             if skipped:
                 print()
@@ -730,17 +862,27 @@ def wrap_setup(
             return 0
         # Nothing detected: configure all supported hosts so the workspace is
         # ready the moment a CLI is installed. Idempotent and non-destructive.
+        hosts = [name for name in SETUP_HOSTS if name != "hermes"]
         print(
-            "no coding-agent CLI detected on PATH; configuring all supported "
-            f"hosts ({', '.join(SETUP_HOSTS)}) — config is inert until a CLI reads it.\n"
+            "no coding-agent CLI detected on PATH; preparing project-local "
+            f"integrations ({', '.join(hosts)}) — config is inert until a CLI reads it.\n"
+            "Hermes needs its installed CLI; run `ctx setup --host hermes` after installation."
         )
 
-    print(setup_hosts(ws, hosts))
+    try:
+        print(setup_hosts(ws, hosts))
+    except (IntegrationError, OSError) as exc:
+        print(f"ctx setup: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
 def print_config(host: str, ctx_exe: str | None = None) -> str:
     """Copy-pasteable configuration for a host, for CI and docs."""
+    from ctx.mcp_hosts import HOSTS, render_config
+
+    if host in HOSTS:
+        return render_config(host, Path.cwd(), ctx_exe)
     exe = ctx_exe or _ctx_executable()
     if host == "claude":
         return json.dumps(prepare_claude(Path.cwd(), exe), indent=2)
@@ -768,3 +910,202 @@ def print_config(host: str, ctx_exe: str | None = None) -> str:
     raise ValueError(
         f"unsupported wrap host {host!r} (expected claude|antigravity|codex)"
     )
+
+
+def wrap_hermes(workspace_root: Path, agent_args=None) -> int:
+    from ctx.mcp_hosts import wrap
+    return wrap("hermes", workspace_root, agent_args)
+
+
+def wrap_omp(workspace_root: Path, agent_args=None) -> int:
+    from ctx.mcp_hosts import wrap
+    return wrap("omp", workspace_root, agent_args)
+
+
+def wrap_opencode(workspace_root: Path, agent_args=None) -> int:
+    from ctx.mcp_hosts import wrap
+    return wrap("opencode", workspace_root, agent_args)
+
+
+def wrap_dsh(workspace_root: Path, agent_args=None) -> int:
+    from ctx.mcp_hosts import wrap
+    return wrap("dsh", workspace_root, agent_args)
+
+
+# ----------------------------------------------------------- prefix parity
+# The prefix-budget manifest (ctx.prefixassets) locks the bytes the harness
+# injects. It cannot see the bytes the HOST adds because of the harness: a
+# wrapper flag that flips a host setting can add tens of KB to every request
+# without touching one manifest asset. Measured on DeepSWE (evals/agentbench):
+# `--proxy` made Claude Code turn deferred tool loading off, 41 inline tool
+# schemas instead of 16, ~15k cached tokens per call, invisible to `ctx gain`.
+# The parity probe is the measurement that catches that class: one naive turn,
+# one wrapped turn, and the first request's composition diffed against what
+# the manifest declares. Two calls to the cheapest model; about one cent.
+
+#: Room for the wrapper's legitimate, undeclared movement in the host prompt:
+#: removing native Grep/Glob under collapse (-6 KB), the session-variable
+#: parts of the system prompt (cwd, date), and JSON encoding noise.
+_PROBE_SLACK_BYTES = 4096
+_PROBE_PROMPT = "Reply with the single word: ok"
+#: Same threshold the scorecard uses for its `prefix tax` flag: a catalogue
+#: this long with no deferral marker is the ~15k-tokens-per-call shape.
+_ENVIRONMENT_TAX_MIN_TOOLS = 24
+
+
+def _prompt_snapshot(config_dir: Path) -> dict | None:
+    """Prefix shape of the first request Claude Code sent from a session run
+    under ``CLAUDE_CONFIG_DIR=config_dir``: the transcript's prompt_snapshot
+    attachment carries the system prompt and the tool list as sent."""
+    import glob as _glob
+
+    for path in sorted(_glob.glob(str(config_dir / "projects" / "*" / "*.jsonl"))):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    att = ev.get("attachment") or {}
+                    if att.get("type") != "prompt_snapshot" or "tools" not in att:
+                        continue
+                    tools = att.get("tools") or []
+                    names = sorted(str(t.get("name") or "") for t in tools if isinstance(t, dict))
+                    return {
+                        "system_bytes": len(str(att.get("systemPrompt", "")).encode("utf-8", "replace")),
+                        "tools": len(tools),
+                        "tools_bytes": len(json.dumps(tools, ensure_ascii=False).encode("utf-8", "replace")),
+                        "deferral": "ToolSearch" in names,
+                        "tool_names": names,
+                    }
+        except OSError:
+            continue
+    return None
+
+
+def judge_prefix_parity(naive: dict | None, wrapped: dict | None, declared_bytes: int) -> dict:
+    """Pure verdict: the wrapped prefix may exceed the naive one by at most the
+    declared resident budget plus slack, and must not lose deferral."""
+    if not naive or not wrapped:
+        return {"ok": False, "reason": "no prompt snapshot from one of the sessions", "naive": naive, "wrapped": wrapped}
+    delta = (wrapped["system_bytes"] + wrapped["tools_bytes"]) - (naive["system_bytes"] + naive["tools_bytes"])
+    # Lost deferral is a tax only when there is a catalogue to inline. A
+    # wrapped session on the print-mode tool diet has no deferred tools
+    # left, so the marker is legitimately absent — and its catalogue is a
+    # third of naive's, which the byte delta already credits.
+    lost = (
+        bool(naive["deferral"]) and not wrapped["deferral"]
+        and wrapped["tools"] >= _ENVIRONMENT_TAX_MIN_TOOLS
+    )
+    allowed = declared_bytes + _PROBE_SLACK_BYTES
+    reasons = []
+    if lost:
+        reasons.append("wrapped session lost tool deferral (the host inlines its whole tool catalogue)")
+    if delta > allowed:
+        reasons.append(f"wrapped prefix is {delta:,} B over naive; declared budget {declared_bytes:,} B + {_PROBE_SLACK_BYTES:,} B slack")
+    # Parity is relative: a tax both sessions pay (ENABLE_TOOL_SEARCH=false in
+    # the environment, a host build without deferral) cancels out of the
+    # delta. It is still a tax, and the wire audit will flag every session,
+    # so name it here rather than let a PASS read as "no tax".
+    environment_tax = (
+        not naive["deferral"] and not wrapped["deferral"]
+        and max(naive["tools"], wrapped["tools"]) >= _ENVIRONMENT_TAX_MIN_TOOLS
+    )
+    return {
+        "ok": not reasons,
+        "reason": "; ".join(reasons),
+        "delta_bytes": delta,
+        "allowed_bytes": allowed,
+        "declared_bytes": declared_bytes,
+        "deferral_lost": lost,
+        "environment_tax": environment_tax,
+        "naive": {k: v for k, v in naive.items() if k != "tool_names"},
+        "wrapped": {k: v for k, v in wrapped.items() if k != "tool_names"},
+        "tools_only_wrapped": sorted(set(wrapped.get("tool_names", [])) - set(naive.get("tool_names", []))),
+        "tools_only_naive": sorted(set(naive.get("tool_names", [])) - set(wrapped.get("tool_names", []))),
+    }
+
+
+def render_prefix_parity(verdict: dict) -> str:
+    n, w = verdict.get("naive"), verdict.get("wrapped")
+    if not n or not w:
+        return f"prefix parity: FAIL — {verdict.get('reason')}"
+    lines = [
+        "prefix parity (first request, bytes as sent):",
+        f"  naive   system {n['system_bytes'] / 1024:.1f} KB · tools {n['tools']} ({n['tools_bytes'] / 1024:.0f} KB) · deferral {'on' if n['deferral'] else 'off'}",
+        f"  wrapped system {w['system_bytes'] / 1024:.1f} KB · tools {w['tools']} ({w['tools_bytes'] / 1024:.0f} KB) · deferral {'on' if w['deferral'] else 'off'}",
+        f"  delta {verdict['delta_bytes']:+,} B · allowed +{verdict['allowed_bytes']:,} B "
+        f"(declared {verdict['declared_bytes']:,} B + slack)",
+    ]
+    if verdict.get("tools_only_wrapped"):
+        lines.append("  tools only in wrapped: " + ", ".join(verdict["tools_only_wrapped"][:12]))
+    if verdict.get("tools_only_naive"):
+        lines.append("  tools only in naive: " + ", ".join(verdict["tools_only_naive"][:12]))
+    if verdict.get("environment_tax"):
+        lines.append(
+            "  ⚠ both sessions inline the whole tool catalogue (deferral off in this "
+            "environment — ENABLE_TOOL_SEARCH, or a host build without it); parity "
+            "holds, the tax does not cancel"
+        )
+    lines.append("  verdict: " + ("PASS" if verdict["ok"] else f"FAIL — {verdict['reason']}"))
+    return "\n".join(lines)
+
+
+def probe_prefix(
+    workspace_root: Path, ctx_exe: str | None = None, *, model: str = "haiku", use_proxy: bool = True
+) -> dict:
+    """Run one naive and one wrapped single-turn session and judge parity.
+
+    Each session gets its own ``CLAUDE_CONFIG_DIR`` so neither can see the
+    other's transcript; the wrapped one goes through ``wrap_claude`` exactly
+    as a real session would (hooks, explorer agent, proxy). Returns the
+    verdict dict from :func:`judge_prefix_parity` plus the raw snapshots."""
+    from ctx.prefixassets import resident_bytes
+
+    claude = shutil.which("claude")
+    if claude is None:
+        return {"ok": False, "reason": "`claude` not found on PATH", "naive": None, "wrapped": None}
+    exe = ctx_exe or _ctx_executable()
+    base_args = ["-p", _PROBE_PROMPT, "--max-turns", "1", "--model", model, "--output-format", "json"]
+    with tempfile.TemporaryDirectory(prefix="ctx-probe-") as tmp:
+        cfg_naive = Path(tmp) / "naive"
+        cfg_wrapped = Path(tmp) / "wrapped"
+        cfg_naive.mkdir()
+        cfg_wrapped.mkdir()
+        subprocess.run(
+            [claude, *base_args],
+            cwd=workspace_root,
+            env={**os.environ, "CLAUDE_CONFIG_DIR": str(cfg_naive)},
+            capture_output=True, text=True, timeout=300,
+        )
+        naive = _prompt_snapshot(cfg_naive)
+        # wrap_claude builds the child env from os.environ; scope the config
+        # dir to this call and restore whatever was there.
+        prior = os.environ.get("CLAUDE_CONFIG_DIR")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(cfg_wrapped)
+        # wrap_claude inherits stdio so interactive sessions work; the probe's
+        # child is not interactive and its JSON result is noise here, so park
+        # fd 1 on /dev/null for the duration (stderr keeps the scorecard).
+        saved_fd = os.dup(1)
+        try:
+            with open(os.devnull, "w") as sink:
+                sys.stdout.flush()
+                os.dup2(sink.fileno(), 1)
+                try:
+                    wrap_claude(workspace_root, list(base_args), ctx_exe=exe, use_proxy=use_proxy)
+                finally:
+                    sys.stdout.flush()
+                    os.dup2(saved_fd, 1)
+        finally:
+            os.close(saved_fd)
+            if prior is None:
+                os.environ.pop("CLAUDE_CONFIG_DIR", None)
+            else:
+                os.environ["CLAUDE_CONFIG_DIR"] = prior
+        wrapped = _prompt_snapshot(cfg_wrapped)
+    declared = sum(resident_bytes().values())
+    verdict = judge_prefix_parity(naive, wrapped, declared)
+    verdict["model"] = model
+    verdict["proxy"] = use_proxy
+    return verdict

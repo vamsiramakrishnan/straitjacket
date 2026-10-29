@@ -1,6 +1,8 @@
 """Acceptance: hook JSON contract, classification policy, fail-open."""
 
 import json
+
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -261,3 +263,144 @@ def test_codex_force_ask_degrades_safely_to_deny():
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     assert hso["permissionDecisionReason"] == "review this"
+
+
+# ------------------------------------------------ container escape surfaces
+# headlong's docker broker denylist, taken as a safety-class force_ask: a
+# privileged container, a host namespace, a host device, the engine socket
+# or a bind mount from outside the workspace reach past the confinement the
+# rest of the guard enforces. One predicate, every door.
+def _cmd(command, ws):
+    return _classify("run_command", {"CommandLine": command, "Cwd": str(ws)}, ws)
+
+
+@pytest.mark.parametrize("command", [
+    "docker run --privileged img",
+    "docker exec --privileged c sh",
+    "docker run --network host img",
+    "docker run --pid=host img",
+    "podman run --uts=host img",
+    "docker run --device /dev/sda img",
+    "docker run --cap-add=SYS_ADMIN img",
+    "docker run -v /:/host img",
+    "docker run -v ../:/up img",
+    "docker run -v /var/run/docker.sock:/var/run/docker.sock img",
+    "docker run --mount type=bind,source=/etc,target=/x img",
+])
+def test_container_escape_surfaces_force_ask(tmp_path, command):
+    d = _cmd(command, tmp_path)
+    assert d["decision"] == "force_ask", (command, d)
+    assert "container escape surface" in d["reason"]
+
+
+def test_unresolved_shell_variable_mount_still_asks(tmp_path):
+    """`$HOME` is a shell metacharacter, so the compound-expression door
+    answers first; the predicate itself refuses to guess what the variable
+    holds. Either way the user sees it."""
+    from ctx.hook import _container_escape
+
+    assert _cmd("docker run -v $HOME/.ssh:/root/.ssh img", tmp_path)["decision"] == "force_ask"
+    why = _container_escape(["docker", "run", "-v", "$HOME/.ssh:/root/.ssh", "img"], str(tmp_path))
+    assert why and "cannot resolve" in why
+    assert _container_escape(["docker", "run", "-v", "$PWD/data:/data", "img"], str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("command", [
+    "docker ps",
+    "docker compose up",
+    "docker run -v named:/data img",
+    "docker run -v ./data:/data img",
+    "docker run --cap-add NET_BIND_SERVICE img",
+    "docker run --mount type=bind,source={ws}/data,target=/x img",
+])
+def test_in_workspace_container_use_keeps_its_volume_class_answer(tmp_path, command):
+    (tmp_path / "data").mkdir()
+    _steering_deny(tmp_path)
+    d = _cmd(command.format(ws=tmp_path), tmp_path)
+    assert d["decision"] == "deny", (command, d)  # unbounded output, ctx run remediation
+    assert "container escape" not in d["reason"]
+
+
+@pytest.mark.parametrize("command", [
+    "docker run --privileged img > out.log 2>&1",       # the redirect shortcut
+    "echo hi && docker run --privileged img",           # a chain segment
+    "ctx run -- docker run --privileged img",           # the deny remediation's own door
+    "ctx run --shell -- 'docker run --privileged img | head -5'",
+])
+def test_container_escape_is_seen_through_every_door(tmp_path, command):
+    d = _cmd(command, tmp_path)
+    assert d["decision"] == "force_ask", (command, d)
+    assert "container escape surface" in d["reason"]
+
+
+def test_ctx_run_door_keeps_the_secret_path_guarantee(tmp_path):
+    """`ctx run -- cat secrets.json` used to be allowed outright because the
+    program was `ctx`; capture answers the volume question, never the
+    safety one."""
+    assert _cmd("ctx run -- cat secrets.json", tmp_path)["decision"] == "force_ask"
+    assert _cmd("ctx run -- pytest -q", tmp_path)["decision"] == "allow"
+
+
+# ------------------------------------------------------- caps never widen
+def test_large_file_read_keeps_the_callers_smaller_limit(tmp_path):
+    """The large-file rewrite bounds a Read to `max_inline_lines`. Measured on
+    DeepSWE (cattrs, haiku): the model asked `offset=729 limit=10` on a 60 KB
+    file and got 239 lines back — the guard meant to bound reads had widened
+    every targeted one into a 10 KB page. A cap narrows; it never widens."""
+    big = tmp_path / "converters.py"
+    big.write_text("\n".join(f"line {i}" for i in range(4000)), encoding="utf-8")
+    assert big.stat().st_size > 16384
+
+    d = _classify("Read", {"file_path": str(big), "offset": 729, "limit": 10}, tmp_path)
+    assert d["rewrite"]["updatedInput"]["limit"] == 10  # caller asked for less: kept
+    assert d["rewrite"]["updatedInput"]["offset"] == 729
+
+    d = _classify("Read", {"file_path": str(big), "offset": 729, "limit": 5000}, tmp_path)
+    assert d["rewrite"]["updatedInput"]["limit"] == 240  # over the cap: capped
+
+    d = _classify("Read", {"file_path": str(big)}, tmp_path)
+    assert d["rewrite"]["updatedInput"]["limit"] == 240  # no limit asked: the cap
+
+
+# --------------------------------------------- whole-file read → outline
+def _big_module(ws, name="converters.py", classes=6, methods=8):
+    src = ["import os", "from typing import Any", ""]
+    for c in range(classes):
+        src.append(f"class Converter{c}:")
+        for m in range(methods):
+            src.append(f"    def method_{c}_{m}(self, value: Any) -> Any:")
+            src += [f"        x = {i}  # padding line" for i in range(12)]
+            src.append("        return value")
+        src.append("")
+    (ws / "src").mkdir(exist_ok=True)
+    f = ws / "src" / name
+    f.write_text("\n".join(src) + "\n", encoding="utf-8")
+    assert f.stat().st_size > 16384
+    return f
+
+
+def test_whole_file_read_of_large_code_file_answers_with_its_outline(state_home, tmp_path):
+    """Measured on DeepSWE (cattrs, haiku): a whole-file Read of a 64 KB module
+    came back as its first 240 lines (~2.5k tok, 14% of the file, no map) and
+    the session paged on. The skeleton is ~1k tok for every symbol with its
+    line range, and makes the next read targeted."""
+    (tmp_path / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    f = _big_module(tmp_path)
+    d = _classify("Read", {"file_path": str(f)}, tmp_path)
+    assert d["decision"] == "deny" and "rewrite" not in d
+    assert "[ctx skeleton repo:src/converters.py]" in d["reason"]
+    assert "class Converter0" in d["reason"] and "method_5_7" in d["reason"]
+    assert "offset and limit" in d["reason"] and "--symbol" in d["reason"]
+    assert len(d["reason"]) < 6000  # a map, not a page
+
+
+def test_slice_reads_and_non_code_files_keep_the_bounded_page(state_home, tmp_path):
+    (tmp_path / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
+    f = _big_module(tmp_path)
+    d = _classify("Read", {"file_path": str(f), "offset": 40, "limit": 20}, tmp_path)
+    assert d["rewrite"]["updatedInput"]["limit"] == 20  # a slice is never outlined
+    assert "skeleton" not in d.get("reason", "")
+    notes = tmp_path / "notes.txt"
+    notes.write_text("x" * 20000, encoding="utf-8")
+    d = _classify("Read", {"file_path": str(notes)}, tmp_path)
+    assert d["rewrite"]["updatedInput"]["limit"] == 240  # no parser: first page as before

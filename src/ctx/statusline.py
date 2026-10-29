@@ -307,9 +307,10 @@ def codex_rollout_summary(rollout_path: Path | str,
                 totals = tu
         if not totals:
             return ""
+        cached_input = int(totals.get("cached_input_tokens", 0) or 0)
         tokens = {
-            "input": int(totals.get("input_tokens", 0) or 0),
-            "cache_read": int(totals.get("cached_input_tokens", 0) or 0),
+            "input": max(0, int(totals.get("input_tokens", 0) or 0) - cached_input),  # cached_input_tokens is a subset of input_tokens, not additional
+            "cache_read": cached_input,
             "cache_write": int(totals.get("cache_write_input_tokens", 0) or 0),
             "output": int(totals.get("output_tokens", 0) or 0)
                       + int(totals.get("reasoning_output_tokens", 0) or 0),

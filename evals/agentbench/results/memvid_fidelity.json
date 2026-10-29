@@ -1,0 +1,96 @@
+{
+ "schema": "sj.memvid_fidelity/v1",
+ "rows": [
+  {
+   "case": "tiny",
+   "in_bytes": 30,
+   "pages": 0,
+   "page_concat_bytes": 0,
+   "exact": false,
+   "exact_after_rstrip_newlines": false,
+   "find_text_exact": false,
+   "sha_in": "ef013f5d6287f07d",
+   "sha_pages": "e3b0c44298fc1c14",
+   "file_bytes": 82545,
+   "verify_failed": []
+  },
+  {
+   "case": "no-trailing-newline",
+   "in_bytes": 5000,
+   "pages": 5,
+   "page_concat_bytes": 5000,
+   "exact": true,
+   "exact_after_rstrip_newlines": true,
+   "find_text_exact": false,
+   "sha_in": "c59d3c0480cc2d71",
+   "sha_pages": "c59d3c0480cc2d71",
+   "file_bytes": 334047,
+   "verify_failed": []
+  },
+  {
+   "case": "one-trailing-newline",
+   "in_bytes": 18890,
+   "pages": 16,
+   "page_concat_bytes": 18889,
+   "exact": false,
+   "exact_after_rstrip_newlines": true,
+   "find_text_exact": false,
+   "sha_in": "45e6307440e9bda0",
+   "sha_pages": "eb4f2f05679ba526",
+   "file_bytes": 169760,
+   "verify_failed": []
+  },
+  {
+   "case": "two-trailing-newlines",
+   "in_bytes": 18891,
+   "pages": 16,
+   "page_concat_bytes": 18889,
+   "exact": false,
+   "exact_after_rstrip_newlines": true,
+   "find_text_exact": false,
+   "sha_in": "c3cbec7c36dea9d4",
+   "sha_pages": "eb4f2f05679ba526",
+   "file_bytes": 169777,
+   "verify_failed": []
+  },
+  {
+   "case": "blank-lines-inside",
+   "in_bytes": 2400,
+   "pages": 0,
+   "page_concat_bytes": 0,
+   "exact": false,
+   "exact_after_rstrip_newlines": false,
+   "find_text_exact": false,
+   "sha_in": "e28e9167eaa377b1",
+   "sha_pages": "e3b0c44298fc1c14",
+   "file_bytes": 96830,
+   "verify_failed": []
+  },
+  {
+   "case": "crlf",
+   "in_bytes": 20890,
+   "pages": 16,
+   "page_concat_bytes": 18889,
+   "exact": false,
+   "exact_after_rstrip_newlines": false,
+   "find_text_exact": false,
+   "sha_in": "4592b5de4d21a834",
+   "sha_pages": "eb4f2f05679ba526",
+   "file_bytes": 169485,
+   "verify_failed": []
+  },
+  {
+   "case": "trailing-spaces",
+   "in_bytes": 24890,
+   "pages": 16,
+   "page_concat_bytes": 18889,
+   "exact": false,
+   "exact_after_rstrip_newlines": false,
+   "find_text_exact": false,
+   "sha_in": "7ea25520567660b4",
+   "sha_pages": "eb4f2f05679ba526",
+   "file_bytes": 169672,
+   "verify_failed": []
+  }
+ ]
+}

@@ -138,6 +138,9 @@ class _Graph:
     out_edges: dict[str, list[tuple[str, int, list[str], str]]] = field(default_factory=dict)
     # base node id -> [subclass node ids]
     subclasses: dict[str, list[str]] = field(default_factory=dict)
+    # base node id -> {subclass node id: resolution tier}, so an unscoped
+    # inheritance edge can be disclosed the same way call edges are
+    subclass_tier: dict[str, dict[str, str]] = field(default_factory=dict)
     # file -> files it directly imports (the scoping relation, kept for cycles)
     imports: dict[str, list[str]] = field(default_factory=dict)
     engines: dict[str, str] = field(default_factory=dict)  # stage -> engine label
@@ -488,10 +491,18 @@ def _import_edges(ws: Workspace, rels: set[str], units: dict[str, _Unit]) -> tup
         # from there. Nothing is registered when no prefix is a package, so
         # loose scripts and test trees keep exactly their old behaviour.
         parts = stem.split("/")
-        for i in range(len(parts)):
-            if "/".join(parts[: i + 1]) in pkg_dirs:
+        # Register the name under EVERY package root the file is importable
+        # from: each prefix that starts an unbroken chain of package dirs
+        # down to the file. Shallow-first alone let a loose `src/conftest.py`
+        # mark `src` a package and key `src/ctx/store.py` only as
+        # `src.ctx.store`; deepest-first alone keyed `src/pkg/sub/store.py`
+        # only as `sub.store` and lost `pkg.sub.store` (Codex review, PR
+        # #33). A file has as many importable names as it has package roots
+        # above it, and `setdefault` keeps the first file per name.
+        dirs = ["/".join(parts[: i + 1]) for i in range(len(parts) - 1)]
+        for i in range(len(dirs)):
+            if all(d in pkg_dirs for d in dirs[i:]):
                 by_stem.setdefault(".".join(parts[i:]), rel)
-                break
     for rel, unit in units.items():
         for imp in unit.imports:
             dotted = imp.replace("::", ".").strip()
@@ -579,11 +590,12 @@ def _link(ws: Workspace, units: dict[str, _Unit]) -> _Graph:
     for rel in sorted(units):
         for d in units[rel].defs:
             for base in d.bases:
-                targets, _tier = _resolve_name(base, rel, g, imports_of)
+                targets, base_tier = _resolve_name(base, rel, g, imports_of)
                 sub = _nid(rel, d.qual)
                 for t in targets:
                     if t != sub:
                         g.subclasses.setdefault(t, []).append(sub)
+                        g.subclass_tier.setdefault(t, {})[sub] = base_tier
     for k in g.in_edges:
         g.in_edges[k] = sorted(set(g.in_edges[k]))
     for k in g.subclasses:
@@ -693,6 +705,7 @@ def _graph_to_json(g: _Graph) -> dict[str, Any]:
         "in_edges": {k: [list(e) for e in v] for k, v in g.in_edges.items()},
         "out_edges": {k: [[a, b, list(c), d] for a, b, c, d in v] for k, v in g.out_edges.items()},
         "subclasses": g.subclasses,
+        "subclass_tier": g.subclass_tier,
         "imports": g.imports,
         "engines": g.engines,
     }
@@ -710,6 +723,7 @@ def _graph_from_json(d: dict[str, Any]) -> _Graph:
         k: [(e[0], int(e[1]), list(e[2]), e[3]) for e in v] for k, v in d["out_edges"].items()
     }
     g.subclasses = {k: list(v) for k, v in d["subclasses"].items()}
+    g.subclass_tier = {k: dict(v) for k, v in (d.get("subclass_tier") or {}).items()}
     g.imports = {k: list(v) for k, v in (d.get("imports") or {}).items()}
     g.engines = dict(d.get("engines") or {})
     return g
@@ -737,6 +751,9 @@ def _resolve_target(g: _Graph, symbol: str) -> list[str]:
         hits = sorted(n for n, d in g.nodes.items() if d.qual.endswith("." + symbol))
         if hits:
             return hits
+        # No qualified match for a dotted query -- do not silently fall back to
+        # an unrelated bare-name hit (e.g. answering Foo.bar with Baz.bar).
+        return []
     return list(g.defs_by_name.get(symbol.split(".")[-1], []))
 
 
@@ -816,8 +833,13 @@ def _rows(g: _Graph, entries: list[tuple[str, int, str]]) -> list[str]:
     `callers put_blob` rows were tests, sorted alphabetically in among the 11
     production callers that were the actual answer.
     """
-    prod = [e for e in entries if _is_production(g.nodes[e[0]].rel if e[0] in g.nodes else e[0])]
-    other = [e for e in entries if e not in prod]
+    # Single pass, not `e not in prod` (list membership) -- that made this
+    # O(n*m) and took ~0.2s+ for a few thousand entries.
+    prod: list[tuple[str, int, str]] = []
+    other: list[tuple[str, int, str]] = []
+    for e in entries:
+        rel = g.nodes[e[0]].rel if e[0] in g.nodes else e[0]
+        (prod if _is_production(rel) else other).append(e)
     out: list[str] = []
     both = bool(prod) and bool(other)
     for label, group in (("first-party", prod), ("tests/evals", other)):
@@ -1129,6 +1151,7 @@ def cmd_impls(store: Store, ws: Workspace, symbol: str, depth: int = _MAX_DEPTH)
         return "\n".join(out)
 
     seen: dict[str, int] = {}
+    unscoped: set[str] = set()
     frontier = list(classes)
     for d in range(1, depth + 1):
         nxt: list[str] = []
@@ -1136,6 +1159,8 @@ def cmd_impls(store: Store, ws: Workspace, symbol: str, depth: int = _MAX_DEPTH)
             for sub in g.subclasses.get(q, []):
                 if sub not in seen and sub not in classes:
                     seen[sub] = d
+                    if g.subclass_tier.get(q, {}).get(sub) == _TIER_REPO:
+                        unscoped.add(sub)
                     nxt.append(sub)
         frontier = nxt
         if not frontier:
@@ -1149,7 +1174,8 @@ def cmd_impls(store: Store, ws: Workspace, symbol: str, depth: int = _MAX_DEPTH)
         label = "direct" if d == 1 else f"depth {d}"
         out.append(f"  {label}: {fmt_int(len(group))}")
         for q in group[:_MAX_ROWS]:
-            out.append(f"    {_fmt_def(g, q)}")
+            mark = "  [unscoped]" if q in unscoped else ""
+            out.append(f"    {_fmt_def(g, q)}{mark}")
         if len(group) > _MAX_ROWS:
             out.append(f"    … +{fmt_int(len(group) - _MAX_ROWS)} more at {label}")
     # The inverse direction, when the queried type itself extends something.

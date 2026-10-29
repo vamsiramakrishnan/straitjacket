@@ -11,6 +11,8 @@ plus two loud ERRORs. No LLM is involved; this exercises the delivery layer
 only, so it re-runs cheaply and identically. Headroom and straitjacket execute
 their real implementations; the other five arms are inspectable models of
 their documented strategies, not executions of those third-party products.
+Opaque 12-hex run IDs are canonicalized to the recorded example before token
+counting, avoiding workspace-path BPE jitter without changing address shape.
 
 | arm | out tok | ratio | quiet needle | address |
 |---|---:|---:|---|---|
@@ -20,7 +22,7 @@ their documented strategies, not executions of those third-party products.
 | **ponytail** (advisory ruleset) | 302,698 | 1.0× | SURVIVED | n/a |
 | **maki** (sandboxed script) | 58 | 5,218× | **DROPPED** | n/a |
 | **headroom-ai 0.32.1** | 357 | 848× | **DROPPED** | no |
-| **sj** (`ctx run` logtemplate/v1) | 524 | 578× | **SURVIVED** | **yes** |
+| **sj** (`ctx run` logtemplate/v1) | 531 | 570× | **SURVIVED** | **yes** |
 
 ## The pattern: the harder the field compresses, the surer it loses the needle
 
@@ -39,20 +41,24 @@ their documented strategies, not executions of those third-party products.
   maximum loss.
 - **headroom** — 848×, but **silently drops** the quiet needle with no address
   (unidiff fallback tier; onnxruntime absent).
-- **sj** — 578× *and* the quiet needle survives *and* it carries a
+- **sj** — 570× *and* the quiet needle survives *and* it carries a
   `ctx get run:… --lines` retrieval address. The only arm that bounds without
   losing.
 
-## The decisive column is "survived AND addressable", not ratio
+## The decisive column is "survived AND address emitted", not ratio
 
-Ratio is a trap: **maki wins the ratio (5,218×) by discarding the needle**, and
-every aggressive compressor in the field (caveman, rtk, maki, headroom) drops it
-with no trace. The two arms that keep it (naive, ponytail) only do so by keeping
-the whole 302k-token flood — no bounding, unciteable. **`sj` is the only arm
-that is simultaneously bounded, lossless, and addressable.**
+Ratio is a trap: the modeled Maki-style arm wins the ratio (5,218×) by
+discarding the needle. Every aggressive treatment exercised in this fixture —
+three explicit models plus pinned Headroom 0.32.1 — drops it. The two other arms
+that keep it (naive and the modeled Ponytail-style treatment) keep the whole
+302k-token flood and emit no retrieval address. **`sj` is the only arm
+that is simultaneously bounded, quiet-target-preserving, and
+address-emitting.** This fixture checks the address's presence and form. It does
+not execute `ctx get` or compare a retrieval round trip; retrieval behavior is
+covered by the implementation's focused tests, not this receipt.
 
 ```
-                   bounded?   needle survives?   addressable?
+                   bounded?   needle survives?   address emitted?
   naive               no            yes              no
   caveman            yes            NO               —
   rtk                yes            NO               —

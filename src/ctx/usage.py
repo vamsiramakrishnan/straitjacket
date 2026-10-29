@@ -31,6 +31,12 @@ class ActualUsage:
     cost_usd: float | None = None
     cost_basis: str = "priced_tokens"  # ``host_reported`` | ``priced_tokens``
     source: str = ""
+    # Model turns the attempt took. The feedback signal the task steward reads:
+    # a node burning past its claim is evidence its complexity was
+    # underestimated, and that is a policy input, not a limit. 0 when the host
+    # did not report it (Antigravity SDK), which the summary keeps distinct
+    # from "took zero turns" by counting attempts that reported at all.
+    turns: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -51,6 +57,7 @@ class ActualUsage:
             "cost_usd": self.cost_usd,
             "cost_basis": self.cost_basis,
             "source": self.source,
+            "turns": self.turns,
         }
 
 
@@ -76,6 +83,7 @@ def _priced(
     cache_write_tokens: int = 0,
     output_tokens: int = 0,
     reported_cost: float | None = None,
+    turns: int = 0,
 ) -> ActualUsage | None:
     tokens = {
         "input": max(0, input_tokens),
@@ -97,7 +105,23 @@ def _priced(
         ),
         cost_basis="host_reported" if reported_cost is not None else "priced_tokens",
         source=source,
+        turns=max(0, int(turns)),
     )
+
+
+def _last_result_event(stdout: str) -> dict | None:
+    """The final ``type: result`` line of a stream-json transcript, or None."""
+    for line in reversed((stdout or "").splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            return event
+    return None
 
 
 def parse_claude_json(
@@ -106,11 +130,19 @@ def parse_claude_json(
     model: str,
     workspace_root: Path | str | None = None,
 ) -> tuple[str, ActualUsage | None]:
-    """Extract Claude Code's ``--output-format json`` result and usage."""
+    """Extract Claude Code's ``--output-format json`` result and usage.
+
+    ``--output-format stream-json`` (used when the orchestrator's idle
+    beacon is on) ends with the same result document as its last event,
+    ``{"type": "result", ...}``; the events before it are the beacon and
+    carry nothing this parser needs, so the last result line is the doc.
+    """
     try:
         doc = json.loads(stdout)
     except (json.JSONDecodeError, TypeError):
-        return stdout, None
+        doc = _last_result_event(stdout)
+        if doc is None:
+            return stdout, None
     if not isinstance(doc, dict):
         return stdout, None
     raw_usage = doc.get("usage")
@@ -124,6 +156,7 @@ def parse_claude_json(
         cache_write_tokens=_number(usage.get("cache_creation_input_tokens")),
         output_tokens=_number(usage.get("output_tokens")),
         reported_cost=_money(doc.get("total_cost_usd")),
+        turns=_number(doc.get("num_turns")),
     )
     result = doc.get("result")
     if not isinstance(result, str):
@@ -147,6 +180,7 @@ def parse_codex_jsonl(
     totals = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0}
     saw_usage = False
     parsed_any = False
+    turns = 0
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
@@ -164,6 +198,8 @@ def parse_codex_jsonl(
         ):
             messages.append(item["text"])
         raw = event.get("usage")
+        if event.get("type") == "turn.completed":
+            turns += 1
         if event.get("type") == "turn.completed" and isinstance(raw, dict):
             full_input = _number(raw.get("input_tokens"))
             cached = _number(raw.get("cached_input_tokens"))
@@ -186,6 +222,7 @@ def parse_codex_jsonl(
             cache_read_tokens=totals["cache_read"],
             cache_write_tokens=totals["cache_write"],
             output_tokens=totals["output"],
+            turns=turns,
         )
     return (messages[-1] if messages else stdout), measured
 
@@ -250,6 +287,7 @@ def coerce_usage(value: Any) -> ActualUsage | None:
             cost_usd=_money(value.get("cost_usd")),
             cost_basis=str(value.get("cost_basis") or "priced_tokens"),
             source=str(value.get("source") or "injected"),
+            turns=_number(value.get("turns")),
         )
     except Exception:
         return None
@@ -282,6 +320,10 @@ def summarize_usage(attempts: Iterable[ActualUsage | None]) -> dict[str, Any]:
         "cost_complete": bool(measured) and len(costs) == len(rows),
         "cost_basis": bases[0] if len(bases) == 1 else "mixed" if bases else None,
         "sources": sorted({row.source for row in measured if row.source}),
+        "turns": sum(row.turns for row in measured),
+        # How many measured attempts reported a turn count at all, so a 0
+        # above can be read as "unreported" rather than "instant".
+        "turns_reported": sum(1 for row in measured if row.turns > 0),
     }
 
 

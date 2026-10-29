@@ -4,7 +4,7 @@ The CLI is organized around four operations:
 
 1. **capture** an operation before it can flood;
 2. **query** stored evidence without replaying raw output;
-3. **resolve** an address to exact bytes or a bounded sub-digest;
+3. **resolve** an address to selected stored coordinates or a bounded sub-digest;
 4. **measure** what the harness changed in the session.
 
 The command surface is larger than four verbs because different execution shapes need
@@ -20,7 +20,7 @@ different safety contracts. The mental model can stay small.
 | Computed control flow | `ctx py <script>` | Branch, loop, aggregate; one bounded final digest |
 | Long-running work | `ctx run --bg-after N -- …` | Returns a job handle instead of idling |
 | Inspect a job | `ctx job <id>` | Bounded live tail and lifecycle control |
-| Exact evidence | `ctx get <handle>` | Address in, exact bytes or bounded zoom out |
+| Stored evidence | `ctx get <handle>` | Address in, redaction-aware region or bounded zoom out |
 | Search stored evidence | `ctx search …` | Search artifacts without re-execution |
 | Compose typed facts | `ctx q '<pipeline>'` | Total, bounded repository/evidence query algebra |
 | Answer a question | `ctx ask "…" --intent <i>` | Typed intent preset (locate/impact/diagnose) → one evidence view |
@@ -35,6 +35,7 @@ different safety contracts. The mental model can stay small.
 | Need | Command | Why |
 |---|---|---|
 | A map of the repo | `ctx map --budget N` | Ranked, token-budgeted file/symbol map instead of a directory dump |
+| Exact answers from def/refs | `ctx index` | Build a compiler-grade SCIP index once; def/refs stop approximating |
 | Where a symbol lives | `ctx def <symbol>` | Definition site as a snapshot + span |
 | Who uses a symbol | `ctx refs <symbol>` | Reference sites, bounded |
 | Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
@@ -43,6 +44,24 @@ different safety contracts. The mental model can stay small.
 | Why the import fails | `ctx cycles` / `ctx cycles --calls` | Circular imports between files, or mutual recursion between functions |
 | Lint/syntax digest | `ctx diag <path>` | Deterministic diagnostics without running a full linter into context |
 | A compiled investigation | `ctx plan …` / `ctx plan run …` | Validate, price, and run a bounded DAG of evidence ops locally; get one digest |
+| Explicit model analysis | `ctx semantic prepare/run/resume/show …` | Frozen evidence, bounded worker calls, validated citations, and durable partial reports |
+| Investigate and verify a repair | `ctx task prepare/run/resume/show/apply …` | Shared task budget, retained worktree, adaptive evidence gathering, and independent checks |
+
+See [semantic analysis](SEMANTIC.md) for the request/worker protocol and the
+distinction between admission estimates and hard process bounds.
+
+### Edit and verify observed source
+
+| Need | Command | Why |
+|---|---|---|
+| Preview or apply one observed replacement | `ctx edit replace …` | Snapshot or anchored span, addressed plan and receipt |
+| Review and apply a sealed plan | `ctx edit preview …` / `ctx edit apply …` | Check current bytes before writing |
+| Check an applied edit | `ctx edit verify … -- <command>` | Captured check bound to edited files and declared witnesses |
+| Request a verified continuation | `ctx edit handoff …` | Attempt-bound proof and complete bounded checklist |
+| Expand a demonstrated rewrite | `ctx edit expand …` | Explicit structural rule, scoped preview, ordinary plan |
+| Compare measured strategies | `ctx edit advise …` | Paired quality and total-cost gates |
+
+See the [edit loop](EDIT-LOOP.md) for command examples, recovery, and proof limits.
 
 ### Manage the store and the session
 
@@ -68,6 +87,42 @@ ctx init
 This writes the workspace configuration and ignore policy. Commit the files when the
 policy is intended to be shared; keep machine- or secret-specific exclusions local.
 
+```bash
+ctx setup --prune      # configure the installed agents, then defer what this repo does not use
+ctx prune              # preview the same decision on an already-harnessed repo
+ctx prune --apply --host claude --host codex
+```
+
+`ctx prune` is the capability-surface audit run as a setup step with a decision
+rule: ctx's own kernel and every capability that is read-only or observed in use
+stays visible; a skill, agent or MCP server that is unused, remote-write or
+destructive is deferred, and each host's minimal launch config is compiled from
+that selection (`.ctx-surface/`). Nothing is deleted. The receipt
+(`.ctx-surface/prune-receipt.json`) records the per-turn tokens before and after
+and what the repository looked like when the decision was made. `--keep <id>`
+pins a capability the rule would defer; `--probe-mcp` spawns each MCP server to
+measure its real schema tokens instead of estimating them.
+
+On a terminal, `ctx prune` and `ctx setup --prune` ask rather than decide. One
+selector per group (MCP servers, skills, agents) lists each capability with its
+tokens per turn, authority, observed use and the rule's recommendation marked
+`[defer]` or `[keep]`:
+
+```text
+MCP servers: 2 · 1,240 tok/turn
+   1. [keep ] mcp.github                                   980 tok/turn  remote-write  used 12x
+   2. [defer] mcp.deploy-prod                              260 tok/turn  destructive   never used
+  defer which? [Enter = as marked]
+```
+
+Enter accepts the marks; `all` / `none`; `1,3-5` picks exactly those; `+2` /
+`-3` adjusts the marks; `?2` explains one item. Kernel capabilities (ctx's own
+tools, policy, repository instructions) are reported as kept and never asked
+about. Then the hosts to compile for, then a confirmation before anything is
+written. The receipt records, per capability, whether the rule or the user
+decided. `--yes` takes the rule's answer at every prompt without asking, which is
+also what a pipe or `--json` gets; `--interactive` forces the questions.
+
 ## Capture one command: `ctx run`
 
 ```bash
@@ -84,6 +139,14 @@ A run has two products:
 - a deterministic digest selected by the detected profile.
 
 The digest header contains the run handle. Use it for later retrieval, search, or diff.
+
+For an embedding tool, `ctx run --json -- <command>` prints one
+`ctx.command-result/v1` object with the command's exit code or signal, timeout
+state and a full run reference. Complete small text streams remain separate;
+large output uses the existing bounded digest. The CLI still exits `3` on a
+failed command and `124` on timeout. Read the JSON command status instead of
+inferring it from ctx's exit code. This foreground mode rejects `--bg`,
+`--bg-after` and `--passthrough`. See [Tool SDK](TOOL-SDK.md) for the contract.
 
 ### Shell syntax
 
@@ -147,17 +210,19 @@ not enter the transcript; failures remain deterministic and retrievable.
 `ctx py` provides bounded capture, not OS isolation. Treat it as having the same
 execution authority as `ctx run` until the broker security boundary ships.
 
-## Retrieve exact evidence: `ctx get`
+## Retrieve bounded evidence: `ctx get`
 
 ```bash
-ctx get run:<id>#stdout --lines 120:180
-ctx get blob:<id>
-ctx get <span-id>
+ctx get run:8d8335db6848#stdout --lines 120:180
+ctx get blob:7bd91f2a4c3d
+ctx get 0f44195122
 ```
 
-Small regions return exact bytes. A region too large for the retrieval budget returns a
-bounded zoom digest with further spans. Retrieval cannot recursively re-flood the
-transcript.
+Small requests select exact stored coordinates. Model-visible bytes remain
+subject to the current redaction policy; an exact-byte request declares when
+redaction changed it. A region too large for the retrieval budget returns a
+bounded zoom digest with further spans. Retrieval cannot recursively re-flood
+the transcript.
 
 A handle is an address today. It becomes an authorization capability only in the
 broker-era design; do not present current content identifiers as a sandbox boundary.
@@ -175,6 +240,18 @@ ctx get repo:app/auth.py --lines 40:52@07407f1c
 ctx get repo:app/auth.py --lines 40:52 --hashlines   # L40:a3| … per-line tags
 ```
 
+`--snapcompact` renders the selected slice as a deterministic monospace
+bitmap PNG (`ctx.snapcompact`) and returns a `blob:` ref instead of text —
+an opt-in cost/format tradeoff (requires the `image` extra: `pip install
+'ctx-harness[image]'`). It never changes default behavior, and this repo
+does not claim a live vision model actually reads the image back correctly
+at any cost saving — see `ctx.snapcompact`'s module docstring:
+
+```bash
+ctx get run:7bd91f2a4c3d#stdout --lines 1:120 --snapcompact
+ctx get blob:<hash from the header> --bytes 1:<size>   # fetch the PNG bytes
+```
+
 The anchor verifies silently when the content has not moved, **follows it** when
 it has (declaring `anchor: @07407f1c moved L40:52 → L42:54` and echoing the
 corrected address), and **refuses with exit 2** when the content is gone rather
@@ -182,17 +259,157 @@ than returning whatever now sits at those coordinates. `ctx def` emits an
 anchored `live:` address for exactly this reason. Full mechanism:
 [ANCHORS.md](ANCHORS.md).
 
+## The collaboration record: `ctx task`
+
+```bash
+ctx orchestrate "add a caching layer"                     # prints task: <id> at the end
+ctx task ls                                               # tasks with a ledger, newest first
+ctx task show task-18d1583556af4e76                       # claims · handbacks · steward · inbox
+ctx task send task-18d… implement checkpoint:d914ee702801 --note "the plan"
+ctx task inbox task-18d… implement
+ctx orchestrate --resume task-18d1583556af4e76            # finished nodes restored, the rest run
+```
+
+Every `ctx orchestrate` run writes a task ledger; `show` renders it as
+addresses and numbers. `send` hands a node an **address** — never content —
+which the node sees in its prompt and resolves with `ctx get`. Full
+mechanism: [TASK-LEDGER.md](TASK-LEDGER.md).
+
+## Tell another harness: `ctx relay`
+
+```bash
+ctx relay watch claude job --action report          # tell me when a job lands
+ctx run --bg -- pytest -q                           # ... and stop polling
+ctx relay signal codex:0f1e2d checkpoint:d914ee702801 --interrupt \
+    --note "the migration schema changed under you"
+ctx relay status                                    # queued, watching, pending
+```
+
+The task ledger lets harnesses share a record; the relay lets one **tell**
+another. A signal carries an address and a bounded note, never content — the
+same closed grammar `ctx task send` enforces.
+
+Delivery is at the receiving harness's next hook boundary: `post-tool-use` and
+session start for `report`/`advise`, `pre-tool-use` for `interrupt`. There is no
+push, and on a hooked host an interrupt stops the next **tool call**, not a
+token stream. An [ACP worker](ACP.md) is the exception — ctx owns that
+subprocess, so a queued interrupt cancels its turn mid-flight and a queued
+report is prepended to its prompt. Full mechanism, per-host delivery table,
+bounds and failure direction: [RELAY.md](RELAY.md).
+
 ## Search captured artifacts: `ctx search`
 
 Use search when the evidence already exists in the store:
 
 ```bash
-ctx search 'MissingTenantError'
-ctx search 'authorization failed' --run run:<id>
+ctx search run:8d8335db6848#stdout 'MissingTenantError'
+ctx search run:8d8335db6848 'authorization failed'
 ```
 
 Searching an artifact is cheaper and more trustworthy than rerunning a command merely
 to recover text the harness already captured.
+
+### Search the repository: filters, symbols, history
+
+Repository searches take the query language (docs/CODE-SEARCH.md): filters ride
+in the pattern list, the text index narrows the corpus to trigram candidates
+(synced by fingerprint before every query, verified against the live bytes),
+and history is a search target like any other.
+
+```bash
+ctx search repo: TokenBucket file:src/ '!file:tests' lang:python
+ctx search repo: 'rate limit' case:no
+ctx search repo: sym:resolve_refs                  # definition sites from the symbol table
+ctx search repo: type:commit "prefix tax"          # commits whose message says so
+ctx search repo: type:diff ENABLE_TOOL_SEARCH file:src/   # commits whose change carries it
+```
+
+The coverage line names the engine (`index trigram · 45 ms sync`, ripgrep, or
+the Python scan) and, for the index, how many of the corpus's files were read
+to verify. `CTX_SEARCH_ENGINE=rg|python` bypasses the index for one call;
+`CTX_SEARCH_INDEX=off` disables it.
+
+## Answer exactly, not approximately: `ctx index`
+
+```bash
+ctx index --list                 # which indexers are installed, what this repo needs
+ctx index                        # refresh the text index, then index the dominant language
+ctx index --language rust        # or name one
+ctx index --text                 # only the text index (trigrams, symbols, fingerprints)
+ctx index --status               # what is indexed, and how current it is
+```
+
+Two indexes live here. The **text index** (docs/CODE-SEARCH.md) needs no
+toolchain, builds itself on first search below a size guard (4,000 files /
+48 MB) and is re-synced by a stat sweep before every query, so `--text` is a
+warm-up, not a requirement. The **SCIP index** is the exact tier below.
+
+`ctx def` and `ctx refs` run an engine ladder, and the top rung is a SCIP index
+— the answer the language's own compiler front end gives. ctx has read those
+indexes for a long time and never made one, so unless a repository indexed
+itself the rung was unreachable and answers came from the ladder's floor: a
+word-boundary regex over source files.
+
+That floor is worse than it looks. Measured against `rust-analyzer scip` on
+`tokio-rs/bytes`, it reported **3,637 reference sites where the compiler says
+806** — and the error lands exactly where names are short and common, which is
+where you ask. `ctx refs buf` returned 754 sites, 55 of them real. A regex
+cannot tell a reference from the same letters in a comment or a string literal;
+the information is not in the text.
+
+`ctx index` shells out to the real tooling rather than approximating it:
+
+| language | indexer | install |
+|---|---|---|
+| rust | `rust-analyzer scip` | `rustup component add rust-analyzer` |
+| go | `scip-go` | `go install github.com/sourcegraph/scip-go/cmd/scip-go@latest` |
+| typescript / javascript | `scip-typescript` | `npm i -g @sourcegraph/scip-typescript` |
+| python | `scip-python` | `npm i -g @sourcegraph/scip-python` |
+| java | `scip-java` | see `sourcegraph/scip-java` |
+
+The index is written to the store's audit area, **never into your worktree**.
+Indexing stays an explicit command because it costs seconds to minutes and
+needs the project's toolchain — it must never happen inside a retrieval verb on
+a hook's latency budget.
+
+### An index goes stale, and ctx will not pretend otherwise
+
+A SCIP index is a snapshot of one moment; nothing keeps it in step with your
+edits. Trusting a stale one is worse than having none, because the exact tier
+answers in a confident voice: a symbol you added since indexing would come back
+as `sites: 0`, and a call site added to a file that changed would simply be
+missing from an answer still labelled `scip (exact)`.
+
+So before using an index, ctx checks that no source file is newer than it (and,
+for an index ctx built, that the file count still matches — a deletion moves no
+surviving file's timestamp). If the tree has moved on, the index is skipped
+exactly as if it were absent, the ladder falls through, and the header says so:
+
+```
+[ctx refs helper · engine ast (textual) · stale index skipped, re-run ctx index]
+```
+
+That check walks the source files, which measured ~220 ms on a 4,700-file
+worktree. It is charged on every `refs`/`def` call in an indexed repository,
+and it buys the difference between an exact answer and a plausible one — when
+the verdict is "stale", the textual scan that runs instead costs far more.
+
+An index `ctx index` built also records the content hash of every source file
+it described, and that makes a stale index *partially* usable instead of
+useless: files whose hash still matches are answered exactly, the changed or
+new ones by the textual rung restricted to them, and the header says how many:
+
+```
+[ctx refs helper · engine scip (exact) · 1 changed file via ast (textual)]
+```
+
+`ctx index --status` lists the files the index no longer describes; `ctx impls`
+has an exact rung from the index's own implementation edges.
+
+Nothing about this is required. With no index the ladder keeps its lower rungs
+and every answer still discloses which engine produced it. `ctx doctor` carries
+an `exact index` row saying whether one exists, whether it is still current,
+and what to run if not, so the difference is visible rather than inferred.
 
 ## Walk the call graph: `ctx callers` / `callees` / `impact` / `impls`
 
@@ -243,6 +460,31 @@ marked `[unscoped]` so a candidate never reads as a fact. When several
 definitions answer to one name, every one of them is listed before the results
 — an ambiguous question gets an ambiguous answer, out loud.
 
+## Ask the language server: `ctx lsp`
+
+The skeleton (`ctx stats repo:<file>`) says *where* symbols are, from a parser.
+A language server says what a name at a position *means*: its definition across
+files, every reference to it, its type and signature. `ctx lsp` is a bounded
+JSON-RPC client over stdio for any server on `PATH`, one process per call.
+
+```bash
+ctx lsp def   src/app.py:42:13            # definition of the name at line 42, col 13 (1-based)
+ctx lsp refs  repo:src/app.py:Router.dispatch   # references; position taken from the skeleton
+ctx lsp hover src/app.py:42:13 --timeout 60     # type and signature
+```
+
+Output is the same coordinate shape as `ctx refs` (`repo:<path>:L<n>: <text>`),
+workspace-confined, with the engine disclosed in the header (`engine lsp
+(pyright-langserver)`). Servers are looked up per skeleton language: pyright,
+pylsp or jedi-language-server for Python; typescript-language-server; gopls;
+rust-analyzer; clangd; jdtls; kotlin-language-server; lua-language-server;
+intelephense or phpactor; ruby-lsp or solargraph; metals; bash-language-server;
+sourcekit-lsp; csharp-ls or omnisharp. `CTX_LSP_SERVERS` (JSON of the same
+shape, `{"python": [["pylsp"]]}`) replaces the table. `ctx doctor` lists which
+server each language resolved to. No server for a language exits `2`; a server
+that fails or times out exits `3`; `ctx refs` uses the tier as a rung above jedi
+and the textual fallback when a server is present, and says so.
+
 ## Answer a question: `ctx ask`
 
 ```bash
@@ -273,11 +515,20 @@ ctx q 'fails last | in-changed'
 ctx q 'refs TokenBucket | group file | top 5'
 ctx q 'fails last | shared-cause | top 10'
 ctx q 'corpus --ext py --changed | outline'
-ctx q 'records run:<id>#stdout --jsonl | group level | count'
+ctx q 'records run:8d8335db6848#stdout --jsonl | group level | count'
 ctx q 'search TODO --glob "src/*.py" | histogram file'
 ```
 
+```bash
+ctx q 'commits "rate limit" | touched | top 5 | outline'   # commits → files they touched → outlines
+ctx q 'search TokenBucket file:src | history'              # each site with the commit that last changed its file
+ctx q 'search retry lang:python | history --line'          # per line (git blame)
+```
+
 `ctx q` operates over typed record streams such as failures, symbols, files, and sites.
+The `search` stage takes the query language's filters and narrows through the text
+index; `commits` turns git history into records, `touched` into the files they name,
+and `history` annotates sites or files with their last commit (docs/CODE-SEARCH.md).
 `corpus` selects a bounded eligible file set with a coverage receipt (`--changed` binds
 to worktree generations, never mtime); `records` opens a stored JSON/JSONL artifact as a
 record stream; `distinct` and `histogram` summarize any field.
@@ -287,14 +538,85 @@ costs statically boundable and every stage’s result addressable.
 Use `ctx py` when the control flow is genuinely computational. Use `ctx q` when the
 intent is a bounded composition of repository and evidence facts.
 
+## Where to look first: `ctx pack`
+
+```bash
+ctx pack "Add partial_structure to BaseConverter; return a PartialResult …"
+ctx pack @task.md --files 10 --budget 3000
+ctx pack - --json < task.md
+```
+
+A ranked, budgeted context pack for a task: the files the task's terms, the
+symbol table, the paths and the history point at, each with its outline and the
+reason it is there (`why: terms … · defines … · commit …`). Terms are weighted
+by rarity from the text index and verified as whole-word counts in the file's
+bytes; tests and prose are demoted unless the task is about them. Deterministic
+for a tree state; `evals/agentbench/pack_recall.py` measures it against the
+files DeepSWE reference solutions actually change (docs/CODE-SEARCH.md).
+
+## ctx as the host: `ctx agent`
+
+```bash
+pip install 'ctx-harness[agent]'
+ctx agent -p "the task" --model haiku --max-turns 60 --output-format json
+ctx agent -p @task.md --pack --verbose
+```
+
+Runs a print-mode session on the Claude Agent SDK with ctx as the host: a lean
+built-in surface (Bash, Read, Edit, Write, MultiEdit), the retrieval verbs as
+in-process tools (`search`, `outline`, `get`, `refs`, `pack`), the wrapper's
+hooks, and with `--pack` a context pack in the first turn (off by default: on
+DeepSWE with haiku it cost held-out tests, see the receipt). The SDK drives the same `claude`
+binary, so billing, caching and the login are the host's; the result JSON is
+the host's shape plus `pack` and `runtime`. Exit 2 without the extra.
+
 ## Compare runs: `ctx diff`
 
 ```bash
-ctx diff run:<before> run:<after>
+ctx diff run:8d8335db6848 run:5a67c9de0123
 ```
 
 The comparison should answer the verification question directly: what failures,
 templates, exits, signals, or stream sizes changed? New evidence receives coordinates.
+
+## Evidence that travels: `ctx capsule`
+
+A `run:` handle resolves in exactly one store. Cited in a pull request, it is
+a claim a reviewer cannot check; cited from a container that has since been
+reclaimed, it is a claim nobody can check. A capsule is one file holding the
+manifests a set of handles names and the blobs those manifests reference —
+no task text, no prompts, no transcript, the same export-safe rule the task
+ledger follows.
+
+```bash
+ctx capsule export evidence.ctxcap --handle run:8d8335db6848#stdout
+ctx capsule export evidence.ctxcap --task task-19f3c2a1b0e   # everything that task cited
+ctx capsule verify evidence.ctxcap
+ctx capsule import evidence.ctxcap    # then every cited handle resolves here
+```
+
+Export closes transitively over what the manifests reference, following both
+full hashes and the abbreviated `run:8d8335db6848` form a checkpoint stores,
+and reports any cited handle that resolved to nothing rather than shipping a
+capsule with a hole in it. A manifest that carries task text in your own words
+— a checkpoint's goal, decisions and hypotheses — is walked for the evidence
+it cites and left out, named in the report; `--include-task-text` keeps it.
+The file is a POSIX tar with fixed member metadata and no wall-clock field,
+so the same evidence always produces the same bytes and two capsules of one
+task are identical files.
+
+Every read verifies. `verify` recomputes each member's `sha256` and checks it
+against two independent records: the capsule index, and the member's own
+address, which for a blob is the hash of its bytes and for a manifest is the
+id the store derives from them. It also checks completeness against the closure the exporter
+recorded, because integrity is not completeness: a repack that drops a blob
+*and* its index row leaves the remaining names agreeing with each other, and
+the hole would otherwise surface at the first read of a cited handle.
+`import` refuses to write anything at all if one check fails, because a
+partial import leaves a handle resolving to bytes nobody vouched for. That check is not habit: `evals/memvid_fidelity.py` found
+a single-file memory format returning altered bytes for six of seven payloads
+while its own deep verification passed, because those checks covered its index
+rather than its content.
 
 ## Inspect binary evidence: `ctx image`
 
@@ -335,7 +657,30 @@ Read the scorecard in this order:
 `ctx gain` is an accounting view, not a quality score. Pair savings with evidence
 preservation and task success.
 
-## Run a host under the harness
+## Connect a coding harness to the sidecar
+
+Keep using the agent you prefer. `ctx setup --host <name>` configures one
+integration; `ctx wrap detect` lists supported hosts. Hermes (`hermes` or
+`open-hermes`), Oh My Pi (`omp` or `oh-my-pi`), OpenCode (`opencode`), and
+DeepSeek Harness (`dsh`) provide native hook plugins and MCP retrieval/edit tools.
+Their wrappers accept agent arguments after `--`; setup persists after exit.
+See [Agent integrations](AGENT-INTEGRATIONS.md) for commands and limits.
+
+`ctx mcp --bounded-only --workspace /absolute/project` serves the bounded MCP
+tool with that default workspace. A tool call's explicit `workspace` overrides
+the default. The MCP tool does not execute arbitrary commands; use `ctx run`
+through the agent's terminal and permission flow.
+
+Add `--with-edits` to expose `ctx_edit` with anchored patch plans, apply receipts,
+and structural rewrite previews. This requires `--workspace`; edit calls cannot
+override that workspace. The new host integrations and ACP workers enable this
+tool. Plain `ctx mcp` retains the retrieval-only surface.
+
+`ctx setup --host <name> --acp --acp-model <exact-agent-model-id>` configures an
+ACP worker endpoint alongside the selected host's setup. Optional flags are
+`--acp-command '<JSON argv array>'`, `--acp-tier economy|standard|frontier`, and
+`--acp-permissions deny|allow_once`. See [ACP orchestration](ACP.md) for endpoint
+commands, model negotiation, permission behavior, and transport limits.
 
 ### Claude Code
 
@@ -344,7 +689,12 @@ ctx wrap claude --proxy -- -p "fix the failing tests"
 ```
 
 The wrapper injects host settings for the session and removes them when the process
-ends.
+ends. With `--proxy` the session's `ANTHROPIC_BASE_URL` points at a loopback
+relay; because Claude Code turns deferred tool loading off for any non-Anthropic
+base URL, the wrapper also sets `ENABLE_TOOL_SEARCH=true` when the relay's
+upstream is Anthropic itself (a value you set yourself is left alone, and a
+third-party upstream is never forced). Without that, every request carried the
+full tool catalogue — measured at ~15k extra cached tokens per call.
 
 ### Antigravity
 
@@ -354,6 +704,25 @@ ctx antigravity install
 
 The plugin is persistent. Both hosts use the same artifact store, digest contracts, and
 retrieval vocabulary.
+
+## Score a trajectory against gold context: `ctx replay --gold`
+
+```bash
+python evals/contextbench.py --workdir /scratch/cb --limit 40 --stratify \
+    --emit-gold /scratch/gold
+ctx replay --gold /scratch/gold/<instance>.json ~/.claude/projects/*/<session>.jsonl
+```
+
+Reconstructs the file regions an agent actually opened during a recorded
+session and scores them against human-annotated gold at file, block and line
+granularity, plus evidence density and regret against the gold oracle. No model
+and no network.
+
+The extractor reads the transcript and nothing else, so it scores a session
+that used ctx and one that did not through the same instrument. That is the
+point: an A/B whose arms are measured differently has decided its result before
+it runs. Design and pre-registered predictions:
+[the A/B design](../evals/contextbench-ab-design.md).
 
 ## Score the loop: regret, follow-up, shadow
 
@@ -393,7 +762,7 @@ used, and they answer three different questions.
 | `0` | Success | Continue |
 | `1` | **ctx** failed | Not your invocation's fault: an internal error, an unreadable store, an engine that would not start. Retry or run `ctx doctor` |
 | `2` | ctx **rejected the invocation** | Fix the arguments. Unknown command or flag, a malformed selector (`--lines nope`), an ungrammatical reference (`zzz:xyz`), a missing required argument, a workspace that will not resolve, or a handle that no longer resolves because `ctx gc` or the retention window collected it |
-| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output |
+| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output. Exception: `ctx run --passthrough` (the form the hooks rewrite tool calls into) exits with the child's own status, and prints small, complete output verbatim with the `run:` handle on one trailing line, so a rewritten tool call looks to the host exactly like the native one |
 | `124` | Timed out | The child exceeded `--timeout` (or `ctx job --wait` gave up). Matches `timeout(1)` |
 | `127` | Not found | The program ctx was asked to launch or wrap is not on `PATH`. Matches the shell's convention |
 

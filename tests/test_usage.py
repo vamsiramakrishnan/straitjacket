@@ -99,3 +99,23 @@ def test_usage_summary_distinguishes_partial_from_zero():
     assert summary["attempts_measured"] == 1
     assert summary["cost_usd"] == 0.0
     assert summary["cost_complete"] is False
+
+
+def test_claude_stream_json_is_read_from_its_last_result_event(tmp_path):
+    """With the orchestrator's idle beacon on, Claude runs with
+    ``--output-format stream-json``: one line per event, the same result
+    document last. The events are the beacon; the parser wants the doc."""
+    lines = [
+        json.dumps({"type": "system", "subtype": "init", "session_id": "s"}),
+        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}}),
+        "not json at all",
+        json.dumps({"type": "result", "result": "done", "num_turns": 7, "total_cost_usd": 0.5,
+                    "usage": {"input_tokens": 100, "output_tokens": 20}}),
+        "",
+    ]
+    text, usage = parse_claude_json("\n".join(lines), model="claude-sonnet-4.6", workspace_root=tmp_path)
+    assert text == "done"
+    assert usage is not None and usage.turns == 7 and usage.cost_usd == pytest.approx(0.5)
+    # No result event: nothing is scraped from prose, as before.
+    text, usage = parse_claude_json("\n".join(lines[:2]), model="claude-sonnet-4.6", workspace_root=tmp_path)
+    assert usage is None and text == "\n".join(lines[:2])

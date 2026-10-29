@@ -143,7 +143,7 @@ def test_teach_rides_rewrite_reason_under_auto_steering(tmp_path):
     )
     assert d["decision"] == "force_ask"  # canonical layer unchanged
     rewritten = d["rewrite"]["updatedInput"]["CommandLine"]
-    assert rewritten.startswith("ctx run --shell -- ")
+    assert rewritten.startswith("ctx run --passthrough --shell -- ")
     assert "ctx py" not in rewritten  # teaching-only: no eval auto-rewrite
     assert "ctx py" in d["rewrite"]["reason"]
 
@@ -215,7 +215,7 @@ def test_hook_end_to_end_antigravity_heredoc(tmp_path):
     # published PreToolUse schema, so the rewrite lands as a deny that names
     # the contained command; the teach line still rides along in the reason.
     assert out["decision"] == "deny"
-    assert "ctx run --shell -- " in out["reason"]
+    assert "ctx run --passthrough --shell -- " in out["reason"]
     assert "ctx py" in out["reason"]
 
 

@@ -1,7 +1,9 @@
 # Anchor drift — how often a `repo:` address stops meaning what it meant
 
-**Date:** 2026-08-20 · **Referee:** `evals/anchor_drift.py` (model-free,
-deterministic, seed 20260820) · **Record:** [`anchor-drift-2026-08-20.json`](anchor-drift-2026-08-20.json)
+**Date:** 2026-08-20 · **Revalidated:** 2026-09-02 · **Referee:**
+`evals/anchor_drift.py` (model-free, corpus commit `7c69ea70aa40`, seed
+20260820) · **Record:**
+[`anchor-drift-2026-08-20.json`](anchor-drift-2026-08-20.json)
 
 Reproduce:
 
@@ -12,20 +14,22 @@ python evals/anchor_drift.py --json   # the record
 
 ## The question
 
-straitjacket's second house rule is *omission keeps an address*, and the README
-states the consequence: **"the same address returns the same bytes tomorrow."**
-That is enforced and measured for the immutable side of the store. It was never
-measured for `repo:` addresses — line numbers into a file the agent is
-concurrently editing — and it is not true there.
+For a retained immutable artifact, a handle addresses the same stored bytes.
+A `repo:` address is different: it points into a file the agent is concurrently
+editing, where a line number is a position rather than an identity. This
+receipt measures that mutable case.
 
 This instrument does not ask *does anchoring work*; the acceptance tests pin
 that. It asks **how large the exposure was**, and what closing it costs.
 
 ## Method
 
-Corpus: 40 of this repository's own `src/ctx/*.py` files, ≥120 lines
-each — real indentation, real duplicate lines, real docstrings, which is what
-makes relocation a measurement rather than a demonstration.
+Corpus: 40 of this repository's own `src/ctx/*.py` files, ≥120 lines each, at
+commit `7c69ea70aa40e1017aa6114b19e977225dd4166f` — real indentation, duplicate
+lines, and docstrings, which is what makes relocation a measurement rather than
+a demonstration. Pinning the corpus prevents unrelated source edits from
+changing the sampled spans. The resolver under test still comes from the
+current tree, and CI requires its output to equal the committed JSON.
 
 For each file, spans of 2, 8, 25 lines
 are sampled at random positions. Each span's address is minted **before** an
@@ -54,15 +58,15 @@ statistic.**
 Every case: an address minted before an edit, re-resolved after it.
 
 edit shape          cases  silently wrong  verified  relocated  refused  wrong answer
-insert-above          480             480         0        480        0             0
-delete-above          480             479         1        479        0             0
+insert-above          480             478         2        478        0             0
+delete-above          480             480         0        480        0             0
 move-the-span         480             480         0        480        0             0
-rewrite-the-span      480             480         0         15      465             0
-ALL                  1920            1919         1       1454      465             0
+rewrite-the-span      480             480         0         14      466             0
+ALL                  1920            1918         2       1452      466             0
 
 unanchored: 99.9% of re-resolutions returned different content, exit 0, no note
-anchored:   75.8% answered correctly (1454 of them by following content that moved), 24.2% refused, 0 wrong answers
-cost:       +17280 characters over 83788 of address (20.6%)
+anchored:   75.7% answered correctly (1452 of them by following content that moved), 24.3% refused, 0 wrong answers
+cost:       +17280 characters over 84028 of address (20.6%)
 ```
 
 ## Reading it
@@ -75,19 +79,19 @@ reads that go wrong in practice. What it measures is that when an unanchored
 a plausible-looking body, no note. There is no partial failure mode to notice.
 
 **Relocation, not detection, is where the value is.** Of
-1455 correct answers, 1454 came from
+1454 correct answers, 1452 came from
 following content that had moved. A mechanism that only *detected* staleness
-would have been right 1 time and refused
+would have been right 2 times and refused
 99.9% of the time — technically
 honest and practically useless. Answering correctly across a shift is what makes
 an anchor a working identifier.
 
 **The refusals are the irreducible ones.**
-465 of 465 refusals are
+466 of 466 refusals are
 `rewrite-the-span`, where the addressed content no longer exists anywhere. No
 addressing scheme can resolve those; the available win is converting a wrong
 answer into a refusal, and that is what happened. The remaining
-15 `rewrite-the-span` cases
+14 `rewrite-the-span` cases
 *relocated* — the span's content was byte-identical to another region of the
 same file (blank lines, repeated boilerplate). Those returned the addressed
 bytes, so they are correct under the promise an anchor makes, but they are the
@@ -97,14 +101,14 @@ known limit: an anchor recovers **content**, not **identity**.
 other than what its address named.
 
 **Cost:** +17280 characters across
-83788 of address text — **20.6%**
+84028 of address text — **20.6%**
 on the address, and a rounding error against the span being addressed.
 
 ## Negative findings and limits
 
-- **`delete-above` verified once.** One sampled span sat at a position where
-  deleting three lines above it happened to leave the span's content at the same
-  coordinates. Correct, and a reminder that the shapes here are a sample of edit
+- **`insert-above` verified twice.** Two sampled spans contained repeated text
+  that also occupied the original coordinates after insertion. Correct under
+  the content promise, and a reminder that the shapes here are a sample of edit
   behaviour, not a proof over all edits.
 - **This receipt measures the mechanism, not agent behaviour.** It shows that an
   anchored address survives edits that break a bare one. It does **not** show how
@@ -113,4 +117,6 @@ on the address, and a rounding error against the span being addressed.
   and its use. Until that exists, the decision to leave `ctx refs` and `ctx diag`
   rows unanchored is a cost judgement, not a measured one.
 - **Model-free by design.** No LLM is involved, so nothing here can drift with a
-  vendor's weights, and it re-runs in a review sandbox in seconds.
+  vendor's weights. The corpus is commit-pinned, the current resolver can still
+  change the result, and the JSON equality check makes that behavior drift
+  visible. The referee re-runs in a review sandbox in seconds.

@@ -244,7 +244,9 @@ def note_symbol_grep(workspace_root: Path | str | None, symbol: str) -> tuple[in
             syms = []
         if symbol not in syms:
             syms.append(symbol[:64])
-        state["grep_symbols"] = syms[:64]  # bounded
+        # Most recent 64, not the first 64 ever seen: `syms[:64]` dropped
+        # every new symbol once the list was full, so the count froze.
+        state["grep_symbols"] = syms[-64:]
         result["count"] = len(state["grep_symbols"])
         result["fired"] = bool(state.get("nav_nudged"))
         # Latch the nudge the moment the threshold is first reached, so the

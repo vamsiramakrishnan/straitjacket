@@ -66,12 +66,12 @@ class StreamRuleEngine:
                 raise ValueError("stream rules need a name, reminder, and max_fires >= 1")
             self._rules.append(_CompiledRule(rule, re.compile(rule.pattern, rule.flags)))
         state = prior_state if isinstance(prior_state, dict) else {}
-        raw_counts = state.get("fires", {}) if state.get("schema") == STREAM_RULE_SCHEMA else {}
+        raw_counts = (state.get("fires") or {}) if state.get("schema") == STREAM_RULE_SCHEMA else {}
         self._fires = {
             item.spec.name: max(0, int(raw_counts.get(item.spec.name, 0) or 0))
             for item in self._rules
         }
-        activated = state.get("activated", []) if state.get("schema") == STREAM_RULE_SCHEMA else []
+        activated = (state.get("activated") or []) if state.get("schema") == STREAM_RULE_SCHEMA else []  # a None-valued persisted field must not crash the constructor
         known = {item.spec.name for item in self._rules}
         self._activated = [str(name) for name in activated if str(name) in known]
         self.begin_turn()

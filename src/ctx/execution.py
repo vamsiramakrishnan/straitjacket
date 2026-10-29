@@ -141,6 +141,11 @@ def run_capture(
     store: Store | None = None,
     stdin_bytes: bytes | None = None,
     record_argv: list[str] | None = None,
+    output_bytes: int | None = None,
+    runtime=None,
+    operation_key: str | None = None,
+    cancelled=None,
+    env: dict[str, str] | None = None,
 ) -> CaptureResult:
     """Execute a command, streaming stdout/stderr into distinct immutable
     blobs, and publish a ``ctx.invocation/v1`` manifest.
@@ -154,6 +159,36 @@ def run_capture(
     if not argv:
         raise ExecutionError("empty command")
     store = store or Store(ws.workspace_id)
+
+    if runtime is not None:
+        if not operation_key:
+            raise ExecutionError("durable command execution needs an operation key")
+        def execute(allowance):
+            from ctx.task_runtime import OperationResult
+            capture = run_capture(ws, argv, cwd=cwd, shell=shell, timeout=allowance,
+                store=store, stdin_bytes=stdin_bytes, record_argv=record_argv,
+                output_bytes=runtime.limits.capture_bytes if output_bytes is None else output_bytes,
+                cancelled=runtime.cancelled, env=env)
+            result = capture.manifest["result"]
+            return OperationResult({"manifest_id": capture.manifest_id, "manifest": capture.manifest},
+                succeeded=not any(result.get(k) for k in ("timedOut", "outputLimited", "cancelled")))
+        inputs = {
+            "argv": argv, "cwd": cwd or ".", "shell": shell,
+            "workspace": hashlib.sha256(str(ws.root.resolve()).encode()).hexdigest(),
+            "stdin": hashlib.sha256(stdin_bytes or b"").hexdigest()}
+        if env is not None:
+            from ctx.store import canonical_json
+            inputs["environmentHash"] = hashlib.sha256(canonical_json(env)).hexdigest()
+        result = runtime.perform(operation_key, "command.run", inputs, execute,
+            kind="execute", timeout=timeout)
+        return CaptureResult(**result)
+
+    if output_bytes is not None:
+        if shell:
+            raise ExecutionError("bounded task commands use explicit argv, not a shell")
+        return _run_limited(ws, store, argv, cwd=cwd, timeout=timeout,
+                            stdin_bytes=stdin_bytes, output_bytes=output_bytes,
+                            record_argv=record_argv, cancelled=cancelled, env=env)
 
     workdir = ws.confine(cwd or ".", must_exist=True)
     rel_cwd = ws.relativize(workdir) or "."
@@ -173,25 +208,43 @@ def run_capture(
         in_path = tmpdir / "stdin"
         in_path.write_bytes(stdin_bytes)
     timed_out = False
+    was_cancelled = False
+
+    def stop_requested():
+        nonlocal was_cancelled
+        was_cancelled = bool(cancelled())
+        return was_cancelled
+
     try:
         in_fh = in_path.open("rb") if in_path is not None else None
-        with out_path.open("wb") as out_fh, err_path.open("wb") as err_fh:
-            try:
-                proc = subprocess.Popen(
-                    popen_args,
-                    cwd=workdir,
-                    shell=shell,
-                    stdout=out_fh,
-                    stderr=err_fh,
-                    stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-            except FileNotFoundError as e:
-                raise ExecutionError(f"command not found: {argv[0]}") from e
-            finally:
-                if in_fh is not None:
-                    in_fh.close()
-            timed_out = wait_or_kill(proc, timeout)
+        try:
+            with out_path.open("wb") as out_fh, err_path.open("wb") as err_fh:
+                try:
+                    proc = subprocess.Popen(
+                        popen_args,
+                        cwd=workdir,
+                        shell=shell,
+                        stdout=out_fh,
+                        stderr=err_fh,
+                        stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
+                        start_new_session=True,
+                        env=env,
+                    )
+                except FileNotFoundError as e:
+                    raise ExecutionError(f"command not found: {argv[0]}") from e
+                finally:
+                    if in_fh is not None:
+                        in_fh.close()
+                        in_fh = None
+                if cancelled is not None:
+                    timed_out = wait_or_kill(proc, timeout, cancelled=stop_requested)
+                else:
+                    timed_out = wait_or_kill(proc, timeout)
+        finally:
+            # in_fh stayed open if the stdout/stderr spool `with` failed before
+            # the inner try ever ran (e.g. out_path.open raising) -- close it here too.
+            if in_fh is not None:
+                in_fh.close()
 
         exit_code, sig_name = exit_status(proc.returncode)
         streams = stream_entries(store, {"stdout": out_path, "stderr": err_path})
@@ -216,9 +269,38 @@ def run_capture(
         timed_out=timed_out,
         streams=streams,
     )
+    if was_cancelled:
+        manifest["result"]["cancelled"] = True
     manifest_id = store.put_manifest(manifest, kind="run")
     manifest["id"] = f"sha256:{manifest_id}"
     return CaptureResult(manifest_id=manifest_id, manifest=manifest)
+
+
+def _run_limited(ws, store, argv, *, cwd, timeout, stdin_bytes, output_bytes, record_argv, cancelled, env=None):
+    """Bound both pipes before publication. Overflow is an execution failure."""
+    from ctx.semantic.worker import CommandWorker
+    if isinstance(output_bytes, bool) or not isinstance(output_bytes, int) or not 1 <= output_bytes <= 8 * 1024 * 1024:
+        raise ExecutionError("output_bytes must be 1..8388608")
+    workdir = ws.confine(cwd or ".", must_exist=True)
+    result = CommandWorker(argv, cwd=workdir, env=env, stderr_bytes=output_bytes, cancelled=cancelled)(
+        stdin_bytes or b"", timeout=600 if timeout is None else timeout, response_bytes=output_bytes)
+    if result.error == "launch_failed":
+        raise ExecutionError("command could not be launched")
+    streams = {}
+    for name, data in (("stdout", result.stdout), ("stderr", result.stderr)):
+        _, encoding, media_type = decode_stream(data[:8192])
+        streams[name] = {"blob": "sha256:" + store.put_blob(data), "bytes": len(data),
+            "lines": data.count(b"\n") + int(bool(data) and not data.endswith(b"\n")),
+            "mediaType": media_type, "encoding": encoding}
+    code, signal = exit_status(result.returncode)
+    manifest = invocation_manifest(ws, cwd=ws.relativize(workdir) or ".",
+        argv=record_argv or argv, shell=False, exit_code=code, signal=signal,
+        timed_out=result.error == "timeout", streams=streams)
+    manifest["result"]["outputLimited"] = result.error == "output_limit"
+    manifest["result"]["cancelled"] = result.error == "cancelled"
+    mid = store.put_manifest(manifest, kind="run")
+    manifest["id"] = "sha256:" + mid
+    return CaptureResult(mid, manifest)
 
 
 def _worktree_hash(ws: Workspace) -> str | None:
@@ -332,7 +414,7 @@ def update_manifest_digest(
     return new_id, body
 
 
-def snapshot_file(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
+def snapshot_file(store: Store, ws: Workspace, rel_path: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     """Snapshot-on-read: pin the current bytes of a workspace file so later
     ``get`` operations remain stable even if the working tree changes."""
     full = ws.confine(rel_path, must_exist=True)
@@ -351,7 +433,15 @@ def snapshot_file(store: Store, ws: Workspace, rel_path: str) -> dict[str, Any]:
             raise ExecutionError(
                 f"path is excluded from capture by policy: {candidate}"
             )
-    data = full.read_bytes()
+    if max_bytes is None:
+        data = full.read_bytes()
+    else:
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+            raise ExecutionError("snapshot max_bytes must be a positive integer")
+        with full.open("rb") as stream:
+            data = stream.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise ExecutionError("snapshot exceeds max_bytes")
     blob_hash = store.put_blob(data)
     _, encoding, media_type = decode_stream(data[:8192] if data else b"")
     manifest = {

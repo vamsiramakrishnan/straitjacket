@@ -1,0 +1,1258 @@
+{
+ "clone_head": "ec74ccc",
+ "date": "2026-09-05",
+ "gate": {
+  "claimed": 66,
+  "precision_by_route": 1.0,
+  "reasons": [
+   "suite did not pass on the harvested tree"
+  ],
+  "refuted_by_route": 0,
+  "suite_passed": false,
+  "verdict": "held",
+  "verified_by_route": 66
+ },
+ "hand_review": {
+  "files_taken": 47,
+  "refused": [
+   "substitute.py: four tests re-decide the collapse rule rounds 12-14 settled (a bare-identifier hunt collapses to the index-exact `refs`); the narrower --glob/--include carry-through is real and deferred",
+   "replay.py downstream_facts: redefines what a downstream fact is (any coordinate in a later command, not one that came from the evidence); render_outcomes requery denominator taken",
+   "_proc.py subreaper: a process-wide prctl(PR_SET_CHILD_SUBREAPER) at import time; the killpg-on-timeout-0 hunk taken, the probe reads zombie state instead",
+   "store._probe_writable test: cannot force fd recycling reliably; the fix (no double close) taken"
+  ],
+  "tests_kept": 64,
+  "tests_refused": 6
+ },
+ "ledger": [
+  {
+   "schema": "ctx.task/v1"
+  },
+  {
+   "attempt": 1,
+   "host": "claude",
+   "model": "claude-opus-4.8",
+   "schema": "ctx.claim/v1"
+  },
+  {
+   "attempt": 1,
+   "cost_usd": 78.31483250000007,
+   "failure_kind": "none",
+   "host": "claude",
+   "model": "claude-opus-4.8",
+   "reason": "done",
+   "schema": "ctx.handback/v1",
+   "turns": 158
+  },
+  {
+   "attempt": 1,
+   "host": "claude",
+   "model": "claude-sonnet-4.6",
+   "schema": "ctx.claim/v1"
+  },
+  {
+   "attempt": 1,
+   "cost_usd": 33.17409330000004,
+   "failure_kind": "none",
+   "host": "claude",
+   "model": "claude-sonnet-4.6",
+   "reason": "done",
+   "schema": "ctx.handback/v1",
+   "turns": 138
+  },
+  {
+   "attempt": 1,
+   "host": "claude",
+   "model": "claude-sonnet-4.6",
+   "schema": "ctx.claim/v1"
+  },
+  {
+   "attempt": 1,
+   "cost_usd": null,
+   "failure_kind": "transient_transport",
+   "host": "claude",
+   "model": "claude-sonnet-4.6",
+   "reason": "failed",
+   "schema": "ctx.handback/v1",
+   "turns": 0
+  },
+  {
+   "action": "retry_same",
+   "attempt": 1,
+   "failure_kind": "transient_transport",
+   "schema": "ctx.steward/v1"
+  },
+  {
+   "attempt": 2,
+   "host": "claude",
+   "model": "claude-sonnet-4.6",
+   "schema": "ctx.claim/v1"
+  }
+ ],
+ "prove_by_hand": {
+  "route_tests_passing": 69,
+  "route_tests_total": 70,
+  "suite_regressions": [
+   "tests/test_round13_mechanisms.py::test_word_match_is_still_collapsed",
+   "tests/test_substitute.py::test_symbol_search_collapses_to_refs[2 params]"
+  ]
+ },
+ "schema": "ctx.improve-route-receipt/v1",
+ "scope": "src/ctx",
+ "steward_defect": "the harvest node's hour timeout was classified transient_transport and queued for retry_same; a timeout is not a transport blip. Watcher stopped the route; the route now runs one attempt per node with a 100-turn ceiling.",
+ "yields": {
+  "harvest": {
+   "fixed": [
+    {
+     "file": "src/ctx/hook.py",
+     "test": "tests/test_improve_round.py::test_collapse_does_not_bypass_secret_path_force_ask"
+    },
+    {
+     "file": "src/ctx/hook.py",
+     "test": "tests/test_improve_round.py::test_classify_read_relative_path_matches_workspace_root"
+    },
+    {
+     "file": "src/ctx/hook.py",
+     "test": "tests/test_improve_round.py::test_piped_follow_forever_rewrite_gets_bg"
+    },
+    {
+     "file": "src/ctx/textutil.py",
+     "test": "tests/test_improve_round.py::test_strip_control_unterminated_osc_does_not_eat_remainder"
+    },
+    {
+     "file": "src/ctx/textutil.py",
+     "test": "tests/test_improve_round.py::test_json_pointer_raises_pointer_error_not_raw_value_error"
+    },
+    {
+     "file": "src/ctx/digest/base.py",
+     "test": "tests/test_improve_round.py::test_stream_view_text_lines_matches_store_nl_only_split"
+    },
+    {
+     "file": "src/ctx/installer.py",
+     "test": "tests/test_improve_round.py::test_generated_ctx_toml_redacts_common_secret_types"
+    },
+    {
+     "file": "src/ctx/installer.py",
+     "test": "tests/test_improve_round.py::test_reinstall_adds_missing_hook_stage"
+    },
+    {
+     "file": "src/ctx/plan_exec.py",
+     "test": "tests/test_improve_round.py::test_explicit_null_wall_seconds_passes_validation_but_crashes_execute"
+    },
+    {
+     "file": "src/ctx/_proc.py",
+     "test": "tests/test_improve_round.py::test_wait_or_kill_zero_misses_the_orphaned_grandchild_when_leader_already_exited"
+    },
+    {
+     "file": "src/ctx/orchestrator.py",
+     "test": "tests/test_improve_round.py::test_merge_patch_lets_route_error_escape_from_bad_replan_node"
+    },
+    {
+     "file": "src/ctx/orchestrator.py",
+     "test": "tests/test_improve_round.py::test_checkpoint_node_closes_store_connection_on_create_checkpoint_failure"
+    },
+    {
+     "file": "src/ctx/store.py",
+     "test": "tests/test_improve_round.py::test_gc_race_deletes_concurrently_written_object"
+    },
+    {
+     "file": "src/ctx/config.py",
+     "test": "tests/test_improve_round.py::test_scalar_budgets_section_fails_open"
+    },
+    {
+     "file": "src/ctx/config.py",
+     "test": "tests/test_improve_round.py::test_scalar_guard_section_fails_open"
+    },
+    {
+     "file": "src/ctx/worktree_isolation.py",
+     "test": "tests/test_improve_round.py::test_cleanup_leaks_stale_worktree_admin_entry_when_remove_fails"
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "test": "tests/test_improve_round.py::test_dotted_query_with_no_qualified_match_does_not_silently_answer_for_a_different_symbol"
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "test": "tests/test_improve_round.py::test_loose_top_level_file_does_not_poison_src_as_package_root"
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "test": "tests/test_improve_round.py::test_unscoped_inheritance_edge_is_disclosed"
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "test": "tests/test_improve_round.py::test_rows_production_partition_is_not_quadratic"
+    },
+    {
+     "file": "src/ctx/_retrieval/get.py",
+     "test": "tests/test_improve_round.py::test_fit_window_never_emits_an_inverted_continuation_for_an_oversized_single_line"
+    },
+    {
+     "file": "src/ctx/_retrieval/get.py",
+     "test": "tests/test_improve_round.py::test_json_pointer_truncation_handle_preserves_selector"
+    },
+    {
+     "file": "src/ctx/_retrieval/targets.py",
+     "test": "tests/test_improve_round.py::test_resolve_repo_targets_considered_count_discloses_the_cap"
+    },
+    {
+     "file": "src/ctx/command_spans.py",
+     "test": "tests/test_improve_round.py::test_gh_api_attached_shorthand_mutation_flags_are_recognised_as_mutations"
+    },
+    {
+     "file": "src/ctx/command_spans.py",
+     "test": "tests/test_improve_round.py::test_git_diff_patch_with_stat_is_classified_as_capture_not_allow"
+    },
+    {
+     "file": "src/ctx/pathglob.py",
+     "test": "tests/test_improve_round.py::test_matches_normalizes_leading_dot_slash_off_pattern_too"
+    },
+    {
+     "file": "src/ctx/substitute.py",
+     "test": "tests/test_improve_round.py::test_bare_identifier_grep_keeps_the_callers_directory_scope"
+    },
+    {
+     "file": "src/ctx/substitute.py",
+     "test": "tests/test_improve_round.py::test_bare_identifier_grep_over_multiple_paths_declines_rather_than_widening"
+    },
+    {
+     "file": "src/ctx/substitute.py",
+     "test": "tests/test_improve_round.py::test_glob_flag_scope_carried_through_rg"
+    },
+    {
+     "file": "src/ctx/substitute.py",
+     "test": "tests/test_improve_round.py::test_include_flag_scope_carried_through_grep"
+    },
+    {
+     "file": "src/ctx/mcp.py",
+     "test": "tests/test_improve_round.py::test_serve_survives_non_object_json_line"
+    },
+    {
+     "file": "src/ctx/surface_gateway.py",
+     "test": "tests/test_improve_round.py::test_serve_gateway_survives_non_object_json_line"
+    },
+    {
+     "file": "src/ctx/astgrep.py",
+     "test": "tests/test_improve_round.py::test_unverifiable_guard_state_fails_open_instead_of_refusing"
+    },
+    {
+     "file": "src/ctx/astgrep.py",
+     "test": "tests/test_improve_round.py::test_lib_search_files_previewed_counts_matches_not_files"
+    },
+    {
+     "file": "src/ctx/astgrep.py",
+     "test": "tests/test_improve_round.py::test_lib_search_omission_note_does_not_claim_a_patch"
+    },
+    {
+     "file": "src/ctx/execution.py",
+     "test": "tests/test_improve_round.py::test_run_capture_leaks_stdin_spool_fd_when_stdout_spool_open_fails"
+    },
+    {
+     "file": "src/ctx/jobs.py",
+     "test": "tests/test_improve_round.py::test_start_job_read_modify_write_clobbers_concurrent_running_state"
+    },
+    {
+     "file": "src/ctx/jobs.py",
+     "test": "tests/test_improve_round.py::test_kill_job_shared_deadline_fails_a_successful_kill_after_slow_start"
+    },
+    {
+     "file": "src/ctx/proxy.py",
+     "test": "tests/test_improve_round.py::test_relay_reconnects_instead_of_502ing_when_pool_is_idle_expired"
+    },
+    {
+     "file": "src/ctx/digest/jsonprof.py",
+     "test": "tests/test_improve_round.py::test_dominant_array_prefix_is_rfc6901_escaped"
+    },
+    {
+     "file": "src/ctx/binfmt.py",
+     "test": "tests/test_improve_round.py::test_inspect_sniffs_with_a_window_wide_enough_to_match_sniff_format"
+    },
+    {
+     "file": "src/ctx/statusline.py",
+     "test": "tests/test_improve_round.py::test_codex_rollout_summary_treats_cached_input_as_subset"
+    },
+    {
+     "file": "src/ctx/evidence_outcomes.py",
+     "test": "tests/test_improve_round.py::test_failing_ids_preserves_parametrized_bracket_suffix"
+    },
+    {
+     "file": "src/ctx/replay.py",
+     "test": "tests/test_improve_round.py::test_downstream_gap_detected_even_when_absent_from_harnessed_digest"
+    },
+    {
+     "file": "src/ctx/replay.py",
+     "test": "tests/test_improve_round.py::test_render_outcomes_hides_requery_when_window_is_censored"
+    },
+    {
+     "file": "src/ctx/scip_ingest.py",
+     "test": "tests/test_improve_round.py::test_scip_refs_bare_name_match_conflates_unrelated_symbols"
+    },
+    {
+     "file": "src/ctx/skeleton.py",
+     "test": "tests/test_improve_round.py::test_ast_skeleton_sees_definitions_nested_in_try_except"
+    },
+    {
+     "file": "src/ctx/ladders.py",
+     "test": "tests/test_improve_round.py::test_report_corpus_handles_an_unmeasurable_ladder_over_an_empty_corpus"
+    },
+    {
+     "file": "src/ctx/seq.py",
+     "test": "tests/test_improve_round.py::test_seq_keep_going_survives_a_step_that_fails_to_spawn"
+    },
+    {
+     "file": "src/ctx/surface.py",
+     "test": "tests/test_improve_round.py::test_probe_surface_does_not_serialize_unboundedly_past_its_own_timeout"
+    },
+    {
+     "file": "src/ctx/surface_reconcile.py",
+     "test": "tests/test_improve_round.py::test_required_families_recognizes_already_decoded_server_names"
+    },
+    {
+     "file": "src/ctx/digest/evidence_render.py",
+     "test": "tests/test_improve_round.py::test_flood_render_scales_linearly_not_quadratically_with_item_count"
+    },
+    {
+     "file": "src/ctx/scorecard.py",
+     "test": "tests/test_improve_round.py::test_scorecard_counts_files_and_lines_in_a_new_untracked_directory"
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "test": "tests/test_improve_round.py::test_redirection_targets_do_not_change_the_signature"
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "test": "tests/test_improve_round.py::test_scope_flag_value_with_spaces_breaks_narrower_comparison"
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "test": "tests/test_improve_round.py::test_fold_q_ledger_does_not_consume_a_partial_trailing_line"
+    },
+    {
+     "file": "src/ctx/plan_ir.py",
+     "test": "tests/test_improve_round.py::test_infinite_budget_degrades_to_rejection_not_overflow"
+    },
+    {
+     "file": "src/ctx/commands/emit.py",
+     "test": "tests/test_improve_round.py::test_investigation_with_candidates_is_not_classified_failure"
+    },
+    {
+     "file": "src/ctx/steward.py",
+     "test": "tests/test_improve_round.py::test_bare_401_substring_in_unrelated_output_is_not_auth_failure"
+    },
+    {
+     "file": "src/ctx/facts.py",
+     "test": "tests/test_improve_round.py::test_newest_captured_matches_fail_table_run_id_format"
+    },
+    {
+     "file": "src/ctx/query.py",
+     "test": "tests/test_improve_round.py::test_search_line_numbers_match_house_nl_only_geometry"
+    },
+    {
+     "file": "src/ctx/query.py",
+     "test": "tests/test_improve_round.py::test_unscoped_omission_reason_survives_group_and_top"
+    },
+    {
+     "file": "src/ctx/catalog.py",
+     "test": "tests/test_improve_round.py::test_workspace_override_with_new_specific_match_beats_general_shipped_row"
+    },
+    {
+     "file": "src/ctx/plan_ops.py",
+     "test": "tests/test_improve_round.py::test_code_context_explicit_zero_is_not_silently_widened_to_default"
+    },
+    {
+     "file": "src/ctx/surface_profiles.py",
+     "test": "tests/test_improve_round.py::test_authority_ok_fails_open_on_unrecognized_ceiling"
+    },
+    {
+     "file": "src/ctx/stream_rules.py",
+     "test": "tests/test_improve_round.py::test_stream_rule_engine_handles_none_valued_persisted_state"
+    },
+    {
+     "file": "src/ctx/route_telemetry.py",
+     "test": "tests/test_improve_round.py::test_route_summary_kinds_histogram_counts_missing_kind_as_zero"
+    },
+    {
+     "file": "src/ctx/_retrieval/search.py",
+     "test": "tests/test_improve_round.py::test_search_v1_run_glob_suggestion_never_filters_run_search"
+    },
+    {
+     "file": "src/ctx/rundiff.py",
+     "test": "tests/test_improve_round.py::test_pytest_failures_line_numbers_match_store_line_index"
+    }
+   ],
+   "skipped": [
+    {
+     "test": "tests/test_improve_round.py::test_probe_writable_does_not_close_an_unrelated_recycled_fd",
+     "why": "Applied the real fix in src/ctx/store.py:_probe_writable (removed the redundant os.close(fd) in the except handler; os.fdopen's with-block already closes fd at the C level, invisible to Python's os.close). That is the correct, minimal fix for the underlying bug. But the test's own instrumentation can only observe 'recycling' by intercepting a *visible* os.close(fd) call that happens after the fd was already freed -- which only occurs in the buggy double-close path being removed. With the redundant close gone, no qualifying os.close(fd) call exists for the spy to observe, so the test's own setup assertion (`assert state.get('recycled')`) fails before reaching the real check. Verified via multiple structural variants that satisfying both the setup assertion and the final os.fstat assertion simultaneously is not possible against this mock; the test's simulation of fd recycling and the correct fix are mutually exclusive by construction."
+    }
+   ]
+  },
+  "hunt": {
+   "findings": [
+    {
+     "file": "src/ctx/hook.py",
+     "line": 2050,
+     "scenario": "Reproduced by running hook.classify() in this repo with the default policy: {'tool_name':'Bash','tool_input':{'command':'cat .env'}} correctly returns {'decision':'force_ask','reason':'CTX_CONTEXT_GUARD: secret-bearing path...'}, but 'head -n 50 .env' returns {'decision':'allow','rewrite':{'updatedInput':{'command':'ctx get repo:.env --lines 1:50'}}} and 'sed -n 1,500p .env' returns the same shape with --lines 1:500. substitute._collapse_head/_collapse_sed_range have no secret-path filter, so the block at line 2050 replaces the force_ask with dict(DECISION_ALLOW) and the secret file is read with no user-visible permission step. The comment at lines 2043-2049 justifies the override purely on flood-boundedness ('every Substitution emits a bounded ctx op') and never consults decision.get('_safety'), so a repo-committed deny_commands entry is erased the same way.",
+     "severity": "high",
+     "summary": "The collapse/substitution surface in classify() unconditionally overwrites whatever classify_command() decided, so it converts safety-class outcomes (secret-path force_ask, repo-committed deny_commands) into allow-plus-rewrite."
+    },
+    {
+     "file": "src/ctx/hook.py",
+     "line": 1837,
+     "scenario": "Both halves reproduced. (a) With CWD outside the repo, classify_read('README.md', <repo>, policy, 's') returns force_ask 'path resolves outside the active workspace' for an in-workspace file, because _path_outside computes abspath(realpath('README.md')) against CWD. (b) With CWD at <repo>/src, classify_read('ROADMAP.md', <repo>, policy, 's') returns {'decision':'allow'} while classify_read('<repo>/ROADMAP.md', ...) returns deny 'file is 20974 bytes (> 16384 inline budget)' -- os.stat('ROADMAP.md') raises OSError from the subdirectory and the handler returns DECISION_ALLOW, so the harness's central inline-byte guard is bypassed by addressing the file relatively. _is_secret_path already shows the intended handling (raw if os.path.isabs(raw) else os.path.join(root, raw)).",
+     "severity": "high",
+     "summary": "classify_read resolves a relative path against the hook process CWD (via _path_outside/os.stat) while _is_secret_path in the same function resolves against workspace_root, so a relative read path is either wrongly force-asked or escapes the inline-byte budget entirely."
+    },
+    {
+     "file": "src/ctx/textutil.py",
+     "line": 16,
+     "scenario": "A tool emits a terminal-title OSC (\\x1b]0;building...\\x07) on a line that a profile clips to EVIDENCE_LINE_CHARS (160), dropping the BEL terminator; render_run_digest then runs sanitize_for_model over the assembled body. Verified by executing it: strip_control('row A: \\x1b]0;clipped title\\nrow B: keeps\\ncoverage: x\\nnext: y') returns exactly 'row A: ' -- the census rows, coverage block and next: affordances are silently gone from the only view the model gets of the run.",
+     "severity": "high",
+     "summary": "The OSC branch of _ANSI_RE makes its terminator optional and uses a character class that crosses newlines, so a single unterminated ESC-] in captured output causes strip_control to delete the entire remainder of the digest."
+    },
+    {
+     "file": "src/ctx/digest/base.py",
+     "line": 36,
+     "scenario": "stdout is b'a\\rb\\n' (any pip/curl/npm/docker progress bar). execution records lines=1 and Store.line_index builds one line (store.py:484 scans only b'\\n'), but text_lines yields ['a','b']. textutil.index_lines exists precisely to split on \\n 'the way the store's line index counts lines' and base.py was never converted, while 38 call sites across every digest profile read text_lines. Concrete downstream break: lintprof.py:156 sets n_lines = first_view.lines (the \\n count) though first_line came from text_lines, so end = min(first_line+6, n_lines) < first_line, emitting an inverted suggestion like 'ctx get ... --lines 9:4' and an empty inline evidence slice at lintprof.py:161.",
+     "severity": "high",
+     "summary": "StreamView.text_lines splits with str.splitlines() while the store's line index and the manifest 'lines' count split on \\n only, so every digest line coordinate and minted span is wrong for output containing a bare CR (or \\v, \\f, \\x1c-\\x1e, \\x85, U+2028/9)."
+    },
+    {
+     "file": "src/ctx/installer.py",
+     "line": 54,
+     "scenario": "`ctx setup` in a fresh repo makes init_workspace write _CTX_TOML_TEMPLATE containing patterns = ['aws-access-key','private-key','generic-api-token']. config.Redaction defaults to _all_redaction_patterns() (config.py:194 -> textutil.REDACTION_PATTERNS, 16 entries), but an explicit list in the file replaces it rather than extending it. For 'A ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA B AIza... C xoxb-11111111111111111111', sanitize_for_model fires nothing under the template config and fires ['github-token','google-api-key','slack-token'] under the code default. GitHub/GitLab/Slack/Stripe/Twilio/SendGrid/npm/PyPI/JWT tokens flow unredacted into model-visible digests.",
+     "severity": "high",
+     "summary": "The ctx.toml template written by `ctx setup`/`ctx init` pins [redaction].patterns to 3 of the 16 vendored patterns, so every ctx-initialized workspace loses most secret redaction relative to the code default."
+    },
+    {
+     "file": "src/ctx/plan_exec.py",
+     "line": 286,
+     "scenario": "Plan doc {\"version\":\"ctx.plan/v1\",\"objective\":{\"question\":\"q\"},\"budget\":{\"wall_seconds\":null},\"steps\":[{\"id\":\"a\",\"op\":\"repo.changed\"}]}. plan_ir.py:333 reads wall = plan.budget.get('wall_seconds', None) and line 334 guards `if wall is not None`, so an explicit null skips the positivity check and validate_plan returns []. execute_plan then calls plan.budget.get('wall_seconds', ws.config.plan.wall_seconds) -- the key EXISTS so the default is never substituted -- and float(None) raises TypeError. Nothing wraps the line, so the whole `ctx plan run` traceback escapes.",
+     "severity": "high",
+     "summary": "An explicit \"wall_seconds\": null passes validate_plan and then crashes execute_plan with an uncaught TypeError from float(None), breaking the module's 'a plan that validates cannot fail structurally at execution' contract."
+    },
+    {
+     "file": "src/ctx/orchestrator.py",
+     "line": 900,
+     "scenario": "A harness CLI (e.g. `claude -p`) forks a background subagent that inherits the stdout/stderr pipes and then exits. proc.communicate(timeout=node_timeout) keeps blocking because the grandchild still holds the pipes, so it raises TimeoutExpired. _run_bounded then calls wait_or_kill(proc, 0); inside _proc.py:58 proc.wait(timeout=0) returns immediately (the leader has already exited), so wait_or_kill returns False WITHOUT reaching the os.killpg(proc.pid, SIGKILL) branch at _proc.py:61. The grandchild survives and keeps writing into the workspace after _launch_host has returned a timeout result. The kill only fires in the opposite case (leader still alive), where wait(0) raises TimeoutExpired.",
+     "severity": "high",
+     "summary": "_run_bounded's timeout handler calls wait_or_kill(proc, 0), which only SIGKILLs the process group when the direct child is still alive, so the orphaned-grandchild case that caused the timeout is exactly the case it fails to clean up."
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "line": 740,
+     "scenario": "Repo defines only Baz.bar and no Foo.bar. `ctx callers Foo.bar` -> _resolve_target finds no exact qual match (line 733) and no '.Foo.bar' suffix match (line 737), so line 740 returns defs_by_name['bar'] = [<rel>::Baz.bar]. Because that is a single target, _ambiguity_note (which only fires for len(targets) > 1) prints nothing, and the header still reads 'ctx callers Foo.bar' while every row listed is a caller of Baz.bar -- exactly the v1 degradation this function's own docstring at lines 726-727 says v2 removed.",
+     "severity": "high",
+     "summary": "A dotted query that matches no qualified definition silently falls back to the bare-name lookup, so callers/callees/impact answer about a different symbol with no ambiguity note."
+    },
+    {
+     "file": "src/ctx/_retrieval/get.py",
+     "line": 194,
+     "scenario": "`ctx get repo:bundle.min.js` on a one-line minified file, or any --lines N:N whose rendered line exceeds room = budget_bytes(1200) - 256 = 4544. The loop breaks with kept=0, line 194 forces kept=1, so new_b = a + 1 - 1 = a = b; span = 1; nxt_a, nxt_b = b+1, min(total, b+1) = b+1, b. The emitted address is `next: ctx get repo:bundle.min.js --lines 2:1`, and following it hits anchors.parse_span's `need 1 <= A <= B` -> RetrievalError, exit 2. The rest of the line is unreachable through the only address the tool offers -- exactly the 'a cut with no forward address is the loop itself' failure the comment at lines 195-199 claims cannot happen. The --records path calls the same helper and has the identical single-oversized-record case.",
+     "severity": "high",
+     "summary": "_fit_window's `kept = max(1, kept)` breaks the invariant asserted three lines below it, so a single-line window that exceeds the byte budget emits a continuation whose range is inverted (--lines B+1:B) and therefore unusable."
+    },
+    {
+     "file": "src/ctx/command_spans.py",
+     "line": 151,
+     "scenario": "Verified by calling classify_command_span: ['gh','api','-XDELETE','repos/o/r/issues/comments/1'] returns 'capture' while ['gh','api','-X','DELETE','repos/...'] returns None, and ['gh','api','graphql','-fquery=mutation{}'] also returns 'capture'. gh is cobra/pflag-based and accepts value-attached shorthands. The any(...) test on lines 152-156 checks `arg in mutation_flags` ('-XDELETE' is not '-X') and `arg.startswith(flag + '=')` only for flags beginning with '--', so nothing matches. In hook.py:1535-1547 CAPTURE sets readonly_noisy=True, choose_guard returns rewrite_command, and _deny_cmd substitutes `ctx run -- gh api -XDELETE ...` into updatedInput -- the DELETE runs automatically, whereas the spaced spelling falls through to the unknown-command force_ask at hook.py:1611.",
+     "severity": "high",
+     "summary": "The `gh api` mutation-flag check only recognises detached shorthand (-X POST) and long --flag=value spellings, so pflag's attached-shorthand form (-XDELETE, -fkey=val) is classified read-only and a mutating API call is executed without the approval gate the spaced spelling triggers."
+    },
+    {
+     "file": "src/ctx/substitute.py",
+     "line": 335,
+     "scenario": "Verified by calling collapse(): 'grep -rn parse_config src/ctx/' -> \"ctx q 'refs parse_config | group file'\" (the src/ctx/ scope is gone), and 'grep -rn TODO src/ tests/' -> \"ctx q 'refs TODO | group file'\" even though _scope_hint returns None for several paths precisely so the caller is not widened. The identifier branch at line 335 returns 13 lines before _scope_hint is reached at line 348 and its `if scope is None: return None` guard at line 349. The extra hits are indistinguishable from real ones.",
+     "severity": "medium",
+     "summary": "The bare-identifier collapse branch returns before `scope = _scope_hint(paths)` runs, so it discards the caller's directory scope and rewrites the search to cover the whole repository -- including the multi-path case _scope_hint deliberately refuses to substitute."
+    },
+    {
+     "file": "src/ctx/substitute.py",
+     "line": 208,
+     "scenario": "Verified by calling collapse(): \"rg --glob '*.py' 'foo bar'\" and \"grep -rn --include=*.py 'foo bar' .\" both produce \"ctx q 'search '...'foo bar'...' | files'\" with no glob at all. _GREP_VALUE_FLAGS (substitute.py:57) contains --glob, -g and --include; _grep_pattern_and_globs does `i += 2` past the flag and its value and appends only bare positionals, so _scope_hint(paths) sees an empty path list. The substituted command searches every file in the repo instead of the *.py subset the caller asked for.",
+     "severity": "medium",
+     "summary": "Glob-scoping flags (--glob/-g/--include) are skipped as value flags when hunting the pattern and are never fed back to _scope_hint, so a glob-scoped grep/rg collapses into an unscoped whole-repo search."
+    },
+    {
+     "file": "src/ctx/hook.py",
+     "line": 1512,
+     "scenario": "Verified with the real policy: classify_command('tail -f app.log | grep ERROR', policy) takes the has_meta branch at line 1488 and emits _rewrite {'command': \"ctx run --shell -- 'tail -f app.log | grep ERROR'\"} with no --bg, while the plain form 'tail -f app.log' is correctly denied and never rewritten. 'journalctl --follow | head -20' reproduces it identically. _deny_cmd would have appended ' --bg' via _follows_forever(argv); on this path the flag is never computed, so the substituted command blocks until the 600s ctx run timeout.",
+     "severity": "medium",
+     "summary": "The compound-shell rewrite branch builds `ctx run --shell -- <expr>` without consulting _follows_forever, so a never-terminating command inside a pipeline is steered into a blocking foreground capture -- the hang _deny_cmd's --bg logic exists to avoid."
+    },
+    {
+     "file": "src/ctx/mcp.py",
+     "line": 421,
+     "scenario": "The try/except at lines 417-420 guards json.loads for JSONDecodeError only; a well-formed non-object decodes fine and then reaches `method = msg.get('method')`. Driving serve() with the two lines `[]` and `{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}` raises AttributeError: 'list' object has no attribute 'get' and the ping is never answered. A client sending a JSON-RPC 2.0 batch (mandatory in MCP 2025-03-26) or any stray scalar line takes down the session's whole tool server instead of receiving a -32600 error.",
+     "severity": "medium",
+     "summary": "The MCP stdio serve loop calls msg.get() outside the try block, so any valid-JSON line that is not an object (e.g. a JSON-RPC batch array) kills the long-lived tool server."
+    },
+    {
+     "file": "src/ctx/surface_gateway.py",
+     "line": 409,
+     "scenario": "json.loads(line) is wrapped for JSONDecodeError only, then `method, msg_id = msg.get('method'), msg.get('id')` runs on whatever decoded. A batch request [{...}] or a scalar line raises AttributeError, which escapes the read loop into `finally: gw.close()`; the gateway process exits and every revealed backend subprocess is terminated, so the host loses all MCP tools for the rest of the session rather than getting an error reply.",
+     "severity": "medium",
+     "summary": "serve_gateway repeats the unguarded msg.get after json.loads, so one non-object JSON line terminates the gateway and closes every proxied MCP backend mid-session."
+    },
+    {
+     "file": "src/ctx/config.py",
+     "line": 308,
+     "scenario": "The `raw.get('scopes') or {}` idiom (repeated at L313 budgets, L316 guard, L336-340, L342, L365, L381) short-circuits only on falsy values, so a scalar passes straight through. Verified against the real loader: a ctx.toml containing `budgets = 5` raises AttributeError: 'int' object has no attribute 'items'; `guard = \"strict\"` raises 'str' object has no attribute 'get'. resolve_workspace calls load_config for every command, so one bracket typo bricks the entire tool -- the failure mode _coerce_like/_str_tuple were added to prevent.",
+     "severity": "medium",
+     "summary": "load_config raises AttributeError on a syntactically valid ctx.toml whose section key is a scalar instead of a table, breaking the documented fail-open contract on the path of every ctx command."
+    },
+    {
+     "file": "src/ctx/installer.py",
+     "line": 461,
+     "scenario": "_hook_command_present (installer.py:438) scans all stages for ' hook claude-code ' and returns True on the first hit, ignoring which stages exist and ignoring its own ctx_exe argument. Seed .claude/settings.json with claude_hook_settings(exe) minus the SessionStart stage (a pre-SessionStart install), then run install_claude: it prints 'hooks already harnessed; left unchanged' and the file keeps only ['PostToolUse','PreToolUse']. The gate is load-bearing because merge_hook_stages does a bare current.extend(entries) with no dedupe (installer.py:388), so the SessionStart surface pre-flight gate is silently never installed on any upgraded workspace while `ctx doctor` still reports the host as hooked.",
+     "severity": "medium",
+     "summary": "install_claude treats hooks as installed if ANY ctx hook command exists in any stage, so re-running `ctx setup` can never add hook stages an earlier ctx version did not write."
+    },
+    {
+     "file": "src/ctx/store.py",
+     "line": 669,
+     "scenario": "The store is explicitly multi-process (WAL + busy_timeout, with a comment at store.py:362 noting 'several agent branches can touch the same catalog at once'). Process A runs `ctx gc` and materializes `leased` (line 636) and `recent` (lines 637-640) into Python sets. Process B then runs `ctx run --`, whose put_blob/put_manifest insert rows with created_at=now. A's sweep at line 669 re-queries SELECT id, kind FROM objects and now sees B's rows, which are in neither set, so it unlinks B's blob and manifest and deletes their catalog rows -- the run handle B just returned to its caller resolves to nothing. No transaction, lock or generation counter spans mark and sweep.",
+     "severity": "medium",
+     "summary": "gc() materializes its live set in separate uncommitted queries and then sweeps with a third query, so any object written by a concurrent process during the gc window is classified as dead and deleted."
+    },
+    {
+     "file": "src/ctx/worktree_isolation.py",
+     "line": 194,
+     "scenario": "_git is built with check=False, so contextlib.suppress never sees a git failure -- a non-zero `git worktree remove --force` (locked worktree, an unlinkable file, NFS EBUSY) returns quietly at line 192. `git worktree prune` then runs at line 194 while self.path still exists on disk, so prune correctly declines to collect the admin entry. Only afterwards does line 196 shutil.rmtree(self._temp_parent, ignore_errors=True) remove the directory -- after the one prune that could have collected it. Every failed node accumulates one dead .git/worktrees registration, and __exit__ returns None so the caller is told cleanup succeeded.",
+     "severity": "medium",
+     "summary": "_cleanup runs `git worktree prune` before deleting the temp directory and ignores git's exit status, so a failed `worktree remove` leaks a stale .git/worktrees/<id> admin entry in the user's real repository forever."
+    },
+    {
+     "file": "src/ctx/orchestrator.py",
+     "line": 2003,
+     "scenario": "run_route line 1820 calls _merge_patch(nodes, state, patch, hosts, cfg) with `patch` produced by the coordinator model. If the model emits a replan node such as {'id':'n9','targets':['/etc/hosts']} (or ['../x'], or a bad output_schema), _coerce_node -> normalize_targets raises WorktreeIsolationError, which _coerce_node converts to RouteError at line 384. The `with contextlib.suppress(RouteError)` block only begins at line 2006, so the RouteError propagates out of _merge_patch, out of the unguarded call in run_route, and out of orchestrate: the whole orchestration crashes mid-run, _append_route_receipt never runs, and the completed waves' RouteResult is lost. The identical call in build_route_plan IS guarded by `except RouteError`.",
+     "severity": "medium",
+     "summary": "_merge_patch calls _coerce_node outside the contextlib.suppress(RouteError) guard, so a RouteError raised from model-supplied replan node data escapes and aborts an in-flight run_route."
+    },
+    {
+     "file": "src/ctx/jobs.py",
+     "line": 235,
+     "scenario": "start_job spawns the supervisor at line 220, then at line 234 does current = _read_meta(jobdir) and, if state is still 'launching', writes current back at line 237. If the supervisor reaches its own _write_meta (state='running', pid=<child>, supervisorPid=<sup>) in the gap between those two calls, the launcher's _atomic_write replaces it with a document that has state='launching' and no pid. While the child actually runs: kill_job spins in its wait-for-pid loop and after settle_s raises JobError('job <id> never started; nothing to kill') leaving the child alive with a kill marker on disk; job_status/list_jobs report 'launching'; and if the supervisor is then killed, _adopt_if_orphaned's launching branch marks the job failed with 'supervisor exited before the job started' even though it ran.",
+     "severity": "medium",
+     "summary": "start_job's read-then-write of meta.json after spawning the supervisor is not atomic, so it can overwrite the supervisor's 'running' record with a stale 'launching' one."
+    },
+    {
+     "file": "src/ctx/proxy.py",
+     "line": 327,
+     "scenario": "_POOL_MAX is 4, so after a burst the pool can hold 4 keep-alive connections; the session then idles until the upstream drops them all. The next request enters `for _attempt in (0, 1)`: attempt 0 calls _acquire, pops stale conn #1 (reused=True), getresponse raises, conn.close(), resp=None, and because reused is True it loops. Attempt 1 calls _acquire again, which always prefers the pool, pops stale conn #2 (reused=True again) and fails identically. resp is None at line 344 so _bad_gateway() sends a 502 even though a fresh TCP connection would have succeeded. The comment at lines 324-325 promises the retry happens 'on a fresh one', which _acquire never guarantees.",
+     "severity": "medium",
+     "summary": "The single retry in _relay re-acquires from the pool instead of forcing a fresh connection, so an entirely idle-expired pool returns 502 to the client rather than reconnecting."
+    },
+    {
+     "file": "src/ctx/pathglob.py",
+     "line": 43,
+     "scenario": "Verified by executing it: pathglob.matches('src/a.py','./src/*.py') is False while pathglob.matches('src/a.py','src/*.py') is True. Line 43 does rel = rel.removeprefix('./') but line 44 only does pat = pattern.strip('/'), and the leading dot is then re.escaped (or gitwildmatch-anchored). `ctx search --glob './src/*.py'` returns zero hits and `--exclude './build/**'` excludes nothing -- the silent scope leak / silent over-exclusion this module's docstring says it exists to eliminate.",
+     "severity": "medium",
+     "summary": "matches() normalizes a leading './' off the path but never off the pattern, so any selector written as './...' silently matches nothing."
+    },
+    {
+     "file": "src/ctx/digest/jsonprof.py",
+     "line": 44,
+     "scenario": "stdout is {\"src/a.py\": [1,2,3,4,5,6,7]} (path-keyed JSON from coverage/lint tools). _dominant_array returns prefix '/src/a.py' and the profile emits `ctx get run:X#stdout --json-pointer /src/a.py/5`. Verified against the harness's own resolver: textutil.json_pointer(doc, '/src/a.py/5') raises JsonPointerError: no member 'src', while the correctly escaped '/src~1a.py/5' returns 6. The digest hands the model a retrieval command that always fails.",
+     "severity": "medium",
+     "summary": "_dominant_array builds a JSON pointer prefix from a raw object key without RFC 6901 ~0/~1 escaping, so the emitted --json-pointer command is wrong for any key containing '/' or '~'."
+    },
+    {
+     "file": "src/ctx/binfmt.py",
+     "line": 218,
+     "scenario": "data = b'A'*100 + b'\\x00'*50 (any binary with an ASCII header longer than 64 bytes). Verified by executing it: sniff_format(data) == 'binary' but inspect(data).format == 'text'. The same 64-byte cap is baked into DigestContext.load (base.py:111, head = data[:64]), so BinaryProfile.detect declines and the blob falls through to text/v1, which treats the bytes as lines and produces garbage -- the case binprof.py's docstring exists to prevent.",
+     "severity": "medium",
+     "summary": "inspect() sniffs with only the first 64 bytes although sniff_format's NUL heuristic is written against a 1 KiB window, so magic-less binary blobs whose first NUL lands past byte 64 are classified as text."
+    },
+    {
+     "file": "src/ctx/statusline.py",
+     "line": 311,
+     "scenario": "A rollout JSONL whose last TokenCount event carries total_token_usage = {input_tokens: 100000, cached_input_tokens: 90000, output_tokens: 2000}. tokens becomes {input: 100000, cache_read: 90000, ...} and pricing.Price.cost_usd prices the categories independently (pricing.py:90-95), charging 100k at the full input rate PLUS 90k at the cache-read rate. The sibling parser for the identical Codex shape does totals['input'] += max(0, full_input - cached) (usage.py:183) with the docstring 'Codex reports cached input as a subset of input ... so the uncached category is reduced before pricing'; statusline omits that subtraction, so the status line reports a cost far above the true one on a cache-heavy session. Line 317's sum(tokens.values()) fallback double-counts the same 90k in the displayed token total when total_tokens is absent.",
+     "severity": "medium",
+     "summary": "codex_rollout_summary prices Codex's input_tokens as fully uncached even though Codex reports cached_input_tokens as a subset of it, so cached tokens are billed twice."
+    },
+    {
+     "file": "src/ctx/evidence_outcomes.py",
+     "line": 314,
+     "scenario": "_NODEID_RE = r'[\\w./-]+::[\\w:]+' (replay.py:114) excludes [ and ], while _FAILING_ID_RE = r'^\\s*(?:\\d+\\.\\s+)?([\\w./-]+::[\\w:\\[\\]-]+)' (evidence_outcomes.py:229) includes them. Verified with both compiled patterns against 'tests/test_a.py::test_f[case1] FAILED': _failing_ids yields {'tests/test_a.py::test_f[case1]'} and test_ids (line 291) yields {'tests/test_a.py::test_f'}, so `failing & test_ids` at line 314 is empty and the emission records no failing ids. Downstream, followup_join's guard `not any(fid in act.result_text for fid in em.failing_ids)` degenerates to `not any(())` == True for every parametrized-test run.",
+     "severity": "medium",
+     "summary": "failing_ids is the intersection of two regexes with different character classes, so every parametrized pytest node id is dropped and the failing-id half of validation resolution is silently disabled."
+    },
+    {
+     "file": "src/ctx/replay.py",
+     "line": 290,
+     "scenario": "downstream_facts(calls, i) only ever adds strings it found inside calls[i]['result']: Edit old_string lines are added under `if len(line) >= 12 and line in res` (line 175) and truncated only by prefix slicing line[:120] (still a substring), and coords come from _COORD_RE/_NODEID_RE.findall(res) (line 177). In the harnessed branch res is the same digest being scored, so `if fact in res` at line 292 is always True: facts_hop stays 0, misses/sample_one_hop stay empty, and every profile reports hops=0 and a perfect-looking frontier. The stated gate ('a downstream-used fact is inline if the digest the model saw carried it, and one-hop otherwise') cannot fail for any transcript ctx actually served.",
+     "severity": "medium",
+     "summary": "The 'evidence sufficiency regression gate' for already-harnessed sessions is tautological: downstream_facts extracts facts as substrings of res, then the branch tests `fact in res`, so a one-hop miss can never be recorded."
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "line": 481,
+     "scenario": "Src-layout repo with src/conftest.py present. pkg_dirs (line 480-482) then contains 'src'. For src/ctx/store.py, parts = ['src','ctx','store']; the loop at line 491 matches at i=0, registers 'src.ctx.store' (identical to the path-derived stem already registered at line 485) and breaks, so 'ctx.store' is never a key. Every `from ctx.store import ...` then fails the by-stem walk, no import edge is produced, and every cross-file caller drops to the repo tier and is hidden from `ctx callers` by default -- the failure the comment at lines 473-479 says the fix exists to prevent (it explicitly claims 'a bare src/' still does not count).",
+     "severity": "medium",
+     "summary": "Any loose .py file directly inside a prefix directory makes that directory a package root, so the import-name loop breaks on the wrong prefix and the file's real importable name is never registered."
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "line": 582,
+     "scenario": "Two unrelated files each define `class Profile`, and a third defines `class LogProfile(Profile)` importing neither. _resolve_name('Profile', ...) returns both definitions at tier 'repo'; line 582 assigns the tier to `_tier` and throws it away, then appends LogProfile to g.subclasses for BOTH. `ctx impls Profile` reports LogProfile as a subtype of a Profile it never inherits from, with no [unscoped] mark and no --unscoped gate -- cmd_impls (line 1110) has no tier filter at all, unlike callers/callees/impact/cycles, while its docstring at lines 1115-1116 claims 'bases are resolved through the same tier ladder as call sites, so an inherited name is scoped, not grepped'.",
+     "severity": "medium",
+     "summary": "Inheritance edges discard the resolution tier, so repo-wide (unscoped) base-name matches are mixed into `ctx impls` output unlabelled and unfiltered."
+    },
+    {
+     "file": "src/ctx/scip_ingest.py",
+     "line": 147,
+     "scenario": "Index contains pkg/Foo#render(). and pkg/Bar#render(). `ctx refs Foo.render` sets want = symbol.rsplit('.',1)[-1] = 'render', and the filter `if occ.name != want: continue` (line 151) keeps every occurrence of Bar.render too; codeverbs.resolve_refs returns them all tagged 'scip (exact)'. The same discarding applies to SCIP parameter and type-parameter descriptors (func().(param), [T]), whose descriptor_name is param/T, contradicting the docstring claim that the final token is always the symbol's own name.",
+     "severity": "medium",
+     "summary": "SCIP reference lookup matches on the bare last identifier of the symbol, so a dotted query collides across unrelated types while the result is still labelled 'scip (exact)'."
+    },
+    {
+     "file": "src/ctx/skeleton.py",
+     "line": 536,
+     "scenario": "A module with `try:\\n    class FastImpl: ...\\nexcept ImportError:\\n    class FastImpl: ...`, or `if TYPE_CHECKING:`-guarded defs. walk_py iterates node.children and dispatches only decorated_definition / function_definition / class_definition / import_statement; try_statement and if_statement are unhandled, so it never recurses into them. skeleton_for reports zero symbols for those classes, skeleton_outline prints the shortfall as a complete census ('outline (census)'), and callgraph._unit_polyglot -- which takes its whole node set from these symbols -- attributes every call inside them to no definition, silently dropping those call sites.",
+     "severity": "medium",
+     "summary": "The Python skeleton extractor only descends into module top level and class bodies, so definitions nested in if/try/with statements never enter the skeleton census."
+    },
+    {
+     "file": "src/ctx/ladders.py",
+     "line": 549,
+     "scenario": "`ctx ladders --corpus <dir>` on a directory containing no .ctx-session-reads: discover_workspaces returns [], so the `for root in roots` loop never runs and the early `return m` at line 553 -- the only path that supplies 'reason' -- is never taken. For the first ladder (solution, signal=None) measurable is False, and the dict assembled at line 560 has keys measurable/ledger/note/records/unmapped/rungs/workspaces/workspaces_with_data and no 'reason'. report_corpus line 586 then does lines.append(f\"  not scored: {m['reason']}\") and raises KeyError: 'reason'.",
+     "severity": "medium",
+     "summary": "measure_corpus returns a result dict with no 'reason' key when the roots list is empty, and report_corpus unconditionally reads m['reason'] for any unmeasurable ladder, raising KeyError."
+    },
+    {
+     "file": "src/ctx/seq.py",
+     "line": 63,
+     "scenario": "cmd_seq passes halt_on_fail=not ns.keep_going (commands/execute.py:288) and the normal failure path correctly honours it (`if halt_on_fail: halted_at = idx; break`, seq.py:100-102). But when run_capture raises ExecutionError, lines 60-63 append the 'failed to start' line, latch final_exit and then `break` with no halt_on_fail test. `ctx seq --keep-going 'nonexistent-binary' 'pytest -q'` therefore never runs the pytest step and reports 'halted at step 1 - 1 not run', contradicting the flag the user passed. The failed step is also never appended to step_digests, so it does not appear in the `failures` list used to select which digest rides in full.",
+     "severity": "medium",
+     "summary": "The ExecutionError branch in run_seq breaks out of the step loop unconditionally, ignoring halt_on_fail, so `ctx seq --keep-going` stops at the first step that fails to START."
+    },
+    {
+     "file": "src/ctx/surface.py",
+     "line": 900,
+     "scenario": "SurfacePolicy.probe defaults to True, so hook.main_session_start calls preflight(probe=True) -> audit(probe_mcp=True) with audit's default timeout=8.0 (surface.py:652) -> probe_surface -> a plain `for name, argv in sorted(_mcp_server_commands(ws_root).items())` loop (line 894) doing subprocess.run(argv, timeout=timeout) once per server. installer.claude_hook_settings registers SessionStart with 'timeout': 15 (installer.py:243). With three configured MCP servers on a cold-cache session wall time reaches ~24s: the host kills the hook and the advisory is lost. Because line 901 caches only successful probes (`if tools:`), the same stall repeats on every subsequent session start.",
+     "severity": "medium",
+     "summary": "preflight probes every configured MCP server serially at 8s each on the SessionStart hook, whose registered host timeout is 15s, and failed probes are never cached, so an uncached session with 2+ slow servers is killed every time."
+    },
+    {
+     "file": "src/ctx/surface_reconcile.py",
+     "line": 138,
+     "scenario": "surface._extract_requires returns servers as the regex GROUP (surface.py:548, _MCP_REF_RE = r'\\bmcp(?:__|\\.)([a-z0-9][a-z0-9-]*)'), i.e. already-decoded bare names like 'github', and enrich_graph stores those in Capability.requires. required_families then runs the same prefix-requiring _MCP_REF_RE over ' '.join(c.requires), which cannot match a bare name. A CLAUDE.md saying 'Use mcp__github__create_pull_request' in prose yields requires=('github',) yet required_families(...) -> set(). Under `ctx surface reconcile --enforce` the `fam in sig.required_families` guard then fails to protect the family the repo instructions depend on, and it is hidden as unused. It fires only in the incidental case where a backticked `mcp__x__y` token also landed in requires via the tools branch at surface.py:555.",
+     "severity": "medium",
+     "summary": "required_families re-applies the mcp__/mcp. extraction regex to Capability.requires, which already holds bare decoded server names, so the 'never hide a family an active contract requires' protection misses every plain prose server reference."
+    },
+    {
+     "file": "src/ctx/digest/evidence_render.py",
+     "line": 445,
+     "scenario": "A pytest run with 1500 failures whose census does not fit the plan budget escalates to FLOOD. build(k) costs O(k) and the loop `for k in range(len(items), 0, -1)` runs from 1500 down to the ~15 that fit, plus build(1) at line 444 and build(len(items)) again at line 454 for the omitted_bytes receipt. Measured in-repo: 1500 items took 2.31s to produce a 4.6 KB digest, and the cost grows as n^2, so ~6000 failures costs well over half a minute of pure string formatting inside digest rendering. A binary search over k produces the identical result in O(n log n).",
+     "severity": "medium",
+     "summary": "_render_flood walks k linearly downward from len(items), re-rendering and re-encoding the whole census on every step, making the flood path quadratic in the number of failing tests."
+    },
+    {
+     "file": "src/ctx/scorecard.py",
+     "line": 721,
+     "scenario": "`git status --porcelain` collapses a wholly-untracked directory into a single record `?? newpkg/`, and gitstatus.py exposes this explicitly as is_dir_entry with the comment 'the caller must walk it or edits inside stay invisible' (gitstatus.py:82-85). scorecard never checks it: for a session that creates newpkg/ with 12 files and 900 lines, untracked_paths == ['newpkg/'], p.is_file() is False at line 724 so lines_new stays 0, and files_new reports 1 instead of 12. summary_line then prints a near-zero deliverable for a session that wrote 900 lines -- the effort signal this function exists to measure.",
+     "severity": "medium",
+     "summary": "attach_deliverable treats git's collapsed untracked-directory entries as ordinary files, so a creation task's entire new directory counts as one file and contributes zero lines_new."
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "line": 312,
+     "scenario": "Verified by executing it: command_signature('pytest tests/x.py > out.log') returns 'pytest tests/x.py out.log' and command_signature('pytest tests/x.py > /dev/null 2>&1') returns 'pytest tests/x.py /dev/null', while command_signature('pytest tests/x.py') returns 'pytest tests/x.py'. _strip_slicer_tokens only removes the exact tokens in _REDIR_TAIL_TOKENS ('2>/dev/null', '>/dev/null', ...), never the space-separated `> FILE` form. A re-run of the intervened signature that adds `> out.log` therefore never matches rec in check_command, so no starvation is scored, and _split_signature/is_narrower treat 'out.log' as a pytest target, corrupting the narrowing relation.",
+     "severity": "medium",
+     "summary": "_signature_parts drops the redirection operator (it is in _META_TOKENS) but keeps its target filename as a positional target, so a command with a redirect gets a different signature than the same command without one."
+    },
+    {
+     "file": "src/ctx/plan_ir.py",
+     "line": 241,
+     "scenario": "parse_plan(json.loads('{\"version\":\"ctx.plan/v1\",\"objective\":{\"question\":\"q\"},\"budget\":{\"max_nodes\":Infinity},\"steps\":[{\"id\":\"a\",\"op\":\"repo.changed\"}]}')) followed by validate_plan raises OverflowError: cannot convert float infinity to integer at `int(budget.get(key, default))`, reached from line 324 own_nodes = _budget_int(plan.budget, 'max_nodes', max_nodes); the handler catches only (TypeError, ValueError). Validation is documented to return all problems as typed Rejections and never raise, and the sibling _policy_int already guards OverflowError for exactly this reason. plan_exec.py:288 int(plan.budget.get('max_fanout', ...)) has the same hole downstream.",
+     "severity": "medium",
+     "summary": "_budget_int does not catch OverflowError, so a budget value of Infinity (which json.loads accepts by default) raises out of validate_plan instead of degrading to a typed Rejection."
+    },
+    {
+     "file": "src/ctx/commands/emit.py",
+     "line": 151,
+     "scenario": "`ctx ask 'where is resolve_workspace defined' --intent locate` compiles a plan whose emit.sections is ['coverage'] (ask.py:63), so plan_exec never renders the `conclusion candidates (census): N` line (plan_exec.py:708). \"candidates (census): 0\" not in text is therefore True and outcome becomes 'failure', so _delivery_plan -> resolver.resolve_delivery picks mode fail_census and applies the failure multiplier on a clean successful run. The same holds for any investigation that DID find candidates (its line reads 'candidates (census): 5'). Symmetrically, a diagnose plan that found ZERO root causes emits 'candidates (census): 0', is classified 'success', and is squeezed by the smaller budget -- the one digest that most needs the failure budget. Both callers (commands/plans.py:173 and :221) are affected and no test pins it.",
+     "severity": "medium",
+     "summary": "The investigate emission outcome test is inverted: any digest that does NOT contain the literal 'candidates (census): 0' is classified a failure, so successful investigations ride the failure budget and genuinely empty ones ride the success budget."
+    },
+    {
+     "file": "src/ctx/steward.py",
+     "line": 78,
+     "scenario": "orchestrator.py:1682 calls classify_failure(code=..., stdout=out, stderr=err, ...) with the worker's full raw output. A node editing HTTP code fails its contract and its output contains `test_401_unauthorized FAILED`, or a traceback line `File \"api.py\", line 401`. classify_failure lowercases and joins both streams, then `any(m in text for m in _AUTH)` matches on '401' and returns Classification('blocked','auth_failure'). steward.decide hands failure_kind='auth_failure' to choose_recovery, whose preference list for that kind is ['stop_blocked'] only (recovery_policy.py:36-37), so the node stops with no retry and no escalation even though retry_same and escalate were on the affordable menu. '429' in _RATE (line 85) has the same shape.",
+     "severity": "medium",
+     "summary": "_AUTH matches the bare substring '401' anywhere in the concatenated host stdout+stderr, so an unrelated failure whose output merely contains those three digits is classified auth_failure and the node is permanently stopped with no retry."
+    },
+    {
+     "file": "src/ctx/facts.py",
+     "line": 898,
+     "scenario": "derive_run writes rows with run_id = mid_full[:SHORT_ID] (facts.py:428, 12 chars) and _newest_captured selects objects.id verbatim (facts.py:957-960), which store.py documents as the full sha256 hex. In fails_sites with run=None, run_id is 64 chars, so _fails_for(store, run_id) runs SELECT ... FROM fail WHERE run_id=? against a 12-char column and always returns []. Every `ctx q 'fails last'` / `ctx ask --intent diagnose` therefore pays a full derive_run (manifest load + fingerprint check + a latest_run write) instead of the cached read. Worse, when that re-derivation cannot complete (extractor epoch bumped and the run's stream blobs already gc'd, so DigestContext.load raises and derive_run returns ok=False), fails_sites returns [] -- an empty 'no failing tests' answer about a run whose derived fail rows are still in facts.sqlite. The neighbouring `_run_exists(store, cached)` path at line 905 handles a 12-char value, showing the two widths coexist.",
+     "severity": "medium",
+     "summary": "_newest_captured returns the full 64-hex objects.id while fail.run_id stores the 12-hex short id, so the fails_sites fast lookup can never match a row and always falls through to a full re-derivation."
+    },
+    {
+     "file": "src/ctx/query.py",
+     "line": 590,
+     "scenario": "A repo file containing \\x0c (form feed, a legal Python page separator), a lone \\r, \\x85, \\u2028 or \\u2029 -- e.g. 'a\\n\\x0cb\\nTARGET\\n'. splitlines() yields ['a','','b','TARGET'] so `ctx q 'search TARGET'` reports repo:f:L4, while textutil.index_lines (\\n only, used by ctx get, store.line_index and _retrieval/search.py) yields ['a','\\x0cb','TARGET'] -- line 3. The citation is wrong, and the downstream `| get` stage calls get(..., Selector(lines=(4-ctx, 4+ctx))), retrieving lines that do not contain the match or refusing as past EOF. `ctx search` and `ctx q 'search'` return different coordinates for the same file.",
+     "severity": "medium",
+     "summary": "_stage_search numbers lines with str.splitlines() instead of the house \\n-only geometry, so the site coordinates it emits do not address the same lines `ctx get --lines` resolves."
+    },
+    {
+     "file": "src/ctx/_retrieval/get.py",
+     "line": 574,
+     "scenario": "`ctx q 'search X | group file'` renders `full set: ctx get blob:<id> --json-pointer /rows` (query.py:1215). Running it on a result with more than ~4.8 KB of JSON (result_tokens=1200 -> 4800 bytes; 200 site rows at indent=2 easily exceed it) goes through bounded, which truncates and appends truncation_continuation. Because there is no `elif selector.json_pointer is not None` branch, handle stays the bare ref_text and the emitted address is `next: ctx get blob:<id>` -- which re-reads the blob as head lines. The /rows payload the tool itself pointed at becomes unreachable through its own continuation, and --json-pointer has no selector-level continuation either, so this is the only address offered.",
+     "severity": "medium",
+     "summary": "The budget-truncation fallback handle covers --bytes, --records and --lines but not --json-pointer, so a truncated JSON answer's next: address drops the selector and re-reads the whole blob as lines."
+    },
+    {
+     "file": "src/ctx/_retrieval/targets.py",
+     "line": 143,
+     "scenario": "`ctx search repo: 'pattern'` in a workspace with 12,000 tracked files and ripgrep unavailable (or CTX_SEARCH_ENGINE=python). ws.list_files is uncapped, `rels = rels[:max_files]` drops 7,000 path-sorted-later files, and `return targets, len(rels), skipped_binary` reports 5000 as considered. search.py renders 'scanned: 5,000 targets' with no omission count -- the one number that would disclose the gap was destroyed by the slice, so matches in tests/... or src/z... are reported as absent. The rg engine applies no such cap, so the same query answers differently depending on whether rg is on PATH, against a module whose contract is engine parity and explicit coverage reporting.",
+     "severity": "medium",
+     "summary": "_resolve_repo_targets silently truncates the file list to max_files and then reports the post-cap count as `considered`, so the coverage line cannot reveal that files were never searched."
+    },
+    {
+     "file": "src/ctx/command_spans.py",
+     "line": 76,
+     "scenario": "Verified by calling classify_command_span: ['git','diff','--stat','--patch-with-stat'] returns 'allow' while ['git','diff','--stat','-p'] returns 'capture'. In _git_span, summary is True via --stat; patch is False because --patch-with-stat is not in _GIT_PATCH_FLAGS, does not start with --unified and does not start with -U, so `return ALLOW if summary and not patch else CAPTURE` yields ALLOW. hook.py:1535-1545 maps that to bounded_command/structured_result -> choose_guard -> 'allow' -> DECISION_ALLOW, and the entire unified diff of the worktree goes straight into model context instead of through ctx run. The --patch-with-raw entry beside it shows the flag family was known.",
+     "severity": "low",
+     "summary": "_GIT_PATCH_FLAGS lists --patch-with-raw but omits its sibling --patch-with-stat, so a git diff that emits a full patch is classified ALLOW and unbounded output passes the guard whenever a summary flag is also present."
+    },
+    {
+     "file": "src/ctx/catalog.py",
+     "line": 64,
+     "scenario": "The shipped table (ctx/data/model-catalog.json) contains the general row match: 'claude-opus'. A repo adds .ctx-catalog.json with {'models':[{'match':'claude-opus-4.6','latency_class':'deliberate',...}]}. by_match is seeded from the shipped rows in order, then setdefault('claude-opus-4.6', {}).update(row) inserts the override as the LAST key, so list(by_match.values()) ends with it. entry_for('claude-opus-4.6') iterates in that order (line 93) and _token_matches('claude-opus','claude-opus-4.6') succeeds first, returning the shipped general row -- the override is silently ignored. pricing.py:137 does the opposite for the identical mechanism (models = list(override...) + models, 'the override's rows are tried before the shipped rows'), which entry_for's docstring claims this module mirrors.",
+     "severity": "low",
+     "summary": "The workspace override merge appends rows with a new `match` key to the END of the model list, contradicting the documented specific->general first-match order, so a repo override for a specific model id is shadowed by a more general shipped row."
+    },
+    {
+     "file": "src/ctx/query.py",
+     "line": 810,
+     "scenario": "`ctx q 'callers TokenBucket | group file | top 3'`. _stage_callers returns Stream(..., omitted=hidden, omitted_reason=_UNSCOPED_REASON). _stage_group constructs Stream(stream.kind, rows, omitted=stream.omitted) with no omitted_reason, and _stage_top, _stage_where, _stage_files, _stage_count, _stage_distinct, _stage_histogram, _stage_outline, _stage_get and facts' _stage_in_changed/_stage_shared_cause all do the same. _render then falls back to `out.omitted_reason or 'declared; narrow with where/top'`, printing 'capped: N rows omitted upstream (declared; narrow with where/top)' for drops that no narrowing recovers -- the 'drop declared with the wrong remedy' the field's own comment at query.py:130-133 was added to prevent. `coverage` IS explicitly propagated by the executor (query.py:1245), showing carry-through was the intent.",
+     "severity": "low",
+     "summary": "Every combinator stage rebuilds Stream carrying `omitted` but dropping `omitted_reason`, so an unscoped-edge omission is re-declared with the generic remedy that cannot recover it."
+    },
+    {
+     "file": "src/ctx/jobs.py",
+     "line": 410,
+     "scenario": "deadline = time.monotonic() + settle_s (8.0 s) is set once at line 394. If the supervisor is slow to reach 'running' (loaded host, cold Python import) and the first loop spends ~8 s polling before meta.get('pid') appears, control reaches line 404 with state == 'running', os.killpg is delivered successfully, and then `while time.monotonic() < deadline:` at line 410 is already false -- the body never executes. meta is still the pre-kill snapshot with state 'running', so line 418 raises JobError('job <id>: kill signalled but state did not settle') and finalize_job is never called, even though the group was killed and the supervisor writes 'done' milliseconds later.",
+     "severity": "low",
+     "summary": "kill_job shares one settle_s deadline between the wait-for-pid phase and the post-signal settle phase, so a slow start makes the settle loop run zero iterations and report failure for a kill that actually worked."
+    },
+    {
+     "file": "src/ctx/plan_ops.py",
+     "line": 714,
+     "scenario": "A plan step {'op':'code.context','args':{'context':0}} -- the one spelling that means 'the matched line only'. int(args.get('context', 3) or 3) evaluates 0 or 3 -> 3, so a, b = line-3, line+3 and each site materializes 7 lines. Verified: max(0, int({'context':0}.get('context',3) or 3)) == 3 while {'context':1} correctly gives 1. bounds.explicit exists to prevent exactly this (its docstring names `ctx ask --depth 0` and `ctx gc --retention-days 0`) and is already used for cap/limit five other places in this same file, but not here, where the failure direction is MORE emitted bytes on a terminal materialization node.",
+     "severity": "low",
+     "summary": "code.context uses the falsy-zero `or default` idiom for the context radius, so an explicit \"context\": 0 silently becomes 3 and the node emits seven lines per site instead of one."
+    },
+    {
+     "file": "src/ctx/astgrep.py",
+     "line": 522,
+     "scenario": "Non-git workspace (so generation_hash returns None) where ws.list_files() raises (unreadable directory, permission error mid-walk). rewrite_preview records generation == 'unknown'; the worktree is then edited; rewrite_apply recomputes 'unknown' and `gen_now != expect_generation` is False, so the stale patch is handed to git apply even though its freshness was never verified. The comment on line 522 states 'refuses on compare: two \"unknown\"s are not equal', which is false for Python string equality.",
+     "severity": "low",
+     "summary": "_guard_state returns the literal string 'unknown' on failure, which compares EQUAL to itself, so the rewrite freshness guard passes instead of refusing -- the opposite of what the inline comment asserts."
+    },
+    {
+     "file": "src/ctx/execution.py",
+     "line": 177,
+     "scenario": "run_capture(ws, argv, stdin_bytes=b'...') opens in_fh at line 177. Its only close is the `finally` at lines 191-193, which belongs to the inner try starting at line 179 -- reached only after `with out_path.open('wb') as out_fh, err_path.open('wb') as err_fh:` on line 178 has succeeded. If that open fails (EMFILE from a caller that exhausted its fd budget, or ENOSPC on the temp filesystem), the exception propagates to the outer finally at line 198, which unlinks the spool files and rmdirs the tmpdir but never closes in_fh; the descriptor stays open on an unlinked file. Separately, lines 168-174 (mkdtemp and in_path.write_bytes) sit outside that outer try, so a failure writing the stdin spool leaves the ctx-cap-* directory behind permanently.",
+     "severity": "low",
+     "summary": "run_capture opens the stdin spool before the with-block that owns its close, so a failure opening the stdout/stderr spools leaks the stdin file handle, and the tmpdir creation sits outside the cleanup try."
+    },
+    {
+     "file": "src/ctx/orchestrator.py",
+     "line": 1226,
+     "scenario": "Inside `with _CHECKPOINT_LOCK`, a Store is opened at line 1226 and closed only at line 1235 after store.put_blob and create_checkpoint both succeed. If either raises (disk full, sqlite WAL/IO error, retention pruning failure -- the conditions the outer `except Exception: return None` at line 1237 is written for), store.close() is skipped and the function returns None. It is called once per attempt per node from parallel wave threads plus twice more per node in the merge path, so a route hitting a persistent store error opens and abandons one sqlite connection per call.",
+     "severity": "low",
+     "summary": "_checkpoint_node opens a Store (sqlite connection) with no try/finally, so the connection is never closed on the exact error paths its fail-open wrapper exists to absorb."
+    },
+    {
+     "file": "src/ctx/store.py",
+     "line": 166,
+     "scenario": "os.fdopen's context manager closes fd on both normal and exceptional exit, so for every failure after fdopen succeeds -- fh.write/os.fsync raising ENOSPC or EIO on a full or read-only-remounted store root, or os.unlink(probe) at line 163 raising EACCES on a sticky directory -- fd is already closed when line 166 runs. Single-threaded this only raises EBADF (swallowed); in the orchestrator, which resolves store locations from ThreadPoolExecutor wave threads, another thread may already have been handed the same integer by open()/socket(), and this closes that thread's file out from under it. The handler is correct only for the one case where os.fdopen itself raises.",
+     "severity": "low",
+     "summary": "_probe_writable's exception handler closes a file descriptor that the `with os.fdopen(fd)` block has already closed, which in the orchestrator's thread pool can close an unrelated, freshly-recycled descriptor."
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "line": 298,
+     "scenario": "Verified by executing it: command_signature(\"pytest tests/x.py -k 'auth and login'\") yields 'pytest tests/x.py -k auth and login', and is_narrower(\"pytest tests/x.py -k 'auth and login'\", 'pytest tests/x.py') returns False even though it is a strictly narrower run (same target, extra scope constraint). check_command's narrowing branch therefore never records the narrowed_execution positive and the open hypothesis window expires as censored; in the other direction is_narrower(that signature, 'pytest') returns True on the strength of the phantom 'and'/'login' targets.",
+     "severity": "low",
+     "summary": "_signature_parts joins a scope flag and its value with a space and _split_signature re-splits on whitespace, so a scope-flag value containing spaces is parsed back as phantom positional targets and breaks the narrowing relation."
+    },
+    {
+     "file": "src/ctx/surface_profiles.py",
+     "line": 85,
+     "scenario": "load_profile takes authority_ceiling from [surface.profiles.<name>] in ctx.toml via str(spec.get('authority_ceiling','destructive')) and never validates it against AUTHORITY_ORDER. A profile written as authority_ceiling = 'readonly' (or 'local_write', 'read-only') makes order.index(ceiling) raise ValueError and the handler returns True for every capability, so select() keeps destructive- and remote-write-authority MCP servers the profile was written to exclude, and check()'s defensive re-test calls the same helper and reports 'checks: clean'. The compiled per-host config is emitted with the unintended servers and no issue is surfaced.",
+     "severity": "low",
+     "summary": "_authority_ok fails open on an unrecognised authority_ceiling, so a typo in a repo-defined profile silently removes the authority gate entirely instead of being reported."
+    },
+    {
+     "file": "src/ctx/textutil.py",
+     "line": 180,
+     "scenario": "`ctx get <ref> --json-pointer '/\u00b2'` against a JSON array. '\u00b2'.isdigit() is True and does not start with '0', so the guard at line 180 passes and int('\u00b2') raises. Verified by executing it: json_pointer([1,2,3], '/\u00b2') raises ValueError: invalid literal for int() with base 10: '\u00b2', bypassing the JsonPointerError contract callers rely on to turn a bad pointer into a message rather than a traceback.",
+     "severity": "low",
+     "summary": "json_pointer validates array indices with str.isdigit(), which accepts non-ASCII digit characters that int() then rejects, so a raw ValueError escapes instead of the JsonPointerError every caller catches."
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "line": 1592,
+     "scenario": "The query engine appends a line to .ctx-session-reads/q-dry.jsonl while a hook process runs check_command on a `ctx q ...` command. fh.read().splitlines() yields the incomplete final line, json.loads raises and the loop continues (lines 1561-1562), then state['q_ops'] = len(lines) counts that partial line as consumed. The next fold starts after it, so the completed dry_query_rerun/recovered event is lost permanently. hook.py's _failure_available solves exactly this case (cut = chunk.rfind(b'\\n'), 'a partial trailing line ... is left for the next call'); this reader does not.",
+     "severity": "low",
+     "summary": "_fold_q_ledger advances the q_ops cursor past a partially written trailing line of q-dry.jsonl, so a q event caught mid-append is skipped and never re-scored once the writer completes it."
+    },
+    {
+     "file": "src/ctx/stream_rules.py",
+     "line": 69,
+     "scenario": "A state file containing {'schema':'ctx.stream-rule/v1','fires':null,'activated':null} (truncated, hand-edited, or written by an older schema) passes load_state's only check (isinstance(doc, dict)) and is returned verbatim. StreamRuleEngine(rules, prior_state=that) then evaluates state.get('fires', {}) -> None and calls raw_counts.get(...), raising AttributeError: 'NoneType' object has no attribute 'get'. A non-list 'activated' raises TypeError and a non-numeric fire count raises ValueError, all contradicting load_state's documented contract that 'malformed or absent state means a fresh engine'.",
+     "severity": "low",
+     "summary": "StreamRuleEngine.__init__ assumes the persisted 'fires'/'activated' values have the right types, so a state document that load_state deliberately returns fail-open crashes the constructor instead of producing a fresh engine."
+    },
+    {
+     "file": "src/ctx/route_telemetry.py",
+     "line": 133,
+     "scenario": "A schema-valid route.jsonl row whose task_profile is {} passes load_route_runs. The key set at line 137 evaluates str(row.get('task_profile',{}).get('kind','unknown')) -> 'unknown', but the count at line 133 evaluates row.get('task_profile',{}).get('kind') -> None, and None == 'unknown' is False. The summary reports {'kinds': {'unknown': 0}} and the histogram no longer sums to `runs`. The same asymmetry drops a non-string kind: 'kind': 5 keys as '5' but counts 0.",
+     "severity": "low",
+     "summary": "route_summary builds the kinds histogram keys with an 'unknown' default and str() coercion but counts them with the raw defaultless value, so any run lacking task_profile.kind produces a bucket that is always 0."
+    },
+    {
+     "file": "src/ctx/replay.py",
+     "line": 477,
+     "scenario": "followups_from_session is called with session_complete=False (replay.py:437), so every window still open at transcript end is censored. One emission for operator profile:pytest/v1 whose command signature is re-issued two actions later with no intervening edit sets equivalent_requery=True (evidence_outcomes.py:480); the window never reaches max_actions=6 and is closed censored. The bucket is obs=1, censored=1, equivalent_requery=1, so non_censored = 0 and cell(1, 0) renders '--': a detected requery is reported as no observation at all. With several such windows plus one non-censored one the same code prints a rate above 100%.",
+     "severity": "low",
+     "summary": "render_outcomes removes censored windows from the requery denominator but not from its numerator, so the reported requery count can exceed the denominator or vanish behind an em dash when the denominator reaches zero."
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "line": 820,
+     "scenario": "`ctx callers get --unscoped` on a repo where defs_by_name['get'] holds ~50 definitions each with ~100 in-edges: entries reaches ~5,000 rows and prod ~4,000, so `e not in prod` performs ~20M tuple comparisons to produce at most 40 printed rows. The membership target is already fully computed on the line above, so the second pass buys nothing but the blowup; a set of ids or a single partitioning pass is equivalent.",
+     "severity": "low",
+     "summary": "The production/test partition in _rows uses list membership against the production list, making row rendering quadratic in the number of caller entries."
+    },
+    {
+     "file": "src/ctx/digest/searchprof.py",
+     "line": 129,
+     "scenario": "grep over this repo produces top_file src/ctx/digest/lintprof.py; short_path shortens it to digest/lintprof.py and the digest emits `ctx search run:<id> '<narrower>' --glob 'digest/lintprof.py'`. Two independent failures: cli.py:388 documents --glob as a path glob for repo: searches and _retrieval/search.py never threads glob into the ref.kind == 'run' branch, so the filter is a silent no-op; and the shortened path is anchored under gitwildmatch, so pathglob.matches('src/ctx/digest/lintprof.py','digest/lintprof.py') is False and the same suggestion against a repo: ref would return nothing.",
+     "severity": "low",
+     "summary": "search/v1 suggests --glob with a short_path-truncated file path against a run: reference, where the flag is both silently ignored and would not match even if honoured."
+    },
+    {
+     "file": "src/ctx/astgrep.py",
+     "line": 356,
+     "scenario": "ast_search with the ast-grep binary absent and ast-grep-py present: rows holds one entry per MATCH (`for node in matches: rows.append(...)`), so a single file with 300 matches yields meta['files_previewed'] = 200 and meta['note'] = '100 of 300 changed files are NOT shown below but ARE in the patch ... before ast.rewrite.apply'. No patch was computed on this code path, no file was changed, and the count is matches rather than files. The binary rung of the same ast_search emits neither key, so the op's meta silently changes shape with the rung.",
+     "severity": "low",
+     "summary": "The library and regex search rungs copy the rewrite-preview meta block, reporting per-match row counts as files_previewed and telling the user the omitted entries 'ARE in the patch' when a search produced no patch at all."
+    },
+    {
+     "file": "src/ctx/rundiff.py",
+     "line": 70,
+     "scenario": "_pytest_failures (line 70) and _fail_blocks (line 81) enumerate text.splitlines() to produce line numbers, and the anchors set at line 231 does the same; those numbers are passed straight to store.register_span(blob_b, 'region', a=start, b=end) at line 240. Store.line_index (store.py:484) builds its offsets by scanning only b'\\n'. For pytest output carrying a bare \\r (captured tqdm/progress output, pytest-xdist worker chatter), every span minted for a new failure points at the wrong region of the blob, and lines_b_total (line 196, taken from the manifest's \\n count) disagrees with the coordinates _span_end clamps against.",
+     "severity": "low",
+     "summary": "run_diff derives failure line numbers with str.splitlines() and mints them as store span coordinates, which are resolved against the store's \\n-only line index -- the same split mismatch as digest/base.py, in a second file."
+    }
+   ]
+  },
+  "verify": {
+   "claimed": 66,
+   "refuted": [],
+   "verified": [
+    {
+     "file": "src/ctx/hook.py",
+     "line": 2050,
+     "summary": "collapse/substitute surface turns secret-path force_ask into allow+rewrite",
+     "test": "tests/test_improve_round.py::test_collapse_does_not_bypass_secret_path_force_ask"
+    },
+    {
+     "file": "src/ctx/hook.py",
+     "line": 1837,
+     "summary": "classify_read resolves relative paths against process CWD instead of workspace_root",
+     "test": "tests/test_improve_round.py::test_classify_read_relative_path_matches_workspace_root"
+    },
+    {
+     "file": "src/ctx/textutil.py",
+     "line": 16,
+     "summary": "unterminated OSC sequence in _ANSI_RE deletes rest of digest",
+     "test": "tests/test_improve_round.py::test_strip_control_unterminated_osc_does_not_eat_remainder"
+    },
+    {
+     "file": "src/ctx/digest/base.py",
+     "line": 36,
+     "summary": "StreamView.text_lines uses str.splitlines() vs store's \\n-only line index",
+     "test": "tests/test_improve_round.py::test_stream_view_text_lines_matches_store_nl_only_split"
+    },
+    {
+     "file": "src/ctx/installer.py",
+     "line": 54,
+     "summary": "generated ctx.toml pins only 3 of 16 redaction patterns",
+     "test": "tests/test_improve_round.py::test_generated_ctx_toml_redacts_common_secret_types"
+    },
+    {
+     "file": "src/ctx/plan_exec.py",
+     "line": 286,
+     "summary": "explicit wall_seconds:null passes validation then crashes execute_plan",
+     "test": "tests/test_improve_round.py::test_explicit_null_wall_seconds_passes_validation_but_crashes_execute"
+    },
+    {
+     "file": "src/ctx/orchestrator.py",
+     "line": 900,
+     "summary": "wait_or_kill(proc,0) misses orphaned grandchild when leader already exited",
+     "test": "tests/test_improve_round.py::test_wait_or_kill_zero_misses_the_orphaned_grandchild_when_leader_already_exited"
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "line": 740,
+     "summary": "dotted query silently falls back to unrelated bare-name match",
+     "test": "tests/test_improve_round.py::test_dotted_query_with_no_qualified_match_does_not_silently_answer_for_a_different_symbol"
+    },
+    {
+     "file": "src/ctx/_retrieval/get.py",
+     "line": 194,
+     "summary": "_fit_window kept=max(1,kept) emits inverted continuation range",
+     "test": "tests/test_improve_round.py::test_fit_window_never_emits_an_inverted_continuation_for_an_oversized_single_line"
+    },
+    {
+     "file": "src/ctx/command_spans.py",
+     "line": 151,
+     "summary": "gh api attached-shorthand mutation flags (-XDELETE) misclassified as read-only",
+     "test": "tests/test_improve_round.py::test_gh_api_attached_shorthand_mutation_flags_are_recognised_as_mutations"
+    },
+    {
+     "file": "src/ctx/substitute.py",
+     "line": 335,
+     "summary": "bare-identifier collapse discards directory scope / widens multi-path search",
+     "test": "tests/test_improve_round.py::test_bare_identifier_grep_keeps_the_callers_directory_scope / test_bare_identifier_grep_over_multiple_paths_declines_rather_than_widening"
+    },
+    {
+     "file": "src/ctx/substitute.py",
+     "line": 208,
+     "summary": "glob-scoping flags (--glob/--include) dropped, collapse widens to whole repo",
+     "test": "tests/test_improve_round.py::test_glob_flag_scope_carried_through_rg / test_include_flag_scope_carried_through_grep"
+    },
+    {
+     "file": "src/ctx/hook.py",
+     "line": 1512,
+     "summary": "compound-shell rewrite of never-terminating piped command omits --bg",
+     "test": "tests/test_improve_round.py::test_piped_follow_forever_rewrite_gets_bg"
+    },
+    {
+     "file": "src/ctx/mcp.py",
+     "line": 421,
+     "summary": "MCP stdio serve loop crashes on non-object JSON line (e.g. batch array)",
+     "test": "tests/test_improve_round.py::test_serve_survives_non_object_json_line"
+    },
+    {
+     "file": "src/ctx/surface_gateway.py",
+     "line": 409,
+     "summary": "gateway serve loop crashes on non-object JSON line, kills all proxied backends",
+     "test": "tests/test_improve_round.py::test_serve_gateway_survives_non_object_json_line"
+    },
+    {
+     "file": "src/ctx/config.py",
+     "line": 308,
+     "summary": "load_config raises AttributeError when a toml section is a scalar not a table",
+     "test": "tests/test_improve_round.py::test_scalar_budgets_section_fails_open / test_scalar_guard_section_fails_open"
+    },
+    {
+     "file": "src/ctx/installer.py",
+     "line": 461,
+     "summary": "_hook_command_present treats any-stage hook presence as fully installed",
+     "test": "tests/test_improve_round.py::test_reinstall_adds_missing_hook_stage"
+    },
+    {
+     "file": "src/ctx/store.py",
+     "line": 669,
+     "summary": "gc() mark/sweep race deletes objects written during the gc window",
+     "test": "tests/test_improve_round.py::test_gc_race_deletes_concurrently_written_object"
+    },
+    {
+     "file": "src/ctx/worktree_isolation.py",
+     "line": 194,
+     "summary": "cleanup prunes before rmtree, leaking stale worktree admin entry on remove failure",
+     "test": "tests/test_improve_round.py::test_cleanup_leaks_stale_worktree_admin_entry_when_remove_fails"
+    },
+    {
+     "file": "src/ctx/orchestrator.py",
+     "line": 2003,
+     "summary": "_merge_patch's _coerce_node call sits outside the RouteError suppress guard",
+     "test": "tests/test_improve_round.py::test_merge_patch_lets_route_error_escape_from_bad_replan_node"
+    },
+    {
+     "file": "src/ctx/jobs.py",
+     "line": 235,
+     "summary": "start_job's non-atomic read-modify-write clobbers supervisor's running state",
+     "test": "tests/test_improve_round.py::test_start_job_read_modify_write_clobbers_concurrent_running_state"
+    },
+    {
+     "file": "src/ctx/proxy.py",
+     "line": 327,
+     "summary": "_relay retry re-acquires from stale pool instead of forcing a fresh connection",
+     "test": "tests/test_improve_round.py::test_relay_reconnects_instead_of_502ing_when_pool_is_idle_expired"
+    },
+    {
+     "file": "src/ctx/pathglob.py",
+     "line": 43,
+     "summary": "matches() strips leading ./ from path but not from pattern",
+     "test": "tests/test_improve_round.py::test_matches_normalizes_leading_dot_slash_off_pattern_too"
+    },
+    {
+     "file": "src/ctx/digest/jsonprof.py",
+     "line": 44,
+     "summary": "_dominant_array builds unescaped JSON pointer prefix from object key",
+     "test": "tests/test_improve_round.py::test_dominant_array_prefix_is_rfc6901_escaped"
+    },
+    {
+     "file": "src/ctx/binfmt.py",
+     "line": 218,
+     "summary": "inspect() sniffs only 64 bytes vs sniff_format's 1KiB NUL heuristic",
+     "test": "tests/test_improve_round.py::test_inspect_sniffs_with_a_window_wide_enough_to_match_sniff_format"
+    },
+    {
+     "file": "src/ctx/statusline.py",
+     "line": 311,
+     "summary": "codex_rollout_summary double-charges cached input tokens",
+     "test": "tests/test_improve_round.py::test_codex_rollout_summary_treats_cached_input_as_subset"
+    },
+    {
+     "file": "src/ctx/evidence_outcomes.py",
+     "line": 314,
+     "summary": "failing_ids intersection drops all parametrized pytest node ids",
+     "test": "tests/test_improve_round.py::test_failing_ids_preserves_parametrized_bracket_suffix"
+    },
+    {
+     "file": "src/ctx/replay.py",
+     "line": 290,
+     "summary": "downstream_facts evidence-sufficiency check is tautological",
+     "test": "tests/test_improve_round.py::test_downstream_gap_detected_even_when_absent_from_harnessed_digest"
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "line": 481,
+     "summary": "loose .py file in prefix dir poisons it as a package root",
+     "test": "tests/test_improve_round.py::test_loose_top_level_file_does_not_poison_src_as_package_root"
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "line": 582,
+     "summary": "inheritance edges discard resolution tier, unscoped matches undisclosed",
+     "test": "tests/test_improve_round.py::test_unscoped_inheritance_edge_is_disclosed"
+    },
+    {
+     "file": "src/ctx/scip_ingest.py",
+     "line": 147,
+     "summary": "SCIP ref lookup matches bare last identifier, collides unrelated symbols",
+     "test": "tests/test_improve_round.py::test_scip_refs_bare_name_match_conflates_unrelated_symbols"
+    },
+    {
+     "file": "src/ctx/skeleton.py",
+     "line": 536,
+     "summary": "ast skeleton extractor never recurses into try/if/with bodies",
+     "test": "tests/test_improve_round.py::test_ast_skeleton_sees_definitions_nested_in_try_except"
+    },
+    {
+     "file": "src/ctx/ladders.py",
+     "line": 549,
+     "summary": "measure_corpus omits 'reason' key for unmeasurable ladder, report_corpus KeyErrors",
+     "test": "tests/test_improve_round.py::test_report_corpus_handles_an_unmeasurable_ladder_over_an_empty_corpus"
+    },
+    {
+     "file": "src/ctx/seq.py",
+     "line": 63,
+     "summary": "ExecutionError branch in run_seq breaks unconditionally, ignoring halt_on_fail",
+     "test": "tests/test_improve_round.py::test_seq_keep_going_survives_a_step_that_fails_to_spawn"
+    },
+    {
+     "file": "src/ctx/surface.py",
+     "line": 900,
+     "summary": "preflight probes MCP servers serially, N*timeout exceeds SessionStart budget",
+     "test": "tests/test_improve_round.py::test_probe_surface_does_not_serialize_unboundedly_past_its_own_timeout"
+    },
+    {
+     "file": "src/ctx/surface_reconcile.py",
+     "line": 138,
+     "summary": "required_families re-applies mcp__ prefix regex to already-decoded names",
+     "test": "tests/test_improve_round.py::test_required_families_recognizes_already_decoded_server_names"
+    },
+    {
+     "file": "src/ctx/digest/evidence_render.py",
+     "line": 445,
+     "summary": "_render_flood rebuilds whole census at every k, quadratic in item count",
+     "test": "tests/test_improve_round.py::test_flood_render_scales_linearly_not_quadratically_with_item_count"
+    },
+    {
+     "file": "src/ctx/scorecard.py",
+     "line": 721,
+     "summary": "attach_deliverable treats collapsed untracked directory as one file",
+     "test": "tests/test_improve_round.py::test_scorecard_counts_files_and_lines_in_a_new_untracked_directory"
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "line": 312,
+     "summary": "_signature_parts keeps redirect target filename as a positional token",
+     "test": "tests/test_improve_round.py::test_redirection_targets_do_not_change_the_signature"
+    },
+    {
+     "file": "src/ctx/plan_ir.py",
+     "line": 241,
+     "summary": "_budget_int doesn't catch OverflowError for Infinity budget values",
+     "test": "tests/test_improve_round.py::test_infinite_budget_degrades_to_rejection_not_overflow"
+    },
+    {
+     "file": "src/ctx/commands/emit.py",
+     "line": 151,
+     "summary": "investigate emission outcome test inverted, successful runs classified failure",
+     "test": "tests/test_improve_round.py::test_investigation_with_candidates_is_not_classified_failure"
+    },
+    {
+     "file": "src/ctx/steward.py",
+     "line": 78,
+     "summary": "_AUTH matches bare '401' substring anywhere in output, misclassifies auth_failure",
+     "test": "tests/test_improve_round.py::test_bare_401_substring_in_unrelated_output_is_not_auth_failure"
+    },
+    {
+     "file": "src/ctx/facts.py",
+     "line": 898,
+     "summary": "_newest_captured returns 64-hex id while fail.run_id stores 12-hex short id",
+     "test": "tests/test_improve_round.py::test_newest_captured_matches_fail_table_run_id_format"
+    },
+    {
+     "file": "src/ctx/query.py",
+     "line": 590,
+     "summary": "_stage_search numbers lines with str.splitlines() vs house \\n-only geometry",
+     "test": "tests/test_improve_round.py::test_search_line_numbers_match_house_nl_only_geometry"
+    },
+    {
+     "file": "src/ctx/_retrieval/get.py",
+     "line": 574,
+     "summary": "truncation continuation handle drops --json-pointer selector",
+     "test": "tests/test_improve_round.py::test_json_pointer_truncation_handle_preserves_selector"
+    },
+    {
+     "file": "src/ctx/_retrieval/targets.py",
+     "line": 143,
+     "summary": "_resolve_repo_targets reports post-cap count as 'considered' with no omission signal",
+     "test": "tests/test_improve_round.py::test_resolve_repo_targets_considered_count_discloses_the_cap"
+    },
+    {
+     "file": "src/ctx/command_spans.py",
+     "line": 76,
+     "summary": "_GIT_PATCH_FLAGS omits --patch-with-stat, full patch diff classified ALLOW",
+     "test": "tests/test_improve_round.py::test_git_diff_patch_with_stat_is_classified_as_capture_not_allow"
+    },
+    {
+     "file": "src/ctx/catalog.py",
+     "line": 64,
+     "summary": "workspace override merge appends new specific match after general shipped row",
+     "test": "tests/test_improve_round.py::test_workspace_override_with_new_specific_match_beats_general_shipped_row"
+    },
+    {
+     "file": "src/ctx/query.py",
+     "line": 810,
+     "summary": "combinator stages drop omitted_reason, unscoped omission loses specific remedy",
+     "test": "tests/test_improve_round.py::test_unscoped_omission_reason_survives_group_and_top"
+    },
+    {
+     "file": "src/ctx/jobs.py",
+     "line": 410,
+     "summary": "kill_job shares one settle_s deadline between wait-for-pid and post-signal phases",
+     "test": "tests/test_improve_round.py::test_kill_job_shared_deadline_fails_a_successful_kill_after_slow_start"
+    },
+    {
+     "file": "src/ctx/plan_ops.py",
+     "line": 714,
+     "summary": "code.context uses falsy-zero 'or default' idiom, context:0 becomes 3",
+     "test": "tests/test_improve_round.py::test_code_context_explicit_zero_is_not_silently_widened_to_default"
+    },
+    {
+     "file": "src/ctx/astgrep.py",
+     "line": 522,
+     "summary": "_guard_state returns 'unknown' literal that compares equal to itself, fails open",
+     "test": "tests/test_improve_round.py::test_unverifiable_guard_state_fails_open_instead_of_refusing"
+    },
+    {
+     "file": "src/ctx/execution.py",
+     "line": 177,
+     "summary": "run_capture leaks stdin spool fd when stdout spool open fails",
+     "test": "tests/test_improve_round.py::test_run_capture_leaks_stdin_spool_fd_when_stdout_spool_open_fails"
+    },
+    {
+     "file": "src/ctx/orchestrator.py",
+     "line": 1226,
+     "summary": "_checkpoint_node opens Store with no try/finally, leaks sqlite connection",
+     "test": "tests/test_improve_round.py::test_checkpoint_node_closes_store_connection_on_create_checkpoint_failure"
+    },
+    {
+     "file": "src/ctx/store.py",
+     "line": 166,
+     "summary": "_probe_writable's except handler double-closes fd, can close unrelated recycled fd",
+     "test": "tests/test_improve_round.py::test_probe_writable_does_not_close_an_unrelated_recycled_fd"
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "line": 298,
+     "summary": "scope-flag value with spaces re-split into phantom positional targets",
+     "test": "tests/test_improve_round.py::test_scope_flag_value_with_spaces_breaks_narrower_comparison"
+    },
+    {
+     "file": "src/ctx/surface_profiles.py",
+     "line": 85,
+     "summary": "_authority_ok fails open on unrecognised authority_ceiling",
+     "test": "tests/test_improve_round.py::test_authority_ok_fails_open_on_unrecognized_ceiling"
+    },
+    {
+     "file": "src/ctx/textutil.py",
+     "line": 180,
+     "summary": "json_pointer's str.isdigit() accepts non-ASCII digits that int() rejects, raw ValueError escapes",
+     "test": "tests/test_improve_round.py::test_json_pointer_raises_pointer_error_not_raw_value_error"
+    },
+    {
+     "file": "src/ctx/reflex.py",
+     "line": 1592,
+     "summary": "_fold_q_ledger advances cursor past partially-written trailing line",
+     "test": "tests/test_improve_round.py::test_fold_q_ledger_does_not_consume_a_partial_trailing_line"
+    },
+    {
+     "file": "src/ctx/stream_rules.py",
+     "line": 69,
+     "summary": "StreamRuleEngine constructor crashes on None-valued persisted fires/activated",
+     "test": "tests/test_improve_round.py::test_stream_rule_engine_handles_none_valued_persisted_state"
+    },
+    {
+     "file": "src/ctx/route_telemetry.py",
+     "line": 133,
+     "summary": "route_summary kinds histogram key/count default mismatch, always 0 for missing kind",
+     "test": "tests/test_improve_round.py::test_route_summary_kinds_histogram_counts_missing_kind_as_zero"
+    },
+    {
+     "file": "src/ctx/replay.py",
+     "line": 477,
+     "summary": "render_outcomes drops censored windows from numerator, hides detected requery",
+     "test": "tests/test_improve_round.py::test_render_outcomes_hides_requery_when_window_is_censored"
+    },
+    {
+     "file": "src/ctx/callgraph.py",
+     "line": 820,
+     "summary": "production/test partition in _rows uses list membership, quadratic in caller count",
+     "test": "tests/test_improve_round.py::test_rows_production_partition_is_not_quadratic"
+    },
+    {
+     "file": "src/ctx/digest/searchprof.py",
+     "line": 129,
+     "summary": "search/v1 suggests --glob against run: ref where glob is a silent no-op",
+     "test": "tests/test_improve_round.py::test_search_v1_run_glob_suggestion_never_filters_run_search"
+    },
+    {
+     "file": "src/ctx/astgrep.py",
+     "line": 356,
+     "summary": "library/regex search rungs report match count as files_previewed, false patch claim",
+     "test": "tests/test_improve_round.py::test_lib_search_files_previewed_counts_matches_not_files / test_lib_search_omission_note_does_not_claim_a_patch"
+    },
+    {
+     "file": "src/ctx/rundiff.py",
+     "line": 70,
+     "summary": "_pytest_failures mints line numbers with str.splitlines(), mismatches store's \\n-only index",
+     "test": "tests/test_improve_round.py::test_pytest_failures_line_numbers_match_store_line_index"
+    }
+   ]
+  }
+ }
+}

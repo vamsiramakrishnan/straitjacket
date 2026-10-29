@@ -135,7 +135,8 @@ def required_families(ws_root: Path | str, records: list[surface.Capability]) ->
     req: set[str] = set()
     provider_family = {c.provider: c.family for c in records if c.kind in ("mcp_server", "mcp_tool")}
     for c in records:
-        for srv in (surface._MCP_REF_RE.findall(" ".join(c.requires)) if c.requires else []):
+        # c.requires already holds bare decoded names, not "mcp__"-prefixed text -- use as-is
+        for srv in (c.requires or ()):
             if srv in provider_family:
                 req.add(provider_family[srv])
     return req

@@ -162,10 +162,9 @@ def _probe_writable(root: Path) -> None:
             os.fsync(fh.fileno())
         os.unlink(probe)
     except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        # os.fdopen's `with` block already closed fd on the way out (even on
+        # exception) -- closing it again here could hit an unrelated fd the OS
+        # already recycled for a new open elsewhere.
         try:
             os.unlink(probe)
         except OSError:
@@ -304,6 +303,11 @@ CREATE TABLE IF NOT EXISTS leases (
     reason TEXT NOT NULL,         -- retention | pin | checkpoint
     expires_at REAL,              -- NULL = pinned forever
     PRIMARY KEY (id, reason)
+);
+CREATE TABLE IF NOT EXISTS artifact_edges (
+    source TEXT NOT NULL,
+    target TEXT NOT NULL,
+    PRIMARY KEY (source, target)
 );
 CREATE TABLE IF NOT EXISTS turn_usage (
     conversation_id TEXT NOT NULL,
@@ -587,6 +591,20 @@ class Store:
                 (obj_id, reason, expires),
             )
 
+    def link_artifacts(self, source: str, value: object) -> None:
+        """Declare immutable artifact dependencies for transitive retention.
+
+        Opaque blobs stay opaque. Publishers of structured artifacts supply
+        their reference-bearing document; GC need not guess JSON or parse code.
+        Republishing can add retention roots but never removes prior edges.
+        """
+        source = source.removeprefix("blob:").removeprefix("sha256:")
+        source = self.resolve_id(source, kinds=("blob",))
+        targets = _referenced_blobs(value) - {source}
+        with self.db:
+            self.db.executemany("INSERT OR IGNORE INTO artifact_edges(source,target) VALUES (?,?)",
+                                [(source, target) for target in targets])
+
     def pin(self, obj_id: str) -> None:
         self.lease(self.resolve_id(obj_id), "pin", ttl_days=None)
 
@@ -649,14 +667,24 @@ class Store:
         # data loss, and the field list would have had to grow by hand for
         # every future kind. Over-marking is the safe direction for a
         # collector -- an extra live id merely survives a cycle.
-        for mid in list(live):
+        pending = list(live)
+        visited = set()
+        while pending:
+            mid = pending.pop()
+            if mid in visited:
+                continue
+            visited.add(mid)
+            references = {r[0] for r in self.db.execute(
+                "SELECT target FROM artifact_edges WHERE source=?", (mid,))}
             mpath = self.manifest_dir / f"{mid}.json"
             if mpath.is_file():
                 try:
                     manifest = json.loads(mpath.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
-                    continue
-                live |= _referenced_blobs(manifest)
+                    manifest = {}
+                references |= _referenced_blobs(manifest)
+            live |= references
+            pending.extend(references - visited)
         removed_blobs = removed_manifests = 0
         # Files are unlinked eagerly per object (unchanged); the two catalog
         # DELETEs are batched into one transaction with executemany instead
@@ -666,9 +694,17 @@ class Store:
         # (surviving vs removed objects, return value) is unchanged; only
         # the number of commits shrinks.
         dead_ids: list[str] = []
-        for row in self.db.execute("SELECT id, kind FROM objects").fetchall():
+        candidates = self.db.execute("SELECT id, kind FROM objects").fetchall()
+        # Re-query recency here, right before deciding deadness, to close the window
+        # between mark (`recent` above) and sweep: an object written in between --
+        # like a concurrent put_blob -- is still within retention and must survive.
+        recent_now = {
+            r[0]
+            for r in self.db.execute("SELECT id FROM objects WHERE created_at >= ?", (cutoff,))
+        }
+        for row in candidates:
             obj_id, kind = row
-            if obj_id in live:
+            if obj_id in live or obj_id in recent_now:
                 continue
             if kind == "blob":
                 p = self.blob_path(obj_id)
@@ -686,6 +722,7 @@ class Store:
             with self.db:
                 self.db.executemany("DELETE FROM objects WHERE id=?", params)
                 self.db.executemany("DELETE FROM leases WHERE id=?", params)
+                self.db.executemany("DELETE FROM artifact_edges WHERE source=?", params)
         return {"blobs_removed": removed_blobs, "manifests_removed": removed_manifests}
 
     # --------------------------------------------------------------- spans

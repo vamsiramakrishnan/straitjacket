@@ -411,7 +411,7 @@ class Ledger:
 
     @_locked
     def start_prewalk(self, task_id: str, **options) -> dict:
-        from ctx.prewalk import _start
+        from ctx.native_prewalk import _start
         from ctx.collab_sessions import status, TERMINAL
         task = self.state().get(task_id, {})
         if any(status(self.dir / 'sessions' / sid)['status'] not in TERMINAL
@@ -421,7 +421,7 @@ class Ledger:
 
     @_locked
     def continue_prewalk(self, guide_id: str, **options) -> dict:
-        from ctx.prewalk import _continue_session
+        from ctx.native_prewalk import _continue_session
         from ctx.collab_sessions import status, TERMINAL
         if len(guide_id) != 32 or any(c not in '0123456789abcdef' for c in guide_id):
             raise CollabError('invalid guide session ID')

@@ -60,8 +60,11 @@ def _rg_repo_search(
         argv.append("--fixed-strings")
     if not (ws.git is not None and ws.config.workspace.respect_gitignore):
         argv.append("--no-ignore")
-    if not ws.config.workspace.follow_symlinks:
-        pass  # rg does not follow symlinks by default
+    # rg does not follow symlinks by default, which matches the config
+    # default; the opt-in has to be passed through or it is a no-op on the
+    # engine most installs use while the walk rung honours it.
+    if ws.config.workspace.follow_symlinks:
+        argv.append("--follow")
     argv.append("--hidden")  # parity with the Python engine's os.walk
     if glob:
         argv += ["--glob", glob]

@@ -2,32 +2,24 @@
 
 # Comparisons
 
-How straitjacket relates to the other tools in this space. We benchmarked the
-mechanisms we could reproduce and desk-researched the others against their
-public contracts. Measured claims live in [`evals/`](../evals/); vendor claims
-are labelled and never move a straitjacket performance number. We record both
-what was integrated and what still beats us.
+Compare tools against the same task, input, and accounting boundary. This page
+collects repository measurements and descriptions of adjacent tools; neither
+feature similarity nor a smaller digest establishes lower end-to-end cost.
 
-<div align="center">
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/field-treemap-light.svg" width="100%" alt="A treemap of the field: Headroom, rtk, Caveman, Compaction, RAG/vectors, Ponytail, Maki and wozcode. Each tile names the tool's one good idea, its limitation, and — on an amber strip — the lossless form straitjacket adopted.">
-</picture>
-
-</div>
+Treat dated third-party descriptions as observations, not current compatibility
+promises. Follow each receipt for its fixture, method, and limitations.
 
 ## The field, in one table
 
 | Approach | What it does well | Limitation (measured where marked) | How we took it |
 |---|---|---|---|
-| Post-hoc compaction / summarization | reclaim a bloated window | rewrites history; evidence irrecoverable, prefix cache invalidated | checkpoint-then-rescue: secure handles first, then clearing is lossless |
-| RAG / vector memory | recall without resending | probabilistic, no provenance | deterministic addresses: `run:<id>#stdout --lines 8412:8422` returns the same bytes forever |
+| Post-hoc compaction / summarization | reclaim a bloated window | if the original is discarded or the prefix rewritten, exact evidence or cache reuse can be lost | checkpoint-then-rescue: secure handles first, then clear the active view |
+| RAG / vector memory | recall without resending | retrieval may be probabilistic; provenance depends on the implementation | deterministic handles address the same stored bytes while the artifact is retained or pinned |
 | [**Headroom**](https://github.com/headroomlabs-ai/headroom) (wire proxy/library/MCP) | broad, low-integration transcript optimization; current releases advertise reversible originals | our reproducible 0.32.1 path dropped a quiet needle and churned cache; this is a dated benchmark, not a claim about current upstream | epoch-latched lossless rescue, exact addresses and prefix-stability gates; rerun current upstream before making a new comparison |
-| [**rtk**](https://github.com/rtk-ai/rtk) (native command filter) | fast, wide command and host coverage; project-defined filters | filtered success output has no exact address for each omitted byte | safe equivalence substitutions plus structured command spans for git/GitHub/build/test families; unknown or mutating shapes remain fail-closed |
-| [**Ponytail**](https://github.com/DietrichGebert/ponytail) (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | ladder A/B-adopted on evidence (−28% turns, −33% time, −17% cost) + `ctx debt` |
-| [**Caveman**](https://github.com/juliusbrussee/caveman) (terse prompting style) | say less | destroys evidence to save tokens — the quiet-needle anti-pattern | cite-don't-quote with resolvable handles (skill rules 11–12) |
-| [**Maki**](https://maki.sh/) (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | no provenance: script and output vanish into the chat log | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
+| [**rtk**](https://github.com/rtk-ai/rtk) (native command filter) | fast, wide command and host coverage; project-defined filters | our rtk-style field treatment omitted quiet success output without an address; this is not a package-wide benchmark | safe equivalence substitutions plus structured command spans for git/GitHub/build/test families; unknown or mutating shapes remain fail-closed |
+| [**Ponytail**](https://github.com/DietrichGebert/ponytail) (ruleset injection) | the solution ladder | advisory only; never measured whether the ladder held | conditional policy with explicit measurement gates and `ctx debt` |
+| [**Caveman**](https://github.com/juliusbrussee/caveman) (terse prompting style) | say less | our head-and-tail model discarded the quiet target; this is a modeled treatment, not a product-wide result | cite-don't-quote with resolvable handles (skill rules 11–12) |
+| [**Maki**](https://maki.sh/) (sandboxed interpreter) | one script collapses N ops (their demo: 1300×) | our anomaly-script model retained neither script nor full log; Maki can be configured differently | `ctx py`: script is an addressable `blob:`, streams span-addressed, tracebacks path-free |
 | [**TokenSave**](https://tokensave.dev/) (semantic code graph) | one-call context, per-branch indexes, 50+ languages, broad editor reach and ambient savings ledger | semantic ranking is probabilistic; 80+ MCP operations require dynamic disclosure to avoid a large stable prefix | one stable `ctx` op surface, typed symbol/call/impact facts and billed-token accounting; branch graphs and semantic ranking remain gaps |
 | [**WozCode**](https://www.wozcode.com/how-it-works) (Claude Code plugin) | combines glob/regex/read into ranked snippets; fuzzy batch edits with post-write syntax checks; SQL graph and session recall | host-specific; no exact omitted-byte address is publicly documented | compiled evidence plans and addressable AST rewrites; batch edit/validate and SQL graph workflows remain gaps |
 | [**oh-my-pi**](https://github.com/can1357/oh-my-pi) (owned agent runtime) | hash-anchored edits, post-write LSP feedback, isolated typed subagents, provider-aware visual compaction, and mid-stream rules | several mechanisms require ownership of edits or the model stream and therefore cannot be promised through every ctx host hook | sealed `ctx edit` transactions, fresh diagnostic receipts, and opt-in isolated typed workers; visual-cold and stream-rule code remain inactive experimental seams |
@@ -45,9 +37,9 @@ product gaps, not design victories.
 
 **Distribution.** This gap is now closed: `pip install ctx-harness` installs the
 published `ctx` CLI, then `ctx setup` performs the idempotent, non-destructive,
-self-verifying host integration. Source `main` may be ahead of the PyPI badge;
-the README states both rather than pretending an unreleased source version is
-already published.
+self-verifying host integration. Source `main` may be ahead of the published
+package; the README names the project, package, command, and current source
+version separately.
 
 **Malleability.** Maki's users shape the agent from `init.lua` in user space.
 Ours must edit `src/ctx/digest/<family>prof.py` and append to the `_PROFILES`
@@ -90,20 +82,21 @@ The harness should learn from its own operator loop, not only other products.
 
 ## How each neighbour is built — and where the harness diverges
 
-The neighbours split into two architectural families. **Headroom** sits on the
-wire and optimizes transcript history after bytes are already resident; current
-upstream advertises reversible originals, while our pinned 0.32.1 benchmark did
-not preserve the quiet needle through the exercised path. **rtk** and
-**Caveman** cut earlier, at the shell hook or in the prompt, but throw the cut
-bytes away. The harness's move is orthogonal to all three: capture at the
-source into an immutable, addressable store, and put only a bounded digest —
-plus a resolvable address for every omitted byte — on the wire.
+The exercised mechanisms split into two architectural families. **Headroom**
+sits on the wire and optimizes transcript history after bytes are resident;
+current upstream advertises reversible originals, while our pinned 0.32.1 path
+did not preserve the quiet needle. Our explicit **rtk-style** and
+**Caveman-style** treatments cut earlier, at a shell filter or in the prompt,
+and did not retain the omitted bytes. Those modeled treatments are not claims
+about every configuration of either product. straitjacket instead captures at
+the source, keeps an immutable stored artifact, and emits a bounded digest with
+retrieval addresses.
 
 <div align="center">
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two lanes. Top: an agent loop feeds a Headroom proxy that compresses messages and rewrites history on each call; the model sees a rewritten log and the quiet needle is silently dropped with no address. Bottom: straitjacket captures tool output at the birth gate into an immutable artifact store where every line is addressed, sends the model a bounded digest, and ctx get resolves any omitted line by address.">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/headroom-arch-light.svg" width="100%" alt="Two measured lanes. The pinned Headroom 0.32.1 path drops the quiet target with no emitted address. The straitjacket field fixture retains the quiet target and emits a retrieval address for omitted regions.">
 </picture>
 
 <picture>
@@ -127,15 +120,15 @@ python evals/headroom_needle_v2.py
 ```
 
 Rerun **2026-07-19 against the current `headroom-ai==0.32.1`** on a 20,001-line
-log (302,628 tok) hiding one structurally rare "quiet needle" with no error
-keyword ([receipt](../evals/headroom-needle-2026-07-19.md)):
+log (302,628 `o200k_base` tokens) hiding one structurally rare "quiet needle"
+with no error keyword ([receipt](../evals/headroom-needle-2026-07-19.md)):
 
 | | Headroom 0.32.1 | `ctx run` logtemplate/v1 |
 |---|---|---|
-| Output | **357 tok** (847×) | **~520 tok** (584×) |
+| Output | **357 `o200k_base` tokens** (848×) | **531 `o200k_base` tokens** (570×) |
 | Loud ERROR line | ✅ kept (keyword window) | ✅ kept, at `L17650` |
 | **Quiet structural needle** | ❌ **silently dropped** | ✅ **verbatim at `L14238`** |
-| Omission keeps an address | ❌ none | ✅ `ctx get run:<id>#stdout --lines 14238:14241` |
+| Omission emits an address | ❌ none | ✅ `ctx get run:8d8335db6848#stdout --lines 14238:14241` |
 
 Headroom compresses harder and keeps the ERROR **because it announces itself**;
 the quiet needle, structurally identical to an INFO line, vanishes with no
@@ -150,19 +143,50 @@ line, drawn out under each approach:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/fates.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/fates-light.svg" width="100%" alt="A 20,001-line log with one anomalous line. Compaction deletes it without trace. A rewriting proxy dropped it in every measured run. straitjacket's logtemplate profile kept it verbatim with an exact retrieval address.">
+  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/fates-light.svg" width="100%" alt="A 20,001-line fixture with one quiet target. The pinned and modeled comparison arms either keep the flood or drop the target; the straitjacket arm keeps the target in a bounded digest and emits a retrieval address.">
 </picture>
 
 </div>
 
+### Their proof table, with straitjacket in the third column (2026-09-15)
+
+Headroom's README publishes one table as its proof: four synthetic scenarios,
+tokens before and after `compress()`, 21–57% saved. It is a compression ratio
+on seeded JSON, with no model, no task and no check on what the compressed text
+still contains. [`evals/headroom_proof_table.py`](../evals/headroom_proof_table.py)
+runs the same generators, seed and tokenizer through headroom (current
+checkout) and through `ctx`'s emission gate, and counts the needles each
+scenario plants (ERROR trace ids, anomalous rows, open bugs, real paths,
+distinct repositories) that are still visible to the model
+([receipt](../evals/headroom-proof-table-2026-09-15.md)):
+
+| scenario | before | headroom: after (saved) · needles | `ctx` gate: after (saved) · needles |
+|---|---:|---:|---:|
+| Code search (100 results) | 17,199 | 13,597 (21%) · 12/12 | 496 (97%) · 4/12 |
+| SRE incident debugging | 55,957 | 24,340 (56%) · 97/108 | 1,018 (98%) · 6/108 |
+| Codebase exploration | 58,801 | 33,895 (42%) · 19/31 | 1,154 (98%) · 15/31 |
+| GitHub issue triage | 46,067 | 32,429 (30%) · 66/66 | 1,391 (97%) · 6/66 |
+| **total** | 178,024 | 104,261 (41%) · 194/217 | 4,059 (98%) · 31/217 |
+
+Headroom's column reproduces its README to the token and drops 23 needles with
+no address. `ctx` shows 31 in the digest; every hidden one was retrieved
+verbatim by `ctx search run:<id>#stdout <needle>` (27 of 27 tried) for a median
+139 tokens. The two are on different axes: headroom is 41% of the tokens with
+89% of the evidence in view, `ctx` is 2% of the tokens with all of the
+evidence one named lookup away. A session that needs a handful of specific
+facts is an order of magnitude cheaper under `ctx`; one that must scan
+everything pays for the range it asks for, and knows the size before it does.
+Neither number says how well a model *uses* either shape; that is what the
+[DeepSWE receipt](../evals/agentbench/deepswe-2026-09-13.md) measures.
+
 ## One hostile payload across seven containment strategies
 
-The broader model-free comparison sends the same 302,628-token log through
-seven delivery strategies. Headroom and straitjacket execute their real
+The broader model-free comparison sends the same 302,628-`o200k_base`-token log
+through seven delivery strategies. Headroom and straitjacket execute their real
 implementations. Caveman, rtk, Ponytail and Maki are explicit models of their
 documented strategy; they are not presented as third-party package benchmarks.
 
-| Strategy | Output tokens | Compression | Quiet needle | Address after omission |
+| Strategy | `o200k_base` output tokens | Compression | Quiet needle | Address emitted after omission |
 |---|---:|---:|---|---|
 | Naive raw output | 302,628 | 1.0× | kept | none |
 | Caveman head + tail | 1,219 | 248× | **dropped** | none |
@@ -170,12 +194,13 @@ documented strategy; they are not presented as third-party package benchmarks.
 | Ponytail-style advisory rules | 302,698 | 1.0× | kept | none |
 | Maki-style anomaly script | 58 | 5,218× | **dropped** | none |
 | Headroom 0.32.1 | 357 | 848× | **dropped** | none |
-| **straitjacket `ctx run`** | **524** | **578×** | **kept** | **yes** |
+| **straitjacket `ctx run`** | **531** | **570×** | **kept** | **yes** |
 
 The result is not “more compression is better.” It exposes three independent
-properties: bounded output, survival of structurally quiet evidence, and a
-resolvable address for omitted bytes. Only the straitjacket arm has all three
-on this workload. See the [runner](../evals/field_needle.py), [machine
+properties: bounded output, survival of structurally quiet evidence, and
+emission of a retrieval address for omitted bytes. Only the straitjacket arm
+has all three on this workload. This fixture does not execute that address. See
+the [runner](../evals/field_needle.py), [machine
 record](../evals/field-needle-record.json), and [dated
 receipt](../evals/field-needle-2026-07-20.md).
 
@@ -275,6 +300,22 @@ less tool-output on an unavoidable flood, honest parity-loss on the greppable on
   arm, the distinction our own bug-bash A/B ran into when the harnessed arm
   won on bytes-per-result and lost on total billed tokens by taking more
   turns.
+- **Recursive Language Models** (Zhang et al., 2025) → nothing structural:
+  "context as a variable the root model reads through code" is the handle
+  model, `FINAL_VAR` is the checkpoint address, and the guarantees the paper
+  says it lacks (total cost, total runtime) are the priced plan and the node
+  bounds. Its counting failures at 263k tokens are the argument for keeping
+  counts in the facts database. Still to take: its partition-and-map as a
+  bounded, priced, depth-1 model call over minted spans, labelled
+  probabilistic and never on the deterministic digest path.
+- **headlong** (Laude Institute) → three pieces, each small: the inactivity
+  bound beside the wall clock (`idle_timeout`, `stalled` vs `wall_timeout`),
+  its docker broker denylist as a safety-class force_ask through every
+  door, and the one-line tldr on every summarized entry — taken
+  deterministically, as the first line of the elided block. Declined:
+  persistent thinking at $1–2/hour with backoff (the opposite of priced
+  context; the harness is not a mind), bash-only state (would un-ship the
+  content-addressed store), and async model-written run summaries.
 - **WozCode** → compiled plans already share its collapse-N-reads instinct.
   Still to take: addressable fuzzy edit transactions, parser validation and
   rollback receipts; its install-friction reproach is closed by the PyPI release.

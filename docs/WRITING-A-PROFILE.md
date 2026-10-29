@@ -1,11 +1,13 @@
 # Writing an evidence profile
 
-A profile is not a clever truncation function. It is the implementation of an evidence
-contract for one output family.
+A digest profile turns one tool's output into a bounded, structured result.
+Use this guide when a generic digest loses identities or diagnostic structure
+that the agent needs. The profile must also identify omitted detail and provide
+a retrieval address for it.
 
-The profile’s job is to turn raw bytes into typed facts, attest what it understood, and
-render the smallest decision-useful view without destroying the route back to the
-source.
+Implement the detector, result contract, and acceptance tests together. Judge
+the profile on preserved evidence and bounded output, not the appearance of
+one sample digest.
 
 ```text
 raw artifact
@@ -82,7 +84,7 @@ A profile is a small class plus a committed contract. Four concrete steps:
    stable_order          = "occurrence"
    evidence_floor_tokens = 256
    hard_ceiling_tokens   = 4000
-   ```
+```
 
    The contract is validated over **typed facts** at the selection seam, never
    by re-parsing rendered text. The special `complete_identity_census` class is

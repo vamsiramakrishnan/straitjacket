@@ -439,9 +439,10 @@ def session_outcomes(path: str | Path) -> list[Any]:
 
 def render_outcomes(events: list[Any]) -> str:
     """The per-operator FOLLOW-UP scoreboard (association, not causation).
-    Counts shown beside every rate; positive rates use all observations as
-    denominator (censoring only under-counts positives); the requery rate
-    excludes censored windows from its denominator."""
+    Counts shown beside every rate; every rate (requery included) uses all
+    observations as denominator, since censoring only under-counts positives
+    and a requery detected inside a censored window is still a positive --
+    the old requery denominator excluded windows its numerator counted."""
     per: dict[str, dict[str, int]] = {}
     for e in events:
         b = per.setdefault(
@@ -470,11 +471,10 @@ def render_outcomes(events: list[Any]) -> str:
 
     for op in sorted(per):
         b = per[op]
-        non_censored = b["obs"] - b["censored"]
         out.append(
             f"{op:<30} {b['obs']:>4} {cell(b['used_exactly'], b['obs']):>10} "
             f"{cell(b['validation_associated'], b['obs']):>11} "
-            f"{cell(b['equivalent_requery'], non_censored):>8} "
+            f"{cell(b['equivalent_requery'], b['obs']):>8} "
             f"{b['censored']:>9}"
         )
     out.append(

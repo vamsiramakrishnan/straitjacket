@@ -2,8 +2,12 @@
   "corpus": {
     "lines": 20001,
     "bytes": 1002594,
+    "sha256": "3ea53b7bc88fb21f7c86189e39938e77444fff9cc1c5f8d1814a76275c60ce1d",
     "raw_tokens_o200k": 302628,
     "quiet_needle_line": 14238
+  },
+  "measurement": {
+    "opaque_run_handles": "canonicalized to run:8956c843e556 before token counting"
   },
   "arms": [
     {
@@ -65,11 +69,11 @@
     },
     {
       "tool": "sj (ctx run logtemplate/v1)",
-      "out_tokens": 521,
+      "out_tokens": 531,
       "quiet_needle_survived": true,
       "loud_needle_survived": true,
       "retrieval_address": true,
-      "output_excerpt": "[ctx run:8956c843e556 profile=logtemplate/v1]\ncwd: .\ncommand: cat corpus.log\nexit: 0\nstdout: 20,001 lines \u00b7 979.1 KiB \u00b7 est 250,648 tokens\nstderr: 0 lines \u00b7 0 B\ntemplates: 11 cover 20,000/20,001 lines\n  2,608\u00d7 L6: INFO worker-<*> request req-<*> enqueued in <*> \u00b7 span 0f44195122\n  2,545\u00d7 L11: INFO worker-<*> request req-<*> validated in <*> \u00b7 span 432ba740c9\n  2,508\u00d7 L2: INFO worker-<*> request re"
+      "output_excerpt": "[ctx run:8956c843e556 profile=logtemplate/v1]\ncwd: .\ncommand: cat corpus.log\nexit: 0\nstdout: 20,001 lines \u00b7 979.1 KiB \u00b7 est 250,648 tokens\nstderr: 0 lines \u00b7 0 B\ntemplates: 11 cover 20,001/20,001 lines \u00b7 top 10 shown (20,000 lines)\n  2,608\u00d7 L6: INFO worker-<*> request req-<*> enqueued in <*> \u00b7 span 0f44195122\n  2,545\u00d7 L11: INFO worker-<*> request req-<*> validated in <*> \u00b7 span 432ba740c9\n  2,508\u00d7 "
     }
   ]
 }

@@ -6,47 +6,817 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
-## [0.36.0] - 2026-08-25
+## [0.41.0] - 2026-10-29
 
-The full 22-family fleet ran bounded managed campaigns (~950 candidates, all
-spend-confirmed): four small deltas (largest +1.59), seventeen exact plateaus
-at the reviewed seeds, and one confirmed catch by the new cross-harness review
-gate — the context-budget winner's improvement was bought by silently dropping
-mandatory evidence; an independent harness reviewer flagged it and a local
-adversarial re-run confirmed (−101,000) before any promotion moved. Layer-B
-replay over 772 real recorded tool outputs shows the translated signal ranking
-strictly dominates the seed-era regex (57 decisive upgrades, 52 finds where
-old saw nothing, zero regressions). Fleet receipt:
-`evals/alphaevolve/2026-08-24-fleet-sweep.md`.
+- Local query-aware block selection preserves required evidence, heading and
+  fence context, and original retrieval addresses. `ctx compress` exposes the
+  selector and deterministic prompt-prefix wrapping without provider calls.
+- Native agy sessions retain explicit model/conversation identities, durable
+  completion events, bounded any/all waits, cancellation and deadline handling.
+  Terminal events feed the existing relay; task completion still requires
+  separate evidence and verification. Isolated native guide/continuation stages
+  require an owned first edit and a passing recorded check.
+- Session-private task hints improve focused generic output selection. Quoted
+  shell operators remain part of their argument when classifying command chains.
+- AlphaEvolve block-selection experiments keep search/holdout/adversarial splits
+  separate. No evolved candidate was promoted: the managed trial did not beat
+  the seed, and downstream task-quality and cost improvements remain unmeasured.
 
-A small AlphaEvolve campaign (14 programs) on evidence selection reached
-**94.44** on the frozen objective (seed 75.42, +25.22%), beating the
-historical 91.12 fleet best with fewer candidates. The promotion-contract
-steps previous winners never received are now in place: independently
-authored holdout (+16.3%) and adversarial (+35.8%) corpora in
-`evals/alphaevolve/evaluate.py`, a reviewed translation of the layered
-signal-ranking policy into the generic digest fallback
-(`src/ctx/digest/text.py:_signal_rank` — benign traps never become signals,
-keyword-less decisive evidence such as HTTP status codes now ranks highest),
-and an exploration-scale corpus built from real captured repository outputs
-(761-line grep sweep, 250-line noisy traceback, pip block, verbose pytest
-failure) where the policy improves selection by **+34.7%** with measured
-blind spots recorded as the next campaign target. Receipt:
-`evals/alphaevolve/2026-08-24-evidence-selection-holdout.md`.
-Receipt: `evals/alphaevolve/2026-08-24-optimizer-revamp.md`.
+- **0.40.0 tool workflow candidate**: compact model delivery keeps rich SDK JSON;
+  progressive snapshot navigation and default query/plan tools reduce separate
+  evidence operations. Explicit context epochs enable content-aware read reuse.
+  ToolSession can reopen the existing TaskRuntime journal, sharing allowances
+  across reads, commands, plan leaves and CAS repair verification. Unknown
+  mutations block retries; verification binds targeted/regression checks to
+  exact input hashes. Pinned repeated benchmark profiles and model-free receipt:
+  `evals/workflow-2026-10-18.md`. Live cost and turn reductions remain unmeasured.
 
-The AlphaEvolve managed-search harness follows Google's
-alphaevolve-on-googlecloud client patterns more closely: weighted flash/pro
-model mixtures (`--model-mix`, fail-closed validation, pro served from `global`
-only), per-campaign memoization of duplicate candidate source (measured 12x
-cheaper on an all-duplicate run), multi-metric component scores on every
-evaluation, typed failure insights fed back to the ensemble, dated campaign
-summary and winner artifacts under `evals/alphaevolve/results/`, and a
-concurrent fleet scorecard that cut full-registry gate time from 7.44 s to
-2.60 s with byte-identical output. Search infrastructure only; no production
-seam, gate, corpus, or promotion rule changed. Registry counts were reconciled
-across documentation to 32 levers / 29 mutable / 21 families / 9 waves.
-Receipt: `evals/alphaevolve/2026-08-24-optimizer-revamp.md`.
+- **Public tool boundary**: `ctx.sdk.ToolSession` and `ctx run --json` return
+  typed command termination and complete small text or bounded evidence.
+  Async cancellation stops the owned process group and retains partial output;
+  session export uses verified capsules. The Antigravity shim uses this runtime
+  with native file tools by default. Signal status mapping, bounded digest reads,
+  actual-delivery telemetry and explicit cache/thinking usage records close gaps
+  found in the supplied benchmark. Model-free replay and source observations:
+  `evals/tool-boundary-2026-10-12.md`. Requires a build containing this change.
+
+- **The decision rule on `ctx agent`** (receipt
+  `evals/agentbench/deepswe-decision-2026-09-16.md`, record
+  `evals/agentbench/results/deepswe-decision.json`): naive vs the runtime,
+  eight DeepSWE tasks, two repeats each, uncapped, $33.20. The runtime earns
+  more partial test credit for less money (347 vs 302 fail-to-pass at the
+  median of repeats, $8.07 vs $8.53), wins six of eight tasks and costs 16%
+  less per turn — and the repeat-to-repeat spread within one arm (median 9
+  and 16 tests, worst 42) is larger than the gap between arms (mean +5.6).
+  Direction consistent over three runs, magnitude not established. Kept, with
+  the claim stated as a lean.
+
+- **`ctx capsule`** (`src/ctx/capsule.py`): evidence that travels. One file
+  holding the manifests a set of cited handles names and the blobs they
+  reference, so a `run:` address in a pull request still resolves on the
+  reviewer's machine and after this container is gone. `export` closes
+  transitively and reports any cited handle that resolved to nothing;
+  `import` verifies every member against both the capsule index and its own
+  content address, and checks completeness against the closure the exporter
+  recorded, because a repack that drops a blob and its index row together
+  leaves the remaining names agreeing with each other; nothing is written if
+  one check fails. Prose-bearing manifests (a checkpoint's goal, decisions
+  and hypotheses) are walked for the evidence they cite and left out, named
+  in the report, unless `--include-task-text` asks for them. The file carries
+  no wall-clock field, so two exports of one task are identical files.
+
+- **memvid, measured before adoption** (`evals/memvid_fidelity.py`, receipt
+  `evals/memvid-fidelity-2026-09-16.md`): a `.mv2` capsule looked like the right
+  container for portable evidence, so the round trip was checked first. One case
+  in seven returns the bytes that were stored: per-line trailing whitespace and
+  carriage returns are normalized away, trailing newlines are dropped, and a
+  payload below the page threshold has no byte path at all, while
+  `verify(deep=True)` passes every check. It can index evidence; it cannot hold
+  it.
+
+- **headroom's proof table, rematched** (`evals/headroom_proof_table.py`,
+  receipt `evals/headroom-proof-table-2026-09-15.md`): their four seeded
+  scenarios, tokenizer and before-count, run through their `compress()` and
+  through the emission gate, with the needles each scenario plants counted in
+  what the model still sees. headroom: 41% saved, 194/217 needles visible, the
+  rest dropped without an address. `ctx`: 98% saved, 31/217 visible, all 27
+  hidden needles tried retrieved verbatim for a median 139 tokens each.
+  docs/COMPARISONS.md carries the table and the caveats (no model, no task,
+  synthetic JSON).
+
+A retrieval substrate for the first ten turns (docs/CODE-SEARCH.md), built
+after the DeepSWE receipts showed where a harnessed session spends them:
+
+- **A text index** (`src/ctx/codeindex.py`): Zoekt-shaped trigrams over the
+  lowercased bytes, a symbol table and a fingerprint per file, in immutable
+  segments under the store — never the worktree. It is a candidate generator
+  only: a stat sweep re-indexes what changed before every query (6 ms per 870
+  files; 6 s first build), candidates are verified against the live bytes, and
+  a regex contributes only the literal runs it must contain. `ctx search`,
+  the `q` search stage and `ctx pack` narrow through it; `ctx index --text`
+  builds it explicitly above the implicit-build size guard, `ctx index
+  --status` and `ctx doctor` report it, `CTX_SEARCH_INDEX=off` disables it.
+- **A query language** in the pattern list, one grammar everywhere: `file:`
+  `!file:` `lang:` `case:no` `sym:` `type:commit|diff` `after:` `before:`
+  `author:` `rev:`. `sym:Name` alone answers the definition sites from the
+  symbol table; `type:commit`/`type:diff` return commits as evidence rows
+  (hash, date, author, subject, files touched) minted as a `blob:`. New `q`
+  stages `commits`, `touched` and `history [--line]` compose git history with
+  everything else.
+- **SCIP per-file currency**: `ctx index` records each source file's content
+  hash, so an edited tree keeps its exact answers for the files that did not
+  change and answers the changed ones textually, labelled (`scip (exact) · 1
+  changed file via ast (textual)`), instead of discarding the index at the
+  first edit. `ctx impls` gains an exact rung from the index's
+  `is_implementation` edges; `ctx index --status` names the changed files.
+- **`ctx pack "<task>"`**: a ranked, budgeted context pack — files by task
+  terms (idf from the index, whole-word counts in the bytes), symbols the
+  terms name, paths, and commits whose message names them, each row with its
+  reason and outline. Measured by `evals/agentbench/pack_recall.py` against the
+  source files DeepSWE reference solutions change: recall@8 0.54 and MRR 0.64
+  over 14 tasks, against 0.43 / 0.55 for a keyword-count baseline; the first
+  cut lost to that baseline until presence was verified and prose demoted.
+- **`ctx agent -p "<task>"`**: ctx as the host on the Claude Agent SDK
+  (`[agent]` extra): Bash/Read/Edit/Write/MultiEdit plus in-process `search`,
+  `outline`, `get`, `refs`, `pack`, the wrapper's hooks, and with `--pack` a
+  pack in the first turn (off by default: uncapped on DeepSWE with haiku the
+  packed runtime passed 219 held-out tests to 367 without); the same `claude`
+  binary, login and billing; result JSON in the host's shape. A PreToolUse router refuses shell grep with the equivalent
+  `search` call, since the model otherwise routes around the index. agentbench
+  gains `sdk` and `sdk_nopack` arms, `--max-turns 0` (uncapped, bounded by
+  `--session-timeout`, DeepSWE's own three-hour budget) and `--resume` for a
+  sweep interrupted mid-way.
+
+Two wrapper defects found by the first DeepSWE v1.1 receipt
+(`evals/agentbench/`, haiku, `naive` vs `sj`), where the wrapped arm cost 13-32%
+more per session and read 21-33% more input for no outcome gain:
+
+- `ctx wrap claude --proxy` silently cost ~15k cached tokens on every request.
+  Claude Code treats a non-Anthropic `ANTHROPIC_BASE_URL` as a gateway that may
+  not forward its `tool_reference` beta and turns deferred tool loading off, so
+  the prompt carried 41 inline tool schemas instead of 16. The relay forwards
+  bytes verbatim, so the wrapper now sets `ENABLE_TOOL_SEARCH=true` when the
+  upstream is Anthropic itself; a user's own value or gateway is left alone.
+  The prefix-budget manifest never saw this, because the bytes were the host's.
+- Hook rewrites now use `ctx run --passthrough`. The agent's own commands
+  produce a median of 91-277 bytes, and every routed one came back as a receipt
+  (header, command echo, status line) with ctx's exit `3` in place of the
+  command's own status; results grew 2-8x and the model re-ran identical
+  failing checks. In passthrough mode small, complete output is printed
+  verbatim with the `run:` handle on one trailing line, and the exit status is
+  the command's; large output still digests, and the artifact is still stored.
+
+- The large-file Read rewrite widened targeted reads. It set `limit` to the
+  240-line window unconditionally, so a model that asked for `offset=729
+  limit=10` on a 60 KB file got 239 lines: on cattrs the wrapped session
+  landed 106 KB of Read results against 74 KB unwrapped, from the guard that
+  exists to bound them. A cap now keeps the caller's own smaller `limit`
+  (and Grep `head_limit`); it narrows, never widens.
+- A whole-file Read of a large code file is answered with the file's skeleton
+  (every symbol with kind, line range and a minted span; tree-sitter, ctags
+  or stdlib ast) instead of its first 240 lines. Measured on cattrs: the 64 KB
+  `converters.py` outlines to ~1k tokens for 83 symbols where the first page
+  was ~2.5k tokens showing 14% of the file, and the outline makes the next
+  read a range or a `--symbol` fetch instead of the next page. Slice reads
+  (offset/limit) and files without a parser are untouched; fail-open.
+- Print-mode wraps declare the coding tool surface (`--tools Bash,Read,Edit,
+  Write,MultiEdit,Grep,Glob,Agent`). The host's default catalogue on a hosted
+  session is 16 tools / 154 KB / ~33k cached tokens on every request, of
+  which a headless coding run uses six; measured 45 KB after. `--tools` is
+  the one flag that drops a schema from the prompt (`--disallowedTools` on a
+  deferred tool makes Claude Code inline all of them). Interactive sessions
+  and a caller's own `--tools` are untouched; `CTX_WRAP_NO_TOOL_DIET=1` opts
+  out.
+
+Code intelligence, so the outline and the verbs answer for every language the
+roster names rather than for Python:
+
+- Tree-sitter grammars for all sixteen skeleton languages. The roster claimed
+  sixteen and shipped wheels for five; C, C++, C#, Java, Kotlin, Lua, PHP,
+  Ruby, Scala, shell and Swift fell to universal-ctags (absent on most
+  machines) and then to nothing. Each now has a grammar wheel in the `[code]`
+  extra and a declarative walker whose node and field names were read off the
+  grammars (`tests/test_skeleton_languages.py`, one fixture per language);
+  functions inside a namespace stay functions, inside a type become methods.
+- `ctx lsp def|refs|hover`: a bounded JSON-RPC stdio client for whatever
+  language server is on PATH (pyright, jedi-language-server, gopls,
+  rust-analyzer, clangd, typescript-language-server ...), one process per
+  call, positions in ctx's 1-based `path:line:col` or a skeleton symbol,
+  results in `ctx refs` coordinates. `ctx refs` uses it as a rung above jedi
+  and the regex floor whenever a server exists, and discloses `engine lsp
+  (<server>)`; `CTX_LSP=off` removes the rung, `CTX_LSP_SERVERS` overrides
+  the table. `ctx doctor` lists the servers found.
+
+And the mechanisms so that class of defect is measured rather than found by
+accident (docs/HOST-CAPABILITIES.md, "Host prefix bytes"):
+
+- The observer proxy records each request's prefix shape (system-prompt bytes,
+  tool count, tool-catalogue bytes, deferral marker) in `wire.jsonl` and
+  `window.json`; the scorecard prints a `prefix:` line and flags `⚠ prefix tax`
+  when a long catalogue rides every request with no deferral.
+- `ctx wrap claude --probe-prefix`: one naive and one wrapped single-turn
+  session, first-request composition diffed against the declared prefix
+  budget; exit 3 on lost deferral or undeclared growth. The agentbench harness
+  runs it under `--prefix-parity` before paid arms and stores the verdict.
+- `ctx run --passthrough` is pinned by an emission-parity test: small output
+  costs the transcript at most the native bytes plus one handle line.
+
+## [0.39.0] - 2026-09-10
+
+`ctx relay` adds a cross-harness relay: the direction the task ledger never
+had. The ledger lets harnesses share a record; the relay lets one tell another.
+Three append-only schemas (`ctx.watch/v1`, `ctx.signal/v1`, `ctx.delivery/v1`)
+under `.ctx-session-reads/relay/`, written with the same lock and torn-line
+repair as the task ledger. A signal carries an address and a bounded note,
+validated by the grammar `ctx task send` already enforces; prose and output are
+refused at the boundary.
+
+Delivery is at the receiving harness's next hook boundary: `report` and
+`advise` at post-tool-use and session start, `interrupt` at pre-tool-use as a
+`force_ask` naming the address. There is no push and no mid-stream
+interruption — an interrupt stops the next tool call, not a token stream, and
+the bound is reported rather than implied. A guard `deny` outranks a relay
+interrupt, and a `ctx` call is never blocked by one. Antigravity receives the
+relay through pre-invocation, its only stage that can carry advisory text.
+
+Two producers ship with it. A backgrounded run announces its `run:` address
+when a harness subscribed to the `job` topic before it launched, so a finished
+job no longer waits for someone to poll; the supervisor stays dependency-free
+and shells out to a detached `ctx job --announce`. An expensive capture (raw
+above 32 KiB) publishes its address on the `digest` topic — the artifact store
+was always shared across harnesses, what was missing is that the peer knew.
+
+ACP workers participate too, and are the one transport where an interrupt is
+more than a tool-call boundary. Their sessions already open with a
+session-scoped MCP server, so the relay ops are reachable from inside one; a
+queued report is prepended to the worker's prompt at the new `acp-prompt`
+stage, since an ACP worker has no `additionalContext` channel; and a queued
+interrupt becomes the transport's cancellation source at the new `acp-cancel`
+stage, cancelling the turn while it runs rather than stopping the next tool
+call. The attempt then fails with the peer's reason and address instead of a
+bare cancellation. Participation is per worker: an orchestrated ACP node
+subscribes as its host id, and the semantic analysis worker declares no address
+and stays unreachable, as a worker running with no tools over frozen evidence
+should.
+
+`relay_watch`, `relay_publish` and `relay_pending` join the MCP tool so an
+agent can use the relay from inside any harness. That changes prefix-resident
+bytes: **PREFIX_VERSION moves 11 → 12, one cold prefix-cache write per model.**
+A workspace with no relay pays one `os.path.exists` per tool call and imports
+nothing; every relay path in the hook degrades to silence rather than to a
+failed tool call. See [the relay](docs/RELAY.md) and
+[harness collaboration](docs/HARNESS-COLLABORATION.md).
+
+`ctx replay --gold` scores what an agent actually opened during a recorded
+session against human-annotated gold context, at file, block and line
+granularity, with evidence density and regret against the gold oracle. New
+`ctx.trajectory` reconstructs those regions from a transcript alone: it reads no
+ctx state and needs no ctx install, so a session that used ctx and one that did
+not are measured by the same instrument. An A/B whose arms are instrumented
+differently has decided its result before it runs, and a test pins that a native
+`Read`/`grep` trajectory and a ctx `get`/`search` trajectory over identical
+regions score identically.
+
+This upgrades the oracle `ctx replay --regret` documents as one-sided. Its
+facts-used oracle is a lower bound "since the trajectory only proves a subset of
+what was needed"; gold regions are what a human said *was* needed.
+`evals/contextbench.py --emit-gold` writes the `ctx.gold/v1` files, and its own
+scoring now delegates to `ctx.trajectory` so one metric cannot mean two things.
+Verified score-identical against a recorded instance. Design and predictions,
+registered before any paid arm:
+[`evals/contextbench-ab-design.md`](evals/contextbench-ab-design.md).
+
+Six defects found by automated review before merge, each verified against the
+code first. `ctx refs` treated an *unreadable* SCIP index the same as an empty
+one, so a truncated or corrupt index made every symbol report zero references
+with the ladder suppressed — parse failure now degrades like an absent index.
+`ctx index` published whatever an indexer left behind even when it exited
+nonzero, installing a silently partial exact tier. `ctx relay gc` snapshotted
+the queue before taking the lock it rewrites under, so an append racing the
+compaction was discarded. In `ctx.trajectory`, a `ctx def` result was credited
+with the full span named in its header even though `cmd_def` renders only the
+first ten lines of a long body — free recall for the arm that module exists to
+keep honest — and block precision divided gold blocks by retrieved regions,
+two different units, which could exceed 1.0. And gold files emitted by
+`--emit-gold` carry an empty root, which made `_relativize` refuse every
+absolute path, scoring a native arm's `Read` at zero while ctx's relative
+output scored fine; `ctx replay` now fills the root from the cwd or
+`--gold-root`. The `block P` column in the ContextBench receipt is withdrawn
+as a consequence.
+
+`ctx index` builds the compiler-grade index the precise tier was written to
+read. ctx has ingested SCIP since M-K4 but never produced one, so outside
+repositories that index themselves in CI the exact rung of the `refs`/`def`
+ladders was dead code and every answer came from the regex floor.
+`evals/refs_precision.py` priced that floor against `rust-analyzer scip` on
+`tokio-rs/bytes`: **3,637 reported sites where the compiler says 806**, with the
+error concentrated where names are short and common — `buf` reported 754 sites
+of which 55 were real. A word-boundary regex cannot separate a reference from
+the same letters in a comment or a string literal, so ctx now shells out to the
+language's own tooling (`rust-analyzer scip`, `scip-go`, `scip-typescript`,
+`scip-python`, `scip-java`) rather than hand-rolling a better approximation.
+The index lands in the store's audit area, never the worktree.
+
+Two defects closed with it. `ctx def` never reached the exact tier at all —
+`refs` had it and `def` did not, so the two verbs disagreed about how precisely
+ctx could answer the same question; a SCIP occurrence is a point, so the
+coordinates now come from the compiler and the extent from the skeleton, since
+`ctx def` still owes the caller a body. And an authoritative "indexed, no
+references" (`[]`) was tested with `if scip_sites:` and thrown away, falling
+through to the regex — replacing an exact answer with a wrong one.
+
+That last fix needed a guard of its own, found in review before merge: an empty
+SCIP answer is authoritative only while the index still describes the tree, and
+nothing kept the two in step, so a symbol added since indexing came back as
+`sites: 0` in the exact tier's voice. An index is now checked against the
+worktree before use — no source file newer than it, plus a file count for the
+indexes ctx writes, since a deletion moves no surviving file's timestamp — and
+skipped like an absent one when the tree has moved on, with the engine label
+saying why rather than falling back silently. Checking only the files an answer
+cites would be cheaper and is wrong: it cannot see a new call site in the file
+that changed, leaving the answer confidently incomplete.
+
+`ctx doctor` gains an **exact index** row, which distinguishes a current index
+from a stale one. Receipt:
+[`evals/refs-precision-2026-09-10.md`](evals/refs-precision-2026-09-10.md).
+
+`--bg` no longer races its own supervisor. Expressed as a zero patience window
+it did: `wait_for_done` checks job state before the deadline, so a child that
+finished before the first poll finalized inline and the transcript got no job
+handle at all — red in CI, never locally. Only `--bg-after` has a window.
+
+`ctx def` and `ctx refs` work outside Python. `evals/verb_coverage.py` asks
+whether `ctx map` advertises addresses the verbs can resolve — the map prints
+`repo:<path> --symbol <name>` as the address to use next, so if `ctx def`
+refuses it the two halves of ctx disagree and the defect is ctx's by
+construction, with no corpus or model in the loop. Baseline across six
+languages was **18/80**: every Python address resolved, every other one
+refused. Now 80/80.
+
+Three defects, in the order the eval surfaced them. `_select_engine()` chose
+between jedi and stdlib `ast` without looking at the file's language, though
+`skeleton.py` already extracted symbols for 16 languages and `ctx map` was
+using it — a third engine now resolves through that same skeleton, so
+resolution agrees with discovery by construction, with ctags as a final rung
+for what the map advertises but tree-sitter does not model (Go package
+constants, struct fields). Skeletons were cached under a key made of the source
+blob hash alone, so a parse performed with no ctags on PATH — every symbol
+missing — was served forever afterwards and installing the dependency changed
+nothing; the key now carries a per-language backend fingerprint. And `ctx refs`
+fell back to a word-boundary regex over `**/*.py`, making the ladder's floor its
+most language-specific rung: on a Go repository it answered `sites: 0`, a wrong
+answer rather than a refusal.
+
+`ctx doctor` gains a **code intelligence** row listing how many languages are
+parseable and what is missing. The extras stay optional, so a thin install is
+not a failure — but it is no longer silent. Twice in this workstream a missing
+`universal-ctags` nearly became a published finding about ctx.
+Receipt: [`evals/verb-coverage-2026-09-10.md`](evals/verb-coverage-2026-09-10.md).
+
+`evals/contextbench.py` scores the search lane against human-annotated gold
+context, closing the retrieval slot `evals/BENCHMARK.md` reserved. ContextBench
+(arXiv:2602.05892) was verified against its actual release first: 500 verified
+instances, 58 repositories, 8 languages, 4,597 gold blocks with real line
+coordinates. The runner is model-free and reports file/block/line
+recall/precision/F1 over a budget ladder. First receipt:
+[`evals/contextbench-2026-09-10.md`](evals/contextbench-2026-09-10.md) — the
+deterministic probe formulation, not ctx's structural engine, is the binding
+constraint: instrumenting the run showed `ctx def` contributing 6 of 1,416
+retrieved blocks, so the 4-10x language spread measures the runner's own
+fallback scanner. File-level recall is flat across a 16x budget increase,
+locating the remaining bottleneck in candidate generation rather than packing. External corpora remain teachers,
+never referees; no resolve rate or agent comparison is claimed.
+
+`ctx task prepare/run/resume/show/cancel/apply` adds an opt-in investigation
+controller over shared execution services. Registered evidence operations,
+semantic subcalls, captured commands, anchored edits and independent checks
+share a durable `TaskRuntime` with root budgets, replay identities and retained
+artifact dependencies. The controller reproduces a failure in a retained Git
+worktree, investigates it, and feeds failed repairs back into investigation.
+Passing fixed checks produce a reviewable patch; applying it to the original
+checkout remains explicit. Existing ACP endpoints can supply reasoning with
+their pinned agent/model. Fixture tests establish execution and recovery
+mechanics, not model quality or cost gains. See [Task execution](docs/TASK-EXECUTION.md)
+and [ADR 007](spec/adr/007-durable-task-execution.md).
+
+Interrupted semantic calls now retain their reserved wall time even when a
+shorter elapsed duration was observed before interruption. Explicit retries
+cannot reclaim that uncertain allowance.
+
+`ctx semantic prepare/run/resume/show` adds explicit, depth-one model analysis
+over frozen evidence through a caller-configured JSON driver or SDK callback.
+File/symbol/paragraph/line partitioning preserves exact model-view coverage;
+support and counterevidence citations must belong to the assigned partition.
+Findings remain labeled inferences, with unknown selection completeness.
+Durable pre-launch reservations, shared call/time/token/cost admission budgets,
+explicit retries, process cleanup, bounded output, and retained checkpoints make
+partial runs inspectable and resumable. Existing deterministic observation paths
+remain model-free. Tests use fixture workers; no live quality, cost, or latency
+advantage is claimed. See [Semantic analysis](docs/SEMANTIC.md).
+
+Hermes, Oh My Pi (`omp`), OpenCode, and DeepSeek Harness (`dsh`) now have
+explicit MCP integrations, host detection, setup, launch wrappers, and
+configuration checks. Existing Claude Code, Codex, and Antigravity integrations
+remain available. The adapters preserve model choice and provider settings.
+Native plugins gate calls, rewrite inputs, and replace text where the host's
+API permits; DSH uses denial with retry guidance for sealed inputs. Explicit
+ACP setup enables unattended orchestration with a configured endpoint/model.
+The shared `ctx_edit` MCP tool supplies anchored patch and structural rewrite
+transactions. ACP notifications do not extend native interception authority. See
+[Agent integrations](docs/AGENT-INTEGRATIONS.md) for profile and launch details.
+`ctx mcp --workspace` supplies a default workspace for host-started MCP servers.
+
+Agent logos now satisfy the portable SVG gate while the documentation site
+serves its own vendored copies. The release instructions include every Docs
+integrity check. Cancellation tests retain an observed descendant termination
+instead of probing the PID again after it may have been reaped.
+
+The [edit loop](docs/EDIT-LOOP.md) now connects observed snapshot bytes to an
+anchored replacement, an immutable apply receipt, and explicit captured checks.
+`ctx edit replace` previews by default; `verify` binds behavior and declared
+witness files to the applied bytes. Typed refusals carry recovery coordinates,
+and all ctx-owned edit entry points record the same outcome telemetry.
+
+Prewalk now requires an attempt-bound applied edit, behavioral verification,
+and a complete bounded continuation checklist. `ctx edit expand` previews a
+scoped structural rule only after it reproduces a verified example. Paired
+edit and prewalk evaluations provide optional per-model/per-shape quality and
+total-cost gates through `ctx edit advise` and orchestration policy files.
+The fixture uses no model; no live quality or cost improvement is claimed.
+
+Interrupted capture and orchestration waits now terminate their owned process
+groups and reap the leader before propagating the exception. The shared
+`kill_and_reap` helper covers cancellation as well as timeout; orchestration
+also closes settled pipe readers. Regression tests exercise real descendants
+through capture and both orchestration timeout modes. See the
+[Harness Playbook assessment](docs/HARNESS-PLAYBOOK.md) for the source analysis
+and the remaining capture, gateway, composition, and replay work.
+
+## [0.38.0] - 2026-09-05
+
+Three mechanisms taken from two outside designs — the Recursive Language
+Model write-up (Zhang et al., 2025) and headlong, the Laude Institute's
+bash agent microharness — after mapping both against what the harness
+already had. Their core moves (context as a variable the model reads
+through code, return by reference, an append-only trajectory that is an
+index over retrievable raw entries) are the handle model, the checkpoint
+address and lossless rescue respectively, so nothing was taken there. What
+was missing was narrower, and each piece is small.
+
+`ctx orchestrate` gains an inactivity bound beside its wall clock,
+headlong's `SHELLM_INACTIVITY_TIMEOUT` shape: `[orchestrate] idle_timeout`
+(seconds, 0 = off, the default) kills a node that emits nothing on either
+stream for that long and raises `ctx.orchestrator.NodeStalled`, while a
+node that keeps emitting is still bounded by `node_timeout`. Every byte a
+host writes is the beacon, read raw rather than by line so a progress
+character counts; Claude nodes switch to `--output-format stream-json
+--verbose` only while the bound is on (the default launch argv is
+unchanged), and `ctx.usage.parse_claude_json` reads that transcript's last
+`type: result` event as the same document `json` mode returned. The
+steward's vocabulary grows two failure kinds the improve route's first live
+run showed were missing: `stalled` (silent for `idle_timeout`) and
+`wall_timeout` (still active when `node_timeout` ran out). Both used to be
+`transient_transport` — the harvest node's hour of work was filed as a
+transport blip and offered a blind same-model retry. The recovery policy
+(production seam and evolution seed, kept identical, with two new evaluator
+cases) now escalates a stalled node and never re-runs it blind, and re-plans
+a wall-timeout node so the coordinator can split it, retrying the same model
+in the same worktree only when nobody can re-plan.
+
+The PreToolUse guard learns headlong's docker broker denylist as a
+safety-class `force_ask`: a privileged container, a host namespace
+(`--pid/--network/--ipc/--uts/--userns/--cgroupns=host`), a host device,
+`--cap-add` of `SYS_ADMIN`/`SYS_PTRACE`/`ALL`, the container-engine socket,
+or a bind mount whose source is outside the workspace (`-v`, `--mount
+type=bind`; `$PWD` resolves, any other shell variable asks). A named volume
+or a mount from inside the workspace keeps the volume-class answer
+`docker` always had. One predicate, every door: the plain command, the
+`> file 2>&1` shortcut, each chain segment, and `ctx run -- <argv>` — which
+was allowed outright because the program was `ctx`, and which the deny
+remediation itself points at. Closing that door also gave `ctx run -- cat
+secrets.json` the secret-path force_ask the plain command had.
+
+Rescue stubs carry the first line of the block they replaced (bounded to
+120 characters, control characters and runs of whitespace collapsed),
+headlong's one-line tldr on every summarized entry — except deterministic:
+a harnessed tool_result opens with its digest header, and that line is a
+pure function of the elided bytes, so a rescued transcript reads as an
+index instead of a column of identical placeholders, with no model and no
+summary involved. Hash, byte count and retrieval path are unchanged.
+
+## [0.37.0] - 2026-09-03
+
+`ctx.taskledger.append()` now holds one OS-level lock (`fcntl.flock`, the
+same idiom already used by `ctx.engagement`'s state file and `ctx.hook`'s
+read ledger) across its tail-check and write, closing a gap where two
+separate OS processes — not just threads inside one orchestrator — could
+race on the same task's ledger file. `ctx.orchestrator`'s own
+`threading.Lock` only ever protected concurrent launches within one
+`ctx orchestrate` run; a second orchestrator process, or a direct
+`ctx task send`, held no lock at all.
+
+Opt-in (`[orchestrate] prewalk = true`, docs/PREWALK.md): a node the router
+assigned a frontier model with a mutation role is asked to plan, make one
+edit, then hand off — printing a literal sentinel line and ending its turn
+rather than continuing the whole task. On that signal the SAME node's next
+attempt runs on the cheapest installed model below frontier, in the SAME
+worktree with the edit kept (never reset, unlike a failed attempt's retry),
+and its prompt carries the frontier attempt's plan and validated edit
+forward verbatim — the "free in-context example" a plan document alone
+cannot give a cheaper model, without which it routinely re-explores to
+trust it. The handback for this is a new, seventh reason,
+`prewalk_handoff` — a deliberate success, not a failure, so it bypasses
+`choose_recovery` entirely for its own deterministic decision,
+`ctx.steward.de_escalation_target` (the literal mirror of
+`escalation_target`: cheapest installed model *below* the current tier
+rather than above it), recorded as a `ctx.steward/v1` row
+(`action: "handoff_cheap"`) before it is acted on like every other steward
+decision. Detection is a single ctx-defined literal the model is asked to
+print, checked against the raw exit code before any of the existing
+failure-classification logic runs — deliberately, since a model narrating
+why it is stopping ("the task is not complete yet, handing off") would
+otherwise read as a real failure to that classifier. A model that ignores
+the instruction degrades safely: it just finishes the task itself, exactly
+as it would without prewalk, at no cost regression. No live-model receipt
+exists yet for the mechanism's actual cost/quality trade; the mechanism and
+its tests are model-free, pinning what the orchestrator does with a given
+transcript rather than what a real model writes.
+
+`ctx get --snapcompact` (`src/ctx/snapcompact.py`, Delivery plane): an opt-in
+transport swap for a bounded `ctx get` slice — render the already-selected
+text as a deterministic monospace bitmap PNG (crisp, no anti-aliasing; same
+input always renders the same pixels) instead of emitting it as raw text,
+store it via the existing content-addressed blob store, and return its
+`blob:` ref in the header instead of the text body. Follows a 2026 blog post
+(stencil.so/blog/snapcompact) describing this as a cost-reduction technique
+for vision-capable models — dense text rendered as an image and read back by
+the model instead of tokenized as text. This ships the deterministic
+encoding half only: a real monospace TTF (DejaVu Sans Mono, or the first of
+Liberation Mono / FreeMono found on the host; Pillow's own bundled font as a
+last-resort fallback), a measured (not assumed) character-cell density, and
+a cost estimate that combines this repo's own `ctx.textutil.estimate_tokens`
+for the raw side with Anthropic's own documented 28x28px vision-tiling
+formula for the image side. It does **not** verify — and cannot verify from
+this sandbox — that a live vision model actually transcribes the rendered
+image back correctly at the blog's claimed ~2-3x cost reduction; that
+requires a real model call. Fully opt-in (`--snapcompact` on `ctx get`, or
+`{snapcompact: true}` in the MCP `get` selector); default behavior is
+unchanged. Requires the `image` extra (`pip install 'ctx-harness[image]'`);
+without it, a clear error names the missing extra rather than a bare
+`ImportError`.
+
+The edit-outcome ledger (`ctx.edit_outcomes`, `.ctx-session-reads/
+edit-outcomes.jsonl`) now records two more fields on every row: the edit's
+**format** — a closed vocabulary derived from the tool name
+(`search_replace` for Edit/MultiEdit/str_replace_editor, `whole_file` for
+Write/create_file, `patch` for apply_patch, `anchored` for `ctx edit apply`,
+`other`) — and the **model** that made it. Published edit benchmarks
+(Aider's format ladder, hashline's 16-model comparison, EDIT-Bench) all
+report that a model's edit success moves by tens of points on the shape of
+the edit alone and that the ranking is per model; a ledger without those
+two axes could not say whether the anchored format straitjacket already
+ships beats a host's native `Edit` for the model actually in use. The model
+comes from `CTX_MODEL`, which `ctx orchestrate` now exports (with
+`CTX_HOST`) into every host process it launches; outside an orchestrated
+run the hook reads the last named model from a bounded tail of the
+transcript the PostToolUse payload points at, and records `unknown`
+otherwise — never a guess from an unrelated variable. `ctx edit apply` now
+records its own outcome into the same ledger, one row per planned file
+(`flavor: "ctx"`, `format: "anchored"`), with its two addressable refusals
+mapped onto the needle's two failure kinds (target moved or vanished →
+`not_found`; target now has more than one copy → `not_unique`). `edit_summary`
+gains `by_model` (per (model, format): counts, classified rows, success and
+failure rates, with `unknown` outside the success denominator) and
+`models_reporting` / `unlabelled_model_rows`; `summarize_rows` and
+`load_rows` expose the same over any row sequence. Old rows without the
+fields fold into `unknown` and the tool-implied format. New
+`evals/edit_format_by_model.py` replays a ledger into the one table the
+question needs — success(anchored) − success(search_replace) per model, in
+points, refusing to print a number for a cell under 30 classified rows and
+labelling hashline's published +15 average as an external bar it does not
+reproduce. No live-model receipt is included: the eval's `--fixture` mode
+prints invented numbers and says so, and the real table only exists once
+sessions with the hook installed have written rows.
+
+Bug-bash round 17 (evals/bugbash-round17-2026-09-04.md): the S6 cell run
+live as a naive-vs-harnessed Claude Code pair. Ten defects, all reproduced
+by hand before their fix, regression-tested in
+`tests/test_round17_mechanisms.py`:
+
+- `hook.py`: the `cmd > file 2>&1` shortcut returned `allow` ahead of the
+  secret-path guard, so `cat .env > out.log 2>&1` was allowed while
+  `cat .env` force-asks. Both doors now consult one predicate
+  (`_names_secret_path`).
+- `config.py`: `[engagement] lean_models = 42` raised `TypeError` out of
+  `load_config` on every command's path, and `"sonnet"` became six
+  one-letter models. Coerced like every other list field; a non-list keeps
+  the shipped default.
+- `digest/__init__.py`: `digest_output` hard-coded `exitCode: 0`, so an
+  errored over-budget tool result digested as `exit 0` and its stored
+  manifest recorded a success. The host's error flag now sets exit 1;
+  run identity is (bytes, tool, is_error).
+- `ladders.py`: `_epoch_rung` indexed past a ladder narrowed to two rungs
+  in ctx.toml (`[x] * 0` still evaluates `x`); guarded like its siblings.
+- `repomap.py`: the builtin ranker raised `KeyError` on an import edge to
+  a listed-but-unreadable file; it now skips edges to files it never read,
+  as the networkx ranker already did.
+- `surface_gateway.py`: `_rpc`'s deadline bounded only the first byte —
+  `select` then `readline()` blocked without a timeout on a backend that
+  wrote half a line and hung. Reads are now raw chunks under the deadline
+  with line splitting in the client.
+- `evidence_outcomes.py`: the `failing_ids` filter tested the whole result
+  and never the match, so one FAILED in a verbose run tagged every passing
+  id as failing and blocked `followup_join` from associating the fix.
+  Decided per line now.
+- `scorecard.py`: `u_read and u_read < max_read` skipped the largest
+  invalidation, cache_read collapsing to 0.
+- `facts.py`: `fails_sites` served a gc-collected run's census from the
+  cached `latest_run` pointer with a dead `run:` citation; the pointer is
+  honoured only while its manifest still exists.
+- `_retrieval/rg_engine.py`: `follow_symlinks = true` never reached
+  ripgrep (`--follow`).
+- `worktree_isolation.py` (found by CI on this branch, not by either arm):
+  every isolated worktree was created at `<tmp>/repo`, so git derived the
+  same worktree id for two parallel wave nodes and one read the other's
+  half-written `.git/worktrees/repo` entry. Leaf names now carry the node
+  id and a unique suffix, and the three mutating worktree commands share
+  one process-wide lock.
+
+The same round's harnessed arm produced zero findings, not from a code bug
+but from a harness/print-mode interaction: the main agent fanned out into 7
+background bug-hunt agents, then ended its turn to wait for their
+completion notifications — a `ScheduleWakeup` call is the last thing in its
+transcript, whose tool result says "the harness re-invokes you when the
+wakeup fires." Print mode (`claude -p`) is a single-shot process with no
+such re-invocation; it instead waits for background subagents up to
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (default well under ten minutes)
+after the main turn ends, then kills them — stderr shows "Background tasks
+still running after 600s; terminating," and `subagent_stats` confirms all 7
+were system-killed with zero completions, discarding real in-progress work.
+The naive arm fanned out the same way and survived because its main agent
+kept its own turn alive (polling for its subagents' notifications) until
+all six had reported; the harnessed main agent took the wakeup tool's
+reply at its word and ended its turn. That tool was present in both
+children only because the launch inherited the parent remote session's
+environment; nothing ctx injects — the ephemeral `--settings` hooks (33-37
+ms per call in the transcript, returning plain allow), the output-discipline
+prompt, the observer proxy — told the agent to delegate and wait. `ctx wrap
+claude` now defaults `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` (wait
+indefinitely) for print-mode launches, `ctx orchestrate`'s launcher sets the
+same default for its `claude -p` nodes (which its own per-node timeout still
+bounds), and `evals/matrix_runner.py` sets it for both arms of a pair so the
+ceiling is never what a comparison measures; all three are skipped if the
+caller already exported the variable. The runner also stops passing the
+parent session's identity (`CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_CHILD_SESSION`) to its arms.
+
+Disabling that timer stops it from killing the subagents, but it does not
+touch the belief that made the main agent end its turn to wait for them in
+the first place — `ScheduleWakeup` is built into this Claude Code build and
+cannot be removed from a print-mode child by environment, and its tool
+result still promises "the harness re-invokes you," which is false once a
+`claude -p` process has nothing left to do. Both print-mode launch points —
+`ctx wrap claude` and `ctx orchestrate`'s per-node launcher — now append a
+short system-prompt notice telling the agent plainly that this is a
+single-shot run with no supervisor, that no wakeup or notification will
+re-invoke it, and that if it delegates to background subagents it must stay
+in its turn and collect their results before finishing. It shares
+`ctx wrap`'s existing opt-out (`CTX_WRAP_NO_DISCIPLINE=1`, or the caller's
+own `--append-system-prompt`) and is skipped for interactive sessions. It is
+not one of the byte-pinned prefix assets in `tests/test_prefix_stability.py`.
+No live re-run of the round-17 scenario has happened yet with this notice in
+place — the tests pin the injection, not a model's behavior in response to it.
+
+The harnessed arm re-run on the fixed tree kept its turn and completed all
+eight subagents (the lifecycle defect is closed) but hit the 30-turn cap
+collecting them, so its eleven findings were read from the subagent
+reports directly (evals/bugbash-round17-2026-09-04.md, "Harnessed arm,
+re-run"). All eleven reproduced and are fixed, regression-tested in
+`tests/test_round17_harnessed.py`; none overlapped the naive arm's ten:
+
+- `_retrieval/get.py`, `_retrieval/spans.py`: bodies were split with
+  `str.splitlines()` while the line index counts only `\n`, so a U+2028
+  (or `\r`, `\v`, `\f`, `\x1c`, `\x85`, U+2029) shifted every line
+  number after it. `ctx.textutil.index_lines` splits the way the index
+  counts; search already did.
+- `_retrieval/get.py`: an empty blob or stream is now an answer
+  (`--lines 1:0 of 0 (empty)`) instead of a refusal whose suggested fix
+  refused again.
+- `orchestrator.py`: a host launch owns its process group and a timeout
+  SIGKILLs all of it (`_run_bounded`), not just the host CLI.
+- `commands/execute.py`: a bare `ctx job <id>` on a finished background
+  job returns the run's exit code (3 on failure) instead of 0.
+- `reflex.py`: every state mutator now holds one flock across its
+  read-modify-write, so parallel hooks from one turn cannot lose each
+  other's updates.
+- `jobs.py`: the launcher records its supervisor's pid; a supervisor that
+  dies before the first state write turns the job `failed` instead of
+  leaving `--wait` polling forever.
+- `installer.py`: `doctor_checks` closes the three stores it opens.
+- `worktree_isolation.py`: `"."` as a declared target is refused with the
+  module's own error, not an `IndexError`.
+- `surface_gateway.py`: hiding a family that is not revealed reports no
+  change.
+- `engagement.py`: the symbol-grep list keeps the most recent 64, so the
+  count no longer freezes.
+- `edit_transactions.py`: a failed rename during rollback, or during the
+  forward commit, no longer leaks its staged temp file.
+
+The single-shot notice now also says that every blocking wait on
+background work spends a turn and prefers foreground subagents; the
+re-run spent fifteen of its thirty turns waiting.
+
+`ctx prune`, and `ctx setup --prune`: the capability-surface audit run as
+a setup step with a decision rule. The audit (`ctx surface audit`) and the
+enforced compile (`ctx surface compile --profile`) had both shipped; what
+was missing was the step between them that runs when the harness is
+installed. Prune keeps ctx's own kernel and every capability whose
+recommended disclosure level is L0 or L1 (read-only, or observed in use),
+defers everything at L2 and above (unused, remote-write, destructive),
+compiles that selection into each host's minimal launch config with the
+existing emitters, and writes `.ctx-surface/prune-receipt.json` with the
+per-turn tokens before and after and the repository's shape (languages by
+file count, test-runner markers). Nothing is deleted; a deferred
+capability stays reachable through the gateway or `--keep <id>`. Preview
+by default, idempotent, and the same rule `ctx surface trim` already
+recommended. On a terminal it asks instead of deciding: one selector per
+group (MCP servers, skills, agents) listing each capability with its tokens
+per turn, authority, observed use and the rule's mark; Enter accepts the
+marks, `all` / `none` / `1,3-5` / `+2` / `-3` / `?2` adjust or explain;
+then the hosts to compile for; then a confirmation. Kernel capabilities are
+reported as kept and never asked about. The receipt records whether the rule
+or the user decided each one. `--yes` (or a pipe, or `--json`) takes the
+rule's answer without questions. `surface_profiles.compile_profile` accepts
+a ready `Profile` for callers that decided the selection themselves.
+
+`evals/improve_route.py`: the self-improvement loop round 17 ran by hand,
+as one `ctx orchestrate` route -- hunt (explore, strongest model), verify
+(reproduce every claim; write a failing test per confirmed one), harvest
+(fix exactly what the tests pin), prove (suite and lint) -- with the task
+ledger recording each step and a verdict computed from the four nodes'
+JSON yields: precision = reproduced / claimed, promotable only when it
+clears 0.8, at least one finding survived, and the suite passed on the
+harvested tree. Promotable means "review this diff", never merge. Model-
+free tests pin the plan's validity under the router's rules and the gate's
+arithmetic; a live receipt is recorded when one exists.
+
+The improvement route's first live run (evals/improve-route-2026-09-05.json,
+recorded in evals/bugbash-round17-2026-09-04.md): hunt 158 turns on the
+frontier model, verify 138 on the standard model, harvest killed at its
+hour timeout after making 69 of 70 verify tests pass across 48 files; the
+prove step, run by hand, found 3 regressions in the substitution family,
+so the gate held the round. The hand review took 47 files and 64 tests and
+refused the substitution changes (they re-decide a settled collapse rule),
+a replay-metric redefinition, and a process-wide child subreaper. Among
+the fixes taken: the collapse rewrite could override a secret-path
+force-ask; `classify_read` resolved a relative path against the process
+cwd rather than the workspace; the generated `ctx.toml` pinned 3 of 16
+redaction patterns; `ctx seq --keep-going` halted on a step that failed to
+spawn; `_authority_ok` failed open on a mistyped ceiling; two more
+`splitlines()` sites disagreed with the line index; `install_claude`
+never added a hook stage an older install lacked; a proxy retry could pop
+a second stale pooled connection; `plan_exec` crashed on an explicit
+`null` wall budget; `wait_or_kill(proc, 0)` did not kill an orphaned
+grandchild whose leader had already exited. The route now runs one
+attempt per node with a 100-turn ceiling and labels its cost estimate a
+placeholder; the first run cost 57 times it.
+
+Review round on this wave (Codex, four findings, all confirmed and fixed):
+prewalk is armed only when the handoff it asks for can happen (a second
+attempt allowed and a cheaper unattended model installed), so a compliant
+frontier worker is never told to stop after one edit with nobody to hand
+to; the cheap handoff attempt is priced against the remaining budget like
+any claim instead of passing on `remaining > 0` alone; the call graph
+registers a file under every package root it is importable from (an
+unbroken chain of package directories), so a nested `pkg.sub.store` keeps
+its outer prefix beside a loose file in the source root; and the job
+launcher records its supervisor's pid in its own file rather than
+read-modify-writing the supervisor's `meta.json`, which raced however many
+times it re-read first.
+
+## [0.36.0] - 2026-09-02
+
+Orchestrated harnesses now collaborate over a task ledger, and a run survives
+its orchestrator. `ctx orchestrate` writes a per-task, append-only ledger of
+six closed-vocabulary rows — task, claim, handback, steward, verdict, inbox —
+under `.ctx-session-reads/tasks/`. Every launch is claimed (host, model,
+expected turns and cost) and handed back with a typed reason and failure kind,
+its checkpoint, turns and actual cost. A handback other than `done` goes to a
+deterministic steward: it classifies why the host stopped, offers the recovery
+policy only the actions that exist for that node (a stronger installed model,
+a coordinator with re-plans left, another attempt), and appends its decision
+before acting. The policy is the AlphaEvolve `choose_recovery` seed, evolved
+for lever `recovery-escalation` and never wired in, promoted verbatim as
+`ctx.recovery_policy`; it replaces the fixed escalate-one-tier-once rule.
+A one-shot host's own `permission auto-denied` / read-only-workspace
+execution failure stays escalatable, as the acceptance suite always required;
+a login failure now stops instead of buying a stronger model, and a stop
+chosen because nothing applicable existed is labelled `stop_blocked`, never
+`stop_budget`. Budget is checked against ledger actuals, never below the
+estimate where an attempt went unpriced, and a claim whose estimate exceeds
+what remains is refused before launch; a claim reserves its estimate until
+its handback and the check-and-claim is one step under the ledger lock, so
+two nodes of one wave cannot both pass against the same balance. Hosts' turn counts are parsed (Claude
+`num_turns`, Codex `turn.completed`) and summarized; a node past
+`[orchestrate] expected_turns` hands back `over_turns` as a complexity
+signal, and `turn_ceiling` > 0 hard-bounds Claude nodes with `--max-turns`.
+`ctx orchestrate --resume <task>` (no task argument needed) rebuilds the plan
+from the ledger, restores nodes with a `done` handback without re-running
+them, and re-runs nodes that were claimed but never handed back; nodes a
+coordinator re-plan added are on the ledger as a further task row, so they
+are restored too. `ctx task ls|show|inbox|send` and the MCP
+ops `task`/`inbox`/`send` read the ledger and hand a node an address — never
+content — which reaches it in its prompt. Ledger rows carry no task text or
+output: the goal is a `blob:` address, output a `checkpoint:` address, the
+inbox ref must parse as an address (with `ctx get` options at most) and is
+bounded, and the inbox note is the one sanitized free-text field. Model-free receipt
+over injected hosts: resume saved 6 of 16 launches a naive restart makes with
+no node run twice; typed recovery spent 43% less than the fixed rule across
+seven failure shapes; the claim check held spend inside a budget the estimate
+had said was fine. The skill body now tells a node how to read its inbox and
+hand addresses forward, and the MCP tool description glosses the three new
+ops; both are injected prefix assets, so this intentional change bumps
+`PREFIX_VERSION` to 11 and cold-invalidates every user's prompt cache once.
 
 ## [0.35.1] - 2026-08-21
 

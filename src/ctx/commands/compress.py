@@ -1,12 +1,11 @@
 """Local compression and deterministic prompt wrapping; no model requests."""
-from pathlib import Path
-import json
-
-from ctx.context_compression import compress_stored, cache_wrap
-from ctx.store import Store
-
-
 def cmd_compress(ws, ns):
+    from pathlib import Path
+    import json
+
+    from ctx.context_compression import compress_stored, cache_wrap
+    from ctx.store import Store
+
     try:
         text = Path(ns.file).read_bytes().decode('utf-8')
         store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)

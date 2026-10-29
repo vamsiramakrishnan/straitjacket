@@ -224,3 +224,42 @@ def test_status_spool_view_is_bounded(ws_store, capsys):
     assert "omitted" in status  # declared omission, never silent
     assert main(["--workspace", root, "job", jid, "--kill"]) == 0
     capsys.readouterr()
+
+
+def test_bg_always_hands_back_an_address_even_when_the_child_is_instant(
+    ws_store, capsys
+):
+    """`--bg` says "background immediately … transcript gets a job handle",
+    so the handle cannot depend on losing a race with the supervisor.
+
+    Expressed as a zero patience window it did: `wait_for_done` checks job
+    state before it checks the deadline, so a child that finished first
+    finalized inline and the transcript got no address. `echo` is instant, so
+    this reproduces on any loaded machine — it went red in CI, not locally.
+    Repeated because the failure is a race, and one green pass proves nothing.
+    """
+    from ctx.cli import main
+
+    ws, _store = ws_store
+    root = str(ws.root)
+    for i in range(8):
+        assert main(["--workspace", root, "run", "--bg", "--", "true"]) == 0
+        out = capsys.readouterr().out
+        assert "backgrounded" in out, f"attempt {i} finalized inline:\n{out}"
+        _job_id(out)  # raises if no handle was printed
+
+
+def test_bg_after_still_finalizes_inline_when_the_child_beats_the_window(
+    ws_store, capsys
+):
+    """The patience window is `--bg-after`'s whole point, and it keeps it:
+    a fast child inside the window prints the ordinary digest, not a handle."""
+    from ctx.cli import main
+
+    ws, _store = ws_store
+    root = str(ws.root)
+    assert main(
+        ["--workspace", root, "run", "--bg-after", "20", "--shell", "--", "echo quick"]
+    ) == 0
+    out = capsys.readouterr().out
+    assert "quick" in out and "backgrounded" not in out

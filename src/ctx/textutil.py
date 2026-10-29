@@ -13,7 +13,7 @@ import re
 _ANSI_RE = re.compile(
     r"""
     \x1b\[[0-9;?]*[ -/]*[@-~]      # CSI sequences
-  | \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?  # OSC sequences
+  | \x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)?  # OSC sequences; stop at \n so an unterminated OSC can't eat the rest
   | \x1b[@-_]                      # other escape sequences
     """,
     re.VERBOSE,
@@ -177,7 +177,7 @@ def json_pointer(doc, pointer: str):
     for token in pointer[1:].split("/"):
         key = token.replace("~1", "/").replace("~0", "~")
         if isinstance(node, list):
-            if not (key.isdigit() and (key == "0" or not key.startswith("0"))):
+            if not (key.isdecimal() and (key == "0" or not key.startswith("0"))):  # fix: isdigit() accepts non-ASCII digits (e.g. superscripts) that int() rejects
                 raise JsonPointerError(
                     f"not an array index: {token!r} in {pointer!r}"
                 )
@@ -243,6 +243,26 @@ def write_exact(text: str, stream=None, *, newline: bool = True) -> None:
     stream.flush()
     buf.write(encode_exact(text) + eol.encode())
     buf.flush()
+
+
+def index_lines(text: str) -> list[str]:
+    """Split on ``\n`` only, the way the store's line index counts lines.
+
+    ``str.splitlines()`` also breaks on ``\r``, ``\v``, ``\f``, ``\x1c``,
+    ``\x85``, U+2028 and U+2029, so a line index built on ``\n`` and a body
+    split with ``splitlines()`` disagreed on any content containing one of
+    them: ``ctx get`` printed four lines under a header claiming three, with
+    every number after the break off by one. Search already split this way
+    (``_retrieval/search.py``); retrieval and spans now do too. A trailing
+    ``\r`` is dropped from each line for display, since CRLF content is one
+    line per ``\n`` either way.
+    """
+    if not text:
+        return []
+    parts = text.split("\n")
+    if parts and parts[-1] == "":
+        parts.pop()
+    return [p[:-1] if p.endswith("\r") else p for p in parts]
 
 
 def estimate_tokens(n_bytes: int) -> int:

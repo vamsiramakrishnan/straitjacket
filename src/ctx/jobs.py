@@ -105,6 +105,17 @@ def _write_meta(jobdir: Path, meta: dict[str, Any]) -> None:
     _atomic_write(jobdir / "meta.json", json.dumps(meta, sort_keys=True).encode("utf-8"))
 
 
+_LAUNCHER_PID_NAME = "launcher.pid"
+
+
+def _launcher_pid(jobdir: Path) -> int | None:
+    """The supervisor pid the launcher recorded, or None before it did."""
+    try:
+        return int((jobdir / _LAUNCHER_PID_NAME).read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _read_meta(jobdir: Path) -> dict[str, Any]:
     try:
         return json.loads((jobdir / "meta.json").read_text(encoding="utf-8"))
@@ -130,6 +141,23 @@ def _adopt_if_orphaned(jobdir: Path, meta: dict[str, Any]) -> dict[str, Any]:
     """If both the supervisor and the child died without a state transition
     (host crash, external SIGKILL of the whole tree), take over meta once.
     Gated on a re-read so a supervisor writing 'done' concurrently wins."""
+    if meta.get("state") == "launching":
+        # Never left "launching": the supervisor died before its first
+        # state write. Without this, `ctx job <id> --wait` polled forever.
+        sup = _launcher_pid(jobdir)
+        if sup is None or _pid_alive(sup):
+            return meta
+        meta = _read_meta(jobdir)
+        if meta.get("state") != "launching":
+            return meta
+        meta.update(
+            state="failed",
+            error="supervisor exited before the job started",
+            endedAt=time.time(),
+            orphaned=True,
+        )
+        _write_meta(jobdir, meta)
+        return meta
     if meta.get("state") != "running":
         return meta
     if _pid_alive(meta.get("supervisorPid")) or _pid_alive(meta.get("pid")):
@@ -188,6 +216,18 @@ def start_job(
         "state": "launching",
         "createdAt": time.time(),
     }
+    # Decided here, by the launcher, because the launcher is the only party
+    # in this flow that already holds a workspace. If nobody is watching the
+    # `job` topic when the run starts, the supervisor stays exactly as
+    # dependency-free as it has always been and no extra process is spawned.
+    try:
+        from ctx import relay
+
+        meta["announce"] = any(
+            w.get("topic") == "job" for w in relay.active_watches(ws.root)
+        )
+    except Exception:
+        meta["announce"] = False
     _write_meta(jobdir, meta)
 
     # Defensive PYTHONPATH: works for src layouts even without an install.
@@ -200,7 +240,7 @@ def start_job(
     )
     sup_err = (jobdir / "supervisor.err").open("wb")
     try:
-        subprocess.Popen(
+        sup = subprocess.Popen(
             [sys.executable, "-m", "ctx", "job", "_supervise", str(jobdir)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -210,6 +250,13 @@ def start_job(
         )
     finally:
         sup_err.close()
+    # Record the supervisor's pid so a supervisor that dies before its first
+    # state write (import failure, OOM in the window) can be recognised
+    # instead of waited on forever. In its OWN file: meta.json is the
+    # supervisor's document, and a parent read-modify-write of it raced the
+    # supervisor's "running" write however many times it re-read first
+    # (Codex review, PR #33). Two writers, two files, no race.
+    _atomic_write(jobdir / _LAUNCHER_PID_NAME, str(sup.pid).encode("ascii"))
     return job_id
 
 
@@ -266,7 +313,61 @@ def supervise_main(jobdir_str: str) -> int:
         endedAt=time.time(),
     )
     _write_meta(jobdir, meta)
+
+    # The one thing the supervisor does beyond spooling: if somebody asked to
+    # be told, hand the announcement to a detached child rather than doing it
+    # here. This function's contract is that it "never resolves a workspace or
+    # opens the store", and finalizing a job requires both — so it shells out
+    # to a fresh `ctx` instead of importing its way around the invariant.
+    # Without this, a finished background job is invisible until an agent
+    # remembers to poll, which is the gap the relay exists to close.
+    if meta.get("announce"):
+        try:
+            subprocess.Popen(
+                [sys.executable, "-m", "ctx", "job", jobdir.name, "--announce"],
+                cwd=meta["cwdAbs"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env=os.environ,
+            )
+        except Exception:  # noqa: BLE001 — an unannounced job is still a done job
+            pass
     return 0
+
+
+def announce_job(ws: Workspace, store: Store, job_id: str) -> list[dict[str, Any]]:
+    """Finalize a done job and publish its address to the relay.
+
+    The signal carries the ``run:`` address and a one-line outcome, never the
+    output — the receiving agent resolves it under its own permissions and
+    pays only for what it reads. Returns the queued signals (empty when
+    nobody is watching, which is not an error).
+    """
+    from ctx import relay
+
+    digest, manifest = finalize_job(ws, store, job_id)
+    meta = _read_meta(_job_dir(store, job_id))
+    result = manifest.get("result") or {}
+    code = result.get("exitCode")
+    outcome = (
+        "timed out"
+        if result.get("timedOut")
+        else f"signal {result['signal']}"
+        if result.get("signal")
+        else f"exit {code}"
+    )
+    argv = " ".join(str(a) for a in (meta.get("argv") or []))[:80]
+    short = short_id(manifest["id"])
+    return relay.publish(
+        ws.root,
+        topic="job",
+        selector=job_id,
+        ref=f"run:{short}#stdout",
+        origin="ctx-job",
+        note=f"{argv} — {outcome}",
+    )
 
 
 # ---------------------------------------------------------------- finalize
@@ -348,7 +449,7 @@ def wait_for_done(store: Store, job_id: str, *, timeout: float | None = None) ->
         if (jobdir / "finalized.json").is_file():
             return True
         meta = _read_meta(jobdir)
-        if meta.get("state") == "running":
+        if meta.get("state") in ("running", "launching"):
             meta = _adopt_if_orphaned(jobdir, meta)
         if meta.get("state") == "done":
             return True
@@ -382,7 +483,8 @@ def kill_job(ws: Workspace, store: Store, job_id: str, *, settle_s: float = 8.0)
         except (ProcessLookupError, PermissionError):
             pass  # already gone (or unsignalable): the supervisor settles state
         # Let the supervisor record the death; adopt only if it died too.
-        while time.monotonic() < deadline:
+        settle_deadline = time.monotonic() + settle_s  # separate deadline: don't share the wait-for-pid budget
+        while time.monotonic() < settle_deadline:
             meta = _read_meta(jobdir)
             if meta.get("state") != "running":
                 break
@@ -489,7 +591,7 @@ def job_status(store: Store, job_id: str, *, tail: int | None = None) -> str:
     Never more than ~40 spool lines; long lines clipped."""
     jobdir = _job_dir(store, job_id)
     meta = _read_meta(jobdir)
-    if meta.get("state") == "running":
+    if meta.get("state") in ("running", "launching"):
         meta = _adopt_if_orphaned(jobdir, meta)
     state = meta.get("state", "unknown")
     if state == "failed":
@@ -529,7 +631,7 @@ def job_state(store: Store, job_id: str) -> str:
     if (jobdir / "finalized.json").is_file():
         return "finalized"
     meta = _read_meta(jobdir)
-    if meta.get("state") == "running":
+    if meta.get("state") in ("running", "launching"):
         meta = _adopt_if_orphaned(jobdir, meta)
     return str(meta.get("state", "unknown"))
 
@@ -555,7 +657,7 @@ def list_jobs(store: Store) -> str:
                 short = "?"
             desc = f"finalized → run:{short}"
         else:
-            if meta.get("state") == "running":
+            if meta.get("state") in ("running", "launching"):
                 meta = _adopt_if_orphaned(jobdir, meta)
             state = meta.get("state", "unknown")
             desc = state

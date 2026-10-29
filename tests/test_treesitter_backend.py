@@ -84,8 +84,11 @@ def test_bundles_remain_a_fallback_for_undeclared_languages(monkeypatch):
 
     from ctx import skeleton
 
-    monkeypatch.setitem(skeleton._TS_PACK_NAMES, "ruby", "ruby")
-    assert skeleton._ts_parser("ruby") is sentinel
+    # Every roster language now has a declared wheel, so the undeclared case
+    # is a language the roster does not know at all.
+    assert "zig" not in skeleton._TS_GRAMMAR_MODULES
+    monkeypatch.setitem(skeleton._TS_PACK_NAMES, "zig", "zig")
+    assert skeleton._ts_parser("zig") is sentinel
 
 
 @pytest.mark.skipif(not HAS_TS_JS, reason="tree-sitter-javascript grammar wheel absent")

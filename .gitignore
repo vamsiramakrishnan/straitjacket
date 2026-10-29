@@ -40,3 +40,9 @@ evals/_runs/
 
 # Machine/project-specific AlphaEvolve connection (resource IDs, no credentials).
 /.alphaevolve.env
+
+# Agent marks are copied from assets/agents by the documentation build.
+/site/public/agents/
+
+# Fetched eval corpora and upstream repo mirrors (deepswe, swebench adapters)
+evals/**/_cache/

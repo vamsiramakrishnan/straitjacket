@@ -28,7 +28,7 @@ def project(tmp_path, monkeypatch):
                'directory': str(root), 'task_id': task_id}
         (root / 'state.json').write_text(json.dumps(row))
         return row
-    monkeypatch.setattr('ctx.prewalk.launch', launch)
+    monkeypatch.setattr('ctx.native_prewalk.launch', launch)
     ledger = Ledger(tmp_path / '.ctx/collab')
     task = ledger.create_task('fix src', owns=('src.py',), verify='python -V')
     ledger.claim(task, 'agy')
@@ -62,3 +62,20 @@ def test_out_of_scope_first_edit_never_reaches_executor(project):
         ledger.continue_prewalk(guide['session_id'], model='gemini-3.8-flash-high')
     assert len(calls) == 1
     assert (root / 'notes.txt').read_text() == 'user untracked work\n'
+
+
+def test_failed_first_edit_check_blocks_continuation(project, monkeypatch):
+    root, ledger, task, calls = project
+    guide = ledger.start_prewalk(task, model='gemini-4-argon-high')
+    (Path(guide['worktree']) / 'src.py').write_text('changed\n')
+    original = subprocess.run
+
+    def fail_check(argv, **kwargs):
+        if argv == ['python', '-V']:
+            return subprocess.CompletedProcess(argv, 1, b'', b'failed check')
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr('ctx.native_prewalk.subprocess.run', fail_check)
+    with pytest.raises(CollabError, match='first-edit check failed'):
+        ledger.continue_prewalk(guide['session_id'], model='gemini-3.8-flash-high')
+    assert len(calls) == 1

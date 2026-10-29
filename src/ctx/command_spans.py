@@ -73,7 +73,7 @@ _GIT_SUMMARY_FLAGS = frozenset(
     {"--check", "--stat", "--numstat", "--shortstat", "--name-only",
      "--name-status", "--summary"}
 )
-_GIT_PATCH_FLAGS = frozenset({"-p", "-u", "--patch", "--patch-with-raw"})
+_GIT_PATCH_FLAGS = frozenset({"-p", "-u", "--patch", "--patch-with-raw", "--patch-with-stat"})  # was missing; full patch leaked through as ALLOW
 
 
 def _metadata_query(argv) -> bool:
@@ -149,9 +149,12 @@ def _gh_span(argv, maximum_records: int) -> str | None:
         return CAPTURE
     if args[0] == "api":
         mutation_flags = {"-X", "--method", "-f", "--field", "-F", "--raw-field", "--input"}
+        short_flags = tuple(flag for flag in mutation_flags if not flag.startswith("--"))
         if not any(
             arg in mutation_flags
             or any(arg.startswith(flag + "=") for flag in mutation_flags if flag.startswith("--"))
+            # attached shorthand (-XDELETE, -fquery=...) glues the value onto the flag
+            or (arg.startswith(short_flags) and len(arg) > 2)
             for arg in args[1:]
         ):
             return CAPTURE

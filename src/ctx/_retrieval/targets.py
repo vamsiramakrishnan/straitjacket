@@ -78,7 +78,9 @@ class SearchTarget:
         return end + 1
 
 
-def _resolve_run_targets(store: Store, ref: Ref) -> tuple[list[SearchTarget], int]:
+def _resolve_run_targets(
+    store: Store, ref: Ref, *, glob: str | None = None
+) -> tuple[list[SearchTarget], int]:
     """Returns (targets, streams_skipped_binary).
 
     Debt 135d7df383 (S6 bug-bash): a binary stream used to raise straight out
@@ -102,7 +104,10 @@ def _resolve_run_targets(store: Store, ref: Ref) -> tuple[list[SearchTarget], in
         except RetrievalError:
             skipped_binary += 1
             continue
-        targets.append(SearchTarget(label=f"run:{short}#{name}", text=text))
+        label = f"run:{short}#{name}"
+        if glob and not _glob_match(label, glob):  # --glob was documented but never threaded into run: search, making it a silent no-op
+            continue
+        targets.append(SearchTarget(label=label, text=text))
     return targets, skipped_binary
 
 
@@ -114,8 +119,11 @@ def _resolve_repo_targets(
     glob: str | None,
     scope: str | None,
     max_files: int = 5000,
+    keep=None,
 ) -> tuple[list[SearchTarget], int, int]:
-    """Returns (targets, files_considered, files_skipped_binary)."""
+    """Returns (targets, files_considered, files_skipped_binary). ``keep``
+    is an optional per-path predicate (the query language's path and
+    language filters) applied after the glob."""
     roots: list[str | None]
     if scope:
         scoped = ws.config.scopes.get(scope)
@@ -140,6 +148,9 @@ def _resolve_repo_targets(
     ]
     if glob:
         rels = [r for r in rels if _glob_match(r, glob)]
+    if keep is not None:
+        rels = [r for r in rels if keep(r)]
+    total_before_cap = len(rels)  # considered must reflect pre-cap size, not the capped list
     rels = rels[:max_files]
 
     targets: list[SearchTarget] = []
@@ -160,4 +171,4 @@ def _resolve_repo_targets(
             skipped_binary += 1
             continue
         targets.append(SearchTarget(label=rel, text=data.decode("utf-8", "replace")))
-    return targets, len(rels), skipped_binary
+    return targets, total_before_cap, skipped_binary

@@ -1,12 +1,8 @@
 # Use cases
 
-straitjacket is most valuable when a coding agent must inspect more evidence than its
-transcript can safely hold. The common thread is not “large output” by itself. It is
-**large output whose decisive evidence must remain recoverable after the first turn**.
-
-This page starts with the work, not the mechanism. Each pattern names the failure mode,
-the smallest useful straitjacket verb, and the evidence that should cross back into the
-model’s context.
+Choose a command by the evidence you need next. Each workflow below names the
+failure it addresses, the command to run, and the result to inspect. Start with
+native tools when their complete output is already small.
 
 ## Choose by failure mode
 
@@ -45,7 +41,7 @@ A useful test digest should preserve:
 Use retrieval only for the failure you are actively diagnosing:
 
 ```bash
-ctx get run:<id>#stdout --lines 418:472
+ctx get run:8d8335db6848#stdout --lines 418:472
 ```
 
 ### Why it helps
@@ -167,7 +163,7 @@ outputs. Duplicate evidence dominates the context; the behavioral change is impl
 ### The bounded path
 
 ```bash
-ctx diff run:<before> run:<after>
+ctx diff run:8d8335db6848 run:5a67c9de0123
 ```
 
 The useful output is a delta census:
@@ -243,8 +239,8 @@ evidence preservation = tasks solved with containment / tasks solved natively
 ```
 
 A small digest with poor decisive-evidence recall is not an optimization. The target is
-high containment **at matched or better task success**, with every omission declared and
-resolvable.
+high containment **at matched or better task success**, with every omission in
+a captured digest declared and resolvable while its artifact is retained.
 
 ---
 

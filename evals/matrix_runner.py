@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import json
 import os
 import pathlib
 import shutil
@@ -176,10 +175,14 @@ def workdir_for(scenario: str, base: pathlib.Path) -> pathlib.Path:
     return base / "r" if scenario in ("S3", "S4", "S5", "S6") else base
 
 
-def run_pair(scenario: str, model: str, out: pathlib.Path, repo: pathlib.Path) -> None:
+ARMS = ("naive", "sj")
+
+
+def run_pair(scenario: str, model: str, out: pathlib.Path, repo: pathlib.Path,
+             arms: tuple[str, ...] = ARMS) -> None:
     task, max_turns = TASKS[scenario]
     procs = []
-    for arm in ("naive", "sj"):
+    for arm in arms:
         base = out / f"{scenario}_{model}_{arm}"
         if base.exists():
             shutil.rmtree(base)
@@ -194,6 +197,22 @@ def run_pair(scenario: str, model: str, out: pathlib.Path, repo: pathlib.Path) -
             "CLAUDE_CONFIG_DIR": str(cfg),
             "PIP_REQUIRE_VIRTUALENV": "1",
         }
+        # Both arms run in print mode, which kills background subagents at a
+        # fixed ceiling after the main turn ends. `ctx wrap` defaults this to
+        # "wait indefinitely" for the sj arm (its hooks/proxy add per-tool
+        # latency that ate the ceiling in round 17 — see
+        # evals/bugbash-round17-2026-09-04.md); set the same default here so
+        # the naive arm isn't bounded by a shorter ceiling than sj gets,
+        # which would make the pair's finding counts an artifact of this
+        # timer rather than of bug-finding ability. Never overrides a value
+        # the caller already exported.
+        env.setdefault("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
+        # A pair launched from inside a Claude Code session inherited that
+        # session's identity, so both arms wrote their transcripts under the
+        # parent's session id and saw the parent's remote-session tools
+        # (round 17). Each arm is its own session.
+        for inherited in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION"):
+            env.pop(inherited, None)
         argv = ["claude", "-p", task, "--max-turns", str(max_turns),
                 "--output-format", "json", "--allowedTools", TOOLS]
         if MODELS[model]:
@@ -223,13 +242,18 @@ def main() -> int:
                     help="scenario:model, e.g. S1:sonnet S1:haiku")
     ap.add_argument("--jobs", type=int, default=1,
                     help="pairs to run concurrently (each pair is 2 agents)")
+    ap.add_argument("--arms", nargs="+", choices=ARMS, default=list(ARMS),
+                    help="run only these arms (default: both); a re-run of one "
+                         "arm after a lifecycle failure need not buy the other")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = []
         for pair in args.pairs:
             scenario, model = pair.split(":")
-            futures.append(pool.submit(run_pair, scenario, model, args.out, args.repo))
+            futures.append(pool.submit(
+                run_pair, scenario, model, args.out, args.repo, tuple(args.arms)
+            ))
         for f in futures:
             f.result()
     print("MATRIX_DONE", flush=True)

@@ -1,6 +1,13 @@
 # Host capabilities — what each agent can actually enforce
 
-**Status:** current behaviour · **Normative source:**
+Straitjacket is the sidecar; the hosts below are the coding harnesses. Each
+integration connects the sidecar's evidence tools to the user's existing agent.
+The optional `antigravity-sdk` entry is a separate ctx-owned agent runtime,
+not a requirement for using the sidecar with Google's Antigravity CLI.
+
+**Status:** current implementation and published host contracts. Claude Code
+and Antigravity have live receipts; the Codex gates are contract-tested but
+still await a live CLI run. **Antigravity contract source:**
 [`spec/adr/005-antigravity-hook-contract.md`](../spec/adr/005-antigravity-hook-contract.md)
 
 > **New here?** `ctx` is straitjacket's command — the project is straitjacket,
@@ -8,21 +15,19 @@
 > [How it works](HOW-IT-WORKS.md) first: ten minutes, one command walked through
 > the whole system.
 
-straitjacket harnesses four hosts, and they do **not** all protect you equally.
-The difference is not effort or polish — it is what each host's published hook
-contract permits. This page tells you what you actually get on the host you use,
-and what to do where the guarantee is weaker.
+Keep using your preferred coding agent. Straitjacket's integrations range from
+explicit MCP tools to automatic command interception, depending on the adapter
+implemented and the host's API. CLI capture and the verified edit workflow are
+available to any agent with terminal access.
 
 ## The two gates
 
 Containment happens at two points:
 
-- **The birth gate** (`PreToolUse`) fires *before* a command runs. It is the
-  primary mechanism: a flooding command is contained at source, so the unbounded
-  output never enters the transcript. (It is still captured *in full* to the
-  local artifact store — containment is about your context window, not about
-  discarding data. See [Capture happens even where substitution
-  cannot](#capture-happens-even-where-substitution-cannot).)
+- **The birth gate** (`PreToolUse`) fires *before* a command runs. On a
+  rewrite-capable host, the command is routed through `ctx run` and captured in
+  full. On Antigravity's deny-only path, the command does not run and nothing is
+  captured until the agent explicitly reissues the bounded command.
 - **The output gate** (`PostToolUse`) fires *after* a tool returns. It is the
   safety net: if something slipped past the birth gate, an oversized result is
   replaced by a bounded digest before the model sees it.
@@ -34,21 +39,33 @@ tool's arguments*; the output gate needs a way to *replace a tool's result*.
 
 | host | birth gate | output gate | how |
 |---|---|---|---|
-| **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `updatedToolOutput` |
-| **codex** (Codex CLI) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `decision:block` |
-| **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
+| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/claude.svg" width="24" height="24" alt=""> **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result | `updatedInput` / `updatedToolOutput` |
+| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/codex.svg" width="24" height="24" alt=""> **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
+| <img src="../assets/agents/antigravity.png" width="24" height="24" alt=""> **antigravity** (`agy` CLI) | ⚠️ **denies** and names the command | ❌ **none** | see below |
 | **antigravity-sdk** (ctx's own agent) | ✅ bounded inside the tool | ✅ bounded inside the tool | see below |
+| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/hermes.svg" width="24" height="24" alt=""> **hermes** (Nous Hermes Agent) | Contract-tested argument rewrite | Contract-tested text replacement | `pre_tool_call` / `transform_tool_result` |
+| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/omp.svg" width="24" height="24" alt=""> **omp** (Oh My Pi) | Contract-tested argument rewrite | Contract-tested text replacement | `tool_call` / `tool_result` |
+| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/opencode.svg" width="24" height="24" alt=""> **opencode** | Contract-tested argument rewrite | Contract-tested text replacement | `tool.execute.before` / `tool.execute.after` |
+| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/dsh.svg" width="24" height="24" alt=""> **dsh** (DeepSeek Harness) | Deny and name the bounded retry | Contract-tested text replacement | `tools/pre-execute` / `tools/post-execute` |
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-host-lanes-mobile.svg">
-  <source media="(max-width: 640px)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-host-lanes-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-host-lanes.svg">
-  <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/readme/diagrams/ae-host-lanes-light.svg" width="100%" alt="Host enforcement lanes. Claude Code and Codex rewrite noisy commands and replace oversized output. Antigravity denies known command floods and the agent must re-issue ctx run on the next turn; connector output can only be persisted and observed. The ctx-owned Antigravity SDK uses bounded tools by construction.">
-</picture>
+The four new integrations have configuration, executable plugin, and subprocess
+tests, not live model-session receipts. All seven agents can use the optional
+[ACP worker transport](ACP.md) after endpoint/model setup. Every ACP session
+receives `ctx` retrieval and `ctx_edit` patch/rewrite tools. Native interception
+requires the adapter to load the host's plugin; receiving ACP tool updates alone
+does not provide interception. See [setup and removal](AGENT-INTEGRATIONS.md).
 
-On Claude Code and Codex, containment is invisible: you type `pytest -q`, the
-hook silently substitutes `ctx run -- pytest -q`, and the agent never sees a
-refusal.
+The new plugins bound **text** results, preserving non-text blocks and metadata.
+OMP's direct eval/browser bridges do not emit these tool hooks, and its error
+path can rethrow the original error after the callback. DSH cannot rewrite
+sealed input arguments; its post-hook also preserves a downstream plugin's
+canonical-value rewrite rather than substituting stale presentation text.
+These paths still have explicit `ctx run` and verified edit tools available.
+
+On Claude Code, containment is invisible: you type `pytest -q`, the hook
+silently substitutes `ctx run -- pytest -q`, and the agent never sees a refusal.
+The Codex implementation targets the same experience; call it live only after a
+version-pinned Codex run records both gates.
 
 ## Codex containment and batch recovery
 
@@ -123,11 +140,12 @@ advisory rides `PreInvocation` instead, as an `injectSteps` *ephemeral* message 
 ephemeral because `PreInvocation` fires before every model call, so a persistent
 message would re-accumulate context on each one.
 
-## Capture happens even where substitution cannot
+## After-the-fact persistence is not containment
 
-An important distinction: **the output gate not being able to substitute does not
-mean nothing happens.** On every host, an over-budget result is still persisted
-to the artifact store and keeps a retrieval address. On Antigravity the raw bytes
+An important distinction: Antigravity's birth-gate denial executes nothing and
+captures nothing. Once the agent reissues the named `ctx run`, capture happens
+normally. If an over-budget result instead reaches Antigravity's post-tool hook,
+straitjacket can persist it but cannot replace what the model sees. The raw bytes
 reach the transcript *and* the store, so afterwards you can still do:
 
 ```bash
@@ -187,6 +205,32 @@ Trade-off worth stating: it is *our* agent, not Google's. When Antigravity ships
 a feature, this shim does not have it. Use `agy` for interactive work; use
 `antigravity-sdk` when something needs to run unattended.
 
+## Host prefix bytes are the host's — and they are audited
+
+Every byte the harness injects into a prompt is locked behind the prefix
+manifest (`ctx.prefixassets`, ~3.5 KB resident). That manifest cannot see the
+bytes the **host** adds because of the harness: a wrapper flag that flips a host
+setting can add tens of KB to every request without touching one manifest
+asset. That happened. Claude Code treats any non-Anthropic `ANTHROPIC_BASE_URL`
+as a gateway that may not forward its `tool_reference` beta and turns deferred
+tool loading off; `ctx wrap claude --proxy` set exactly such a URL, so the
+prompt carried 41 inline tool schemas instead of 16, about 15k cached tokens on
+every one of ~120 calls per session, and `ctx gain` reported the harness as
+876 tokens. The DeepSWE receipt (`evals/agentbench/deepswe-2026-09-13.md`)
+measured it as 82% of a 27% cost regression.
+
+Three mechanisms now cover that class, from cheapest to most decisive:
+
+| mechanism | cost | what it catches |
+|---|---|---|
+| **Wire prefix audit.** The observer proxy records, per request, the system-prompt bytes, tool count, tool-catalogue bytes and whether a deferral marker (`ToolSearch`, or `defer_loading`) is present; `window.json` keeps the first, the scorecard prints a `prefix:` line and flags `⚠ prefix tax` when a long catalogue has no deferral marker. | free, every proxied session | a host that inlines its catalogue, from the first scorecard of the first session |
+| **Prefix parity probe.** `ctx wrap claude --probe-prefix` runs one naive single-turn session and one wrapped one (isolated `CLAUDE_CONFIG_DIR` each), reads the first request's prompt snapshot from both transcripts, and fails (exit 3) when the wrapped prefix exceeds the naive one by more than the manifest declares plus 4 KB slack, or when deferral was lost. `evals/agentbench/harness.py --prefix-parity` runs it before any paid arm and stores the verdict in the payload. | two calls to the cheapest model, about one cent | any wrapper-induced host prefix growth, whether or not it has a name yet |
+| **Emission parity invariant.** `tests/test_run_passthrough.py` pins that a rewritten command whose output fits the inline budget emits at most the native bytes plus one handle line, with the command's own exit status. | free, in CI | receipt-shaped tool results (measured at 2-8x on sub-KB outputs) |
+
+The rule these encode: the harness's cost to a session is measured **on the
+wire, against a naive control**, never inferred from the bytes the harness
+knows it wrote.
+
 ## Checking your own install
 
 ```bash
@@ -194,8 +238,9 @@ ctx wrap detect     # which hosts are installed, and their models/prices
 ctx doctor          # is the harness actually wired up here
 ```
 
-`ctx setup` verifies itself with these same checks and tells you if one
-fails.
+`ctx setup` runs these configuration checks and tells you if one fails. A green
+configuration check is not a substitute for the still-pending live Codex hook
+receipt.
 
 ## Where the truth lives
 

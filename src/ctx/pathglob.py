@@ -41,6 +41,7 @@ def matches(rel: str, pattern: str) -> bool:
     does; a pattern containing no ``/`` matches by basename at any depth.
     """
     rel = rel.removeprefix("./")
+    pattern = pattern.removeprefix("./")  # was stripped from rel but not pattern, so "./src/*.py" never matched
     if not pattern:
         return False
     return _compiled(pattern)(rel)

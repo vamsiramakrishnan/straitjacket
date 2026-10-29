@@ -45,6 +45,7 @@ TOOL_SCHEMA: dict[str, Any] = {
         "q (compose typed evidence in one call: a total `|`-pipeline over "
         "symbols/sites/files/records streams — options.pipeline, e.g. "
         "\"refs Foo | group file | top 3 | get --context 5\")."
+        " relay_watch (subscribe this harness to a relay topic — options.subscriber, options.topic, optional options.selector and options.action), relay_publish (announce an ADDRESS to whoever is watching — options.topic, options.ref, optional options.to/options.note/options.interrupt), relay_pending (what the relay has queued for options.subscriber, without consuming it). task (the collaboration ledger for options.task — claims, handbacks, steward decisions, inbox — or the task list when omitted), inbox (addresses handed to options.node in options.task), send (hand options.node an ADDRESS — options.ref, never content — with an optional bounded options.note)."
     ),
     "inputSchema": {
         "type": "object",
@@ -55,6 +56,8 @@ TOOL_SCHEMA: dict[str, Any] = {
                     "search", "get", "stats", "map",
                     "def", "refs", "diag", "callers", "callees", "impact",
                     "diff", "repo", "doctor", "investigate", "q",
+                    "task", "inbox", "send",
+                    "relay_watch", "relay_publish", "relay_pending",
                 ],
                 "description": (
                     "callers/callees: direct call-graph edges for options.symbol; "
@@ -66,7 +69,12 @@ TOOL_SCHEMA: dict[str, Any] = {
                     "no loops, no recursion, max 8 stages, so cost is statically "
                     "bounded; prefer it over several round-trips when the answer is a "
                     "composition (locate → narrow → read). "
-                    "execute-class ops (test.run, ast.rewrite.*) are CLI-only."
+                    "execute-class ops (test.run, ast.rewrite.*) are CLI-only. "
+                    "task: the collaboration ledger for options.task (or the list "
+                    "when omitted); inbox: addresses sent to options.node in "
+                    "options.task; send: hand options.node an ADDRESS (options.ref, "
+                    "never content) with an optional bounded options.note — the "
+                    "handoff bus between harnesses."
                 ),
             },
             "workspace": {"type": "string", "description": "workspace path or alias"},
@@ -82,11 +90,11 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "selector": {
                 "type": "object",
-                "description": "get selector: {lines:'A:B'|'A:B@anchor'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {symbol:'Cls.meth'} | {span:'<token from digest>'} | {hashlines:true}. An anchored repo: line span verifies the content is still there, follows it if it moved, and refuses if it is gone.",
+                "description": "get selector: {lines:'A:B'|'A:B@anchor'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {symbol:'Cls.meth'} | {span:'<token from digest>'} | {hashlines:true} | {snapcompact:true}. An anchored repo: line span verifies the content is still there, follows it if it moved, and refuses if it is gone. snapcompact renders the selected slice as a monospace bitmap PNG and returns a blob: ref instead of text (opt-in; requires the `image` extra).",
             },
             "options": {
                 "type": "object",
-                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path} · callers/callees/impact options: {symbol,depth} · diff options: {refA,refB} · q options: {pipeline}",
+                "description": "search options: {fixed,all,context,glob,scope,maxMatches} · map options: {budget,focus} · def/refs/diag options: {target,symbol,path} · callers/callees/impact options: {symbol,depth} · diff options: {refA,refB} · q options: {pipeline} · task/inbox/send options: {task,node,ref,from,note}",
             },
             "maxTokens": {
                 "type": "integer",
@@ -152,11 +160,20 @@ def _resolve_cached(workspace_arg: str | None) -> tuple[Any, Any]:
 
 
 def _dispatch(args: dict[str, Any]) -> str:
+    ws, store = _resolve_cached(args.get("workspace"))
+    return dispatch_bounded(ws, store, args)
+
+
+def dispatch_bounded(ws, store, args: dict[str, Any], *, runtime=None) -> str:
+    """Shared bounded retrieval dispatch; callers own workspace and connection.
+
+    The SDK uses a fresh Store per worker, so SQLite connections and the MCP
+    server's process-local workspace cache never cross thread boundaries.
+    """
     # Heavy modules load lazily so server startup stays fast.
     from ctx.retrieval import Selector, RetrievalError, get, search, stats, charge_turn_budget, _span, _span_anchored
 
     op = args.get("op")
-    ws, store = _resolve_cached(args.get("workspace"))
 
     max_tokens = args.get("maxTokens")
     if isinstance(max_tokens, int):
@@ -209,6 +226,7 @@ def _dispatch(args: dict[str, Any]) -> str:
             lines=(la, lb) if la is not None else None,
             lines_anchor=lanchor,
             hashlines=bool(sel_raw.get("hashlines")),
+            snapcompact=bool(sel_raw.get("snapcompact")),
             bytes=_span(sel_raw["bytes"]) if sel_raw.get("bytes") else None,
             records=_span(sel_raw["records"]) if sel_raw.get("records") else None,
             json_pointer=sel_raw.get("jsonPointer"),
@@ -274,7 +292,7 @@ def _dispatch(args: dict[str, Any]) -> str:
             )
         # Bounded-only by construction (SPEC §10.4): the MCP tier validates
         # at tier='mcp', so execute-class ops are typed rejections here.
-        result, _code = execute_plan(ws, store, plan_doc, tier="mcp")
+        result, _code = execute_plan(ws, store, plan_doc, tier="mcp", runtime=runtime)
     elif op == "q":
         # The composition algebra, finally on the bounded tier. `ctx q` shipped
         # CLI-only on the stated grounds that MCP wiring would churn the prefix
@@ -302,6 +320,10 @@ def _dispatch(args: dict[str, Any]) -> str:
         if code != 0:
             raise RetrievalError(text)
         return text
+    elif op in ("relay_watch", "relay_publish", "relay_pending"):
+        result = _relay_ops(ws, op, args.get("options") or {})
+    elif op in ("task", "inbox", "send"):
+        result = _task_ops(ws, op, args.get("options") or {})
     elif op == "repo":
         result = stats(store, ws, "repo:")
     elif op == "doctor":
@@ -317,16 +339,130 @@ def _dispatch(args: dict[str, Any]) -> str:
     return result
 
 
-def _tool_call(params: dict[str, Any]) -> dict[str, Any]:
+def _task_ops(ws, op: str, opts: dict[str, Any]) -> str:
+    """The ledger through MCP, so an agent inside ANY harness can read its
+    inbox and hand an address to another node without shelling out. Same
+    contract as `ctx task`: send carries an address, never content."""
+    from ctx import taskledger as ledger
+    from ctx.retrieval import RetrievalError
+
+    task = opts.get("task")
+    if op == "task":
+        if not task:
+            ids = ledger.list_tasks(ws.root)
+            return "\n".join(ids) if ids else "no task ledgers in this workspace"
+        rows = ledger.load(ws.root, str(task))
+        if not rows:
+            raise RetrievalError(f"unknown task {task}")
+        return ledger.render_task(ledger.task_state(rows))
+    node = opts.get("node")
+    if not task or not node:
+        raise RetrievalError(f"{op} requires options.task and options.node")
+    if op == "inbox":
+        st = ledger.task_state(ledger.load(ws.root, str(task)))
+        msgs = ledger.inbox_for(st, str(node))
+        if not msgs:
+            return f"inbox for {node}: empty"
+        return "\n".join(
+            f"from {m.get('from')}: {m.get('ref')}" + (f" — {m['note']}" if m.get("note") else "")
+            for m in msgs
+        )
+    ref = opts.get("ref")
+    if not isinstance(ref, str) or not ref:
+        raise RetrievalError("send requires options.ref (an address)")
+    try:
+        row = ledger.append(ws.root, ledger.inbox_row(
+            str(task), to=str(node), sender=str(opts.get("from") or "agent"),
+            ref=ref, note=opts.get("note"),
+        ))
+    except ledger.LedgerError as e:
+        raise RetrievalError(str(e)) from None
+    return f"sent to {row['to']}: {row['ref']}"
+
+
+def _relay_ops(ws, op: str, opts: dict[str, Any]) -> str:
+    """The cross-harness relay through MCP.
+
+    The point of putting it here rather than only on the CLI: an agent that
+    is about to start a long build should be able to say "tell me when this
+    lands" from inside whatever harness it is running in, and an agent that
+    has just discovered the schema changed should be able to stop its peer
+    without shelling out. Same contract as `ctx relay`: every write carries
+    an ADDRESS and a bounded note, never content.
+    """
+    from ctx import relay
+    from ctx.retrieval import RetrievalError
+
+    try:
+        if op == "relay_watch":
+            row = relay.watch(
+                ws.root,
+                subscriber=str(opts.get("subscriber") or ""),
+                topic=str(opts.get("topic") or "job"),
+                selector=str(opts.get("selector") or ""),
+                action=str(opts.get("action") or "advise"),
+            )
+            return (
+                f"watching {row['topic']}"
+                + (f"/{row['selector']}" if row["selector"] else "")
+                + f" as {row['subscriber']} -> {row['action']}\nwatch: {row['watch_id']}"
+            )
+
+        if op == "relay_publish":
+            ref = opts.get("ref")
+            if not isinstance(ref, str) or not ref:
+                raise RetrievalError("relay_publish requires options.ref (an address)")
+            origin = str(opts.get("origin") or "agent")
+            if opts.get("interrupt"):
+                to = opts.get("to")
+                if not isinstance(to, str) or not to:
+                    raise RetrievalError("an interrupt needs options.to")
+                row = relay.interrupt(
+                    ws.root, to=to, ref=ref, origin=origin,
+                    note=str(opts.get("note") or ""),
+                )
+                return (
+                    f"interrupt queued for {row['to']} ({row['signal_id']}); "
+                    "it lands at that harness's next tool call, not mid-turn"
+                )
+            queued = relay.publish(
+                ws.root,
+                topic=str(opts.get("topic") or "peer"),
+                selector=str(opts.get("selector") or ""),
+                ref=ref,
+                origin=origin,
+                note=str(opts.get("note") or ""),
+                to=str(opts.get("to") or "") or None,
+            )
+            if not queued:
+                return "published; nobody is watching that topic, nothing queued"
+            return "\n".join(
+                f"queued {r['kind']} for {r['to']} ({r['signal_id']})" for r in queued
+            )
+
+        subscriber = opts.get("subscriber")
+        if not isinstance(subscriber, str) or not subscriber:
+            raise RetrievalError("relay_pending requires options.subscriber")
+        signals = relay.pending(ws.root, subscriber)
+        return relay.render(signals) if signals else f"nothing pending for {subscriber}"
+    except relay.RelayError as e:
+        raise RetrievalError(str(e)) from None
+
+
+def _tool_call(params: dict[str, Any], *, edit_workspace: str | None = None) -> dict[str, Any]:
     name = params.get("name")
-    if name != "ctx":
+    if name != "ctx" and not (name == "ctx_edit" and edit_workspace):
         return {
             "content": [{"type": "text", "text": f"unknown tool {name!r}"}],
             "isError": True,
         }
     args = params.get("arguments") or {}
     try:
-        text = _dispatch(args)
+        if name == "ctx_edit":
+            from ctx.mcp_edits import dispatch
+            text = dispatch(args, edit_workspace)
+        else:
+            text = _dispatch(args)
         return {"content": [{"type": "text", "text": text}], "isError": False}
     except Exception as e:
         # Same handler, same prefix as the CLI (`ctx:`, not `ctx error:`) and
@@ -343,10 +479,13 @@ def _tool_call(params: dict[str, Any]) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
-def serve(bounded_only: bool = True) -> int:
+def serve(bounded_only: bool = True, workspace: str | None = None, with_edits: bool = False) -> int:
     """Run the stdio MCP server until EOF. ``bounded_only`` is the only
     supported v1 mode and is accepted for forward compatibility."""
     del bounded_only
+    if with_edits and not workspace:
+        print("ctx mcp --with-edits requires --workspace", file=sys.stderr)
+        return 2
     stdin = sys.stdin.buffer
     stdout = sys.stdout
 
@@ -367,6 +506,8 @@ def serve(bounded_only: bool = True) -> int:
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(msg, dict):
+            continue  # e.g. a JSON array/batch: msg.get below would raise AttributeError
         method = msg.get("method")
         msg_id = msg.get("id")
         if method == "initialize":
@@ -381,9 +522,18 @@ def serve(bounded_only: bool = True) -> int:
         elif method == "notifications/initialized":
             continue
         elif method == "tools/list":
-            reply(msg_id, {"tools": [TOOL_SCHEMA]})
+            schemas = [TOOL_SCHEMA]
+            if with_edits:
+                from ctx.mcp_edits import TOOL_SCHEMA as EDIT_SCHEMA
+                schemas.append(EDIT_SCHEMA)
+            reply(msg_id, {"tools": schemas})
         elif method == "tools/call":
-            reply(msg_id, _tool_call(msg.get("params") or {}))
+            params = msg.get("params") or {}
+            if workspace and isinstance(params, dict):
+                arguments = params.get("arguments", {})
+                if isinstance(arguments, dict):
+                    params = {**params, "arguments": {"workspace": workspace, **arguments}}
+            reply(msg_id, _tool_call(params, edit_workspace=workspace if with_edits else None))
         elif method == "ping":
             reply(msg_id, {})
         elif msg_id is not None:

@@ -1,10 +1,8 @@
 # Core concepts
 
-<sub><a href="README.md">« straitjacket / docs</a></sub>
-
-straitjacket is easiest to understand as an evidence-delivery system with a strict separation between **what happened**, **what is stored**, and **what the model is allowed to see at once**.
-
-This page defines the vocabulary used across the CLI, specifications, architecture documents, and benchmark receipts. New here? Read [How it works](HOW-IT-WORKS.md) first for the plain-language walkthrough; this page is the reference you come back to.
+Straitjacket separates stored evidence from the bounded view an agent receives.
+This reference defines the addresses, budgets, and receipts used by the CLI.
+Start with [Getting started](GETTING-STARTED.md) for a runnable workflow.
 
 ## Quick glossary
 
@@ -12,6 +10,8 @@ Scan this first; the sections below explain each term in depth.
 
 | Term | In one sentence |
 |---|---|
+| **Coding harness** | The application that owns the agent's model calls, tool loop, session, authentication, and permissions: Claude Code, Codex, Antigravity, and other supported agents. |
+| **Sidecar** | Straitjacket's role alongside that harness: capture tool evidence, return bounded views, retrieve omitted detail, and optionally verify edits; a daemon or container is not required. |
 | **Artifact** | An immutable stored result — command output, a file snapshot, a query result — the durable source a view is rendered from. |
 | **Handle** | A stable reference to an artifact or a region of one, e.g. `run:ba3d1020ee8f#stdout`. |
 | **Span** | An exact range inside an artifact: lines, bytes, a failure block, a symbol body. |
@@ -24,6 +24,10 @@ Scan this first; the sections below explain each term in depth.
 | **The four gates** | Birth, Entry, Residence, Emission — the four moments in a byte's life where the harness can act. |
 | **Capture ladder** | The choice of the least-powerful verb that fits the work: native read → `run` → `--shell` → `seq` → `eval`, with `q` alongside. |
 | **Reflex vs. policy epoch** | A within-session adjustment (fast loop) versus a reviewed, committed config change (slow loop). |
+| **Task ledger** | The append-only, per-task record harnesses collaborate over: claims, handbacks, steward decisions, verdicts, inbox addresses. Harnesses never address each other; they read and append here, and a killed run resumes from it. |
+| **Handback** | A node's typed exit — `done`, `failed`, `blocked`, `over_budget`, `over_turns`, `low_confidence` — with a failure kind, its checkpoint, turns and cost. |
+| **Steward** | The deterministic reader of handbacks: classifies why a node stopped, offers the recovery policy only the actions that exist, and records its decision before acting. Not a model. |
+| **Prewalk** | Opt-in: a frontier model on a mutation node plans, makes one validated edit, then hands the same node off to the cheapest cheaper model installed — a success, not a failure, so it bypasses the steward's recovery policy for its own deterministic `handoff_cheap` decision ([PREWALK.md](PREWALK.md)). |
 | **Determinism** | Same evidence + same contract + same plan → byte-identical digest, so caches stay warm and diffs are real signal. |
 
 ## The central distinction: evidence versus context
@@ -287,6 +291,8 @@ A receipt is a durable explanation of a mechanism decision or benchmark result. 
 
 A mechanism is adopted because measured behaviour supports it, not because the design sounds plausible.
 
-## The one-sentence model
+## Choose the next operation
 
-straitjacket moves deterministic evidence work out of the probabilistic model loop, keeps the full result addressable, and admits only a bounded, reproducible view into active context.
+Capture output with `ctx run`. Inspect its digest. Retrieve the addressed
+region needed for the decision. Keep verification receipts with the change
+and check their freshness before using them for continuation.

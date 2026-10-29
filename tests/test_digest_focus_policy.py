@@ -59,3 +59,17 @@ def test_focus_render_is_bounded_replayable_and_retrievable(state_home, workspac
     assert len(focused.encode()) < 6000
     original = get(store, ws, f"run:{rid}#stdout", Selector(lines=(151, 151)))
     assert rows[150] in original
+
+
+def test_focused_digest_keeps_complete_heading_and_fence(state_home, workspace_dir):
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+    text = ('routine output ' * 100 + '\n\n') * 20
+    text += '# Cache investigation\n```python\ncache_latency = 400\n```\n'
+    _, rid = digest_output(store, ws, 'opaque_tool', text)
+    manifest = store.get_manifest(rid)
+    focused, _ = render_run_digest(store, ws, manifest, focus='cache_latency')
+    assert 'structure: complete blocks' in focused
+    assert '# Cache investigation' in focused
+    assert 'cache_latency = 400' in focused
+    assert focused.count('```') == 2

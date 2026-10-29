@@ -285,21 +285,19 @@ def ast_search(
         "precision": "textual (metavariable-anchored regex; ast-grep absent)",
         "matched": len(rows),
     }
-    # The patch is built from EVERY matched file; `cap` only bounded the rows
-    # shown for review. A preview that lists 200 files and applies 260 is not
-    # a preview -- so the gap is declared, with the count and the flag that
-    # widens it, and the patch stays complete (silently applying less would
-    # be the worse failure: a partial mechanical rewrite).
+    # This rung is a pure search (ast_search builds no patch) -- files_previewed
+    # counts distinct FILES among the shown rows (was counting match rows),
+    # and the note must not claim a patch that was never built.
     shown = bounds.count(cap)
-    meta["files_previewed"] = min(shown, len(rows))
+    shown_rows = rows[:shown]
+    meta["files_previewed"] = len({r["file"] for r in shown_rows})
     if len(rows) > shown:
         meta["preview_omitted"] = len(rows) - shown
         meta["note"] = (
-            f"{len(rows) - shown} of {len(rows)} changed files are NOT shown "
-            f"below but ARE in the patch; re-run with a larger cap to review "
-            f"them before ast.rewrite.apply"
+            f"{len(rows) - shown} of {len(rows)} matches are NOT shown "
+            f"below; re-run with a larger cap to review them"
         )
-    return rows[:shown], meta
+    return shown_rows, meta
 
 
 def _lib_search(
@@ -347,21 +345,19 @@ def _lib_search(
             rows.append({"file": rel, "line": line, "col": col, "text": first})
     rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
     meta = {"engine": engine_id(), "precision": "structural", "matched": len(rows)}
-    # The patch is built from EVERY matched file; `cap` only bounded the rows
-    # shown for review. A preview that lists 200 files and applies 260 is not
-    # a preview -- so the gap is declared, with the count and the flag that
-    # widens it, and the patch stays complete (silently applying less would
-    # be the worse failure: a partial mechanical rewrite).
+    # This rung is a pure search (ast_search builds no patch) -- files_previewed
+    # counts distinct FILES among the shown rows (was counting match rows),
+    # and the note must not claim a patch that was never built.
     shown = bounds.count(cap)
-    meta["files_previewed"] = min(shown, len(rows))
+    shown_rows = rows[:shown]
+    meta["files_previewed"] = len({r["file"] for r in shown_rows})
     if len(rows) > shown:
         meta["preview_omitted"] = len(rows) - shown
         meta["note"] = (
-            f"{len(rows) - shown} of {len(rows)} changed files are NOT shown "
-            f"below but ARE in the patch; re-run with a larger cap to review "
-            f"them before ast.rewrite.apply"
+            f"{len(rows) - shown} of {len(rows)} matches are NOT shown "
+            f"below; re-run with a larger cap to review them"
         )
-    return rows[:shown], meta
+    return shown_rows, meta
 
 
 def _language_matches(rel: str, language: str) -> bool:
@@ -559,6 +555,13 @@ def rewrite_apply(
             "(refusing to apply a patch whose freshness cannot be checked)"
         )
     gen_now = _guard_state(ws)
+    if gen_now == "unknown" or expect_generation == "unknown":
+        # the "unknown" sentinel compares equal to itself, so an unverifiable
+        # state must fail closed explicitly rather than rely on inequality
+        raise RewriteError(
+            "worktree generation cannot be verified — re-run ast.rewrite.preview "
+            "(refusing to apply a patch whose freshness cannot be checked)"
+        )
     if gen_now != expect_generation:
         raise RewriteError(
             "worktree generation changed since preview — re-run ast.rewrite.preview "

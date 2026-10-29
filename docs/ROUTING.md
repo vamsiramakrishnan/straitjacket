@@ -19,6 +19,12 @@ it actually needs.
 
 ## What `ctx orchestrate` does
 
+Host setup and worker transport are separate capabilities. Hermes, OMP,
+OpenCode, and DSH currently expose explicit MCP/CLI tools but are not eligible
+orchestration workers. An [ACP transport migration](../spec/adr/006-acp-orchestration-transport.md)
+is proposed to share session, progress, permission, and cancellation handling
+across compatible agents. It is not implemented yet; existing CLI workers remain.
+
 ```bash
 ctx orchestrate "add a caching layer" --dry-run   # plan and price it, launch nothing
 ctx orchestrate "add a caching layer"             # run it
@@ -77,6 +83,16 @@ call is not included in route-node estimates.
 
 Note that the *cheap* model does the coordinating and the *expensive* one does
 the thinking. Deciding who should do the work is much easier than doing it.
+
+Every launch is claimed and handed back on the **task ledger**
+([TASK-LEDGER.md](TASK-LEDGER.md)): a node that does not finish is classified
+by *why* and handed to a deterministic steward, which retries a transient,
+escalates a capability limit, leaves an incomplete contract for re-planning,
+and stops honestly on a login failure or an exhausted budget — with the
+decision on record before it is acted on. Budget is checked against what hosts
+actually charged, and a claim the ledger cannot cover is refused before the
+launch. A run the process did not survive resumes with
+`ctx orchestrate --resume <task-id>`; finished nodes are restored, not re-run.
 
 Automatic orchestration excludes hosts that cannot complete a one-shot run
 unattended. Google's interactive `agy` CLI therefore remains available through

@@ -23,6 +23,32 @@ from pathlib import Path
 
 
 REQUIRED_FILES = {
+    "ctx/data/native-hooks/bridge.mjs",
+    "ctx/data/native-hooks/hermes.py",
+    "ctx/data/native-hooks/omp.mjs",
+    "ctx/data/native-hooks/opencode.mjs",
+    "ctx/data/native-hooks/dsh.mjs",
+    "ctx/acp.py",
+    "ctx/sdk.py",
+    "ctx/toolresult.py",
+    "ctx/tooltelemetry.py",
+    "ctx/toolviews.py",
+    "ctx/toolrepair.py",
+    "ctx/mcp_edits.py",
+    "ctx/commands/semantic.py",
+    "ctx/semantic/__init__.py",
+    "ctx/semantic/contract.py",
+    "ctx/semantic/evidence.py",
+    "ctx/semantic/engine.py",
+    "ctx/semantic/worker.py",
+    "ctx/semantic/hosts.py",
+    "ctx/task_runtime.py",
+    "ctx/accounting.py",
+    "ctx/evidence_access.py",
+    "ctx/evidence_ops.py",
+    "ctx/commands/tasks.py",
+    "ctx/controllers/investigation.py",
+    "ctx/controllers/investigation_contract.py",
     "ctx/data/antigravity/plugin.json",
     "ctx/data/antigravity/hooks.json",
     "ctx/data/codex/config.toml",
@@ -140,10 +166,76 @@ def check(wheel: Path, sdist: Path | None = None) -> None:
                     f"runtime version mismatch: expected 'ctx {version}', got {actual!r}"
                 )
 
-            for host in ("antigravity", "claude", "codex"):
+            # The semantic SDK must work from the installed wheel with no
+            # provider, source checkout, optional dependencies, or model call.
+            _run(python, clean_root, "-c", """
+import pathlib, sys
+from ctx.semantic import prepare, inspect
+from ctx.store import Store
+from ctx.workspace import resolve_workspace
+root = pathlib.Path('semantic-workspace')
+root.mkdir()
+(root / 'ctx.toml').write_text('version = 1\\n')
+(root / 'evidence.py').write_text('answer = 42\\n')
+ws = resolve_workspace(str(root))
+store = Store(ws.workspace_id, state_root=root / 'state')
+try:
+    handle = prepare(ws, store, {'question': 'What is the answer?',
+        'sources': ['repo:evidence.py'], 'worker': {'identity': 'smoke-no-model',
+        'model': 'fixture', 'command': [sys.executable, '-c', 'raise AssertionError']}})
+    _, report = inspect(ws, store, handle)
+    assert report['totals']['calls'] == 0
+    assert report['coverage']['selected_partitions'] == 1
+    from ctx.task_runtime import TaskRuntime
+    from ctx.controllers import investigation
+    from ctx.plan_ops import OPS
+    assert 'semantic.map' in OPS and 'evidence.read' in OPS
+    rt = TaskRuntime.create(ws, store, goal='installed execution smoke')
+    with rt.active():
+        assert rt.perform('observe', 'fixture.observe', {}, lambda timeout: {'answer': 42})['answer'] == 42
+    resumed = TaskRuntime(ws, store, rt.task_id)
+    with resumed.active():
+        assert resumed.perform('observe', 'fixture.observe', {}, lambda timeout: None)['answer'] == 42
+finally:
+    store.close()
+""")
+
+            for host in ("antigravity", "claude", "codex", "hermes", "omp", "opencode", "dsh"):
                 rendered = _run(ctx, clean_root, "wrap", host, "--print-config")
                 if not rendered.strip():
                     raise RuntimeError(f"{host} renderer returned no configuration")
+                if host in ("hermes", "omp", "opencode", "dsh"):
+                    json.loads(rendered)
+
+            # Public tool runtime from the wheel, with no source checkout or
+            # provider dependency. Status, stream identity and retrieval must
+            # survive the same package boundary as an embedding application.
+            _run(python, clean_root, "-c", """
+import asyncio, json, os, pathlib, sys
+from ctx.sdk import ToolSession
+root = pathlib.Path('tool-sdk-workspace')
+root.mkdir()
+(root / 'ctx.toml').write_text('version=1\\n')
+os.environ['CTX_STATE_HOME'] = str(root / 'state')
+async def probe():
+    session = ToolSession(root, durable=True, context_epoch='wheel-smoke')
+    result = await session.run([sys.executable, '-c', "import sys; sys.stdout.write('installed-evidence'); sys.exit(4)"])
+    assert result.command_exit_code == 4 and result.delivery == 'inline'
+    assert result.stdout == 'installed-evidence' and result.stderr == ''
+    assert 'installed-evidence' in await session.get(result.ref, start_line=1, end_line=1)
+    compact = await session.run_model([sys.executable, '-c', "print('compact-evidence')"])
+    assert 'exit=0' in compact and 'stdout:\\ncompact-evidence' in compact
+    (root / 'source.py').write_text('answer = 42\\n')
+    assert 'L1: answer = 42' in await session.navigate('source.py')
+    resumed = ToolSession(root, task_id=session.task_id, context_epoch='wheel-smoke')
+    assert 'reused: 1' in await resumed.navigate('source.py')
+    resumed.set_context_epoch('wheel-smoke-reset')
+    assert 'L1: answer = 42' in await resumed.navigate('source.py')
+    from ctx.toolrepair import repair
+    await session.export(root / 'evidence.tar')
+asyncio.run(probe())
+""")
+            _run(python, clean_root, "-m", "ctx.data.ctx_agy", "--help")
 
             # Exercise the two Codex contracts that are easy to get subtly
             # wrong and otherwise fail only when the next Codex session starts.

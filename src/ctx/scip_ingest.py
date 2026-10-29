@@ -25,6 +25,7 @@ The local identifier is the last identifier token in the string
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -53,16 +54,188 @@ def available() -> bool:
     return _scip_pb2() is not None
 
 
-def find_index(ws: Workspace) -> Path | None:
+#: Sidecar `ctx index` writes beside a generated index, recording the tree it
+#: describes. Absent for an index a project built itself, which is why the
+#: currency check degrades to the index file's own mtime.
+_SIDECAR_NAME = "index.meta.json"
+
+
+def _source_state(ws: Workspace) -> tuple[int, int]:
+    """(file count, newest mtime_ns) over the workspace's *source* files.
+
+    Restricted to files a code indexer would read, decided by the skeleton's
+    own language table so this cannot disagree with the rest of ctx about what
+    source is. A touched README does not invalidate a code index, and neither
+    does the index — or its own sidecar — sitting in the worktree.
+
+    Stats only, no reads: this runs on the retrieval path, whereas the heavier
+    :func:`ctx.workspace.stat_fingerprint` hashes bytes because a rewrite
+    guard needs evidence a timestamp cannot give.
+    """
+    from ctx.skeleton import language_for
+
+    newest = 0
+    count = 0
+    root = ws.root
+    for rel in ws.list_files(None):
+        if language_for(rel) is None:
+            continue
+        count += 1
+        try:
+            mtime = (root / rel).stat().st_mtime_ns
+        except OSError:
+            continue
+        if mtime > newest:
+            newest = mtime
+    return count, newest
+
+
+def _index_basis(index: Path) -> int | None:
+    """The moment ``index`` describes, in mtime_ns, or None if unreadable.
+
+    The sidecar's recorded high-water mark beats the index file's own mtime
+    where both exist, because an indexer may finish writing well after it read
+    the last source file.
+    """
+    try:
+        basis = index.stat().st_mtime_ns
+    except OSError:
+        return None
+    try:
+        meta = json.loads(index.with_name(_SIDECAR_NAME).read_text(encoding="utf-8"))
+        basis = max(basis, int(meta["max_mtime_ns"]))
+    except Exception:
+        pass
+    return basis
+
+
+def index_is_current(ws: Workspace, index: Path) -> bool:
+    """Whether ``index`` still describes the worktree.
+
+    A SCIP index is a snapshot of a tree at one moment, and nothing keeps it in
+    step with edits afterwards. Trusting a stale one is worse than having none:
+    the coordinates it returns are exact-looking and wrong, and — the reason
+    this exists — an *empty* answer from a stale index would suppress the rest
+    of the ladder, so `ctx refs` would confidently report `sites: 0` for a
+    symbol added since indexing. A clean wrong answer beats a noisy right one
+    nowhere, least of all here.
+
+    Basis: no tracked file may be newer than the index, and (when `ctx index`
+    left its sidecar) the file count must match. The bound worth stating is
+    that a deletion which touches no surviving file is invisible to a
+    mtime-only check — that is why the sidecar records the count at all.
+    """
+    basis = _index_basis(index)
+    if basis is None:
+        return False
+    recorded_count: int | None = None
+    try:
+        meta = json.loads(index.with_name(_SIDECAR_NAME).read_text(encoding="utf-8"))
+        recorded_count = int(meta["files"])
+    except Exception:
+        pass  # a project's own index has no sidecar; mtime alone still bounds it
+
+    count, newest = _source_state(ws)
+    if newest > basis:
+        return False
+    return recorded_count is None or recorded_count == count
+
+
+def file_basis(index: Path) -> dict[str, str] | None:
+    """rel → content hash of every source file at indexing time, from the
+    sidecar `ctx index` writes. None for an index without one (a project's
+    own, or one built before the sidecar carried it): such an index is
+    current or it is nothing, as :func:`index_is_current` decides."""
+    try:
+        meta = json.loads(index.with_name(_SIDECAR_NAME).read_text(encoding="utf-8"))
+        basis = meta.get("files_sha")
+        return {str(k): str(v) for k, v in basis.items()} if isinstance(basis, dict) else None
+    except Exception:
+        return None
+
+
+def content_hashes(ws: Workspace, store=None) -> dict[str, str]:
+    """rel → hash for the workspace's source files, from the text index's
+    catalog when it is built (the same sweep every search runs), else hashed
+    directly. One hash function for both (:func:`ctx.codeindex._sha12`)."""
+    from ctx.codeindex import _sha12, enabled
+    from ctx.skeleton import language_for
+
+    out: dict[str, str] = {}
+    if store is not None and enabled():
+        try:
+            from ctx.codeindex import Index
+
+            idx = Index(store, ws)
+            if idx.built:
+                idx.sync()
+                out = {rel: ent[4] for rel, ent in idx.files.items() if language_for(rel)}
+                idx.close()
+                return out
+            idx.close()
+        except Exception:
+            out = {}
+    root = ws.root
+    for rel in ws.list_files(None):
+        if language_for(rel) is None:
+            continue
+        try:
+            out[rel] = _sha12((root / rel).read_bytes())
+        except OSError:
+            continue
+    return out
+
+
+def stale_files(ws: Workspace, index: Path, store=None) -> list[str] | None:
+    """Source files the index does not describe any more: changed since it
+    was built, or new. None when the index has no per-file basis. Deleted
+    files are not listed (they have no sites to answer for) but they do make
+    the index non-current, which callers handle by filtering sites to files
+    whose hash still matches."""
+    basis = file_basis(index)
+    if basis is None:
+        return None
+    now = content_hashes(ws, store)
+    return sorted(rel for rel, sha in now.items() if basis.get(rel) != sha)
+
+
+def find_index(ws: Workspace, store=None) -> Path | None:
     """The workspace's SCIP index, or None. ``$CTX_SCIP_INDEX`` overrides
-    (absolute, or relative to the workspace root)."""
+    (absolute, or relative to the workspace root).
+
+    Three places, in order: the override, an ``index.scip`` a build already
+    put in the worktree, then the one ``ctx index`` generated into the store.
+    The store copy is last so a project that indexes itself keeps priority
+    over ctx's, and first-class enough that ctx never has to write a build
+    artifact into someone's repository to make the precise tier reachable.
+    """
     override = os.environ.get("CTX_SCIP_INDEX")
     if override:
         p = Path(override)
         p = p if p.is_absolute() else ws.root / p
         return p if p.is_file() else None
     p = ws.root / _INDEX_NAME
-    return p if p.is_file() else None
+    if p.is_file():
+        return p
+    try:
+        from ctx.scip_index import index_path
+
+        if store is not None:
+            generated = index_path(store)
+        else:
+            # Only when the caller has none: every retrieval verb already
+            # holds an open store, and opening a second one per lookup is
+            # both wasted work and an avoidable lock on the hot path.
+            from ctx.store import Store
+
+            own = Store(ws.workspace_id)
+            try:
+                generated = index_path(own)
+            finally:
+                own.close()
+        return generated if generated.is_file() else None
+    except Exception:
+        return None  # a store that will not open is not an indexing error
 
 
 #: SCIP's local-symbol convention: `local <id>`. The word "local" matches
@@ -109,16 +282,32 @@ def _range_1indexed(rng) -> tuple[int, int, int]:
     return int(line0) + 1, int(ca) + 1, int(cb) + 1
 
 
-def iter_occurrences(index_path: Path):
-    """Yield every :class:`Occurrence` in a SCIP index. Fail-open: an
-    unreadable/absent runtime yields nothing (the caller degrades)."""
+def load_index(index_path: Path):
+    """The parsed SCIP index, or None when it cannot be read.
+
+    Separated from :func:`iter_occurrences` because "parsed fine and names
+    nothing" and "could not be parsed" are the same empty stream to a
+    generator, and the difference decides whether an empty answer may be
+    trusted. A truncated or corrupt index that silently yielded no rows would
+    otherwise let `ctx refs` report zero references for *every* symbol, in the
+    exact tier's voice, with the rest of the ladder suppressed.
+    """
     pb2 = _scip_pb2()
     if pb2 is None:
-        return
+        return None
     try:
         idx = pb2.Index()
         idx.ParseFromString(Path(index_path).read_bytes())
+        return idx
     except Exception:
+        return None
+
+
+def iter_occurrences(index_path: Path):
+    """Yield every :class:`Occurrence` in a SCIP index. Fail-open: an
+    unreadable/absent runtime yields nothing (the caller degrades)."""
+    idx = load_index(index_path)
+    if idx is None:
         return
     for doc in idx.documents:
         rel = str(doc.relative_path).replace("\\", "/")
@@ -135,21 +324,43 @@ def iter_occurrences(index_path: Path):
             )
 
 
-def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False):
+def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False, store=None):
     """Precise reference sites for ``symbol`` from the workspace's SCIP
     index, matching the codeverbs contract: ``list[(rel, line, text)]``
     sorted (file, line). ``text`` is the source line (read from the
-    worktree). Returns None when no index is present or the runtime is
-    absent — the signal to fall through the engine ladder."""
-    index = find_index(ws)
+    worktree). Returns None when no *usable* index is present — none at all,
+    no protobuf runtime, or one that no longer describes this worktree — which
+    is the signal to fall through the engine ladder. An empty list is the
+    other thing entirely: a current index that genuinely names no site."""
+    index = find_index(ws, store)
     if index is None or not available():
         return None
-    want = symbol.rsplit(".", 1)[-1]  # dotted subject → its final component
+    if not index_is_current(ws, index):
+        # Same signal as "no index", deliberately: the caller's contract is
+        # that None means fall through the ladder, and an index that no longer
+        # describes this tree has exactly that much to say.
+        #
+        # Checked up front rather than per-cited-file. A per-file check is
+        # cheaper and validates coordinates, but it cannot see a *new* site in
+        # a file that changed — so `ctx refs` would answer "scip (exact) ·
+        # sites: 52" while silently missing the 53rd. Confident incompleteness
+        # is the defect this guard exists to prevent, not a cheaper version of
+        # it. The walk measured 220 ms on a 4,700-file worktree, which is real
+        # but is dwarfed by the textual scan of every source file that runs
+        # instead whenever the answer is that the index cannot be trusted.
+        return None
+    subject, _, want = symbol.rpartition(".")  # dotted subject → its final component
+    qualifier = subject.rsplit(".", 1)[-1] if subject else None
     hits: dict[tuple[str, int], str] = {}
     line_cache: dict[str, list[str]] = {}
     for occ in iter_occurrences(index):
         if occ.name != want:
             continue
+        if qualifier is not None:
+            # bare-name match alone conflates unrelated symbols sharing a method name; also require the qualifier
+            tokens = _IDENT_RE.findall(occ.symbol)
+            if len(tokens) < 2 or tokens[-2] != qualifier:
+                continue
         if definitions_only and not occ.is_definition:
             continue
         key = (occ.file, occ.line)
@@ -167,7 +378,115 @@ def refs(ws: Workspace, symbol: str, *, definitions_only: bool = False):
         text = lines[occ.line - 1].strip() if 0 < occ.line <= len(lines) else ""
         hits[key] = text
     if not hits:
-        # An index exists but names nothing — still a definitive SCIP answer
-        # for this symbol (empty), distinct from "no index" (None).
-        return []
+        # Empty is two different facts wearing one face: "parsed, and names no
+        # site" — a definitive answer — or "could not be parsed at all", which
+        # a generator reports the same silent way. Trusting the second would
+        # let a truncated or corrupt index answer zero references for every
+        # symbol in the exact tier's voice, with the ladder suppressed. Asked
+        # only here, where the distinction changes the decision and nothing
+        # cheaper can settle it.
+        return [] if load_index(index) is not None else None
     return [(f, ln, hits[(f, ln)]) for (f, ln) in sorted(hits)]
+
+
+def _matches(occ: Occurrence, want: str, qualifier: str | None) -> bool:
+    if occ.name != want:
+        return False
+    if qualifier is not None:
+        tokens = _IDENT_RE.findall(occ.symbol)
+        if len(tokens) < 2 or tokens[-2] != qualifier:
+            return False
+    return True
+
+
+def _line_text(ws: Workspace, cache: dict[str, list[str]], rel: str, line: int) -> str:
+    lines = cache.get(rel)
+    if lines is None:
+        try:
+            lines = (ws.root / rel).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        cache[rel] = lines
+    return lines[line - 1].strip() if 0 < line <= len(lines) else ""
+
+
+def refs_partial(
+    ws: Workspace, symbol: str, *, definitions_only: bool = False, store=None
+):
+    """Per-file currency: the exact sites from every file the index still
+    describes (its content hash unchanged since `ctx index`), plus the list
+    of source files it does not, for a lower rung to answer.
+
+    :func:`refs` is all-or-nothing on purpose — a stale index may not speak
+    in the exact tier's voice about the *tree*. But it can still speak about
+    the files that have not changed, as long as the caller answers the
+    changed ones another way and says so. That is what this returns:
+    ``(sites, stale_files)``, or None when there is no index, no protobuf
+    runtime, or no per-file basis to make the split with.
+    """
+    index = find_index(ws, store)
+    if index is None or not available():
+        return None
+    stale = stale_files(ws, index, store)
+    if stale is None:
+        return None
+    basis = file_basis(index) or {}
+    now = content_hashes(ws, store)
+    exact_ok = {rel for rel, sha in now.items() if basis.get(rel) == sha}
+    subject, _, want = symbol.rpartition(".")
+    qualifier = subject.rsplit(".", 1)[-1] if subject else None
+    hits: dict[tuple[str, int], str] = {}
+    cache: dict[str, list[str]] = {}
+    for occ in iter_occurrences(index):
+        if occ.file not in exact_ok or not _matches(occ, want, qualifier):
+            continue
+        if definitions_only and not occ.is_definition:
+            continue
+        key = (occ.file, occ.line)
+        if key not in hits:
+            hits[key] = _line_text(ws, cache, occ.file, occ.line)
+    if not hits and load_index(index) is None:
+        return None
+    sites = sorted((f, ln, t) for (f, ln), t in hits.items())
+    return sites, stale
+
+
+def implementations(ws: Workspace, symbol: str, *, store=None):
+    """What implements or extends ``symbol``, from the index's own
+    relationship edges (``is_implementation``): ``(sites, stale_files)`` with
+    each site the implementing symbol's definition, or None when no usable
+    index answers. Sites are taken only from files the index still
+    describes; ``stale_files`` names the ones it does not."""
+    index = find_index(ws, store)
+    if index is None or not available():
+        return None
+    if index_is_current(ws, index):
+        stale: list[str] = []
+        exact_ok = None
+    else:
+        stale = stale_files(ws, index, store) or []
+        if not file_basis(index):
+            return None
+        basis = file_basis(index) or {}
+        exact_ok = {rel for rel, sha in content_hashes(ws, store).items() if basis.get(rel) == sha}
+    idx = load_index(index)
+    if idx is None:
+        return None
+    want = symbol.rpartition(".")[2]
+    sites: dict[tuple[str, int], str] = {}
+    cache: dict[str, list[str]] = {}
+    for doc in idx.documents:
+        rel = str(doc.relative_path).replace("\\", "/")
+        if exact_ok is not None and rel not in exact_ok:
+            continue
+        impls = {
+            si.symbol for si in doc.symbols
+            if any(r.is_implementation and descriptor_name(r.symbol) == want for r in si.relationships)
+        }
+        if not impls:
+            continue
+        for occ in doc.occurrences:
+            if occ.symbol in impls and occ.symbol_roles & _DEFINITION_ROLE:
+                line, _ca, _cb = _range_1indexed(occ.range)
+                sites.setdefault((rel, line), _line_text(ws, cache, rel, line))
+    return sorted((f, ln, t) for (f, ln), t in sites.items()), stale

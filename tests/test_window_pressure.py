@@ -177,7 +177,7 @@ def test_head_tail_cap_scales_with_window(tmp_path):
     d = _cmd(cmd, tmp_path)
     assert d["decision"] == "deny"
     assert d["reason"].endswith(" [window 84% full — budgets tightened]")
-    assert d["rewrite"]["updatedInput"]["CommandLine"] == f"ctx run -- tail -n 300 {f.name}"
+    assert d["rewrite"]["updatedInput"]["CommandLine"] == f"ctx run --passthrough -- tail -n 300 {f.name}"
     assert " [window 84% full — budgets tightened]" in d["rewrite"]["reason"]
     # Still inside the tightened cap: unchanged allow.
     assert _cmd(f"tail -n 200 {f.name}", tmp_path) == {"decision": "allow"}

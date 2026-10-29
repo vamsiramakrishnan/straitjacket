@@ -1,18 +1,48 @@
 # Getting started
 
+**Straitjacket is a context and evidence sidecar for coding agents.** It adds
+bounded tool output and retrievable evidence to an existing coding harness.
+
+Keep using Claude Code, Codex, Antigravity, or your preferred coding agent.
+Straitjacket runs alongside it. Your agent still handles the conversation,
+model selection, authentication, and permissions; `ctx` handles captured
+evidence and the optional verified edit workflow. Host hooks are optional for
+direct `ctx` commands, and their capabilities differ by integration.
+
 [Documentation](README.md) · [How it works](HOW-IT-WORKS.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-This guide installs straitjacket, configures a coding-agent host, and runs the core capture and retrieval loop.
+Install Straitjacket, capture one command, and retrieve its evidence. Configure
+a coding-agent host after the terminal workflow works.
 
 ## Requirements
 
 - Python 3.11 or newer.
 - A local repository.
-- Antigravity, Claude Code, or Codex for host integration.
+- A supported coding-agent host if you want automatic interception.
 
 Host integration is optional. Every `ctx` command also works from a terminal.
 
 `rg`, ctags, tree-sitter, Jedi, SCIP, and Semgrep can improve repository analysis. Capture and retrieval do not depend on them.
+
+## Know the data boundary
+
+Captured stdout and stderr may contain source code, logs, credentials, or other
+sensitive data. Raw artifacts are stored as local plaintext today.
+Model-visible output is deterministically redacted by default, but redaction
+can be disabled explicitly; it does not encrypt the stored artifact.
+
+Host-hook reads of secret-bearing paths require an explicit permission step and
+are excluded from automatic capture by default. A directly authorized
+`ctx run` can still capture them.
+
+The store lives outside the repository by default under `$CTX_STATE_HOME`,
+then `$XDG_STATE_HOME/ctx`, then `~/.local/state/ctx`. The default retention
+GC eligibility horizon is 30 days. There is no background collector: artifacts
+remain until `ctx gc` runs. `ctx gc --retention-days N` can override the
+horizon; pins and active checkpoint leases survive collection.
+
+Do not capture secret-bearing commands when plaintext local retention is
+unacceptable.
 
 ## Install
 
@@ -37,50 +67,6 @@ cd straitjacket
 python -m pip install -e '.[dev]'
 pytest
 ```
-
-## Configure the repository
-
-```bash
-cd your-repository
-ctx setup
-ctx doctor
-```
-
-`ctx setup`:
-
-1. creates or updates `ctx.toml` and `.ctxignore`;
-2. detects supported agent CLIs;
-3. merges host configuration;
-4. runs the same checks as `ctx doctor`;
-5. records a content-free fingerprint for fast verified reruns.
-
-It does not replace an existing host configuration. An unchanged rerun is a verified no-op. Use `ctx setup --repair` to force verification and repair. Use `ctx setup --all` to prepare every supported host.
-
-Configure one host only:
-
-```bash
-ctx wrap antigravity
-ctx wrap claude
-ctx wrap codex
-```
-
-Preview the exact host configuration without writing it:
-
-```bash
-ctx wrap codex --print-config
-```
-
-## Know the host boundary
-
-| Host | Birth-time containment | Oversized result substitution |
-|---|---|---|
-| Claude Code | Transparent rewrite | Yes |
-| Codex | Transparent rewrite | Yes |
-| Antigravity | Deny with a bounded replacement command | No |
-
-Antigravity's published PreToolUse contract cannot modify arguments. Its PostToolUse contract cannot replace tool output. straitjacket still prevents known command floods before execution, but a verbose connector result can enter the transcript unchanged. Use bounded `ctx` retrieval operations for those paths.
-
-See [Host capabilities](HOST-CAPABILITIES.md) for the full matrix.
 
 ## Run the first capture
 
@@ -120,6 +106,91 @@ ctx search run:ba3d1020ee8f "MissingTenantError"
 Use `#stdout` or `#stderr` to select a stream. Use `--lines`, `--bytes`, or a span address to select a region.
 
 Retrieval remains bounded. If the requested region is too large, `ctx get` returns a smaller view with continuation addresses.
+
+## Know the host boundary
+
+| Host | Birth-time containment | Oversized result substitution |
+|---|---|---|
+| Claude Code | Transparent rewrite | Yes |
+| Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
+| Antigravity | Deny with a bounded replacement command | No |
+| Hermes, OMP, OpenCode | Native plugin argument rewrite | Text-output replacement; contract-tested |
+| DSH | Deny with a bounded replacement command | Native text-output replacement; contract-tested |
+
+Antigravity's published PreToolUse contract cannot modify arguments. Its
+PostToolUse contract cannot replace tool output. straitjacket can prevent a
+known command flood before execution, but a verbose connector result can still
+enter the transcript unchanged.
+
+See [Host capabilities](HOST-CAPABILITIES.md) for the full matrix.
+
+## Configure the repository
+
+`ctx setup` configures the sidecar's hooks and MCP integration with the selected
+coding harness. To opt into [ACP orchestration](ACP.md), add `--acp` and an
+explicit `--acp-model` for one host. Existing CLI worker transports remain
+available for hosts without ACP configuration.
+
+```bash
+cd your-repository
+ctx setup
+ctx doctor
+```
+
+`ctx setup`:
+
+1. creates or updates `ctx.toml` and `.ctxignore`;
+2. detects supported agent CLIs;
+3. applies host configuration using host-specific preservation rules;
+4. runs the same checks as `ctx doctor`;
+5. records a content-free fingerprint of the managed setup surfaces for fast
+   reruns.
+
+It preserves unrelated user-owned settings. It merges JSON settings where safe,
+refreshes ctx-managed files and marker-delimited blocks, and refuses to rewrite
+user-owned Codex TOML. A matching readiness receipt can skip repeated writes;
+use `ctx setup --repair` to force all checks and repair. Use `ctx setup --all` to
+prepare all registered vendor integrations; `antigravity-sdk` remains an
+explicit opt-in. Hermes needs its installed CLI to activate profile settings;
+DSH needs the generated `--patch` at launch. See
+[the additional agent integrations](AGENT-INTEGRATIONS.md).
+
+Setup reports host-configuration writes. The persistent host configuration is:
+
+| Scope | Files or entries |
+|---|---|
+| Workspace | `ctx.toml`, `.ctxignore` |
+| Antigravity | `.agents/plugins/ctx-harness/`; a ctx `statusLine` in `~/.gemini/antigravity-cli/settings.json` only when no status line already exists |
+| Claude Code | ctx hook entries and, when absent, a ctx `statusLine` in `.claude/settings.json`; `.claude/agents/ctx-explorer.md` only when absent; a managed block in `CLAUDE.md` |
+| Codex | ctx entries in `.codex/config.toml` and `.codex/hooks.json`, a managed block in `AGENTS.md` |
+| Hermes | Active profile's MCP entry and enabled `straitjacket` plugin; `.ctx/hosts/hermes.json` records the recipe |
+| OMP | `mcpServers.ctx-harness` in `.omp/mcp.json` |
+| OpenCode | `mcp.ctx-harness` in `opencode.json`; existing JSONC requires a manual merge |
+| DSH | `.ctx/hosts/dsh.cordis.patch.yml`, loaded with `--patch` |
+
+Setup also writes a content-free readiness receipt to
+`.ctx-session-reads/setup.json`; this is not host configuration.
+
+If a user-owned Codex configuration cannot be merged safely, setup prints the
+MCP table instead of replacing the file. Add that table, and ensure the existing
+`[features]` table contains `hooks = true` (create the table if absent; do not
+duplicate it). Then rerun `ctx setup`. Preview one host without writing:
+
+```bash
+ctx wrap codex --print-config
+```
+
+To remove the integration, remove only the ctx-managed directory, entries, and
+marker-delimited blocks. Keep unrelated settings. The exact host-by-host steps
+are in [Troubleshooting](TROUBLESHOOTING.md#how-do-i-turn-the-harness-off-or-uninstall-it).
+
+Configure one host only:
+
+```bash
+ctx wrap antigravity
+ctx wrap claude
+ctx wrap codex
+```
 
 ## Choose the command by work shape
 
@@ -211,12 +282,13 @@ straitjacket provides:
 - output containment;
 - deterministic rendering;
 - bounded retrieval;
-- workspace-relative path confinement;
-- traversal and symlink-escape rejection;
+- workspace-relative confinement for ctx-managed repository reads and searches;
+- traversal and symlink-escape rejection on those ctx-managed paths;
 - timeouts and process-group handling;
 - secret-aware controls.
 
-It is not a complete process sandbox. Commands run with the invoking user's permissions.
+It is not a complete process sandbox. Child processes launched through
+`ctx run` keep the invoking user's filesystem and execution authority.
 
 ## Next
 

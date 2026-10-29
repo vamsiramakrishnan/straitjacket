@@ -9,6 +9,11 @@ budget, tighten the guard, or add a monorepo scope.
 
 ## Where configuration lives
 
+This page covers Straitjacket policy. Agent-side MCP and hook settings are
+separate: see [Getting started](GETTING-STARTED.md) and
+[Agent integrations](AGENT-INTEGRATIONS.md). Hermes' MCP entry belongs to its
+active profile; OMP and OpenCode use project files, and DSH uses a launch overlay.
+
 straitjacket reads **exactly one file: `ctx.toml` at the workspace root.** There
 is no upward search and no user-global or machine-global config — configuration
 is per-workspace and committed with the repo. `ctx init` (or `ctx setup`)
@@ -102,7 +107,7 @@ hosts without output substitution. An unexpected flood is digested once and
 marks that signature so subsequent calls return to birth-time capture.
 This policy is the first reviewed AlphaEvolve product canary; its measured
 tradeoffs and remaining proof boundary are documented in the
-[optimization guide](ALPHAEVOLVE-OPTIMIZATION.md#what-alphaevolve-has-changed-in-the-product).
+[optimization guide](ALPHAEVOLVE-OPTIMIZATION.md#how-those-benefits-reached-the-product).
 
 **To make the harness stricter,** `mode` and `steering` are different axes:
 `mode` sets *how much* is classified (`advisory` off → `guarded` → `strict`),
@@ -158,6 +163,33 @@ exceed.
 | `max_fanout` | `64` | Maximum plan fan-out. |
 | `wall_seconds` | `120.0` | Wall-clock bound for a plan run. |
 | `replans` | `1` | Allowed replans. |
+
+## `[orchestrate]` — edit and prewalk policies
+
+These optional keys control the [edit loop](EDIT-LOOP.md) and
+[prewalk](PREWALK.md). See [routing](ROUTING.md) for the broader orchestration
+configuration.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `prewalk` | `false` | Offer a frontier mutation worker a verified handoff when a cheaper installed model and another attempt are available. |
+| `edit_policy_file` | `""` | Workspace-relative paired live JSONL evidence for edit-format advice. Insufficient evidence keeps native formatting. |
+| `prewalk_policy_file` | `""` | Workspace-relative paired live JSONL evidence required before offering prewalk. Insufficient evidence keeps the assigned model. |
+
+```toml
+[orchestrate]
+prewalk = true
+edit_policy_file = "evals/edit-results.jsonl"
+prewalk_policy_file = "evals/prewalk-results.jsonl"
+```
+
+Set `edit_shape` on each applicable route node to the evaluated task shape.
+The exact model ID (or guide/executor pair) and shape must match the evidence.
+An absent or unreadable configured file cannot select a new strategy. An empty
+`prewalk_policy_file` leaves `prewalk = true` as an explicit experimental
+opt-in, still subject to receipt verification and existing budget/attempt
+limits. Policy files grant no additional mutation permissions. See
+[paired evaluations](../evals/EDIT-MATRIX.md) for the evidence schema and gates.
 
 ## `[surface]` — the input side (MCP tool schemas)
 

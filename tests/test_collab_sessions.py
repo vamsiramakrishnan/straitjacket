@@ -74,13 +74,19 @@ def test_conversation_identity_must_match(fake_agy):
 
 
 def test_recovery_replays_capture_without_another_agent_call(tmp_path):
-    root = tmp_path / 'session'
-    root.mkdir()
+    from ctx import relay
+
+    relay.watch(tmp_path, subscriber='codex', topic='task', selector='review')
+    root = tmp_path / '.ctx/collab/sessions/session'
+    root.mkdir(parents=True)
     os.mkfifo(root / 'wake')
     (root / 'state.json').write_text(json.dumps({'status': 'blocked', 'returncode': 0,
-        'conversation_id': 'c', 'seq': 1, 'task_completed': False}))
+        'conversation_id': 'c', 'seq': 1, 'task_completed': False, 'task_id': 'review'}))
     payload = {'conversation_id': 'c', 'status': 'SUCCESS', 'response': 'verified review'}
     (root / 'stdout.jsonl').write_text(json.dumps({'event': 'result', 'result': payload}) + '\n')
     assert recover(root)['status'] == 'completed'
     assert recover(root)['seq'] == 2
     assert (root / 'response.md').read_text() == 'verified review'
+    signals = relay.pending(tmp_path, 'codex')
+    assert len(signals) == 1
+    assert signals[0]['ref'] == 'repo:.ctx/collab/sessions/session/state.json'

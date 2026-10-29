@@ -1,11 +1,9 @@
 """Measure how often a ``repo:`` line address stops meaning what it meant.
 
-Why this exists: straitjacket's central claim is that omission is reversible --
-*"the same address returns the same bytes tomorrow, next week, on another
-machine."* That is enforced and measured for the immutable side of the store.
-It was never measured for ``repo:`` addresses, which are line numbers into a
-file the agent is concurrently editing, and where the claim is simply false: a
-line number is a position, not an identity.
+Why this exists: for a retained immutable artifact, a handle addresses the same
+stored bytes. A ``repo:`` address is different: it points into a file the agent
+is concurrently editing, where a line number is a position, not an identity.
+The mutable case needed its own measurement.
 
 The question this instrument answers is not "does anchoring work" -- the unit
 tests pin that. It is **how large the exposure was**, in the only units that
@@ -20,15 +18,17 @@ are reproducible in a review sandbox and cannot drift with a vendor's weights.
     python evals/anchor_drift.py            # human-readable receipt
     python evals/anchor_drift.py --json     # machine-readable record
 
-The corpus is this repository's own ``src/ctx/*.py``: files with real
-indentation, real duplicate lines, and real docstrings, which is what makes
-relocation a measurement rather than a demonstration.
+The corpus is ``src/ctx/*.py`` at one pinned repository commit: files with real
+indentation, duplicate lines, and docstrings, without letting unrelated source
+edits silently change the receipt. The resolver under test still comes from the
+current tree, so an anchor-behavior change remains visible.
 """
 
 from __future__ import annotations
 
 import json
 import random
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,6 +39,10 @@ from ctx import anchors  # noqa: E402
 #: Spans an agent actually asks for: a couple of lines it is about to change,
 #: a small block, a function-sized region.
 SPAN_LENGTHS = (2, 8, 25)
+
+# Freeze the input corpus. Before this pin, the seed was stable but the sampled
+# text was not: ordinary source edits changed the published totals.
+CORPUS_COMMIT = "7c69ea70aa40e1017aa6114b19e977225dd4166f"
 
 #: Edit shapes, as a function of the file's lines. Each returns the edited file
 #: and a label. These are the mutations that make a stored line address wrong:
@@ -66,12 +70,36 @@ def _rewrite_span(lines, a, b):
 
 
 def _corpus(limit: int) -> list[tuple[str, list[str]]]:
-    files = sorted((ROOT / "src" / "ctx").rglob("*.py"))
+    def git(*args: str) -> str:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(ROOT), *args],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError(
+                f"anchor-drift corpus commit {CORPUS_COMMIT} is unavailable; "
+                "run from a full clone"
+            ) from exc
+        return proc.stdout
+
+    files = sorted(
+        path
+        for path in git(
+            "ls-tree", "-r", "--name-only", CORPUS_COMMIT, "--", "src/ctx"
+        ).splitlines()
+        if path.endswith(".py")
+    )
     out = []
-    for f in files:
-        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+    for path in files:
+        lines = git("show", f"{CORPUS_COMMIT}:{path}").splitlines()
         if len(lines) >= 120:
-            out.append((str(f.relative_to(ROOT)), lines))
+            out.append((path, lines))
     return out[:limit]
 
 
@@ -146,6 +174,7 @@ def run(seed: int = 20260820, files: int = 40) -> dict:
     total = {k: sum(r[k] for r in tally.values()) for k in next(iter(tally.values()))}
     return {
         "seed": seed,
+        "corpus_commit": CORPUS_COMMIT,
         "files": len(corpus),
         "span_lengths": list(SPAN_LENGTHS),
         "by_edit": tally,

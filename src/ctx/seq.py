@@ -59,8 +59,10 @@ def run_seq(
         except ExecutionError as e:
             lines_out.append(f"step {idx} ✗ failed to start ({e}) · {cmd}")
             final_exit = final_exit or 127
-            halted_at = idx
-            break
+            if halt_on_fail:  # was breaking unconditionally, ignoring --keep-going
+                halted_at = idx
+                break
+            continue
         digest, manifest = render_run_digest(
             store, ws, capture.manifest, focus=focus
         )

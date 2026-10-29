@@ -335,6 +335,7 @@ def test_non_messages_path_passthrough_and_status(proxy):
     assert rec == {
         "seq": 1,
         "path": "/health",
+        "prefix": {},
         "status": 418,
         "req_bytes": 0,
         "messages": 0,
@@ -543,3 +544,38 @@ def test_wrap_claude_proxy_integration(tmp_path, monkeypatch, upstream):
             break
     else:
         raise AssertionError("proxy still accepting connections after wrap exit")
+
+
+# ------------------------------------------------------------ prefix audit
+def test_observe_request_records_prefix_shape():
+    from ctx.proxy import _observe_request
+
+    body = json.dumps({
+        "model": "claude-haiku-4-5",
+        "system": [{"type": "text", "text": "x" * 1000}, {"type": "text", "text": "y" * 500}],
+        "tools": [
+            {"name": "Bash", "description": "d" * 100, "input_schema": {}},
+            {"name": "ToolSearch", "description": "deferred loader", "input_schema": {}},
+        ],
+        "messages": [{"role": "user", "content": "hi"}],
+    }).encode()
+    pf = _observe_request("/v1/messages", body)["prefix"]
+    assert pf["system_bytes"] == 1500 and pf["tools"] == 2 and pf["deferral"] is True
+    assert pf["tools_bytes"] > 100
+
+
+def test_observe_request_prefix_without_deferral_marker():
+    from ctx.proxy import _observe_request
+
+    body = json.dumps({
+        "model": "m", "system": "s" * 10,
+        "tools": [{"name": f"T{i}", "input_schema": {}} for i in range(30)],
+        "messages": [{"role": "user", "content": "hi"}],
+    }).encode()
+    pf = _observe_request("/v1/messages", body)["prefix"]
+    assert pf == {"system_bytes": 10, "tools": 30, "tools_bytes": pf["tools_bytes"], "deferral": False}
+    # A `defer_loading` flag on any tool is the host-neutral marker.
+    body2 = json.dumps({"model": "m", "tools": [{"name": "A", "defer_loading": True}], "messages": []}).encode()
+    assert _observe_request("/v1/messages", body2)["prefix"]["deferral"] is True
+    # Non-/messages traffic carries no prefix.
+    assert _observe_request("/v1/other", body)["prefix"] == {}

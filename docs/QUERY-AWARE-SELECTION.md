@@ -57,16 +57,29 @@ measure evidence retention, follow-up retrievals, end-to-end latency, and verifi
 task success against the unfocused baseline. Those downstream measurements have
 not yet been run. Compression percentage alone is not an admission criterion.
 
-## Experimental block selector
+## Block selection and retrieval
 
 `src/ctx/digest/block_selection.py` prepares exact source blocks, keeps fenced
 code together, and closes heading dependencies before enforcing a byte budget.
 Required evidence that cannot fit produces `needs_retrieval`; it is not silently
 cut. No phrase, DEBUG level, null value, identifier, or license text is deleted
-during preprocessing. This selector is experimental and is not wired into the
-production text digest. It uses lexical features, not trained neural weights.
+during preprocessing. Focused generic text digests use `text/focus-v3` to expand
+selected evidence into complete blocks when the protected blocks fit; otherwise
+they retain the bounded `text/focus-v2` line view. This uses lexical features,
+not trained neural weights.
 
-The `block-selection` AlphaEvolve experiment can change only `rank_blocks(items)`.
+`ctx compress FILE --query "question" --budget-bytes 2048` also exposes the local
+selector. It stores the original bytes and returns their retrieval address.
+`--require-line N` protects explicit evidence. An unsatisfied budget returns
+`needs_retrieval` (exit 3), rather than silently dropping required evidence.
+
+`--cache-prefix FILE` emits a deterministic reference prefix and a separate
+evidence/query suffix. Applications can send the same prefix before changing
+content to make provider prompt caching possible. This does not manipulate a
+model's KV cache, call a provider, or guarantee a cache hit. Keep instructions
+outside this reference-data wrapper.
+
+The experimental `block-selection` AlphaEvolve search can change only `rank_blocks(items)`.
 Candidates receive numeric features, not source text, answer labels, or test
 code. The fixed evaluator rejects missing or duplicated IDs and noninteger IDs.
 Search, holdout, and adversarial splits contain six synthetic cases each.

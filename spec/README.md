@@ -1,8 +1,12 @@
 # Specifications
 
-This directory is the **normative** source of truth for straitjacket's
-behaviour. When a design doc and the spec disagree about what the product does,
-the spec wins. When the spec and the code disagree, that's a bug — file it.
+This directory contains a draft target contract for the core runtime and the
+original Antigravity integration design. It is not a complete statement of
+v0.35.1 behavior: some clauses describe intended work, including encrypted raw
+storage and an execute-without-capture escape path that do not ship today.
+Use the changelog, CLI docs, host-capability matrix, code, and tests for current
+behavior. RFC-2119 language here expresses the target inside the draft's stated
+scope; a code difference is not automatically a released-product bug.
 
 New contributor? Read this before proposing a change: it tells you what any
 change must satisfy to merge.
@@ -11,7 +15,7 @@ change must satisfy to merge.
 
 | File | What it is |
 |---|---|
-| [`SPEC.md`](SPEC.md) | The normative specification. RFC-2119 keywords (MUST/SHOULD/MAY), the core invariants, the wire and packaging contracts. |
+| [`SPEC.md`](SPEC.md) | Draft target invariants, wire contracts, and Antigravity packaging. |
 | [`ACCEPTANCE.md`](ACCEPTANCE.md) | The acceptance suite: the list of MUSTs a release has to satisfy. `tests/` is its executable form — a green suite is the merge gate. |
 | [`REFERENCES.md`](REFERENCES.md) | External references the integration was designed against (host docs), with a "re-verify before release" note. |
 | [`adr/`](adr/) | Architecture Decision Records — the load-bearing choices and why they were made. |
@@ -25,6 +29,7 @@ change must satisfy to merge.
 | [002](adr/002-store-outside-repository.md) | Store payloads outside the repository. |
 | [003](adr/003-pretool-routing.md) | Route before execution; do not repair after execution. |
 | [004](adr/004-plugin-contains-skill.md) | The plugin contains the skill (they must not both be installed). |
+| [005](adr/005-antigravity-hook-contract.md) | Match Antigravity's published hook contract; deny and redirect because its hooks cannot substitute input or output. |
 
 ## The wire schemas
 
@@ -37,7 +42,7 @@ change must satisfy to merge.
 
 The project separates four kinds of truth (see [`docs/README.md`](../docs/README.md)):
 
-- **`spec/`** (here) — what the product *must* do (normative).
+- **`spec/`** (here) — draft target contracts and design constraints.
 - **`docs/`** — how it works and *why* each mechanism exists (design intent).
 - **`evals/`** — the *measurements* that justified shipping each mechanism.
 - **`CHANGELOG.md`** — what actually shipped, and when.

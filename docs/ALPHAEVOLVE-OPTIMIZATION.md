@@ -28,8 +28,8 @@ different evidence strengths:
 | Command coverage | **57,313** wrapper, limit, structured, compound, noisy-read, deny, and mutation cases with zero classification failures | deterministic production gate | found a compound-command rewrite counterexample and helped organize direct/capture/review as three explicit outcomes |
 | Multi-host orchestration | **269,696** wave, mutation, handoff, and verification combinations with zero policy failures; opt-in disjoint worktrees later measured **1.68x** faster than serial in a two-worker production-path canary | deterministic gate plus scoped local canary | made latency, turns, evidence, mutation isolation, and independent verification searchable without making safety mutable; managed runs produced no incremental winner |
 | Route correctness | interactive-host false success, unverified mutation plans, and zero-exit “not complete” responses became explicit failures; a passing lean feature arm used **52.7% less wall time**, 25% fewer turns, 44.2% less estimated visible context, and 70.4% less estimated spend than the passing four-stage arm | acceptance evidence plus estimated route economics | refreshed the corpus around actual completion instead of trusting exit status or route estimates |
-| Fleet and retrieval | **33** registered levers, **30** mutable seams, **22** experiment families, and three protected oracle planes; adversarial retrieval found and fixed failure-evidence ordering | deterministic search infrastructure | made widespread iteration bounded, repeatable, and incapable of mutating usage accounting, safety guards, or receipt integrity |
-| Generic evidence selection | a 14-program managed campaign raised the frozen eight-case evidence objective from 75.419820 to **94.444440 (+25.22%)**, beating the historical 91.116070 best; independently authored holdout and adversarial corpora — plus a real-output exploration-scale corpus — confirm transfer (**+16.3% / +35.8% / +34.7%**), and the policy is translated into the generic digest fallback's signal ranking | holdout + adversarial + exploration corpora, translated product path | proved the upgraded campaign harness (insights, component metrics) finds stronger policies with fewer candidates; blind spots (coordinate-saturated sweeps) are the next target |
+| Fleet and retrieval | **24** registered levers, **21** mutable seams, **15** experiment families, and three protected oracle planes; adversarial retrieval found and fixed failure-evidence ordering | deterministic search infrastructure | made widespread iteration bounded, repeatable, and incapable of mutating usage accounting, safety guards, or receipt integrity |
+| Generic evidence selection | a managed winner raised the frozen eight-case evidence objective from 75.419820 to 91.116070, a **20.81% relative improvement** | managed search candidate only | proved the bounded search loop can improve a narrow objective; the candidate remains quarantined pending independent holdout and long-output integration evidence |
 | Cold-context policy | seed models **76.56% fewer visible tokens** and **71.12% lower dollars** than always-inline, with no modeled turn reduction | inactive modeled candidate | supplied frozen search, holdout, and adversarial gates; no renderer, provider transport, or product claim exists |
 
 Two negative results are benefits too. Direct naive execution was **8.55%
@@ -286,14 +286,6 @@ Explicit user host/model pins remain authoritative.
 - Every cloud command requires `--confirm-spend`.
 - Generated code runs in a timeout-bounded child process with restricted
   builtins and allowlisted pure-stdlib imports.
-- Generation models follow Google's documented mixture surface: a weighted
-  flash/pro blend via `--model-mix` or `MODEL_1`/`MODEL_2` environment names.
-  Unknown model names fail closed before any billed experiment starts.
-- Duplicate candidate source is evaluated once per campaign and replayed from
-  the local memo, so billed search never pays twice for identical code.
-- Every evaluation reports the primary scalar plus per-metric component gains
-  as separate named scores; failures return typed hints the upstream loop can
-  feed back to the ensemble.
 
 ## Promotion contract
 
@@ -358,8 +350,7 @@ the same regression.
 
 | Measurement | Improvement | Evidence class |
 |---|---:|---|
-| Quiet-needle raw context | **578x smaller** with the needle retained and addressable | deterministic field corpus |
-| Evidence selection, 2026-08-24 campaign | search corpus **+25.22%** (75.42 → 94.44), holdout **+16.3%**, adversarial **+35.8%**, exploration-scale real outputs **+34.7%** | frozen corpora + translated digest fallback ranking |
+| Quiet-needle raw context | **570x smaller** with the needle retained and a retrieval address emitted (not exercised by this fixture) | deterministic field corpus |
 | Unavoidable Antigravity flood | **152x less tool output**, 30% fewer billed tokens, equal correctness | live matched-host A/B |
 | Quarantined naive-fast-path winner, search mix | **11.25x less visible context**, 9.09x lower modeled dollars, 3x fewer model turns; rejected after adversarial failure | frozen completion-gated evaluator, not product behavior |
 | Receipt-informed routing, search mix | **2.81x lower blended dollars**, 2.25x less visible context | replay; only 1 of 8 case costs currently actual |

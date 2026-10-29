@@ -168,6 +168,10 @@ DIALECT_CAPS: dict[str, dict[str, bool]] = {
     "claude-code": {"input_substitution": True, "output_substitution": True},
     "codex": {"input_substitution": True, "output_substitution": True},
     "antigravity": {"input_substitution": False, "output_substitution": False},
+    "hermes": {"input_substitution": True, "output_substitution": True},
+    "omp": {"input_substitution": True, "output_substitution": True},
+    "opencode": {"input_substitution": True, "output_substitution": True},
+    "dsh": {"input_substitution": False, "output_substitution": True},
 }
 
 
@@ -318,6 +322,15 @@ _GATE_FAILURE_HEAD_BYTES = 2048  # bounded excerpt inside a gate-failure digest
 _GREP_MATCH_CAP = 25  # -m injected into single-file grep under rewrite steering
 
 _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
+# A transparent rewrite must be native-shaped where capture buys nothing.
+# Measured on DeepSWE (evals/agentbench, haiku): the agent's own commands
+# produced a median of 91-277 bytes, yet every routed one came back as a
+# receipt (header, command echo, status line) and a failing `python -c`
+# reported ctx's exit 3 instead of the command's 1 — results grew 2-8x and
+# the model re-ran identical failing checks. `--passthrough` makes `ctx run`
+# print small, complete output verbatim (handle on one trailing line) and
+# exit with the wrapped command's own status; large output still digests.
+_REWRITE_FLAGS = " --passthrough"
 
 # --- Tool-kind classification -------------------------------------------------
 # Which guard branch a tool name takes (edit / command / read / search), matched
@@ -327,6 +340,7 @@ _REWRITE_REASON = "CTX_CONTEXT_GUARD: routed through ctx for bounded capture"
 # order is load-bearing (edit → command → read → search): an `edit_command`-style
 # name classifies as edit, exactly as the old ordered `if` chain did.
 _TOOL_EXACT_KIND = {
+    "patch": "edit", "apply_patch": "edit",
     "create_file": "edit", "replace_file_content": "edit",
     "bash": "command", "shell": "command", "exec": "command",
     "open_file": "read", "view_file": "read",
@@ -1096,7 +1110,7 @@ def _deny_cmd(
     # A never-terminating command must not be steered into a blocking capture.
     bg = " --bg" if _follows_forever(argv) else ""
     if has_meta and original:
-        cmd = f"ctx run{bg} --shell -- " + shlex.quote(original)
+        cmd = f"ctx run{bg}{_REWRITE_FLAGS} --shell -- " + shlex.quote(original)
     else:
         # Classification deliberately unwraps ``env``, ``timeout``, ``nice``
         # and similar launchers to see the real program. Execution must retain
@@ -1104,7 +1118,7 @@ def _deny_cmd(
         # semantics. Reparse the already validated original string only for a
         # metacharacter-free direct argv rewrite.
         routed_argv = shlex.split(original) if original else argv
-        cmd = f"ctx run{bg} -- " + " ".join(shlex.quote(a) for a in routed_argv)
+        cmd = f"ctx run{bg}{_REWRITE_FLAGS} -- " + " ".join(shlex.quote(a) for a in routed_argv)
     reason = _REWRITE_REASON
     if bg:
         reason = (
@@ -1182,6 +1196,8 @@ def _split_simple_chain(stripped: str) -> list[str] | None:
                 quote = None
             elif char == "\\" and quote == '"':
                 index += 1
+            elif quote == '"' and char in '$`':
+                return None  # Double-quoted substitutions still execute in the shell.
         elif char in "\"'":
             quote = char
         elif char == ";" or stripped[index:index + 2] in {"&&", "||"}:
@@ -1320,6 +1336,132 @@ def _decay_taught_reason(decision: dict[str, Any], workspace_root: str | None) -
             continue
 
 
+def _ctx_run_inner(argv: list[str]) -> list[str]:
+    """The command ``ctx run [flags] -- <argv>`` will execute, or ``[]``.
+    ``--shell -- '<string>'`` is split like the shell would; a string the
+    shell would reject yields ``[]`` (the guard then has nothing to judge,
+    and ``ctx run`` itself reports the error)."""
+    if len(argv) < 3 or argv[1] != "run" or "--" not in argv[2:]:
+        return []
+    sep = argv.index("--", 2)
+    inner = argv[sep + 1:]
+    if "--shell" in argv[2:sep] and len(inner) == 1:
+        try:
+            inner = shlex.split(inner[0])
+        except ValueError:
+            return []
+    return inner
+
+
+def _names_secret_path(argv: list[str], cwd: str | None) -> bool:
+    """Does any path-shaped argument name a secret-bearing file?
+
+    One predicate for every door: the plain command path and the
+    ``cmd > file 2>&1`` shortcut both consult it, so a new early return
+    cannot quietly skip the guarantee again. Restricted to arguments shaped
+    like paths, because the secret regex alone matches the bare WORD
+    "secrets", which is a sentence, not a file.
+    """
+    for _arg in argv[1:]:
+        if _arg.startswith("-"):
+            continue
+        _p = _arg.replace("\\", "/")
+        if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
+            continue
+        if _is_secret_path(_p, cwd):
+            return True
+    return False
+
+
+def _secret_path_force_ask() -> dict[str, str]:
+    return _force_ask(
+        "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
+        "an explicit user-visible permission step; it is excluded "
+        "from automatic capture."
+    )
+
+
+# Container-engine invocations that reach past the workspace confinement.
+# The table is headlong's docker broker denylist (privileged containers,
+# host namespaces, host devices, the engine socket, bind mounts from
+# outside the workspace), applied here as a safety-class force_ask: the
+# command is not wrong, it is a decision the user has to see. Same class,
+# same door discipline, as secret-bearing paths -- the plain command, the
+# ``> file 2>&1`` shortcut, chain segments and ``ctx run --`` all consult
+# it. ``docker`` is also in _UNBOUNDED_CMDS, so a plain ``docker run`` still
+# gets the volume-class deny-with-remediation; this check comes first because
+# the remediation for a deny is ``ctx run -- <same argv>``, and a privileged
+# container is not made acceptable by capturing its output.
+_CONTAINER_PROGS = {"docker", "podman", "nerdctl"}
+_HOST_NS_FLAGS = {"--pid", "--network", "--net", "--ipc", "--uts", "--userns", "--cgroupns"}
+_CAP_ESCAPE = {"ALL", "SYS_ADMIN", "CAP_SYS_ADMIN", "CAP_ALL", "SYS_PTRACE", "CAP_SYS_PTRACE"}
+_ENGINE_SOCKET_MARKS = ("docker.sock", "podman.sock", "containerd.sock")
+
+
+def _bind_source_escape(src: str, cwd: str | None) -> str | None:
+    """Why a bind-mount SOURCE reaches outside the workspace, or None."""
+    if not src:
+        return None
+    if any(src.endswith(m) or f"{m}:" in src for m in _ENGINE_SOCKET_MARKS) or "/run/docker" in src:
+        return "the container engine socket is mounted"
+    if cwd:
+        src = src.replace("${PWD}", cwd).replace("$PWD", cwd).replace("$(pwd)", cwd)
+    if src.startswith("$"):
+        return "a bind mount from a shell variable the guard cannot resolve"
+    if src.startswith("~"):
+        src = os.path.expanduser(src)
+    if not src.startswith(("/", ".")):
+        return None  # a named volume, not a host path
+    if not cwd:
+        # No workspace to confine to: only an absolute host root is certain.
+        return "the host filesystem root is bind-mounted" if src.rstrip("/") == "" else None
+    absolute = src if os.path.isabs(src) else os.path.join(cwd, src)
+    if _path_outside(absolute, cwd):
+        return "a bind mount from outside the workspace"
+    return None
+
+
+def _container_escape(argv: list[str], cwd: str | None) -> str | None:
+    """The first container-escape surface in a docker/podman/nerdctl argv,
+    as a short reason fragment, or None. Pure over argv; the only I/O is
+    path resolution for bind-mount sources."""
+    if not argv or os.path.basename(argv[0]) not in _CONTAINER_PROGS:
+        return None
+    toks = argv[1:]
+    for i, tok in enumerate(toks):
+        flag, has_eq, inline = tok.partition("=")
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        value = inline if has_eq else nxt
+        if tok == "--privileged":
+            return "a privileged container"
+        if flag in _HOST_NS_FLAGS and value == "host":
+            return f"a host namespace ({flag}=host)"
+        if flag == "--device":
+            return "a host device is passed through"
+        if flag == "--cap-add" and value.upper() in _CAP_ESCAPE:
+            return f"capability {value.upper()} is added"
+        if flag in ("-v", "--volume"):
+            why = _bind_source_escape(value.split(":", 1)[0], cwd)
+            if why:
+                return why
+        if flag == "--mount":
+            fields = dict(kv.split("=", 1) for kv in value.split(",") if "=" in kv)
+            src = fields.get("source") or fields.get("src") or ""
+            if fields.get("type", "volume") == "bind" or any(m in src for m in _ENGINE_SOCKET_MARKS):
+                why = _bind_source_escape(src, cwd)
+                if why:
+                    return why
+    return None
+
+
+def _container_escape_force_ask(why: str) -> dict[str, str]:
+    return _force_ask(
+        f"CTX_CONTEXT_GUARD: container escape surface — {why}. It reaches past "
+        "the workspace confinement; running it requires an explicit "
+        "user-visible permission step."
+    )
+
+
 def _classify_command_inner(
     command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
 ) -> dict[str, str]:
@@ -1354,6 +1496,21 @@ def _classify_command_inner(
                     return _safety_deny_cmd(
                         denied, policy, original=stripped, has_meta=has_meta
                     )
+                # Same lesson, second door. The deny_commands check above was
+                # added because this shortcut returned ahead of a repo-
+                # committed rule; it still returned ahead of the secret-path
+                # guard below, so `cat .env > out.log 2>&1` was allowed while
+                # `cat .env` force-asks. The redirect answers the volume
+                # question only; the blanket secret guarantee holds here too.
+                try:
+                    inner = shlex.split(redir.group("cmd") or "")
+                except ValueError:
+                    inner = []
+                if _names_secret_path(inner, cwd):
+                    return _secret_path_force_ask()
+                escape = _container_escape(inner, cwd)
+                if escape is not None:
+                    return _container_escape_force_ask(escape)
                 return dict(DECISION_ALLOW)
         # Bounded chain: `a; b && c` with no other metacharacters. Each
         # segment is classified independently; the chain is allowed only if
@@ -1403,8 +1560,17 @@ def _classify_command_inner(
 
     prog = os.path.basename(argv[0])
 
-    # Already routed through ctx → always allow.
+    # Already routed through ctx → allow, once the safety class has had its
+    # look at what ``ctx run -- <argv>`` will actually execute. Capture is
+    # a volume answer; it never makes a secret read or a container escape
+    # acceptable, and the deny remediation itself points here.
     if prog == "ctx":
+        inner = _ctx_run_inner(argv)
+        if _names_secret_path(inner, cwd):
+            return _secret_path_force_ask()
+        escape = _container_escape(inner, cwd)
+        if escape is not None:
+            return _container_escape_force_ask(escape)
         return dict(DECISION_ALLOW)
 
     # Repo-configured overrides win over built-in tables.
@@ -1428,18 +1594,11 @@ def _classify_command_inner(
     # downgraded `echo secrets please` from deny to ask. Restricted to
     # arguments that are shaped like paths, because the regex alone matches
     # the bare WORD "secrets", which is a sentence, not a file.
-    for _arg in argv[1:]:
-        if _arg.startswith("-"):
-            continue
-        _p = _arg.replace("\\", "/")
-        if "/" not in _p and "." not in _p and not _SECRET_BARE_RE.match(_p):
-            continue
-        if _is_secret_path(_p, cwd):
-            return _force_ask(
-                "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
-                "an explicit user-visible permission step; it is excluded "
-                "from automatic capture."
-            )
+    if _names_secret_path(argv, cwd):
+        return _secret_path_force_ask()
+    escape = _container_escape(argv, cwd)
+    if escape is not None:
+        return _container_escape_force_ask(escape)
     # A prefix allow/promotion applies to a single command only. When shell
     # metacharacters survived the chain/redirect handling above (e.g.
     # ``echo hi && rm -rf x``), ``shlex.split`` keeps ``&&`` as an ordinary
@@ -1497,8 +1656,9 @@ def _classify_command_inner(
             f"Prefer: ctx run --shell -- {shlex.quote(stripped)}"
         )
         if _steering_allows(policy):
+            bg = " --bg" if _follows_forever(argv) else ""  # fix: never-terminating piped command needs --bg too
             fa["_rewrite"] = {
-                "command": "ctx run --shell -- " + shlex.quote(stripped),
+                "command": "ctx run" + bg + _REWRITE_FLAGS + " --shell -- " + shlex.quote(stripped),
                 "reason": _REWRITE_REASON,
             }
         return fa
@@ -1811,12 +1971,69 @@ def _pressured_window(max_lines: int, total: int, budget: int) -> int:
     return max(_OVER_BUDGET_MIN_LINES, int(max_lines / (4 * over)))
 
 
+#: Token budget for the outline that answers a whole-file read. A 64 KB
+#: Python module (~16k tok) outlines to ~1k tok at this budget; the first
+#: 240-line page it replaces was ~2.5k tok and showed 14% of the file.
+_OUTLINE_BUDGET_TOKENS = 1200
+
+
+def _whole_file_read(tool_input: dict[str, Any] | None) -> bool:
+    """A Read that asked for the file, not a slice of it."""
+    if not tool_input:
+        return False
+    return not any(
+        isinstance(tool_input.get(k), int) and not isinstance(tool_input.get(k), bool)
+        and tool_input.get(k) > 0
+        for k in ("offset", "limit", "start_line", "end_line", "StartLine", "EndLine")
+    )
+
+
+def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int) -> str | None:
+    """The map of a large code file, for a Read that wanted all of it.
+
+    Measured on DeepSWE (cattrs, haiku): every whole-file Read of the 64 KB
+    converters.py came back as its first 240 lines, ~2.5k tokens showing 14%
+    of the file and no structure, and the session paged on from there. The
+    skeleton (tree-sitter / ctags / stdlib ast, with line ranges and minted
+    spans) is ~1k tokens for all 83 symbols and makes the next read a
+    targeted one. Slice reads (offset/limit) are never touched. Fail-open:
+    any problem returns None and the bounded first page applies as before."""
+    if not workspace_root:
+        return None
+    try:
+        from ctx.skeleton import language_for, skeleton_for, skeleton_outline
+
+        rel = os.path.relpath(path_str, workspace_root).replace(os.sep, "/")
+        if rel.startswith("..") or not language_for(rel):
+            return None
+        from ctx.store import Store
+        from ctx.workspace import resolve_workspace
+
+        ws = resolve_workspace(workspace_root)
+        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+        sk = skeleton_for(store, ws, rel)
+        if not sk.get("symbols"):
+            return None
+        outline = skeleton_outline(sk, _OUTLINE_BUDGET_TOKENS)
+        return (
+            f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte code file "
+            f"(~{size // 4:,} tok). Its map is below instead of the first page; "
+            "read what you need by range (Read with offset and limit) or by "
+            f"symbol (ctx get repo:{rel} --symbol <Name>).\n" + outline
+        )
+    except Exception:
+        return None
+
+
 def classify_read(
     path_str: str,
     workspace_root: str | None,
     policy: dict[str, Any],
     session_id: str = "unknown",
+    tool_input: dict[str, Any] | None = None,
 ) -> dict[str, str]:
+    if workspace_root and not os.path.isabs(path_str):
+        path_str = os.path.join(workspace_root, path_str)  # fix: resolve relative paths against workspace_root, not process CWD
     if _is_secret_path(path_str, workspace_root):
         return _force_ask(
             "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires an explicit "
@@ -1847,6 +2064,13 @@ def classify_read(
     # which _pressured_window reads as "no pressure").
     seen = 0 if in_ledger else _ledger_charge(workspace_root, session_id, 0)
     if size > limit:
+        if not in_ledger and _whole_file_read(tool_input):
+            outline = _skeleton_outline_for(path_str, workspace_root, size)
+            if outline:
+                # A deny whose reason IS the answer: the outline reaches the
+                # model as the tool's text on every host, and no rewrite is
+                # attached so the first-page fallback never overrides it.
+                return _deny(outline)
         price = _price_note(size, workspace_root)
         decision: dict[str, Any] = _deny(
             f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline budget).\n"
@@ -1892,6 +2116,11 @@ def classify_read(
 _APPLY_ROOT: dict[str, Any] = {}
 
 
+#: Rewrite fields that are upper bounds on a result (Read `limit`, Grep
+#: `head_limit`). The caller's own smaller value is kept.
+_CAP_FIELDS = frozenset({"limit", "head_limit"})
+
+
 def _apply_rewrite(
     decision: dict[str, Any],
     tool_input: dict[str, Any],
@@ -1911,7 +2140,21 @@ def _apply_rewrite(
             return decision  # no command field to substitute: keep plain decision
         updated[command_key] = hint["command"]
     else:
-        updated.update(hint.get("fields", {}))
+        for key, cap in hint.get("fields", {}).items():
+            own = tool_input.get(key)
+            if (
+                key in _CAP_FIELDS
+                and isinstance(own, int) and not isinstance(own, bool)
+                and 0 < own <= cap
+            ):
+                # A cap narrows a read; it never widens one. Measured on
+                # DeepSWE (cattrs, haiku): the model asked `offset=729
+                # limit=10` on a 60 KB file and the large-file rewrite handed
+                # it 239 lines — every targeted read became a 10 KB page,
+                # 106 KB of Read results against naive's 74 KB, from the
+                # guard that exists to bound them.
+                continue
+            updated[key] = cap
     decision["rewrite"] = {"updatedInput": updated, "reason": hint["reason"]}
     if "command" in hint:
         # Carried for hosts that cannot substitute input and have to name the
@@ -2018,7 +2261,12 @@ def classify(
                     command,
                     failure_available=lambda: _failure_available(workspace_root),
                     symbols_resolvable=lambda: _symbols_resolvable(workspace_root))
-                if sub is not None:
+                if sub is not None and not (
+                    decision.get("decision") == "force_ask"
+                    and decision.get("reason", "").startswith(
+                        "CTX_CONTEXT_GUARD: secret-bearing path"
+                    )
+                ):  # fix: never let collapse override a secret-path force_ask
                     # Deliberately overrides a DENY as well as an allow, and
                     # that is the product: the flagship case (`grep -rn X .`)
                     # is denied by the canonical layer as unbounded, and the
@@ -2116,11 +2364,12 @@ def classify(
         session_id = str(
             payload.get("session_id") or payload.get("conversation_id") or "unknown"
         )
-        for key in ("AbsolutePath", "TargetFile", "file_path", "path", "Path"):
+        for key in ("AbsolutePath", "TargetFile", "file_path", "filePath", "path", "Path"):
             v = tool_input.get(key)
             if isinstance(v, str) and v:
                 return _apply_rewrite(
-                    classify_read(v, workspace_root, policy, session_id), tool_input
+                    classify_read(v, workspace_root, policy, session_id, tool_input=tool_input),
+                    tool_input,
                 )
         return dict(DECISION_ALLOW)
 
@@ -2334,6 +2583,48 @@ EMISSION_NUDGE_TEMPLATE = (
 )
 
 
+#: Hook flavor -> the host id the relay addresses. Only Claude Code differs
+#: (the hook dialect is ``claude-code``; the host in ``ctx.hosts`` is
+#: ``claude``). Spelled here rather than imported because this module must
+#: not import :mod:`ctx.hosts` on the hot path.
+_RELAY_HOST = {"claude-code": "claude"}
+
+
+def _relay_subscriber(flavor: str, payload: dict[str, Any]) -> str:
+    """This harness's relay address: ``<host>:<session>``, or ``<host>``."""
+    host = _RELAY_HOST.get(flavor, flavor)
+    session = str(
+        payload.get("session_id") or payload.get("sessionId") or ""
+    ).strip()[:32]
+    session = "".join(c for c in session if c.isalnum() or c in "._-")
+    return f"{host}:{session}" if session else host
+
+
+def _relay_drain(
+    payload: dict[str, Any], flavor: str, stage: str, ws_root: str | None = None
+) -> tuple[str, list[dict[str, Any]]]:
+    """Take whatever the cross-harness relay has queued for this harness.
+
+    Gated on the queue file existing so a workspace that never uses the relay
+    pays one ``os.path.exists`` per tool call and imports nothing — the hot
+    path is pinned by ``tests/test_hook_hot_path.py`` and this must not widen
+    it. Fail-open in every direction: the relay is an advisory channel, and a
+    corrupt or unreadable queue must degrade to silence rather than to a
+    failed tool call.
+    """
+    try:
+        root = ws_root if ws_root is not None else _resolve_workspace_root(payload)
+        if not root:
+            return "", []
+        if not os.path.exists(session_reads_dir(root, "relay", "relay.jsonl")):
+            return "", []
+        from ctx import relay
+
+        return relay.drain_quietly(root, _relay_subscriber(flavor, payload), stage=stage)
+    except Exception:
+        return "", []
+
+
 def _emission_nudge(payload: dict[str, Any]) -> str | None:
     """Emission governor (mechanism B): the symmetric partner of the read
     budget. The proxy measures cumulative output tokens; when the session
@@ -2490,10 +2781,12 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
         tr = payload.get("toolResponse")
     stdout, stderr = _normalize_tool_response(tr)
     is_error = None
+    if isinstance(payload.get("is_error"), bool):
+        is_error = payload["is_error"]
     if isinstance(tr, dict) and isinstance(tr.get("is_error"), bool):
         is_error = tr["is_error"]
 
-    from ctx.edit_outcomes import append_edit_outcome, classify
+    from ctx.edit_outcomes import append_edit_outcome, classify, resolve_model
 
     def _pick(*keys: str) -> str:
         for key in keys:
@@ -2502,6 +2795,7 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
                 return value
         return ""
 
+    transcript = payload.get("transcript_path") or payload.get("transcriptPath")
     append_edit_outcome(
         workspace_root,
         tool=tool,
@@ -2512,6 +2806,12 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
         old_len=len(_pick("old_string", "oldString", "old_str")),
         new_len=len(_pick("new_string", "newString", "new_str", "content")),
         flavor=flavor,
+        # Which model made the edit: CTX_MODEL when a launcher set it (ctx
+        # orchestrate does), else the transcript's last named model, else
+        # "unknown". The format is derived from the tool name inside.
+        model=resolve_model(
+            transcript_path=transcript if isinstance(transcript, str) else None
+        ),
     )
 
 
@@ -2783,6 +3083,10 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
             is_error=is_error,
             argv=_command_argv(command),
             contained=can_substitute,
+            # Name this harness so the relay fan-out can skip it: an agent
+            # watching `digest` wants a peer's expensive output, not an echo
+            # of the flood it just produced itself.
+            producer=_relay_subscriber(flavor, payload),
         )
         if not isinstance(text, str) or not text.strip():
             raise ValueError("digest produced no text")
@@ -2842,6 +3146,7 @@ def main_session_start(flavor: str = "antigravity") -> int:
     Fires once per session (not the hot path), so the surface import is fine.
     Fail-open: any error emits a no-op, never a blocked session."""
     advisory = ""
+    payload: dict[str, Any] = {}
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
@@ -2862,6 +3167,19 @@ def main_session_start(flavor: str = "antigravity") -> int:
                     probe=sp.probe)
     except Exception:
         advisory = ""
+    try:
+        # A fresh session drains everything, interrupts included: there is no
+        # turn in flight to stop, so the backlog is simply what this harness
+        # missed while it was not running. On Antigravity this stage is
+        # PreInvocation and fires before every model call, which makes it
+        # that host's only relay delivery point — its PostToolUse contract
+        # has exactly one legal output and cannot carry advisory text.
+        relay_text, _ = _relay_drain(payload if isinstance(payload, dict) else {},
+                                     flavor, "session-start")
+        if relay_text:
+            advisory = f"{advisory}\n{relay_text}" if advisory else relay_text
+    except Exception:
+        pass
     if flavor in ("claude-code", "codex"):
         emitted: dict[str, Any] = (
             {"hookSpecificOutput": {"hookEventName": "SessionStart",
@@ -2896,6 +3214,9 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
         payload = parsed if isinstance(parsed, dict) else {}
+        if flavor in ("hermes", "omp", "opencode", "dsh"):
+            from ctx.native_hooks import normalize
+            payload = normalize(flavor, payload)
     except Exception:
         payload = {}
     # Each stage gets its own block. The nudges are advisory; the emission
@@ -2925,12 +3246,35 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
             "[ctx gate-failed]\nCTX_EMISSION_GATE: the output gate raised; the "
             "raw result was withheld rather than emitted unbounded."
         )
-    if flavor == "claude-code":
+    # The relay's report/advise delivery point, and it is deliberately drained
+    # *here* rather than alongside the nudges: a drain marks its signals
+    # delivered, so draining on a host that cannot carry the text would
+    # silently consume the message. That is the one failure this whole channel
+    # exists to prevent, so the drain is gated on there being a real channel
+    # for it on this flavor, and pending signals simply wait for a stage that
+    # has one. Interrupts are never delivered here — this stage cannot stop
+    # anything, and an interrupt shown as advisory text has been demoted to a
+    # suggestion. They wait for pre-tool-use.
+    native = flavor in ("hermes", "omp", "opencode", "dsh")
+    can_carry = flavor in ("claude-code", "codex") or (native and replacement is not None)
+    relay_text = ""
+    if can_carry:
+        try:
+            relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
+        except Exception:
+            relay_text = ""
+
+    if native:
+        if relay_text and replacement is not None:
+            replacement = f"{replacement}\n\n{relay_text}"
+        emitted = {"output": replacement} if replacement is not None else {}
+    elif flavor == "claude-code":
         hso: dict[str, Any] = {"hookEventName": "PostToolUse"}
         if replacement is not None:
             hso["updatedToolOutput"] = replacement
-        if nudge is not None:
-            hso["additionalContext"] = nudge
+        context = "\n".join(x for x in (nudge, relay_text) if x)
+        if context:
+            hso["additionalContext"] = context
         emitted: dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
     elif flavor == "codex":
         # Codex PostToolUse substitutes the model-visible result via
@@ -2941,8 +3285,9 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
             emitted["decision"] = "block"
             emitted["reason"] = replacement
         chso: dict[str, Any] = {"hookEventName": "PostToolUse"}
-        if nudge is not None:
-            chso["additionalContext"] = nudge
+        context = "\n".join(x for x in (nudge, relay_text) if x)
+        if context:
+            chso["additionalContext"] = context
         if len(chso) > 1:
             emitted["hookSpecificOutput"] = chso
     else:
@@ -3024,6 +3369,68 @@ def _internal_error_decision(
     return dict(DECISION_ALLOW)
 
 
+def _is_ctx_call(payload: dict[str, Any]) -> bool:
+    """Is the tool call about to run a ``ctx`` command?
+
+    An interrupt tells the agent to go read an address. Denying the very
+    call that would resolve it deadlocks the agent against the message, so
+    ctx invocations are exempt — the interrupt is still delivered, it just
+    does not block the one action it is asking for.
+    """
+    name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    if name.startswith("mcp__ctx") or name == "ctx":
+        return True
+    raw = payload.get("tool_input") or payload.get("toolInput") or {}
+    if not isinstance(raw, dict):
+        return False
+    command = str(raw.get("command") or raw.get("cmd") or "").lstrip()
+    return command.startswith("ctx ") or command == "ctx"
+
+
+def _apply_relay_interrupt(
+    decision: dict[str, Any] | None,
+    payload: dict[str, Any],
+    flavor: str,
+    ws_root: str | None,
+) -> dict[str, Any] | None:
+    """Turn a queued relay interrupt into a stop at this tool-call boundary.
+
+    This is the strongest form of "interrupt" that exists across hook hosts,
+    and the module docstring of :mod:`ctx.stream_rules` explains why there is
+    no stronger one: a PreToolUse hook cannot observe assistant tokens, so
+    nothing here can abort a request mid-stream. What it *can* do is refuse
+    the next tool call and say why, naming the address the sender wants read.
+
+    ``force_ask``, not ``deny``: a peer harness is not a safety authority,
+    and a wrong interrupt should cost a confirmation rather than a hard
+    refusal. A decision that already denies is left alone — the guard's own
+    verdict outranks a peer's.
+    """
+    if decision is not None and decision.get("decision") == "deny":
+        return decision
+    if _is_ctx_call(payload):
+        # Still drain, so the message is not re-delivered forever; just do
+        # not let it block the call that resolves it.
+        _relay_drain(payload, flavor, "pre-tool-use", ws_root)
+        return decision
+
+    text, signals = _relay_drain(payload, flavor, "pre-tool-use", ws_root)
+    if not signals:
+        return decision
+    reason = (
+        "CTX_RELAY_INTERRUPT: another harness asked you to stop and read "
+        "this before continuing.\n" + text
+    )
+    updated = dict(decision or {"decision": "allow"})
+    updated["decision"] = "force_ask"
+    updated["reason"] = reason
+    # A rewrite and an interrupt are contradictory instructions for one call.
+    # The interrupt is the newer information, so it wins and the rewrite is
+    # dropped rather than smuggled through alongside a stop.
+    updated.pop("rewrite", None)
+    return updated
+
+
 def main_pre_tool_use(flavor: str = "antigravity") -> int:
     """Entry point for ``ctx hook <flavor> pre-tool-use``. Reads one JSON
     payload on stdin, writes exactly one JSON decision on stdout.
@@ -3045,6 +3452,9 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
         payload = parsed if isinstance(parsed, dict) else {}
+        if flavor in ("hermes", "omp", "opencode", "dsh"):
+            from ctx.native_hooks import normalize
+            payload = normalize(flavor, payload)
     except Exception as exc:
         # A payload we cannot read is still an internal error: route it
         # through the policy rather than assuming it was harmless.
@@ -3068,7 +3478,18 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             decision = classify(payload, policy)
         except Exception as exc:
             decision = _internal_error_decision(ws_root, policy, "classify", exc)
-    if flavor == "codex":
+
+    try:
+        decision = _apply_relay_interrupt(decision, payload, flavor, ws_root)
+    except Exception:
+        # An advisory channel must never be able to change a guard decision
+        # by failing. Leave the classified decision exactly as it stands.
+        pass
+
+    if flavor in ("hermes", "omp", "opencode", "dsh"):
+        from ctx.native_hooks import decision_for
+        emitted = decision_for(flavor, decision)
+    elif flavor == "codex":
         emitted = _to_codex_schema(decision)
     elif flavor == "claude-code":
         emitted = _to_claude_code_schema(decision)

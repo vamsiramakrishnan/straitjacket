@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
 
     # ------------------------------------------------------ hook fast path
-    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code", "codex"):
+    if len(args) >= 3 and args[0] == "hook" and args[1] in ("antigravity", "claude-code", "codex", "hermes", "omp", "opencode", "dsh"):
         if args[2] == "user-prompt-submit":
             from ctx.task_context import main_prompt
 
@@ -71,7 +71,15 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == "mcp":
         from ctx.mcp import serve
 
-        return serve(bounded_only="--bounded-only" in args)
+        workspace = None
+        if "--workspace" in args:
+            i = args.index("--workspace")
+            if i + 1 >= len(args):
+                print("ctx mcp: --workspace requires a path", file=sys.stderr)
+                return 2
+            workspace = args[i + 1]
+        return serve(bounded_only="--bounded-only" in args, workspace=workspace,
+                     with_edits="--with-edits" in args)
 
     return _main_slow(args)
 
@@ -170,6 +178,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "map": ("retrieve", "cmd_map", True),
     "def": ("retrieve", "cmd_def", True),
     "refs": ("retrieve", "cmd_refs", True),
+    "lsp": ("retrieve", "cmd_lsp", True),
     "diag": ("retrieve", "cmd_diag", True),
     "callers": ("retrieve", "cmd_callers", True),
     "callees": ("retrieve", "cmd_callees", True),
@@ -177,14 +186,19 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "impls": ("retrieve", "cmd_impls", True),
     "cycles": ("retrieve", "cmd_cycles", True),
     "q": ("retrieve", "cmd_q", True),
+    "pack": ("retrieve", "cmd_pack", True),
+    "capsule": ("retrieve", "cmd_capsule", True),
     "edit": ("edit", "cmd_edit", True),
     "rewrite": ("rewrite", "cmd_rewrite", True),
     "plan": ("plans", "cmd_plan", True),
     "ask": ("plans", "cmd_ask", True),
+    "semantic": ("semantic", "cmd_semantic", True),
     "surface": ("surfaces", "cmd_surface", True),
+    "prune": ("surfaces", "cmd_prune", True),
     "gain": ("admin", "cmd_gain", True),
     "init": ("admin", "cmd_init", True),
     "doctor": ("admin", "cmd_doctor", True),
+    "index": ("admin", "cmd_index", True),
     "gc": ("admin", "cmd_gc", True),
     "pin": ("admin", "cmd_pin", True),
     "checkpoint": ("admin", "cmd_checkpoint", True),
@@ -194,9 +208,12 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "orchestrate": ("hosts", "cmd_orchestrate", True),
     "collab": ("collab", "cmd_collab", True),
     "compress": ("compress", "cmd_compress", True),
+    "task": ("hosts", "cmd_task", True),
+    "relay": ("hosts", "cmd_relay", True),
     "setup": ("hosts", "cmd_setup", False),
     "replay": ("history", "cmd_replay", False),
     "wrap": ("hosts", "cmd_wrap", False),
+    "agent": ("hosts", "cmd_agent", True),
     "antigravity": ("hosts", "cmd_antigravity", False),
     "proxy": ("hosts", "cmd_proxy", False),
 }
@@ -351,6 +368,21 @@ def _build_parser():
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    p_semantic = sub.add_parser("semantic", help="explicit model analysis over selected evidence")
+    semantic_sub = p_semantic.add_subparsers(dest="semantic_cmd", required=True)
+    p_semantic_prepare = semantic_sub.add_parser("prepare", help="freeze a selection without calling a model")
+    p_semantic_prepare.add_argument("request_file", help="request JSON in the workspace, or - for stdin")
+    for name in ("run", "resume", "show"):
+        p_semantic_action = semantic_sub.add_parser(name, help={
+            "run": "execute the plan's explicitly configured worker",
+            "resume": "continue a saved map within its remaining root budget",
+            "show": "read the latest report without invoking a worker",
+        }[name])
+        p_semantic_action.add_argument("handle", help="prepared plan's blob: handle")
+        if name != "show":
+            p_semantic_action.add_argument("--retry-failed", action="store_true",
+                                           help="retry failed or uncertain partitions using additional budget")
+
     p_setup = sub.add_parser(
         "setup", prog="ctx setup",
         help="detect, configure, and verify installed agents",
@@ -361,17 +393,36 @@ def _build_parser():
     )
     p_setup.add_argument(
         "--all", action="store_true",
-        help="configure every supported host even when its CLI is not installed",
+        help="request setup for every supported host (Hermes activation needs its CLI)",
     )
     p_setup.add_argument(
         "--repair", action="store_true",
         help="bypass the ready receipt, refresh managed config, and verify again",
+    )
+    p_setup.add_argument("--acp", action="store_true", help="configure ACP orchestration for one --host")
+    p_setup.add_argument("--acp-model", help="exact model id advertised by the ACP agent")
+    p_setup.add_argument("--acp-command", help="override ACP command as a JSON argv array")
+    p_setup.add_argument("--acp-tier", choices=("economy", "standard", "frontier"), default="standard")
+    p_setup.add_argument("--acp-permissions", choices=("deny", "allow_once"), default="deny",
+                        help="how unattended ACP requests are answered; default deny")
+    p_setup.add_argument(
+        "--prune", action="store_true",
+        help="after setup, defer the capabilities this repo does not use and "
+             "compile each configured host's minimal config (ctx prune --apply)",
     )
 
     p_run = sub.add_parser("run", help="execute a command with birth-time capture")
     p_run.add_argument("--focus", help="deterministic evidence-selection query")
     p_run.add_argument("--cwd", help="working directory relative to the workspace")
     p_run.add_argument("--shell", action="store_true", help="run one string through the shell")
+    p_run.add_argument("--json", action="store_true",
+                       help="one ctx.command-result/v1 object with typed command status and bounded output")
+    p_run.add_argument(
+        "--passthrough", action="store_true",
+        help="hook mode: exit with the wrapped command's own status, and when the "
+             "whole output fits the inline budget print it verbatim (the run: "
+             "handle follows on one line) instead of a receipt",
+    )
     p_run.add_argument("--timeout", type=float, default=600.0)
     p_run.add_argument(
         "--bg", action="store_true",
@@ -409,6 +460,10 @@ def _build_parser():
     p_get.add_argument(
         "--hashlines", action="store_true",
         help="prefix each line with its content tag (L40:a3| …)")
+    p_get.add_argument(
+        "--snapcompact", action="store_true",
+        help="render the slice as a monospace bitmap PNG blob instead of text "
+             "(opt-in cost/format tradeoff; requires the `image` extra)")
 
     p_diff = sub.add_parser("diff", help="run-to-run regression delta digest")
     p_diff.add_argument("ref_a", metavar="handle_before", help="the earlier run handle")
@@ -440,6 +495,40 @@ def _build_parser():
         p_edit_action.add_argument(
             "--receipt", help="also write the safe receipt to this workspace-relative path"
         )
+
+    p_replace = edit_sub.add_parser("replace", help="preview or apply one anchored span")
+    p_replace.add_argument("ref", help="snapshot:id, repo:path, or workspace-relative path")
+    p_replace.add_argument("--lines", required=True, help="A:B@anchor, or A:B with an immutable snapshot")
+    p_replace.add_argument("--replacement-file", required=True, help="UTF-8 replacement file")
+    p_replace.add_argument("--apply", action="store_true", help="apply instead of preview")
+    p_replace.add_argument("--receipt", help="write the full receipt to this path")
+
+    p_verify = edit_sub.add_parser("verify", help="verify an apply receipt against exact bytes")
+    p_verify.add_argument("ref", help="blob: apply receipt")
+    p_verify.add_argument("--kind", choices=("syntax", "types", "behavior"), default="behavior")
+    p_verify.add_argument("--timeout", type=float, default=60.0)
+    p_verify.add_argument("--witness", action="append", default=[], help="also bind this check input file")
+    p_verify.add_argument("--receipt", help="write the full verification receipt")
+    p_verify.add_argument("command", nargs=argparse.REMAINDER, help="-- command [args...]")
+
+    p_handoff = edit_sub.add_parser("handoff", help="request prewalk from verified progress")
+    p_handoff.add_argument("--verification", required=True, help="blob: verification receipt")
+    p_handoff.add_argument("--state", required=True, help="checklist and investigation JSON file")
+
+    p_expand = edit_sub.add_parser("expand", help="preview structural expansion from a verified example")
+    p_expand.add_argument("--verification", required=True)
+    p_expand.add_argument("--pattern", required=True)
+    p_expand.add_argument("--replacement", required=True)
+    p_expand.add_argument("--lang", required=True)
+    p_expand.add_argument("--glob", required=True)
+    p_expand.add_argument("--receipt")
+
+    p_advise = edit_sub.add_parser("advise", help="select an edit format from paired evaluation rows")
+    p_advise.add_argument("file", help="workspace-relative evaluation JSONL")
+    p_advise.add_argument("--model", required=True)
+    p_advise.add_argument("--shape", required=True)
+    p_advise.add_argument("--strategy", choices=("format", "prewalk"), default="format")
+    p_advise.add_argument("--executor-model", help="required for prewalk strategy advice")
 
     p_rewrite = sub.add_parser(
         "rewrite", help="structural multi-file rewrite in one op (find+edit, transactional)")
@@ -480,6 +569,11 @@ def _build_parser():
         "--kill", action="store_true",
         help="SIGKILL the process group; finalize what spooled",
     )
+    p_job.add_argument(
+        "--announce", action="store_true",
+        help="finalize and publish this job's address to the relay "
+             "(the supervisor runs this itself when a harness is watching jobs)",
+    )
 
     sub.add_parser("jobs", help="list this workspace's backgrounded runs")
 
@@ -500,6 +594,26 @@ def _build_parser():
     p_seq.add_argument("--focus", help="bias step digests toward this question")
 
     sub.add_parser("gain", help="cumulative token/cost savings from telemetry")
+
+    p_prune = sub.add_parser(
+        "prune",
+        help="defer the tools, skills and agents this repo does not use; "
+             "compile each host's minimal config (preview unless --apply)",
+    )
+    p_prune.add_argument("--apply", action="store_true",
+                         help="write the compiled host configs and the receipt (no questions)")
+    p_prune.add_argument("--yes", action="store_true",
+                         help="accept the rule's recommendation for every prompt and apply")
+    p_prune.add_argument("--interactive", action="store_true",
+                         help="ask, even when stdin is not a terminal")
+    p_prune.add_argument("--host", dest="hosts", action="append",
+                         choices=("claude", "codex", "antigravity"),
+                         help="compile for this host (repeatable; default claude)")
+    p_prune.add_argument("--probe-mcp", action="store_true",
+                         help="spawn MCP servers to measure real per-tool schema tokens")
+    p_prune.add_argument("--keep", action="append",
+                         help="capability id to keep visible regardless (repeatable)")
+    p_prune.add_argument("--json", action="store_true", help="machine-readable report")
 
     p_surface = sub.add_parser(
         "surface",
@@ -558,6 +672,22 @@ def _build_parser():
         ".ctx-session-reads/evidence-followups.jsonl ledger (the input to "
         "`ctx policy compile --plan-value`) — an explicit user action, "
         "never a runtime side effect",
+    )
+    p_replay.add_argument(
+        "--gold", dest="replay_gold", default="",
+        help="score the trajectory against a ctx.gold/v1 file: which annotated "
+             "regions the agent actually opened, at what token cost",
+    )
+    p_replay.add_argument(
+        "--gold-root", dest="replay_gold_root", default="",
+        help="checkout the transcript's absolute paths are under (default: the "
+             "workspace). Gold annotations are repo-relative and the file "
+             "carries no root, so without this a native arm's absolute "
+             "Read/Edit paths score as nothing",
+    )
+    p_replay.add_argument(
+        "--block-overlap", dest="replay_block_overlap", type=float, default=0.5,
+        help="fraction of a gold block that must be observed to count (default 0.5)",
     )
     p_replay.add_argument("--json", dest="replay_json", action="store_true")
 
@@ -681,12 +811,51 @@ def _build_parser():
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
     p_map.add_argument("--focus", help="boost files whose path or symbols match")
 
+    p_pack = sub.add_parser(
+        "pack", help="ranked, budgeted context pack for a task (files, symbols, history)"
+    )
+    p_pack.add_argument("task", help="the task text, @path to read it from a file, or - for stdin")
+    p_pack.add_argument("--budget", type=int, default=None, help="token budget (default 2500)")
+    p_pack.add_argument("--files", type=int, default=None, dest="max_files",
+                        help="files to rank into the pack (default 8)")
+    p_pack.add_argument("--no-history", action="store_true", dest="no_history",
+                        help="skip the git history signal")
+    p_pack.add_argument("--json", action="store_true", dest="as_json", help="machine-readable pack")
+
+    p_cap = sub.add_parser(
+        "capsule", help="evidence that travels: pack cited handles into one verifiable file"
+    )
+    p_cap.add_argument("action", choices=("export", "verify", "import"))
+    p_cap.add_argument("path", help="the capsule file to write or read")
+    p_cap.add_argument("--handle", action="append", default=None,
+                       help="a handle to close over (repeatable); e.g. run:8d8335db6848#stdout")
+    p_cap.add_argument("--task", default=None,
+                       help="close over every address a task ledger cited")
+    p_cap.add_argument("--note", default=None, help="one line recorded in the capsule index")
+    p_cap.add_argument("--include-task-text", action="store_true", dest="include_task_text",
+                       help="also include checkpoint manifests, which carry the goal and "
+                            "reasoning in your own words (excluded by default)")
+    p_cap.add_argument("--no-pin", action="store_true", dest="no_pin",
+                       help="on import, do not pin the manifests against gc")
+    p_cap.add_argument("--json", action="store_true", dest="as_json", help="machine-readable report")
+
     p_def = sub.add_parser("def", help="symbol definition site (snapshot + span)")
     p_def.add_argument("target", help="repo:<path>:<Symbol.dotted>")
 
     p_refs = sub.add_parser("refs", help="reference sites for a symbol")
     p_refs.add_argument("symbol", help="name or Class.method dotted name")
     p_refs.add_argument("--path", help="restrict sites to a subtree")
+
+    p_lsp = sub.add_parser(
+        "lsp", help="ask the language server: definition, references, hover at a position or symbol"
+    )
+    p_lsp.add_argument("what", choices=("def", "refs", "hover"))
+    p_lsp.add_argument(
+        "target",
+        help="<path>:<line>:<col> (1-based) or repo:<path>:<Symbol.dotted> (position from the skeleton)",
+    )
+    p_lsp.add_argument("--timeout", type=float, default=None,
+                       help="seconds to wait for the server (default 20; whole-repo indexers need more)")
 
     p_diag = sub.add_parser("diag", help="deterministic lint/syntax digest")
     p_diag.add_argument("path", nargs="?", help="restrict to a subtree")
@@ -813,6 +982,25 @@ def _build_parser():
 
     sub.add_parser("init", help="write ctx.toml and .ctxignore templates")
 
+    p_index = sub.add_parser(
+        "index", help="build the SCIP index the exact refs/def tier reads"
+    )
+    p_index.add_argument(
+        "--language", help="index this language (default: the workspace's dominant one)"
+    )
+    p_index.add_argument(
+        "--list", action="store_true", dest="list_indexers",
+        help="show which indexers are installed, and what this workspace needs",
+    )
+    p_index.add_argument("--timeout", type=float, default=900.0)
+    p_index.add_argument(
+        "--text", action="store_true",
+        help="build or refresh only the text index (trigrams, symbols, fingerprints)",
+    )
+    p_index.add_argument(
+        "--status", action="store_true", help="report what is indexed and how current it is"
+    )
+
     p_doctor = sub.add_parser("doctor", help="validate installation and store health")
     p_doctor.add_argument("--antigravity", action="store_true")
 
@@ -848,15 +1036,30 @@ def _build_parser():
         "large tool_results to file-backed stubs (0 = pure observer)",
     )
 
+    p_agent = sub.add_parser(
+        "agent", help="run a task with ctx as the host: lean tools, ctx retrieval, a pack at turn one"
+    )
+    p_agent.add_argument("-p", "--print", dest="task", required=True,
+                         help="the task (print mode; @path reads it from a file)")
+    p_agent.add_argument("--model", default=None)
+    p_agent.add_argument("--max-turns", type=int, default=None, dest="max_turns")
+    p_agent.add_argument("--output-format", choices=("text", "json"), default="text",
+                         dest="output_format")
+    p_agent.add_argument("--pack", action="store_true",
+                         help="put a ctx pack of where to look in the first turn (off by default: "
+                              "on DeepSWE with haiku it cost tests, see the receipt)")
+    p_agent.add_argument("--pack-budget", type=int, default=2500, dest="pack_budget")
+    p_agent.add_argument("--verbose", action="store_true", help="stream turns to stderr")
+
     p_wrap = sub.add_parser(
         "wrap",
-        help="set up / run the harness for a host (built for Antigravity, "
-        "works with Claude Code and Codex)",
+        help="set up or run the harness for a supported coding-agent host",
     )
     p_wrap.add_argument(
         "host",
         choices=["setup", "all", "detect", "claude", "antigravity",
-                 "antigravity-sdk", "codex"],
+                 "antigravity-sdk", "codex", "hermes", "open-hermes",
+                 "omp", "oh-my-pi", "opencode", "dsh"],
         help="'setup' detects & harnesses installed CLIs; 'all' forces every "
         "supported host; 'detect' lists installed CLIs priced by model",
     )
@@ -871,7 +1074,10 @@ def _build_parser():
         help="route a task's phases across installed harnesses by model cost "
         "(harness collaboration); prices the plan, then runs it",
     )
-    p_orch.add_argument("task", help="the task to collaborate on")
+    p_orch.add_argument(
+        "task", nargs="?", default="",
+        help="the task to collaborate on (omit when replaying with --resume)",
+    )
     p_orch.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="print the priced routing plan and stop (launch no harness)",
@@ -880,6 +1086,88 @@ def _build_parser():
         "--run", action="store_true", dest="force_run",
         help="execute even when [orchestrate] confirm=true",
     )
+    p_orch.add_argument(
+        "--resume", metavar="TASK", default=None,
+        help="replay a task ledger: finished nodes are restored, the rest run",
+    )
+
+    p_task = sub.add_parser(
+        "task", help="the task ledger: how harnesses collaborated on a task"
+    )
+    task_sub = p_task.add_subparsers(dest="task_cmd", required=True)
+    p_tp = task_sub.add_parser("prepare", help="prepare a bounded investigation with fixed checks")
+    p_tp.add_argument("request_file", help="task request JSON in the workspace, or - for stdin")
+    for action in ("run", "resume", "apply", "cancel"):
+        p_tx = task_sub.add_parser(action, help={"run": "investigate and verify a repair in a retained worktree",
+            "resume": "continue from durable operation results and remaining budget",
+            "apply": "apply a verified patch to its clean original checkout",
+            "cancel": "stop dispatch and cancel owned running processes"}[action])
+        p_tx.add_argument("task", metavar="TASK")
+        if action in ("run", "resume"):
+            p_tx.add_argument("--retry-failed", action="store_true",
+                              help="allow another charged attempt after a failed or uncertain call")
+    task_sub.add_parser("ls", help="tasks with a ledger in this workspace, newest first")
+    p_ts = task_sub.add_parser("show", help="claims, handbacks, steward decisions, inbox")
+    p_ts.add_argument("task", metavar="TASK")
+    p_ti = task_sub.add_parser("inbox", help="addresses sent to one node")
+    p_ti.add_argument("task", metavar="TASK")
+    p_ti.add_argument("node", metavar="NODE")
+    p_tsend = task_sub.add_parser(
+        "send", help="send a node an address (never content) — the handoff bus"
+    )
+    p_tsend.add_argument("task", metavar="TASK")
+    p_tsend.add_argument("node", metavar="NODE", help="destination node id")
+    p_tsend.add_argument("ref", help="an address: checkpoint:, run:, blob:, repo:…@anchor")
+    p_tsend.add_argument("--from", dest="sender", default="operator",
+                         help="sending node id (default: operator)")
+    p_tsend.add_argument("--note", default=None,
+                         help="bounded note (≤200 chars); the ref carries the content")
+
+    p_relay = sub.add_parser(
+        "relay", help="the cross-harness relay: tell another harness, between turns"
+    )
+    relay_sub = p_relay.add_subparsers(dest="relay_cmd", required=True)
+
+    p_rw = relay_sub.add_parser("watch", help="subscribe a harness to a topic")
+    p_rw.add_argument("subscriber", help="<host> or <host>:<session>, e.g. claude or codex:9f1a")
+    p_rw.add_argument("topic", choices=["job", "task", "digest", "edit", "peer"])
+    p_rw.add_argument("--selector", default="", help="narrow within the topic (prefix match)")
+    p_rw.add_argument("--action", default="advise", choices=["report", "advise", "interrupt"],
+                      help="what a matching signal should do to you (default: advise)")
+    p_rw.add_argument("--ttl", type=float, default=6 * 3600, help="seconds (default: 6h)")
+
+    p_ru = relay_sub.add_parser("unwatch", help="retire a watch")
+    p_ru.add_argument("watch_id", metavar="WATCH")
+
+    p_rp = relay_sub.add_parser("publish", help="announce to whoever is watching")
+    p_rp.add_argument("topic", choices=["job", "task", "digest", "edit", "peer"])
+    p_rp.add_argument("ref", help="an address: run:, checkpoint:, blob:, repo:… (never content)")
+    p_rp.add_argument("--selector", default="", help="what this is about, e.g. a job id")
+    p_rp.add_argument("--origin", default="operator", help="who is announcing (default: operator)")
+    p_rp.add_argument("--to", default="", help="one subscriber instead of the watchers")
+    p_rp.add_argument("--note", default=None, help="bounded note (≤200 chars)")
+    p_rp.add_argument("--ttl", type=float, default=6 * 3600)
+
+    p_rs = relay_sub.add_parser(
+        "signal", help="send one harness an address, or interrupt it at its next tool call"
+    )
+    p_rs.add_argument("to", help="<host> or <host>:<session>")
+    p_rs.add_argument("ref", help="an address the receiver resolves with ctx get")
+    p_rs.add_argument("--interrupt", action="store_true",
+                      help="stop that harness at its next tool call (not mid-stream)")
+    p_rs.add_argument("--topic", default="peer", choices=["job", "task", "digest", "edit", "peer"])
+    p_rs.add_argument("--selector", default="")
+    p_rs.add_argument("--origin", default="operator")
+    p_rs.add_argument("--note", default=None, help="bounded note (≤200 chars)")
+    p_rs.add_argument("--ttl", type=float, default=6 * 3600)
+
+    p_rd = relay_sub.add_parser("drain", help="take what is queued for a harness, by hand")
+    p_rd.add_argument("host", help="host id, e.g. claude")
+    p_rd.add_argument("--session", default="", help="narrow to one session")
+    p_rd.add_argument("--peek", action="store_true", help="show without marking delivered")
+
+    relay_sub.add_parser("status", help="what is queued and who is listening")
+    relay_sub.add_parser("gc", help="drop settled rows from the queue")
 
     p_agy = sub.add_parser("antigravity", help="Antigravity integration")
     agy_sub = p_agy.add_subparsers(dest="agy_cmd", required=True)

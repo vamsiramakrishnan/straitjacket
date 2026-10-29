@@ -9,6 +9,7 @@ on the invoking process's CWD or PATH.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import shutil
 import sys
@@ -50,7 +51,7 @@ retention_days = 30
 
 [redaction]
 enabled = true
-patterns = ["aws-access-key", "private-key", "generic-api-token"]
+patterns = ["aws-access-key", "aws-secret-key", "private-key", "github-token", "gitlab-token", "slack-token", "stripe-key", "twilio-key", "sendgrid-key", "npm-token", "pypi-token", "huggingface-token", "anthropic-key", "jwt", "google-api-key", "generic-api-token"]  # fix: template pinned only 3 of 16 code-default patterns
 """
 
 _CTXIGNORE_TEMPLATE = """\
@@ -176,6 +177,10 @@ def install_antigravity(ws: Workspace, *, init_policy: bool = True) -> str:
     lines.append("  Ask:   ctx run (command execution keeps the native permission flow)")
     lines.append("")
     lines.append("validate with: ctx doctor --antigravity")
+    lines.append(
+        "uninstall: remove .agents/plugins/ctx-harness; remove the global "
+        "statusLine only when its command is the ctx status-line command"
+    )
     return "\n".join(lines)
 
 
@@ -278,7 +283,7 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
     if host == "claude":
         files[".ctx-surface/gateway.claude.json"] = json.dumps(
             {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args}}}, indent=2) + "\n"
-        launch = f"claude --strict-mcp-config --mcp-config .ctx-surface/gateway.claude.json"
+        launch = "claude --strict-mcp-config --mcp-config .ctx-surface/gateway.claude.json"
     elif host == "codex":
         args_toml = ", ".join(json.dumps(a) for a in gw_args)
         files[".ctx-surface/config.codex.gateway.toml"] = (
@@ -286,13 +291,13 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
             "# backends recorded in .ctx-surface/backends.json.\n"
             f"[mcp_servers.{_GATEWAY_NAME}]\n"
             f'command = "{exe}"\nargs = [{args_toml}]\n')
-        launch = f"codex --config .ctx-surface/config.codex.gateway.toml"
+        launch = "codex --config .ctx-surface/config.codex.gateway.toml"
     elif host == "antigravity":
         files[".ctx-surface/mcp_config.gateway.json"] = json.dumps(
             {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args, "disabled": False}}},
             indent=2) + "\n"
         launch = ("point ~/.gemini/antigravity-cli at "
-                  f".ctx-surface/mcp_config.gateway.json, then Refresh MCP servers")
+                  ".ctx-surface/mcp_config.gateway.json, then Refresh MCP servers")
     else:
         return f"unknown host {host!r}; one of claude, codex, antigravity"
 
@@ -458,11 +463,23 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
         return _refusal(settings_path, e, what="Claude Code")
     merged = dict(existing)
     changed = False
-    if _hook_command_present(existing, exe):
+    full_stages = claude_hook_settings(exe)["hooks"]
+    # fix: check presence per stage, not any-stage-present, so a reinstall adds a stage an older install lacked
+    existing_hooks = existing.get("hooks", {})
+    if not isinstance(existing_hooks, dict):
+        existing_hooks = {}
+    missing_stages = {
+        stage: entries
+        for stage, entries in full_stages.items()
+        if not _hook_command_present(
+            {"hooks": {stage: existing_hooks.get(stage, [])}}, exe
+        )
+    }
+    if not missing_stages:
         lines.append(".claude/settings.json hooks already harnessed; left unchanged")
     else:
         try:
-            merge_hook_stages(merged, claude_hook_settings(exe)["hooks"])
+            merge_hook_stages(merged, missing_stages)
         except SettingsUnreadable as e:
             # Refuse the same way an unparseable file is refused, a few lines
             # above: a message and an untouched file. Raising here would have
@@ -504,7 +521,9 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
         lines.extend(init_workspace(root, quiet=True))
     lines.append(
         "uninstall: remove the ctx hook entries from .claude/settings.json "
-        "and the ctx-harness block from CLAUDE.md"
+        "and the ctx-harness block from CLAUDE.md; remove the statusLine only "
+        "when its command is ctx, and remove ctx-explorer.md only if setup "
+        "reported that it created the file"
     )
     return "\n".join(lines)
 
@@ -564,6 +583,9 @@ def _codex_mcp_contract(path: Path, exe: str) -> tuple[bool, str]:
         return False, "ctx-harness MCP command is stale or contains arguments"
     if actual.get("args") != expected["args"]:
         return False, "ctx-harness MCP args are stale or incomplete"
+    features = doc.get("features")
+    if not isinstance(features, dict) or features.get("hooks") is not True:
+        return False, ".codex/config.toml must enable hooks = true in [features]"
     return True, ".codex/config.toml launches the bounded ctx MCP server"
 
 
@@ -585,6 +607,13 @@ def _render_codex_mcp_snippet(exe: str) -> str:
 
 def setup_conflicts(ws: Workspace, hosts: "list[str]") -> list[str]:
     """Return user-owned setup state that cannot be rewritten safely."""
+    from ctx.mcp_hosts import HOSTS, conflicts
+
+    problems = [problem for host in hosts if host in HOSTS for problem in conflicts(host, ws.root)]
+    return problems + _codex_setup_conflicts(ws, hosts)
+
+
+def _codex_setup_conflicts(ws: Workspace, hosts: "list[str]") -> list[str]:
     if "codex" not in hosts:
         return []
     cfg = ws.root / ".codex" / "config.toml"
@@ -597,10 +626,27 @@ def setup_conflicts(ws: Workspace, hosts: "list[str]") -> list[str]:
     ok, detail = _codex_mcp_contract(cfg, _ctx_executable())
     if ok or _managed_codex_config(text):
         return []
+    if "hooks = true" in detail:
+        return [
+            f"{detail}. ctx will not rewrite user-owned TOML. Add or update "
+            "the existing [features] table (do not duplicate it), then rerun "
+            "`ctx setup`."
+        ]
     snippet = _render_codex_mcp_snippet(_ctx_executable())
+    if re.search(r"(?m)^\s*\[mcp_servers\.ctx-harness\]\s*(?:#.*)?$", text):
+        values = "\n".join(snippet.splitlines()[1:])
+        return [
+            f"{detail}. ctx will not rewrite user-owned TOML. Update the "
+            "existing [mcp_servers.ctx-harness] table to contain these values "
+            "(do not add a duplicate), ensure the existing [features] table "
+            "contains hooks = true (create it if absent; do not duplicate it), "
+            f"then rerun `ctx setup`:\n{values}"
+        ]
     return [
         f"{detail}. ctx will not rewrite user-owned TOML. Add this reviewed "
-        f"entry, then rerun `ctx setup`:\n{snippet}"
+        f"entry, ensure the existing [features] table contains hooks = true "
+        f"(create it if absent; do not duplicate it), then rerun `ctx setup`:\n"
+        f"{snippet}"
     ]
 
 
@@ -677,7 +723,15 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
                 cfg.write_text(cfg_snippet, encoding="utf-8")
                 lines.append("refreshed managed .codex/config.toml")
         elif "mcp_servers.ctx-harness" in cfg_text:
-            lines.append(".codex/config.toml already registers ctx-harness; unchanged")
+            ok, detail = _codex_mcp_contract(cfg, exe)
+            if ok:
+                lines.append(".codex/config.toml already registers ctx-harness; unchanged")
+            else:
+                lines.append(
+                    f"{detail}; user-owned TOML was left unchanged. Ensure the "
+                    "existing [features] table contains hooks = true, then rerun "
+                    "ctx doctor"
+                )
         else:
             # Never rewrite a user's TOML in place (duplicate-table hazard).
             lines.append(
@@ -718,7 +772,11 @@ def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
 
     if init_policy:
         lines.extend(init_workspace(root, quiet=True))
-    lines.append("uninstall: remove .codex/config.toml, .codex/hooks.json, and the AGENTS.md block")
+    lines.append(
+        "uninstall: remove only the ctx-harness MCP table, ctx hook entries, "
+        "and the marker-delimited AGENTS.md block; delete a whole config file "
+        "only when setup created the managed file and it has no unrelated settings"
+    )
     return "\n".join(lines)
 
 
@@ -731,7 +789,7 @@ def _hook_command_present_codex(settings: dict, ctx_exe: str) -> bool:
     return False
 
 
-# The harness is built for Antigravity and works with Claude Code and Codex.
+# Host setup is explicit because each hook contract has different guarantees.
 # Both of these are DERIVED from the host registry (ctx.hosts): the wired set
 # and the name→installer mapping used to be hand-maintained here as well, a
 # second copy of what every HostSpec already declares via `installer`.
@@ -759,7 +817,7 @@ def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
 
     selected = hosts or list(SETUP_HOSTS)
     out: list[str] = [
-        "ctx harness setup — built for Antigravity, works with Claude Code and Codex",
+        "ctx harness setup — local context containment for coding agents",
         "",
     ]
     for host in selected:
@@ -802,11 +860,106 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         from ctx.store import Store
 
         store = Store(ws.workspace_id)
-        probe = store.put_blob(b"ctx-doctor-probe")
-        store.get_blob(probe)
-        check("store writable", True, store.location.detail)
+        try:
+            probe = store.put_blob(b"ctx-doctor-probe")
+            store.get_blob(probe)
+            check("store writable", True, store.location.detail)
+        finally:
+            # `ctx mcp` serves `op: "doctor"` from a long-lived process;
+            # an unclosed Store per call is the leak _WS_CACHE exists for.
+            store.close()
     except Exception as e:
         check("store writable", False, str(e))
+
+    # Code intelligence is optional tooling, so a thin install is not a
+    # failure — but it must never be invisible. Measuring ctx against a
+    # missing universal-ctags and reporting the result as a ctx defect is a
+    # mistake this row exists to make impossible.
+    try:
+        from ctx.skeleton import _ctags_path, backend_roster
+
+        roster = backend_roster()
+        dark = sorted(lang for lang, rungs in roster.items() if rungs == "none")
+        detail = f"{len(roster) - len(dark)}/{len(roster)} languages parseable"
+        if _ctags_path() is None:
+            detail += "; no universal-ctags (non-Python symbols unavailable)"
+        if dark:
+            detail += f"; no backend for {', '.join(dark)}"
+        check("code intelligence", len(dark) < len(roster), detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("code intelligence", False, f"{type(e).__name__}: {e}")
+
+    # The language-server tier (`ctx lsp`, the refs ladder's semantic rung)
+    # is whatever servers are on PATH. Optional like the parsers, and for the
+    # same reason never silent: a machine without one answers `ctx refs`
+    # from jedi or the regex floor, and the header says so.
+    try:
+        from ctx.lsp import roster as lsp_roster
+
+        servers = lsp_roster()
+        found = {lang: exe for lang, exe in servers.items() if exe != "none"}
+        detail = (
+            f"{len(found)}/{len(servers)} languages: "
+            + ", ".join(f"{lang}={exe}" for lang, exe in sorted(found.items()))
+            if found else "no language server on PATH (ctx lsp unavailable; refs use jedi/regex)"
+        )
+        check("language servers", True, detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("language servers", True, f"probe failed: {type(e).__name__}: {e}")
+
+    # The text index (docs/CODE-SEARCH.md) is what search, the q search
+    # stage and `ctx pack` narrow with. It builds itself on first use below a
+    # size guard; above it, `ctx index --text` is one command, and a
+    # workspace that needs it should be told so.
+    try:
+        from ctx import codeindex
+        from ctx.store import Store as _Store
+
+        _st = _Store(ws.workspace_id)
+        try:
+            _idx = codeindex.Index(_st, ws)
+            _status = _idx.status()
+            if _status["built"]:
+                detail = f"{_status['files']} files · {_status['segments']} segment(s) · synced before every query"
+            else:
+                n, nbytes = _idx.corpus_estimate()
+                big = n > codeindex.IMPLICIT_BUILD_MAX_FILES or nbytes > codeindex.IMPLICIT_BUILD_MAX_BYTES
+                detail = (f"not built · {n} files; run ctx index --text (too large to build inside a query)"
+                          if big else f"not built · {n} files; builds on first search")
+            _idx.close()
+        finally:
+            _st.close()
+        check("text index", True, detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("text index", True, f"probe failed: {type(e).__name__}: {e}")
+
+    # The exact tier of the refs/def ladders needs an index, and for years
+    # nothing in ctx made one — so it was unreachable and every answer came
+    # from the regex floor without saying so. Same rule as the row above:
+    # optional, therefore not a failure; invisible, therefore a defect.
+    try:
+        from ctx import scip_index, scip_ingest
+
+        have = scip_ingest.find_index(ws)
+        if have is not None and scip_ingest.index_is_current(ws, have):
+            check("exact index", True, "SCIP index present — refs/def answer exactly")
+        elif have is not None:
+            check(
+                "exact index", True,
+                "SCIP index is stale and is being skipped; refs/def have fallen "
+                "back to the textual engine — run: ctx index",
+            )
+        else:
+            wanted = scip_index.dominant_languages(ws)
+            usable = [lang for lang in wanted if scip_index.available(lang)]
+            detail = "no SCIP index; refs/def use the textual fallback"
+            if usable:
+                detail += f" — run: ctx index --language {usable[0]}"
+            elif wanted:
+                detail += f"; no indexer installed for {', '.join(wanted[:4])}"
+            check("exact index", True, detail)
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("exact index", False, f"{type(e).__name__}: {e}")
 
     plugin_dir = ws.root / ".agents" / "plugins" / PLUGIN_DIRNAME
     skill_dir = ws.root / ".agents" / "skills" / PLUGIN_DIRNAME
@@ -876,6 +1029,13 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         check("codex MCP", mcp_ok, mcp_detail)
     if plugin_dir.is_dir():
         wrapped.append("antigravity")
+    from ctx.mcp_hosts import checks as mcp_checks
+    from ctx.acp import checks as acp_checks
+
+    for name, ok, detail in [*mcp_checks(ws.root), *acp_checks(ws.root)]:
+        check(name, ok, detail)
+        if ok:
+            wrapped.append(name.split()[0])
     check(
         "an agent is wrapped",
         bool(wrapped),
@@ -906,13 +1066,16 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
             from ctx.store import Store as _S
 
             _store = _S(ws.workspace_id)
-            row = _store.db.execute(
-                "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()
-            if row:
-                manifest = _store.get_manifest(row[0])
-                jsonschema.validate(manifest, json.loads(schema_path.read_text(encoding="utf-8")))
-                check("manifest schema", True, "latest run manifest validates against invocation-v1")
+            try:
+                row = _store.db.execute(
+                    "SELECT id FROM objects WHERE kind='run' ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
+                if row:
+                    manifest = _store.get_manifest(row[0])
+                    jsonschema.validate(manifest, json.loads(schema_path.read_text(encoding="utf-8")))
+                    check("manifest schema", True, "latest run manifest validates against invocation-v1")
+            finally:
+                _store.close()  # the third store doctor opened; the report missed this one
     except ImportError:
         pass
     except Exception as e:
@@ -957,7 +1120,11 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         from ctx.retrieval import telemetry_summary
         from ctx.store import Store as _Store
 
-        t = telemetry_summary(_Store(ws.workspace_id))
+        _tstore = _Store(ws.workspace_id)
+        try:
+            t = telemetry_summary(_tstore)
+        finally:
+            _tstore.close()
         if t["events"]:
             check(
                 "telemetry",
@@ -968,6 +1135,26 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         pass
 
     return checks
+
+
+def install_hermes(ws, *, init_policy=True):
+    from ctx.mcp_hosts import install
+    return install("hermes", ws, init_policy=init_policy)
+
+
+def install_omp(ws, *, init_policy=True):
+    from ctx.mcp_hosts import install
+    return install("omp", ws, init_policy=init_policy)
+
+
+def install_opencode(ws, *, init_policy=True):
+    from ctx.mcp_hosts import install
+    return install("opencode", ws, init_policy=init_policy)
+
+
+def install_dsh(ws, *, init_policy=True):
+    from ctx.mcp_hosts import install
+    return install("dsh", ws, init_policy=init_policy)
 
 
 def doctor_report(ws: Workspace, *, antigravity: bool = False) -> str:

@@ -8,35 +8,51 @@
 //        - a link to the docs index      (README.md)   -> the site home
 //        - a link that escapes docs/      (../evals/…)  -> a GitHub URL
 //      (absolute URLs, in-page anchors, and asset links are left untouched;
-//       SVG embeds already use absolute raw.githubusercontent URLs.)
+//       SVG embeds already use absolute raw.githubusercontent URLs; agent marks
+//       are copied into the site and rewritten to local assets.)
 //
-// Keep PAGES in sync with the Starlight sidebar in ../astro.config.mjs — the
-// slugs here are the sidebar's slugs.
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+// PAGES is the set published by Starlight. The sidebar in ../astro.config.mjs
+// intentionally exposes only the product path; specialist pages may still be
+// published so existing links remain stable.
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const docsDir = join(here, '..', '..', 'docs');
 const outDir = join(here, '..', 'src', 'content', 'docs');
+const agentAssets = join(here, '..', '..', 'assets', 'agents');
+const publicAgents = join(here, '..', 'public', 'agents');
+mkdirSync(publicAgents, { recursive: true });
+for (const file of readdirSync(agentAssets)) {
+  if (/\.(svg|png)$/.test(file)) copyFileSync(join(agentAssets, file), join(publicAgents, file));
+}
 
 const BASE = '/straitjacket'; // must match `base` in astro.config.mjs
 const OWNER_REPO = 'vamsiramakrishnan/straitjacket';
 const GH_BLOB = `https://github.com/${OWNER_REPO}/blob/main/`;
 const GH_TREE = `https://github.com/${OWNER_REPO}/tree/main/`;
+const RAW_AGENTS = `https://raw.githubusercontent.com/${OWNER_REPO}/main/assets/agents/`;
 
 // [ source filename, site slug, title, description ]
 const PAGES = [
+  ['AGENT-INTEGRATIONS.md', 'guides/agent-integrations', 'Agent integrations', 'Keep your agent: connect Hermes, OMP, OpenCode, and DeepSeek Harness.'],
+  ['ACP.md', 'guides/acp', 'ACP orchestration', 'Configure agent endpoints, permissions, and verified edit tools.'],
+  ['EDIT-LOOP.md', 'guides/edit-loop', 'Edit and verify', 'Observed source, anchored edits, verification, and evidence-gated continuation.'],
+  ['SEMANTIC.md', 'guides/semantic', 'Semantic analysis', 'Explicit model calls over frozen evidence, with budgets and resumable findings.'],
+  ['TOOL-SDK.md', 'guides/tool-sdk', 'Tool SDK', 'Async capture, typed command status, bounded retrieval and portable evidence for embedding harnesses.'],
   // Start here
   ['HOW-IT-WORKS.md', 'start/how-it-works', 'How it works', 'A ten-minute, plain-language walkthrough of one command through the whole system.'],
   ['GETTING-STARTED.md', 'start/getting-started', 'Getting started', 'From a checkout to one harnessed session, then capture, inspect, and retrieve.'],
   ['CONCEPTS.md', 'start/concepts', 'Core concepts', 'The vocabulary: artifact, handle, span, digest, profile, contract, plan, and the four gates.'],
   // Guides
   ['USE-CASES.md', 'guides/use-cases', 'Use cases', 'Choose the shortest path through the harness by task and failure mode.'],
+  ['HOST-CAPABILITIES.md', 'guides/host-capabilities', 'Host capabilities', 'What Claude Code, Codex, and Antigravity can enforce before and after tool execution.'],
+  ['ANCHORS.md', 'guides/anchors', 'Anchored addresses', 'How repository addresses verify, relocate, or refuse after content moves.'],
   ['CLI.md', 'guides/cli', 'CLI guide', 'Choose a verb, retrieve evidence, and interpret the session scorecard.'],
   ['CONFIGURATION.md', 'guides/configuration', 'Configuration', 'Every ctx.toml setting: budgets, the guard, scopes, redaction, and the store.'],
   ['TROUBLESHOOTING.md', 'guides/troubleshooting', 'Troubleshooting & FAQ', 'Symptom to cause to fix for setup, steering, permissions, the store, and the proxy.'],
-  ['WHY-STRAITJACKET.md', 'guides/why-straitjacket', 'Why straitjacket', 'The context-cost, cache, latency, and quality thesis in one place.'],
+  ['WHY-STRAITJACKET.md', 'guides/why-straitjacket', 'Why straitjacket', 'The failure, design decision, shipped mechanism, limits, and counterexamples.'],
   ['COMPARISONS.md', 'guides/comparisons', 'Comparisons', 'Head-to-head data versus Headroom, rtk, Ponytail, Caveman, Maki, and the field.'],
   ['ALPHAEVOLVE-OPTIMIZATION.md', 'guides/alphaevolve-benefits', 'AlphaEvolve benefits', 'What AlphaEvolve measurably improved, what it made safer, and which results remain modeled or rejected.'],
   // Contributing
@@ -65,6 +81,8 @@ const SLUG_BY_FILE = new Map(PAGES.map(([src, slug]) => [src, `${BASE}/${slug}/`
 // Rewrite a single link target for the site. Returns the new target.
 function rewriteTarget(value) {
   const v = value.trim();
+  // Canonical docs use portable raw URLs; serve this build's vendored marks.
+  if (v.startsWith(RAW_AGENTS)) return `${BASE}/agents/${v.slice(RAW_AGENTS.length)}`;
   // Leave absolute URLs, in-page anchors, and mail/data URIs untouched.
   if (/^[a-z][a-z0-9+.-]*:/i.test(v) || v.startsWith('//') || v.startsWith('#')) {
     return value;
@@ -80,6 +98,9 @@ function rewriteTarget(value) {
   // A sibling doc that we sync -> its slug.
   if (SLUG_BY_FILE.has(path)) return `${SLUG_BY_FILE.get(path)}${frag}`;
 
+  // Vendored agent marks are served locally on the docs site.
+  if (path.startsWith('../assets/agents/')) return `${BASE}/agents/${path.slice('../assets/agents/'.length)}${frag}`;
+
   // A path that escapes docs/ (../evals/, ../spec/, ../CONTRIBUTING.md, …) -> GitHub.
   if (path.startsWith('../')) {
     const repoPath = path.slice(3); // drop the leading ../ (docs/ -> repo root)
@@ -87,12 +108,16 @@ function rewriteTarget(value) {
     return `${base}${repoPath}${frag}`;
   }
 
+  // A sibling Markdown document that is not published -> its GitHub source.
+  // Leaving `FOO.md` relative from a nested generated page produces a 404.
+  if (path.endsWith('.md')) return `${GH_BLOB}docs/${path}${frag}`;
+
   // Anything else (already-correct relative asset, unknown) -> unchanged.
   return value;
 }
 
 const MD_LINK = /(\]\()([^)\s]+)(\))/g;                  // [text](target)
-const HTML_HREF = /(\bhref\s*=\s*(['"]))([^'"]+)(\2)/gi; // href="target"
+const HTML_HREF = /(\b(?:href|src)\s*=\s*(['"]))([^'"]+)(\2)/gi; // href/src="target"
 
 function rewriteLinks(text) {
   return text
@@ -109,13 +134,25 @@ for (const [src, slug, title, description] of PAGES) {
   let text = readFileSync(join(docsDir, src), 'utf8');
   // Strip GitHub-only chrome: the leading banner (a <picture> or bare <img>),
   // the breadcrumb <sub>, and the H1. Starlight renders its own title from
-  // frontmatter, so these would otherwise leak. Each strip tolerates leading
-  // blank lines so a failed earlier match does not cascade.
-  text = text
-    .replace(/^\s*<picture>[\s\S]*?<\/picture>\s*/, '')
-    .replace(/^\s*<img[^>]*>\s*/, '')
-    .replace(/^\s*<sub>[\s\S]*?<\/sub>\s*/, '')
-    .replace(/^\s*#\s.*(?:\n|$)/, '');
+  // frontmatter, so these would otherwise leak. Source documents use more
+  // than one ordering, so consume whichever chrome element is currently first.
+  const chromePatterns = [
+    /^\s*<picture>[\s\S]*?<\/picture>\s*/,
+    /^\s*<img[^>]*>\s*/,
+    /^\s*<sub>[\s\S]*?<\/sub>\s*/,
+    /^\s*#\s.*(?:\n|$)/,
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pattern of chromePatterns) {
+      const stripped = text.replace(pattern, '');
+      if (stripped !== text) {
+        text = stripped;
+        changed = true;
+      }
+    }
+  }
   text = rewriteLinks(text);
   const fm = `---\ntitle: "${title}"\ndescription: "${description.replaceAll('"', '\\"')}"\n---\n\n`;
   const outPath = join(outDir, `${slug}.md`);

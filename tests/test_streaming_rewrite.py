@@ -53,7 +53,7 @@ def test_rewrite_backgrounds_a_follower_and_says_why(workspace_dir):
     policy = {"steering": "rewrite"}
     d = _deny_cmd("docker logs -f web".split(), policy)
     rw = d.get("_rewrite") or {}
-    assert rw.get("command") == "ctx run --bg -- docker logs -f web"
+    assert rw.get("command") == "ctx run --bg --passthrough -- docker logs -f web"
     assert "never exits" in rw.get("reason", "")
     assert "ctx job" in rw.get("reason", "")  # tells the model how to collect it
 
@@ -62,4 +62,4 @@ def test_rewrite_leaves_ordinary_commands_in_the_foreground(workspace_dir):
     from ctx.hook import _deny_cmd
 
     d = _deny_cmd("pytest -q".split(), {"steering": "rewrite"})
-    assert (d.get("_rewrite") or {}).get("command") == "ctx run -- pytest -q"
+    assert (d.get("_rewrite") or {}).get("command") == "ctx run --passthrough -- pytest -q"

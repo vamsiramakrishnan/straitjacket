@@ -45,6 +45,17 @@ def _event(root: Path, state: dict, kind: str, **data) -> None:
             os.close(fd)
     except OSError:
         pass  # Durable events and the watchdog cover absent/slow consumers.
+    if kind in {"terminal", "reconciled"}:
+        # The durable state remains authoritative if notification delivery fails.
+        from ctx.relay import publish
+
+        try:
+            publish(root.parents[3], topic="task", selector=state["task_id"],
+                    origin="agy", ref=f"repo:.ctx/collab/sessions/{root.name}/state.json",
+                    note=f"Native agy turn {root.name}: {state['status']}; task verification still required.")
+        except (OSError, ValueError) as exc:
+            state["notification_error"] = str(exc)
+            _write(root / "state.json", state)
 
 
 def launch(workspace: Path, task_id: str, prompt: str, *, model: str,

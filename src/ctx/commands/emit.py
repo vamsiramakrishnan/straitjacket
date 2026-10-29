@@ -56,7 +56,7 @@ def _truncation_handle(text: str) -> str | None:
     return f"ctx get {m.group(1)}:{m.group(2)}" if m else None
 
 
-def _emit_bounded_digest(ws, store, text: str, plan, continuation=None) -> None:
+def render_bounded_digest(ws, store, text: str, plan, continuation=None) -> str:
     """Shared emission boundary: engagement filtering (teaching prose obeys
     both the plan and the graduated-engagement cap), the plan's token
     budget as the bounded() backstop, and the plan receipt telemetry.
@@ -76,14 +76,16 @@ def _emit_bounded_digest(ws, store, text: str, plan, continuation=None) -> None:
     if not plan.include_teaching:
         cap = 0  # include_teaching=False maps to suggestion cap 0
     resolver.record_plan_receipt(store.audit_dir if store is not None else None, plan)
-    print(
-        bounded(
+    return bounded(
             filter_digest(text, cap),
             plan.token_budget,
             continuation,
             truncation_continuation=_truncation_handle(text),
         )
-    )
+
+
+def _emit_bounded_digest(ws, store, text: str, plan, continuation=None) -> None:
+    print(render_bounded_digest(ws, store, text, plan, continuation))
 
 
 def _emit_run_digest(ws, digest: str, manifest: dict, store=None, signature=None) -> int:
@@ -148,7 +150,7 @@ def _emit_investigation(ws, store, text: str) -> None:
     """Emission tail for plan/investigate digests: the shared resolver
     (family 'investigate'; a digest naming failed nodes rides the failure
     budget) + engagement filter + bounded backstop."""
-    outcome = "failure" if ("ERROR:" in text or "candidates (census): 0" not in text) else "success"
+    outcome = "failure" if ("ERROR:" in text or "candidates (census): 0" in text) else "success"  # was inverted: "not in" misclassified successful census as failure
     plan = _delivery_plan(
         ws,
         outcome=outcome,

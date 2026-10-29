@@ -246,3 +246,31 @@ def test_proxy_rescue_end_to_end(tmp_path):
         assert _wait_until(_rescued_on_wire), "wire.jsonl never disclosed a rescue"
     finally:
         srv.shutdown(); srv.server_close(); up.shutdown(); up.server_close()
+
+
+# ------------------------------------------------------ the stub's first line
+def test_stub_carries_the_first_line_of_what_it_replaced(tmp_path):
+    """Headlong keeps a one-line tldr on every summarized entry so its
+    trajectory stays a readable index. Our stub carried bytes and a hash
+    only, so a rescued transcript was a column of identical placeholders.
+    The first line of a harnessed tool_result is its digest header; it is a
+    pure function of the elided bytes and rides on the stub."""
+    from ctx.rescue import HEAD_LINE_MAX, apply_elision, head_line, stub_for
+
+    body = "pytest: 37 failed, 412 passed [run:ba3d1020ee8f]\n" + "x" * 2000
+    msgs = [_tool_result(body, 0), _tool_result("y" * 2000, 1)]
+    out, n = apply_elision(msgs, {0}, tmp_path)
+    assert n == 1
+    stub = out[0]["content"][0]["content"]
+    assert 'first line: "pytest: 37 failed, 412 passed [run:ba3d1020ee8f]"' in stub
+    assert "sha256:" in stub and "/elided/" in stub  # nothing lost from before
+    assert "\n" not in stub
+
+    # Bounded, single-line, deterministic whatever the block held.
+    noisy = "\n\n  \x1b[31mERROR\x1b[0m\t\tline\x00one   here\nsecond line\n"
+    assert head_line(noisy) == "[31mERROR [0m line one here"
+    long = "w" * (HEAD_LINE_MAX * 3)
+    assert len(head_line(long)) == HEAD_LINE_MAX and head_line(long).endswith("…")
+    assert head_line("\n \n") == ""
+    assert "first line:" not in stub_for("\n \n" + " " * 1100, "ab" * 32, "p")
+    assert stub_for(noisy, "cd" * 32, "p") == stub_for(noisy, "cd" * 32, "p")

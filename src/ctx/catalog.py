@@ -58,12 +58,19 @@ def load_catalog(workspace_root: Path | str | None = None) -> dict[str, Any]:
                 # model without restating the whole table.
                 by_match = {str(m.get("match", "")): dict(m)
                             for m in table.get("models", [])}
+                shipped_keys = list(by_match.keys())
+                new_keys: list[str] = []
                 for row in doc["models"]:
                     key = str(row.get("match", ""))
                     if key:
+                        if key not in by_match:
+                            new_keys.append(key)
                         by_match.setdefault(key, {}).update(row)
+                # new override matches go first: appending them kept a new specific
+                # match after the shipped general row, so it could never win first-match
                 table = {**table, **{k: v for k, v in doc.items() if k != "models"},
-                         "models": list(by_match.values())}
+                         "models": [by_match[k] for k in new_keys]
+                                   + [by_match[k] for k in shipped_keys]}
         except (OSError, ValueError):
             pass
     return table

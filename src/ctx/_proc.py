@@ -38,14 +38,32 @@ from __future__ import annotations
 import os
 import signal as signal_mod
 import subprocess
+import time
 
-__all__ = ["exit_status", "wait_or_kill"]
+__all__ = ["exit_status", "native_exit_status", "kill_and_reap", "wait_or_kill"]
 
 
-def wait_or_kill(proc: subprocess.Popen, timeout: float | None) -> bool:
+def kill_and_reap(proc: subprocess.Popen) -> None:
+    """Stop an owned process group and reap its leader, even if it exited.
+
+    Call only for children started with ``start_new_session=True``. A dead
+    leader can still have live descendants, so do not gate the group signal
+    on ``poll()``. This is process cleanup, not containment of descendants
+    that deliberately escape the group with ``setsid()``.
+    """
+    try:
+        os.killpg(proc.pid, signal_mod.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    proc.wait()
+
+
+def wait_or_kill(proc: subprocess.Popen, timeout: float | None, *, cancelled=None) -> bool:
     """Wait for ``proc``; on timeout SIGKILL its process group and reap it.
 
     Returns True iff the timeout expired. ``timeout=None`` waits forever.
+    Interruption or another wait failure also stops the group, then propagates
+    the original exception. It must never be reported as a successful run.
 
     The group kill is the point: both callers spawn with
     ``start_new_session=True``, so the child leads its own process group and
@@ -55,14 +73,36 @@ def wait_or_kill(proc: subprocess.Popen, timeout: float | None) -> bool:
     optional — without it the killed child stays a zombie.
     """
     try:
-        proc.wait(timeout=timeout)
+        if cancelled is None:
+            proc.wait(timeout=timeout)
+        else:
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while True:
+                if cancelled():
+                    kill_and_reap(proc)
+                    return False
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    kill_and_reap(proc)
+                    return True
+                try:
+                    proc.wait(timeout=min(0.05, remaining) if remaining is not None else 0.05)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal_mod.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
-        proc.wait()
+        kill_and_reap(proc)
         return True
+    except BaseException:
+        kill_and_reap(proc)
+        raise
+    if timeout == 0:
+        # timeout=0 means the caller already detected the timeout elsewhere
+        # (orchestrator._run_bounded: communicate() timed out) and is forcing
+        # cleanup now. The leader may have exited already while an orphaned
+        # grandchild keeps the process group alive, so wait() did not raise
+        # and killpg still has to run. Improvement route, first live run.
+        kill_and_reap(proc)
     return False
 
 
@@ -80,3 +120,25 @@ def exit_status(returncode: int | None) -> tuple[int | None, str | None]:
         except ValueError:  # pragma: no cover - exotic signal number
             return None, f"SIG{-returncode}"
     return returncode, None
+
+
+def native_exit_status(result: dict) -> int:
+    """Shell-facing status, distinct from the command's typed termination.
+
+    A timeout is 124. A signal is 128+N, while the manifest continues to
+    carry exitCode=null and signal=SIGNAME. Unknown status must fail.
+    """
+    if result.get("timedOut"):
+        return 124
+    name = result.get("signal")
+    if name:
+        try:
+            number = int(signal_mod.Signals[str(name)])
+        except (KeyError, ValueError):
+            try:
+                number = int(str(name).removeprefix("SIG"))
+            except ValueError:
+                return 1
+        return 128 + number if 0 < number < 128 else 1
+    code = result.get("exitCode")
+    return code if type(code) is int and 0 <= code <= 255 else 1

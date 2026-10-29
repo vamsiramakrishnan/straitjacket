@@ -494,7 +494,7 @@ def test_no_hand_rolled_budget_math_left_in_cli():
     import re as _re
 
     calls = _re.findall(r"(?<!def )_emit_retrieval\(ws, store, out", src)
-    assert len(calls) == 4  # diff/map/code/retrieval
+    assert len(calls) == 5  # diff/map/code/retrieval + lsp
     assert src.count("_delivery_plan(") >= 3  # run + eval + seq (+ render plan)
     assert "resolve_retrieval_budget" in src
 

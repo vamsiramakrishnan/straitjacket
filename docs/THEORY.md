@@ -86,7 +86,7 @@ Three properties make R honest rather than decorative:
 First measurement (spec3 archives, 8 sessions): `pytest/v1` — 199/199
 downstream-used facts inline (sufficiency holds after profile changes: the
 regression gate), frontier **0.17** — the digest spends ~5.7× the
-strictly-used evidence. That 0.17 is the honest, load-bearing number: it is
+strictly-used evidence. That 0.17 is the honest, measured result: it is
 where "are we near-optimal" stops being rhetoric. Read with care — the oracle
 is a lower bound, and censuses the model *reads* without *reusing verbatim*
 are invisible to it — but any future profile change that pushes frontier
@@ -134,12 +134,12 @@ demanded its exact form.
 | Head/tail evidence windows | **empirical** | encodes the prior "conclusions live at the end"; adopted after a measured miss |
 | `pytest/v1..v2` census profiles | **empirical** | shape from real failure triage; sufficiency regression-gated by replay |
 | Steering classifier / rewrite lanes | **empirical** | conservative by design; measured via denial/rewrite telemetry |
-| Solution ladder, backward planning | **empirical** | A/B-adopted (−28% turns / −17% cost); behavioral, not information-theoretic |
+| Solution ladder, backward planning | **unresolved** | advisory behavior is not instrumented at the rung; existing A/Bs do not isolate its effect |
 | The four gates | **ontology** | a decomposition of where tokens are born, cross, stay, and leave — the map, not a theorem |
 
 The empirical rows are not weaknesses; they are hypotheses the objective can
 now score. A profile is *good* exactly insofar as its frontier → 1.0 with
-hops → 0 on real trajectories — which is measurable, per profile, forever.
+hops → 0 on real trajectories — which can be re-measured per profile over time.
 
 ## 5. What would falsify, and what is next
 

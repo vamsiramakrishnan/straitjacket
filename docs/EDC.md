@@ -284,7 +284,7 @@ strips ALL flags as presentation noise — including scope-affecting ones.
 `pytest -k auth` / `-m slow` / `--lf` currently equal bare `pytest`,
 so a legitimate scope change can score as starvation. Fix: per-family
 signature tables declaring scope flags (kept) vs presentation flags
-(dropped) — breadth as data, per the house rule.
+(dropped) — breadth as data, per the repository invariant.
 
 ## Source-state generations (§8)
 

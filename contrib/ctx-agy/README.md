@@ -1,7 +1,8 @@
 # `ctx agy` — a headless, harnessed Antigravity CLI
 
-A ~200-line shim over the **`google-antigravity` Agent SDK** that provides the
-two things the official `agy` binary cannot.
+A shim over the **`google-antigravity` Agent SDK**. Its asynchronous tools use
+the provider-independent [Tool SDK](../../docs/TOOL-SDK.md), including typed
+command status, bounded retrieval, cancellation and capsule export.
 
 ## Why
 
@@ -25,27 +26,26 @@ was never unbounded" — which needs no substitution API at all.
 
 ## What it replaces
 
-Flooding builtins are disabled and replaced with `ctx`-backed tools:
+The default `command-output` profile disables only `RUN_COMMAND` and supplies
+three asynchronous tools: `run_command`, `ctx_get`, and `ctx_search`. Native file
+reading, discovery and editing remain available. A command result is one
+`ctx.command-result/v1` JSON object; small complete stdout/stderr stay separate,
+and large output remains retrievable by its full run address.
 
-| disabled builtin | replacement | bounded by |
-|---|---|---|
-| `RUN_COMMAND` | `run_command` | `ctx run` digest + `ctx get run:<id>` refs |
-| `VIEW_FILE` | `view_file` | `ctx get repo:<path> --lines a:b` |
-| `SEARCH_DIR` | `search_dir` | `ctx search` hit census |
-| `LIST_DIR` | `list_dir` | `ctx stats` summary |
-| `FIND_FILE` | `find_file` | `ctx search --glob` |
+Use `--tool-profile full` to disable all five flooding builtins and add bounded
+file viewing, directory search, directory statistics, corpus file discovery and
+finite `ctx_query` composition. Empty files are discoverable. `ctx_query` accepts
+the observation pipeline grammar, not arbitrary CLI commands.
 
-`CREATE_FILE`, `EDIT_FILE`, `ASK_QUESTION` and `FINISH` stay native — they do
-not flood, and replacing them would only add failure modes. A `ctx_query` tool
-is added so the agent can resolve any omitted span by the address its digest
-printed.
+`CREATE_FILE`, `EDIT_FILE`, `ASK_QUESTION` and `FINISH` remain native in both
+profiles. The caller's SDK policy still owns permission decisions.
 
 ## Use
 
 ```bash
-python -m venv /tmp/agy-venv && /tmp/agy-venv/bin/pip install google-antigravity
+python -m venv /tmp/agy-venv && /tmp/agy-venv/bin/pip install google-antigravity ctx-harness
 GEMINI_API_KEY=... /tmp/agy-venv/bin/python contrib/ctx-agy/ctx_agy.py \
-    --add-dir . --model gemini-3.6-flash -p "fix the failing test"
+    --add-dir . --model gemini-3.6-flash --evidence-output evidence.tar -p "fix the failing test"
 ```
 
 It lives in `contrib/` and runs from its own venv because the SDK conflicts with
@@ -56,7 +56,16 @@ depend on a source checkout.
 `--no-contain` runs the same agent with the native builtins instead, which is
 the A/B baseline.
 
-## Measured, once
+A build containing the public Tool SDK is required; the historical 0.39.0
+release cannot import it. The managed launcher loads only the parent ctx package,
+keeping its broader site-packages out of the provider environment.
+
+`--usage-input-semantics` defaults to `unknown`; raw prompt, cache, candidate,
+thinking and total counters remain available without invented zeroes or a billing
+assumption. Use `includes_cache` or `excludes_cache` only with evidence for the
+chosen provider path. `--json` includes that usage record.
+
+## Historical measurement
 
 Fixture: a failing test whose cause is one anomalous line in a 4,000-line log
 (the `quiet` scenario from

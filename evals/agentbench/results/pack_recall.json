@@ -1,0 +1,950 @@
+{
+  "corpus_commit": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+  "schema": "agentbench.pack_recall/v1",
+  "summary": {
+    "grep-count": {
+      "first_hit_within_top": 14,
+      "gold_existing": 51,
+      "gold_new": 17,
+      "mrr": 0.547,
+      "recall@5": 0.376,
+      "recall@8": 0.429,
+      "tasks": 14
+    },
+    "pack": {
+      "first_hit_within_top": 12,
+      "gold_existing": 51,
+      "gold_new": 17,
+      "mrr": 0.641,
+      "recall@5": 0.445,
+      "recall@8": 0.54,
+      "tasks": 14
+    },
+    "pack-nohist": {
+      "first_hit_within_top": 12,
+      "gold_existing": 51,
+      "gold_new": 17,
+      "mrr": 0.641,
+      "recall@5": 0.445,
+      "recall@8": 0.54,
+      "tasks": 14
+    }
+  },
+  "tasks": [
+    {
+      "files": 489,
+      "gold_new": [],
+      "gold_src": [
+        "src/adaptix/_internal/morphing/facade/provider.py",
+        "src/adaptix/_internal/morphing/facade/retort.py",
+        "src/adaptix/_internal/morphing/model/crown_definitions.py",
+        "src/adaptix/_internal/morphing/model/loader_gen.py",
+        "src/adaptix/_internal/morphing/model/loader_provider.py",
+        "src/adaptix/_internal/morphing/name_layout/base.py",
+        "src/adaptix/_internal/morphing/name_layout/component.py",
+        "src/adaptix/_internal/morphing/name_layout/provider.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 5,
+        "recall@5": 0.125,
+        "recall@8": 0.25,
+        "rr": 0.2,
+        "top": [
+          "docs/loading-and-dumping/extended-usage.rst",
+          "tests/unit/morphing/name_layout/test_provider.py",
+          "docs/reference/integrations.rst",
+          "docs/why-not-pydantic.rst",
+          "src/adaptix/_internal/morphing/facade/provider.py",
+          "src/adaptix/_internal/morphing/name_layout/component.py",
+          "docs/loading-and-dumping/tutorial.rst",
+          "src/adaptix/__init__.py"
+        ]
+      },
+      "pack": {
+        "first_hit": 1,
+        "index_files": 484,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 1.0,
+        "top": [
+          "src/adaptix/_internal/morphing/facade/provider.py",
+          "src/adaptix/_internal/morphing/name_layout/component.py",
+          "src/adaptix/_internal/morphing/model/crown_definitions.py",
+          "tests/unit/morphing/name_layout/test_provider.py",
+          "src/adaptix/_internal/morphing/model/loader_gen.py",
+          "src/adaptix/_internal/name_style.py",
+          "src/adaptix/__init__.py",
+          "docs/loading-and-dumping/extended-usage.rst"
+        ],
+        "wall_s": 0.39
+      },
+      "pack-nohist": {
+        "first_hit": 1,
+        "index_files": 484,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 1.0,
+        "top": [
+          "src/adaptix/_internal/morphing/facade/provider.py",
+          "src/adaptix/_internal/morphing/name_layout/component.py",
+          "src/adaptix/_internal/morphing/model/crown_definitions.py",
+          "tests/unit/morphing/name_layout/test_provider.py",
+          "src/adaptix/_internal/morphing/model/loader_gen.py",
+          "src/adaptix/_internal/name_style.py",
+          "docs/loading-and-dumping/extended-usage.rst",
+          "src/adaptix/__init__.py"
+        ],
+        "wall_s": 1.2
+      },
+      "task_id": "adaptix-name-mapping-aliases"
+    },
+    {
+      "files": 298,
+      "gold_new": [
+        "bandit/core/cache_manager.py"
+      ],
+      "gold_src": [
+        "bandit/cli/main.py",
+        "bandit/core/issue.py",
+        "bandit/core/manager.py",
+        "bandit/core/metrics.py",
+        "bandit/formatters/json.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 1,
+        "recall@5": 0.2,
+        "recall@8": 0.4,
+        "rr": 1.0,
+        "top": [
+          "bandit/cli/main.py",
+          "doc/source/ci-cd/github-actions.rst",
+          "doc/source/man/bandit.rst",
+          "tests/unit/cli/test_main.py",
+          "bandit/cli/baseline.py",
+          "bandit/core/manager.py",
+          "tests/unit/core/test_manager.py",
+          "CONTRIBUTING.md"
+        ]
+      },
+      "pack": {
+        "first_hit": 1,
+        "index_files": 291,
+        "recall@5": 0.6,
+        "recall@8": 0.6,
+        "rr": 1.0,
+        "top": [
+          "bandit/cli/main.py",
+          "bandit/core/manager.py",
+          "bandit/cli/baseline.py",
+          "bandit/formatters/json.py",
+          "tests/unit/cli/test_main.py",
+          "setup.cfg",
+          "bandit/core/utils.py",
+          "bandit/cli/config_generator.py"
+        ],
+        "wall_s": 0.3
+      },
+      "pack-nohist": {
+        "first_hit": 1,
+        "index_files": 291,
+        "recall@5": 0.6,
+        "recall@8": 0.6,
+        "rr": 1.0,
+        "top": [
+          "bandit/cli/main.py",
+          "bandit/cli/baseline.py",
+          "bandit/core/manager.py",
+          "bandit/formatters/json.py",
+          "tests/unit/cli/test_main.py",
+          "bandit/cli/config_generator.py",
+          "setup.cfg",
+          "bandit/formatters/sarif.py"
+        ],
+        "wall_s": 0.98
+      },
+      "task_id": "bandit-incremental-cache-control"
+    },
+    {
+      "files": 298,
+      "gold_new": [
+        "bandit/core/taint.py",
+        "bandit/plugins/taint_path_traversal.py",
+        "bandit/plugins/taint_shell_injection.py",
+        "bandit/plugins/taint_sql_injection.py",
+        "bandit/plugins/taint_ssrf.py",
+        "bandit/plugins/taint_xss.py"
+      ],
+      "gold_src": [
+        "bandit/core/issue.py",
+        "bandit/core/node_visitor.py",
+        "setup.cfg"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 2,
+        "recall@5": 0.6666666666666666,
+        "recall@8": 0.6666666666666666,
+        "rr": 0.5,
+        "top": [
+          "tests/functional/test_functional.py",
+          "setup.cfg",
+          "bandit/core/issue.py",
+          "bandit/blacklists/calls.py",
+          "bandit/plugins/injection_shell.py",
+          "bandit/plugins/injection_sql.py",
+          "bandit/plugins/injection_wildcard.py",
+          "bandit/plugins/django_sql_injection.py"
+        ]
+      },
+      "pack": {
+        "first_hit": null,
+        "index_files": 291,
+        "recall@5": 0.0,
+        "recall@8": 0.0,
+        "rr": 0.0,
+        "top": [
+          "bandit/plugins/injection_shell.py",
+          "bandit/plugins/injection_sql.py",
+          "bandit/plugins/django_sql_injection.py",
+          "bandit/plugins/injection_wildcard.py",
+          "examples/subprocess_shell.py",
+          "bandit/plugins/injection_paramiko.py",
+          "bandit/plugins/markupsafe_markup_xss.py",
+          "bandit/plugins/request_without_timeout.py"
+        ],
+        "wall_s": 0.36
+      },
+      "pack-nohist": {
+        "first_hit": null,
+        "index_files": 291,
+        "recall@5": 0.0,
+        "recall@8": 0.0,
+        "rr": 0.0,
+        "top": [
+          "bandit/plugins/injection_shell.py",
+          "bandit/plugins/django_sql_injection.py",
+          "bandit/plugins/injection_sql.py",
+          "bandit/plugins/injection_wildcard.py",
+          "examples/subprocess_shell.py",
+          "bandit/plugins/injection_paramiko.py",
+          "bandit/plugins/markupsafe_markup_xss.py",
+          "bandit/blacklists/calls.py"
+        ],
+        "wall_s": 1.09
+      },
+      "task_id": "bandit-interprocedural-taint-checks"
+    },
+    {
+      "files": 170,
+      "gold_new": [
+        "src/cattrs/partial.py"
+      ],
+      "gold_src": [
+        "src/cattrs/__init__.py",
+        "src/cattrs/converters.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 2,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.5,
+        "top": [
+          "HISTORY.md",
+          "src/cattrs/converters.py",
+          "docs/customizing.md",
+          "tests/test_converter.py",
+          "src/cattrs/gen/__init__.py",
+          "tests/test_gen_dict.py",
+          "tests/test_typeddicts.py",
+          "docs/defaulthooks.md"
+        ]
+      },
+      "pack": {
+        "first_hit": 1,
+        "index_files": 162,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 1.0,
+        "top": [
+          "src/cattrs/converters.py",
+          "src/cattrs/gen/__init__.py",
+          "tests/test_gen_dict.py",
+          "src/cattrs/cols.py",
+          "tests/test_typeddicts.py",
+          "src/cattrs/gen/typeddicts.py",
+          "HISTORY.md",
+          "src/cattrs/errors.py"
+        ],
+        "wall_s": 0.29
+      },
+      "pack-nohist": {
+        "first_hit": 1,
+        "index_files": 162,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 1.0,
+        "top": [
+          "src/cattrs/converters.py",
+          "src/cattrs/gen/__init__.py",
+          "tests/test_gen_dict.py",
+          "src/cattrs/cols.py",
+          "tests/test_typeddicts.py",
+          "src/cattrs/gen/typeddicts.py",
+          "HISTORY.md",
+          "tests/test_converter.py"
+        ],
+        "wall_s": 0.72
+      },
+      "task_id": "cattrs-partial-structuring-recovery"
+    },
+    {
+      "files": 480,
+      "gold_new": [
+        "IPython/core/sessionbundle.py"
+      ],
+      "gold_src": [
+        "IPython/core/interactiveshell.py",
+        "IPython/core/magics/execution.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 2,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.5,
+        "top": [
+          "docs/source/whatsnew/github-stats-0.13.rst",
+          "IPython/core/interactiveshell.py",
+          "docs/source/whatsnew/github-stats-2.0.rst",
+          "tests/test_magic.py",
+          "docs/source/whatsnew/github-stats-1.0.rst",
+          "docs/source/whatsnew/github-stats-0.12.rst",
+          "docs/source/whatsnew/version8.rst",
+          "docs/source/whatsnew/github-stats-0.11.rst"
+        ]
+      },
+      "pack": {
+        "first_hit": 1,
+        "index_files": 426,
+        "recall@5": 0.5,
+        "recall@8": 1.0,
+        "rr": 1.0,
+        "top": [
+          "IPython/core/interactiveshell.py",
+          "IPython/core/magics/basic.py",
+          "IPython/core/display.py",
+          "IPython/core/history.py",
+          "IPython/core/oinspect.py",
+          "IPython/core/formatters.py",
+          "IPython/core/displayhook.py",
+          "IPython/core/magics/execution.py"
+        ],
+        "wall_s": 0.96
+      },
+      "pack-nohist": {
+        "first_hit": 1,
+        "index_files": 426,
+        "recall@5": 0.5,
+        "recall@8": 1.0,
+        "rr": 1.0,
+        "top": [
+          "IPython/core/interactiveshell.py",
+          "IPython/core/history.py",
+          "IPython/core/magics/basic.py",
+          "IPython/core/display.py",
+          "IPython/core/displayhook.py",
+          "IPython/core/displaypub.py",
+          "IPython/sphinxext/ipython_directive.py",
+          "IPython/core/magics/execution.py"
+        ],
+        "wall_s": 2.7
+      },
+      "task_id": "ipython-session-bundle-replay"
+    },
+    {
+      "files": 340,
+      "gold_new": [],
+      "gold_src": [
+        "kombu/entity.py",
+        "kombu/messaging.py",
+        "kombu/transport/filesystem.py",
+        "kombu/transport/memory.py",
+        "kombu/transport/pyro.py",
+        "kombu/transport/virtual/base.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 2,
+        "recall@5": 0.3333333333333333,
+        "recall@8": 0.5,
+        "rr": 0.5,
+        "top": [
+          "kombu/transport/qpid.py",
+          "kombu/entity.py",
+          "kombu/messaging.py",
+          "Changelog.rst",
+          "kombu/transport/SQS/__init__.py",
+          "kombu/transport/redis.py",
+          "kombu/transport/virtual/base.py",
+          "t/unit/transport/test_qpid.py"
+        ]
+      },
+      "pack": {
+        "first_hit": 2,
+        "index_files": 337,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.5,
+        "top": [
+          "kombu/transport/qpid.py",
+          "kombu/transport/virtual/base.py",
+          "kombu/entity.py",
+          "kombu/messaging.py",
+          "kombu/transport/redis.py",
+          "kombu/transport/SQS/__init__.py",
+          "kombu/pidbox.py",
+          "kombu/connection.py"
+        ],
+        "wall_s": 0.61
+      },
+      "pack-nohist": {
+        "first_hit": 2,
+        "index_files": 337,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.5,
+        "top": [
+          "kombu/transport/qpid.py",
+          "kombu/transport/virtual/base.py",
+          "kombu/entity.py",
+          "kombu/messaging.py",
+          "kombu/transport/redis.py",
+          "kombu/transport/SQS/__init__.py",
+          "kombu/pidbox.py",
+          "kombu/connection.py"
+        ],
+        "wall_s": 1.43
+      },
+      "task_id": "kombu-single-active-consumer-priority"
+    },
+    {
+      "files": 171,
+      "gold_new": [
+        "mashumaro/flatten.py"
+      ],
+      "gold_src": [
+        "mashumaro/core/meta/code/builder.py",
+        "mashumaro/exceptions.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 2,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.5,
+        "top": [
+          "README.md",
+          "mashumaro/core/meta/code/builder.py",
+          "mashumaro/jsonschema/schema.py",
+          "tests/test_jsonschema/test_jsonschema_generation.py",
+          "mashumaro/core/meta/types/pack.py",
+          "mashumaro/core/meta/types/unpack.py",
+          "mashumaro/jsonschema/models.py",
+          "tests/test_config.py"
+        ]
+      },
+      "pack": {
+        "first_hit": 3,
+        "index_files": 171,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.3333333333333333,
+        "top": [
+          "mashumaro/helper.py",
+          "README.md",
+          "mashumaro/core/meta/code/builder.py",
+          "tests/test_config.py",
+          "mashumaro/jsonschema/schema.py",
+          ".github/workflows/main.yml",
+          "tests/test_helper.py",
+          "mashumaro/__init__.py"
+        ],
+        "wall_s": 0.26
+      },
+      "pack-nohist": {
+        "first_hit": 3,
+        "index_files": 171,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.3333333333333333,
+        "top": [
+          "README.md",
+          "mashumaro/helper.py",
+          "mashumaro/core/meta/code/builder.py",
+          "tests/test_config.py",
+          "mashumaro/jsonschema/schema.py",
+          "benchmark/libs/mashumaro/common.py",
+          "tests/test_aliases.py",
+          "tests/test_helper.py"
+        ],
+        "wall_s": 0.66
+      },
+      "task_id": "mashumaro-flattened-dataclass-fields"
+    },
+    {
+      "files": 131,
+      "gold_new": [],
+      "gold_src": [
+        "mobly/controller_manager.py",
+        "mobly/expects.py"
+      ],
+      "gold_tests": [
+        "mobly/base_test.py"
+      ],
+      "grep-count": {
+        "first_hit": 4,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.25,
+        "top": [
+          "mobly/base_test.py",
+          "tests/mobly/base_test_test.py",
+          "tests/mobly/test_runner_test.py",
+          "mobly/controller_manager.py",
+          "tests/mobly/controller_manager_test.py",
+          "tests/mobly/utils_test.py",
+          "docs/tutorial_custom_controller.md",
+          "mobly/controllers/android_device_lib/adb.py"
+        ]
+      },
+      "pack": {
+        "first_hit": 7,
+        "index_files": 131,
+        "recall@5": 0.0,
+        "recall@8": 0.5,
+        "rr": 0.14285714285714285,
+        "top": [
+          "mobly/base_test.py",
+          "mobly/controllers/android_device_lib/snippet_client_v2.py",
+          "mobly/test_runner.py",
+          "tests/mobly/base_test_test.py",
+          "mobly/suite_runner.py",
+          "mobly/signals.py",
+          "mobly/controller_manager.py",
+          "tests/mobly/test_runner_test.py"
+        ],
+        "wall_s": 0.29
+      },
+      "pack-nohist": {
+        "first_hit": 7,
+        "index_files": 131,
+        "recall@5": 0.0,
+        "recall@8": 0.5,
+        "rr": 0.14285714285714285,
+        "top": [
+          "mobly/base_test.py",
+          "mobly/controllers/android_device_lib/snippet_client_v2.py",
+          "tests/mobly/base_test_test.py",
+          "mobly/test_runner.py",
+          "mobly/suite_runner.py",
+          "mobly/signals.py",
+          "mobly/controller_manager.py",
+          "tests/mobly/test_runner_test.py"
+        ],
+        "wall_s": 0.79
+      },
+      "task_id": "mobly-grouped-test-barriers"
+    },
+    {
+      "files": 407,
+      "gold_new": [
+        "returns/interfaces/specific/validated.py",
+        "returns/pointfree/bind_validated.py",
+        "returns/validated.py"
+      ],
+      "gold_src": [
+        "returns/contrib/hypothesis/containers.py",
+        "returns/converters.py",
+        "returns/methods/cond.py",
+        "returns/pointfree/__init__.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 8,
+        "recall@5": 0.0,
+        "recall@8": 0.25,
+        "rr": 0.125,
+        "top": [
+          "returns/io.py",
+          "returns/result.py",
+          "returns/context/requires_context_future_result.py",
+          "returns/context/requires_context_ioresult.py",
+          "returns/context/requires_context_result.py",
+          "returns/future.py",
+          "returns/interfaces/specific/result.py",
+          "returns/contrib/hypothesis/containers.py"
+        ]
+      },
+      "pack": {
+        "first_hit": null,
+        "index_files": 407,
+        "recall@5": 0.0,
+        "recall@8": 0.0,
+        "rr": 0.0,
+        "top": [
+          "returns/interfaces/specific/result.py",
+          "returns/interfaces/failable.py",
+          "returns/result.py",
+          "returns/io.py",
+          "returns/context/requires_context_future_result.py",
+          "returns/context/requires_context_ioresult.py",
+          "returns/context/requires_context_result.py",
+          "returns/future.py"
+        ],
+        "wall_s": 0.3
+      },
+      "pack-nohist": {
+        "first_hit": null,
+        "index_files": 407,
+        "recall@5": 0.0,
+        "recall@8": 0.0,
+        "rr": 0.0,
+        "top": [
+          "returns/interfaces/specific/result.py",
+          "returns/interfaces/failable.py",
+          "returns/result.py",
+          "returns/io.py",
+          "returns/context/requires_context_ioresult.py",
+          "returns/context/requires_context_future_result.py",
+          "returns/context/requires_context_result.py",
+          "returns/future.py"
+        ],
+        "wall_s": 0.85
+      },
+      "task_id": "returns-validated-error-accumulation"
+    },
+    {
+      "files": 94,
+      "gold_new": [],
+      "gold_src": [
+        "docs/cli-reference.rst",
+        "docs/cli.rst",
+        "sqlite_utils/__init__.py",
+        "sqlite_utils/cli.py",
+        "sqlite_utils/db.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 1,
+        "recall@5": 0.4,
+        "recall@8": 0.4,
+        "rr": 1.0,
+        "top": [
+          "docs/cli.rst",
+          "docs/python-api.rst",
+          "docs/cli-reference.rst",
+          "tests/test_rows.py",
+          "tests/test_transform.py",
+          "README.md",
+          "docs/changelog.rst",
+          "docs/plugins.rst"
+        ]
+      },
+      "pack": {
+        "first_hit": 1,
+        "index_files": 94,
+        "recall@5": 0.4,
+        "recall@8": 0.4,
+        "rr": 1.0,
+        "top": [
+          "docs/cli.rst",
+          "docs/python-api.rst",
+          "sqlite_utils/db.py",
+          "tests/test_analyze_tables.py"
+        ],
+        "wall_s": 0.18
+      },
+      "pack-nohist": {
+        "first_hit": 1,
+        "index_files": 94,
+        "recall@5": 0.4,
+        "recall@8": 0.4,
+        "rr": 1.0,
+        "top": [
+          "docs/cli.rst",
+          "docs/python-api.rst",
+          "sqlite_utils/db.py",
+          "tests/test_analyze_tables.py"
+        ],
+        "wall_s": 0.57
+      },
+      "task_id": "sqlite-utils-safe-import-checkpoints"
+    },
+    {
+      "files": 2121,
+      "gold_new": [
+        "examples/kitty_keyboard_protocol.py"
+      ],
+      "gold_src": [
+        "src/textual/_keyboard_protocol.py",
+        "src/textual/_xterm_parser.py",
+        "src/textual/drivers/linux_driver.py",
+        "src/textual/drivers/windows_driver.py",
+        "src/textual/events.py"
+      ],
+      "gold_tests": [
+        "tests/test_xterm_parser.py"
+      ],
+      "grep-count": {
+        "first_hit": 4,
+        "recall@5": 0.2,
+        "recall@8": 0.2,
+        "rr": 0.25,
+        "top": [
+          "CHANGELOG.md",
+          "src/textual/app.py",
+          "src/textual/_ansi_sequences.py",
+          "src/textual/_xterm_parser.py",
+          "docs/FAQ.md",
+          "docs/guide/input.md",
+          "docs/guide/testing.md",
+          "docs/guide/widgets.md"
+        ]
+      },
+      "pack": {
+        "first_hit": 2,
+        "index_files": 2042,
+        "recall@5": 0.4,
+        "recall@8": 0.4,
+        "rr": 0.5,
+        "top": [
+          "src/textual/keys.py",
+          "src/textual/_xterm_parser.py",
+          "src/textual/_ansi_sequences.py",
+          "src/textual/events.py",
+          "src/textual/app.py",
+          "src/textual/widgets/_text_area.py",
+          "src/textual/widgets/_input.py",
+          "src/textual/pilot.py"
+        ],
+        "wall_s": 1.24
+      },
+      "pack-nohist": {
+        "first_hit": 2,
+        "index_files": 2042,
+        "recall@5": 0.4,
+        "recall@8": 0.4,
+        "rr": 0.5,
+        "top": [
+          "src/textual/keys.py",
+          "src/textual/_xterm_parser.py",
+          "src/textual/_ansi_sequences.py",
+          "src/textual/events.py",
+          "src/textual/app.py",
+          "src/textual/widgets/_text_area.py",
+          "src/textual/widgets/_input.py",
+          "src/textual/pilot.py"
+        ],
+        "wall_s": 7.59
+      },
+      "task_id": "textual-kitty-key-phases"
+    },
+    {
+      "files": 2123,
+      "gold_new": [
+        "examples/rich_log_follow_state.py"
+      ],
+      "gold_src": [
+        "src/textual/widgets/_log.py",
+        "src/textual/widgets/_rich_log.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 3,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 0.3333333333333333,
+        "top": [
+          "tests/snapshot_tests/test_snapshots.py",
+          "CHANGELOG.md",
+          "src/textual/widgets/_rich_log.py",
+          "src/textual/demo/widgets.py",
+          "src/textual/widget.py",
+          "src/textual/app.py",
+          "docs/widgets/log.md",
+          "docs/widgets/rich_log.md"
+        ]
+      },
+      "pack": {
+        "first_hit": 1,
+        "index_files": 2044,
+        "recall@5": 1.0,
+        "recall@8": 1.0,
+        "rr": 1.0,
+        "top": [
+          "src/textual/widgets/_rich_log.py",
+          "src/textual/widgets/_log.py",
+          "src/textual/widget.py",
+          "src/textual/app.py",
+          "src/textual/widgets/_tree.py",
+          "tests/snapshot_tests/test_snapshots.py",
+          "src/textual/widgets/_text_area.py",
+          "src/textual/widgets/_data_table.py"
+        ],
+        "wall_s": 1.58
+      },
+      "pack-nohist": {
+        "first_hit": 1,
+        "index_files": 2044,
+        "recall@5": 1.0,
+        "recall@8": 1.0,
+        "rr": 1.0,
+        "top": [
+          "src/textual/widgets/_rich_log.py",
+          "src/textual/widgets/_log.py",
+          "src/textual/widget.py",
+          "src/textual/app.py",
+          "src/textual/widgets/_tree.py",
+          "src/textual/demo/widgets.py",
+          "src/textual/widgets/_text_area.py",
+          "tests/snapshot_tests/test_snapshots.py"
+        ],
+        "wall_s": 8.22
+      },
+      "task_id": "textual-richlog-follow-state"
+    },
+    {
+      "files": 81,
+      "gold_new": [
+        "tomlkit/convert.py"
+      ],
+      "gold_src": [
+        "tomlkit/__init__.py",
+        "tomlkit/api.py",
+        "tomlkit/exceptions.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 1,
+        "recall@5": 0.3333333333333333,
+        "recall@8": 0.3333333333333333,
+        "rr": 1.0,
+        "top": [
+          "tomlkit/api.py",
+          "tomlkit/items.py",
+          "tests/test_items.py",
+          "tests/test_api.py",
+          "tests/test_toml_document.py",
+          "tomlkit/parser.py",
+          "CHANGELOG.md",
+          "tomlkit/container.py"
+        ]
+      },
+      "pack": {
+        "first_hit": 2,
+        "index_files": 80,
+        "recall@5": 0.3333333333333333,
+        "recall@8": 0.6666666666666666,
+        "rr": 0.5,
+        "top": [
+          "tomlkit/items.py",
+          "tomlkit/api.py",
+          "tomlkit/container.py",
+          "tomlkit/parser.py",
+          "tests/test_items.py",
+          "tests/test_toml_document.py",
+          "tomlkit/exceptions.py",
+          "tests/test_api.py"
+        ],
+        "wall_s": 0.22
+      },
+      "pack-nohist": {
+        "first_hit": 2,
+        "index_files": 80,
+        "recall@5": 0.3333333333333333,
+        "recall@8": 0.6666666666666666,
+        "rr": 0.5,
+        "top": [
+          "tomlkit/items.py",
+          "tomlkit/api.py",
+          "tomlkit/container.py",
+          "tomlkit/parser.py",
+          "tests/test_items.py",
+          "tests/test_toml_document.py",
+          "tomlkit/exceptions.py",
+          "tests/test_api.py"
+        ],
+        "wall_s": 0.4
+      },
+      "task_id": "tomlkit-toml-table-converters"
+    },
+    {
+      "files": 63,
+      "gold_new": [
+        "vulture/cache.py"
+      ],
+      "gold_src": [
+        "vulture/config.py",
+        "vulture/core.py"
+      ],
+      "gold_tests": [],
+      "grep-count": {
+        "first_hit": 1,
+        "recall@5": 0.5,
+        "recall@8": 0.5,
+        "rr": 1.0,
+        "top": [
+          "vulture/config.py",
+          "README.md",
+          "pyproject.toml",
+          "CHANGELOG.md",
+          "dev/release.sh",
+          "tests/__init__.py",
+          "tests/test_script.py",
+          "vulture/__init__.py"
+        ]
+      },
+      "pack": {
+        "first_hit": 1,
+        "index_files": 63,
+        "recall@5": 1.0,
+        "recall@8": 1.0,
+        "rr": 1.0,
+        "top": [
+          "vulture/config.py",
+          "vulture/core.py",
+          "pyproject.toml",
+          "dev/release.sh",
+          "vulture/utils.py",
+          "vulture/version.py",
+          "vulture/__init__.py",
+          ".github/workflows/main.yml"
+        ],
+        "wall_s": 0.16
+      },
+      "pack-nohist": {
+        "first_hit": 1,
+        "index_files": 63,
+        "recall@5": 1.0,
+        "recall@8": 1.0,
+        "rr": 1.0,
+        "top": [
+          "vulture/config.py",
+          "vulture/core.py",
+          "pyproject.toml",
+          "dev/release.sh",
+          "vulture/utils.py",
+          "vulture/__init__.py",
+          "tests/test_config.py",
+          "tests/test_script.py"
+        ],
+        "wall_s": 0.26
+      },
+      "task_id": "vulture-persistent-analysis-cache"
+    }
+  ],
+  "top": 8
+}

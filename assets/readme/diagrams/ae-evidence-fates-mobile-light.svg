@@ -57,7 +57,7 @@
 <text x="54" y="780" text-anchor="start" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700" letter-spacing="0" fill="#62686C">EXACT  ✕     SMALL  ✓</text>
 <rect x="32" y="860" width="576" height="294" fill="#FCFAF4" opacity="1" stroke="#D8D4C9" stroke-width="1"/>
 <text x="54" y="894" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" letter-spacing="1.5" fill="#174EB8">ADDRESSABLE</text>
-<text x="54" y="946" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="750" letter-spacing="0" fill="#16181D">521</text>
+<text x="54" y="946" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="750" letter-spacing="0" fill="#16181D">531</text>
 <text x="54" y="972" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="500" letter-spacing="0" fill="#62686C">visible tokens</text>
 <line x1="54" y1="994" x2="586" y2="994" stroke="#D8D4C9" stroke-width="1" opacity="1"/>
 <rect x="54" y="1012" width="532" height="64" fill="#DCE6FF" opacity="1" stroke="#174EB8" stroke-width="1"/>

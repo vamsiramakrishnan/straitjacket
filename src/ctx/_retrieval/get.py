@@ -12,7 +12,7 @@ from typing import Any
 
 from ctx.execution import snapshot_file
 from ctx.store import Store
-from ctx.textutil import decode_exact, encode_exact, fmt_int, short_id
+from ctx.textutil import index_lines, decode_exact, encode_exact, fmt_int, short_id
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit, _parse, _peek_blob, _read_bytes_range, _route_workspace
@@ -35,6 +35,13 @@ class Selector:
     #: Render ``L40:a3| text`` instead of ``L40: text`` — per-line content tags
     #: the model can name individual lines by when it goes on to edit them.
     hashlines: bool = False
+    #: Render the selected slice as a deterministic monospace bitmap PNG
+    #: (``ctx.snapcompact``), store it via the blob store, and return its
+    #: ``blob:`` ref instead of the raw text — the "snapcompact" technique
+    #: (docs/ARCHITECTURE.md, Delivery plane). Opt-in only; never changes
+    #: default behavior. See ``ctx.snapcompact`` for what is and is not
+    #: verified about the cost/fidelity tradeoff this makes available.
+    snapcompact: bool = False
 
 
 def _window(flag: str, a: int, b: int, total: int, unit: str) -> tuple[int, int]:
@@ -52,7 +59,14 @@ def _window(flag: str, a: int, b: int, total: int, unit: str) -> tuple[int, int]
     """
     window = bounds.span(a, b, total)
     if window is None:
-        suggest = min(total, 200) or 1
+        if total <= 0:
+            # No range can select from nothing; the old text suggested
+            # `--lines 1:1`, which raised this same error again.
+            raise RetrievalError(
+                f"--{flag} {a}:{b} selects nothing: the content is empty "
+                f"(0 {unit}). Omit --{flag} to see that."
+            )
+        suggest = min(total, 200)
         raise RetrievalError(
             f"--{flag} {a}:{b} selects nothing: the content has "
             f"{fmt_int(total)} {unit}. Use --{flag} 1:{suggest} or omit "
@@ -176,6 +190,10 @@ def _fit_window(
             break
         kept += 1
     if kept >= len(rendered):
+        return b, None
+    if kept == 0:
+        # nothing fit at all (e.g. a single oversized line) -- forcing kept=1 below
+        # produced an inverted continuation range (new_b==b, so next start > next end)
         return b, None
     kept = max(1, kept)
     # Reached only when the window was actually trimmed (`kept < len(rendered)`
@@ -311,6 +329,18 @@ def get(
     continuation: str | None = None
     lines_handle: str | None = None
 
+    if selector.snapcompact and selector.span is not None:
+        # Declared, not silent (same house rule the --symbol/anchor
+        # combination below enforces): --span resolves and returns through
+        # its own path (`_resolve_span`, never reaching the snapcompact
+        # rendering below), so silently accepting the flag here would make
+        # `--span X --snapcompact` a no-op that looks like it worked.
+        raise RetrievalError(
+            "--snapcompact cannot be combined with --span: a span already "
+            "names a fixed rendering. Use --lines/--bytes/--records/"
+            "--json-pointer or --symbol instead."
+        )
+
     if selector.span is not None:
         result = _resolve_span(store, ws, ref_text, label, selector.span)
         record_telemetry(store, "get", len(data) if data else 0, len(encode_exact(result)))
@@ -347,7 +377,9 @@ def get(
         # silently ignored flag. `lines_anchor` deliberately does not survive --
         # the anchor described the caller's own range, and the range has just
         # been replaced by one the symbol resolver chose.
-        selector = Selector(lines=span, hashlines=selector.hashlines)
+        selector = Selector(
+            lines=span, hashlines=selector.hashlines, snapcompact=selector.snapcompact
+        )
 
     if selector.json_pointer is not None:
         try:
@@ -414,83 +446,127 @@ def get(
             a, b = selector.lines if selector.lines is not None else (1, total)
             if selector.lines is None:
                 b = min(total, ws.config.budgets.max_inline_lines)
-            # bounds.span, not a lone `min(b, total)`: only the END was
-            # clamped, so a START past EOF printed a self-contradictory
-            # header (start > total) over a silently empty body and still
-            # exited 0. An empty span is empty, and says so.
-            a, b = _window("lines", a, b, total, "lines")
-            if b - a + 1 > budget.max_inline_lines:
-                b = a + budget.max_inline_lines - 1
-                continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
-            chunk = store.read_blob_lines(blob_hash, a, b)
-            all_lines = chunk.decode("utf-8", "replace").splitlines()
-            rendered = anchors.render_window(all_lines, a, tagged=selector.hashlines)
-            b, fit_next = _fit_window("--lines", ref_text, a, b, total, rendered, budget)
-            if fit_next:
-                continuation = fit_next
-                rendered = rendered[: b - a + 1]
-            header.append(f"selector: --lines {a}:{b} of {fmt_int(total)}")
-            body = "\n".join(rendered)
+            if total == 0 and selector.lines is None:
+                # An empty file or stream is a complete answer. Every path
+                # through _window refused it ("selects nothing"), so `ctx
+                # get` could not return an empty blob at all -- and the
+                # refusal suggested `--lines 1:1`, which refused again.
+                header.append("selector: --lines 1:0 of 0 (empty)")
+                body = ""
+            else:
+                # bounds.span, not a lone `min(b, total)`: only the END was
+                # clamped, so a START past EOF printed a self-contradictory
+                # header (start > total) over a silently empty body and
+                # still exited 0. An empty span is empty, and says so.
+                a, b = _window("lines", a, b, total, "lines")
+                if b - a + 1 > budget.max_inline_lines:
+                    b = a + budget.max_inline_lines - 1
+                    continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
+                chunk = store.read_blob_lines(blob_hash, a, b)
+                all_lines = index_lines(chunk.decode("utf-8", "replace"))
+                rendered = anchors.render_window(all_lines, a, tagged=selector.hashlines)
+                b, fit_next = _fit_window("--lines", ref_text, a, b, total, rendered, budget)
+                if fit_next:
+                    continuation = fit_next
+                    rendered = rendered[: b - a + 1]
+                header.append(f"selector: --lines {a}:{b} of {fmt_int(total)}")
+                body = "\n".join(rendered)
         else:
             if b"\x00" in data[:8192]:
                 raise RetrievalError("binary content: use --bytes A:B for exact slices")
-            all_lines = data.decode("utf-8", "replace").splitlines()
-            if selector.lines is None:
-                a, b = 1, min(len(all_lines), ws.config.budgets.max_inline_lines)
+            all_lines = index_lines(data.decode("utf-8", "replace"))
+            if selector.lines is None and not all_lines:
+                header.append("selector: --lines 1:0 of 0 (empty)")
+                body = ""
             else:
-                a, b = selector.lines
-            # Anchor resolution runs BEFORE the range is clamped. An edit that
-            # deleted lines can leave an anchored address pointing past the new
-            # end of file, and _window refuses a start past the end -- so
-            # clamping first would answer "that range selects nothing" about
-            # content that is still in the file, three lines up. The address
-            # names content; where that content currently sits is the answer,
-            # not a precondition for looking.
-            if selector.lines_anchor is not None:
-                a, b, moved = _resolve_anchor(
-                    all_lines, a, b, selector.lines_anchor, ref_text
-                )
-                if moved:
-                    header.append(moved)
-            # Second door onto the same contract: this path clamped only the
-            # END too, so `--lines 1000:5` on a 5-line file printed the header
-            # "--lines 1000:5 of 5" -- a range whose start exceeds its own
-            # total -- over an empty body, and exited 0.
-            a, b = _window("lines", a, b, len(all_lines), "lines")
-            # How this ref spells a --lines value. A mutable target (repo:)
-            # mints the anchor of the window being addressed, so every address
-            # this call emits -- the selector it echoes and any continuation it
-            # offers -- is verifiable when it comes back. Immutable targets
-            # mint nothing: their bytes cannot move, and the nine characters
-            # would buy a guarantee the ref kind already gives for free.
-            def _addr(x: int, y: int) -> str:
-                if not mutable:
-                    return f"{x}:{y}"
-                return anchors.format_span(x, y, anchors.anchor(all_lines[x - 1 : y]))
+                if selector.lines is None:
+                    a, b = 1, min(len(all_lines), ws.config.budgets.max_inline_lines)
+                else:
+                    a, b = selector.lines
+                # Anchor resolution runs BEFORE the range is clamped. An edit that
+                # deleted lines can leave an anchored address pointing past the new
+                # end of file, and _window refuses a start past the end -- so
+                # clamping first would answer "that range selects nothing" about
+                # content that is still in the file, three lines up. The address
+                # names content; where that content currently sits is the answer,
+                # not a precondition for looking.
+                if selector.lines_anchor is not None:
+                    a, b, moved = _resolve_anchor(
+                        all_lines, a, b, selector.lines_anchor, ref_text
+                    )
+                    if moved:
+                        header.append(moved)
+                # Second door onto the same contract: this path clamped only the
+                # END too, so `--lines 1000:5` on a 5-line file printed the header
+                # "--lines 1000:5 of 5" -- a range whose start exceeds its own
+                # total -- over an empty body, and exited 0.
+                a, b = _window("lines", a, b, len(all_lines), "lines")
+                # How this ref spells a --lines value. A mutable target (repo:)
+                # mints the anchor of the window being addressed, so every address
+                # this call emits -- the selector it echoes and any continuation it
+                # offers -- is verifiable when it comes back. Immutable targets
+                # mint nothing: their bytes cannot move, and the nine characters
+                # would buy a guarantee the ref kind already gives for free.
+                def _addr(x: int, y: int) -> str:
+                    if not mutable:
+                        return f"{x}:{y}"
+                    return anchors.format_span(x, y, anchors.anchor(all_lines[x - 1 : y]))
 
-            if b - a + 1 > budget.max_inline_lines:
-                b = a + budget.max_inline_lines - 1
-                nxt_b = min(len(all_lines), b + budget.max_inline_lines)
-                continuation = f"ctx get {ref_text} --lines {_addr(b + 1, nxt_b)}"
-            rendered = anchors.render_window(
-                all_lines[a - 1 : b], a, tagged=selector.hashlines
-            )
-            b, fit_next = _fit_window(
-                "--lines", ref_text, a, b, len(all_lines), rendered, budget, addr=_addr
-            )
-            if fit_next:
-                continuation = fit_next
-                rendered = rendered[: b - a + 1]
-            header.append(
-                f"selector: --lines {_addr(a, b)} of {fmt_int(len(all_lines))}"
-            )
-            # The budget-truncation fallback address, resolved. `selector.lines`
-            # holds what the CALLER asked for, which after a relocation is the
-            # range the content has just been shown to have left -- so the one
-            # address emitted when the token budget cuts the body would send the
-            # reader back to coordinates this very call reported as stale.
-            lines_handle = f"{ref_text} --lines {_addr(a, b)}"
-            body = "\n".join(rendered)
+                if b - a + 1 > budget.max_inline_lines:
+                    b = a + budget.max_inline_lines - 1
+                    nxt_b = min(len(all_lines), b + budget.max_inline_lines)
+                    continuation = f"ctx get {ref_text} --lines {_addr(b + 1, nxt_b)}"
+                rendered = anchors.render_window(
+                    all_lines[a - 1 : b], a, tagged=selector.hashlines
+                )
+                b, fit_next = _fit_window(
+                    "--lines", ref_text, a, b, len(all_lines), rendered, budget, addr=_addr
+                )
+                if fit_next:
+                    continuation = fit_next
+                    rendered = rendered[: b - a + 1]
+                header.append(
+                    f"selector: --lines {_addr(a, b)} of {fmt_int(len(all_lines))}"
+                )
+                # The budget-truncation fallback address, resolved. `selector.lines`
+                # holds what the CALLER asked for, which after a relocation is the
+                # range the content has just been shown to have left -- so the one
+                # address emitted when the token budget cuts the body would send the
+                # reader back to coordinates this very call reported as stale.
+                lines_handle = f"{ref_text} --lines {_addr(a, b)}"
+                body = "\n".join(rendered)
+
+    if selector.snapcompact and body:
+        # Opt-in transport swap (docs/ARCHITECTURE.md, Delivery plane): the
+        # slice is already fully selected and budget-fitted above by the
+        # ordinary text path -- this only changes how it leaves the tool,
+        # not what it contains or how much of it there is. Render exactly
+        # that bounded text, store the PNG as a blob (the store's existing
+        # binary-artifact path, SPEC §12), and hand back its `blob:` ref
+        # instead of the text itself. The caller still has to separately
+        # fetch the bytes and attach them as vision input -- ctx has no
+        # channel of its own to hand a model an image inline.
+        from ctx.snapcompact import SnapcompactUnavailable, estimate_savings, render_text_to_png
+
+        try:
+            png_bytes = render_text_to_png(body)
+            stats = estimate_savings(body)
+        except SnapcompactUnavailable as e:
+            raise RetrievalError(str(e)) from e
+        blob_hash = store.put_blob(png_bytes)
+        header.append(
+            f"snapcompact: blob:{short_id(blob_hash)} (image/png, "
+            f"{stats['image_width_px']}x{stats['image_height_px']}px, "
+            f"cell {stats['cell_width_px']}x{stats['cell_height_px']}px/char, "
+            f"~{fmt_int(stats['image_tokens'])} image tokens vs "
+            f"~{fmt_int(stats['raw_tokens'])} raw text tokens (est.) "
+            f"[UNVERIFIED transcription fidelity — see ctx.snapcompact])"
+        )
+        body = (
+            f"ctx get blob:{short_id(blob_hash)} --bytes 1:{len(png_bytes)}\n"
+            "(fetch the rendered PNG bytes above and pass them as an `image` "
+            "content block -- not as text)"
+        )
 
     if divergence:
         header.append(f"divergence: {divergence}")
@@ -506,6 +582,9 @@ def get(
         handle = f"{ref_text} --bytes {selector.bytes[0]}:{selector.bytes[1]}"
     elif selector.records is not None:
         handle = f"{ref_text} --records {selector.records[0]}:{selector.records[1]}"
+    elif selector.json_pointer is not None:
+        # was falling through to the bare ref, dropping --json-pointer from the continuation
+        handle = f"{ref_text} --json-pointer {selector.json_pointer}"
     elif selector.lines is not None:
         # --lines was the one selector this fix skipped when it was written,
         # so an over-budget `--lines A:B` emitted "next: ctx get <ref>" --

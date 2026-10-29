@@ -156,3 +156,67 @@ def test_cli_stats_session(tmp_path, proxy_dir, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "session scorecard" in out
     assert "invalidations 1" in out
+
+
+# ------------------------------------------------------------ prefix audit
+# The bytes that cost the most are the host's own (system prompt, tool
+# catalogue), which the prefix-budget manifest cannot see. The proxy records
+# them per request; the scorecard surfaces the first catalogue it saw and
+# flags the one shape known to cost ~15k tokens per call: a long inline tool
+# list with no deferral marker.
+def _prefix_wire(tmp_path, prefix):
+    from ctx.scorecard import compute_scorecard
+
+    d = tmp_path / "proxy"
+    d.mkdir()
+    recs = [_wire_record(1, msgs=1, cre=8000, read=0), _wire_record(2, msgs=3, cre=100, read=8000)]
+    recs[0]["prefix"] = prefix
+    recs[1]["prefix"] = prefix
+    (d / "wire.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+    return compute_scorecard(d)
+
+
+def test_scorecard_reports_prefix_and_flags_lost_deferral(tmp_path):
+    from ctx.scorecard import render_scorecard, summary_line
+
+    sc = _prefix_wire(tmp_path, {"system_bytes": 16000, "tools": 41, "tools_bytes": 257000, "deferral": False})
+    assert sc["prefix"] == {"system_bytes": 16000, "tools": 41, "tools_bytes": 257000, "deferral": False, "tax": True}
+    assert "deferral off" in render_scorecard(sc) and "prefix tax" in summary_line(sc)
+
+
+def test_scorecard_prefix_with_deferral_is_not_a_tax(tmp_path):
+    from ctx.scorecard import render_scorecard, summary_line
+
+    sc = _prefix_wire(tmp_path, {"system_bytes": 15000, "tools": 16, "tools_bytes": 158000, "deferral": True})
+    assert sc["prefix"]["tax"] is False
+    assert "deferral on" in render_scorecard(sc) and "prefix tax" not in summary_line(sc)
+
+
+def test_scorecard_prefix_prefers_this_sessions_window_over_an_accumulated_wire(tmp_path):
+    # wire.jsonl accumulates across sessions of one workspace; window.json is
+    # rewritten by the live proxy and belongs to the session being scored.
+    from ctx.scorecard import compute_scorecard
+
+    d = tmp_path / "proxy"
+    d.mkdir()
+    old = {"system_bytes": 15000, "tools": 17, "tools_bytes": 96000, "deferral": True}
+    new = {"system_bytes": 15000, "tools": 41, "tools_bytes": 155000, "deferral": False}
+    recs = [_wire_record(1, msgs=1, cre=8000, read=0), _wire_record(2, msgs=1, cre=8000, read=0)]
+    recs[0]["prefix"], recs[1]["prefix"] = old, new
+    (d / "wire.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+    assert compute_scorecard(d)["prefix"]["tools"] == 41  # latest wire record wins over first
+    (d / "window.json").write_text(json.dumps({"requests": 2, "prefix": old}), encoding="utf-8")
+    assert compute_scorecard(d)["prefix"]["tools"] == 17  # the session's own window wins over the wire
+
+
+def test_scorecard_small_catalogue_without_deferral_is_not_a_tax(tmp_path):
+    sc = _prefix_wire(tmp_path, {"system_bytes": 2000, "tools": 6, "tools_bytes": 9000, "deferral": False})
+    assert sc["prefix"]["tax"] is False
+
+
+def test_scorecard_without_prefix_records_is_unchanged(proxy_dir):
+    from ctx.scorecard import compute_scorecard, render_scorecard
+
+    sc = compute_scorecard(proxy_dir)
+    assert "prefix" not in sc
+    assert "prefix:" not in render_scorecard(sc)

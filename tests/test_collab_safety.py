@@ -83,3 +83,12 @@ def test_agy_flags_precede_prompt_and_keep_explicit_conversation():
     assert seen[-2:] == ['-p', 'review']
     assert seen[seen.index('--conversation') + 1] == 'conversation-1'
     assert '--dangerously-skip-permissions' not in seen
+
+
+def test_quoted_command_substitution_never_uses_simple_chain_parser():
+    from ctx.hook import _split_simple_chain
+
+    assert _split_simple_chain('echo "$(touch marker)"; echo done') is None
+    assert _split_simple_chain('echo "`touch marker`"; echo done') is None
+    assert _split_simple_chain("echo 'literal; text'; echo done") == [
+        "echo 'literal; text'", 'echo done']
