@@ -1,0 +1,1161 @@
+{
+  "schema": "ctx.lsp-edit-comparison/v1",
+  "fixture_files": 9,
+  "fixture_sha256": "706c518d265daf158e3a3211bc3ab80d5fa425a9c7f20b979639fde98d49cdc6",
+  "tokenizer": "cl100k_base",
+  "jedi_version": "0.18.1",
+  "tiktoken_version": "0.11.0",
+  "source_sha256": {
+    "lsp.py": "d6cf95082aaf40cc63a3e9a4f758e378435e98b98c755c638b76cdb37fa20462",
+    "lsp_service.py": "af50fe6fbd2d9529c8f53a4b02cd5acbdc95d1a58f2c5cd0fbb785672e4b745b",
+    "lsp_edits.py": "56fa9ca97637d613a1d0ce1acd6a78d9f793fd5cb7256eb8bd015dfba0960e81",
+    "edit_transactions.py": "ae14849119add375e7009c05c589a3aeabcff935664a7ee78cb8df2a67cf38da"
+  },
+  "repeats": 3,
+  "summaries": {
+    "manual_ctx": {
+      "seconds": 0.697,
+      "scripted_tool_calls": 14,
+      "tool_result_tokens": 4295,
+      "tool_argument_tokens": 864,
+      "passed": true
+    },
+    "jedi": {
+      "seconds": 0.1192,
+      "scripted_tool_calls": 7,
+      "tool_result_tokens": 3492,
+      "tool_argument_tokens": 275,
+      "passed": true
+    },
+    "lsp": {
+      "seconds": 1.1253,
+      "scripted_tool_calls": 7,
+      "tool_result_tokens": 3491,
+      "tool_argument_tokens": 275,
+      "passed": true
+    }
+  },
+  "comparisons": {
+    "manual_ctx": {
+      "tool_result_tokens_saved": 804,
+      "tool_result_reduction_pct": 18.72,
+      "illustrative_input_savings_per_1000_tasks_usd": {
+        "1": 0.804,
+        "3": 2.412,
+        "10": 8.04
+      },
+      "rate_unit": "USD per million uncached input tokens; scenarios, not Gemini prices"
+    },
+    "jedi": {
+      "tool_result_tokens_saved": 1,
+      "tool_result_reduction_pct": 0.03,
+      "illustrative_input_savings_per_1000_tasks_usd": {
+        "1": 0.001,
+        "3": 0.003,
+        "10": 0.01
+      },
+      "rate_unit": "USD per million uncached input tokens; scenarios, not Gemini prices"
+    }
+  },
+  "rows": [
+    {
+      "arm": "manual_ctx",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 0.7099,
+      "scripted_tool_calls": 14,
+      "tool_result_tokens": 4321,
+      "tool_argument_tokens": 864,
+      "trace": [
+        {
+          "operation": "ctx refs",
+          "arguments": {
+            "symbol": "compute_total",
+            "lsp": false
+          },
+          "result": "[ctx refs compute_total \u00b7 engine jedi]\nrepo:billing.py:L3: def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nrepo:checkout.py:L1: from billing import compute_total, tax\nrepo:checkout.py:L4:     subtotal = compute_total(items, discount=0.1)\nrepo:client.py:L1: from billing import compute_total as subtotal\nrepo:exports.py:L1: from billing import compute_total\nrepo:exports.py:L4:     return compute_total(items, discount=0.5)\nrepo:reporting.py:L4:     return sum(billing.compute_total(batch) for batch in batches)\nrepo:worker.py:L1: from exports import compute_total\nrepo:worker.py:L4:     return compute_total(\ncoverage:\n  sites: 9 \u00b7 shown: 9\nsnapshots:\n  billing.py \u2192 snapshot:a0c8cb67256a\n  checkout.py \u2192 snapshot:f3e0410fb0ed\n  client.py \u2192 snapshot:c338c228c988\n  exports.py \u2192 snapshot:5f90e7daddc1\n  reporting.py \u2192 snapshot:0aefc3d2af2e\n  worker.py \u2192 snapshot:ebe397311700\n",
+          "argument_tokens": 23,
+          "result_tokens": 267
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:billing.py",
+            "lines": "1:9"
+          },
+          "result": "[ctx get repo:billing.py (snapshot:a0c8cb67256a)]\nselector: --lines 1:9@b505c584 of 9\nL1: \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL2: \nL3: def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL4:     if not 0 <= discount <= 1:\nL5:         raise ValueError(\"discount must be between zero and one\")\nL6:     return round(sum(items) * (1 - discount), 2)\nL7: \nL8: def tax(total: float, rate: float = 0.2) -> float:\nL9:     return round(total * rate, 2)",
+          "argument_tokens": 27,
+          "result_tokens": 160
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:checkout.py",
+            "lines": "1:5"
+          },
+          "result": "[ctx get repo:checkout.py (snapshot:f3e0410fb0ed)]\nselector: --lines 1:5@83adfb10 of 5\nL1: from billing import compute_total, tax\nL2: \nL3: def checkout(items):\nL4:     subtotal = compute_total(items, discount=0.1)\nL5:     return subtotal + tax(subtotal)",
+          "argument_tokens": 27,
+          "result_tokens": 84
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:client.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:client.py (snapshot:c338c228c988)]\nselector: --lines 1:4@89489feb of 4\nL1: from billing import compute_total as subtotal\nL2: \nL3: def preview(items):\nL4:     return subtotal(items, discount=0.25)",
+          "argument_tokens": 27,
+          "result_tokens": 68
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:exports.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:exports.py (snapshot:5f90e7daddc1)]\nselector: --lines 1:4@add7bcb4 of 4\nL1: from billing import compute_total\nL2: \nL3: def discounted(items):\nL4:     return compute_total(items, discount=0.5)",
+          "argument_tokens": 27,
+          "result_tokens": 73
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:reporting.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:reporting.py (snapshot:0aefc3d2af2e)]\nselector: --lines 1:4@c7ea2ecb of 4\nL1: import billing\nL2: \nL3: def revenue(batches):\nL4:     return sum(billing.compute_total(batch) for batch in batches)",
+          "argument_tokens": 28,
+          "result_tokens": 75
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:worker.py",
+            "lines": "1:7"
+          },
+          "result": "[ctx get repo:worker.py (snapshot:ebe397311700)]\nselector: --lines 1:7@21bf2357 of 7\nL1: from exports import compute_total\nL2: \nL3: def work(items):\nL4:     return compute_total(\nL5:         items,\nL6:         discount=0.2,\nL7:     )",
+          "argument_tokens": 27,
+          "result_tokens": 81
+        },
+        {
+          "operation": "plan edits",
+          "arguments": {
+            "schema": "ctx.edit-request/v1",
+            "edits": [
+              {
+                "path": "billing.py",
+                "span": "1:9@b505c584",
+                "replacement": "\"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\n\ndef calculate_total(items: list[float], *, discount: float = 0.0) -> float:\n    if not 0 <= discount <= 1:\n        raise ValueError(\"discount must be between zero and one\")\n    return round(sum(items) * (1 - discount), 2)\n\ndef tax(total: float, rate: float = 0.2) -> float:\n    return round(total * rate, 2)\n"
+              },
+              {
+                "path": "checkout.py",
+                "span": "1:5@83adfb10",
+                "replacement": "from billing import calculate_total, tax\n\ndef checkout(items):\n    subtotal = calculate_total(items, discount=0.1)\n    return subtotal + tax(subtotal)\n"
+              },
+              {
+                "path": "client.py",
+                "span": "1:4@89489feb",
+                "replacement": "from billing import calculate_total as subtotal\n\ndef preview(items):\n    return subtotal(items, discount=0.25)\n"
+              },
+              {
+                "path": "exports.py",
+                "span": "1:4@add7bcb4",
+                "replacement": "from billing import calculate_total\n\ndef discounted(items):\n    return calculate_total(items, discount=0.5)\n"
+              },
+              {
+                "path": "reporting.py",
+                "span": "1:4@c7ea2ecb",
+                "replacement": "import billing\n\ndef revenue(batches):\n    return sum(billing.calculate_total(batch) for batch in batches)\n"
+              },
+              {
+                "path": "worker.py",
+                "span": "1:7@21bf2357",
+                "replacement": "from exports import calculate_total\n\ndef work(items):\n    return calculate_total(\n        items,\n        discount=0.2,\n    )\n"
+              }
+            ]
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 433,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:bff7c2df2b864c3d43b3b9090f52085c63402b603862707cc09d1e6cc38c4191\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1194
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:bff7c2df2b864c3d43b3b9090f52085c63402b603862707cc09d1e6cc38c4191\",\"planRef\":\"blob:fd02a2d0c6c29f252df25fe3c1227f5eb4b549d2400d6fc5a2dfa38dc9c0031e\",\"receiptRef\":\"blob:58eb23f6c05e69e0db5d1d64a656d7ef4a6c3c5d573ca4a3115d2aafad9e7df5\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_2d0715dfdd104e6a\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1564
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 0
+    },
+    {
+      "arm": "jedi",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 0.103,
+      "scripted_tool_calls": 7,
+      "tool_result_tokens": 3492,
+      "tool_argument_tokens": 275,
+      "trace": [
+        {
+          "operation": "jedi rename",
+          "arguments": {
+            "target": "billing.py:3:5",
+            "new_name": "calculate_total"
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 30,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:84b88b313a255d5e05971428397ed07a7a6f71f3d327ba16d0e1906ad27ddc31\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1194
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:84b88b313a255d5e05971428397ed07a7a6f71f3d327ba16d0e1906ad27ddc31\",\"planRef\":\"blob:b1eb0f072477fa31bf3c0096295605083af82bcd1b3869d11d20bd4a975db375\",\"receiptRef\":\"blob:dde11bbce54ddd8df96f86e3acdda77f642f52374cbdcf5d6ee6c1e030595b00\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_c42739b5efbe10db\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1543
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 0
+    },
+    {
+      "arm": "lsp",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 1.1082,
+      "scripted_tool_calls": 7,
+      "tool_result_tokens": 3481,
+      "tool_argument_tokens": 275,
+      "trace": [
+        {
+          "operation": "lsp rename",
+          "arguments": {
+            "target": "billing.py:3:5",
+            "new_name": "calculate_total"
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 30,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:919eb6ce15ca54c10cf775ff6b966b88003294d8af295d04961cf563ce8bb49e\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1189
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:919eb6ce15ca54c10cf775ff6b966b88003294d8af295d04961cf563ce8bb49e\",\"planRef\":\"blob:e79fe06a58d2f962c6065922ce4514e816554cf19095f2748a2a1403bc9563e0\",\"receiptRef\":\"blob:874fb01ed9742e77bcca140abf308942f0f97b1985069e5013132cda02998fc0\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_eea1288d7e638801\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1537
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 0
+    },
+    {
+      "arm": "jedi",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 0.1192,
+      "scripted_tool_calls": 7,
+      "tool_result_tokens": 3492,
+      "tool_argument_tokens": 275,
+      "trace": [
+        {
+          "operation": "jedi rename",
+          "arguments": {
+            "target": "billing.py:3:5",
+            "new_name": "calculate_total"
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 30,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:d48283ba299fe1b38d0e2814819a6d51863c5def2fd972f7400caa0ab76642f4\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1191
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:d48283ba299fe1b38d0e2814819a6d51863c5def2fd972f7400caa0ab76642f4\",\"planRef\":\"blob:ce7d9e9665f980b0b48136cd1caa7356ca420c508a798907e14f6d744ad2b68f\",\"receiptRef\":\"blob:2d5910d2ab6920719cfa61a8882b0d919f47876f86306c9f92cf63f3fc046321\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_42edd0be25c6378f\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1546
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "arm": "lsp",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 1.1574,
+      "scripted_tool_calls": 7,
+      "tool_result_tokens": 3492,
+      "tool_argument_tokens": 275,
+      "trace": [
+        {
+          "operation": "lsp rename",
+          "arguments": {
+            "target": "billing.py:3:5",
+            "new_name": "calculate_total"
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 30,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:3e452a561f770165181e4a0c883b14771e8b5119b2ced4530312868bd8dcc798\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1190
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:3e452a561f770165181e4a0c883b14771e8b5119b2ced4530312868bd8dcc798\",\"planRef\":\"blob:592ac4aa3541d0bb1d3658de7fa2d0c8924e453a1c0d11d853c5f23100a1384d\",\"receiptRef\":\"blob:9a7919866317e6c83025cbdf4f78b83cefed747cfa57bd77aad5da867e9d053a\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_6780a602aa664f1b\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1547
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "arm": "manual_ctx",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 0.697,
+      "scripted_tool_calls": 14,
+      "tool_result_tokens": 4295,
+      "tool_argument_tokens": 864,
+      "trace": [
+        {
+          "operation": "ctx refs",
+          "arguments": {
+            "symbol": "compute_total",
+            "lsp": false
+          },
+          "result": "[ctx refs compute_total \u00b7 engine jedi]\nrepo:billing.py:L3: def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nrepo:checkout.py:L1: from billing import compute_total, tax\nrepo:checkout.py:L4:     subtotal = compute_total(items, discount=0.1)\nrepo:client.py:L1: from billing import compute_total as subtotal\nrepo:exports.py:L1: from billing import compute_total\nrepo:exports.py:L4:     return compute_total(items, discount=0.5)\nrepo:reporting.py:L4:     return sum(billing.compute_total(batch) for batch in batches)\nrepo:worker.py:L1: from exports import compute_total\nrepo:worker.py:L4:     return compute_total(\ncoverage:\n  sites: 9 \u00b7 shown: 9\nsnapshots:\n  billing.py \u2192 snapshot:005228d8aa7f\n  checkout.py \u2192 snapshot:91a6f0bf883c\n  client.py \u2192 snapshot:35750945619a\n  exports.py \u2192 snapshot:e5bb612db108\n  reporting.py \u2192 snapshot:d9d307b6684b\n  worker.py \u2192 snapshot:afec4c6fa426\n",
+          "argument_tokens": 23,
+          "result_tokens": 264
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:billing.py",
+            "lines": "1:9"
+          },
+          "result": "[ctx get repo:billing.py (snapshot:005228d8aa7f)]\nselector: --lines 1:9@b505c584 of 9\nL1: \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL2: \nL3: def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL4:     if not 0 <= discount <= 1:\nL5:         raise ValueError(\"discount must be between zero and one\")\nL6:     return round(sum(items) * (1 - discount), 2)\nL7: \nL8: def tax(total: float, rate: float = 0.2) -> float:\nL9:     return round(total * rate, 2)",
+          "argument_tokens": 27,
+          "result_tokens": 160
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:checkout.py",
+            "lines": "1:5"
+          },
+          "result": "[ctx get repo:checkout.py (snapshot:91a6f0bf883c)]\nselector: --lines 1:5@83adfb10 of 5\nL1: from billing import compute_total, tax\nL2: \nL3: def checkout(items):\nL4:     subtotal = compute_total(items, discount=0.1)\nL5:     return subtotal + tax(subtotal)",
+          "argument_tokens": 27,
+          "result_tokens": 85
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:client.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:client.py (snapshot:35750945619a)]\nselector: --lines 1:4@89489feb of 4\nL1: from billing import compute_total as subtotal\nL2: \nL3: def preview(items):\nL4:     return subtotal(items, discount=0.25)",
+          "argument_tokens": 27,
+          "result_tokens": 68
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:exports.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:exports.py (snapshot:e5bb612db108)]\nselector: --lines 1:4@add7bcb4 of 4\nL1: from billing import compute_total\nL2: \nL3: def discounted(items):\nL4:     return compute_total(items, discount=0.5)",
+          "argument_tokens": 27,
+          "result_tokens": 69
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:reporting.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:reporting.py (snapshot:d9d307b6684b)]\nselector: --lines 1:4@c7ea2ecb of 4\nL1: import billing\nL2: \nL3: def revenue(batches):\nL4:     return sum(billing.compute_total(batch) for batch in batches)",
+          "argument_tokens": 28,
+          "result_tokens": 72
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:worker.py",
+            "lines": "1:7"
+          },
+          "result": "[ctx get repo:worker.py (snapshot:afec4c6fa426)]\nselector: --lines 1:7@21bf2357 of 7\nL1: from exports import compute_total\nL2: \nL3: def work(items):\nL4:     return compute_total(\nL5:         items,\nL6:         discount=0.2,\nL7:     )",
+          "argument_tokens": 27,
+          "result_tokens": 84
+        },
+        {
+          "operation": "plan edits",
+          "arguments": {
+            "schema": "ctx.edit-request/v1",
+            "edits": [
+              {
+                "path": "billing.py",
+                "span": "1:9@b505c584",
+                "replacement": "\"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\n\ndef calculate_total(items: list[float], *, discount: float = 0.0) -> float:\n    if not 0 <= discount <= 1:\n        raise ValueError(\"discount must be between zero and one\")\n    return round(sum(items) * (1 - discount), 2)\n\ndef tax(total: float, rate: float = 0.2) -> float:\n    return round(total * rate, 2)\n"
+              },
+              {
+                "path": "checkout.py",
+                "span": "1:5@83adfb10",
+                "replacement": "from billing import calculate_total, tax\n\ndef checkout(items):\n    subtotal = calculate_total(items, discount=0.1)\n    return subtotal + tax(subtotal)\n"
+              },
+              {
+                "path": "client.py",
+                "span": "1:4@89489feb",
+                "replacement": "from billing import calculate_total as subtotal\n\ndef preview(items):\n    return subtotal(items, discount=0.25)\n"
+              },
+              {
+                "path": "exports.py",
+                "span": "1:4@add7bcb4",
+                "replacement": "from billing import calculate_total\n\ndef discounted(items):\n    return calculate_total(items, discount=0.5)\n"
+              },
+              {
+                "path": "reporting.py",
+                "span": "1:4@c7ea2ecb",
+                "replacement": "import billing\n\ndef revenue(batches):\n    return sum(billing.calculate_total(batch) for batch in batches)\n"
+              },
+              {
+                "path": "worker.py",
+                "span": "1:7@21bf2357",
+                "replacement": "from exports import calculate_total\n\ndef work(items):\n    return calculate_total(\n        items,\n        discount=0.2,\n    )\n"
+              }
+            ]
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 433,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:7f123d79675a389af03a51acd0b632bfee725087c913ff8096e65aec2cdc4b21\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1189
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:7f123d79675a389af03a51acd0b632bfee725087c913ff8096e65aec2cdc4b21\",\"planRef\":\"blob:7c9b08f0c0f3d320be5c31c87a9d1e55cfdbcf48a177b9c813987f3b778b18aa\",\"receiptRef\":\"blob:c92f2ef9bc91788e3ce714448ff00622b061a1126d44e4b10009e0aac12f3f51\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_1d73f98bd099c630\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1549
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "arm": "lsp",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 1.1253,
+      "scripted_tool_calls": 7,
+      "tool_result_tokens": 3491,
+      "tool_argument_tokens": 275,
+      "trace": [
+        {
+          "operation": "lsp rename",
+          "arguments": {
+            "target": "billing.py:3:5",
+            "new_name": "calculate_total"
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 30,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:a2118f5797f9762b3a529c28c9c07cbddd5b5b5072975924947c444762ba1473\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1191
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:a2118f5797f9762b3a529c28c9c07cbddd5b5b5072975924947c444762ba1473\",\"planRef\":\"blob:bff41c4af839980ce5ebd4cc8c6e17c635cb9661b38f155fd97c3390869fe314\",\"receiptRef\":\"blob:2f3e431c7264d2ec39c25b638cdcac4a38e545eb9e55bfd173e4e3be63e2a294\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_bdcda95c909d404e\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1545
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 2
+    },
+    {
+      "arm": "manual_ctx",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 0.5864,
+      "scripted_tool_calls": 14,
+      "tool_result_tokens": 4291,
+      "tool_argument_tokens": 864,
+      "trace": [
+        {
+          "operation": "ctx refs",
+          "arguments": {
+            "symbol": "compute_total",
+            "lsp": false
+          },
+          "result": "[ctx refs compute_total \u00b7 engine jedi]\nrepo:billing.py:L3: def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nrepo:checkout.py:L1: from billing import compute_total, tax\nrepo:checkout.py:L4:     subtotal = compute_total(items, discount=0.1)\nrepo:client.py:L1: from billing import compute_total as subtotal\nrepo:exports.py:L1: from billing import compute_total\nrepo:exports.py:L4:     return compute_total(items, discount=0.5)\nrepo:reporting.py:L4:     return sum(billing.compute_total(batch) for batch in batches)\nrepo:worker.py:L1: from exports import compute_total\nrepo:worker.py:L4:     return compute_total(\ncoverage:\n  sites: 9 \u00b7 shown: 9\nsnapshots:\n  billing.py \u2192 snapshot:dc42d3a64148\n  checkout.py \u2192 snapshot:79243246bf8b\n  client.py \u2192 snapshot:01490dafdbb7\n  exports.py \u2192 snapshot:e13bab88c8a5\n  reporting.py \u2192 snapshot:a3953f27673e\n  worker.py \u2192 snapshot:2bfd105cdda0\n",
+          "argument_tokens": 23,
+          "result_tokens": 263
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:billing.py",
+            "lines": "1:9"
+          },
+          "result": "[ctx get repo:billing.py (snapshot:dc42d3a64148)]\nselector: --lines 1:9@b505c584 of 9\nL1: \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL2: \nL3: def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL4:     if not 0 <= discount <= 1:\nL5:         raise ValueError(\"discount must be between zero and one\")\nL6:     return round(sum(items) * (1 - discount), 2)\nL7: \nL8: def tax(total: float, rate: float = 0.2) -> float:\nL9:     return round(total * rate, 2)",
+          "argument_tokens": 27,
+          "result_tokens": 160
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:checkout.py",
+            "lines": "1:5"
+          },
+          "result": "[ctx get repo:checkout.py (snapshot:79243246bf8b)]\nselector: --lines 1:5@83adfb10 of 5\nL1: from billing import compute_total, tax\nL2: \nL3: def checkout(items):\nL4:     subtotal = compute_total(items, discount=0.1)\nL5:     return subtotal + tax(subtotal)",
+          "argument_tokens": 27,
+          "result_tokens": 83
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:client.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:client.py (snapshot:01490dafdbb7)]\nselector: --lines 1:4@89489feb of 4\nL1: from billing import compute_total as subtotal\nL2: \nL3: def preview(items):\nL4:     return subtotal(items, discount=0.25)",
+          "argument_tokens": 27,
+          "result_tokens": 69
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:exports.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:exports.py (snapshot:e13bab88c8a5)]\nselector: --lines 1:4@add7bcb4 of 4\nL1: from billing import compute_total\nL2: \nL3: def discounted(items):\nL4:     return compute_total(items, discount=0.5)",
+          "argument_tokens": 27,
+          "result_tokens": 71
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:reporting.py",
+            "lines": "1:4"
+          },
+          "result": "[ctx get repo:reporting.py (snapshot:a3953f27673e)]\nselector: --lines 1:4@c7ea2ecb of 4\nL1: import billing\nL2: \nL3: def revenue(batches):\nL4:     return sum(billing.compute_total(batch) for batch in batches)",
+          "argument_tokens": 28,
+          "result_tokens": 71
+        },
+        {
+          "operation": "ctx get",
+          "arguments": {
+            "ref": "repo:worker.py",
+            "lines": "1:7"
+          },
+          "result": "[ctx get repo:worker.py (snapshot:2bfd105cdda0)]\nselector: --lines 1:7@21bf2357 of 7\nL1: from exports import compute_total\nL2: \nL3: def work(items):\nL4:     return compute_total(\nL5:         items,\nL6:         discount=0.2,\nL7:     )",
+          "argument_tokens": 27,
+          "result_tokens": 83
+        },
+        {
+          "operation": "plan edits",
+          "arguments": {
+            "schema": "ctx.edit-request/v1",
+            "edits": [
+              {
+                "path": "billing.py",
+                "span": "1:9@b505c584",
+                "replacement": "\"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\n\ndef calculate_total(items: list[float], *, discount: float = 0.0) -> float:\n    if not 0 <= discount <= 1:\n        raise ValueError(\"discount must be between zero and one\")\n    return round(sum(items) * (1 - discount), 2)\n\ndef tax(total: float, rate: float = 0.2) -> float:\n    return round(total * rate, 2)\n"
+              },
+              {
+                "path": "checkout.py",
+                "span": "1:5@83adfb10",
+                "replacement": "from billing import calculate_total, tax\n\ndef checkout(items):\n    subtotal = calculate_total(items, discount=0.1)\n    return subtotal + tax(subtotal)\n"
+              },
+              {
+                "path": "client.py",
+                "span": "1:4@89489feb",
+                "replacement": "from billing import calculate_total as subtotal\n\ndef preview(items):\n    return subtotal(items, discount=0.25)\n"
+              },
+              {
+                "path": "exports.py",
+                "span": "1:4@add7bcb4",
+                "replacement": "from billing import calculate_total\n\ndef discounted(items):\n    return calculate_total(items, discount=0.5)\n"
+              },
+              {
+                "path": "reporting.py",
+                "span": "1:4@c7ea2ecb",
+                "replacement": "import billing\n\ndef revenue(batches):\n    return sum(billing.calculate_total(batch) for batch in batches)\n"
+              },
+              {
+                "path": "worker.py",
+                "span": "1:7@21bf2357",
+                "replacement": "from exports import calculate_total\n\ndef work(items):\n    return calculate_total(\n        items,\n        discount=0.2,\n    )\n"
+              }
+            ]
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 433,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:4d40de0829ecdf63db5f0f5f187b566205a21f3b9c8b4606efd2119b9149c427\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1195
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:4d40de0829ecdf63db5f0f5f187b566205a21f3b9c8b4606efd2119b9149c427\",\"planRef\":\"blob:0eb90e18ba52a4144b6ef1cca5ac29cdc0bb427e72baa2112463856329e77804\",\"receiptRef\":\"blob:c961365e55fb5a01aeb071bf579180134ef5ad21b548ca059f67d158aeaf12c7\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_2189ee33172723e6\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1541
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 2
+    },
+    {
+      "arm": "jedi",
+      "passed": true,
+      "error": null,
+      "changed_files": [
+        "billing.py",
+        "checkout.py",
+        "client.py",
+        "exports.py",
+        "reporting.py",
+        "worker.py"
+      ],
+      "seconds": 0.1232,
+      "scripted_tool_calls": 7,
+      "tool_result_tokens": 3490,
+      "tool_argument_tokens": 275,
+      "trace": [
+        {
+          "operation": "jedi rename",
+          "arguments": {
+            "target": "billing.py:3:5",
+            "new_name": "calculate_total"
+          },
+          "result": "{\"files\": [\"billing.py\", \"checkout.py\", \"client.py\", \"exports.py\", \"reporting.py\", \"worker.py\"], \"plan\": \"plan.json\", \"status\": \"planned\"}",
+          "argument_tokens": 30,
+          "result_tokens": 42
+        },
+        {
+          "operation": "ctx edit preview",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"preview\",\"outcome\":\"ready\",\"patch\":\"blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7\",\"planId\":\"sha256:a88ae19c4cebe079071b2a2bd276b92a8abdd18dfd681a4a38ca96047303682b\",\"schema\":\"ctx.edit-receipt/v1\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1190
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "1:25"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 1:25 of 57\nL1: --- a/billing.py\nL2: +++ b/billing.py\nL3: @@ -1,6 +1,6 @@\nL4:  \"\"\"Invoice arithmetic shared by checkout and reporting.\"\"\"\nL5:  \nL6: -def compute_total(items: list[float], *, discount: float = 0.0) -> float:\nL7: +def calculate_total(items: list[float], *, discount: float = 0.0) -> float:\nL8:      if not 0 <= discount <= 1:\nL9:          raise ValueError(\"discount must be between zero and one\")\nL10:      return round(sum(items) * (1 - discount), 2)\nL11: --- a/checkout.py\nL12: +++ b/checkout.py\nL13: @@ -1,5 +1,5 @@\nL14: -from billing import compute_total, tax\nL15: +from billing import calculate_total, tax\nL16:  \nL17:  def checkout(items):\nL18: -    subtotal = compute_total(items, discount=0.1)\nL19: +    subtotal = calculate_total(items, discount=0.1)\nL20:      return subtotal + tax(subtotal)\nL21: --- a/client.py\nL22: +++ b/client.py\nL23: @@ -1,4 +1,4 @@\nL24: -from billing import compute_total as subtotal\nL25: +from billing import calculate_total as subtotal",
+          "argument_tokens": 64,
+          "result_tokens": 334
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "26:50"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 26:50 of 57\nL26:  \nL27:  def preview(items):\nL28:      return subtotal(items, discount=0.25)\nL29: --- a/exports.py\nL30: +++ b/exports.py\nL31: @@ -1,4 +1,4 @@\nL32: -from billing import compute_total\nL33: +from billing import calculate_total\nL34:  \nL35:  def discounted(items):\nL36: -    return compute_total(items, discount=0.5)\nL37: +    return calculate_total(items, discount=0.5)\nL38: --- a/reporting.py\nL39: +++ b/reporting.py\nL40: @@ -1,4 +1,4 @@\nL41:  import billing\nL42:  \nL43:  def revenue(batches):\nL44: -    return sum(billing.compute_total(batch) for batch in batches)\nL45: +    return sum(billing.calculate_total(batch) for batch in batches)\nL46: --- a/worker.py\nL47: +++ b/worker.py\nL48: @@ -1,7 +1,7 @@\nL49: -from exports import compute_total\nL50: +from exports import calculate_total",
+          "argument_tokens": 64,
+          "result_tokens": 283
+        },
+        {
+          "operation": "ctx get diff",
+          "arguments": {
+            "ref": "blob:c4a7eca8669a28f16f9f75da6635f3cdda3f098421ff3f3813416ae3c96871e7",
+            "lines": "51:57"
+          },
+          "result": "[ctx get blob:c4a7eca8669a]\nselector: --lines 51:57 of 57\nL51:  \nL52:  def work(items):\nL53: -    return compute_total(\nL54: +    return calculate_total(\nL55:          items,\nL56:          discount=0.2,\nL57:      )",
+          "argument_tokens": 64,
+          "result_tokens": 76
+        },
+        {
+          "operation": "ctx edit apply",
+          "arguments": {
+            "plan": "plan.json"
+          },
+          "result": "{\"files\":[{\"afterSha256\":\"sha256:9d09ce85dbd6a6a454722f2443388f7eb0729bf55a11e3cbe38cfe5181b055a4\",\"beforeSha256\":\"sha256:2ba7409b07a1131b1e0cac0c4d16b9ea5b0d59497d4118fe52e513fd20d16fa4\",\"bytesAfter\":368,\"bytesBefore\":366,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"a7661b521d28d69260bf5590adc18ee460b26716d769f6f96265befc7c99c1ba\"},\"edits\":[{\"plannedSpan\":\"1:9@b505c584\",\"relocated\":false,\"replacementSha256\":\"sha256:f6d2e7b3264bc9da02b22d59dd5bb11c3482501a36cd4e46232a6511fa96cc21\",\"resolvedSpan\":\"1:9\"}],\"path\":\"billing.py\"},{\"afterSha256\":\"sha256:9359807faabadc5e927e6d99931676524eee6e228b96666b19f737461c7a8ec2\",\"beforeSha256\":\"sha256:68b30fd58e0ccf5d631854a746b4a3c062c7d76b6a7b45e9b9d1c43806cada6d\",\"bytesAfter\":151,\"bytesBefore\":147,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"2622f4ec7992b596f4b57d1f71e5a3d3fadc147005dc7c83d48ce79f61b2765e\"},\"edits\":[{\"plannedSpan\":\"1:5@83adfb10\",\"relocated\":false,\"replacementSha256\":\"sha256:391f73c9d98f845d040f3268d264bff26c55ea0b1eab2002cdbcb2b302dca523\",\"resolvedSpan\":\"1:5\"}],\"path\":\"checkout.py\"},{\"afterSha256\":\"sha256:af5ff1aca7afe1248a79afafef1cc44b2bc8ac9c21e7c196cb73809b399a0899\",\"beforeSha256\":\"sha256:9980b69da9626a06e1d82db560c6dbb1f06c44053f63f3da3e4126be120f9b0b\",\"bytesAfter\":111,\"bytesBefore\":109,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9891ad9fc62c800fecf9af1a6986aff156f25ad4fdb6df4f63123c7ef5a6fa58\"},\"edits\":[{\"plannedSpan\":\"1:4@89489feb\",\"relocated\":false,\"replacementSha256\":\"sha256:c885bdcfacf6dc6f533a5d661b750dd387c3f362338167ca5d64ff2b55285d3a\",\"resolvedSpan\":\"1:4\"}],\"path\":\"client.py\"},{\"afterSha256\":\"sha256:714cd0b2fa9bccda9d4d9d61630a48ad6d5a1a3ea62723f7466139f91954dd28\",\"beforeSha256\":\"sha256:241782281ed335a8eb6c461fd5c8ee05faebc6821f90bb0e7d66ea4896827962\",\"bytesAfter\":108,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3173f3a5af4cc76be94b468f635dccf6a7020af028f77d578dc1106e38cd3ec2\"},\"edits\":[{\"plannedSpan\":\"1:4@add7bcb4\",\"relocated\":false,\"replacementSha256\":\"sha256:39ef5e2476f3bf9e8ae246ec2f494d5b9fa62a678b179131ec032848aca67ab3\",\"resolvedSpan\":\"1:4\"}],\"path\":\"exports.py\"},{\"afterSha256\":\"sha256:17266022615b18a58da93f8dac590e155c827eec99e61ad64fac27b1bd7b2dae\",\"beforeSha256\":\"sha256:8e242ccd738fb93cfad3bf1e38bdbcd421bf0d34582addb5c52262495d56827d\",\"bytesAfter\":106,\"bytesBefore\":104,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"3e53444adfc9cc6525c6dccfa6c3b97c9e2ec1a58e2267ec3afbe884411ebe3b\"},\"edits\":[{\"plannedSpan\":\"1:4@c7ea2ecb\",\"relocated\":false,\"replacementSha256\":\"sha256:e203e30779c10e52a94bf9e324a553bd05faf22d9a0ff41ddfab88ece2ba7ce9\",\"resolvedSpan\":\"1:4\"}],\"path\":\"reporting.py\"},{\"afterSha256\":\"sha256:6a6703a59a1af738b916e3c9b4368d9e6703ca538101fbf00d3d30140910a6f7\",\"beforeSha256\":\"sha256:79858cc5ef24b8f0ac0d5305ee093071710b17c42754e9297d9ca8c8c029d17a\",\"bytesAfter\":125,\"bytesBefore\":121,\"diagnostics\":{\"outcome\":\"clean\",\"receiptId\":\"9acf6407ef4f3cc391e7d38ab9452cfd0dea9258c5dfda58f83bc6f52e8e2ac1\"},\"edits\":[{\"plannedSpan\":\"1:7@21bf2357\",\"relocated\":false,\"replacementSha256\":\"sha256:3c638a185e3fcaf2ab8f71550cbfa59a8969fe4c30e5feaa4d9030d6f280b9ec\",\"resolvedSpan\":\"1:7\"}],\"path\":\"worker.py\"}],\"operation\":\"apply\",\"outcome\":\"applied\",\"planId\":\"sha256:a88ae19c4cebe079071b2a2bd276b92a8abdd18dfd681a4a38ca96047303682b\",\"planRef\":\"blob:ffe252da26e251c2b0ca28b5d988d7e936a5de629aeec3da10f3e68d70985fa0\",\"receiptRef\":\"blob:cca2de579ee07c3e4fa67b7e9885f6321fe08c38536ea5da4b89330dd572d0f3\",\"schema\":\"ctx.edit-receipt/v1\",\"workspaceId\":\"ws_d518abec77b30572\"}\n",
+          "argument_tokens": 18,
+          "result_tokens": 1545
+        },
+        {
+          "operation": "verify",
+          "arguments": {
+            "check": "12 behavioral assertions"
+          },
+          "result": "{\"exit\": 0, \"stderr\": \"\", \"stdout\": \"12 behavioral assertions passed\\n\"}",
+          "argument_tokens": 17,
+          "result_tokens": 20
+        }
+      ],
+      "repeat": 2
+    }
+  ],
+  "passed": true,
+  "model_calls": 0,
+  "agent_turns": null,
+  "actual_provider_cost": null,
+  "limits": [
+    "one synthetic Python refactor",
+    "scripted actions are not agent turns",
+    "manual edits use Jedi to avoid penalizing the baseline for mistakes",
+    "Jedi rename is a benchmark adapter, not a newly shipped ctx command",
+    "tool arguments and results counted separately; no hidden reasoning or history replay",
+    "cl100k_base is a proxy, not the Gemini tokenizer",
+    "all arms use builtin checks; separate replay covers fresh LSP diagnostics"
+  ]
+}

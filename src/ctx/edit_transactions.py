@@ -171,7 +171,7 @@ def validate_plan(ws: Workspace, plan: dict[str, Any]) -> None:
 
 
 def create_edit_plan(
-    ws: Workspace, store: Store, request: dict[str, Any]
+    ws: Workspace, store: Store, request: dict[str, Any], *, exact_files: bool = False
 ) -> dict[str, Any]:
     """Resolve an edit request and return a sealed, serializable plan."""
     if request.get("schema") != REQUEST_SCHEMA:
@@ -265,6 +265,8 @@ def create_edit_plan(
         "workspaceId": ws.workspace_id,
         "edits": planned,
     }
+    if exact_files:
+        plan['exactFiles'] = True
     return _seal(plan)
 
 
@@ -307,6 +309,8 @@ def _prepare(ws: Workspace, plan: dict[str, Any], operation: str) -> list[_Prepa
             resolved: list[_ResolvedEdit] = []
             shifts: set[int] = set()
             for edit in grouped[rel]:
+                if plan.get('exactFiles') and _sha(before) != edit['sourceFileSha256']:
+                    raise EditTransactionError('semantic edit source file changed; replan', code='source_changed')
                 pstart, pend, _ = anchors.parse_span(str(edit["plannedSpan"]))
                 span_len = int(edit["spanLength"])
                 if pend - pstart + 1 != span_len:
@@ -482,10 +486,26 @@ def _apply_edit_plan(ws: Workspace, plan: dict[str, Any], *, attempt_key: str | 
             reason += "; rollback could not safely restore: " + ", ".join(rollback_failed)
         raise _refusal(plan, "apply", reason) from None
     diagnostics: dict[str, dict[str, Any]] = {}
+    from ctx.lsp import diagnostic_provider, server_for
+    from ctx.skeleton import language_for
+    import time
+
+    diagnostic_deadline = time.monotonic() + 8
     for item in prepared:
         try:
+            providers = []
+            remaining = diagnostic_deadline - time.monotonic()
+            if (os.environ.get('CTX_LSP', '').lower() not in {'off', '0', 'false'}
+                    and server_for(language_for(item.rel))):
+                if remaining > .1:
+                    providers = [diagnostic_provider(ws.root, timeout=min(2, remaining / 3))]
+                else:
+                    from ctx.post_edit_diagnostics import DiagnosticSnapshot
+                    providers = [lambda path, baseline: DiagnosticSnapshot(
+                        source='lsp', available=False, reason='transaction diagnostic budget exhausted')]
             diagnostics[item.rel] = verify_post_edit(
                 ws.root, item.rel, baselines[item.rel], run_builtin=True, persist=True,
+                providers=providers,
                 expected_digest=_sha(item.after).removeprefix("sha256:"),
             )
         except Exception as e:
