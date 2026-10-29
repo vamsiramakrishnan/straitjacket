@@ -495,7 +495,8 @@ def render_pack(pack: Pack) -> str:
                            f" [static/{rel['tier']}]{ambiguity}")
         if r.relationships_omitted:
             details.append(f"   +{r.relationships_omitted} relationships; "
-                           f"ctx callers {r.rel}:{r.symbols[0][0]}")
+                           f"ctx callers {r.rel}:{r.symbols[0][0]}; "
+                           f"ctx callees {r.rel}:{r.symbols[0][0]}")
         for line in details:
             if fits(out + block + [line]):
                 block.append(line)

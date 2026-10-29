@@ -206,3 +206,17 @@ def test_pack_respects_budget_with_source_and_many_relationships(state_home, rep
     assert len(out) <= budget * 4
     if budget >= 60:
         assert "next:" in out
+
+
+def test_omitted_callees_have_a_scoped_continuation(state_home, repo):
+    from ctx.pack import build_pack, render_pack
+
+    (repo / "entry.py").write_text(
+        "def entry_point():\n" + "".join(f"    helper_{i}()\n" for i in range(10)) +
+        "\n".join(f"def helper_{i}():\n    return {i}\n" for i in range(10)))
+    ws = make_ws(repo)
+    pack = build_pack(make_store(ws), ws, "entry_point", history=False)
+    row = next(r for r in pack.rows if r.rel == "entry.py")
+    assert row.relationships_omitted == 6
+    rendered = render_pack(pack)
+    assert "ctx callees entry.py:entry_point" in rendered
