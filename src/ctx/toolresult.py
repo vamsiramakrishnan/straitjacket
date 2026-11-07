@@ -96,13 +96,140 @@ def fit_model_view(head: str, body: str, ref: str, max_bytes: int) -> str:
     return head + body[:low] + notice
 
 
+_PROJECTION_PROGS = frozenset({
+    "python", "python3", "jq", "awk", "gawk", "pdftotext", "perl", "ruby", "node",
+})
+_FLOOD_PROGS = frozenset({
+    "ps", "top", "env", "printenv", "dmesg", "journalctl", "find",
+})
+_DEFAULT_INLINE_BYTES = 16384
+_DEFAULT_INLINE_LINES = 240
+_DEFAULT_RESULT_TOKENS = 1200
+
+
+def _command_intent(cmd_str: str) -> str:
+    """Classify shell command intent: ``'projection'``, ``'flood'``, or ``'standard'``.
+
+    Explicit data projections (``python -c``, ``jq``, ``awk``, ``pdftotext``)
+    carry near-certain follow-up retrieval when digested at moderate sizes,
+    costing an extra model turn; ambient host/history dumps (``ps``, ``git log``,
+    ``find``, ``ls /tmp``) rarely warrant wide inline passthrough.
+    Fail-open to ``'standard'``.
+    """
+    try:
+        import os
+        import shlex
+
+        s = (cmd_str or "").strip()
+        if not s:
+            return "standard"
+        for sep in ("&&", ";"):
+            if s.startswith("cd ") and sep in s:
+                head_seg, rest_seg = s.split(sep, 1)
+                if head_seg.strip().startswith("cd ") and rest_seg.strip():
+                    s = rest_seg.strip()
+                    break
+        if "|" in s:
+            tail_seg = s.rsplit("|", 1)[-1].strip()
+            try:
+                tail_argv = shlex.split(tail_seg)
+            except ValueError:
+                tail_argv = tail_seg.split()
+            if tail_argv:
+                tprog = os.path.basename(tail_argv[0])
+                if tprog in _PROJECTION_PROGS or tprog in ("head", "tail", "wc"):
+                    return "projection"
+        try:
+            argv = shlex.split(s)
+        except ValueError:
+            argv = s.split()
+        if not argv:
+            return "standard"
+        prog = os.path.basename(argv[0])
+        if prog in ("bash", "sh", "zsh") and len(argv) >= 3 and argv[1] in ("-c", "-lc"):
+            return _command_intent(argv[2])
+        if prog in _PROJECTION_PROGS:
+            return "projection"
+        if prog in _FLOOD_PROGS:
+            return "flood"
+        if prog == "git" and len(argv) >= 2 and argv[1] in (
+            "log", "diff", "show", "status", "branch", "rev-parse", "remote"
+        ):
+            return "flood"
+        if prog == "ls" and any(
+            a == "/tmp" or a.startswith("/tmp/") or a.startswith("..") or "R" in a
+            for a in argv[1:]
+            if a
+        ):
+            return "flood"
+        return "standard"
+    except Exception:
+        return "standard"
+
+
+def _inline_thresholds(ws, cmd_str: str, dense: bool) -> tuple[int, int]:
+    """Turn-carriage break-even and command-intent inline thresholds ``(bytes, lines)``.
+
+    Honours explicitly tightened ``ctx.toml`` or ``ToolSession(max_tokens=...)``
+    caps without widening them. Fail-open to configured ``(max_inline_bytes,
+    max_inline_lines)``.
+    """
+    from ctx import bounds
+
+    budgets = ws.config.budgets
+    base_bytes = bounds.count(
+        bounds.explicit(getattr(budgets, "max_inline_bytes", None), _DEFAULT_INLINE_BYTES)
+    )
+    base_lines = bounds.count(
+        bounds.explicit(getattr(budgets, "max_inline_lines", None), _DEFAULT_INLINE_LINES)
+    )
+    rtok = bounds.count(
+        bounds.explicit(getattr(budgets, "result_tokens", None), _DEFAULT_RESULT_TOKENS)
+    )
+    try:
+        from ctx.proxywindow import read_window_doc
+
+        doc = read_window_doc(getattr(ws, "root", None))
+        pct = doc.get("window_pct")
+        raw_pressure = bounds.explicit(getattr(budgets, "window_pressure_pct", None), 70)
+        pressure_pct = float(raw_pressure) if isinstance(raw_pressure, (int, float)) else 70.0
+        if isinstance(pct, (int, float)) and not isinstance(pct, bool) and float(pct) >= pressure_pct:
+            return min(base_bytes, 8192), min(base_lines, 120)
+        raw_c = doc.get("turn_carriage_tokens")
+        if raw_c is None:
+            raw_c = doc.get("last_input_tokens")
+        carriage = int(raw_c) if isinstance(raw_c, (int, float)) and not isinstance(raw_c, bool) else 0
+    except Exception:
+        carriage = 0
+
+    intent = _command_intent(cmd_str)
+    if intent == "flood" and not dense:
+        return min(base_bytes, 8192), min(base_lines, 120)
+
+    # Never widen an explicitly tightened caller/config cap.
+    if base_bytes < _DEFAULT_INLINE_BYTES or base_lines < _DEFAULT_INLINE_LINES or rtok < _DEFAULT_RESULT_TOKENS:
+        return base_bytes, base_lines
+
+    if dense:
+        return max(base_bytes * 2, 32768), max(base_lines * 2, 500)
+    if intent == "projection":
+        eff_bytes = min(32768, max(24576, base_bytes, int(carriage * 1.5)))
+        return eff_bytes, max(base_lines, 420)
+    if carriage > 0:
+        eff_bytes = min(24576, max(base_bytes, int(carriage * 0.8)))
+        return eff_bytes, max(base_lines, 280)
+    return base_bytes, base_lines
+
+
 def render_command_result(ws, store, capture, *, focus=None, delivery="auto") -> CommandResult:
-    """Complete small text streams inline; otherwise use the profile/resolver.
+    """Complete small/break-even text streams inline; otherwise use the profile/resolver.
 
     Check serialized size after sanitization: control characters and escaping
     can make even a small raw stream expensive. Stream identity is retained in
     JSON, including empty output and output without a final newline.
     """
+    from ctx import bounds
+
     if delivery not in {"auto", "digest"}:
         raise ValueError("delivery must be auto or digest")
     manifest = capture.manifest
@@ -113,9 +240,28 @@ def render_command_result(ws, store, capture, *, focus=None, delivery="auto") ->
         output_limited=bool(status.get("outputLimited")))
     streams = manifest["streams"]
     budgets = ws.config.budgets
+
+    cmd_str = ""
+    sig = None
+    dense = False
+    try:
+        import shlex
+        from ctx import reflex
+
+        argv = manifest.get("argv") or []
+        cmd_str = str(argv[0]) if manifest.get("shell") and argv else shlex.join([str(a) for a in argv])
+        sig = reflex.command_signature(cmd_str)
+        if sig:
+            dense = reflex.check_command(ws.root, cmd_str) == "densify" or (
+                reflex.densify_latched(ws.root, sig)
+            )
+    except Exception:
+        sig, dense = None, False
+
+    eff_bytes, eff_lines = _inline_thresholds(ws, cmd_str, dense)
     raw = sum(s["bytes"] for s in streams.values())
-    inline = delivery == "auto" and raw <= budgets.max_inline_bytes and (
-        sum(s["lines"] for s in streams.values()) <= budgets.max_inline_lines
+    inline = delivery == "auto" and raw <= eff_bytes and (
+        sum(s["lines"] for s in streams.values()) <= eff_lines
     ) and not any(status.get(k) for k in ("timedOut", "cancelled", "outputLimited")) and all(
         not s["bytes"] or s["mediaType"].startswith("text/") or s["mediaType"] == "application/json"
         for s in streams.values())
@@ -126,9 +272,19 @@ def render_command_result(ws, store, capture, *, focus=None, delivery="auto") ->
             views[name], removed = sanitize_for_model(data.decode("utf-8", "replace"), ws.config.redaction)
             redactions.update(removed)
         candidate = CommandResult(**values, delivery="inline", **views, redactions=tuple(sorted(redactions)))
-        # Include the envelope itself in the result budget. The provisional and
-        # final refs have the same length, so publication cannot grow it.
-        if len(candidate.to_json().encode()) <= budgets.result_tokens * 4:
+        # Honour explicit tight token caps (e.g. ToolSession(max_tokens=64)); under
+        # standard budgets, measure UTF-8 payload against eff_bytes (avoiding the
+        # 4,800-byte result_tokens*4 clamp overriding max_inline_bytes=16,384) while
+        # still catching pathological control-character expansion on the wire.
+        if budgets.result_tokens < _DEFAULT_RESULT_TOKENS:
+            fits_wire = len(candidate.to_json().encode()) <= bounds.budget_bytes(budgets.result_tokens)
+        else:
+            utf8_json = json.dumps(candidate.as_dict(), ensure_ascii=False, separators=(",", ":"))
+            fits_wire = (
+                len(utf8_json.encode("utf-8")) <= eff_bytes + 1024
+                and len(candidate.to_json().encode()) <= eff_bytes * 2 + 1024
+            )
+        if fits_wire:
             payload = json.dumps(views, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
             mid, _ = update_manifest_digest(store, manifest, {
                 "profile": "inline/v1", "policy": POLICY_VERSION,
@@ -139,13 +295,36 @@ def render_command_result(ws, store, capture, *, focus=None, delivery="auto") ->
 
     from ctx.digest import render_run_digest
     from ctx.commands.emit import _delivery_plan, render_bounded_digest
+    from ctx.textutil import short_id
+
     outcome = "success" if status.get("exitCode") == 0 else "failure"
-    plan = _delivery_plan(ws, outcome=outcome, family="run", base_tokens=budgets.digest_tokens)
-    digest, final = render_run_digest(store, ws, manifest, focus=focus, plan=plan, record_delivery=False)
+    plan = _delivery_plan(ws, outcome=outcome, family="run", base_tokens=budgets.digest_tokens, signature=sig)
+    digest, final = render_run_digest(
+        store, ws, manifest, focus=focus, dense=dense, plan=plan, record_delivery=False
+    )
+    try:
+        from ctx import engagement, reflex
+
+        if reflex.has_omissions(digest):
+            if ws.config.engagement.mode == "auto":
+                engagement.note_truncation(ws.root)
+            if sig:
+                reflex.note_intervention(
+                    ws.root, sig, short_id(final.get("id", "")), hints=reflex.count_hints(digest)
+                )
+        if dense:
+            digest = reflex.DENSIFY_HEADER + "\n" + digest
+    except Exception:
+        pass
     digest = render_bounded_digest(ws, store, digest, plan)
     result = CommandResult(**{**values, "ref": "run:" + final["id"].removeprefix("sha256:")},
         delivery="digest", digest=digest)
-    return _fit_wire(result, max(512, budgets.result_tokens * 4))
+    if budgets.result_tokens < _DEFAULT_RESULT_TOKENS:
+        wire_cap = max(512, bounds.budget_bytes(budgets.result_tokens))
+    else:
+        plan_tok = bounds.count(bounds.explicit(getattr(plan, "token_budget", None), budgets.result_tokens))
+        wire_cap = max(512, bounds.budget_bytes(max(budgets.result_tokens, plan_tok)))
+    return _fit_wire(result, wire_cap)
 
 
 def _fit_wire(result: CommandResult, max_bytes: int) -> CommandResult:

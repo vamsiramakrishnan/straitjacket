@@ -116,7 +116,49 @@ def _resolve_anchor(
     return moved, end, f"anchor: @{want} moved L{a}:{b} → L{moved}:{end} (content unchanged)"
 
 
-def _byte_window(ref_text, a: int, b: int, total: int, budget):
+#: Default single-call retrieval budget (Budgets.result_tokens). Elastic
+#: tail-slack and turn-carriage scaling apply only at or above this floor so
+#: explicitly tightened caller/test budgets keep their exact cut points.
+_DEFAULT_RESULT_TOKENS = 1200
+
+
+def _effective_result_tokens(ws: Workspace | None, budget) -> int:
+    """Scale single-call retrieval budget by proxy-observed turn carriage.
+
+    When ``window.json`` reports high per-turn prompt carriage (>= 12K tokens),
+    each extra ``ctx get`` pagination hop re-bills tens of thousands of prompt
+    tokens. Scaling toward ``turn_retrieval_tokens`` (default 2,800) while the
+    context window is below pressure halves pagination round-trips without
+    exceeding the per-turn retrieval cap. Fail-open to ``budget.result_tokens``.
+    """
+    base = bounds.count(bounds.explicit(getattr(budget, "result_tokens", None), _DEFAULT_RESULT_TOKENS))
+    if ws is None or base < _DEFAULT_RESULT_TOKENS:
+        return base
+    try:
+        from ctx.proxywindow import read_window_doc
+
+        doc = read_window_doc(getattr(ws, "root", None))
+        pct = doc.get("window_pct")
+        raw_pressure = bounds.explicit(getattr(budget, "window_pressure_pct", None), 70)
+        pressure = float(raw_pressure) if isinstance(raw_pressure, (int, float)) else 70.0
+        if isinstance(pct, (int, float)) and not isinstance(pct, bool) and float(pct) >= pressure:
+            return base
+        raw_c = doc.get("turn_carriage_tokens")
+        if raw_c is None:
+            raw_c = doc.get("last_input_tokens")
+        carriage = int(raw_c) if isinstance(raw_c, (int, float)) and not isinstance(raw_c, bool) else 0
+        if carriage >= 12000:
+            turn_cap = bounds.count(
+                bounds.explicit(getattr(budget, "turn_retrieval_tokens", None), 2800)
+            )
+            if turn_cap > base:
+                return min(turn_cap, max(base, carriage // 16))
+    except Exception:
+        pass
+    return base
+
+
+def _byte_window(ref_text, a: int, b: int, total: int, budget, result_tokens: int | None = None):
     """Clamp a byte range to the inline budget and address the remainder.
 
     `--lines` has always clamped to max_inline_lines and pointed at the next
@@ -128,7 +170,9 @@ def _byte_window(ref_text, a: int, b: int, total: int, budget):
     rest re-read the stream as lines.
 
     Clamping here means the cut is the SELECTOR's, so the continuation can
-    name the next window and actually advance.
+    name the next window and actually advance. Under standard budgets, small
+    orphan remainders (<= min(2400, 40% of cap)) are absorbed rather than
+    forcing an extra retrieval turn.
     """
     # The TIGHTER of the two budgets that apply. max_inline_bytes bounds the
     # selector; the result-token budget bounds the emission, and it is
@@ -136,12 +180,16 @@ def _byte_window(ref_text, a: int, b: int, total: int, budget):
     # "--bytes 1:16384" over a body that bounded() had since cut to ~4.7 KB
     # -- the header describing a range the body does not contain, which is
     # the same lie in a smaller font.
-    room = bounds.budget_bytes(getattr(budget, "result_tokens", 0)) - _HEADER_RESERVE
+    rtok = bounds.count(
+        result_tokens if result_tokens is not None else getattr(budget, "result_tokens", 0)
+    )
+    room = bounds.budget_bytes(rtok) - _HEADER_RESERVE
     cap = min(
         bounds.count(getattr(budget, "max_inline_bytes", 0)) or (b - a + 1),
         room if room > 0 else (b - a + 1),
     )
-    if b - a + 1 <= cap:
+    slack = min(2400, int(cap * 0.40)) if rtok >= _DEFAULT_RESULT_TOKENS else 0
+    if b - a + 1 <= cap + slack:
         nxt = f"ctx get {ref_text} --bytes {b + 1}:{min(total, b + (b - a + 1))}"
         return a, b, (nxt if b < total else None)
     b = a + cap - 1
@@ -150,7 +198,7 @@ def _byte_window(ref_text, a: int, b: int, total: int, budget):
 
 def _fit_window(
     flag: str, ref_text, a: int, b: int, total: int, rendered: list[str], budget,
-    addr=None,
+    addr=None, result_tokens: int | None = None,
 ):
     """Trim a 1-based item window to what the result budget can actually hold.
 
@@ -180,7 +228,10 @@ def _fit_window(
     the first budget cut -- the same class of defect as dropping the selector
     itself, which is what this helper was written for.
     """
-    room = bounds.budget_bytes(getattr(budget, "result_tokens", 0)) - _HEADER_RESERVE
+    rtok = bounds.count(
+        result_tokens if result_tokens is not None else getattr(budget, "result_tokens", 0)
+    )
+    room = bounds.budget_bytes(rtok) - _HEADER_RESERVE
     if room <= 0:
         return b, None
     kept, used = 0, 0
@@ -195,6 +246,12 @@ def _fit_window(
         # nothing fit at all (e.g. a single oversized line) -- forcing kept=1 below
         # produced an inverted continuation range (new_b==b, so next start > next end)
         return b, None
+    if rtok >= _DEFAULT_RESULT_TOKENS:
+        rem_lines = len(rendered) - kept
+        rem_bytes = sum(len(encode_exact(ln)) + 1 for ln in rendered[kept:])
+        slack_bytes = min(2400, int(room * 0.40))
+        if rem_lines <= 40 and rem_bytes <= slack_bytes:
+            return b, None
     kept = max(1, kept)
     # Reached only when the window was actually trimmed (`kept < len(rendered)`
     # above), so `new_b < b <= total`: there is always a next item to address
@@ -219,6 +276,7 @@ def get(
     ref = _parse(ref_text)
     store, ws = _route_workspace(store, ws, ref)
     budget = ws.config.budgets
+    eff_rtok = _effective_result_tokens(ws, budget)
 
     label: str
     data: bytes
@@ -412,7 +470,9 @@ def get(
         # Fit BEFORE the header is written, so the header reports the range
         # actually shown. Writing it first is how `--lines` originally came
         # to claim a range wider than its own body.
-        b, fit_next = _fit_window("--records", ref_text, a, b, len(lines), rendered, budget)
+        b, fit_next = _fit_window(
+            "--records", ref_text, a, b, len(lines), rendered, budget, result_tokens=eff_rtok
+        )
         rendered = rendered[: b - a + 1]
         if fit_next:
             continuation = fit_next
@@ -425,7 +485,9 @@ def get(
         if fast_bytes is not None:
             blob_hash_b, total_b = fast_bytes
             a, b = _window("bytes", a, b, total_b, "bytes")
-            a, b, continuation = _byte_window(ref_text, a, b, total_b, budget)
+            a, b, continuation = _byte_window(
+                ref_text, a, b, total_b, budget, result_tokens=eff_rtok
+            )
             chunk = _read_bytes_range(store, blob_hash_b, a, b)
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(total_b)}")
             # decode_exact, not errors="replace": --bytes is THE exact-bytes
@@ -436,7 +498,9 @@ def get(
             body = decode_exact(chunk)
         else:
             a, b = _window("bytes", a, b, len(data), "bytes")
-            a, b, continuation = _byte_window(ref_text, a, b, len(data), budget)
+            a, b, continuation = _byte_window(
+                ref_text, a, b, len(data), budget, result_tokens=eff_rtok
+            )
             chunk = data[a - 1 : b]
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(len(data))}")
             body = decode_exact(chunk)  # second door onto the same contract
@@ -465,7 +529,9 @@ def get(
                 chunk = store.read_blob_lines(blob_hash, a, b)
                 all_lines = index_lines(chunk.decode("utf-8", "replace"))
                 rendered = anchors.render_window(all_lines, a, tagged=selector.hashlines)
-                b, fit_next = _fit_window("--lines", ref_text, a, b, total, rendered, budget)
+                b, fit_next = _fit_window(
+                    "--lines", ref_text, a, b, total, rendered, budget, result_tokens=eff_rtok
+                )
                 if fit_next:
                     continuation = fit_next
                     rendered = rendered[: b - a + 1]
@@ -520,7 +586,8 @@ def get(
                     all_lines[a - 1 : b], a, tagged=selector.hashlines
                 )
                 b, fit_next = _fit_window(
-                    "--lines", ref_text, a, b, len(all_lines), rendered, budget, addr=_addr
+                    "--lines", ref_text, a, b, len(all_lines), rendered, budget,
+                    addr=_addr, result_tokens=eff_rtok,
                 )
                 if fit_next:
                     continuation = fit_next
@@ -591,7 +658,13 @@ def get(
         # an address that re-reads the stream from line 1. The continuation
         # offering to reach the rest sent the reader back to the start.
         handle = f"{ref_text} --lines {selector.lines[0]}:{selector.lines[1]}"
-    result = _emit(ws, "\n".join(header) + "\n" + body, budget.result_tokens, continuation,
+    full_text = "\n".join(header) + "\n" + body
+    emit_tokens = eff_rtok
+    if eff_rtok >= _DEFAULT_RESULT_TOKENS and selector.json_pointer is None and not selector.snapcompact:
+        raw_bytes = len(encode_exact(full_text))
+        if raw_bytes <= bounds.budget_bytes(eff_rtok) + 2464:
+            emit_tokens = max(eff_rtok, (raw_bytes + 67) // 4)
+    result = _emit(ws, full_text, emit_tokens, continuation,
                    handle=handle, exact=selector.bytes is not None)
     if fast_lines is not None:
         raw_len = fast_lines_raw
