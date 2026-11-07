@@ -7,6 +7,7 @@ memory and never reaches the model before it is content-addressed.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -121,6 +122,35 @@ def invocation_manifest(
     }
 
 
+def _isolated_child_env(
+    ws: Workspace, workdir: Path, env: dict[str, str] | None
+) -> dict[str, str]:
+    """Build child process environment with non-git ancestor ceiling isolation.
+
+    When neither ``workdir`` nor ``ws.root`` is itself a git repository, git
+    commands invoked inside ``workdir`` would otherwise walk up to an unrelated
+    host or harness ancestor ``.git`` and leak parent commit history into tool
+    captures. Setting ``GIT_CEILING_DIRECTORIES`` to ``workdir``'s parent stops
+    git's upward traversal at ``workdir`` while leaving git workspaces untouched.
+    """
+    child_env = dict(os.environ if env is None else env)
+    child_env.setdefault("GIT_DISCOVERY_ACROSS_FILESYSTEM", "0")
+    try:
+        wd_res = workdir.resolve()
+        root_res = ws.root.resolve()
+        if ws.git is None and not (wd_res / ".git").exists() and not (root_res / ".git").exists():
+            ceil_parts = [str(wd_res.parent)]
+            if wd_res.parent.parent != wd_res.parent:
+                ceil_parts.append(str(wd_res.parent.parent))
+            existing = child_env.get("GIT_CEILING_DIRECTORIES", "").strip()
+            if existing:
+                ceil_parts.append(existing)
+            child_env["GIT_CEILING_DIRECTORIES"] = os.pathsep.join(ceil_parts)
+    except Exception:
+        pass
+    return child_env
+
+
 def _normalize_focus(focus: str | None) -> str:
     if not focus:
         return ""
@@ -192,6 +222,7 @@ def run_capture(
 
     workdir = ws.confine(cwd or ".", must_exist=True)
     rel_cwd = ws.relativize(workdir) or "."
+    child_env = _isolated_child_env(ws, workdir, env)
 
     if shell:
         if len(argv) != 1:
@@ -228,7 +259,7 @@ def run_capture(
                         stderr=err_fh,
                         stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
                         start_new_session=True,
-                        env=env,
+                        env=child_env,
                     )
                 except FileNotFoundError as e:
                     raise ExecutionError(f"command not found: {argv[0]}") from e
@@ -282,7 +313,8 @@ def _run_limited(ws, store, argv, *, cwd, timeout, stdin_bytes, output_bytes, re
     if isinstance(output_bytes, bool) or not isinstance(output_bytes, int) or not 1 <= output_bytes <= 8 * 1024 * 1024:
         raise ExecutionError("output_bytes must be 1..8388608")
     workdir = ws.confine(cwd or ".", must_exist=True)
-    result = CommandWorker(argv, cwd=workdir, env=env, stderr_bytes=output_bytes, cancelled=cancelled)(
+    child_env = _isolated_child_env(ws, workdir, env)
+    result = CommandWorker(argv, cwd=workdir, env=child_env, stderr_bytes=output_bytes, cancelled=cancelled)(
         stdin_bytes or b"", timeout=600 if timeout is None else timeout, response_bytes=output_bytes)
     if result.error == "launch_failed":
         raise ExecutionError("command could not be launched")
@@ -358,6 +390,8 @@ def generation_hash(ws_root: Any) -> str | None:
         return None
     try:
         root = Path(ws_root)
+        if not (root / ".git").exists():
+            return None
         out = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=str(root),
