@@ -6,6 +6,29 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-11-07
+
+- `ctx.toolresult` classifies command intent (`projection`, `flood`, `standard`),
+  scales inline delivery thresholds by proxy-observed `turn_carriage_tokens` when
+  the context window is below pressure, measures UTF-8 wire size against the
+  configured inline byte budget rather than clamping at 4.8 KB under default
+  budgets, and activates engagement before digest bounding so the first truncated
+  digest retains its `next:` retrieval address. Explicitly tightened caller token
+  budgets remain unchanged.
+- `ctx get` absorbs small orphan tail remainders (`<= 40` lines and `<= 2.4 KB`)
+  in a single response and scales single-call retrieval toward
+  `turn_retrieval_tokens` when `window.json` reports high per-turn prompt
+  carriage (`>= 12,000` tokens) below window pressure.
+- `ctx.execution` isolates child processes in non-git workspaces from unrelated
+  ancestor `.git` repositories via `GIT_CEILING_DIRECTORIES` and skips
+  `git status` in `generation_hash` on non-git workspace roots.
+- `ctx.residence.WatermarkResidence` compacts older `(model functionCall, user
+  functionResponse)` pairs in-place only after eligible carried `thought_tokens`
+  cross a configurable watermark, keeping already-compacted prefix turns
+  byte-identical across epochs while preserving `state_note` lines, verbatim tool
+  outputs up to `max_result_chars`, multimodal `inlineData`/`fileData` parts, and
+  optional standard/media epoch ceilings.
+
 ## [0.42.0] - 2026-10-29
 
 - Reuse language-server sessions across CLI calls through a private local
