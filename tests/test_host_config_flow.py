@@ -580,3 +580,133 @@ def test_repair_and_removal_preserve_jsonc_comments_inside_owned_command(workspa
         with pytest.raises(ConfigError):
             plan.apply()
     assert snapshot(workspace_dir) == before
+
+
+@pytest.mark.parametrize('original', ['', '# Project rules\n\nKeep project rules.\n'])
+@pytest.mark.parametrize('remove', [False, True])
+@pytest.mark.parametrize('edit', ['add', 'change', 'comment'])
+def test_modified_instruction_block_requires_reconciliation(workspace_dir, original, remove, edit):
+    path = workspace_dir / 'AGENTS.md'
+    if original:
+        path.write_text(original)
+    apply(workspace_dir, ['codex'])
+    text = path.read_text()
+    if edit == 'add':
+        text = text.replace('<!-- ctx-harness:end -->', 'Always use the workspace staging service.\n<!-- ctx-harness:end -->')
+    elif edit == 'change':
+        text = text.replace('## Context containment', '## Custom workspace instructions')
+    else:
+        text = text.replace('<!-- ctx-harness:end -->', '<!-- Retain this workspace annotation. -->\n<!-- ctx-harness:end -->')
+    path.write_text(text)
+    before = snapshot(workspace_dir)
+    plan = plan_configuration(workspace_dir, ['codex'], exe=EXE, remove=remove)
+    assert plan.blockers, plan.render()
+    assert 'AGENTS.md' in plan.render() and 'block' in plan.render()
+    assert '--- a/AGENTS.md' in plan.render()
+    with pytest.raises(ConfigError):
+        plan.apply()
+    assert snapshot(workspace_dir) == before
+
+
+def test_remove_keeps_changes_outside_unchanged_instruction_block(workspace_dir):
+    path = workspace_dir / 'AGENTS.md'
+    path.write_text('# Original project instructions\n')
+    apply(workspace_dir, ['codex'])
+    installed = path.read_text()
+    outside_before = '# Added project rule\n\n'
+    outside_after = '\n\n# Added project appendix\n'
+    path.write_text(outside_before + installed + outside_after)
+    start = path.read_text().index('<!-- ctx-harness:start -->')
+    end = path.read_text().index('<!-- ctx-harness:end -->') + len('<!-- ctx-harness:end -->')
+    expected = path.read_text()[:start] + path.read_text()[end:]
+    apply(workspace_dir, ['codex'], remove=True)
+    assert path.read_text() == expected
+    assert not (workspace_dir / LEDGER).exists()
+
+
+def test_cli_remove_apply_refuses_modified_instruction_block(workspace_dir, capsys):
+    from ctx.cli import main
+    apply(workspace_dir, ['codex'])
+    path = workspace_dir / 'AGENTS.md'
+    path.write_text(path.read_text().replace('<!-- ctx-harness:end -->', 'Keep the user-added constraint.\n<!-- ctx-harness:end -->'))
+    before = snapshot(workspace_dir)
+    assert main(['--workspace', str(workspace_dir), 'setup', '--host', 'codex', '--remove', '--apply']) == 1
+    assert 'AGENTS.md' in capsys.readouterr().out
+    assert snapshot(workspace_dir) == before
+
+
+def test_legacy_instruction_provenance_migrates_only_from_an_unchanged_file(workspace_dir):
+    path = workspace_dir / 'AGENTS.md'
+    apply(workspace_dir, ['codex'])
+    installed = path.read_bytes()
+    ledger = workspace_dir / LEDGER
+    state = json.loads(ledger.read_text())
+    expected_hash = state['hosts']['codex']['AGENTS.md'].pop('block_hash')
+    ledger.write_text(json.dumps(state))
+
+    plan = apply(workspace_dir, ['codex'])
+    assert [change.path for change in plan.changes] == [LEDGER]
+    assert path.read_bytes() == installed
+    assert json.loads(ledger.read_text())['hosts']['codex']['AGENTS.md']['block_hash'] == expected_hash
+    path.write_bytes(b'# Added later\n' + installed)
+    apply(workspace_dir, ['codex'], remove=True)
+    assert path.read_bytes() == b'# Added later\n\n'
+
+
+@pytest.mark.parametrize('inside', [False, True])
+def test_edited_legacy_instruction_file_cannot_acquire_unverified_block_ownership(workspace_dir, inside):
+    apply(workspace_dir, ['codex'])
+    path = workspace_dir / 'AGENTS.md'
+    ledger = workspace_dir / LEDGER
+    state = json.loads(ledger.read_text())
+    state['hosts']['codex']['AGENTS.md'].pop('block_hash')
+    ledger.write_text(json.dumps(state))
+    text = path.read_text()
+    path.write_text(text.replace('<!-- ctx-harness:end -->', 'Preserve this custom instruction.\n<!-- ctx-harness:end -->') if inside else '# Custom outside instructions\n' + text)
+    before = snapshot(workspace_dir)
+
+    removal = plan_configuration(workspace_dir, ['codex'], remove=True)
+    assert removal.blockers and 'block hash is missing' in removal.render()
+    with pytest.raises(ConfigError):
+        removal.apply()
+    setup = plan_configuration(workspace_dir, ['codex'], exe=EXE)
+    if setup.blockers:
+        with pytest.raises(ConfigError):
+            setup.apply()
+    else:
+        setup.apply()
+    assert snapshot(workspace_dir) == before
+
+
+def test_owned_instruction_upgrade_preserves_outside_edits_and_updates_block_provenance(workspace_dir, monkeypatch):
+    import ctx.installer as installer
+    path = workspace_dir / 'AGENTS.md'
+    path.write_text('# Project guidance\n')
+    apply(workspace_dir, ['codex'])
+    old_hash = json.loads((workspace_dir / LEDGER).read_text())['hosts']['codex']['AGENTS.md']['block_hash']
+    path.write_text('# Added before upgrade\n' + path.read_text())
+    render = installer._render_codex_file
+    def upgraded(name, exe):
+        text = render(name, exe)
+        return text.replace('<!-- ctx-harness:end -->', 'New ctx-owned guidance.\n<!-- ctx-harness:end -->') if name == 'AGENTS.md' else text
+    monkeypatch.setattr(installer, '_render_codex_file', upgraded)
+
+    apply(workspace_dir, ['codex'])
+    new_hash = json.loads((workspace_dir / LEDGER).read_text())['hosts']['codex']['AGENTS.md']['block_hash']
+    assert new_hash != old_hash
+    assert 'New ctx-owned guidance.' in path.read_text()
+    assert not apply(workspace_dir, ['codex']).changes
+    path.write_text(path.read_text() + '# Added after upgrade\n')
+    text = path.read_text()
+    a, b = text.index('<!-- ctx-harness:start -->'), text.index('<!-- ctx-harness:end -->') + len('<!-- ctx-harness:end -->')
+    apply(workspace_dir, ['codex'], remove=True)
+    assert path.read_text() == text[:a] + text[b:]
+
+
+def test_already_removed_instruction_block_preserves_remaining_user_text(workspace_dir):
+    apply(workspace_dir, ['codex'])
+    path = workspace_dir / 'AGENTS.md'
+    path.write_text('# User instructions after removing the ctx block\n')
+    apply(workspace_dir, ['codex'], remove=True)
+    assert path.read_text() == '# User instructions after removing the ctx block\n'
+    assert not plan_configuration(workspace_dir, ['codex'], remove=True).changes

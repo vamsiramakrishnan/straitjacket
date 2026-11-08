@@ -36,6 +36,23 @@ def _source_hash(doc, path, item):
     return _hash(doc.fragment(path).encode())
 
 
+def _managed_block_span(text, relative):
+    start, end = "<!-- ctx-harness:start -->", "<!-- ctx-harness:end -->"
+    if start not in text and end not in text:
+        return None
+    if text.count(start) != 1 or text.count(end) != 1 or text.index(start) >= text.index(end):
+        raise ConfigError(f"{relative}: ambiguous ctx-harness block markers; reconcile the marker pair")
+    return text.index(start), text.index(end) + len(end)
+
+
+def _owns_block(before, record, source_hash):
+    if "block_hash" in record:
+        return record["block_hash"] == source_hash
+    # Older ledgers only attest to the whole file. They can acquire scoped
+    # provenance only while that original file is still byte-identical.
+    return record.get("hash") == _hash(before)
+
+
 def _safe_path(root, relative):
     path = root / relative
     if Path(relative).is_absolute() or ".." in Path(relative).parts:
@@ -360,20 +377,29 @@ class _Builder:
         before = self.read(relative)
         after = expected.encode()
         old = self.ledger["hosts"].get(host, {}).get(relative, {})
+        block_proven = block and before is None
         if block and before is not None:
-            start, end = "<!-- ctx-harness:start -->", "<!-- ctx-harness:end -->"
             text = before.decode()
-            if start in text or end in text:
-                if text.count(start) != 1 or text.count(end) != 1 or text.index(start) >= text.index(end):
-                    raise ConfigError(f"{relative}: ambiguous ctx-harness block markers; repair the marker pair before setup")
-                a, b = text.index(start), text.index(end) + len(end)
+            span = _managed_block_span(text, relative)
+            if span is not None:
+                a, b = span
+                block_proven = _owns_block(before, old, _hash(text[a:b].encode()))
+                if not block_proven and ("block_hash" in old or text[a:b] != expected.strip()):
+                    self.plan.blockers.append(f"{relative}: instruction block source changed or is unowned; preserve it and reconcile the exact repair diff.")
                 after = (text[:a] + expected.strip() + text[b:]).encode()
             else:
                 sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
                 after = (text + sep + expected.strip() + "\n").encode()
+                block_proven = True
         elif before is not None and before != after and _hash(before) != old.get("hash"):
             self.plan.blockers.append(f"{relative}: existing unmanaged or modified plugin differs from the owned version; review its proposed diff before replacing it.")
         self.finish_file(host, relative, before, after, raw=True)
+        if block_proven:
+            record = self.ledger["hosts"].get(host, {}).get(relative)
+            if record is not None:
+                text = after.decode()
+                a, b = _managed_block_span(text, relative)
+                record["block_hash"] = _hash(text[a:b].encode())
 
     def remove_host(self, host):
         files = self.ledger["hosts"].get(host, {})
@@ -390,14 +416,14 @@ class _Builder:
             elif record.get("raw"):
                 if relative == "AGENTS.md":
                     text = before.decode()
-                    start, end = "<!-- ctx-harness:start -->", "<!-- ctx-harness:end -->"
-                    if text.count(start) == text.count(end) == 1 and text.index(start) < text.index(end):
-                        a, b = text.index(start), text.index(end) + len(end)
+                    span = _managed_block_span(text, relative)
+                    if span is not None:
+                        a, b = span
+                        if not _owns_block(before, record, _hash(text[a:b].encode())):
+                            self.plan.blockers.append(f"{relative}: cannot verify the installed instruction block; its source changed or its block hash is missing. Preserve it and reconcile the exact removal diff.")
                         after = (text[:a] + text[b:]).encode()
-                    elif start not in text and end not in text:
-                        after = before
                     else:
-                        raise ConfigError(f"{relative}: ambiguous managed block; preserve it and reconcile markers")
+                        after = before
                 else:
                     self.plan.blockers.append(f"{relative}: owned plugin was modified; preserve it and reconcile before removal.")
                     continue

@@ -2,7 +2,8 @@
 
 Date: 2026-11-09. Base: `e23ce52fb65a45d345bf1a9fa4d17344d6d8bbe6`
 (PR #50, v0.43.0). Implementation branch: `feat/safe-host-config`.
-Validation was performed locally before publication.
+The initial validation below describes commit `8b08e9267d52f54686a0346da676c64283ca9295`.
+The PR review follow-up is recorded separately at the end.
 
 ## Result
 
@@ -126,3 +127,31 @@ python scripts/check_distribution.py dist/*.whl dist/*.tar.gz
 The local build retains the base release version and is a review build,
 not a new published release. No live-host compatibility claim is added:
 Codex and OpenCode retain their documented contract-test/live-receipt status.
+
+
+## PR #51 review follow-up: owned instruction blocks
+
+Review `5819959144` identified that removal trusted AGENTS.md markers without
+verifying the installed block source. An instruction added inside those markers
+could therefore be deleted. The same missing boundary also affected repair.
+
+The ledger now records a separate `block_hash` for the marker-inclusive source.
+Repair and removal verify it before changing that block. User edits inside the
+block produce a blocked plan and an exact diff; surrounding edits remain
+removable. Legitimate ctx-owned block upgrades refresh the scoped hash. Older
+whole-file ownership records acquire a block hash only while their recorded file
+is byte-identical; edited legacy files cannot silently acquire new provenance.
+
+Validation used isolated configuration fixtures and host HOME:
+
+- The review reproducer selection failed 13 cases on the reviewed commit.
+- All 19 new review cases pass, including actual CLI removal, new/existing
+  AGENTS.md files, edits/additions/comments inside the block, outside edits,
+  generated guidance upgrades, safe legacy migration and repeated removal.
+- The complete setup/integration selection passes: 228 normal and 228 builtin
+  engine checks. The configuration-flow file now contains 92 acceptance cases.
+- Wheel/sdist build and clean installed-wheel lifecycle smoke passed; the wheel
+  contains the updated host-config source. `git diff --check` passed.
+
+The full-suite results above remain the initial implementation's recorded runs;
+this follow-up ran the relevant regression selection and package check.

@@ -1,4 +1,5 @@
 Safe host configuration validation — 2026-11-09
+Validated revision: 8b08e9267d52f54686a0346da676c64283ca9295 (initial implementation)
 Base: e23ce52fb65a45d345bf1a9fa4d17344d6d8bbe6
 Branch: feat/safe-host-config; validation recorded before publication
 
