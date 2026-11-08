@@ -67,6 +67,20 @@ silently substitutes `ctx run -- pytest -q`, and the agent never sees a refusal.
 The Codex implementation targets the same experience; call it live only after a
 version-pinned Codex run records both gates.
 
+## Configuration validation
+
+Codex/OpenCode setup uses the same parsed edit plan for preview, application,
+repair and owned removal. This changes configuration handling, not the host's
+enforcement capabilities or live-validation status above. See
+[Getting started](GETTING-STARTED.md) for commands and conflict handling.
+
+Doctor validates Codex's bounded stdio command/arguments, `features.hooks`,
+all lifecycle registrations (including `SessionStart`) and its instruction
+block. OpenCode checks the selected JSON/JSONC MCP entry and native plugin
+separately. A surviving ownership record lets doctor report missing components
+when an integration was partially deleted. These are configuration checks;
+they do not establish that a running host has loaded its plugin or hooks.
+
 ## Codex containment and batch recovery
 
 Codex's output adapter uses `decision: "block"` to replace oversized output.

@@ -673,6 +673,22 @@ DeepSeek Harness (`dsh`) provide native hook plugins and MCP retrieval/edit tool
 Their wrappers accept agent arguments after `--`; setup persists after exit.
 See [Agent integrations](AGENT-INTEGRATIONS.md) for commands and limits.
 
+Codex and OpenCode configuration planning:
+
+```bash
+ctx setup --host codex --host opencode --preview   # no writes or receipts
+ctx setup --host codex --host opencode --apply     # safe changes only
+ctx setup --host codex --repair                   # restore missing owned stages; verify
+ctx setup --host codex --remove                   # preview owned removal
+ctx setup --host codex --remove --apply
+```
+
+Preview and removal require explicit Codex/OpenCode hosts. They cannot be
+combined with `--all`, `--acp` or `--prune`; `--preview` and `--apply` are mutually
+exclusive. Default setup stops for review before changing a pre-existing user
+configuration. Conflicts require reconciliation even with `--apply`.
+See [Getting started](GETTING-STARTED.md) for ownership and preservation rules.
+
 `ctx mcp --bounded-only --workspace /absolute/project` serves the bounded MCP
 tool with that default workspace. A tool call's explicit `workspace` overrides
 the default. The MCP tool does not execute arbitrary commands; use `ctx run`

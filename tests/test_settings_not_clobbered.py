@@ -13,6 +13,7 @@ These tests pin the rule: if ctx cannot read it, ctx does not write it.
 from __future__ import annotations
 
 import json
+import pytest
 
 from conftest import make_ws
 
@@ -63,10 +64,11 @@ def test_codex_setup_refuses_to_overwrite_unparseable_hooks(workspace_dir):
     path.write_text('{"hooks": {"PreToolUse": [', encoding="utf-8")
     before = path.read_text(encoding="utf-8")
 
-    out = install_codex(make_ws(workspace_dir), init_policy=False)
-
+    from ctx.mcp_hosts import IntegrationError
+    with pytest.raises(IntegrationError, match="invalid JSON"):
+        install_codex(make_ws(workspace_dir), init_policy=False)
     assert path.read_text(encoding="utf-8") == before
-    assert "did not modify" in out
+    assert not (workspace_dir / ".codex/config.toml").exists()
 
 
 def test_antigravity_statusline_refuses_to_overwrite_global_settings(tmp_path):

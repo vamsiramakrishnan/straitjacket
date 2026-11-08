@@ -184,6 +184,26 @@ def cmd_setup(ns) -> int:
         )
         return 2
     root = resolve_workspace(ns.workspace).root
+    preview = bool(getattr(ns, "preview", False))
+    apply = bool(getattr(ns, "apply", False))
+    remove = bool(getattr(ns, "remove", False))
+    if preview or remove:
+        from ctx.host_config import HOSTS, plan_configuration
+        from ctx.config_edit import ConfigError
+        if not hosts or any(h not in HOSTS for h in hosts) or ns.all or getattr(ns, "acp", False) or getattr(ns, "prune", False):
+            print("ctx setup: --preview/--remove require explicit --host codex and/or --host opencode, without --all, --acp or --prune", file=sys.stderr)
+            return 2
+        plan = plan_configuration(root, hosts, remove=remove)
+        print(plan.render())
+        if plan.blockers:
+            return 1
+        if apply:
+            try:
+                plan.apply()
+            except (ConfigError, OSError) as exc:
+                print(f"ctx setup: {exc}", file=sys.stderr)
+                return 1
+        return 0
     prune_targets = []
     if getattr(ns, "prune", False):
         from ctx.surface_profiles import HOSTS
@@ -210,7 +230,7 @@ def cmd_setup(ns) -> int:
                 raise ValueError("--acp-command must be a nonempty JSON string array")
             # ACP configuration is separate from interactive MCP setup. Workers
             # receive the MCP server in session/new, in their actual worktree.
-            setup_code = wrap_setup(root, hosts, force_repair=bool(ns.repair))
+            setup_code = wrap_setup(root, hosts, force_repair=bool(ns.repair), apply_config=apply)
             if setup_code:
                 return setup_code
             print(configure(root, hosts[0], ns.acp_model, command=command,
@@ -219,7 +239,7 @@ def cmd_setup(ns) -> int:
         except ValueError as exc:
             print(f"ctx setup: {exc}", file=sys.stderr)
             return 2
-    code = wrap_setup(root, hosts or None, force_all=bool(ns.all), force_repair=bool(ns.repair))
+    code = wrap_setup(root, hosts or None, force_all=bool(ns.all), force_repair=bool(ns.repair), apply_config=apply)
     if code == 0 and getattr(ns, "prune", False):
         # Bound before bloat, at the moment the harness is installed: the
         # same rule `ctx surface trim` recommends, made the default here.

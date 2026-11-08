@@ -639,6 +639,7 @@ def guided_setup(
     *,
     force_all: bool = False,
     force_repair: bool = False,
+    apply_config: bool = False,
 ) -> int:
     """`ctx setup`, narrated: survey → harness → verify → what next.
 
@@ -668,6 +669,16 @@ def guided_setup(
         # Hermes needs its installed profile writer. An implicit inert recipe
         # would poison doctor checks for every later host setup.
         target = [name for name in target if name != "hermes"]
+    # The planner is shared by preview, direct installers, repair and removal.
+    # A default setup never silently edits a pre-existing user configuration.
+    from ctx.host_config import HOSTS as CONFIG_HOSTS, plan_configuration
+    from ctx.config_edit import ConfigError
+    config_targets = [host for host in target if host in CONFIG_HOSTS]
+    config_plan = plan_configuration(ws.root, config_targets) if config_targets else None
+    if config_plan and not config_plan.blockers and config_plan.requires_review and not apply_config:
+        print(config_plan.render())
+        print("Existing configuration requires review; no files or readiness receipt were changed.")
+        return 1
     prior = load_setup_receipt(ws.root)
     conflicts = setup_conflicts(ws, target)
     strategy = choose_setup(
@@ -750,8 +761,11 @@ def guided_setup(
     from ctx.mcp_hosts import IntegrationError
 
     try:
+        if config_plan and config_plan.changes:
+            print(config_plan.render())
+            config_plan.apply()
         setup_report = setup_hosts(ws, target)
-    except (IntegrationError, OSError) as exc:
+    except (ConfigError, IntegrationError, OSError) as exc:
         print(f"  setup incomplete: {exc}", file=sys.stderr)
         record_setup(ws.root, target, strategy=strategy, success=False,
                      checks_total=1, checks_passed=0,
@@ -813,6 +827,7 @@ def wrap_setup(
     *,
     force_all: bool = False,
     force_repair: bool = False,
+    apply_config: bool = False,
 ) -> int:
     """Single-command multi-host setup. By default this now *detects* which
     coding-agent CLIs are installed and configures exactly those (reporting the
@@ -832,10 +847,21 @@ def wrap_setup(
 
     ws = resolve_workspace(str(workspace_root))
 
-    if os.environ.get("CTX_SETUP_PLAIN") != "1":
+    if os.environ.get("CTX_SETUP_PLAIN") != "1" or apply_config:
         return guided_setup(
-            ws, hosts, force_all=force_all, force_repair=force_repair
+            ws, hosts, force_all=force_all, force_repair=force_repair, apply_config=apply_config
         )
+
+    from ctx.host_config import HOSTS as CONFIG_HOSTS, plan_configuration
+    selected = hosts
+    if selected is None:
+        from ctx.hosts import detect_all
+        selected = [d.name for d in detect_all(workspace_root=ws.root) if d.installed and d.harnessable] if not force_all else []
+        selected = selected or [name for name in SETUP_HOSTS if name != "hermes"]
+    config_plan = plan_configuration(ws.root, [h for h in selected if h in CONFIG_HOSTS])
+    if config_plan.blockers or config_plan.requires_review:
+        print(config_plan.render())
+        return 1
 
     if hosts is None and not force_all:
         from ctx.hosts import detect_all

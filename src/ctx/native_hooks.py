@@ -112,10 +112,11 @@ def install(host: str, root: Path) -> str:
 
 def checks(root: Path):
     from ctx.mcp_hosts import FILES
+    from ctx.host_config import owned_hosts
     rows = []
     for host, relative in PATHS.items():
         path = root / relative
-        if not path.exists() and not (root / FILES[host]).exists():
+        if not path.exists() and not (root / FILES[host]).exists() and not (host == "opencode" and ((root / "opencode.jsonc").exists() or host in owned_hosts(root))):
             continue
         try:
             ok = path.read_text() == render(host)
