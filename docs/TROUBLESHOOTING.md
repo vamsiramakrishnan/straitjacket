@@ -44,25 +44,29 @@ skill. The two must not coexist.
 **Fix:** remove `.agents/skills/ctx-harness`, then re-run setup. (`ctx doctor
 --antigravity` reports this as the `no duplicate installation` check.)
 
-### Codex: setup printed a snippet instead of editing `.codex/config.toml`
+### Codex or OpenCode: setup stopped with a configuration diff
 
-**Not a failure — by design.** straitjacket never rewrites an existing
-`.codex/config.toml` in place (editing a TOML with duplicate tables is a
-data-loss hazard). If the file exists but doesn't yet register `ctx-harness`,
-setup prints the exact `[mcp_servers.ctx-harness]` snippet for you to paste.
-Add it, then ensure the existing `[features]` table contains `hooks = true`
-(create the table if absent; do not add a duplicate table). Rerun `ctx setup`
-after both changes.
+Setup previews changes before editing existing user configuration. Review the
+exact diff, then run `ctx setup --host codex --apply` or
+`ctx setup --host opencode --apply` for safe additions. The same plan powers
+`ctx setup --host <name> --preview`, repair and removal.
+
+If setup names a conflict, `--apply` still refuses. Reconcile that exact entry
+using the proposed diff: for example, decide whether to enable an explicitly
+disabled hook or replace a different `ctx-harness` server. Comments and other
+integrations are preserved. Invalid syntax and duplicate keys require repair
+at the reported location before a structural diff can be generated.
 
 ### Codex: `MCP client for ctx-harness failed to start: No such file or directory`
 
-**Cause:** an older generated fallback put the whole `python -m ctx` invocation
-in the MCP `command` field. Codex launches that field directly, without a
-shell, so the executable and its arguments must be separate. **Fix:** upgrade
-`ctx-harness`, run `ctx wrap codex` once to refresh a ctx-managed config, and
-restart Codex. The corrected block has `command = "/path/to/python"` and begins
-`args` with `"-m", "ctx"`. If your `.codex/config.toml` is user-managed, setup
-will print the corrected snippet instead of rewriting the file.
+An older generated fallback put the whole `python -m ctx` invocation in MCP
+`command`. Codex launches that field directly, without a shell. Preview the
+repair with `ctx setup --host codex --preview`. The corrected entry separates
+`command = "/path/to/python"` from `args = ["-m", "ctx", "mcp", "--bounded-only"]`.
+Owned entries are repairable when they still match the recorded value. Legacy
+entries without an ownership record need the shown correction reviewed and
+integrated before setup proceeds; the old banner does not authorize overwrites.
+Restart Codex afterward.
 
 ### Codex: `PreToolUse hook returned unsupported permissionDecision:allow`
 
@@ -263,6 +267,11 @@ steering everywhere, set `[guard] mode = "advisory"` — but note that only
 neutralizes the PreToolUse guard; the PostToolUse digest gate and the `ctx` MCP
 tool stay registered. To fully remove the host integration, delete the files
 `ctx wrap` added (this is exactly what each host's setup output tells you):
+
+For Codex and OpenCode installs created by the configuration planner, use
+`ctx setup --host codex --host opencode --remove` to preview owned removal;
+add `--apply` to execute it. Other integrations and unowned entries remain.
+The following manual steps also cover older installs without ownership records.
 
 - **Antigravity** — remove the `.agents/plugins/ctx-harness/` directory. In
   `~/.gemini/antigravity-cli/settings.json`, remove `statusLine` only when its

@@ -18,6 +18,7 @@ _RECEIPT_NAME = "setup.json"
 _MANAGED_FILES = (
     "ctx.toml",
     ".ctxignore",
+    ".ctx/host-config.json",
     ".agents/plugins/ctx-harness/plugin.json",
     ".agents/plugins/ctx-harness/hooks.json",
     ".agents/plugins/ctx-harness/mcp_config.json",

@@ -9,6 +9,13 @@ SRC = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC))
 
 
+@pytest.fixture(autouse=True)
+def isolated_host_home(tmp_path_factory, monkeypatch):
+    """Installers may write global host settings: never use a developer's home."""
+    home = tmp_path_factory.mktemp("host-home")
+    monkeypatch.setenv("HOME", str(home))
+
+
 @pytest.fixture()
 def state_home(tmp_path, monkeypatch):
     """Isolated artifact store per test (never the user's real state dir)."""

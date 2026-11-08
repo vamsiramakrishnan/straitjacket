@@ -190,9 +190,12 @@ context residency—not the highest compression ratio.
 | OpenCode | Native argument rewriting and text-output replacement; project plugin + MCP |
 | DeepSeek Harness (`dsh`) | Native gating and text-output replacement; sealed arguments require an explicit retry |
 
-`ctx setup` merges JSON where safe and refreshes ctx-managed blocks. For
-user-owned Codex TOML it prints a reviewed snippet rather than replacing the
-file. See [host capabilities](docs/HOST-CAPABILITIES.md) for exact coverage.
+`ctx setup` preserves unrelated settings and refreshes managed blocks. For
+Codex TOML and OpenCode JSONC, preview exact source edits with
+`ctx setup --host codex --host opencode --preview`; accept safe additions with
+`--apply`. Conflicting user values still refuse. See
+[setup and removal](docs/GETTING-STARTED.md) and
+[host capabilities](docs/HOST-CAPABILITIES.md) for exact coverage.
 
 [Set up Hermes, OMP, OpenCode, or DSH](docs/AGENT-INTEGRATIONS.md). These adapters
 have executable contract tests; live model-session receipts remain pending.

@@ -143,18 +143,16 @@ def test_user_owned_codex_config_refuses_before_any_managed_write(
 
     assert wrap.guided_setup(setup_ws) == 1
     output = capsys.readouterr().out
-    assert "one reviewed edit needed" in output
-    assert "[mcp_servers.ctx-harness]" in output
-    assert "[features]" in output
-    assert "hooks = true" in output
+    assert "Existing configuration requires review" in output
+    assert '"mcp_servers"."ctx-harness"' in output
+    assert '"features"."hooks" = true' in output
+    assert "--host codex --apply" in output
     assert "[tui]" not in output
-    assert "managed files were not changed" in output
+    assert "no files or readiness receipt were changed" in output
     assert config.read_text(encoding="utf-8") == original
     assert not (setup_ws.root / ".codex" / "hooks.json").exists()
     assert not (setup_ws.root / "AGENTS.md").exists()
-    receipt = load_setup_receipt(setup_ws.root)
-    assert receipt["success"] is False
-    assert receipt["strategy"] == "refuse_unmanaged"
+    assert load_setup_receipt(setup_ws.root) is None
 
 
 def test_wrap_codex_propagates_user_owned_config_refusal(setup_ws, capsys):
@@ -170,7 +168,9 @@ def test_wrap_codex_propagates_user_owned_config_refusal(setup_ws, capsys):
     assert wrap.wrap_codex(setup_ws.root) == 1
     captured = capsys.readouterr()
     assert "one reviewed edit needed" in captured.out
-    assert "Update the existing [mcp_servers.ctx-harness] table" in captured.out
+    assert 'mcp_servers.ctx-harness.command conflicts' in captured.out
+    assert '-command = "stale-ctx"' in captured.out
+    assert '+++ b/.codex/config.toml' in captured.out
     assert "Add this reviewed entry" not in captured.out
     assert "now harnessed" not in captured.out + captured.err
 
@@ -216,8 +216,9 @@ def test_ctx_managed_codex_config_with_removed_mcp_is_repaired(setup_ws):
 
     report = install_codex(setup_ws, init_policy=False)
 
-    assert "refreshed managed .codex/config.toml" in report
-    assert "[mcp_servers.ctx-harness]" in config.read_text(encoding="utf-8")
+    assert "wrote .codex/config.toml" in report
+    import tomllib
+    assert "ctx-harness" in tomllib.loads(config.read_text())["mcp_servers"]
 
 
 def test_doctor_rejects_broken_codex_mcp_launch_contract(setup_ws):

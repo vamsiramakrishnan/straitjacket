@@ -112,8 +112,9 @@ def test_bad_config_refuses_without_writes(host, content, workspace_dir):
 def test_jsonc_is_never_shadowed(workspace_dir):
     path = workspace_dir / "opencode.jsonc"
     path.write_text('{ // keep my comment\n "model": "my-choice"\n}')
-    with pytest.raises(mh.IntegrationError, match="JSONC"):
-        mh.install("opencode", make_ws(workspace_dir))
+    mh.install("opencode", make_ws(workspace_dir))
+    from ctx.config_edit import JSONSource
+    assert JSONSource(path.read_text()).data["mcp"][mh.SERVER]["enabled"] is True
     assert not (workspace_dir / "opencode.json").exists()
     assert "keep my comment" in path.read_text()
 

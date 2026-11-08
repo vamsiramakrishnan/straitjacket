@@ -6,6 +6,12 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- Preview and safely merge Codex TOML and OpenCode JSON/JSONC configuration
+  through parsed source edits. Preserve comments and other integrations,
+  refuse conflicting values with exact diffs, and track contributions for
+  idempotent repair and owned removal. Doctor checks every Codex lifecycle
+  stage and detects partial OpenCode JSONC integrations.
+
 ## [0.43.0] - 2026-11-07
 
 - `ctx.toolresult` classifies command intent (`projection`, `flood`, `standard`),

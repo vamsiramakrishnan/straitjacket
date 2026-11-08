@@ -103,8 +103,6 @@ def _merged(host: str, root: Path, expected: dict | list) -> dict | list:
     path = root / FILES[host]
     if path.is_symlink() or any(p.is_symlink() for p in path.parents if p != root and root in p.parents):
         raise IntegrationError(f"Refusing to write through a symlink: {FILES[host]}")
-    if host == "opencode" and (root / "opencode.jsonc").exists():
-        raise IntegrationError("opencode.jsonc exists; merge the `ctx wrap opencode --print-config` mcp entry there. ctx will not shadow or rewrite JSONC.")
     if not path.exists():
         return expected
     current = _read(path)
@@ -112,7 +110,7 @@ def _merged(host: str, root: Path, expected: dict | list) -> dict | list:
         if current != expected:
             raise IntegrationError(f"{FILES[host]} differs from the generated configuration; move it aside or reconcile it before setup.")
         return current
-    key = "mcp" if host == "opencode" else "mcpServers"
+    key = "mcpServers"
     if not isinstance(current, dict) or not isinstance(current.get(key, {}), dict):
         raise IntegrationError(f"{FILES[host]} must contain an object at {key}.")
     servers = current.setdefault(key, {})
@@ -129,6 +127,10 @@ def _merged(host: str, root: Path, expected: dict | list) -> dict | list:
 
 
 def conflicts(host: str, root: Path) -> list[str]:
+    if host == "opencode":
+        from ctx.host_config import plan_configuration
+        plan = plan_configuration(root, [host])
+        return [plan.render()] if plan.blockers else []
     from ctx.native_hooks import conflicts as hook_conflicts
     problems = hook_conflicts(host, root)
     if problems:
@@ -165,6 +167,20 @@ def _write(path: Path, value: dict | list) -> None:
 def install(host: str, ws, *, init_policy: bool = True) -> str:
     from ctx.installer import init_workspace
 
+    if host == "opencode":
+        from ctx.config_edit import ConfigError
+        from ctx.host_config import plan_configuration
+        plan = plan_configuration(ws.root, [host])
+        if plan.blockers:
+            raise IntegrationError(plan.render())
+        try:
+            plan.apply()
+        except ConfigError as exc:
+            raise IntegrationError(str(exc)) from exc
+        if init_policy:
+            init_workspace(ws.root, quiet=True)
+        return plan.render() + "\n" + next_step(host, ws.root)
+
     problems = conflicts(host, ws.root)
     if problems:
         raise IntegrationError("\n".join(problems))
@@ -200,6 +216,27 @@ def checks(root: Path) -> list[tuple[str, bool, str]]:
     rows = []
     for host in HOSTS:
         path = root / FILES[host]
+        if host == "opencode":
+            from ctx.config_edit import ConfigError, JSONSource
+            from ctx.host_config import opencode_path, owned_hosts, _read as read_config
+            from ctx.native_hooks import PATHS
+            if not any((root / p).exists() for p in ("opencode.json", "opencode.jsonc", PATHS[host])) and host not in owned_hosts(root):
+                continue
+            try:
+                path = root / opencode_path(root)
+                raw = read_config(root, path.name)
+                if raw is None:
+                    raise ConfigError(f"{path.name} is missing; rerun ctx setup --host opencode --preview")
+                current = JSONSource(raw.decode("utf-8")).data
+                expected = configuration(host, root)["mcp"][SERVER]
+                actual = current.get("mcp", {}).get(SERVER) if isinstance(current, dict) and isinstance(current.get("mcp", {}), dict) else None
+                disabled = current.get("disabledServers", []) if isinstance(current, dict) else []
+                ok = (isinstance(actual, dict) and isinstance(disabled, list) and SERVER not in disabled
+                      and all(type(actual.get(k)) is type(v) and actual.get(k) == v for k, v in expected.items()))
+                rows.append(("opencode MCP", ok, str(path.name) + (" verified; Start: opencode" if ok else ": MCP entry missing, disabled or changed; rerun ctx setup --host opencode --preview")))
+            except (ConfigError, OSError, UnicodeError, ValueError) as exc:
+                rows.append(("opencode MCP", False, str(exc)))
+            continue
         if not path.exists():
             continue
         try:
@@ -210,12 +247,10 @@ def checks(root: Path) -> list[tuple[str, bool, str]]:
             elif host == "dsh":
                 ok = current == expected
             else:
-                key = "mcp" if host == "opencode" else "mcpServers"
+                key = "mcpServers"
                 ok = (isinstance(current, dict) and isinstance(current.get(key), dict)
                       and current[key].get(SERVER) == expected[key][SERVER]
                       and SERVER not in current.get("disabledServers", []))
-                if host == "opencode" and (root / "opencode.jsonc").exists():
-                    ok = False
             detail = "config verified; " + next_step(host, root) if ok else "configuration missing or changed; rerun setup"
         except (IntegrationError, TypeError) as exc:
             ok, detail = False, str(exc)
@@ -231,6 +266,14 @@ def wrap(host: str, root: Path, agent_args: list[str] | None = None) -> int:
     try:
         if host == "hermes" and any(arg in ("--profile", "-p") or arg.startswith("--profile=") for arg in (agent_args or [])):
             raise IntegrationError("Select the Hermes profile before setup (or set HERMES_HOME for setup and launch); a launch-only --profile would configure a different profile.")
+        if host == "opencode":
+            from ctx.host_config import plan_configuration
+            plan = plan_configuration(root, [host])
+            if plan.blockers or plan.requires_review:
+                print(plan.render())
+                return 1
+            if plan.changes:
+                print(plan.render())
         print(install(host, resolve_workspace(str(root))))
         if not agent_args:
             return 0 if all(ok for name, ok, _ in checks(root) if name.startswith(host + " ")) else 1

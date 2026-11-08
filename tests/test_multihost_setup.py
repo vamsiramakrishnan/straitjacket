@@ -56,7 +56,7 @@ def test_install_codex_splits_python_module_fallback(monkeypatch, workspace_dir)
     assert server["args"] == ["-m", "ctx", "mcp", "--bounded-only"]
 
 
-def test_install_codex_repairs_its_managed_legacy_mcp_command(
+def test_codex_legacy_banner_does_not_authorize_overwriting_user_settings(
     monkeypatch, workspace_dir
 ):
     import ctx.installer as installer
@@ -72,12 +72,19 @@ def test_install_codex_repairs_its_managed_legacy_mcp_command(
     )
     monkeypatch.setattr(installer.shutil, "which", lambda _name: None)
 
-    report = installer.install_codex(make_ws(workspace_dir))
-    data = tomllib.loads((codex_dir / "config.toml").read_text(encoding="utf-8"))
-    server = data["mcp_servers"]["ctx-harness"]
-    assert server["command"] == sys.executable
-    assert server["args"] == ["-m", "ctx", "mcp", "--bounded-only"]
-    assert "refreshed managed .codex/config.toml" in report
+    from ctx.host_config import plan_configuration
+    from ctx.mcp_hosts import IntegrationError
+    import pytest
+
+    config = codex_dir / "config.toml"
+    config.write_text(config.read_text() + '\n[my.settings]\nvalue = "keep"\n')
+    before = config.read_bytes()
+    plan = plan_configuration(workspace_dir, ["codex"])
+    assert plan.blockers
+    assert '-command = ' in plan.render()
+    with pytest.raises(IntegrationError):
+        installer.install_codex(make_ws(workspace_dir))
+    assert config.read_bytes() == before
 
 
 def test_install_codex_idempotent_and_nondestructive(workspace_dir):
@@ -93,7 +100,6 @@ def test_install_codex_idempotent_and_nondestructive(workspace_dir):
     agents = (workspace_dir / "AGENTS.md").read_text(encoding="utf-8")
     assert "House rules stay." in agents  # user content preserved
     assert agents.count("<!-- ctx-harness:start -->") == 1  # block not duplicated
-    assert "already registers ctx-harness" in report2
     assert "already harnessed" in report2
 
 
@@ -106,8 +112,11 @@ def test_install_codex_preserves_existing_config(workspace_dir):
     cfg.write_text(original, encoding="utf-8")
 
     report = install_codex(make_ws(workspace_dir))
-    assert cfg.read_text(encoding="utf-8") == original  # never rewritten in place
-    assert "add these lines" in report
+    assert original in cfg.read_text(encoding="utf-8")
+    data = tomllib.loads(cfg.read_text())
+    assert data["mcp_servers"]["other"]["command"] == "x"
+    assert data["features"]["hooks"] is True
+    assert "wrote .codex/config.toml" in report
 
 
 # ------------------------------------------------------------------ Claude install

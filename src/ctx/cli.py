@@ -399,6 +399,10 @@ def _build_parser():
         "--repair", action="store_true",
         help="bypass the ready receipt, refresh managed config, and verify again",
     )
+    config_mode = p_setup.add_mutually_exclusive_group()
+    config_mode.add_argument("--preview", action="store_true", help="show exact Codex/OpenCode configuration diffs without writing")
+    config_mode.add_argument("--apply", action="store_true", help="apply safe configuration additions after preview; conflicts still refuse")
+    p_setup.add_argument("--remove", action="store_true", help="preview removal of owned Codex/OpenCode contributions; add --apply to remove")
     p_setup.add_argument("--acp", action="store_true", help="configure ACP orchestration for one --host")
     p_setup.add_argument("--acp-model", help="exact model id advertised by the ACP agent")
     p_setup.add_argument("--acp-command", help="override ACP command as a JSON argv array")
