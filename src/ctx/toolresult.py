@@ -107,7 +107,7 @@ _DEFAULT_INLINE_LINES = 240
 _DEFAULT_RESULT_TOKENS = 1200
 
 
-def _command_intent(cmd_str: str) -> str:
+def _command_intent(cmd_str: str, _depth: int = 0) -> str:
     """Classify shell command intent: ``'projection'``, ``'flood'``, or ``'standard'``.
 
     Explicit data projections (``python -c``, ``jq``, ``awk``, ``pdftotext``)
@@ -120,9 +120,32 @@ def _command_intent(cmd_str: str) -> str:
         import os
         import shlex
 
+        if _depth > 4:
+            return "standard"
         s = (cmd_str or "").strip()
         if not s:
             return "standard"
+        try:
+            lead_argv = shlex.split(s)
+        except ValueError:
+            lead_argv = None
+        if lead_argv:
+            try:
+                from ctx.hook import _unwrap
+
+                unwrapped = _unwrap(lead_argv)
+            except Exception:
+                unwrapped = lead_argv
+            if unwrapped:
+                uprog = os.path.basename(unwrapped[0])
+                if (
+                    uprog in ("bash", "sh", "zsh", "dash")
+                    and len(unwrapped) >= 3
+                    and unwrapped[1] in ("-c", "-lc")
+                ):
+                    return _command_intent(unwrapped[2], _depth + 1)
+                if unwrapped != lead_argv:
+                    s = shlex.join(unwrapped)
         for sep in ("&&", ";"):
             if s.startswith("cd ") and sep in s:
                 head_seg, rest_seg = s.split(sep, 1)
@@ -146,8 +169,8 @@ def _command_intent(cmd_str: str) -> str:
         if not argv:
             return "standard"
         prog = os.path.basename(argv[0])
-        if prog in ("bash", "sh", "zsh") and len(argv) >= 3 and argv[1] in ("-c", "-lc"):
-            return _command_intent(argv[2])
+        if prog in ("bash", "sh", "zsh", "dash") and len(argv) >= 3 and argv[1] in ("-c", "-lc"):
+            return _command_intent(argv[2], _depth + 1)
         if prog in _PROJECTION_PROGS:
             return "projection"
         if prog in _FLOOD_PROGS:

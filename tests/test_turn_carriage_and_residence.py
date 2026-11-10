@@ -13,9 +13,10 @@ import jsonschema
 
 from conftest import make_store, make_ws
 from ctx._retrieval.get import Selector, _effective_result_tokens, get
+from ctx.deliverables import audit_deliverables, extract_declared_deliverables
 from ctx.execution import generation_hash, run_capture
 from ctx.proxywindow import window_path
-from ctx.residence import WatermarkResidence
+from ctx.residence import WatermarkResidence, extract_mutation_receipts
 from ctx.toolresult import _command_intent, _inline_thresholds, render_command_result
 
 SCHEMA = json.loads(
@@ -37,15 +38,42 @@ def test_command_intent_classifies_projections_floods_and_standard():
     assert _command_intent("cd sub && jq '.items' data.json") == "projection"
     assert _command_intent("cat rows.jsonl | head -n 20") == "projection"
     assert _command_intent('bash -lc "python -c \'import json\'"') == "projection"
+    assert (
+        _command_intent(
+            "bwrap --die-with-parent --unshare-pid --dev /dev --proc /proc "
+            "--bind /tmp/run /task --chdir /task -- bash -c \"python3 -c 'print(42)'\""
+        )
+        == "projection"
+    )
+    assert (
+        _command_intent(
+            "bwrap --die-with-parent --unshare-pid --bind /tmp/run /task -- "
+            "bash -c 'cat /task/workspace/rows.jsonl | jq .'"
+        )
+        == "projection"
+    )
 
     assert _command_intent("ps aux") == "flood"
     assert _command_intent("git log -n 50") == "flood"
     assert _command_intent("git diff HEAD~1") == "flood"
     assert _command_intent("find . -maxdepth 4") == "flood"
     assert _command_intent("ls -la /tmp") == "flood"
+    assert (
+        _command_intent(
+            "bwrap --die-with-parent --unshare-pid --dev /dev --proc /proc "
+            "--chdir /task -- bash -c 'ps aux'"
+        )
+        == "flood"
+    )
 
     assert _command_intent("pytest tests/test_bounds.py -q") == "standard"
     assert _command_intent("") == "standard"
+
+    from ctx.reflex import command_signature
+
+    assert command_signature(
+        "bwrap --die-with-parent --unshare-pid --bind /tmp/run /task -- bash -c 'pytest tests/test_x.py -q'"
+    ) == command_signature("pytest tests/test_x.py -q")
 
 
 def test_inline_passthrough_honours_16k_default_and_projection_ceiling(state_home, workspace_dir):
@@ -364,3 +392,408 @@ def test_watermark_residence_honours_media_and_standard_epoch_ceilings():
     res.record_model_turn(5, 5_000)
     assert res.maybe_compact(contents) == (0, 0)
     assert res.epochs == 1
+
+
+def test_watermark_residence_char_watermark_and_superseded_ui_controls():
+    res = WatermarkResidence(
+        k_keep=1,
+        thought_watermark=20_000,
+        char_watermark=10_000,
+        strip_superseded_ui_controls=True,
+    )
+    controls_block = "\n".join(f"[e{i}] <button> Item {i} action button" for i in range(1, 90))
+    inbox_body = "Inbox view:\n" + "\n".join(f"Thread #{i}: Urgent launch review item {i}" for i in range(1, 35))
+    detail_body = "Thread detail:\nSupplier confirmed MOQ=500 and FOB=$3.20 with carton spec."
+
+    snap1 = (
+        "[Snapshot] targetId=t1 | url=http://localhost/mail | title=Mail\n"
+        f"=== Interactive Elements (89) ===\n{controls_block}\n\n"
+        f"=== Visible Page Text ===\n{inbox_body}"
+    )
+    snap2_dup_inbox = (
+        "[Clicked e2] targetId=t1 | url=http://localhost/mail | title=Mail\n"
+        f"=== Interactive Elements (89) ===\n{controls_block}\n\n"
+        f"=== Visible Page Text ===\n{inbox_body}"
+    )
+    snap3_unique_detail = (
+        "[Clicked e5] targetId=t1 | url=http://localhost/mail/5 | title=Thread 5\n"
+        f"=== Interactive Elements (89) ===\n{controls_block}\n\n"
+        f"=== Visible Page Text ===\n{detail_body}"
+    )
+    snap4_latest = (
+        "[Clicked e9] targetId=t1 | url=http://localhost/mail/9 | title=Thread 9\n"
+        f"=== Interactive Elements (89) ===\n{controls_block}\n\n"
+        "=== Visible Page Text ===\nLatest live page text"
+    )
+
+    contents: list[dict] = [{"role": "user", "parts": [{"text": "triage inbox"}]}]
+    for idx_step, snap in enumerate((snap1, snap2_dup_inbox, snap3_unique_detail, snap4_latest)):
+        contents.extend(_tool_pair("browser_click", {"ref": f"e{idx_step + 1}"}, snap))
+        # Low thoughts (300 tok/step << 20,000 thought_watermark), so char_watermark triggers compaction!
+        res.record_model_turn(1 + 2 * idx_step, 300)
+
+    compacted_pairs, compacted_thoughts = res.maybe_compact(contents)
+    assert compacted_pairs == 3
+    assert compacted_thoughts == 900
+    assert res.ui_controls_stripped_chars > 5_000
+
+    # Pair 1: superseded [e1]..[e89] stripped, unique inbox Visible Page Text retained verbatim.
+    u1 = contents[2]["parts"][0]["text"]
+    assert "[superseded element refs" in u1
+    assert "[e1] <button>" not in u1
+    assert "Thread #34: Urgent launch review item 34" in u1
+
+    # Pair 2: identical >400-char inbox Visible Page Text deduplicated.
+    u2 = contents[4]["parts"][0]["text"]
+    assert "[visible page text identical to earlier snapshot above]" in u2
+
+    # Pair 3: unique thread detail text preserved 100% verbatim while controls stripped.
+    u3 = contents[6]["parts"][0]["text"]
+    assert "[superseded element refs" in u3
+    assert "MOQ=500 and FOB=$3.20" in u3
+
+    # Pair 4 (trailing k_keep=1): live interactive controls stay completely untouched.
+    u4 = contents[8]["parts"][0]["functionResponse"]["response"]["output"]
+    assert "[e1] <button> Item 1 action button" in u4
+
+
+def test_watermark_residence_cache_breakeven_media_pinning_and_mutation_ledger():
+    # Default WatermarkResidence() uses zero arbitrary watermarks or epoch caps:
+    # min_cache_tokens=6_144, cache_read_ratio=0.10, pin_media_turns=True.
+    res = WatermarkResidence()
+    assert res.thought_watermark is None
+    assert res.max_epochs is None
+    assert res.pin_media_turns is True
+
+    contents: list[dict] = [{"role": "user", "parts": [{"text": "Audit and update records"}]}]
+    img = {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}
+
+    # Step 1 (indices 1, 2): multimodal image inspection turn -> pinned in place under normal window occupancy.
+    contents.extend(
+        _tool_pair(
+            "read",
+            {"file_path": "label.png", "state_note": "label SKU=B9 verified"},
+            "Loaded image label.png",
+            media_parts=[img],
+        )
+    )
+    res.record_model_turn(1, 5_000)
+
+    # Steps 2..5 (indices 3..10): low thoughts (400 tok/step -> 1,200 dead tokens < 6,144 min_cache_tokens).
+    contents.extend(
+        _tool_pair(
+            "write",
+            {"file_path": "out/stage1.json", "content": '{"ok": true}', "state_note": "wrote stage1"},
+            "wrote out/stage1.json",
+        )
+    )
+    res.record_model_turn(3, 400)
+    for step_n in (3, 4, 5):
+        contents.extend(_tool_pair("bash", {"command": f"echo {step_n}"}, f"{step_n}\n"))
+        res.record_model_turn(1 + 2 * (step_n - 1), 400)
+
+    # Below 6,144 min_cache_tokens -> stays strictly append-only.
+    assert res.maybe_compact(contents) == (0, 0)
+
+    # Steps 6..9: step 6 (6K) enters eligible (D=7,600 >= 6,144), while steps 7 (6K) & 8 (5K)
+    # sit inside the cached k_keep tail (invalidated_cached_tokens ~11,100). Compacting right
+    # now would re-bill steps 7 & 8 uncached (cost 9,990 > savings 6,840), so break-even defers!
+    for step_n, t_tok in ((6, 6_000), (7, 6_000), (8, 5_000), (9, 1_000)):
+        contents.extend(_tool_pair("bash", {"command": f"python3 check_{step_n}.py"}, "verified\n"))
+        res.record_model_turn(1 + 2 * (step_n - 1), t_tok)
+    assert res.maybe_compact(contents) == (0, 0)
+
+    # Steps 10..11 (low thoughts): steps 7 & 8 age out of k_keep into eligible (D=18,600,
+    # invalidated tail ~1,500) -> single amortized compaction epoch fires!
+    for step_n in (10, 11):
+        contents.extend(_tool_pair("bash", {"command": f"python3 check_{step_n}.py"}, "verified\n"))
+        res.record_model_turn(1 + 2 * (step_n - 1), 500)
+
+    compacted_pairs, compacted_thoughts = res.maybe_compact(contents)
+    assert compacted_pairs == 7  # steps 2..8 compacted; step 1 (media) stays pinned; steps 9..11 are k_keep=3
+    assert compacted_thoughts == (400 * 4 + 6_000 + 6_000 + 5_000)
+    assert res.mutations_preserved == 1
+
+    # Step 1 (indices 1, 2) remains an uncompacted multimodal functionCall/functionResponse turn!
+    assert any("functionCall" in p for p in contents[1]["parts"])
+    assert "functionResponse" in contents[2]["parts"][0]
+
+    # Step 2 (index 3) was tagged [mutated], and the epoch boundary (step 8, index 15) carries [prior-mutations].
+    assert "[mutated] write(" in contents[3]["parts"][0]["text"]
+    boundary_text = contents[15]["parts"][0]["text"]
+    assert "[prior-mutations (1)] write(file_path='out/stage1.json'" in boundary_text
+
+    # Verify frozen prefix invariance across Epoch 2 (indices 0..16 stay byte-identical).
+    frozen_prefix = copy.deepcopy(contents[:17])
+    for step_n in (12, 13, 14, 15):
+        contents.extend(_tool_pair("bash", {"command": f"echo {step_n}"}, "ok\n"))
+        res.record_model_turn(1 + 2 * (step_n - 1), 3_000)
+    for step_n in (16, 17):
+        contents.extend(_tool_pair("bash", {"command": f"echo {step_n}"}, "ok\n"))
+        res.record_model_turn(1 + 2 * (step_n - 1), 400)
+
+    comp2, _ = res.maybe_compact(contents)
+    assert comp2 >= 4
+    assert contents[:17] == frozen_prefix
+    assert "[prior-mutations (1)]" in contents[15 + 2 * comp2]["parts"][0]["text"]
+
+
+def test_deliverables_extraction_and_audit_sparsity_and_hygiene(tmp_path: Path):
+    prompt = (
+        "Inspect `/task/workspace/raw_claims.csv` and write `/task/outputs/claims_audit.json` "
+        "plus `outputs/executive_brief.md`.\n\n"
+        "Save all deliverables under `/task/outputs/`: `remediation.csv`, `badge.svg`, "
+        "ignoring wildcard examples like `outputs/*.tmp` or `outputs/claim_0X.json`."
+    )
+    declared = extract_declared_deliverables(prompt)
+    assert declared == [
+        "outputs/claims_audit.json",
+        "outputs/executive_brief.md",
+        "outputs/remediation.csv",
+        "outputs/badge.svg",
+    ]
+
+    ws = tmp_path / "task_ws"
+    out_dir = ws / "outputs"
+    out_dir.mkdir(parents=True)
+
+    # 1. Missing declared deliverables + stray helper script -> blocking defects.
+    (out_dir / "helper_build.py").write_text("print('temp')\n", encoding="utf-8")
+    (out_dir / "claims_audit.json").write_text(
+        json.dumps(
+            {
+                "claims": [
+                    {"claim_id": "CLM-001", "status": "substantiated", "replacement_text": "Verified 12h"},
+                    {"claim_id": "CLM-002", "status": "needs_edit", "replacement_text": ""},
+                    {"claim_id": "CLM-003", "status": "needs_edit", "replacement_text": "Tested to IPX4"},
+                    {"claim_id": "CLM-004", "status": "substantiated", "replacement_text": "2-year warranty"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (out_dir / "executive_brief.md").write_text(
+        "# Executive Brief\n\n- Audited 4 marketplace claims.\n",
+        encoding="utf-8",
+    )
+
+    audit1 = audit_deliverables(
+        ws,
+        ["/task/outputs/claims_audit.json"],
+        declared_paths=declared,
+    )
+    assert audit1.has_blocking_defects is True
+    assert audit1.should_gate is True
+    gate_txt = audit1.format_gate_message()
+    assert "outputs/remediation.csv" in gate_txt
+    assert "outputs/badge.svg" in gate_txt
+    assert "helper_build.py" in gate_txt
+    # Existing executive_brief.md omitted from present_files is flagged as [CHECK].
+    assert "executive_brief.md" in gate_txt and "omitted from present_files" in gate_txt
+    # Sparse empty `replacement_text` on CLM-002 (populated on 3/4 records) is flagged with record ID!
+    assert "CLM-002" in gate_txt and "replacement_text" in gate_txt
+
+    # 2. Populate remaining files cleanly and remove stray script -> zero defects or advisories!
+    (out_dir / "helper_build.py").unlink()
+    (out_dir / "claims_audit.json").write_text(
+        json.dumps(
+            {
+                "claims": [
+                    {"claim_id": "CLM-001", "status": "substantiated", "replacement_text": "Verified 12h"},
+                    {"claim_id": "CLM-002", "status": "needs_edit", "replacement_text": "Water-resistant shell"},
+                    {"claim_id": "CLM-003", "status": "needs_edit", "replacement_text": "Tested to IPX4"},
+                    {"claim_id": "CLM-004", "status": "substantiated", "replacement_text": "2-year warranty"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (out_dir / "remediation.csv").write_text("claim_id,action\nCLM-002,rewrite\n", encoding="utf-8")
+    (out_dir / "badge.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>', encoding="utf-8")
+
+    audit2 = audit_deliverables(
+        ws,
+        [
+            "/task/outputs/claims_audit.json",
+            "/task/outputs/executive_brief.md",
+            "/task/outputs/remediation.csv",
+            "/task/outputs/badge.svg",
+        ],
+        declared_paths=declared,
+    )
+    assert audit2.has_blocking_defects is False
+    assert audit2.should_gate is False
+    assert len(audit2.structural_summary) == 4
+
+
+def test_deliverables_multistate_enum_conditional_nullability_without_binary_false_positives(tmp_path: Path):
+    ws = tmp_path / "enum_ws"
+    out_dir = ws / "outputs"
+    out_dir.mkdir(parents=True)
+
+    # 1. Multi-state enum (>=3 states: revise, approve, needs_more_evidence, remove) where
+    #    1 state is 100% populated (4/12 < 50%) and >=2 other states collapse to "".
+    (out_dir / "review.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {"id": "I-01", "decision": "revise", "replacement": "Fix A"},
+                    {"id": "I-02", "decision": "revise", "replacement": "Fix B"},
+                    {"id": "I-03", "decision": "revise", "replacement": "Fix C"},
+                    {"id": "I-04", "decision": "revise", "replacement": "Fix D"},
+                    {"id": "I-05", "decision": "approve", "replacement": ""},
+                    {"id": "I-06", "decision": "approve", "replacement": ""},
+                    {"id": "I-07", "decision": "needs_more_evidence", "replacement": ""},
+                    {"id": "I-08", "decision": "remove", "replacement": ""},
+                    {"id": "I-09", "decision": "remove", "replacement": ""},
+                    {"id": "I-10", "decision": "remove", "replacement": ""},
+                    {"id": "I-11", "decision": "remove", "replacement": ""},
+                    {"id": "I-12", "decision": "remove", "replacement": ""},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_multi = audit_deliverables(ws, ["outputs/review.json"])
+    assert audit_multi.should_gate is True
+    msg = audit_multi.format_gate_message()
+    assert "approve=0/2 [I-05, I-06]" in msg
+    assert "needs_more_evidence=0/1 [I-07]" in msg
+
+    # 2. Binary 2-state enum (error vs ok) must NOT fire a false-positive advisory!
+    (out_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "checks": [
+                    {"id": "C-1", "status": "error", "error_msg": "timeout"},
+                    {"id": "C-2", "status": "error", "error_msg": "bad_crc"},
+                    {"id": "C-3", "status": "ok", "error_msg": ""},
+                    {"id": "C-4", "status": "ok", "error_msg": ""},
+                    {"id": "C-5", "status": "ok", "error_msg": ""},
+                    {"id": "C-6", "status": "ok", "error_msg": ""},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_bin = audit_deliverables(ws, ["outputs/status.json"])
+    assert audit_bin.should_gate is False
+
+
+def test_watermark_residence_empirical_mutation_receipts_and_bash_classifiers():
+    cli_out = 'Uploading supplier dossier...\n✓ Created page "Supplier Evidence Handoff" (page_9f8e7d)\nDone.'
+    json_out = '{"ok": true, "id": "draft_4412", "status": "draft_created"}'
+    assert extract_mutation_receipts(cli_out) == ['Created page "Supplier Evidence Handoff" (page_9f8e7d)']
+    assert extract_mutation_receipts(json_out) == ["draft_4412 (draft_created)"]
+
+    res = WatermarkResidence(k_keep=1, thought_watermark=1_000)
+    contents: list[dict] = [{"role": "user", "parts": [{"text": "Run handoff"}]}]
+    # Opaque script command string, but empirical output carries creation receipt!
+    contents.extend(_tool_pair("bash", {"command": "python3 run_handoff.py"}, cli_out))
+    res.record_model_turn(1, 2_000)
+    # Multiline urllib POST + JSON-RPC tools/call mutation
+    mcp_cmd = (
+        "python3 - <<'PY'\n"
+        "import json, urllib.request\n"
+        'body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", '
+        '"params": {"name": "gmail.createDraft", "arguments": {"to": "v@example.com"}}}\n'
+        "req = urllib.request.Request('http://127.0.0.1:3000/mcp', headers={'Content-Type': 'application/json'}, data=json.dumps(body).encode())\n"
+        "PY"
+    )
+    contents.extend(_tool_pair("bash", {"command": mcp_cmd}, json_out))
+    res.record_model_turn(3, 2_000)
+    contents.extend(_tool_pair("bash", {"command": "ls outputs"}, "ok\n"))
+    res.record_model_turn(5, 500)
+
+    compacted_pairs, _ = res.maybe_compact(contents)
+    assert compacted_pairs == 2
+    assert res.mutations_preserved == 2
+    assert "[mutated] bash('python3 run_handoff.py')" in contents[1]["parts"][0]["text"]
+    boundary_summary = contents[3]["parts"][0]["text"]
+    assert '[prior-mutations (2)]' in boundary_summary
+    assert 'Created page "Supplier Evidence Handoff" (page_9f8e7d)' in boundary_summary
+    assert "draft_4412 (draft_created)" in boundary_summary
+
+
+def test_watermark_residence_empirical_single_tip_cache_avoids_thrash_and_respects_remaining_steps():
+    # 1. Single-tip rolling cache simulator: post-compaction cached_tokens drops to Turn-0 floor (3,600).
+    res_single = WatermarkResidence(k_keep=3)
+    contents: list[dict] = [{"role": "user", "parts": [{"text": "Initial task instructions " * 80}]}]
+    floor_tokens = 3_600
+
+    # Accumulate 8 heavy turns -> Epoch 1 compacts first 5 pairs (first_idx == 1, measures Turn-0 floor).
+    p_tok = floor_tokens
+    c_tok = 0
+    for step in range(1, 9):
+        res_single.observe_cache_usage(p_tok, c_tok)
+        idx = len(contents)
+        contents.extend(_tool_pair("bash", {"command": f"echo step_{step}"}, "result payload " * 180))
+        res_single.record_model_turn(idx, 3_500)
+        n_c, _ = res_single.maybe_compact(contents, remaining_steps=120 - step)
+        p_tok += 4_200
+        c_tok = floor_tokens if n_c else (p_tok - 4_200)
+
+    assert res_single.epochs == 1
+    assert res_single._single_tip_cache is False
+
+    # Next step observes post-Epoch-1 Turn-0 floor (first_idx == 1).
+    res_single.observe_cache_usage(22_000, floor_tokens)
+    assert res_single._retained_cache_floor == floor_tokens
+
+    # Accumulate enough turns for Epoch 2 (first_idx > 1, expected_retained_prefix >= min_probe).
+    p_tok = 26_000
+    c_tok = 21_000
+    while res_single.epochs < 2:
+        res_single.observe_cache_usage(p_tok, c_tok)
+        idx = len(contents)
+        contents.extend(_tool_pair("bash", {"command": f"echo mid_{idx}"}, "mid result " * 200))
+        res_single.record_model_turn(idx, 4_000)
+        n_c, _ = res_single.maybe_compact(contents, remaining_steps=90)
+        p_tok += 4_800
+        c_tok = floor_tokens if n_c else (p_tok - 4_800)
+
+    # Post-Epoch-2 API call reports cached_tokens reset to 3,600 despite >20K unchanged prefix -> learns single-tip!
+    res_single.observe_cache_usage(30_000, floor_tokens)
+    assert res_single._single_tip_cache is True
+    assert res_single._retained_cache_floor == floor_tokens
+
+    # Now simulate a deep 95K cached prefix with modest 7K dead thoughts across only 4 eligible turns:
+    # single-tip pricing + EOQ horizon must suppress premature thrashing!
+    for n_small in range(4):
+        res_single.observe_cache_usage(98_000 + n_small * 2_000, 94_000 + n_small * 2_000)
+        idx = len(contents)
+        contents.extend(_tool_pair("bash", {"command": f"echo small_{n_small}"}, "ok " * 60))
+        res_single.record_model_turn(idx, 1_800)
+        n_c, _ = res_single.maybe_compact(contents, remaining_steps=50)
+        assert n_c == 0
+    assert res_single.epochs == 2
+
+    # Near-end remaining_steps guard: even when EOQ break-even is reached over a full interval,
+    # a short remaining step budget skips an unamortizable cache reset.
+    for n_big in range(8):
+        idx = len(contents)
+        contents.extend(_tool_pair("bash", {"command": f"echo big_{n_big}"}, "ok " * 80))
+        res_single.record_model_turn(idx, 7_500)
+    res_single.observe_cache_usage(68_000, 55_000)
+    assert res_single.maybe_compact(contents, remaining_steps=0) == (0, 0)
+    assert res_single.maybe_compact(contents, remaining_steps=4) == (0, 0)
+
+    # With ample remaining steps and EOQ-amortized dead thoughts (12 * 0.10 * ~70K > 0.90 * 51.4K), compacts cleanly.
+    n_final, _ = res_single.maybe_compact(contents, remaining_steps=40)
+    assert n_final > 0
+    assert res_single.epochs == 3
+
+    # 2. Multi-checkpoint cache simulator: post-Epoch-2 cached_tokens retains prefix -> _single_tip_cache stays False.
+    res_multi = WatermarkResidence(k_keep=2)
+    m_contents: list[dict] = [{"role": "user", "parts": [{"text": "Task " * 100}]}]
+    for step in range(1, 12):
+        res_multi.observe_cache_usage(10_000 + step * 4_000, 8_000 + step * 3_500)
+        idx = len(m_contents)
+        m_contents.extend(_tool_pair("bash", {"command": f"echo m_{step}"}, "payload " * 250))
+        res_multi.record_model_turn(idx, 5_000)
+        n_mc, _ = res_multi.maybe_compact(m_contents, remaining_steps=80)
+        if n_mc and res_multi.epochs == 2:
+            # Retain 90% of expected prefix on the call immediately following Epoch 2.
+            res_multi.observe_cache_usage(45_000, max(20_000, int(0.9 * res_multi._expected_retained_prefix_tokens)))
+            break
+    assert res_multi._single_tip_cache is False

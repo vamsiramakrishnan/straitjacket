@@ -29,6 +29,7 @@ REQUIRED_FILES = {
     "ctx/data/native-hooks/opencode.mjs",
     "ctx/data/native-hooks/dsh.mjs",
     "ctx/acp.py",
+    "ctx/deliverables.py",
     "ctx/residence.py",
     "ctx/sdk.py",
     "ctx/toolresult.py",
