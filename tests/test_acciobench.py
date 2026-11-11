@@ -1526,6 +1526,69 @@ def test_resume_accepts_cached_results_only_for_the_same_configuration(
     assert (tmp_path / "work" / "superseded" / "legacy-model-old" / "file-fp__sj__t1_meta").is_dir()
 
 
+def test_supersede_never_deletes_a_previous_configurations_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dataclasses as _dc
+
+    import evals.acciobench.loop as loop_mod
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-sup")
+    cfg_a = BenchConfig(
+        dataset_root=ds_root, workdir=tmp_path / "work", model="model-a", provider="gemini",
+        api_key="dummy", judge_provider="mock", arms=("sj",),
+    )
+    cfg_b = _dc.replace(cfg_a, model="model-b")
+    run_dir = cfg_a.runs_dir / "file-sup__sj__t1"
+    sup = cfg_a.workdir / "superseded"
+
+    def go(cfg: BenchConfig) -> RunMetrics:
+        return run_trial(cfg, "file-sup", "sj", 33, _SolvingProvider())  # type: ignore[arg-type]
+
+    # A#1 -> B supersedes it -> A#2 supersedes B -> B supersedes A#2 under A's fingerprint again.
+    go(cfg_a)
+    (run_dir / "workspace" / "MARK_A1.txt").write_text("A1", encoding="utf-8")
+    go(cfg_b)
+    go(cfg_a)
+    (run_dir / "workspace" / "MARK_A2.txt").write_text("A2", encoding="utf-8")
+    go(cfg_b)
+    a1 = list(sup.glob("*/file-sup__sj__t1/workspace/MARK_A1.txt"))
+    a2 = list(sup.glob("*/file-sup__sj__t1/workspace/MARK_A2.txt"))
+    assert len(a1) == 1 and len(a2) == 1 and a1[0].parent.parent.parent != a2[0].parent.parent.parent
+    assert {p.name for p in sup.iterdir()} >= {a1[0].parents[2].name, a2[0].parents[2].name}
+    assert all((p / "file-sup__sj__t1_meta" / "result.json").is_file() for p in sup.iterdir())
+
+    # The move cannot start (superseded/ is a file): the trial stops, nothing is deleted.
+    (run_dir / "workspace" / "MARK_B2.txt").write_text("B2", encoding="utf-8")
+    moved_aside = sup.rename(tmp_path / "superseded_kept")
+    sup.write_text("blocking", encoding="utf-8")
+    with pytest.raises(loop_mod.SupersedeError):
+        go(cfg_a)
+    assert (run_dir / "workspace" / "MARK_B2.txt").read_text(encoding="utf-8") == "B2"
+    assert json.loads((cfg_a.runs_dir / "file-sup__sj__t1_meta" / "result.json").read_text())["model_id"] == "model-b"
+    sup.unlink()
+    moved_aside.rename(sup)
+
+    # The second rename fails: the first is undone, both directories stay in runs/.
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def flaky_rename(src: Any, dst: Any) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError(18, "Invalid cross-device link")
+        real_rename(src, dst)
+
+    monkeypatch.setattr(loop_mod.os, "rename", flaky_rename)
+    with pytest.raises(loop_mod.SupersedeError):
+        go(cfg_a)
+    monkeypatch.setattr(loop_mod.os, "rename", real_rename)
+    assert (run_dir / "workspace" / "MARK_B2.txt").is_file()
+    assert (cfg_a.runs_dir / "file-sup__sj__t1_meta" / "result.json").is_file()
+    assert len(list(sup.glob("*/file-sup__sj__t1/workspace/MARK_A1.txt"))) == 1
+
+
 def _write_two_arm_results(workdir: Path, missing_arm: str, how: str) -> None:
     """Tasks a and b on raw and sj; task b's ``missing_arm`` has no scorable result, by ``how``."""
     import shutil as _shutil

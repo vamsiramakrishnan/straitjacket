@@ -125,8 +125,10 @@ python evals/acciobench_run.py run \
   `model_id` equals `--model` (one `[legacy]` line says so); never across models.
   When a result does not match, one `[rerun]` line says why and the previous trial
   (its run directory and `_meta` directory) is moved to
-  `<workdir>/superseded/<old fingerprint>/` (or `legacy-<model>/`), where reports do
-  not look, instead of being deleted. `ctx_state/` is shared by all configurations.
+  `<workdir>/superseded/<old fingerprint>/` (or `legacy-<model>/`; a `.2`, `.3`, ...
+  suffix when that already holds a trial), where reports do not look. Nothing is ever
+  deleted: if the move fails, that trial stops with an error and its directories stay
+  where they were. `ctx_state/` is shared by all configurations.
 - **Grading errors are not failures**: when the official grader itself fails (timeout,
   missing or invalid `reward.json`), `result.json` records `grading_error` (the grader's
   message) with `passed=false` and zero scores, and the agent's `termination` is kept.

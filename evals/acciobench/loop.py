@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -345,20 +346,49 @@ def _accept_for_config(saved: dict[str, Any], config: BenchConfig, fingerprint: 
     return False
 
 
-def _supersede(config: BenchConfig, run_dir: Path, meta_dir: Path, saved: dict[str, Any]) -> None:
+class SupersedeError(RuntimeError):
+    """A previous configuration's trial could not be moved aside; nothing was deleted."""
+
+
+def _supersede(config: BenchConfig, run_dir: Path, meta_dir: Path, saved: dict[str, Any]) -> Path:
     """Move a previous configuration's trial out of ``runs/`` (reports never load it from
-    there) into ``<workdir>/superseded/<fingerprint>/`` instead of deleting it."""
+    there) into its OWN new directory ``<workdir>/superseded/<fingerprint>[.N]/``.
+
+    Never deletes: an existing destination gets a counter suffix, and the moves are plain
+    renames (no copy-then-delete). If a rename fails, the ones already done are undone,
+    the trial's directories are left where they were, and ``SupersedeError`` stops this
+    trial so the caller never wipes them."""
     tag = str(saved.get("config_fingerprint") or "") or (
         "legacy-" + "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in str(saved.get("model_id") or "unknown"))
     )
-    dest_root = config.workdir / "superseded" / tag
-    dest_root.mkdir(parents=True, exist_ok=True)
-    for src in (run_dir, meta_dir):
-        if src.exists():
+    srcs = [p for p in (run_dir, meta_dir) if p.exists()]
+    moved: list[tuple[Path, Path]] = []
+    try:
+        parent = config.workdir / "superseded"
+        parent.mkdir(parents=True, exist_ok=True)
+        n = 1
+        while True:
+            dest_root = parent / (tag if n == 1 else f"{tag}.{n}")
+            try:
+                dest_root.mkdir()  # exclusive: never reuse a directory that holds a trial
+                break
+            except FileExistsError:
+                n += 1
+        for src in srcs:
             dest = dest_root / src.name
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.move(str(src), str(dest))
+            os.rename(src, dest)
+            moved.append((src, dest))
+    except OSError as exc:
+        for src, dest in reversed(moved):
+            try:
+                os.rename(dest, src)
+            except OSError:
+                pass
+        raise SupersedeError(
+            f"{run_dir.name}: could not move the previous configuration's trial aside "
+            f"({exc}); it was left in place and this trial was not run"
+        ) from exc
+    return dest_root
 
 
 def run_trial(
@@ -395,8 +425,14 @@ def run_trial(
     if config.resume and result_file.is_file():
         try:
             saved = json.loads(result_file.read_text(encoding="utf-8"))
-            if not _accept_for_config(saved, config, fingerprint, slug):
-                _supersede(config, run_dir, meta_dir, saved)
+        except Exception:
+            saved = None
+        if isinstance(saved, dict) and not _accept_for_config(saved, config, fingerprint, slug):
+            _supersede(config, run_dir, meta_dir, saved)  # SupersedeError stops this trial
+            saved = None
+        try:
+            if saved is None:
+                pass
             elif str(saved.get("termination", "")) not in _RESUMABLE_ERROR_TERMINATIONS:
                 cached = RunMetrics.from_dict(saved)
                 if cached.grading_error:
