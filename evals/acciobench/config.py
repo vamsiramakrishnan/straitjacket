@@ -283,7 +283,25 @@ def task_inputs_digest(case_dir: Path) -> str:
     1 MiB are hashed by size and both ends; per-file digests are memoized per process."""
     root = Path(case_dir).resolve()
     h = hashlib.sha256()
-    for dirpath, dirnames, filenames in os.walk(root):
+    # Staging copies through directory symlinks (shutil.copytree's default), so the walk
+    # follows them too: what a trial receives is what is hashed. Each real directory is
+    # hashed once, under the first path that reaches it; any further path to it (a second
+    # link, or a link back to an ancestor, which would otherwise never end) is recorded
+    # by name only.
+    seen_dirs: set[tuple[int, int]] = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        try:
+            st_dir = os.stat(dirpath)
+            dir_key = (st_dir.st_dev, st_dir.st_ino)
+        except OSError:
+            dir_key = None
+        if dir_key is None or dir_key in seen_dirs:
+            rel_dir = Path(dirpath).relative_to(root).as_posix()
+            marker = "unreadable-dir" if dir_key is None else "dir-already-hashed"
+            h.update(rel_dir.encode("utf-8") + b"\0" + marker.encode() + b"\n")
+            dirnames[:] = []
+            continue
+        seen_dirs.add(dir_key)
         dirnames[:] = sorted(d for d in dirnames if d not in _DIGEST_SKIP_DIRS)
         for name in sorted(filenames):
             if name in _DIGEST_SKIP_FILES or name.endswith(".pyc"):
