@@ -213,7 +213,7 @@ def run_doctor(config: BenchConfig) -> tuple[bool, list[str]]:
         lines.append(f"[OK] bwrap sandbox: {bwrap_bin} (mount + PID namespace isolation active)")
     else:
         lines.append(
-            "[WARN] bwrap sandbox unavailable (falling back to path/env confinement; "
+            "[WARN] bwrap sandbox: unavailable (falling back to path/env confinement; "
             "install bubblewrap on Linux for mount + PID namespace isolation)"
         )
 

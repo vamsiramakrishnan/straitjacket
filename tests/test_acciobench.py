@@ -2203,14 +2203,17 @@ def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
             fr_gr_mc, _, _ = host.execute_part("grep", {"pattern": "SECRET_GRADER", "path": str(meta_dir)})
             assert fr_gr_mc["functionResponse"]["response"]["output"] == "(no matches)"
 
-            # /tmp round-trips cleanly between write/read and bash without touching host /tmp.
+            # The write tool keeps /tmp in the run's private directory, never the host's.
             host.execute_part("write", {"file_path": "/tmp/step_note.txt", "content": f"NOTE_{arm}"})
-            fr_cat_tmp, _, _ = host.execute_part("bash", {"command": "cat /tmp/step_note.txt"})
-            assert f"NOTE_{arm}" in fr_cat_tmp["functionResponse"]["response"]["output"]
             assert not (Path("/tmp") / "step_note.txt").exists()
 
             if bwrap_sandbox_executable() is not None:
                 assert host._use_bwrap is True
+                # Inside the namespace bash sees that same directory as /tmp, so the
+                # write/read tools and bash round-trip. Without bwrap there is no mount
+                # namespace and bash sees the host's /tmp (path/env confinement only).
+                fr_cat_tmp, _, _ = host.execute_part("bash", {"command": "cat /tmp/step_note.txt"})
+                assert f"NOTE_{arm}" in fr_cat_tmp["functionResponse"]["response"]["output"]
                 probe_sh = (
                     "pwd && cat /task/workspace/input.txt && "
                     f"test ! -e {str(host_tmp_marker)!r} && echo TMP_ISOLATED && "
