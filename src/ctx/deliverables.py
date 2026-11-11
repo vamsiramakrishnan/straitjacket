@@ -25,6 +25,8 @@ import re
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
+
 __all__ = [
     "CLOSED_WORLD_CONTRACT_RULE",
     "DeliverableAudit",
@@ -328,7 +330,7 @@ def _extract_tokens_from_span(
             fields.append(c)
 
     def _add_h(cand: str) -> None:
-        c = " ".join(cand.strip().lstrip("#").split())[:48]
+        c = clip_redacting(" ".join(cand.strip().lstrip("#").split()), 48)
         if c and c not in seen_h:
             seen_h.add(c)
             headings.append(c)
@@ -445,7 +447,7 @@ def format_deliverable_contract(
                 entry = f"- {disp_path} ({fmt}): {lbl}=[{', '.join(fields[:10])}]"
             else:
                 entry = f"- {disp_path} ({fmt})"
-            lines.append(entry[:140])
+            lines.append(clip_redacting(entry, 140))
     else:
         lines.append("- deliverables: none declared under /task/outputs (complete required service/UI actions)")
 
@@ -479,7 +481,7 @@ def format_deliverable_contract(
 
     body = "\n".join(lines)
     if len(body) > 540:
-        body = body[:537].rsplit("\n", 1)[0]
+        body = clip_redacting(body, 537).rsplit("\n", 1)[0]
     return f"{body}\n{CLOSED_WORLD_CONTRACT_RULE}"
 
 
@@ -487,7 +489,7 @@ def _record_label(rec: dict[str, Any], idx: int) -> str:
     for k in _RECORD_ID_KEYS:
         val = rec.get(k)
         if isinstance(val, (str, int)) and str(val).strip():
-            return str(val).strip()[:32]
+            return clip_redacting(str(val).strip(), 32)
     return f"#{idx}"
 
 
@@ -1144,7 +1146,7 @@ def _inspect_markdown(text: str) -> str:
     for ln in lines:
         hm = _MD_HEADING_RE.match(ln)
         if hm:
-            headings.append(hm.group(2)[:36])
+            headings.append(clip_redacting(hm.group(2), 36))
         if _MD_BULLET_RE.match(ln):
             bullets += 1
         elif _MD_NUMBERED_RE.match(ln):
