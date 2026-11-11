@@ -227,6 +227,58 @@ class SurfacePolicy:
 
 
 @dataclass(frozen=True)
+class MediaPolicy:
+    """Media reads (ctx.mediaread, read on the guard hot path by ctx.hook).
+
+    ``image_read``: what a native read of a large image does. ``advise``
+    (default) lets it proceed unchanged with a short note naming the exact
+    ``ctx view`` crop command; ``redirect`` opts into replacing the read with
+    a gridded overview (falls back to the note without Pillow, on error, or
+    past ``redirect_budget_ms``); ``off`` leaves image reads alone.
+    ``video_read``: ``steer`` (default) denies a read of video or audio with
+    the exact ``ctx view`` command; ``off`` leaves it alone.
+    ``file_mentions`` (OFF by default): under ``ctx wrap claude``, route
+    ``@file`` prompt mentions through the Read tool (and so through this
+    guard) by setting CLAUDE_CODE_DISABLE_FILE_MENTIONS=1 in the child; never
+    outside the wrapper, never over the user's own value. Observed on Claude
+    Code 2.1.322 (haiku, -p): the host already does not inline a large
+    mention (a 352 KB log became a ``too_large`` reference, a 58 KB one got no
+    attachment) and the model searched and answered correctly; routed through
+    Read, the same 58 KB log was bounded to 240 lines and the model, not then
+    told of the bound, answered wrongly. Worth enabling when mentions of
+    images (so the media note applies) or of files the host does inline
+    should pass the guard; the bound is now stated to the model."""
+
+    image_read: str = "advise"          # advise | redirect | off
+    video_read: str = "steer"           # steer | off
+    file_mentions: bool = False
+    redirect_budget_ms: int = 6000      # clamped to 500..8000 (hook timeout is 10 s)
+
+
+_IMAGE_READ_MODES = ("advise", "redirect", "off")
+_VIDEO_READ_MODES = ("steer", "off")
+
+
+def _media_policy(raw: Any) -> MediaPolicy:
+    """``[media]`` with unknown values falling back to the default, never to
+    a different behavior (mirrors the hot-path reader in ctx.hook)."""
+    md = MediaPolicy()
+    if not isinstance(raw, dict):
+        return md
+    image_read = raw.get("image_read")
+    video_read = raw.get("video_read")
+    budget = raw.get("redirect_budget_ms")
+    return MediaPolicy(
+        image_read=image_read if image_read in _IMAGE_READ_MODES else md.image_read,
+        video_read=video_read if video_read in _VIDEO_READ_MODES else md.video_read,
+        file_mentions=_coerce_like(md.file_mentions, raw.get("file_mentions", md.file_mentions)),
+        redirect_budget_ms=(max(500, min(budget, 8000))
+                            if isinstance(budget, int) and not isinstance(budget, bool)
+                            else md.redirect_budget_ms),
+    )
+
+
+@dataclass(frozen=True)
 class IntakePolicy:
     """The prompt gate: what happens to an oversized pasted prompt.
 
@@ -285,6 +337,7 @@ class Config:
     plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
     surface: SurfacePolicy = field(default_factory=SurfacePolicy)
+    media: MediaPolicy = field(default_factory=MediaPolicy)
     intake: IntakePolicy = field(default_factory=IntakePolicy)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # ws:<alias> routing targets: alias -> workspace path (absolute, or
@@ -475,6 +528,7 @@ def load_config(workspace_root: Path | None) -> Config:
         plan=plan,
         redaction=redaction,
         surface=surface,
+        media=_media_policy(raw.get("media")),
         intake=intake,
         scopes=scopes,
         aliases=aliases,

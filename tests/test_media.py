@@ -545,7 +545,7 @@ def test_probe_census_of_a_clip(clip):
     assert p.video_codec == "h264" and p.audio_codec == "aac"
     assert len(p.audio_streams) == 1 and len(p.subtitle_streams) == 1
     assert p.subtitle_streams[0]["text"] is True and p.engine == "ffprobe"
-    assert media.raw_tokens(p)[1] == "video@1fps"
+    assert media.raw_tokens(p)[1].startswith("video@1fps")
     assert media.probe(clip.read_bytes()).sha256 == p.sha256     # bytes or path
 
 
@@ -565,7 +565,7 @@ def test_contact_sheet_frame_count_labels_and_geometry(clip):
     assert Image.open(io.BytesIO(d.data)).size == (d.width, d.height)
     from ctx.snapcompact import _image_tokens
 
-    assert d.record.tokens_basis == "video@1fps"
+    assert d.record.tokens_basis.startswith("video@1fps")
     assert d.record.tokens_after == _image_tokens(d.width, d.height, high_resolution=False)
     assert d.record.tokens_before == 4 * _image_tokens(320, 240, high_resolution=False)
     assert d.record.engine == "ffmpeg+pillow" and "ffmpeg" in d.record.engine_version

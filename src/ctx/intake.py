@@ -159,6 +159,115 @@ def binary_kind(data: bytes) -> str | None:
 
 
 # ------------------------------------------------------------------ the seam
+_BOX_SCAN = 256          # boxes walked per level of an ISO-BMFF file
+_VIDEO_KINDS = {"mp4": "video", "mov": "video", "mkv": "video", "webm": "video",
+                "avi": "video", "m4a": "audio", "mp3": "audio", "wav": "audio",
+                "flac": "audio", "ogg": "audio"}
+
+
+def _boxes(data: bytes, start: int, end: int):
+    """(type, body_start, body_end) of the ISO-BMFF boxes in [start, end),
+    bounded in count and never past ``end`` (an untrusted size ends the walk)."""
+    at, seen = start, 0
+    while at + 8 <= end and seen < _BOX_SCAN:
+        size = int.from_bytes(data[at:at + 4], "big")
+        kind = data[at + 4:at + 8]
+        head = 8
+        if size == 1 and at + 16 <= end:
+            size, head = int.from_bytes(data[at + 8:at + 16], "big"), 16
+        elif size == 0:
+            size = end - at
+        if size < head or at + size > end:
+            return
+        yield kind, at + head, at + size
+        at += size
+        seen += 1
+
+
+def _isobmff_facts(data: bytes) -> tuple[float | None, tuple[int, int] | None]:
+    """Duration (``mvhd``) and the first visual track size (``tkhd``) of an
+    MP4/MOV, stdlib only and bounded; (None, None) whatever goes wrong. The
+    facts are from an untrusted header: shown as such, never acted on."""
+    duration, size = None, None
+    try:
+        for kind, a, b in _boxes(data, 0, len(data)):
+            if kind != b"moov":
+                continue
+            for sub, sa, sb in _boxes(data, a, b):
+                if sub == b"mvhd" and sb - sa >= 32:
+                    v1 = data[sa] == 1
+                    scale = int.from_bytes(data[sa + (20 if v1 else 12):sa + (24 if v1 else 16)], "big")
+                    dur = int.from_bytes(data[sa + (24 if v1 else 16):sa + (32 if v1 else 20)], "big")
+                    if scale > 0 and 0 < dur / scale < 7 * 86400:
+                        duration = round(dur / scale, 3)
+                elif sub == b"trak" and size is None:
+                    for tk, ta, tb in _boxes(data, sa, sb):
+                        if tk == b"tkhd" and tb - ta >= 84:
+                            off = ta + (88 if data[ta] == 1 else 76)
+                            w = int.from_bytes(data[off:off + 4], "big") >> 16
+                            h = int.from_bytes(data[off + 4:off + 8], "big") >> 16
+                            if 0 < w <= 16384 and 0 < h <= 16384:
+                                size = (w, h)
+            break
+    except (IndexError, ValueError):
+        return None, None
+    return duration, size
+
+
+def _media_lines(info: Any, data: bytes, address: str) -> list[str]:
+    """What an intaken image or video is, what it would cost, and the exact
+    ``ctx view`` commands, from header bytes only (no Pillow, no ffmpeg), so
+    intake never depends on the optional engines and the digest stays a pure
+    function of the bytes. Token figures are the project's estimates."""
+    from ctx import binfmt, mediaread
+
+    fmt = info.format
+    q = address
+    if fmt in ("png", "jpeg", "gif", "webp", "bmp", "tiff") and info.width and info.height:
+        w, h = int(info.width), int(info.height)
+        if not (0 < w <= 65535 and 0 < h <= 65535):
+            return []
+        rows, cols = mediaread.default_grid(w, h)
+        cell = f"{chr(ord('A') + min(2, cols) - 1)}{min(2, rows)}"
+        lo, hi, basis = mediaread.image_cost(w, h, model="")
+        out = [f"media: image {w}×{h} · {mediaread.fmt_cost(lo, hi)} tok if shown "
+               f"whole (estimate; {basis})"]
+        out.append(f"next: ctx view {q}  (overview with a labelled {rows}x{cols} grid)")
+        out.append(f"next: ctx view {q} --grid {rows}x{cols} --cell {cell}  (one cell "
+                   "from the original pixels, {} tok est.)".format(
+                       mediaread.fmt_cost(*mediaread.cell_cost(w, h, rows, cols, model="")[:2])))
+        return out
+    kind = _VIDEO_KINDS.get(fmt)
+    if kind is None or fmt not in binfmt.MEDIA_FORMATS | {"ogg"}:
+        return []
+    duration, size = _isobmff_facts(data) if fmt in ("mp4", "mov", "m4a") else (None, None)
+    facts = [f"media: {kind} {fmt}"]
+    if size and kind == "video":
+        facts.append(f"{size[0]}×{size[1]}")
+    if duration is not None:
+        whole = int(duration)
+        facts.append(f"{whole // 60}:{whole % 60:02d} (header)")
+        if size and kind == "video":
+            plo, phi, pbasis = mediaread.image_cost(*size, model="")
+            import math
+
+            # duration > 0 here (checked when parsed), so ceil() is at least 1:
+            # the same one-frame-per-started-second basis as ctx.media.raw_tokens.
+            n = math.ceil(duration)
+            facts.append(f"{mediaread.fmt_cost(plo * n, phi * n)} tok at one frame per "
+                         f"second (estimate; {pbasis})")
+    else:
+        facts.append("duration: from `ctx view` (needs ffprobe)")
+    out = [" · ".join(facts)]
+    if kind == "audio":
+        out.append(f"next: ctx view {q}  (duration and codecs; audio is never transcribed)")
+        return out
+    out.append(f"next: ctx view {q}  (contact sheet of timestamped frames; needs ffmpeg)")
+    mid = f"{duration / 2:.1f}".rstrip("0").rstrip(".") if duration else "1"
+    out.append(f"next: ctx view {q} --at {mid}  (one frame, seconds or m:ss)")
+    return out
+
+
 def describe_binary(
     store: Store, ws: Workspace, data: bytes, *, kind: str, label: str, name: str | None
 ) -> IntakeReceipt:
@@ -181,6 +290,7 @@ def describe_binary(
     if "pdf_version" in info.extra:  # decoded header bytes: payload text
         info.extra["pdf_version"] = one_line(str(info.extra["pdf_version"]))
     lines.append(binfmt.render_digest(info, address=address))
+    lines.extend(_media_lines(info, data, address))
     text, redactions = sanitize_for_model("\n".join(lines), ws.config.redaction)
     if redactions:
         text += "\nredaction: applied [" + ", ".join(redactions) + "]"

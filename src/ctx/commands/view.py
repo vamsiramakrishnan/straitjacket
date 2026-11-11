@@ -284,7 +284,8 @@ def _view(ws, ns, media, sel, label, src) -> int:
         "path": mat.rel_path if mat else None,
         "address": mat.address if mat else None, "width": derived.width, "height": derived.height,
         "bytes": rec.bytes_after, "tokens": rec.tokens_after,
-        "tokens_before": rec.tokens_before, "tokens_basis": rec.tokens_basis,
+        "tokens_before": rec.tokens_before, "tokens_before_basis": rec.tokens_basis,
+        "tokens_basis": _derived_basis(derived, rec),
         "engine": rec.engine, "engine_version": rec.engine_version,
         "output_sha256": rec.output_sha256, "source_sha256": rec.source_sha256,
         "params": rec.params, "meta": derived.meta,
@@ -294,6 +295,18 @@ def _view(ws, ns, media, sel, label, src) -> int:
     if derived.op == "subs":
         facts["excerpt"] = _subs_excerpt(derived)
     return _emit(ns, facts, 0)
+
+
+def _derived_basis(derived, rec) -> str:
+    """The basis of ``tokens`` (the derived figure), as the text output says it:
+    an image is priced by the one estimate on its own size (often the same on
+    either tier); anything else keeps the record's basis."""
+    if derived.mime.startswith("image/") and derived.width and derived.height:
+        from ctx.mediaread import image_cost
+
+        lo, hi, basis = image_cost(int(derived.width), int(derived.height))
+        return basis if lo == hi else f"high end of {basis}"
+    return rec.tokens_basis
 
 
 def _read_times(media, sel) -> dict:
@@ -378,8 +391,9 @@ def _source_facts(p) -> dict:
     from ctx import media
 
     out = p.to_dict()
-    tokens, basis = media.raw_tokens(p)
+    low, tokens, basis = media.raw_cost(p)
     out["tokens_raw"] = tokens
+    out["tokens_raw_low"] = low
     out["tokens_basis"] = basis
     return out
 
@@ -564,17 +578,33 @@ def _render_text(f: dict) -> str:
     if f.get("view"):
         lines.append(f"view: {f['view']}")
     lines.append(f"source: {_describe_source(s)} · sha256 {s['sha256'][:12]}…")
-    lines.append(f"raw cost: ~{s['tokens_raw']:,} tok ({s['tokens_basis']})")
+    low = s.get("tokens_raw_low", s["tokens_raw"])
+    cost = (f"~{s['tokens_raw']:,}" if low == s["tokens_raw"]
+            else f"~{low:,}-{s['tokens_raw']:,}")
+    lines.append(f"raw cost: {cost} tok ({s['tokens_basis']})")
     lines.extend(_read_lines(f.get("read") or {}))
     d = f["derived"]
     if d:
         saved = ""
-        if d["mime"].startswith("image/") and d["tokens_before"] > 0:
-            pct = round(100 * (1 - d["tokens"] / d["tokens_before"]))
-            saved = f" ({pct}% fewer)" if pct > 0 else " (no saving)"
+        cost = f"~{d['tokens']:,} tok ({d['tokens_basis']})"
+        if d["mime"].startswith("image/") and d.get("width") and d.get("height"):
+            # The same estimate as the source line, with its basis. A saving
+            # is stated only against a single-valued baseline on the same
+            # basis: a percentage of one end of a range would be invented.
+            from ctx.mediaread import fmt_cost, image_cost
+
+            lo, hi, basis = image_cost(int(d["width"]), int(d["height"]))
+            src_lo = s.get("tokens_raw_low", s["tokens_raw"])
+            if (lo == hi and src_lo == s["tokens_raw"] and s["tokens_raw"] > 0
+                    and s.get("kind") == "image" and not s.get("animated")):
+                pct = round(100 * (1 - hi / s["tokens_raw"]))
+                saved = (f"; {pct}% fewer than the source's ~{s['tokens_raw']:,}"
+                         if pct > 0 else "; no saving against the source")
+            cost = f"{fmt_cost(lo, hi)} tok ({basis}{saved})"
+            saved = ""
         dims = f" {d['width']}×{d['height']}" if d.get("width") else ""
         lines.append(f"derived: {d['op']}{dims} {d['mime']} · {fmt_bytes(d['bytes'])} · "
-                     f"~{d['tokens']:,} tok{saved} · {d['engine']} {d['engine_version']}")
+                     f"{cost}{saved} · {d['engine']} {d['engine_version']}")
         for line in _layout_lines(d):
             lines.append(line)
     elif f["status"] == "error":

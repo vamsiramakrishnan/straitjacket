@@ -148,6 +148,27 @@ from ctx.proxywindow import read_window_doc
 from ctx.sessiondir import LEDGER_DIR_NAME as _LEDGER_DIR_NAME
 from ctx.sessiondir import session_reads_dir
 
+# Media reads (ctx.mediaread): what the read guard does with an image, video
+# or audio file. That module is imported only once a path's suffix says it
+# may be media; until then the whole cost is one set lookup on these
+# suffixes (pinned equal to mediaread's own table by tests/test_media_read.py).
+_MEDIA_SUFFIXES = frozenset({
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "ico",
+    "mp4", "m4v", "mov", "mkv", "webm", "avi",
+    "mp3", "wav", "flac", "ogg", "oga", "opus", "m4a"})
+#: [media] values and hosts, restated for the policy dict (pinned to
+#: ctx.mediaread and ctx.config by tests/test_media_read.py).
+_MEDIA_IMAGE_MODES = ("advise", "redirect", "off")
+_MEDIA_VIDEO_MODES = ("steer", "off")
+_MEDIA_HOSTS = ("claude-code", "codex")
+
+
+def _maybe_media(path_str: str) -> bool:
+    """Could this path be media? From the name alone; no system call."""
+    dot = path_str.rfind(".")
+    return (dot >= 0 and len(path_str) - dot <= 6
+            and path_str[dot + 1:].lower() in _MEDIA_SUFFIXES)
+
 # `pathlib` (~4.2 ms) and `typing` (~2.3 ms) are deliberately NOT imported at
 # module scope — see the latency contract above. Every path expression on the
 # per-call path uses `os.path`, which is already loaded; the one `Path` this
@@ -564,6 +585,11 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
         "engagement_mode": "auto",
         "engagement_activate_after": 8,
         "emission_nudge_tokens": EMISSION_NUDGE_TOKENS_DEFAULT,
+        # [media] (ctx.mediaread): image reads advise by default, redirect to
+        # an overview only on opt-in; video and audio reads are steered.
+        "media_image_read": "advise",
+        "media_video_read": "steer",
+        "media_redirect_budget_ms": 6000,
         # Provenance of the guard section, NOT a setting: "default" (no
         # ctx.toml), "ok" (parsed), "failed" (present but unreadable /
         # unparseable). The internal-error policy needs to tell "the config
@@ -598,6 +624,23 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
 
             with open(path, encoding="utf-8") as fh:
                 raw = tomllib.loads(fh.read())
+            # [media] first, on its own: it reads only its own section and
+            # cannot raise, so a malformed key elsewhere in the file (which
+            # sends the rest of this block to the fail-open default below)
+            # never overrides a user's media choice, e.g. image_read = "off".
+            media = raw.get("media")
+            if isinstance(media, dict):
+                # An unknown value keeps the default rather than switching the
+                # behavior off or on by accident (same rule as ctx.config).
+                image_read = media.get("image_read")
+                if image_read in _MEDIA_IMAGE_MODES:
+                    policy["media_image_read"] = image_read
+                video_read = media.get("video_read")
+                if video_read in _MEDIA_VIDEO_MODES:
+                    policy["media_video_read"] = video_read
+                budget_ms = media.get("redirect_budget_ms")
+                if isinstance(budget_ms, int) and not isinstance(budget_ms, bool):
+                    policy["media_redirect_budget_ms"] = max(500, min(budget_ms, 8000))
             guard = raw.get("guard") or {}
             budgets = raw.get("budgets") or {}
             policy["mode"] = str(guard.get("mode", policy["mode"]))
@@ -2494,12 +2537,269 @@ def _bound_fields(tool_input: dict[str, Any] | None, lines: int) -> dict[str, in
     return {"limit": lines}
 
 
+def _media_read(
+    path_str: str,
+    workspace_root: str | None,
+    policy: dict[str, Any],
+    tool_input: dict[str, Any] | None,
+    path_key: str | None,
+    viewer: str = "Read",
+) -> dict[str, Any] | None:
+    """The read guard's decision for an image, video or audio file, or None.
+
+    Defaults (``[media]`` in ctx.toml): a large displayable image is allowed
+    unchanged with a note (``image_read = "advise"``) or, opted in, redirected
+    to a gridded overview (``"redirect"``); video and audio are denied with the
+    exact ``ctx view`` command (``video_read = "steer"``). Only for the hosts
+    in ``mediaread.HOSTS``; everything else keeps its behavior. Fail-open by
+    contract: any error returns None and the read proceeds down the ordinary
+    path, recorded in the coverage ledger as ``media:error``.
+    """
+    flavor = str(policy.get("_flavor") or "")
+    if flavor not in _MEDIA_HOSTS or not workspace_root:
+        return None
+    try:
+        return _media_read_inner(path_str, workspace_root, policy, tool_input,
+                                 path_key, viewer, flavor)
+    except Exception:
+        policy["_media_note"] = "media:error"
+        return None
+
+
+_HINTS_FILE = "media-hints.json"
+_HINTS_MAX = 512
+_HINT_SESSIONS = 16
+
+
+def _hint_state(ws_root: str, session: str, key: str, mark: str | None = None) -> str:
+    """Per-session state of one file's video hint: "" (never given),
+    "pending" (put in an ask reason, which the model may never see) or
+    "delivered". With ``mark``, records it. Fail-open: "" on any error, so a
+    broken ledger can only repeat a hint, never suppress one wrongly."""
+    try:
+        path = session_reads_dir(ws_root, _HINTS_FILE)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            if not isinstance(doc, dict):
+                doc = {}
+        except (OSError, ValueError):
+            doc = {}
+        sid = _safe_id(session, 64)
+        rows = doc.get(sid) if isinstance(doc.get(sid), dict) else {}
+        if mark is None:
+            return str(rows.get(key, ""))
+        rows[key] = mark
+        # Every recent session keeps its own rows (interleaved sessions must not
+        # erase each other's "delivered"); bounded per session and in sessions.
+        doc.pop(sid, None)
+        doc[sid] = dict(list(rows.items())[-_HINTS_MAX:])
+        doc = dict(list(doc.items())[-_HINT_SESSIONS:])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        os.replace(tmp, path)
+        return mark
+    except Exception:
+        return ""
+
+
+def _media_shell_hint(command: str, cwd: str | None, workspace_root: str | None,
+                      policy: dict[str, Any]) -> tuple[str, str] | None:
+    """``(hint, key)`` naming `ctx view` for the first video or audio file a
+    video tool (ffmpeg/ffprobe/ffplay, as the PROGRAM) is given, or None.
+
+    Limits (stated, not solved): a video that exists and is only the OUTPUT
+    (``ffmpeg -i in.png v.mp4``) also gets the hint; ``sudo -u USER ffmpeg``
+    and commands inside ``if``/``for``/``while`` bodies are not recognised.
+
+    Same gates as a media read (host, ``video_read = "steer"``, inside the
+    workspace, not secret, not .ctxignore'd, not a symlink, a header that
+    sniffs as a container ``ctx view`` reads), plus: ``ctx view`` can
+    actually produce something here (the engines it needs are installed)."""
+    flavor = str(policy.get("_flavor") or "")
+    if (flavor not in _MEDIA_HOSTS or not workspace_root
+            or str(policy.get("media_video_read", "steer")) != "steer"):
+        return None
+    from ctx import mediaread as mr
+
+    for path in mr.video_tool_args(command, cwd or workspace_root)[:16]:
+        if _is_secret_path(path, workspace_root) or _path_outside(path, workspace_root):
+            continue
+        root = mr.ctx_root(workspace_root)
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        if rel.startswith("..") or mr.policy_excluded(root, rel):
+            continue
+        got = mr.read_head(path, 4096)
+        if got is None:
+            continue
+        from ctx.binfmt import sniff_format
+
+        fmt = sniff_format(got[0][:1024])
+        kind = ("video" if fmt in ("mp4", "mov", "mkv", "webm", "avi")
+                else "audio" if fmt in ("mp3", "wav", "flac", "ogg", "m4a") else None)
+        if kind is None or mr.missing_engines(kind):
+            continue
+        target, _exact = mr.command_target(rel)
+        import hashlib
+
+        return mr.shell_hint(target, kind), hashlib.sha256(rel.encode()).hexdigest()[:16]
+    return None
+
+
+def _media_post_hint(payload: dict[str, Any], flavor: str) -> str | None:
+    """PostToolUse half of the video hint: a call whose PreToolUse put the
+    hint only in an ask reason (shown to the user, not the model) ran, so the
+    model gets it now, as context, once."""
+    if flavor not in _MEDIA_HOSTS:
+        return None
+    command = _tool_command(payload)
+    if not command or not ("ffmpeg" in command or "ffprobe" in command or "ffplay" in command):
+        return None
+    ws_root = _resolve_workspace_root(payload)
+    if not ws_root:
+        return None
+    policy = _load_guard_policy(ws_root)
+    policy["_flavor"] = flavor
+    ti = payload.get("tool_input") or payload.get("toolInput") or {}
+    cwd = (ti.get("cwd") or ti.get("Cwd")) if isinstance(ti, dict) else None
+    found = _media_shell_hint(command, cwd or ws_root, ws_root, policy)
+    if not found:
+        return None
+    hint, key = found
+    session = str(payload.get("session_id") or payload.get("conversation_id") or "unknown")
+    if _hint_state(ws_root, session, key) != "pending":
+        return None
+    _hint_state(ws_root, session, key, "delivered")
+    return hint
+
+
+def _media_decision(base: dict[str, Any], note: str, policy: dict[str, Any]) -> dict[str, Any]:
+    if policy.get("_media_withheld"):
+        note += ":name_withheld"
+    policy["_media_note"] = note
+    return base
+
+
+def _media_read_inner(path_str, workspace_root, policy, tool_input, path_key, viewer, flavor):
+    from ctx import mediaread as mr
+
+    klass = mr.suffix_class(path_str)
+    image_mode = str(policy.get("media_image_read", mr.DEFAULT_IMAGE_MODE))
+    video_mode = str(policy.get("media_video_read", mr.DEFAULT_VIDEO_MODE))
+    if klass in ("image", "still") and image_mode not in ("advise", "redirect"):
+        return None
+    if klass in ("video", "audio") and video_mode != "steer":
+        return None
+    if _LEDGER_DIR_NAME in path_str.replace("\\", "/").split("/"):
+        return None  # our own derivatives (overviews, crops, sheets)
+    root = mr.ctx_root(workspace_root)
+    try:
+        rel = os.path.relpath(path_str, root).replace(os.sep, "/")
+    except ValueError:
+        return None
+    if rel.startswith("../") or rel == "..":
+        return None
+    target, exact = mr.command_target(rel)
+    if not exact:
+        # Any name is handled; one that cannot be shown safely is not
+        # printed (the command names PATH and says what PATH stands for).
+        policy["_media_withheld"] = True
+    if mr.policy_excluded(root, rel):
+        policy["_media_note"] = "media:excluded"
+        return None
+    got = mr.read_head(path_str)
+    if got is None:
+        return None  # missing, a symlink, not a regular file: the ordinary path decides
+    head, size = got
+    allow: dict[str, Any] = dict(DECISION_ALLOW)
+
+    if klass in ("video", "audio"):
+        from ctx.binfmt import sniff_format  # rare path; agrees with ctx view by construction
+
+        fmt = sniff_format(head[:1024])
+        kind = {"mp4": "video", "mov": "video", "mkv": "video", "webm": "video",
+                "avi": "video", "mp3": "audio", "wav": "audio", "flac": "audio",
+                "ogg": "audio", "m4a": "audio"}.get(fmt)
+        if kind is None:
+            return None  # the bytes are not a container ctx view would read
+        if fmt in ("mp4", "mov") and klass == "audio":
+            kind = "audio"
+        return _media_decision(_deny(mr.steer_reason(target, fmt, kind, viewer=viewer)),
+                               f"media:steer_{kind}", policy)
+
+    if klass == "still":
+        from ctx.binfmt import sniff_format
+
+        fmt = sniff_format(head[:1024])
+        if fmt not in ("bmp", "tiff", "ico") or not mr.has_pillow():
+            return None
+        allow["context"] = mr.convert_note(target, fmt, mr.dims(fmt, head), viewer=viewer)
+        return _media_decision(allow, "media:advise_convert", policy)
+
+    fmt = mr.sniff_still(head)
+    if fmt is None:
+        return None  # not actually an image: the text path decides
+    wh = mr.dims(fmt, head)
+    if wh is None:
+        return _media_decision(allow, "media:unknown_size", policy)
+    w, h = wh
+    if not mr.host_downscales(w, h):
+        # Small enough that the host sends every pixel: neither an overview nor
+        # a crop would show more, so nothing is added.
+        return _media_decision(allow, "media:small", policy)
+    pillow = mr.has_pillow()
+    note = "media:advise"
+    if image_mode == "redirect":
+        why = ""
+        if not pillow:
+            why = "no_pillow"
+        elif not _steering_allows(policy):
+            why = "steering_deny"
+        elif not path_key or not isinstance(tool_input, dict):
+            why = "no_path_field"
+        elif size > mr.REDIRECT_MAX_BYTES or w * h > mr.REDIRECT_MAX_PIXELS:
+            why = "too_large"
+        elif flavor == "claude-code" and mr.read_rules_present(root):
+            # The user has Read deny/ask rules: a redirect must not route a
+            # read around them (see _to_claude_code_schema: no approval is
+            # given, and the host checks rules against the NEW path).
+            why = "read_rules"
+        if not why:
+            facts, why = mr.make_overview(
+                root, rel, int(policy.get("media_redirect_budget_ms",
+                                          mr.DEFAULT_REDIRECT_BUDGET_MS)))
+            if facts is not None:
+                d = facts["derived"]
+                meta = d.get("meta") or {}
+                rows, cols = int(meta.get("rows") or 0), int(meta.get("cols") or 0)
+                if rows and cols:
+                    out = dict(DECISION_ALLOW)
+                    out["_no_approve"] = True
+                    out["_rewrite"] = {
+                        "fields": {path_key: os.path.join(root, d["path"])},
+                        "reason": "CTX_MEDIA: read redirected to a reduced overview "
+                                  "([media] image_read = \"redirect\")",
+                    }
+                    out["context"] = mr.redirect_note(
+                        target, w, h, int(d["width"]), int(d["height"]), rows, cols,
+                        host=flavor, viewer=viewer)
+                    return _media_decision(out, "media:redirect", policy)
+                why = "no_grid"
+        note = f"media:advise_fallback_{why}"
+    allow["context"] = mr.advise_note(target, fmt, w, h, host=flavor, pillow=pillow,
+                                      viewer=viewer)
+    return _media_decision(allow, note, policy)
+
+
 def classify_read(
     path_str: str,
     workspace_root: str | None,
     policy: dict[str, Any],
     session_id: str = "unknown",
     tool_input: dict[str, Any] | None = None,
+    path_key: str | None = None,
 ) -> dict[str, str]:
     if workspace_root and not os.path.isabs(path_str):
         path_str = os.path.join(workspace_root, path_str)  # fix: resolve relative paths against workspace_root, not process CWD
@@ -2513,6 +2813,15 @@ def classify_read(
             "CTX_CONTEXT_GUARD: path resolves outside the active workspace. "
             "Confirm outside-root access explicitly or pass --workspace."
         )
+    # Media reads (ctx.mediaread). Only past the secret and workspace checks
+    # above, so a media decision can never reach a file the guard refuses;
+    # decided from the suffix alone before any system call, so a source-file
+    # read pays one string lookup. None means "not a media decision": the
+    # read continues down the ordinary path exactly as before.
+    if _maybe_media(path_str):
+        media = _media_read(path_str, workspace_root, policy, tool_input, path_key)
+        if media is not None:
+            return media
     try:
         size = os.stat(path_str).st_size
     except OSError:
@@ -2579,6 +2888,8 @@ def classify_read(
             max_lines = _pressured_window(max_lines, seen, budget)
             decision["_rewrite"] = {
                 "fields": _bound_fields(tool_input, max_lines),
+                "size": size if _window_note_applies(path_str, tool_input, policy,
+                                                     in_ledger) else None,
                 "reason": (
                     f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline "
                     f"budget); bounded to the first {max_lines} lines. "
@@ -2600,6 +2911,8 @@ def classify_read(
             pressured: dict[str, Any] = dict(DECISION_ALLOW)
             pressured["_rewrite"] = {
                 "fields": _bound_fields(tool_input, _pressured_window(max_lines, total, budget)),
+                "size": size if _window_note_applies(path_str, tool_input, policy,
+                                                     in_ledger) else None,
                 "reason": reason,
             }
             return pressured
@@ -2616,6 +2929,51 @@ _APPLY_ROOT: dict[str, Any] = {}
 #: Rewrite fields that are upper bounds on a result (Read `limit`, Grep
 #: `head_limit`). The caller's own smaller value is kept.
 _CAP_FIELDS = frozenset({"limit", "head_limit"})
+
+
+#: Suffixes the host does not read as lines of text (images, video, audio,
+#: documents, notebooks, archives and other binaries): a line-window note
+#: about them would be false, so none is attached.
+_NOT_LINE_TEXT = _MEDIA_SUFFIXES | frozenset({
+    "heic", "heif", "avif", "pdf", "ipynb", "zip", "gz", "tgz", "bz2", "xz", "zst", "7z",
+    "tar", "jar", "whl", "exe", "dll", "so", "dylib", "bin", "class", "o", "a", "wasm",
+    "sqlite", "db", "pyc"})
+
+
+def _window_note_applies(path_str: str, tool_input: dict[str, Any] | None,
+                         policy: dict[str, Any], in_ledger: bool) -> bool:
+    """Only for what the hook knows is a plain text read on a host whose read
+    tool and parameters are established: Claude Code's ``Read`` with
+    ``offset``/``limit`` (observed live, 2.1.322). Never for ctx's own
+    session files, a ``pages`` read, or a suffix the host does not read as
+    text lines. Decided from the name and the input alone: no extra read."""
+    if policy.get("_flavor") != "claude-code" or policy.get("_read_tool") != "Read":
+        return False
+    if in_ledger or not isinstance(tool_input, dict) or "pages" in tool_input:
+        return False
+    dot = path_str.rfind(".")
+    suffix = path_str[dot + 1:].lower() if dot >= 0 and "/" not in path_str[dot:] else ""
+    return suffix not in _NOT_LINE_TEXT
+
+
+def _window_note(updated: dict[str, Any], size: Any) -> str | None:
+    """What the guard asked the host for, for the model: one line built only
+    from integers the guard already holds (the stat size, the offset and
+    limit it is about to send), never from the file's name or bytes, so
+    neither can shape it, and no extra read is made to produce it. Whether the
+    file continues past the window is not known without reading it, so the
+    note says how to tell and how to continue, and claims nothing more."""
+    limit = updated.get("limit")
+    if (not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0
+            or not isinstance(size, int) or isinstance(size, bool) or size < 0):
+        return None
+    off = updated.get("offset")
+    start = off if isinstance(off, int) and not isinstance(off, bool) and off > 0 else 1
+    end = start + limit - 1
+    return (f"CTX_CONTEXT_GUARD: the guard limited this Read to at most {limit} lines "
+            f"starting at line {start} (the file is {size:,} bytes). If the result ends "
+            f"at line {end}, the file may continue: Read it again with offset={end + 1} "
+            f"limit={limit}, or search it for what you need.")
 
 
 def _apply_rewrite(
@@ -2653,6 +3011,16 @@ def _apply_rewrite(
                 continue
             updated[key] = cap
     decision["rewrite"] = {"updatedInput": updated, "reason": hint["reason"]}
+    if updated.get("limit") != tool_input.get("limit") and not decision.get("context"):
+        # A read the guard just narrowed must SAY so to the model. The reason
+        # above travels as permissionDecisionReason, which Claude Code shows
+        # the user but not the model on an allow: measured live (2.1.322,
+        # haiku, an @-mentioned 58 KB log routed through Read), the model got
+        # the first 240 lines with no sign of more and answered "No ERROR line
+        # exists" about a file whose line 902 was the ERROR.
+        note = _window_note(updated, hint.get("size"))
+        if note:
+            decision["context"] = note
     if "fields" in hint:
         # Hosts that cannot substitute input name these in their deny instead.
         decision["rewrite"]["fields"] = dict(hint["fields"])
@@ -2858,6 +3226,33 @@ def classify(
                     decision = dict(DECISION_ALLOW)
             except Exception:
                 pass
+        if "ffmpeg" in command or "ffprobe" in command or "ffplay" in command:
+            # Claude Code's Read refuses a video before any hook runs
+            # (observed, 2.1.322), so the model improvises with ffmpeg in the
+            # shell; this is the first tool call a hook sees. Once per file
+            # per session, on a path the model sees whatever the outcome: a
+            # deny's reason; an allowed or rewritten call's context; and for
+            # an ask (whose reason the USER sees) the reason now and, if the
+            # call then runs, PostToolUse context (_media_post_hint). Fail-open.
+            try:
+                found = _media_shell_hint(command, cwd or workspace_root, workspace_root, policy)
+                session = str(payload.get("session_id") or payload.get("conversation_id")
+                              or "unknown")
+                if found and not _hint_state(workspace_root, session, found[1]):
+                    hint, key = found
+                    raw_decision = decision.get("decision", "allow")
+                    if "_rewrite" in decision or raw_decision == "allow":
+                        decision["context"] = hint
+                        _hint_state(workspace_root, session, key, "delivered")
+                    elif raw_decision == "deny":
+                        decision["reason"] = str(decision.get("reason", "")) + "\n" + hint
+                        _hint_state(workspace_root, session, key, "delivered")
+                    else:  # ask: the user reads this; the model gets it post-run
+                        decision["reason"] = str(decision.get("reason", "")) + "\n" + hint
+                        _hint_state(workspace_root, session, key, "pending")
+                    policy["_media_note"] = "media:shell_hint"
+            except Exception:
+                pass
         return _apply_rewrite(decision, tool_input, command_key)
 
     if kind == "read":
@@ -2874,10 +3269,32 @@ def classify(
                         and _path_outside(v, workspace_root)
                         and _agy_mcp_schema_read(payload, v)):
                     return dict(DECISION_ALLOW)
+                policy["_read_tool"] = tool_name
                 return _apply_rewrite(
-                    classify_read(v, workspace_root, policy, session_id, tool_input=tool_input),
+                    classify_read(v, workspace_root, policy, session_id, tool_input=tool_input,
+                                  path_key=key),
                     tool_input,
                 )
+        return dict(DECISION_ALLOW)
+
+    if kind is None and policy.get("_flavor") == "codex" and tool_name == "view_image":
+        # Codex's image viewer (tool argument `path`, as codex-cli 0.167.1's
+        # tool schema declares it). Its hooks reference documents PreToolUse
+        # deny, additionalContext and an `updatedInput` replacement-arguments
+        # object for local function tools; none of this is live-verified.
+        # The read guard's own checks come first: a secret or outside-workspace
+        # path is left to the host untouched (this tool is otherwise exempt),
+        # so a media decision is only ever made for a call that was allowed.
+        v = tool_input.get("path")
+        if isinstance(v, str) and v:
+            path_str = v if os.path.isabs(v) or not workspace_root else os.path.join(workspace_root, v)
+            if (_maybe_media(path_str)
+                    and not _is_secret_path(path_str, workspace_root)
+                    and not _path_outside(path_str, workspace_root)):
+                media = _media_read(path_str, workspace_root, policy, tool_input, "path",
+                                    viewer="view_image")
+                if media is not None:
+                    return _apply_rewrite(media, tool_input)
         return dict(DECISION_ALLOW)
 
     if kind == "search":
@@ -2976,7 +3393,7 @@ def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
     arguments before it runs (https://code.claude.com/docs/en/hooks)."""
     rewrite = decision.get("rewrite")
     if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
-        return {
+        out = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "allow",
@@ -2984,6 +3401,15 @@ def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
                 "permissionDecisionReason": str(rewrite.get("reason", "")),
             }
         }
+        if decision.get("_no_approve"):
+            # A media redirect never APPROVES the read. Observed on 2.1.322
+            # (liveprobe xB, xF): `allow` with a rewritten input ran a call the
+            # user's deny / ask rule named; without a decision (xC, xE0-xE2)
+            # the host runs its own permission flow on the rewritten input.
+            del out["hookSpecificOutput"]["permissionDecision"]
+            del out["hookSpecificOutput"]["permissionDecisionReason"]
+        _attach_context(out, decision, proceeds=True)
+        return out
     mapping = {"allow": "allow", "deny": "deny", "force_ask": "ask"}
     out: dict[str, Any] = {
         "hookSpecificOutput": {
@@ -2993,7 +3419,21 @@ def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
     }
     if decision.get("reason"):
         out["hookSpecificOutput"]["permissionDecisionReason"] = decision["reason"]
+    _attach_context(out, decision)
     return out
+
+
+def _attach_context(out: dict[str, Any], decision: dict[str, Any],
+                    proceeds: bool = False) -> None:
+    """Model-visible advisory text (``hookSpecificOutput.additionalContext``)
+    for a call that proceeds: Claude Code presents it as a system reminder
+    (observed, 2.1.322); Codex adds it as developer context (hooks reference).
+    Only ever attached to a call that is allowed, or rewritten (``proceeds``:
+    a canonical deny carrying a rewrite runs, in its rewritten form)."""
+    note = decision.get("context")
+    if isinstance(note, str) and note and (
+            proceeds or decision.get("decision", "allow") == "allow"):
+        out["hookSpecificOutput"]["additionalContext"] = note
 
 
 def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
@@ -3006,7 +3446,7 @@ def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
     """
     rewrite = decision.get("rewrite")
     if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
-        return {
+        out = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "allow",
@@ -3014,6 +3454,8 @@ def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
                 "permissionDecisionReason": str(rewrite.get("reason", "")),
             }
         }
+        _attach_context(out, decision, proceeds=True)
+        return out
 
     raw = decision.get("decision", "allow")
     if raw in ("deny", "ask", "force_ask"):
@@ -3030,6 +3472,13 @@ def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
             out["hookSpecificOutput"]["permissionDecisionReason"] = reason
         return out
 
+    if decision.get("context"):
+        # A pass-through that carries advice: no permissionDecision (Codex
+        # accepts `allow` only with updatedInput), only the documented
+        # additionalContext.
+        advised: dict[str, Any] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+        _attach_context(advised, decision)
+        return advised
     return {}
 
 
@@ -3927,7 +4376,13 @@ def _note_pre_coverage(
             pre = "deny_steer"
         label = ("advisory" if pol.get("mode") == "advisory"
                  else _pre_decision_label(decision, flavor, payload))
-        _note_coverage(ws_root, flavor, "pre", payload, kind, pre or "observe", label)
+        note = pol.get("_media_note")
+        if note and kind == "media":
+            # Codex view_image: the table's route is "exempt", but a media
+            # decision was made on its input side; record the route it took.
+            pre = "media"
+        _note_coverage(ws_root, flavor, "pre", payload, kind, pre or "observe", label,
+                       note=str(note) if note else None)
     except Exception:
         pass
 
@@ -4253,6 +4708,12 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         nudge = _navigation_nudge(payload) or _emission_nudge(payload)
     except Exception:
         nudge = None
+    try:
+        media_hint = _media_post_hint(payload, flavor)
+        if media_hint:
+            nudge = media_hint + ("\n" + nudge if nudge else "")
+    except Exception:
+        pass
     try:
         # Pure observation, in its own block for the same reason the nudges
         # are: it influences nothing this call returns, so it must never be

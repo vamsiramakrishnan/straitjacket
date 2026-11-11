@@ -123,6 +123,47 @@ def _with_print_bg_wait_ceiling(
     return {**base, _PRINT_BG_WAIT_CEILING_VAR: "0"}
 
 
+_FILE_MENTIONS_VAR = "CLAUDE_CODE_DISABLE_FILE_MENTIONS"
+
+
+def _with_file_mention_routing(
+    workspace_root: Path, env: dict[str, str]
+) -> tuple[dict[str, str], str | None]:
+    """Route ``@file`` prompt mentions through the Read tool.
+
+    Without this, Claude Code inlines an ``@``-mentioned file into the prompt
+    itself and no hook fires: a 3 MB log or a 4K screenshot enters whole, past
+    the read guard and the media note. With CLAUDE_CODE_DISABLE_FILE_MENTIONS
+    set, the prompt carries only a marker naming the file and the model calls
+    Read, which the guard sees (observed on Claude Code 2.1.322; the variable
+    is in that build's environment allow-list). The CLI ignores the variable
+    when it comes from a settings file, so it is set in the child's
+    environment. A build that does not know it ignores it and inlines as
+    before, so an older CLI is unaffected.
+
+    Opt-in (``[media] file_mentions = true``; see ctx.config.MediaPolicy for
+    the live evidence behind that default). Even then not when the user set
+    the variable themselves (any value), not with CTX_WRAP_NO_FILE_MENTIONS=1, and not when ``[guard] mode = "advisory"``, where
+    no hook would act on the Read. Returns the environment and a one-line
+    startup note (None when nothing was changed)."""
+    if os.environ.get("CTX_WRAP_NO_FILE_MENTIONS"):
+        return env, None
+    if _FILE_MENTIONS_VAR in env or _FILE_MENTIONS_VAR in os.environ:
+        return env, None  # the user's own setting wins
+    try:
+        from ctx.config import load_config
+
+        cfg = load_config(workspace_root)
+        if not cfg.media.file_mentions or cfg.guard.mode == "advisory":
+            return env, None
+    except Exception:
+        return env, None  # fail-open: a config problem never changes the launch
+    note = ("ctx wrap: @file mentions are read through the Read tool, so the guard "
+            f"sees them ({_FILE_MENTIONS_VAR}=1; opt out with "
+            "CTX_WRAP_NO_FILE_MENTIONS=1, or drop [media] file_mentions = true)")
+    return {**env, _FILE_MENTIONS_VAR: "1"}, note
+
+
 _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
 
 
@@ -455,6 +496,9 @@ def wrap_claude(
         child_env = {**(child_env if child_env is not None else os.environ),
                      "CTX_TASK_CONTEXT_FILE": task_file.name}
         child_env.pop("CTX_TASK_QUERY", None)
+        child_env, mentions_note = _with_file_mention_routing(workspace_root, child_env)
+        if mentions_note:
+            print(mentions_note, file=sys.stderr)
         if not _claude_supports_settings(claude):
             print(
                 "ctx wrap: this claude build lacks --settings; "

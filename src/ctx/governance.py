@@ -283,7 +283,12 @@ def exempt_reason(kind: str | None) -> str:
 #: ``ctx coverage``; one line each.
 LIMITS: dict[str, tuple[str, ...]] = {
     "claude-code": (
-        "@-referenced files enter the context with no tool call, so no hook sees them",
+        "@-referenced files enter the context with no tool call, so no hook sees them "
+        "(2.1.322 observed: a large mention is not inlined, only referenced); opt-in "
+        "[media] file_mentions = true makes `ctx wrap claude` set "
+        "CLAUDE_CODE_DISABLE_FILE_MENTIONS=1 so the model reads them with Read",
+        "images pasted from the clipboard or attached to a prompt enter with no tool "
+        "call: no hook sees them, so no media note or overview applies",
         "a failed tool fires PostToolUseFailure, which cannot replace output: "
         "failure output is observed, never digested",
         "built-in results must keep their output shape; a result the gate "
@@ -330,6 +335,65 @@ LIMITS: dict[str, tuple[str, ...]] = {
         "naming the exact retry",
         "a downstream canonical-value rewrite is left alone, so the gate skips it",
     ),
+}
+
+#: Media reads: what the read route does when the file is an image, video or
+#: audio (``ctx.mediaread``; ``[media]`` in ctx.toml). Printed by ``ctx
+#: coverage`` under each host; "unchanged" is a declared non-behavior, not a gap
+#: left implicit. Evidence is stated per line: observed live, or contract only.
+MEDIA_READS: dict[str, tuple[str, ...]] = {
+    "claude-code": (
+        "Read of a large PNG/JPEG/GIF/WebP: allowed unchanged + note (size, the host's "
+        "downscale, the exact `ctx view --cell` crop command) [image_read = advise, "
+        "default]; opt-in image_read = redirect rewrites it to a gridded overview "
+        "(falls back to the note without Pillow, on error or past the time budget); "
+        "an image the host sends whole gets nothing. Observed live on 2.1.322",
+        "Read of video (MP4/MOV/MKV/WebM/AVI) or audio: the guard denies it with the "
+        "exact `ctx view` command (or what is missing) [video_read = steer, default], "
+        "but OBSERVED on 2.1.322 Read refuses a binary extension in its own input "
+        "validation BEFORE PreToolUse runs, so there the model gets the host's "
+        "'cannot read binary files' error and no hook sees the call; the hooks "
+        "reference says such validation rejections fire no PostToolUseFailure "
+        "either. The hint therefore rides the model's next ffmpeg/ffprobe call on "
+        "that file (one line naming `ctx view`)",
+        "Read of BMP/TIFF/ICO: allowed unchanged + a note naming `ctx view` "
+        "(only when Pillow is installed)",
+        "the video hint: fires on a video that exists and is only the command's output "
+        "(`ffmpeg -i in.png v.mp4`); misses `sudo -u USER ffmpeg` and commands inside "
+        "if/for/while bodies",
+        "up to 200 characters of a visible file name appear inside the quoted command "
+        "(inherent to naming the file); longer or unsafe names are replaced by PATH",
+        "a redirect never approves the read: it returns updatedInput with no "
+        "permissionDecision, so the host runs its own permission flow, on the "
+        "REWRITTEN path (2.1.322 liveprobe: an allow+rewrite bypassed a user deny/ask "
+        "rule). It is skipped when a visible settings file has a Read deny/ask rule; "
+        "rules passed by --settings or managed policy are not visible to the hook, and "
+        "a path-specific Read rule from those is not checked against the overview path",
+        "media reads skip the session read-budget ledger (an image is priced in "
+        "tokens, not bytes); the overview is hash-verified before the redirect, but "
+        "the host opens it later, a time-of-check window inside the session directory "
+        "(exploiting it needs write access to the workspace; not tested)",
+        "media handling runs only for a read the guard was going to allow: secret, "
+        "outside-workspace, .ctxignore'd or symlinked files keep the "
+        "ordinary read path",
+    ),
+    "codex": (
+        "view_image of a large image: allowed + additionalContext note [advise]; "
+        "image_read = redirect replaces its `path` via updatedInput. Contract only "
+        "(hooks reference), not observed live",
+        "view_image of video or audio: denied with the exact `ctx view` command. "
+        "Contract only",
+        "media passed to the shell (cat, xxd ...) keeps the command guard; the "
+        "reference does not say how Codex shows images otherwise, so nothing else changes",
+    ),
+    "antigravity": (
+        "unchanged: no media handling (its hooks reference is silent on image and "
+        "video reads)",
+    ),
+    "hermes": ("unchanged: no media handling",),
+    "omp": ("unchanged: no media handling",),
+    "opencode": ("unchanged: no media handling",),
+    "dsh": ("unchanged: no media handling",),
 }
 
 # ------------------------------------------------------------ prompt gate

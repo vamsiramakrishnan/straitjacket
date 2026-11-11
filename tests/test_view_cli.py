@@ -368,7 +368,7 @@ def test_video_json_and_animated_gif(ws, clip, capsys):
     doc = json.loads(out)
     assert rc == 0 and doc["view"] == "sheet" and doc["source"]["subtitle_streams"][0]["text"]
     assert doc["derived"]["meta"]["frames"] == 12 and len(doc["derived"]["meta"]["labels"]) == 12
-    assert doc["source"]["tokens_basis"] == "video@1fps"
+    assert doc["source"]["tokens_basis"].startswith("video@1fps")
     frames = [Image.new("RGB", (64, 48), c) for c in ((255, 0, 0), (0, 255, 0), (0, 0, 255))]
     frames[0].save(ws / "a.gif", save_all=True, append_images=frames[1:], duration=300, loop=0)
     rc, out, err = run(ws, "a.gif", capsys=capsys)

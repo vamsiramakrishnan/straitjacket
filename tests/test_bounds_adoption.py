@@ -77,6 +77,11 @@ ALLOWED: dict[str, str] = {
         "chunk-partition line cap and the width of an `L<n>: ` prefix; the "
         "digest it renders is fitted to digest_tokens separately"
     ),
+    "mediaread.py": (
+        "pixel-geometry floors restating snapcompact's and ctx.media's own "
+        "(downscaled and cropped dimensions never round to zero) and a "
+        "divide-by-zero guard on an aspect ratio; no caller-supplied bound"
+    ),
     "snapcompact.py": (
         "pixel-geometry floors, not caller bounds: a font's own metrics "
         "clamped to a positive cell size, and post-downscale dimensions "

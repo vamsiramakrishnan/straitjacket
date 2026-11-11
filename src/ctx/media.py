@@ -1509,35 +1509,59 @@ def _probe_av(src: _Src, p: MediaProbe) -> None:
                 p.notes.append(note)
 
 
-def raw_tokens(p: MediaProbe) -> tuple[int, str]:
-    """What this media would cost if handed to a model whole, and the basis.
-
-    Images use the project's image-token formula (``snapcompact``). Video has
-    no single price; the estimate is one frame per second at the video's own
+def raw_cost(p: MediaProbe) -> tuple[int, int, str]:
+    """What this media would cost if handed to a model whole: ``(low, high,
+    basis)``. Images use :func:`ctx.mediaread.image_cost`, the one image-cost
+    estimate (a single tier when ``CTX_MODEL`` names a known model, else the
+    standard-to-high-res range, said so in the basis). Video has no single
+    price; the estimate is one frame per second at the video's own
     resolution, labelled ``video@1fps``. Anything else falls back to the
-    house bytes/4 estimate.
-    """
-    from ctx.snapcompact import _image_tokens
+    house bytes/4 estimate."""
+    from ctx.mediaread import image_cost
 
     if p.kind in ("image", "video") and p.width and p.height:
-        per = _image_tokens(p.width, p.height, high_resolution=False)
+        lo, hi, tier = image_cost(p.width, p.height)
         if p.kind == "video":
             if p.duration_s:
-                return per * _floor1(math.ceil(p.duration_s)), "video@1fps"
+                n = _floor1(math.ceil(p.duration_s))
+                return lo * n, hi * n, f"video@1fps, {tier}"
         elif not p.animated:
-            return per, "image-patch"
+            return lo, hi, f"image-patch, {tier}"
         elif p.frames:
-            return per * p.frames, ("image-patch x frames (at least)" if p.scan_truncated
-                                    else "image-patch x frames")
-    return estimate_tokens(p.bytes), "bytes/4"
+            what = ("image-patch x frames (at least)" if p.scan_truncated
+                    else "image-patch x frames")
+            return lo * p.frames, hi * p.frames, f"{what}, {tier}"
+    n = estimate_tokens(p.bytes)
+    return n, n, "bytes/4"
+
+
+def raw_tokens(p: MediaProbe) -> tuple[int, str]:
+    """:func:`raw_cost` as one figure: the HIGH end (a budget must not be
+    understated), with the basis that says whether it is a range."""
+    lo, hi, basis = raw_cost(p)
+    return hi, _high_end(basis, lo, hi)
+
+
+def _high_end(basis: str, lo: int, hi: int) -> str:
+    """Name a single figure taken from a range as its high end."""
+    if lo == hi:
+        return basis
+    return basis.replace("standard-to-high-res tier range",
+                         "high end of the standard-to-high-res tier range")
 
 
 def _tokens(width: int | None, height: int | None, nbytes: int) -> int:
-    from ctx.snapcompact import _image_tokens
+    return _tokens_basis(width, height, nbytes)[0]
+
+
+def _tokens_basis(width: int | None, height: int | None, nbytes: int) -> tuple[int, str]:
+    """One figure and its basis: the high end when the tier is unknown."""
+    from ctx.mediaread import image_cost
 
     if width and height:
-        return _image_tokens(width, height, high_resolution=False)
-    return estimate_tokens(nbytes)
+        lo, hi, basis = image_cost(width, height)
+        return hi, _high_end(basis, lo, hi)
+    return estimate_tokens(nbytes), "bytes/4"
 
 
 # -------------------------------------------------------------- image core
@@ -1682,7 +1706,9 @@ def _make_derived(*, src: _Src, src_dims: tuple[int | None, int | None],
         mime, ext = "text/plain", "txt"
     w, h = size if size else (None, None)
     if tokens_before is None:
-        tokens_before = _tokens(src_dims[0], src_dims[1], src.size)
+        tokens_before, tier = _tokens_basis(src_dims[0], src_dims[1], src.size)
+        if tier != "bytes/4":
+            tokens_basis = f"{tokens_basis}, {tier}"
     rec = Derivation(
         source_sha256=src.sha256(), op=op, params=params, engine=engine[0],
         engine_version=engine[1], output_sha256=hashlib.sha256(data).hexdigest(),

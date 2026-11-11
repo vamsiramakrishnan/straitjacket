@@ -187,6 +187,9 @@ def render_static(host: str, regs: dict[str, dict[str, Any]] | None = None) -> l
     out.append("  cannot govern:")
     for line in gov.LIMITS.get(host, ()):
         out.append(f"    - {line}")
+    out.append("  media reads:")
+    for line in gov.MEDIA_READS.get(host, ()):
+        out.append(f"    - {line}")
     return out
 
 
@@ -308,7 +311,12 @@ def observed(rows: list[dict[str, Any]], *, host: str | None = None,
         rows = [r for r in rows if r.get("session") == session]
     calls: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     escaped: dict[str, dict[str, Any]] = {}
+    media: dict[str, int] = {}
     for r in rows:
+        note = str(r.get("note") or "")
+        if r.get("stage") == "pre" and note.startswith("media:"):
+            mkey = f"{r.get('host', '')} {_identity(r)} {note}"
+            media[mkey] = media.get(mkey, 0) + 1
         key = (str(r.get("host", "")), _identity(r), str(r.get("stage", "")), str(r.get("route", "")))
         agg = calls.setdefault(key, {"calls": 0, "decisions": {}, "raw_bytes": 0, "emitted_bytes": 0})
         agg["calls"] += 1
@@ -330,7 +338,8 @@ def observed(rows: list[dict[str, Any]], *, host: str | None = None,
         {"tool": k, **v} for k, v in sorted(escaped.items(), key=lambda kv: (-kv[1]["bytes"], kv[0]))
     ]
     return {"rows": len(rows), "session": session or "all", "sessions": len(sessions),
-            "calls": by_calls, "ungoverned": top_escaped}
+            "calls": by_calls, "ungoverned": top_escaped,
+            "media": [{"key": k, "calls": v} for k, v in sorted(media.items())]}
 
 
 def render_observed(obs: dict[str, Any], top: int = _TOP) -> list[str]:
@@ -357,6 +366,12 @@ def render_observed(obs: dict[str, Any], top: int = _TOP) -> list[str]:
         out.append(f"    {e['bytes']:>9} B  {e['calls']:>4} calls  {e['tool']}  ({why})")
     if len(obs["ungoverned"]) > 10:
         out.append(f"    ... {len(obs['ungoverned']) - 10} more omitted (--json lists all)")
+    if obs.get("media"):
+        out.append("  media reads (host tool decision: calls):")
+        for m in obs["media"][:10]:
+            out.append(f"    {m['key']}: {m['calls']}")
+        if len(obs["media"]) > 10:
+            out.append(f"    ... {len(obs['media']) - 10} more omitted (--json lists all)")
     return out
 
 
@@ -375,6 +390,7 @@ def report(root, *, host: str | None = None, session: str | None = None) -> dict
             "tools": rows,
             "ungoverned": ungoverned_static(rows),
             "cannot_govern": list(gov.LIMITS.get(h, ())),
+            "media_reads": list(gov.MEDIA_READS.get(h, ())),
             "prompt": prompt_row(h, regs),
         }
     data["installed_drift"] = installed_drift(root) if (host in (None, "claude-code")) else []
