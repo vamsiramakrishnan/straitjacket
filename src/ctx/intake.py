@@ -323,7 +323,9 @@ def render_chunk_page(store: Store, ws: Workspace, ref_text: str, start: int = 1
     """
     from ctx import bounds
     from ctx.digest.base import MAX_PARSE_BYTES
-    from ctx.digest.intakeprof import build_map, chunk_row, mappable_text, mint_chunk_span
+    from ctx.digest.intakeprof import (
+        build_map, chunk_row, mappable_text, mint_chunk_span, unmapped_tail,
+    )
     from ctx.refs import RefError, parse_ref
 
     try:
@@ -372,11 +374,10 @@ def render_chunk_page(store: Store, ws: Workspace, ref_text: str, start: int = 1
 
     scope = ""
     if partial:
-        mapped_lines, mapped_bytes = chunks[-1].end_line, chunks[-1].end_byte
+        tail_text, tail_cmd = unmapped_tail(text, chunks, total_lines, size, handle, budgets)
         scope = (
-            f" · mapped: first {fmt_bytes(mapped_bytes)} = L1-L{fmt_int(mapped_lines)} · NOT mapped: "
-            f"L{fmt_int(mapped_lines + 1)}-L{fmt_int(total_lines)}, reach it with "
-            f"ctx get {handle} --lines {mapped_lines + 1}:{mapped_lines + 40}"
+            f" · mapped: bytes 1-{fmt_int(chunks[-1].end_byte)} · {tail_text}, "
+            f"reach it with {tail_cmd}"
         )
 
     # Rows are redacted one by one as they are added, so the page is fitted

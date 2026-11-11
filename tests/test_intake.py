@@ -476,30 +476,125 @@ def test_traceback_paste_surfaces_its_decisive_line(env):
     assert "RecursionError" in get(store, ws, r.address, Selector(span=sid))
 
 
-def test_payload_past_the_parse_cap_names_every_scope(env, monkeypatch):
+CAP = 8 * 1024
+_CAP_PAYLOADS = {
+    # the cap lands inside the first (only) line
+    "one-line": b"abcdefghij" * 1500,
+    # ... inside the first line, with a short line after it
+    "one-line-then-tail": b"abcdefghij" * 1500 + b"\nshort tail line\n",
+    # ... inside a long line that follows complete lines
+    "straddler-after-lines": b"".join(b"line %04d ok\n" % i for i in range(300))
+    + b"x" * 9000 + b"\nafter\n",
+    # ... inside an ordinary short line
+    "short-lines": b"".join(b"row %05d of a long paste\n" % i for i in range(1500)),
+    # ... exactly on a line boundary
+    "on-boundary": b"y" * (CAP - 1) + b"\n" + b"z" * 5000 + b"\n",
+    # ... in the middle of a two-byte UTF-8 character
+    "split-char": b"a" + "é".encode() * 6000,
+}
+
+
+def _bytes_body(out: str) -> str:
+    """The body of a ``ctx get --bytes`` answer, minus header and next: line."""
+    body = out.split("\n", 2)[2]
+    if "\nnext: ctx get " in body:
+        body = body.rsplit("\nnext: ctx get ", 1)[0]
+    return body
+
+
+def _run(store, ws, cmd: str) -> str:
+    import shlex
+
+    argv = shlex.split(cmd)
+    assert argv[0] == "ctx", cmd
+    if argv[1] == "intake":
+        assert argv[2] == "--chunks"
+        return render_chunk_page(store, ws, argv[3], int(argv[5]) if len(argv) > 5 else 1)
+    assert argv[1] == "get", cmd
+    flag, value = argv[3], argv[4]
+    if flag == "--span":
+        return get(store, ws, argv[2], Selector(span=value))
+    a, b = (int(x) for x in value.split(":"))
+    key = {"--bytes": "bytes", "--lines": "lines"}[flag]
+    return get(store, ws, argv[2], Selector(**{key: (a, b)}))
+
+
+@pytest.mark.parametrize("case", sorted(_CAP_PAYLOADS))
+def test_every_byte_past_the_parse_cap_is_reachable(env, monkeypatch, case):
+    """Execute what the digest and the chunk pages print and rebuild the
+    payload from the answers: the map's own chunks (through their spans)
+    plus the unmapped tail (through the printed --bytes chain)."""
     from ctx.digest import base as digest_base
     from ctx.digest import intakeprof
 
-    monkeypatch.setattr(digest_base, "MAX_PARSE_BYTES", 64 * 1024)
-    monkeypatch.setattr(intakeprof, "MAX_PARSE_BYTES", 64 * 1024)
+    monkeypatch.setattr(digest_base, "MAX_PARSE_BYTES", CAP)
+    monkeypatch.setattr(intakeprof, "MAX_PARSE_BYTES", CAP)
     ws, store = env
-    data = b"".join(b"row %06d of a long paste\n" % i for i in range(20_000))   # ~500 KB
-    r = intake_bytes(store, ws, data, label="huge")
+    data = _CAP_PAYLOADS[case]
+    r = intake_bytes(store, ws, data, label="cap")
     d = r.digest
-    assert "lines · " in d and " total · " in d.splitlines()[1]
-    assert "chunks in the mapped part:" in d
-    m = re.search(r"mapped: first [\d.]+ KiB = L1-L([\d,]+) .*NOT mapped: L([\d,]+)-L20,000", d)
+    assert r.profile == "chunkmap/v1", d
+    assert " total · " in d.splitlines()[1]
+    assert re.search(r"L(\d+)-L(\d+)", d.split("NOT mapped:", 1)[1]) is None or all(
+        int(x) <= int(y) for x, y in re.findall(
+            r"L([\d,]+)-L([\d,]+)", d.split("NOT mapped:", 1)[1].replace(",", "")))
+    m = re.search(r"mapped: bytes 1-([\d,]+) .*NOT mapped: bytes ([\d,]+)-([\d,]+) ", d)
     assert m, d
-    mapped = int(m.group(1).replace(",", ""))
-    assert int(m.group(2).replace(",", "")) == mapped + 1
-    assert f"--lines {mapped + 1}:{mapped + 40}" in d
-    rows = [ln for ln in d.splitlines() if ln.startswith("  #")]
-    assert f"-L{mapped} " in rows[-1]          # the last row ends where the map ends
-    # the tail it points at is real and reachable
-    tail = get(store, ws, r.address, Selector(lines=(mapped + 1, mapped + 1)))
-    assert b"row %06d" % mapped in tail.encode()
+    mapped, first, total = (int(g.replace(",", "")) for g in m.groups())
+    assert first == mapped + 1 and total == len(data) and mapped <= CAP
+
+    # every printed follow-up runs and answers
+    for cmd in re.findall(r"^  (ctx .+)$", d.split("next:\n", 1)[1], re.M):
+        if "<pattern>" not in cmd:
+            assert _run(store, ws, cmd)
+
+    # the mapped part, rebuilt from every chunk's span, page by page
+    mapped_text, start = "", 1
+    while start:
+        page = render_chunk_page(store, ws, r.address, start)
+        assert "NOT mapped: bytes" in page
+        for sid in SPAN_RE.findall(page):
+            out = _run(store, ws, f"ctx get {r.address} --span {sid}")
+            if "\nbytes: " in out:
+                mapped_text += out.split("\n", 2)[2]
+            else:
+                body = out.split("\n")[2:]
+                mapped_text += "".join(re.sub(r"^L\d+: ", "", ln, count=1) + "\n" for ln in body)
+        nxt = re.search(r"^next: (ctx intake --chunks .+)$", page, re.M)
+        start = int(nxt.group(1).rsplit(" ", 1)[1]) if nxt else 0
+    if not data[:mapped].endswith(b"\n"):
+        mapped_text = mapped_text[:-1] if mapped_text.endswith("\n") and len(
+            mapped_text.encode()) > mapped else mapped_text
+    assert mapped_text.encode() == data[:mapped], case
+
+    # the tail, by following the printed --bytes chain to its end
+    cmd = re.search(r"^  (ctx get \S+ --bytes \d+:\d+)$", d, re.M).group(1)
+    tail, hops = "", 0
+    while cmd:
+        out = _run(store, ws, cmd)
+        tail += _bytes_body(out)
+        nxt = re.search(r"^next: (ctx get \S+ --bytes \d+:\d+)$", out, re.M)
+        cmd = nxt.group(1) if nxt else None
+        hops += 1
+        assert hops < 100
+    assert mapped_text.encode() + tail.encode() == data, case
+
+
+def test_parse_cap_mid_line_never_prints_an_impossible_range(env, monkeypatch):
+    """The reviewer's case: the cap inside the only line used to print
+    ``NOT mapped: L2-L1`` and ``ctx get … --lines 2:41``."""
+    from ctx.digest import base as digest_base
+    from ctx.digest import intakeprof
+
+    monkeypatch.setattr(digest_base, "MAX_PARSE_BYTES", CAP)
+    monkeypatch.setattr(intakeprof, "MAX_PARSE_BYTES", CAP)
+    ws, store = env
+    r = intake_bytes(store, ws, _CAP_PAYLOADS["one-line"], label="cap")
+    assert "L2-L1" not in r.digest and "--lines 2:" not in r.digest
+    assert "mapped: bytes 1-8,192 = part of L1" in r.digest
+    assert "NOT mapped: bytes 8,193-15,000 (6.6 KiB, rest of L1)" in r.digest
     page = render_chunk_page(store, ws, r.address, 1)
-    assert "NOT mapped" in page
+    assert "L2-L1" not in page and "--lines" not in page
 
 
 def test_session_query_never_changes_an_intake(env, monkeypatch):

@@ -84,7 +84,45 @@ def mappable_text(text: str, parsed_fully: bool) -> str:
     if parsed_fully:
         return text
     cut = text.rfind("\n")
-    return text[: cut + 1] if cut >= 0 else text
+    if cut >= 0:
+        return text[: cut + 1]
+    # No whole line in the parsed prefix: map the part of the line that was
+    # read, minus a trailing U+FFFD the cap may have made of a split UTF-8
+    # sequence (its 3 encoded bytes would overstate what was mapped). The
+    # rest of that line is the unmapped tail, reached by byte range.
+    return text.rstrip("\ufffd")
+
+
+def unmapped_tail(
+    mapped: str, chunks: tuple[Chunk, ...], total_lines: int, total_bytes: int,
+    handle: str, budgets,
+) -> tuple[str, str]:
+    """(description, command) for the stored bytes past the map.
+
+    Addressed by BYTE range, never by line: the cap can land inside a line
+    (a 40 MiB minified-JSON line, or a long line after short ones), and a
+    ``--lines`` continuation then either names a line that does not exist or
+    returns a whole multi-megabyte line through a clipped window. ``ctx get
+    --bytes`` pages a byte range with its own continuation to the end, so
+    following the printed commands reaches every byte.
+    """
+    mapped_bytes = chunks[-1].end_byte if chunks else 0
+    first = mapped_bytes + 1
+    window = max(1, bounds.budget_bytes(budgets.result_tokens) - SPAN_HEADER_RESERVE)
+    last = min(total_bytes, first + window - 1)
+    mid_line = bool(mapped) and not mapped.endswith("\n")
+    start_line = chunks[-1].end_line if (chunks and mid_line) else (
+        chunks[-1].end_line + 1 if chunks else 1)
+    where = (
+        f"rest of L{fmt_int(start_line)}" if mid_line and start_line >= total_lines
+        else f"rest of L{fmt_int(start_line)} to L{fmt_int(total_lines)}" if mid_line
+        else f"L{fmt_int(start_line)}-L{fmt_int(total_lines)}"
+    )
+    description = (
+        f"NOT mapped: bytes {fmt_int(first)}-{fmt_int(total_bytes)} "
+        f"({fmt_bytes(total_bytes - mapped_bytes)}, {where})"
+    )
+    return description, f"ctx get {handle} --bytes {first}:{last}"
 
 
 def build_map(text: str, total_lines: int, budgets) -> tuple[Chunk, ...]:
@@ -225,12 +263,14 @@ class ChunkMapProfile(Profile):
         target = fmt_bytes(chunk_params(budgets, view.lines)["target_cost"])
         scope = " in the mapped part" if partial else ""
         if partial:
-            tail_from = mapped_lines + 1
+            tail_text, tail_cmd = unmapped_tail(
+                text, chunks, view.lines, view.bytes, handle, budgets)
+            upto = "part of L1" if mapped_lines == 1 and not text.endswith("\n") else (
+                f"L1-L{fmt_int(mapped_lines)}" + ("" if text.endswith("\n") else " (last one partly)"))
             coverage = (
-                f"coverage: {{shown}}/{fmt_int(n)} chunks listed · mapped: first "
-                f"{fmt_bytes(mapped_bytes)} = L1-L{fmt_int(mapped_lines)} (parse cap "
-                f"{fmt_bytes(MAX_PARSE_BYTES)}) · NOT mapped: L{fmt_int(tail_from)}-"
-                f"L{fmt_int(view.lines)}, {fmt_bytes(view.bytes - mapped_bytes)}"
+                f"coverage: {{shown}}/{fmt_int(n)} chunks listed · mapped: bytes "
+                f"1-{fmt_int(mapped_bytes)} = {upto} (parse cap "
+                f"{fmt_bytes(MAX_PARSE_BYTES)}) · {tail_text}"
             )
         else:
             coverage = (
@@ -258,9 +298,7 @@ class ChunkMapProfile(Profile):
             if decisive is not None and sid_for(decisive.index):
                 suggestions.append(f"ctx get {handle} --span {sid_for(decisive.index)}")
             if partial:
-                suggestions.append(
-                    f"ctx get {handle} --lines {tail_from}:{tail_from + 39}"
-                )
+                suggestions.append(tail_cmd)
             if first_hidden is not None:
                 suggestions.append(f"ctx intake --chunks {handle} --from {first_hidden}")
             if decisive is None and shown and sid_for(shown[0]):
@@ -283,5 +321,5 @@ class ChunkMapProfile(Profile):
 
 __all__ = [
     "ChunkMapProfile", "build_map", "chunk_params", "chunk_row", "decisive_chunk",
-    "emitted", "mappable_text", "mint_chunk_span",
+    "emitted", "mappable_text", "mint_chunk_span", "unmapped_tail",
 ]
