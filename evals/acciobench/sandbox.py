@@ -14,6 +14,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
@@ -550,10 +551,12 @@ def _allocate_free_ports(
     base_port: int,
     *,
     has_notion: bool = False,
+    taken: set[int] | frozenset[int] = frozenset(),
 ) -> dict[int, int]:
-    """Deterministically assign free host ports starting at ``base_port``, skipping occupied ports."""
+    """Deterministically assign free host ports starting at ``base_port``, skipping occupied
+    ports and those in ``taken`` (held by another live sandbox that may not be listening yet)."""
     mapping: dict[int, int] = {}
-    reserved: set[int] = set()
+    reserved: set[int] = set(taken)
     stride = 2 if has_notion else 1
     next_cand = max(1024, int(base_port))
     for p in raw_ports:
@@ -574,6 +577,93 @@ def _allocate_free_ports(
         else:
             raise RuntimeError(f"Unable to allocate free host port starting from {base_port}")
     return mapping
+
+
+#: Host ports held by the live sandboxes of this process: a fresh trial's allocated ports
+#: and a re-grade's restored ones. A re-grade must bind the exact ports its trial ran with
+#: (they are baked into its staged files), and trials that ran one after another in the
+#: same worker slot share port numbers. Two sandboxes that want the same port therefore
+#: take turns; otherwise the second one's service fails to bind while its readiness probe
+#: is answered by the first one's, and it is graded against another trial's state.
+_HELD_PORTS: set[int] = set()
+_PORTS_CHANGED = threading.Condition()
+#: How long a re-grade waits for a port another trial of this process holds, and how long
+#: it then lets a listener outside this process (a service still shutting down) go away.
+_REGRADE_PORT_WAIT_S = 1800.0
+_PORT_FREE_GRACE_S = 20.0
+
+
+def _host_ports(port_map: dict[int, int], has_notion: bool) -> set[int]:
+    """Every host port a sandbox with ``port_map`` binds (Notion tasks also use port+1)."""
+    ports = set(port_map.values())
+    if has_notion:
+        ports |= {p + 1 for p in port_map.values()}
+    return ports
+
+
+def _claim_fresh_ports(raw_ports: list[int], base_port: int, *, has_notion: bool) -> tuple[dict[int, int], set[int]]:
+    """Allocate ports for a new trial and hold them until :func:`_release_ports`."""
+    with _PORTS_CHANGED:
+        mapping = _allocate_free_ports(raw_ports, base_port, has_notion=has_notion, taken=_HELD_PORTS)
+        held = _host_ports(mapping, has_notion)
+        _HELD_PORTS.update(held)
+    return mapping, held
+
+
+def _claim_saved_ports(
+    ports: set[int],
+    label: str,
+    *,
+    wait_s: float | None = None,
+    grace_s: float | None = None,
+) -> None:
+    """Hold exactly ``ports`` for a re-grade: wait until no live sandbox of this process
+    holds any of them, then require that nothing else on the host is listening on them.
+    Raises ``RuntimeError`` (and holds nothing) if either does not happen in time, so the
+    trial stays ungraded instead of being graded against someone else's service."""
+    wait_s = _REGRADE_PORT_WAIT_S if wait_s is None else wait_s
+    grace_s = _PORT_FREE_GRACE_S if grace_s is None else grace_s
+    if not ports:
+        return
+    deadline = time.monotonic() + wait_s
+    announced = False
+    with _PORTS_CHANGED:
+        while ports & _HELD_PORTS:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"port(s) {sorted(ports & _HELD_PORTS)} needed to re-grade {label} stayed "
+                    f"held by another trial for {wait_s:.0f}s"
+                )
+            if not announced:
+                announced = True
+                print(
+                    f"  [regrade] {label}: waiting for port(s) {sorted(ports & _HELD_PORTS)} "
+                    "held by another trial",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            _PORTS_CHANGED.wait(timeout=min(remaining, 5.0))
+        _HELD_PORTS.update(ports)
+    grace_deadline = time.monotonic() + grace_s
+    while True:
+        busy = sorted(p for p in ports if not _is_port_free(p))
+        if not busy:
+            return
+        if time.monotonic() >= grace_deadline:
+            _release_ports(ports)
+            raise RuntimeError(
+                f"port(s) {busy} needed to re-grade {label} are in use outside this run"
+            )
+        time.sleep(0.2)
+
+
+def _release_ports(ports: set[int]) -> None:
+    if not ports:
+        return
+    with _PORTS_CHANGED:
+        _HELD_PORTS.difference_update(ports)
+        _PORTS_CHANGED.notify_all()
 
 
 class TaskSandbox:
@@ -619,13 +709,15 @@ class TaskSandbox:
         self._spawned_pids: set[int] = set()
         self._setup_ran = False
         self._start_attempted = False
+        self._held_ports: set[int] = set()
 
     def setup(self) -> None:
         raw_ports = discover_task_ports(self.spec)
         base_port = 20000 + self.slot * 100
         has_notion = _spec_uses_notion(self.spec)
         self._has_notion = has_notion
-        self.port_map = _allocate_free_ports(raw_ports, base_port, has_notion=has_notion)
+        _release_ports(self._held_ports)
+        self.port_map, self._held_ports = _claim_fresh_ports(raw_ports, base_port, has_notion=has_notion)
         self.compiled_ports = CompiledPortMap(self.port_map)
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -772,6 +864,13 @@ class TaskSandbox:
             self.mock_case_dir / "services"
         ).is_dir()
         if self.has_mocks:
+            # The saved ports are the only ones this trial's staged files work with, and
+            # another trial may be using the same numbers right now: take turns.
+            _release_ports(self._held_ports)
+            wanted = _host_ports(self.port_map, self._has_notion)
+            self._held_ports = set()
+            _claim_saved_ports(wanted, str(self.spec.task_id))
+            self._held_ports = wanted
             self._remap_mocks()
             self._start_services(keep_existing_tmp=True)
         self._setup_ran = True
@@ -1139,6 +1238,14 @@ class TaskSandbox:
         return {"_error": log_text[-400:], "_exit": rc}
 
     def cleanup(self) -> None:
+        """Stop this sandbox's services, then give its ports back to waiting sandboxes."""
+        try:
+            self._terminate_services()
+        finally:
+            held, self._held_ports = self._held_ports, set()
+            _release_ports(held)
+
+    def _terminate_services(self) -> None:
         """Terminate mock service process groups in <5ms, falling back to `/proc` scan only if needed."""
         need_proc_fallback = False
 
