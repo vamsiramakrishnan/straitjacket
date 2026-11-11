@@ -145,8 +145,9 @@ def test_workspace_files_never_receive_user_scope_definitions(ws, capsys):
 _FAKE_SLEEPER = """#!/bin/sh
 if [ "$1" = "--help" ]; then echo "--settings"; exit 0; fi
 echo started > {ready}
-trap 'exit 42' TERM HUP
+trap 'kill $SLEEPER 2>/dev/null; exit 42' TERM HUP
 sleep 30 &
+SLEEPER=$!
 wait
 """
 

@@ -106,43 +106,67 @@ def test_probe_cache_invalidated_on_argv_change(ws):
     assert not any(r.provider == "big" for r in recs)
 
 
-def _hook(host, ws, budget):
+#: Repo instructions are loaded whole, up front, on EVERY host and either MCP
+#: basis (~550 tokens here), so a budget of 100 is exceeded by construction —
+#: not by whatever the fixture's MCP schema happens to cost on the basis that
+#: applies (deferred on all three hosts, where it is a tool name only).
+_INSTRUCTIONS = "Always run the full test suite before you finish. " * 44
+
+
+def _hook(host, ws, budget, tmp_path):
     (ws / "ctx.toml").write_text(
         f"version=1\n[surface]\nmax_static_tokens = {budget}\n", encoding="utf-8")
+    (ws / "AGENTS.md").write_text(_INSTRUCTIONS, encoding="utf-8")
     payload = json.dumps({"hook_event_name": "SessionStart",
                           "cwd": str(ws), "workspacePaths": [str(ws)]})
+    # Hermetic: an empty HOME and state dir of our own. Without HOME the
+    # child falls back to the account's real home (the password database)
+    # and prices whatever user-scope skills and servers live there.
+    home = tmp_path / "hook-home"
+    home.mkdir(exist_ok=True)
     proc = subprocess.run(
         [sys.executable, "-m", "ctx", "hook", host, "session-start"],
         input=payload.encode(),
-        env={"PYTHONPATH": str(SRC), "PATH": __import__("os").environ.get("PATH", "")},
+        env={"PYTHONPATH": str(SRC), "PATH": __import__("os").environ.get("PATH", ""),
+             "HOME": str(home), "CTX_STATE_HOME": str(tmp_path / "hook-state")},
         capture_output=True, timeout=40)
     return json.loads(proc.stdout.decode().strip())
 
 
-def test_sessionstart_claude_injects_advisory_over_budget(ws):
-    out = _hook("claude-code", ws, 100)
+def test_hook_fixture_exceeds_budget_on_the_applicable_basis(ws):
+    (ws / "AGENTS.md").write_text(_INSTRUCTIONS, encoding="utf-8")
+    a = surface.audit(ws)
+    assert a["totals"]["upfront_estimate"]["mcp_deferred"] > 100
+    assert a["totals"]["by_kind"]["repo_instructions"]["tokens"] > 100
+
+
+def test_sessionstart_claude_injects_advisory_over_budget(ws, tmp_path):
+    out = _hook("claude-code", ws, 100, tmp_path)
     assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert "CTX_SURFACE_GUARD" in out["hookSpecificOutput"]["additionalContext"]
+    ctx_text = out["hookSpecificOutput"]["additionalContext"]
+    assert "CTX_SURFACE_GUARD" in ctx_text and "deferred basis: Claude Code" in ctx_text
 
 
-def test_sessionstart_claude_noop_under_budget(ws):
-    out = _hook("claude-code", ws, 1_000_000)
+def test_sessionstart_claude_noop_under_budget(ws, tmp_path):
+    out = _hook("claude-code", ws, 1_000_000, tmp_path)
     assert out == {"continue": True}
 
 
-def test_sessionstart_codex_injects_advisory(ws):
-    out = _hook("codex", ws, 100)
-    assert "CTX_SURFACE_GUARD" in out["hookSpecificOutput"]["additionalContext"]
+def test_sessionstart_codex_injects_advisory(ws, tmp_path):
+    out = _hook("codex", ws, 100, tmp_path)
+    ctx_text = out["hookSpecificOutput"]["additionalContext"]
+    assert "CTX_SURFACE_GUARD" in ctx_text and "deferred basis: Codex" in ctx_text
 
 
-def test_preinvocation_antigravity_shape(ws):
+def test_preinvocation_antigravity_shape(ws, tmp_path):
     # Antigravity has no SessionStart event; the advisory rides PreInvocation's
     # injectSteps as an ephemeral message so it does not accumulate in the
     # transcript on every invocation.
-    over = _hook("antigravity", ws, 100)
+    over = _hook("antigravity", ws, 100, tmp_path)
     assert "CTX_SURFACE_GUARD" in over["injectSteps"][0]["ephemeralMessage"]
+    assert "deferred basis: Antigravity" in over["injectSteps"][0]["ephemeralMessage"]
     assert "additionalContext" not in over
-    under = _hook("antigravity", ws, 1_000_000)
+    under = _hook("antigravity", ws, 1_000_000, tmp_path)
     assert under == {}
 
 
@@ -153,7 +177,8 @@ def test_gate_off_is_silent(ws):
     proc = subprocess.run(
         [sys.executable, "-m", "ctx", "hook", "claude-code", "session-start"],
         input=payload.encode(),
-        env={"PYTHONPATH": str(SRC), "PATH": __import__("os").environ.get("PATH", "")},
+        env={"PYTHONPATH": str(SRC), "PATH": __import__("os").environ.get("PATH", ""),
+             "HOME": __import__("os").environ["HOME"]},  # the isolated test HOME
         capture_output=True, timeout=40)
     assert json.loads(proc.stdout.decode().strip()) == {"continue": True}
 
