@@ -31,6 +31,11 @@ known section are ignored. (One consequence worth knowing: a typo in `ctx.toml`
 does not raise — it quietly reverts the affected setting to its default. If a
 change seems to have no effect, check the file parses.)
 
+The one exception is the prompt gate. [`[intake] mode`](#intake-the-prompt-gate-for-oversized-pastes)
+controls whether prompt text is stored, so it fails toward `off`: a `ctx.toml`
+that cannot be read with confidence, or a mode that is not exactly one of the
+three values, stores nothing.
+
 ## A minimal `ctx.toml`
 
 ```toml
@@ -45,7 +50,7 @@ digest_head_lines = 5
 digest_tail_lines = 5
 
 [guard]
-mode = "guarded"               # advisory | guarded | strict
+mode = "guarded"               # advisory | guarded | strict (strict behaves as guarded)
 unknown_command = "force_ask"
 internal_error = "allow"       # fail-open: a broken guard must not brick the workspace
 ```
@@ -84,7 +89,7 @@ before it runs.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `mode` | `"guarded"` | `advisory` \| `guarded` \| `strict`. **`advisory` makes the guard a no-op** — nothing is steered. |
+| `mode` | `"guarded"` | `advisory` \| `guarded` \| `strict`. **`advisory` switches the guard off**: PreToolUse allows every call and the PostToolUse output gate replaces nothing. **`strict` is accepted but has no code path of its own: it behaves exactly as `guarded`.** Any other value also behaves as `guarded`. |
 | `unknown_command` | `"force_ask"` | Disposition for a command the classifier doesn't recognize: `allow` \| `deny` \| `ask` \| `force_ask`. |
 | `internal_error` | `"allow"` | What to do if the guard itself errors. The default is availability-safe (fail-open); set `"deny"` to fail-closed. |
 | `steering` | `"auto"` | `auto` \| `rewrite` \| `deny`. `deny` disables all transparent rewrites, so you see plain denials instead of substitutions. |
@@ -109,12 +114,20 @@ This policy is the first reviewed AlphaEvolve product canary; its measured
 tradeoffs and remaining proof boundary are documented in the
 [optimization guide](ALPHAEVOLVE-OPTIMIZATION.md#how-those-benefits-reached-the-product).
 
-**To make the harness stricter,** `mode` and `steering` are different axes:
-`mode` sets *how much* is classified (`advisory` off → `guarded` → `strict`),
-while `steering` sets *what happens* to a flooding command — `auto`/`rewrite`
-transparently reroute it through `ctx run`, and `steering = "deny"` blocks it
-outright so nothing runs until you re-issue it yourself. A locked-down install
-typically pairs `mode = "strict"` with `steering = "deny"`.
+**To make the harness stricter,** use `steering`, `unknown_command` and
+`internal_error`, not `mode`. `mode` has one effect today: `advisory` turns the
+guard off, and every other value is `guarded`. `steering` sets *what happens* to
+a flooding command: `auto`/`rewrite` transparently reroute it through `ctx run`,
+and `steering = "deny"` blocks it outright so nothing runs until you re-issue it
+yourself. `unknown_command` decides what happens to a command the classifier does not
+recognise: the default `force_ask` asks you; `allow` lets it run; `deny` sends it
+down the same path as a recognised flood, so under the default `steering` it is
+rewritten to run under `ctx run` and allowed, and it is refused only together with
+`steering = "deny"`. `internal_error = "deny"` makes a broken guard fail closed. A
+locked-down install pairs `steering = "deny"` with `unknown_command = "deny"` and
+`internal_error = "deny"`. `ctx coverage`
+prints a note when a workspace sets `mode = "strict"`, so the setting cannot be
+mistaken for one that does something.
 
 ## `[workspace]` — capture boundaries
 
@@ -193,11 +206,14 @@ limits. Policy files grant no additional mutation permissions. See
 
 ## `[surface]` — the input side (MCP tool schemas)
 
-Governs the discretionary-context budget and the pre-flight gate. That gate runs
-on `SessionStart` for Claude Code and Codex; Antigravity has no such event, so
-there it runs on `PreInvocation` and injects the advisory as an *ephemeral*
-message (that hook fires before every model call, so a persistent one would
-re-accumulate context on each).
+Governs the discretionary-context budget, the pre-flight gate, and the plan
+`ctx wrap claude` applies at launch. The gate runs on `SessionStart` for Claude
+Code and Codex. On Antigravity it also runs on `SessionStart` when the payload carries
+`hookEventName`, which `agy` added in 1.5.4 (per its changelog); observed live on 1.5.5 only; the advisory is injected once and stays in
+the conversation. A payload without `hookEventName` comes from an `agy` older than
+1.5.4, which may have no `SessionStart`; there the gate runs on `PreInvocation` and
+injects the advisory as an *ephemeral* message, because that hook fires before every
+model call and a persistent message would re-accumulate context on each.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -206,6 +222,75 @@ re-accumulate context on each).
 | `default_profile` | `""` | Profile suggested when over budget. |
 | `gateway` | `false` | Use the MCP gateway delivery (progressive disclosure). |
 | `probe` | `true` | Measure real MCP tool schemas (cached) during the gate. |
+| `wrap` | `"auto"` | The surface plan `ctx wrap claude` applies at launch: `auto` or `off`. `ctx wrap claude --surface auto\|off\|<profile>` overrides it for one launch. A profile name here is ignored with a note on stderr and `auto` is used: a profile can only be chosen on the command line. See [`ctx wrap --surface`](CLI.md#shrink-the-launch-surface---surface). |
+| `wrap_min_sessions` | `5` | Complete Claude Code sessions of transcript evidence required before `auto` narrows any skill to name-only. A value below 1 or an unreadable value uses `5`. |
+
+`auto` reads usage evidence from this project's own Claude Code transcripts and
+never starts an MCP server to measure anything; it also needs no `probe`. A
+launch with fewer than `wrap_min_sessions` sessions changes no skill, and the
+receipt (`.ctx-surface/wrap-receipt.json`) says how many sessions it saw.
+
+A profile for `--surface <name>` is one of the built-ins (`read-only`,
+`local-dev`, `review`, `full`) or a table in `ctx.toml`:
+
+```toml
+[surface.profiles.docs-only]
+families = ["repository", "docs", "harness"]
+authority_ceiling = "read"        # read | local-write | remote-write | destructive
+include = []                      # capability ids to keep, e.g. "mcp.github.search_code"
+exclude = []                      # capability ids to drop
+max_schema_tokens = 4000
+```
+
+A table here takes precedence over a built-in of the same name. A per-tool
+restriction (an `include` or `exclude` naming one tool of a server, or an
+`authority_ceiling` below `destructive`) is enforced through the gateway, or the
+server is left out of the session; it is never half-applied.
+
+## `[intake]`: the prompt gate for oversized pastes
+
+A prompt hook on Claude Code and Codex (`UserPromptSubmit`) can add context to a
+prompt or block it. It cannot remove or shorten the text already sent. This section
+sets what ctx does with a prompt that carries a very large paste. The behaviour,
+and what each host does, is in [Pastes and media](PASTES-AND-MEDIA.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mode` | `"advise"` | `advise` \| `block` \| `off`. |
+| `threshold_bytes` | `0` | A pasted region, or a prompt with no separable paste, larger than this many UTF-8 bytes is stored. `0` means `[budgets] max_inline_bytes` (16384). Values below `4096` are raised to `4096`. |
+
+```toml
+[intake]
+mode = "block"
+threshold_bytes = 32768
+```
+
+- `advise` stores the paste through [`ctx intake`](CLI.md#store-a-paste-file-or-clipboard-ctx-intake)
+  and adds a digest with its handle as context. The paste still reaches the model
+  this turn, and the added context says so. What it buys is that the model can cite
+  and re-read regions by handle, and that the handle survives compaction.
+- `block` stores the paste and stops the prompt before any model call. The user is
+  shown the handles and told to resend the message with a handle in place of the
+  paste. The block message contains handles, sizes and counts, never any pasted text.
+- `off` does nothing and stores nothing.
+
+`mode` is a privacy control, so it fails toward `off`: it is trimmed and
+case-folded, and anything that is not exactly one of the three values (a typo, a
+non-string, an `[intake]` that is not a table) means `off`. So does a `ctx.toml`
+that does not parse, that is a directory, or that is a dangling or looping
+symlink. An internal error, an unusable state directory or a handle that does not
+resolve lets the prompt through unchanged; `block` happens only after every paste is
+stored and every handle resolves.
+
+Stored prompt text is kept **verbatim and unredacted** in this machine's ctx state
+directory for the workspace (see `[store]` above) for `[store] retention_days`,
+then it is eligible for `ctx gc`. The state root and its `workspaces/` directory are
+mode `0700` and files are `0600`, which is what protects the content; the blob and
+manifest subdirectories below them are not individually `0700`. Redaction
+applies to what the model is shown, not to the stored bytes. Nothing leaves the
+machine. The gate does not store into the repository unless `[store] backend =
+"local"`; when the state directory is unusable the prompt goes through unstored.
+Advise mode records no token saving, because nothing was avoided.
 
 ## `[redaction]` — secret redaction
 

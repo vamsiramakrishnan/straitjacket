@@ -113,14 +113,16 @@ Retrieval remains bounded. If the requested region is too large, `ctx get` retur
 |---|---|---|
 | Claude Code | Transparent rewrite | Yes |
 | Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
-| Antigravity | Deny with a bounded replacement command | No |
+| Antigravity | Rewrite `run_command` and `read_file` in place when the payload carries `hookEventName` (added in `agy` 1.5.4; observed on 1.5.5 only); deny and name the bounded command for other tools | No |
 | Hermes, OMP, OpenCode | Native plugin argument rewrite | Text-output replacement; contract-tested |
 | DSH | Deny with a bounded replacement command | Native text-output replacement; contract-tested |
 
-Antigravity's published PreToolUse contract cannot modify arguments. Its
-PostToolUse contract cannot replace tool output. straitjacket can prevent a
-known command flood before execution, but a verbose connector result can still
-enter the transcript unchanged.
+On Antigravity (observed on `agy` 1.5.5) a PreToolUse hook can rewrite a call's
+arguments, and ctx does so for `run_command` and `read_file`; every other read or
+search tool is denied with the bounded command named. Its PostToolUse hook accepts
+only an empty reply and is not given the tool's output, so it cannot replace
+output. straitjacket can prevent a known command flood before execution, but a
+verbose connector result can still enter the transcript unchanged.
 
 See [Host capabilities](HOST-CAPABILITIES.md) for the full matrix.
 

@@ -32,8 +32,8 @@ the harness already crosses*:
 
 | delivery point | what drains there | on which hosts |
 |---|---|---|
-| `session-start` | everything pending, as session advisory context | claude, codex |
-| `pre-invocation` | everything pending, before every model call | antigravity |
+| `session-start` | everything pending, as session advisory context | claude, codex, antigravity (when the payload carries `hookEventName`, added in `agy` 1.5.4; observed on 1.5.5 only) |
+| `pre-invocation` | everything pending, before every model call | antigravity (the only delivery point on an `agy` that has no `SessionStart`) |
 | `post-tool-use` | `report` and `advise`, as additional context | claude, codex |
 | `post-tool-use` | `report` and `advise`, appended to the replaced output | hermes, omp, opencode, dsh — only when there *is* a replacement |
 | `pre-tool-use` | `interrupt`, as a stop on the next tool call | all seven |

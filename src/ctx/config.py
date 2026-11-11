@@ -257,8 +257,8 @@ class IntakePolicy:
     Privacy: stored prompt content is user content, kept VERBATIM and
     UNREDACTED (redaction applies to what the model is shown, never to the
     stored bytes) in this machine's ctx state directory for this workspace
-    (``$CTX_STATE_HOME`` or ``$XDG_STATE_HOME/ctx/workspaces/<id>/``, shown
-    by ``ctx doctor``; mode 0700, files 0600) for ``[store] retention_days``
+    (``$CTX_STATE_HOME`` or ``$XDG_STATE_HOME/ctx/workspaces/<id>/``; that
+    directory is mode 0700 and files are 0600) for ``[store] retention_days``
     (30 by default), and is then eligible for ``ctx gc``. Nothing leaves the
     machine. The gate never stores a prompt inside the repository on its own:
     when the state directory is unusable (the automatic in-project

@@ -174,9 +174,9 @@ Host contracts are not equal:
 |---|---|---|
 | Claude Code | can rewrite arguments | can replace output |
 | Codex | implemented and contract-tested | implemented and contract-tested; live CLI receipt pending |
-| Antigravity | can allow or deny, not rewrite | cannot replace output |
+| Antigravity | can rewrite `run_command` and `read_file` (when the payload carries `hookEventName`, added in `agy` 1.5.4; observed on 1.5.5 only); denies other tools | cannot replace output |
 
-On Antigravity, straitjacket denies a known flood and returns the bounded replacement command. That costs a turn, but prevents the bytes. A large connector result can only be observed after return because the host exposes no replacement field. See [Host capabilities](HOST-CAPABILITIES.md).
+On Antigravity, straitjacket rewrites a known flooding shell command in place so it runs once through `ctx run`; for other tools it denies the call and names the bounded command, which costs a turn but prevents the bytes. A large connector result reaches the transcript whole because the host exposes no replacement field and gives its post-tool hook no result. See [Host capabilities](HOST-CAPABILITIES.md).
 
 ## There are four places to act
 

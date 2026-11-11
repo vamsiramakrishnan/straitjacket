@@ -88,13 +88,16 @@ This is the most common report, and it almost always has a mundane cause.
 
 ### The guard is a complete no-op
 
-**Cause:** `[guard] mode = "advisory"` turns the guard off — it allows
-everything unconditionally. **Fix:** set `mode = "guarded"` (the default) or
-`"strict"` in `ctx.toml`.
+**Cause:** `[guard] mode = "advisory"` turns the guard off — PreToolUse allows
+everything unconditionally and the PostToolUse output gate replaces nothing.
+**Fix:** set `mode = "guarded"` (the default) in `ctx.toml`. `"strict"` is accepted
+but behaves exactly as `guarded`; `ctx coverage` says so when a workspace sets it.
 
 Related: a **syntax error in `ctx.toml`** silently reverts settings to their
-defaults rather than erroring, so an intended `mode = "strict"` sitting under a
-malformed line behaves as the default. Confirm the file parses.
+defaults rather than erroring, so an intended `mode = "advisory"` sitting under a
+malformed line behaves as the default. Confirm the file parses. The one setting
+that fails the other way is `[intake] mode`: an unreadable `ctx.toml` turns the
+prompt gate off.
 
 ### A specific command isn't being captured
 
@@ -263,9 +266,10 @@ telemetry may remain under the normal retention policy.
 
 ## How do I turn the harness off, or uninstall it?
 For a single break-glass command, confirm the force-ask prompt. To disable
-steering everywhere, set `[guard] mode = "advisory"` — but note that only
-neutralizes the PreToolUse guard; the PostToolUse digest gate and the `ctx` MCP
-tool stay registered. To fully remove the host integration, delete the files
+steering everywhere, set `[guard] mode = "advisory"` — that makes both the
+PreToolUse guard and the PostToolUse digest gate allow everything, but the hooks
+and the `ctx` MCP tool stay registered. The prompt gate has its own switch,
+`[intake] mode = "off"`. To fully remove the host integration, delete the files
 `ctx wrap` added (this is exactly what each host's setup output tells you):
 
 For Codex and OpenCode installs created by the configuration planner, use

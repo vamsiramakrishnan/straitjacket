@@ -184,7 +184,7 @@ context residency—not the highest compression ratio.
 | Direct `ctx` CLI | Capture and retrieval without a host plugin |
 | Claude Code | Command rewriting and oversized-result substitution on supported hooks |
 | Codex | Implemented and contract-tested gates; live CLI receipt pending |
-| Antigravity | Deny recognized floods and supply a bounded replacement command; no output substitution |
+| Antigravity | Rewrite recognized floods in `run_command` and `read_file` in place (`agy` 1.5.5), deny and name the bounded command for other tools; no output substitution |
 | Hermes / Open Hermes | Native argument rewriting and text-output replacement; active-profile plugin + MCP |
 | Oh My Pi (`omp`) | Native argument rewriting and text-output replacement; project plugin + MCP |
 | OpenCode | Native argument rewriting and text-output replacement; project plugin + MCP |

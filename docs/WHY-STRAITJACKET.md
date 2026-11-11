@@ -72,9 +72,11 @@ rerun the command.
 
 The shipped Claude Code path now rewrites recognized noisy commands
 transparently. The Codex path implements and contract-tests the same behavior,
-but still lacks a live CLI receipt. Antigravity has to deny and name the bounded
-replacement because its published hook contract does not permit argument
-replacement.
+but still lacks a live CLI receipt. Antigravity first had to deny and name the
+bounded replacement, because its published hook contract listed no argument
+replacement. On `agy` 1.5.5 a hook can rewrite arguments (observed live), so ctx
+now rewrites `run_command` and `read_file` in place and still denies and names the
+command for its other tools.
 
 The lesson was not that agents cannot manage output themselves. Strong agents
 often can.
@@ -179,7 +181,7 @@ Host APIs determine how much can be enforced.
 |---|---|---|
 | Claude Code | Rewrites recognized noisy calls | Replaces oversized results |
 | Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
-| Antigravity CLI | Denies and names the bounded command | Cannot replace output |
+| Antigravity CLI | Rewrites `run_command` and `read_file`; denies and names the bounded command for other tools | Cannot replace output |
 | ctx-owned Antigravity SDK | Uses bounded tools directly | Uses bounded tools directly |
 
 On Antigravity, a verbose connector result can still enter the transcript

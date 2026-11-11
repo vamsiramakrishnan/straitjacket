@@ -6,6 +6,93 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- `ctx intake [PATH|-]` stores pasted text, a workspace file, stdin or the clipboard
+  once and prints a bounded digest with a handle, without a command or tool call to
+  hang it on (`--label`, `--name`, `--focus`, `--json`, `--clip`, `--copy`, and
+  `--chunks HANDLE --from N` to page every chunk). Receipt schema `ctx.intake/v1`.
+  Text uses the existing digest machinery; a large payload no profile claims gets the
+  intake-only `chunkmap/v1` table of addressable line- or byte-range chunks with the
+  decisive and terminal signal lines. Intake parses at most 32 MiB; the rest is
+  stored and named as an unmapped tail with a `ctx get --bytes` continuation, also
+  when the cap falls inside a line. Binary is stored under a retention lease and
+  described by `binary/v1`. A payload smaller than its digest is printed as-is.
+  `PATH` is confined to the workspace and its ignore policy. Command-output digests
+  are byte-identical.
+- `ctx view TARGET` gives images and video an overview first and zoom on demand:
+  `--fit`, `--grid RxC`, `--cell`, `--region`, `--at`, `--range A-B`, `--every`,
+  `--count`, `--sheet`, `--scenes`, `--subs`, `--json` (`ctx.view/v1`). Zoom reads
+  the original pixels or frames; output is a digest, a workspace-relative file under
+  `.ctx-session-reads/media/` and exact `next:` commands. Pillow and ffmpeg are
+  optional and a missing one is a declared skip with exit status 1: without ffmpeg
+  there is no video support, without Pillow no resizing, grids or contact sheets,
+  while ffmpeg alone still gives `--at`, `--scenes` and `--subs`, with frames checked
+  structurally before they are written. The target is opened once without following
+  symlinks and every engine reads a private copy; ffmpeg is pinned to the sniffed
+  demuxer with a `file`-only protocol list, a codec allow-list and a pixel cap, and an
+  interrupted view leaves no file or process behind. Token figures are estimates for
+  the standard image tier. `binfmt` now recognises MP4/MOV/M4A/HEIC/AVIF, Matroska/WebM,
+  WAV, AVI, MP3, FLAC and SVG by container structure.
+- Native tool governance is a declared table (`ctx.governance`) mapping each host and
+  tool to a route (`rewrite`, `bound`, `deny_steer`, `output_gate`, `observe`,
+  `exempt`), read by the hook and pinned to the Claude Code, Codex and Antigravity
+  registrations by tests. `ctx coverage [--json] [--host H] [--session ID|last]`
+  prints it with what each host cannot govern and the coverage ledger
+  (`.ctx-session-reads/coverage.jsonl`, rotated, never arguments or content).
+  Fixed with it: Antigravity payloads nest the call under `toolCall` and every call
+  was allowed; Claude Code ignores a plain-string `updatedToolOutput` for built-in
+  tools (observed on 2.1.322), so a replacement is now sent in the tool's own result
+  shape and only when it fits the budget; MCP tools are recognised before native
+  names; the PostToolUse matcher is derived from the table (sub-agent tool `Agent` as
+  well as `Task`, edit tools included) with a `PostToolUseFailure` stage; the
+  installer updates matchers it owns and leaves customised ones. `[guard] mode =
+  "strict"` still behaves as `guarded`, and `ctx coverage` says so.
+- `ctx wrap claude --surface auto|off|<profile>` and `[surface] wrap` /
+  `wrap_min_sessions` apply a capability plan at launch through ephemeral channels
+  only, with a `ctx.surface.wrap/v1` receipt at `.ctx-surface/wrap-receipt.json` and
+  one stderr line. `auto` relies on Claude Code's own MCP deferral and sets a skill
+  with zero invocations to `name-only` through `skillOverrides` once the transcripts
+  hold `wrap_min_sessions` (default 5) complete sessions; it never starts a server,
+  never touches ctx's own skill, and a caller's `--mcp-config`, `--strict-mcp-config`,
+  `--settings` or deferral variables win. A profile can be chosen only on the command
+  line. Discovery lists user- and local-scope servers, skills and agents; every
+  figure is labelled an estimate.
+- Prompt gate for oversized pastes: `[intake] mode = advise|block|off` and
+  `threshold_bytes` (default `[budgets] max_inline_bytes`, floor 4096), run by a
+  `UserPromptSubmit` hook on Claude Code and Codex. A prompt hook cannot replace or
+  shorten the prompt, so `advise` (default) stores the paste through `ctx intake` and
+  adds a digest with its handle as context while the paste still reaches the model,
+  and `block` stores it and stops the prompt before any model call; the messages name
+  handles, sizes and counts, never pasted text. An error, an unusable state directory
+  or an unresolved handle lets the prompt through; an unreadable `ctx.toml` or an
+  unrecognised mode means `off`. Observed on Claude Code 2.1.322 (context over 10,000
+  characters becomes a file path and preview); Codex is contract-tested from its
+  documentation only.
+- Antigravity on `agy` 1.5.5: a `PreToolUse` `overwrite` rewrites a flooding
+  `run_command` in place (a 343,557-byte output reached the model as 988 bytes) and
+  bounds `read_file` by its line range; other tools stay deny-and-steer, and an
+  `agy` without `hookEventName` keeps that behaviour. The plugin's `hooks.json` was
+  rejected whole and no hook ran; it now loads and registers `SessionStart`, which
+  carries the once-per-session advisory instead of `PreInvocation`. `ctx.agyperm`
+  judges the user's permission rules against the original command, because the host
+  checks them against the rewritten one, so a rewrite is never more permitted than
+  the original. Real captured payloads are replayed in `tests/test_agy_replay.py`;
+  see `evals/agy-rewrite-live-2026-11-11.md`. Tool results still cannot be replaced.
+- Intake views for pasted stack traces (`trace/v1`: Python, JavaScript/TypeScript, the
+  Java family, Go, Rust, with chains, collapsed frame cycles and a labelled heuristic
+  for the user's own code), delimited tables (`delimited/v1`: comma, tab, semicolon,
+  pipe, exact counts, sampled statistics labelled as such) and plain unified diffs
+  (`udiff/v1`). Each is claimed only when it dominates the payload, applies to intake
+  only, and passes every payload string through one quoter that redacts the original,
+  cleans, redacts again, then clips; a secret disguised so neither reading matches a
+  shared pattern is not detected.
+- Hardening that changes documented behaviour: payload text can no longer break a
+  digest line (JSON and JSONL keys, PDF version bytes, and CR, U+0085, U+2028 and
+  U+2029 are escaped) so tool output cannot plant a `next:` line; a shell command
+  that merely starts with `ctx` is not exempt from either gate unless the whole
+  command is one invocation of the ctx the hook runs as, and an MCP server is exempt
+  only by exact ctx name; a launch profile that restricts individual tools is enforced
+  through the gateway or the whole server is left out, instead of leaving an excluded
+  tool callable under a receipt that said the profile was applied.
 - Preview and safely merge Codex TOML and OpenCode JSON/JSONC configuration
   through parsed source edits. Preserve comments and other integrations,
   refuse conflicting values with exact diffs, and track contributions for
