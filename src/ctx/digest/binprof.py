@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from ctx import binfmt
 from ctx.digest.base import DigestContext, Profile, from_intake
+from ctx.textutil import one_line
 
 # Formats worth a typed binary digest. Plain "text" declines (falls through to
 # the text/log/table profiles); a NUL-bearing unknown blob is still bounded.
@@ -47,6 +48,9 @@ class BinaryProfile(Profile):
         if not data:  # store-free rendering (tests) — degrade to the head
             data = ctx.stdout.head
         info = binfmt.inspect(data)
+        if "pdf_version" in info.extra:
+            # Three header bytes decoded as latin-1: payload text, one line.
+            info.extra["pdf_version"] = one_line(str(info.extra["pdf_version"]))
         header = (
             [ctx.intake_line(sizes=False)] if from_intake(ctx)
             else [f"cwd: {ctx.manifest['cwd']}", f"command: {ctx.command_line()}"]

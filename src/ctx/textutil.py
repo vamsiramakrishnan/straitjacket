@@ -318,6 +318,45 @@ def fmt_tokens_compact(n: int) -> str:
     return str(n)
 
 
+# ------------------------------------------------- payload strings, one line
+# A digest is read by a model that treats a line beginning ``next:`` as a
+# suggested command and ``[ctx …]`` as a digest header. A string taken from
+# the payload must therefore never break a digest line: every character that
+# a reader may take as a line break is rendered as a visible escape instead.
+_LINE_BREAK_ESCAPES = {
+    "\n": "\\n", "\r": "\\r", "\x0b": "\\v", "\x0c": "\\f",
+    "\x1c": "\\x1c", "\x1d": "\\x1d", "\x1e": "\\x1e",
+    "\x85": "\\x85", "\u2028": "\\u2028", "\u2029": "\\u2029",
+}
+_LINE_BREAK_RE = re.compile("[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
+# The subset that survives strip_control (which already removes \v, \f and
+# \x1c-\x1e) and that no profile's own structure ever emits -- every line
+# break a profile writes is a plain \n -- so any occurrence in a rendered
+# body came from the payload.
+_BODY_BREAK_RE = re.compile("[\r\x85\u2028\u2029]")
+
+
+def one_line(text: str) -> str:
+    """``text`` as one line: every line-break character, ``\n`` included,
+    becomes a visible escape (``\\n``, ``\\u2028``…). Identity for any string
+    without one, so ordinary content renders byte-for-byte as before. Use it
+    on payload strings that did not come from a line split -- JSON keys and
+    values, decoded header fields."""
+    if _LINE_BREAK_RE.search(text) is None:
+        return text
+    return _LINE_BREAK_RE.sub(lambda m: _LINE_BREAK_ESCAPES[m.group()], text)
+
+
+def neutralize_line_breaks(body: str) -> str:
+    """Escape the line-break characters other than ``\n`` in a rendered
+    digest body. Lines split on ``\n`` can still carry ``\r``, U+0085,
+    U+2028 or U+2029 -- which some readers break on -- and no profile writes
+    any of them itself, so escaping them all touches payload text only."""
+    if _BODY_BREAK_RE.search(body) is None:
+        return body
+    return _BODY_BREAK_RE.sub(lambda m: _LINE_BREAK_ESCAPES[m.group()], body)
+
+
 def strip_control(text: str) -> str:
     """Remove ANSI escape sequences and non-printable control characters,
     preserving newlines and tabs."""

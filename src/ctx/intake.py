@@ -45,6 +45,8 @@ from ctx.textutil import (
     estimate_tokens,
     fmt_bytes,
     fmt_int,
+    neutralize_line_breaks,
+    one_line,
     sanitize_for_model,
     short_id,
 )
@@ -175,7 +177,10 @@ def describe_binary(
     address = f"blob:{short_id(blob)}"
     header = f"[ctx {address} profile=binary/v1]"
     lines = [header, f"intake: {label}" + (f" · {name}" if name else "")]
-    lines.append(binfmt.render_digest(binfmt.inspect(data), address=address))
+    info = binfmt.inspect(data)
+    if "pdf_version" in info.extra:  # decoded header bytes: payload text
+        info.extra["pdf_version"] = one_line(str(info.extra["pdf_version"]))
+    lines.append(binfmt.render_digest(info, address=address))
     text, redactions = sanitize_for_model("\n".join(lines), ws.config.redaction)
     if redactions:
         text += "\nredaction: applied [" + ", ".join(redactions) + "]"
@@ -253,7 +258,7 @@ def intake_bytes(
         # A digest must pay for itself: when the wrapping costs more than the
         # content it wraps, deliver the content (redacted, like every
         # model-visible byte). The handle stays in the receipt.
-        plain, redactions = sanitize_for_model(text, ws.config.redaction)
+        plain, redactions = sanitize_for_model(neutralize_line_breaks(text), ws.config.redaction)
         if redactions:
             plain += "\nredaction: applied [" + ", ".join(redactions) + "]"
         scaffold = len(encode_exact(digest)) - len(encode_exact(plain))

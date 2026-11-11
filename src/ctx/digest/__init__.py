@@ -33,7 +33,7 @@ from ctx.digest.tableprof import TableProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
-from ctx.textutil import decode_stream, sanitize_for_model, short_id
+from ctx.textutil import decode_stream, neutralize_line_breaks, sanitize_for_model, short_id
 from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
@@ -224,6 +224,10 @@ def render_run_digest(
 
     body = profile.render(ctx)
     body = _pass_through_if_digest_earned_nothing(ctx, body, ws)
+    # Payload text inside the body may carry a line break other than \n
+    # (a lone \r, U+0085, U+2028, U+2029); render it visibly so content can
+    # never start a digest line. Identity for bodies without one.
+    body = neutralize_line_breaks(body)
     body, redactions = sanitize_for_model(body, ws.config.redaction)
     if redactions:
         body += "\nredaction: applied [" + ", ".join(redactions) + "]"
