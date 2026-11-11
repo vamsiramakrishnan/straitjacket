@@ -25,7 +25,7 @@ from ctx.deliverables import (  # noqa: E402
 from ctx.residence import WatermarkResidence  # noqa: E402
 
 from .browser import BrowserPool, BrowserSession  # noqa: E402
-from .config import BenchConfig, RunMetrics, load_cab_task  # noqa: E402
+from .config import BenchConfig, RunMetrics, config_fingerprint, load_cab_task  # noqa: E402
 from .host import ToolHost  # noqa: E402
 from .providers import ModelProvider  # noqa: E402
 from .sandbox import TaskSandbox  # noqa: E402
@@ -299,6 +299,68 @@ def _regrade_cached(
     return cached
 
 
+#: Harness constants that change what a trial measures (residence/compaction cadence,
+#: loop gates); part of the resume fingerprint alongside config.FINGERPRINT_FIELDS.
+_HARNESS_BEHAVIOUR: dict[str, Any] = {
+    "max_empty_turns": _MAX_EMPTY_TURNS,
+    "max_text_nudges": _MAX_TEXT_NUDGES,
+    "min_steps_for_text_complete": _MIN_STEPS_FOR_TEXT_COMPLETE,
+    "max_identical_turn_streak": _MAX_IDENTICAL_TURN_STREAK,
+    "max_dup_turn_streak": _MAX_DUP_TURN_STREAK,
+    "max_service_delta_gate_hits": _MAX_SERVICE_DELTA_GATE_HITS,
+    "compact_min_turn_gap": _COMPACT_MIN_TURN_GAP,
+    "micro_py_streak_limit": _MICRO_PY_STREAK_LIMIT,
+    "pass_score_threshold": _PASS_SCORE_THRESHOLD,
+}
+
+
+def _accept_for_config(saved: dict[str, Any], config: BenchConfig, fingerprint: str, slug: str) -> bool:
+    """May a cached result stand for a trial under ``config``? One line explains a refusal
+    or a legacy acceptance."""
+    saved_fp = str(saved.get("config_fingerprint") or "")
+    if saved_fp:
+        if saved_fp == fingerprint:
+            return True
+        with _PRINT_LOCK:
+            print(
+                f"  [rerun] {slug}: configuration changed since this result "
+                f"(fingerprint {saved_fp} -> {fingerprint})",
+                flush=True,
+            )
+        return False
+    saved_model = str(saved.get("model_id") or "")
+    with _PRINT_LOCK:
+        if saved_model == config.model:
+            print(
+                f"  [legacy] {slug}: result predates config fingerprints; accepted because "
+                f"model_id={saved_model} matches",
+                flush=True,
+            )
+            return True
+        print(
+            f"  [rerun] {slug}: result predates config fingerprints and was produced by "
+            f"model_id={saved_model or '?'}, not {config.model}",
+            flush=True,
+        )
+    return False
+
+
+def _supersede(config: BenchConfig, run_dir: Path, meta_dir: Path, saved: dict[str, Any]) -> None:
+    """Move a previous configuration's trial out of ``runs/`` (reports never load it from
+    there) into ``<workdir>/superseded/<fingerprint>/`` instead of deleting it."""
+    tag = str(saved.get("config_fingerprint") or "") or (
+        "legacy-" + "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in str(saved.get("model_id") or "unknown"))
+    )
+    dest_root = config.workdir / "superseded" / tag
+    dest_root.mkdir(parents=True, exist_ok=True)
+    for src in (run_dir, meta_dir):
+        if src.exists():
+            dest = dest_root / src.name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.move(str(src), str(dest))
+
+
 def run_trial(
     config: BenchConfig,
     task_id: str,
@@ -329,10 +391,13 @@ def run_trial(
     meta_dir = config.runs_dir / f"{slug}_meta"
     result_file = meta_dir / "result.json"
 
+    fingerprint = config_fingerprint(config, _HARNESS_BEHAVIOUR)
     if config.resume and result_file.is_file():
         try:
             saved = json.loads(result_file.read_text(encoding="utf-8"))
-            if str(saved.get("termination", "")) not in _RESUMABLE_ERROR_TERMINATIONS:
+            if not _accept_for_config(saved, config, fingerprint, slug):
+                _supersede(config, run_dir, meta_dir, saved)
+            elif str(saved.get("termination", "")) not in _RESUMABLE_ERROR_TERMINATIONS:
                 cached = RunMetrics.from_dict(saved)
                 if cached.grading_error:
                     # The agent finished; only the grader failed. Grade its outputs again.
@@ -369,6 +434,7 @@ def run_trial(
         model_id=config.model,
         wave=wave,
         bucket=bucket,
+        config_fingerprint=fingerprint,
     )
 
     sandbox = TaskSandbox(config, spec, run_dir, meta_dir, slot)

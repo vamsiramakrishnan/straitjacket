@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import asdict, dataclass, field
+import hashlib
 import importlib.util
 import json
 import os
@@ -149,6 +150,9 @@ class RunMetrics:
     # reward.json): the trial is UNGRADED, not failed. Reports leave it out of solve
     # rate and score aggregates; resume re-grades it without re-running the agent.
     grading_error: str = ""
+    # config_fingerprint(config) of the configuration that produced this result; resume
+    # accepts a cached result only for the same fingerprint ("" = written before it).
+    config_fingerprint: str = ""
 
     @property
     def is_grading_error(self) -> bool:
@@ -207,6 +211,34 @@ class RunMetrics:
             kwargs["grading_error"] = str(data.get("grading_error") or "")
 
         return cls(**kwargs)
+
+
+#: BenchConfig fields that change what a trial measures. Everything else is left out on
+#: purpose: where results go and how fast they are produced (workdir, workers,
+#: slot_offset, resume), which arms run (the arm is part of the result's own path),
+#: credentials and account routing (api_key, project_id, location), and host paths
+#: (dataset_root, runtime_dir, ctx_bin, chrome_bin), which name WHERE an input lives,
+#: not what it is, so moving a checkout does not invalidate a workdir.
+FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "model",
+    "provider",
+    "thinking_level",
+    "max_output_tokens",
+    "max_steps",
+    "entry_gate_bytes",
+    "baseline_raw_cap",
+    "judge_provider",
+    "judge_model",
+)
+
+
+def config_fingerprint(config: BenchConfig, harness: dict[str, Any] | None = None) -> str:
+    """A short stable hash of the configuration a trial ran under (FINGERPRINT_FIELDS plus
+    the harness's own behaviour constants passed as ``harness``)."""
+    doc = {name: getattr(config, name) for name in FINGERPRINT_FIELDS}
+    doc["harness"] = dict(sorted((harness or {}).items()))
+    blob = json.dumps(doc, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
 
 
 def resolve_ctx_bin(explicit: Path | None = None) -> Path:

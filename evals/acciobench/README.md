@@ -115,6 +115,18 @@ python evals/acciobench_run.py run \
 - `--wave-file plan.json --wave wave1`: run predefined stratified waves.
 - `--sample N --seed 42`: deterministic random subsample.
 - `--no-cache`: force re-execution instead of resuming from completed `*_meta/result.json` receipts in `--workdir`.
+- **Resume is per configuration**: every `result.json` carries `config_fingerprint`, a
+  hash of the settings that change what a trial measures (`model`, `provider`,
+  `thinking_level`, `max_output_tokens`, `max_steps`, `entry_gate_bytes`,
+  `baseline_raw_cap`, `judge_provider`, `judge_model`, and the loop's own gate and
+  compaction constants). A cached result is reused only when its fingerprint matches;
+  worker counts, slot offsets, output paths, credentials and host paths are not part
+  of it. A result written before fingerprints existed is reused only if its
+  `model_id` equals `--model` (one `[legacy]` line says so); never across models.
+  When a result does not match, one `[rerun]` line says why and the previous trial
+  (its run directory and `_meta` directory) is moved to
+  `<workdir>/superseded/<old fingerprint>/` (or `legacy-<model>/`), where reports do
+  not look, instead of being deleted. `ctx_state/` is shared by all configurations.
 - **Grading errors are not failures**: when the official grader itself fails (timeout,
   missing or invalid `reward.json`), `result.json` records `grading_error` (the grader's
   message) with `passed=false` and zero scores, and the agent's `termination` is kept.

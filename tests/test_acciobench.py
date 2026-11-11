@@ -1416,6 +1416,70 @@ def test_grading_error_is_ungraded_reported_apart_and_regraded_on_resume(tmp_pat
     assert fourth.passed is True and fourth.grading_error == ""
 
 
+def test_resume_accepts_cached_results_only_for_the_same_configuration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import dataclasses as _dc
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-fp")
+    base = BenchConfig(
+        dataset_root=ds_root, workdir=tmp_path / "work", model="model-a", provider="gemini",
+        api_key="dummy", judge_provider="mock", arms=("sj",), slot_offset=60,
+    )
+    meta = base.runs_dir / "file-fp__sj__t1_meta"
+    result_file = meta / "result.json"
+
+    def run(cfg: BenchConfig, provider: Any) -> RunMetrics:
+        return run_trial(cfg, "file-fp", "sj", 61, provider)
+
+    p0 = _SolvingProvider()
+    first = run(base, p0)
+    assert p0.calls >= 3 and first.passed
+    fp_a = json.loads(result_file.read_text(encoding="utf-8"))["config_fingerprint"]
+    assert fp_a
+
+    # Same configuration (other workers, slot and resume settings): cached, no model call.
+    same = _dc.replace(base, workers=9, slot_offset=3)
+    assert run(same, _MustNotGenerateProvider()).passed
+
+    # Each behaviour-changing setting re-runs the trial and says why in one line.
+    for i, change in enumerate(({"model": "model-b"}, {"thinking_level": "HIGH"}, {"entry_gate_bytes": 1_000})):
+        capsys.readouterr()
+        cfg = _dc.replace(base, **change)
+        prov = _SolvingProvider()
+        res = run(cfg, prov)
+        assert prov.calls >= 3, change
+        assert set(prov.models) == {cfg.model}
+        assert res.model_id == cfg.model
+        out = capsys.readouterr().out
+        assert "configuration changed" in out, (change, out)
+        new_fp = json.loads(result_file.read_text(encoding="utf-8"))["config_fingerprint"]
+        assert new_fp != fp_a
+        # The previous configuration's trial is kept aside, never loaded by reports.
+        assert any((tmp_path / "work" / "superseded").glob("*/file-fp__sj__t1_meta/result.json"))
+        assert len(load_run_results(base.workdir)) == 1
+        fp_a = new_fp
+
+    # Legacy results (no fingerprint): accepted only for the same model, with a notice.
+    last_cfg = _dc.replace(base, entry_gate_bytes=1_000)
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    doc.pop("config_fingerprint")
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    capsys.readouterr()
+    assert run(last_cfg, _MustNotGenerateProvider()).model_id == "model-a"
+    assert "predates config fingerprints" in capsys.readouterr().out
+
+    doc["model_id"] = "model-old"
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    prov = _SolvingProvider()
+    res = run(last_cfg, prov)
+    out = capsys.readouterr().out
+    assert prov.calls >= 3 and res.model_id == "model-a"
+    assert "model_id=model-old, not model-a" in out
+    assert (tmp_path / "work" / "superseded" / "legacy-model-old" / "file-fp__sj__t1_meta").is_dir()
+
+
 def test_legacy_verifier_error_note_loads_as_grading_error() -> None:
     legacy = {"task_id": "t", "arm": "sj", "model_id": "m", "termination": "present_files",
               "passed": False, "notes": ["verifier error: Traceback ... TimeoutError"]}

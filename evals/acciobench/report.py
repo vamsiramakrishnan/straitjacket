@@ -19,7 +19,9 @@ from .config import RunMetrics
 _ORDERED_CATEGORIES = ("api", "browser", "cli", "file")
 _ORDERED_BUCKETS = ("worse", "better", "unknown")
 _EXCLUDED_PATH_PARTS = frozenset(
-    {"workspace", "outputs", "mock_case", "mock_services", "mock_state", "ctx_state", "ctxws", "extracts", "tmp"}
+    {"workspace", "outputs", "mock_case", "mock_services", "mock_state", "ctx_state", "ctxws", "extracts", "tmp",
+     # previous configurations' trials moved aside by resume (loop._supersede)
+     "superseded"}
 )
 _INFRA_ERROR_TERMINATIONS = frozenset({"api_error", "setup_error"})
 
