@@ -126,7 +126,10 @@ python evals/acciobench_run.py run \
   bwrap sandbox is active). A cached result is reused only when its fingerprint
   matches; worker counts, slot offsets, output paths, credentials and host paths are
   not part of it (moving the dataset does not invalidate a workdir; changing its
-  content does). A result written before fingerprints existed is reused only if its
+  content does). The ctx version is the string `ctx --version` prints, not a hash of
+  its source: an edit to ctx that keeps the version is NOT detected, so pass
+  `--no-cache` or a fresh `--workdir` when comparing two builds of the same version.
+  A result written before fingerprints existed is reused only if its
   `model_id` equals `--model` (one `[legacy]` line says so); never across models.
   When a result does not match, one `[rerun]` line says why and the previous trial
   (its run directory and `_meta` directory) is moved to

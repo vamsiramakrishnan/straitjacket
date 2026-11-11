@@ -1219,8 +1219,8 @@ class ToolHost:
         """A bash command that starts with ``ctx`` on the sj arm.
 
         Host fast path: exactly one plain ctx call (``ctx.hook.ctx_command_words``:
-        no comment, substitution, redirection, assignment prefix, double quote or
-        second command) whose arguments read only ctx's store by ``run:`` handle
+        no comment, substitution, redirection, assignment prefix, expanding double
+        quote or second command) whose arguments read only ctx's store by ``run:`` handle
         (``ctx get``/``search``/``stats``/``view`` of a run handle, ``diff`` of two,
         ``intake --chunks``). Any other plain ctx call runs inside the sandbox with
         the same argv; anything the grammar cannot read as one plain call runs in
