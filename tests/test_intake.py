@@ -662,3 +662,22 @@ def test_real_hanging_clipboard_tool_is_abandoned(monkeypatch, tmp_path):
     with pytest.raises(intake.ClipboardUnavailable, match="tried xclip"):
         intake.read_clipboard()
     assert time.monotonic() - t < 10
+
+
+def _telemetry_events(store) -> list[dict]:
+    path = store.audit_dir / "telemetry.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.is_file() else []
+
+
+def test_record_delivery_default_books_telemetry_and_false_suppresses_it(env):
+    ws, store = env
+    data = b"".join(b"line %d of a log\n" % i for i in range(4000))
+    default = intake_bytes(store, ws, data)
+    events = _telemetry_events(store)
+    assert [e["op"] for e in events] == ["intake"] and events[0]["est_tokens_avoided"] > 0
+    quiet = intake_bytes(store, ws, data + b"more\n", record_delivery=False)
+    assert len(_telemetry_events(store)) == 1                 # no new event
+    # identity and digest bytes do not depend on the flag
+    again = intake_bytes(store, ws, data, record_delivery=False)
+    assert again.address == default.address and again.digest == default.digest
+    assert quiet.address != default.address

@@ -203,8 +203,13 @@ def intake_bytes(
     label: str = "paste",
     name: str | None = None,
     focus: str | None = None,
+    record_delivery: bool = True,
 ) -> IntakeReceipt:
-    """Store ``data`` and return its receipt (bounded digest + handle)."""
+    """Store ``data`` and return its receipt (bounded digest + handle).
+
+    ``record_delivery=False`` skips the delivery telemetry event (forwarded to
+    ``render_run_digest``): for a caller, such as the prompt gate, that cannot
+    claim the bytes were kept out of the context and books its own event."""
     if not data:
         raise IntakeError("nothing to intake: the payload is empty")
     label = _safe_token(label, "paste") or "paste"
@@ -241,6 +246,7 @@ def intake_bytes(
         # state rather than of (bytes, label, name).
         focus=focus if focus is not None else "",
         op="intake",
+        record_delivery=record_delivery,
     )
     run_id = str(final["id"]).removeprefix("sha256:")
     store.lease(run_id, LEASE_REASON, ttl_days=store.retention_days)

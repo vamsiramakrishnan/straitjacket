@@ -299,6 +299,39 @@ LIMITS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# ------------------------------------------------------------ prompt gate
+#: What the UserPromptSubmit hook can do about an oversized prompt, per host
+#: (the prompt gate, ``ctx.promptgate``). Printed by ``ctx coverage``. The
+#: honest limit is the same on every host that has one: a prompt hook can add
+#: context or block the prompt, and cannot replace or shorten it. A host not
+#: listed has no ctx prompt gate and an oversized prompt reaches the model
+#: unmodified.
+PROMPT_GATE: dict[str, dict[str, str]] = {
+    "claude-code": {
+        "event": "UserPromptSubmit",
+        "advise": "stores the paste and adds a digest + handle as context "
+                  "(delivered whole up to 10,000 chars; the gate stays under it)",
+        "block": "stores the paste and stops the prompt before any model call; "
+                 "the user resends their message with the handle",
+        "limit": "cannot shorten or replace the prompt: in advise mode the paste still "
+                 "reaches the model this turn",
+        "evidence": "observed live on Claude Code 2.1.322 (context limit, block); "
+                    "the pasted-region markers are from documentation only",
+    },
+    "codex": {
+        "event": "UserPromptSubmit",
+        "advise": "stores the paste and adds a digest + handle as developer context "
+                  "(Codex caps added context near 2,500 tokens; the gate stays under it)",
+        "block": "stores the paste and returns decision=block; the user resends their "
+                 "message with the handle",
+        "limit": "cannot shorten or replace the prompt: in advise mode the paste still "
+                 "reaches the model this turn; non-managed hooks need the user's trust "
+                 "before they run",
+        "evidence": "from OpenAI's documentation only: contract-tested, NOT live-verified",
+    },
+}
+
+
 #: Hosts whose plugin forwards every tool to the hook (both stages).
 FORWARDS_ALL = frozenset({"codex", "hermes", "omp", "opencode", "dsh"})
 

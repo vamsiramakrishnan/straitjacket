@@ -227,6 +227,52 @@ class SurfacePolicy:
 
 
 @dataclass(frozen=True)
+class IntakePolicy:
+    """The prompt gate: what happens to an oversized pasted prompt.
+
+    ``mode``
+      ``advise`` (default): oversized content is stored once and a bounded
+      digest with its retrieval handle is ADDED as context. A prompt hook
+      cannot shorten or replace the prompt on Claude Code or Codex, so the
+      paste still reaches the model this turn; the value is that it becomes
+      addressable (cite and re-read regions) and survives compaction.
+      ``block``: the content is stored and the prompt is stopped before any
+      model call; the user is told the handle and how to resend their message
+      without the paste (one resubmission). The only hook-level way to keep a
+      paste out of context entirely.
+      ``off``: the gate does nothing and stores nothing.
+
+      ``mode`` is a privacy control, so it fails toward ``off``: it is
+      trimmed and case-folded, and anything that is not exactly one of the
+      three (a typo, a non-string, an ``[intake]`` that is not a table) means
+      ``off``; and a ``ctx.toml`` that cannot be parsed at all means ``off``
+      for the gate, never the default.
+
+    ``threshold_bytes``
+      A pasted region, or a prompt with no separable paste, larger than this
+      many UTF-8 bytes is stored. 0 (default) means ``[budgets]
+      max_inline_bytes``. Values below 4096 are raised to 4096, which keeps
+      the common short prompt free of any work.
+
+    Privacy: stored prompt content is user content, kept VERBATIM and
+    UNREDACTED (redaction applies to what the model is shown, never to the
+    stored bytes) in this machine's ctx state directory for this workspace
+    (``$CTX_STATE_HOME`` or ``$XDG_STATE_HOME/ctx/workspaces/<id>/``, shown
+    by ``ctx doctor``; mode 0700, files 0600) for ``[store] retention_days``
+    (30 by default), and is then eligible for ``ctx gc``. Nothing leaves the
+    machine. The gate never stores a prompt inside the repository on its own:
+    when the state directory is unusable (the automatic in-project
+    fallback) the prompt goes through unstored; only an explicit ``[store]
+    backend = "local"`` keeps it in the project's ``.ctx-session-reads/store``.
+    With mode ``off`` nothing is stored. The gate books no "tokens avoided":
+    its telemetry event records bytes stored with raw equal to emitted.
+    """
+
+    mode: str = "advise"          # advise | block | off
+    threshold_bytes: int = 0      # 0 = [budgets] max_inline_bytes
+
+
+@dataclass(frozen=True)
 class Config:
     version: int = 1
     repo_key: str | None = None
@@ -239,6 +285,7 @@ class Config:
     plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
     surface: SurfacePolicy = field(default_factory=SurfacePolicy)
+    intake: IntakePolicy = field(default_factory=IntakePolicy)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # ws:<alias> routing targets: alias -> workspace path (absolute, or
     # relative to this workspace root). Committed in ctx.toml [aliases].
@@ -360,6 +407,16 @@ def load_config(workspace_root: Path | None) -> Config:
     plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
     surface = _pick(raw.get("surface") or {}, SurfacePolicy)
+    intake_raw = raw.get("intake")
+    intake = _pick(intake_raw if isinstance(intake_raw, dict) else {}, IntakePolicy)
+    # The mode is a privacy control: trimmed and case-folded, and anything
+    # that is not exactly advise/block/off (a typo, a wrong type, a section
+    # that is not a table) means off. See IntakePolicy.
+    raw_mode = intake_raw.get("mode", "advise") if isinstance(intake_raw, dict) else (
+        "advise" if intake_raw is None else None)
+    mode = raw_mode.strip().casefold() if isinstance(raw_mode, str) else "off"
+    intake = IntakePolicy(mode=mode if mode in ("advise", "block", "off") else "off",
+                          threshold_bytes=intake.threshold_bytes)
 
     eng_raw = raw.get("engagement") or {}
     ed = Engagement()
@@ -418,6 +475,7 @@ def load_config(workspace_root: Path | None) -> Config:
         plan=plan,
         redaction=redaction,
         surface=surface,
+        intake=intake,
         scopes=scopes,
         aliases=aliases,
     )

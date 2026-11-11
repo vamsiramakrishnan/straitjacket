@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
         if args[2] == "user-prompt-submit":
             from ctx.task_context import main_prompt
 
-            return main_prompt()
+            return main_prompt(flavor=args[1])
         if args[2] == "pre-tool-use":
             from ctx.hook import main_pre_tool_use
 

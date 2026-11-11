@@ -61,7 +61,9 @@ def registrations() -> dict[str, dict[str, Any]]:
         "pre_matcher": pre, "post_matcher": post,
     }
     codex = _plugin_json("codex")["hooks"]
+    regs["claude-code"]["prompt"] = "UserPromptSubmit" in claude
     regs["codex"] = {
+        "prompt": "UserPromptSubmit" in codex,
         "pre": _codex_matches(codex["PreToolUse"][0].get("matcher", "*")),
         "post": _codex_matches(codex["PostToolUse"][0].get("matcher", "*")),
         "pre_matcher": codex["PreToolUse"][0].get("matcher", "*"),
@@ -178,10 +180,34 @@ def render_static(host: str, regs: dict[str, dict[str, Any]] | None = None) -> l
     loose = ungoverned_static(rows)
     if loose:
         out.append("  UNGOVERNED (no hooked stage): " + ", ".join(loose))
+    out.extend(render_prompt(host, regs))
     out.append("  cannot govern:")
     for line in gov.LIMITS.get(host, ()):
         out.append(f"    - {line}")
     return out
+
+
+def prompt_row(host: str, regs: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """What happens to an oversized prompt on ``host`` (the prompt gate)."""
+    regs = regs or registrations()
+    info = gov.PROMPT_GATE.get(host)
+    if info is None or not regs.get(host, {}).get("prompt"):
+        return {"gate": False, "limit": "no ctx prompt gate: an oversized prompt reaches the "
+                "model unmodified"}
+    return {"gate": True, **info}
+
+
+def render_prompt(host: str, regs: dict[str, dict[str, Any]] | None = None) -> list[str]:
+    row = prompt_row(host, regs)
+    if not row["gate"]:
+        return [f"  prompt (oversized paste): {row['limit']}"]
+    return [
+        f"  prompt (oversized paste): {row['event']} hook, [intake] mode advise (default) | block | off",
+        f"      advise: {row['advise']}",
+        f"      block:  {row['block']}",
+        f"      limit:  {row['limit']}",
+        f"      evidence: {row['evidence']}",
+    ]
 
 
 def installed_drift(root) -> list[str]:
@@ -345,11 +371,24 @@ def report(root, *, host: str | None = None, session: str | None = None) -> dict
             "tools": rows,
             "ungoverned": ungoverned_static(rows),
             "cannot_govern": list(gov.LIMITS.get(h, ())),
+            "prompt": prompt_row(h, regs),
         }
     data["installed_drift"] = installed_drift(root) if (host in (None, "claude-code")) else []
     data["guard_mode"] = _guard_mode(root)
+    data["prompt_policy"] = _prompt_policy(root)
     data["observed"] = observed(read_ledger(root), host=host, session=session)
     return data
+
+
+def _prompt_policy(root) -> dict[str, Any]:
+    """The prompt gate's configured mode and threshold in this workspace."""
+    try:
+        from ctx.promptgate import policy
+
+        mode, threshold = policy(str(root))
+        return {"mode": mode, "threshold_bytes": threshold}
+    except Exception:
+        return {"mode": "unknown", "threshold_bytes": None}
 
 
 def _guard_mode(root) -> str:
@@ -368,6 +407,11 @@ def render(data: dict[str, Any]) -> str:
     for h, info in data["hosts"].items():
         out.extend(render_static(h))
         out.append("")
+    pp = data.get("prompt_policy") or {}
+    if pp.get("mode"):
+        out.append(f"prompt gate in this workspace: [intake] mode = {pp['mode']!r}, stores a paste or "
+                   f"prompt over {pp.get('threshold_bytes')} bytes (stored prompt text is kept verbatim "
+                   "in ctx's local state for [store] retention_days; mode off stores nothing)")
     if data.get("guard_mode") == "strict":
         out.append("note: [guard] mode = \"strict\" has no code path of its own; it behaves as \"guarded\".")
     elif data.get("guard_mode") == "advisory":
