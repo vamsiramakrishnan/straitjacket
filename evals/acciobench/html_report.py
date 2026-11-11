@@ -27,6 +27,7 @@ from .report import (
     _INFRA_ERROR_TERMINATIONS,
     _collapse_arm_runs,
     _infer_arm_from_legacy,
+    count_grading_errors,
     load_baseline_records,
     load_run_results,
 )
@@ -1547,6 +1548,9 @@ def build_html_report_payload(
             "baseline_arm": baseline_arm,
             "reference_arm": reference_arm,
             "levers": levers_summary,
+            # Ungraded trials (grader failed): excluded from every solve/score figure.
+            "grading_errors": {a: count_grading_errors(by_arm_runs[a]) for a in live_arms},
+            "grading_errors_total": sum(count_grading_errors(by_arm_runs[a]) for a in live_arms),
         },
         "arms_order": arms_order,
         "scopes": scopes,

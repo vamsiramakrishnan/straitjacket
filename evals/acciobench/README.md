@@ -115,6 +115,17 @@ python evals/acciobench_run.py run \
 - `--wave-file plan.json --wave wave1`: run predefined stratified waves.
 - `--sample N --seed 42`: deterministic random subsample.
 - `--no-cache`: force re-execution instead of resuming from completed `*_meta/result.json` receipts in `--workdir`.
+- **Grading errors are not failures**: when the official grader itself fails (timeout,
+  missing or invalid `reward.json`), `result.json` records `grading_error` (the grader's
+  message) with `passed=false` and zero scores, and the agent's `termination` is kept.
+  Reports (table, markdown, JSON `grading_error_runs`, HTML header) exclude such trials
+  from solve rate and score aggregates and show their count separately. On resume, a
+  trial in this state is **re-graded only**: the grader runs again against the outputs
+  still in its run directory (same staged case, same port map from
+  `sandbox_ports.json`, mock services restarted from the trial's persisted state), with
+  no model call and nothing wiped. Only if its run directory is gone is it re-run.
+  Results written before this change that carry a `verifier error:` note and
+  `passed=false` load as grading errors.
 - **Untouched model defaults**: `thinkingConfig` and `maxOutputTokens` are left unset by default so models run at their native provider defaults. Optional `--thinking-level` and `--max-output-tokens` flags are exposed strictly for explicit ablation studies.
 
 ---

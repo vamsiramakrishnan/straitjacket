@@ -215,7 +215,88 @@ def _format_progress(metrics: RunMetrics) -> str:
         f"tot {metrics.total_tokens:>9,} | {metrics.wall_clock_s:>5.1f}s | "
         f"pass={'Y' if metrics.passed else 'N'} cap={metrics.capacity_score:.2f} "
         f"({metrics.checks_passed}/{metrics.checks_total}) | {metrics.termination}"
+        + (" | UNGRADED (grading error)" if metrics.grading_error else "")
     )
+
+
+def _grade_into(
+    config: BenchConfig,
+    provider: ModelProvider,
+    sandbox: TaskSandbox,
+    meta_dir: Path,
+    metrics: RunMetrics,
+) -> None:
+    """Run the official grader and record its verdict, or a grading error, in ``metrics``.
+
+    A grader failure (timeout, missing or invalid ``reward.json``) is NOT a task
+    failure: ``metrics.grading_error`` is set, the score fields stay at zero and
+    reports leave the trial out of every aggregate until it is re-graded."""
+    judge_tok = (
+        provider.judge_access_token() if config.judge_provider == "vertex" else ""
+    )
+    reward_json = meta_dir / "reward.json"
+    reward_json.unlink(missing_ok=True)  # never read a previous grade as this one
+    grade_data = sandbox.grade(reward_json, judge_token=judge_tok)
+    metrics.notes = [n for n in metrics.notes if not n.startswith("verifier error:")]
+    if "_error" not in grade_data:
+        raw_score = float(grade_data.get("score", 0.0) or 0.0)
+        cp_cnt = int(grade_data.get("checks_passed", 0) or 0)
+        ct_cnt = int(grade_data.get("checks_total", 0) or 0)
+        metrics.grading_error = ""
+        metrics.raw_verifier_score = raw_score
+        metrics.checks_passed = cp_cnt
+        metrics.checks_total = ct_cnt
+        if ct_cnt > 0:
+            metrics.capacity_score = cp_cnt / ct_cnt
+            metrics.passed = (cp_cnt == ct_cnt) or (raw_score >= _PASS_SCORE_THRESHOLD)
+        else:
+            metrics.capacity_score = raw_score
+            metrics.passed = raw_score >= _PASS_SCORE_THRESHOLD
+        metrics.failed_checks = [
+            f"{chk.get('id')}: {str(chk.get('reason', ''))[:_MAX_CHECK_REASON_CHARS]}"
+            for chk in (grade_data.get("checks_breakdown") or [])
+            if not chk.get("passed")
+        ]
+    else:
+        err_msg = str(grade_data.get("_error", ""))[:_MAX_VERIFIER_ERR_CHARS]
+        metrics.grading_error = err_msg.strip() or f"grader exited {grade_data.get('_exit')}"
+        metrics.passed = False
+        metrics.capacity_score = 0.0
+        metrics.raw_verifier_score = 0.0
+        metrics.checks_passed = 0
+        metrics.checks_total = 0
+        metrics.failed_checks = []
+        metrics.notes.append(f"verifier error: {err_msg}")
+
+
+def _regrade_cached(
+    config: BenchConfig,
+    spec: Any,
+    provider: ModelProvider,
+    cached: RunMetrics,
+    run_dir: Path,
+    meta_dir: Path,
+    result_file: Path,
+    slot: int,
+) -> RunMetrics | None:
+    """Grade a finished trial's outputs again, without any model call and without
+    touching its run directory. ``None`` when that is impossible (directories gone)."""
+    sandbox = TaskSandbox(config, spec, run_dir, meta_dir, slot)
+    try:
+        try:
+            sandbox.prepare_regrade()
+        except FileNotFoundError:
+            return None
+        _grade_into(config, provider, sandbox, meta_dir, cached)
+    except Exception as exc:
+        cached.grading_error = f"re-grade failed: {str(exc)[:_MAX_VERIFIER_ERR_CHARS]}"
+    finally:
+        sandbox.cleanup()
+    result_file.write_text(
+        json.dumps(cached.to_dict(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return cached
 
 
 def run_trial(
@@ -253,9 +334,24 @@ def run_trial(
             saved = json.loads(result_file.read_text(encoding="utf-8"))
             if str(saved.get("termination", "")) not in _RESUMABLE_ERROR_TERMINATIONS:
                 cached = RunMetrics.from_dict(saved)
-                with _PRINT_LOCK:
-                    print(f"  [cached] {_format_progress(cached)}", flush=True)
-                return cached
+                if cached.grading_error:
+                    # The agent finished; only the grader failed. Grade its outputs again.
+                    regraded = _regrade_cached(
+                        config, spec, provider, cached, run_dir, meta_dir, result_file, slot
+                    )
+                    if regraded is not None:
+                        with _PRINT_LOCK:
+                            print(f"  [regraded] {_format_progress(regraded)}", flush=True)
+                        return regraded
+                    with _PRINT_LOCK:
+                        print(
+                            f"  [rerun] {slug}: grading error and the trial's directories are gone",
+                            flush=True,
+                        )
+                else:
+                    with _PRINT_LOCK:
+                        print(f"  [cached] {_format_progress(cached)}", flush=True)
+                    return cached
         except Exception:
             pass
 
@@ -722,32 +818,7 @@ def run_trial(
             browser.close()
             browser = None
 
-        judge_tok = (
-            provider.judge_access_token() if config.judge_provider == "vertex" else ""
-        )
-        reward_json = meta_dir / "reward.json"
-        grade_data = sandbox.grade(reward_json, judge_token=judge_tok)
-        if "_error" not in grade_data:
-            raw_score = float(grade_data.get("score", 0.0) or 0.0)
-            cp_cnt = int(grade_data.get("checks_passed", 0) or 0)
-            ct_cnt = int(grade_data.get("checks_total", 0) or 0)
-            metrics.raw_verifier_score = raw_score
-            metrics.checks_passed = cp_cnt
-            metrics.checks_total = ct_cnt
-            if ct_cnt > 0:
-                metrics.capacity_score = cp_cnt / ct_cnt
-                metrics.passed = (cp_cnt == ct_cnt) or (raw_score >= _PASS_SCORE_THRESHOLD)
-            else:
-                metrics.capacity_score = raw_score
-                metrics.passed = raw_score >= _PASS_SCORE_THRESHOLD
-            metrics.failed_checks = [
-                f"{chk.get('id')}: {str(chk.get('reason', ''))[:_MAX_CHECK_REASON_CHARS]}"
-                for chk in (grade_data.get("checks_breakdown") or [])
-                if not chk.get("passed")
-            ]
-        else:
-            err_msg = str(grade_data.get("_error", ""))[:_MAX_VERIFIER_ERR_CHARS]
-            metrics.notes.append(f"verifier error: {err_msg}")
+        _grade_into(config, provider, sandbox, meta_dir, metrics)
 
     except Exception as exc:
         metrics.wall_clock_s = round(time.time() - t0, 1)

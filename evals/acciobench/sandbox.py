@@ -67,6 +67,8 @@ _SINGLE_SERVICE_PORT_ENVS: tuple[tuple[str, int], ...] = (
     ("SERPAPI_HOTELS_PORT", 4501),
 )
 
+_PORT_MAP_FILE = "sandbox_ports.json"
+
 _ISOLATED_CLI_STATE_DIRS: tuple[tuple[str, str], ...] = (
     ("STRIPE_MOCK_STATE_DIR", "stripe_cli"),
     ("BOX_MOCK_STATE_DIR", "box_cli"),
@@ -494,24 +496,27 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _harvest_pid_files(*dirs: Path) -> set[int]:
+    files: list[Path] = []
+    for base in dirs:
+        if base.is_dir():
+            files.extend(p for p in base.rglob("*") if p.is_file())
+    return _harvest_pid_file_list(files)
+
+
+def _harvest_pid_file_list(files: list[Path]) -> set[int]:
     pids: set[int] = set()
     my_pid = os.getpid()
-    for base in dirs:
-        if not base.is_dir():
+    for p in files:
+        if "pid" not in p.name.lower():
             continue
-        for p in base.rglob("*"):
-            if not p.is_file():
-                continue
-            if "pid" not in p.name.lower():
-                continue
-            try:
-                txt = p.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            for tok in re.findall(r"\b(\d{2,8})\b", txt):
-                val = int(tok)
-                if val > 1 and val != my_pid:
-                    pids.add(val)
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for tok in re.findall(r"\b(\d{2,8})\b", txt):
+            val = int(tok)
+            if val > 1 and val != my_pid:
+                pids.add(val)
     return pids
 
 
@@ -625,6 +630,10 @@ class TaskSandbox:
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.meta_dir.mkdir(parents=True, exist_ok=True)
+        # The staged case files have these ports baked in; a later re-grade reuses them.
+        (self.meta_dir / _PORT_MAP_FILE).write_text(
+            json.dumps({str(k): v for k, v in self.port_map.items()}), encoding="utf-8"
+        )
 
         src_ws = Path(self.spec.case_dir) / "workspace"
         dst_ws = self.run_dir / "workspace"
@@ -730,7 +739,45 @@ class TaskSandbox:
             return
 
         stage_mock_services_tree(self._golden_mocks, self.mock_services_dir, self.mock_state_dir)
+        self._remap_mocks()
+        self._start_services()
+        self._setup_ran = True
 
+    def prepare_regrade(self) -> None:
+        """Re-attach to a FINISHED trial so its outputs can be graded again.
+
+        Nothing is restaged or reset: the run directory (the agent's workspace and
+        outputs), the staged case under ``mock_case``, the staged mock services and
+        their state are used exactly as the trial left them, with the trial's own port
+        map (``sandbox_ports.json``). Mock services, if the task has any, are started
+        again from that persisted state. Raises ``FileNotFoundError`` when the trial's
+        directories are gone, in which case the caller must re-run the trial.
+
+        LIMIT: a task whose service start script re-seeds its state on start would be
+        graded against re-seeded state; the staged scripts are the dataset's own."""
+        run_sh = self.mock_case_dir / self.spec.test_script
+        if not self.run_dir.is_dir() or not (self.run_dir / "outputs").is_dir() or not run_sh.is_file():
+            raise FileNotFoundError(f"trial directories for {self.spec.task_id} are gone; cannot re-grade")
+        ports_file = self.meta_dir / _PORT_MAP_FILE
+        if ports_file.is_file():
+            saved = json.loads(ports_file.read_text(encoding="utf-8"))
+            self.port_map = {int(k): int(v) for k, v in saved.items()}
+        elif discover_task_ports(self.spec):
+            raise FileNotFoundError(f"no recorded port map for {self.spec.task_id}; cannot re-grade")
+        else:
+            self.port_map = {}
+        self.compiled_ports = CompiledPortMap(self.port_map)
+        self._has_notion = _spec_uses_notion(self.spec)
+        self.has_mocks = bool(getattr(self.spec, "runtime_mocks", ())) or (
+            self.mock_case_dir / "services"
+        ).is_dir()
+        if self.has_mocks:
+            self._remap_mocks()
+            self._start_services(keep_existing_tmp=True)
+        self._setup_ran = True
+
+    def _remap_mocks(self) -> None:
+        mock_svcs_str = str(self.mock_services_dir)
         self.remapped_mocks = []
         self.runtime_mock_urls = {}
         for m in getattr(self.spec, "runtime_mocks", ()) or ():
@@ -772,9 +819,6 @@ class TaskSandbox:
             self.mock_state_dir,
             self._runtime_bin,
         )
-
-        self._start_services()
-        self._setup_ran = True
 
     def service_env(self) -> dict[str, str]:
         mock_scratch_work = self.meta_dir / "mock_workdir"
@@ -941,7 +985,14 @@ class TaskSandbox:
             tail = log_path.read_text(encoding="utf-8", errors="ignore")[-500:]
             raise RuntimeError(f"{label} failed (exit {rc}) for {self.spec.task_id}: {tail}")
 
-    def _start_services(self) -> None:
+    def _start_services(self, *, keep_existing_tmp: bool = False) -> None:
+        """Start the task's services. ``keep_existing_tmp`` (re-grade): files already in
+        ``/task/tmp`` belong to the finished trial and are neither harvested as pid files
+        nor removed; only files the start itself wrote there are."""
+        tmp_d = self.run_dir / "tmp"
+        preexisting: set[Path] = (
+            {p for p in tmp_d.rglob("*")} if (keep_existing_tmp and tmp_d.is_dir()) else set()
+        )
         env = self.service_env()
         ss = self.mock_case_dir / "services" / "start_services.sh"
         legacy_ss = self.mock_case_dir / "files" / "start_mock_services.sh"
@@ -963,14 +1014,20 @@ class TaskSandbox:
             )
 
         # Harvest any explicit PID files before scrubbing /task/tmp for agent isolation.
-        self._spawned_pids.update(
-            _harvest_pid_files(self.run_dir / "tmp", self.meta_dir / "mock_workdir" / "tmp")
-        )
+        if preexisting:
+            self._spawned_pids.update(_harvest_pid_files(self.meta_dir / "mock_workdir" / "tmp"))
+            new_files = [p for p in tmp_d.rglob("*") if p not in preexisting and p.is_file()]
+            self._spawned_pids.update(_harvest_pid_file_list(new_files))
+        else:
+            self._spawned_pids.update(
+                _harvest_pid_files(self.run_dir / "tmp", self.meta_dir / "mock_workdir" / "tmp")
+            )
 
         # Unlink temporary pid/log files written into run_dir/tmp so /task/tmp stays clean.
-        tmp_d = self.run_dir / "tmp"
         if tmp_d.is_dir():
             for tf in list(tmp_d.rglob("*")):
+                if tf in preexisting:
+                    continue
                 if tf.is_file() or tf.is_symlink():
                     try:
                         tf.unlink()

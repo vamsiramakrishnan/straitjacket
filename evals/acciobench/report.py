@@ -213,8 +213,21 @@ def load_baseline_records(baseline_json: Path) -> dict[str, dict[str, Any]]:
     return collapsed
 
 
+def count_grading_errors(runs: list[RunMetrics]) -> int:
+    """Trials whose agent run finished but whose grader failed (ungraded, not failed)."""
+    return sum(1 for r in runs if r.grading_error and r.termination not in _INFRA_ERROR_TERMINATIONS)
+
+
+def _is_scorable(r: RunMetrics) -> bool:
+    return r.termination not in _INFRA_ERROR_TERMINATIONS and not r.grading_error
+
+
 def _collapse_arm_runs(runs: list[RunMetrics]) -> tuple[dict[str, RunMetrics], int]:
-    """Collapse repeat trials per task_id for a single arm; return (per_task, error_count)."""
+    """Collapse repeat trials per task_id for a single arm; return (per_task, error_count).
+
+    Infra errors and grading errors are left out of every aggregate: neither says
+    whether the agent solved the task. Grading errors are counted separately by
+    :func:`count_grading_errors`."""
     by_task: dict[str, list[RunMetrics]] = {}
     error_count = 0
     for r in runs:
@@ -224,7 +237,7 @@ def _collapse_arm_runs(runs: list[RunMetrics]) -> tuple[dict[str, RunMetrics], i
 
     collapsed: dict[str, RunMetrics] = {}
     for tid, truns in sorted(by_task.items()):
-        valid = [r for r in truns if r.termination not in _INFRA_ERROR_TERMINATIONS]
+        valid = [r for r in truns if _is_scorable(r)]
         if not valid:
             continue
         if len(valid) == 1:
@@ -518,6 +531,7 @@ def compute_summary_payload(
             "raw_runs": len(by_arm_raw[a]),
             "completed_tasks": len(rows),
             "error_runs": errors_by_arm[a],
+            "grading_error_runs": count_grading_errors(by_arm_raw[a]),
             "overall": _summarize_metrics_slice(rows, "All Tasks"),
             "by_category": {c: _summarize_metrics_slice([r for r in rows if r.category == c], f"Category: {c}") for c in cats},
             "by_bucket": {
@@ -619,6 +633,7 @@ def compute_summary_payload(
 
     return {
         "total_runs": len(results),
+        "grading_error_runs": sum(a["grading_error_runs"] for a in arms_payload.values()),
         "arms": arms_payload,
         "paired": paired_payload,
         "straitjacket_telemetry": sj_telemetry,
@@ -637,10 +652,27 @@ def _fmt_ev(val: float | None) -> str:
     return f"{val:.3f}"
 
 
+def _grading_error_note(payload: dict[str, Any]) -> str:
+    """One line naming ungraded trials per arm, or "" when there are none."""
+    per_arm = [
+        f"{name}={a['grading_error_runs']}"
+        for name, a in payload["arms"].items()
+        if a.get("grading_error_runs")
+    ]
+    if not per_arm:
+        return ""
+    return (
+        f"Grading errors: {payload.get('grading_error_runs', 0)} trial(s) ungraded "
+        f"({', '.join(per_arm)}); excluded from solve rate and score. "
+        "Re-run with resume to re-grade them."
+    )
+
+
 def _render_table(payload: dict[str, Any]) -> str:
     arms = payload["arms"]
+    gnote = _grading_error_note(payload)
     if not arms or all(a["completed_tasks"] == 0 for a in arms.values()):
-        return "No completed runs found."
+        return "No completed runs found." + (f"\n{gnote}" if gnote else "")
 
     lines: list[str] = []
     lines.append("=" * 136)
@@ -672,6 +704,8 @@ def _render_table(payload: dict[str, Any]) -> str:
                 f"{stp_str:>16} | {s['gen_tokens']:>11,} | {s['total_tokens']:>12,} | "
                 f"{s['cache_hit_pct']:>5.1f}% | {s['wall_clock_min']:>7.1f}"
             )
+    if gnote:
+        lines.append(gnote)
 
     paired = payload.get("paired")
     if paired:
@@ -725,8 +759,9 @@ def _render_table(payload: dict[str, Any]) -> str:
 
 def _render_markdown(payload: dict[str, Any]) -> str:
     arms = payload["arms"]
+    gnote = _grading_error_note(payload)
     if not arms or all(a["completed_tasks"] == 0 for a in arms.values()):
-        return "## AccioBench Summary Report\n\nNo completed runs found.\n"
+        return "## AccioBench Summary Report\n\nNo completed runs found.\n" + (f"\n{gnote}\n" if gnote else "")
 
     lines: list[str] = ["## AccioBench Summary Report", ""]
     lines.append("### Per-Arm Summary")
@@ -754,6 +789,9 @@ def _render_markdown(payload: dict[str, Any]) -> str:
                 f"{s['capacity_mean']:.3f} | {s['steps_total']} / {s['steps_median']:.1f} | "
                 f"{s['gen_tokens']:,} | {s['total_tokens']:,} | {s['cache_hit_pct']:.1f}% | {s['wall_clock_min']:.1f} |"
             )
+    if gnote:
+        lines.append("")
+        lines.append(f"> {gnote}")
 
     paired = payload.get("paired")
     if paired:

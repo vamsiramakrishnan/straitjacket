@@ -145,6 +145,14 @@ class RunMetrics:
     checks_total: int = 0
     failed_checks: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # Non-empty when the official grader itself failed (timeout, missing or invalid
+    # reward.json): the trial is UNGRADED, not failed. Reports leave it out of solve
+    # rate and score aggregates; resume re-grades it without re-running the agent.
+    grading_error: str = ""
+
+    @property
+    def is_grading_error(self) -> bool:
+        return bool(self.grading_error)
 
     @property
     def gen_tokens(self) -> int:
@@ -187,6 +195,16 @@ class RunMetrics:
             kwargs["failed_checks"] = [str(x) for x in kwargs["failed_checks"]]
         if "notes" in kwargs and isinstance(kwargs["notes"], list):
             kwargs["notes"] = [str(x) for x in kwargs["notes"]]
+        if "grading_error" not in data:
+            # Results written before the grading-error state recorded a grader failure
+            # only as a "verifier error: ..." note on an otherwise failed trial.
+            legacy = next(
+                (n for n in kwargs.get("notes") or [] if str(n).startswith("verifier error:")), ""
+            )
+            if legacy and not kwargs.get("passed"):
+                kwargs["grading_error"] = str(legacy)[len("verifier error:"):].strip() or "verifier error"
+        else:
+            kwargs["grading_error"] = str(data.get("grading_error") or "")
 
         return cls(**kwargs)
 

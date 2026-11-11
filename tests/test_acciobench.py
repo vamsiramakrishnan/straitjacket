@@ -1297,6 +1297,134 @@ def test_run_trial_and_run_suite_paired_arms_with_residence_and_resume(tmp_path:
         orch_mod.create_provider = orig_create
 
 
+class _SolvingProvider:
+    """Reads orders.json, writes the expected summary and presents it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.models: list[str] = []
+
+    def generate(self, model_id: str, contents: list[dict[str, Any]], tools: list[dict[str, Any]], **_kw: Any) -> dict[str, Any]:
+        self.calls += 1
+        self.models.append(model_id)
+        user_turns = len([c for c in contents if c.get("role") == "user"])
+        if user_turns == 1:
+            part: dict[str, Any] = {"functionCall": {"name": "read", "args": {"path": "/task/workspace/orders.json"}}}
+        elif user_turns == 2:
+            part = {"functionCall": {"name": "write", "args": {
+                "path": "/task/outputs/summary.json",
+                "content": json.dumps({"total_usd": 420, "status": "verified"}),
+            }}}
+        elif user_turns == 3:
+            part = {"functionCall": {"name": "present_files", "args": {"files": ["/task/outputs/summary.json"]}}}
+        else:
+            part = {"text": "Completed."}
+        return {
+            "candidates": [{"content": {"role": "model", "parts": [part]}}],
+            "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 10},
+        }
+
+    def judge_access_token(self) -> str:
+        return ""
+
+    def close(self) -> None:
+        pass
+
+
+class _MustNotGenerateProvider(_SolvingProvider):
+    def generate(self, *a: Any, **kw: Any) -> dict[str, Any]:
+        pytest.fail("resume made a model call")
+
+
+def _flaky_grader_task(ds_root: Path, task_id: str, flag: Path) -> Path:
+    """A task whose grader crashes (no reward.json) until ``flag`` exists, then grades for real."""
+    case_dir = _create_synthetic_task(ds_root, category="file", task_id=task_id)
+    grader = case_dir / "grader"
+    (grader / "run.sh").rename(grader / "real.sh")
+    _write_executable(
+        grader / "run.sh",
+        "#!/usr/bin/env bash\n"
+        f'FLAG="{flag}"\n'
+        'if [ ! -e "$FLAG" ]; then : > "$FLAG"; echo "grader crashed: judge timeout" >&2; exit 2; fi\n'
+        'exec bash "$(dirname "$0")/real.sh"\n',
+    )
+    return case_dir
+
+
+def test_grading_error_is_ungraded_reported_apart_and_regraded_on_resume(tmp_path: Path) -> None:
+    from evals.acciobench.html_report import build_html_report_payload
+    from evals.acciobench.report import compute_summary_payload
+
+    ds_root = tmp_path / "cab"
+    flag = tmp_path / "grader_has_run_once"
+    _flaky_grader_task(ds_root, "file-flaky-grader", flag)
+    cfg = BenchConfig(
+        dataset_root=ds_root, workdir=tmp_path / "work", provider="gemini", api_key="dummy",
+        judge_provider="mock", arms=("sj",), slot_offset=70,
+    )
+
+    first = run_trial(cfg, "file-flaky-grader", "sj", 71, _SolvingProvider())  # type: ignore[arg-type]
+    assert first.termination == "present_files"
+    assert first.grading_error and "grader crashed" in first.grading_error
+    assert first.passed is False
+    result_file = cfg.runs_dir / "file-flaky-grader__sj__t1_meta" / "result.json"
+    saved = json.loads(result_file.read_text(encoding="utf-8"))
+    assert saved["grading_error"]
+
+    # Reports: an ungraded trial is not a failed one; it is counted apart in every format.
+    loaded = load_run_results(cfg.workdir)
+    payload = compute_summary_payload(loaded)
+    assert payload["arms"]["sj"]["grading_error_runs"] == 1
+    assert payload["arms"]["sj"]["overall"]["n"] == 0
+    assert payload["grading_error_runs"] == 1
+    assert "Grading errors: 1" in render_summary_report(loaded, format="table")
+    assert "Grading errors: 1" in render_summary_report(loaded, format="markdown")
+    assert json.loads(render_summary_report(loaded, format="json"))["grading_error_runs"] == 1
+    html_meta = build_html_report_payload(loaded, workdir=cfg.workdir)["meta"]
+    assert html_meta["grading_errors_total"] == 1 and html_meta["grading_errors"] == {"sj": 1}
+
+    # Resume re-grades the existing outputs: no model call, run directory untouched.
+    run_dir = cfg.runs_dir / "file-flaky-grader__sj__t1"
+    keep = run_dir / "tmp" / "agent_scratch.txt"
+    keep.write_text("keep me", encoding="utf-8")
+    second = run_trial(cfg, "file-flaky-grader", "sj", 71, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert second.grading_error == ""
+    assert second.passed is True and second.capacity_score == 1.0
+    assert second.steps == first.steps and second.prompt_tokens == first.prompt_tokens
+    assert keep.read_text(encoding="utf-8") == "keep me"
+    assert json.loads(result_file.read_text(encoding="utf-8"))["passed"] is True
+    payload2 = compute_summary_payload(load_run_results(cfg.workdir))
+    assert payload2["arms"]["sj"]["grading_error_runs"] == 0
+    assert payload2["arms"]["sj"]["overall"]["passed"] == 1
+
+    # A graded result is then plainly cached (no model call, no grader run).
+    flag.unlink()
+    third = run_trial(cfg, "file-flaky-grader", "sj", 71, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert third.passed is True and not flag.exists()
+
+    # Re-grading impossible (run directory gone): only then is the trial re-run.
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    doc.update(grading_error="grader timeout", passed=False)
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    import shutil as _shutil
+
+    _shutil.rmtree(run_dir)
+    flag.touch()
+    rerun_provider = _SolvingProvider()
+    fourth = run_trial(cfg, "file-flaky-grader", "sj", 71, rerun_provider)  # type: ignore[arg-type]
+    assert rerun_provider.calls >= 3
+    assert fourth.passed is True and fourth.grading_error == ""
+
+
+def test_legacy_verifier_error_note_loads_as_grading_error() -> None:
+    legacy = {"task_id": "t", "arm": "sj", "model_id": "m", "termination": "present_files",
+              "passed": False, "notes": ["verifier error: Traceback ... TimeoutError"]}
+    m = RunMetrics.from_dict(legacy)
+    assert m.grading_error.startswith("Traceback")
+    ok = RunMetrics.from_dict({"task_id": "t", "arm": "sj", "model_id": "m", "passed": True})
+    assert ok.grading_error == ""
+
+
 # ---------------------------------------------------------------------------
 # 7. Report, Doctor, Referee Validator & CLI Entrypoints
 # ---------------------------------------------------------------------------

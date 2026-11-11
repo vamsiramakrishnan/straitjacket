@@ -362,7 +362,13 @@ _JS_PART_1 = r"""<script>
       '<span><strong>' + esc(m.harness) + '</strong></span>' +
       '<span class="sep">•</span><span>' + m.total_tasks + ' tasks (' + esc(catParts) + ')</span>' +
       '<span class="sep">•</span><span>Untouched model defaults</span>' +
-      '<span class="sep">•</span><span>Judge: <strong style="color:var(--ink)">' + esc(m.judge) + '</strong></span>';
+      '<span class="sep">•</span><span>Judge: <strong style="color:var(--ink)">' + esc(m.judge) + '</strong></span>' +
+      (m.grading_errors_total
+        ? '<span class="sep">•</span><span id="grading-errors">Grading errors: <strong style="color:var(--ink)">' +
+          m.grading_errors_total + '</strong> ungraded (' +
+          esc(Object.entries(m.grading_errors || {}).filter(([, v]) => v).map(([k, v]) => k + '=' + v).join(', ')) +
+          '), excluded from solve rate &amp; score</span>'
+        : '');
     document.getElementById('subbar-date').textContent = 'Completed: ' + m.date + ' UTC';
 
     const scopeSlot = document.getElementById('scope-switcher-slot');
