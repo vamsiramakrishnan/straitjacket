@@ -57,6 +57,7 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("reflex.py", "argv[:i]"): "argv list",
     ("media.py", "text[:-2]"): "strips a known 2-char suffix",
     ("media.py", "text[:-1]"): "strips a known 1-char suffix",
+    ("deliverables.py", 'str(ck)[: -len("_count")]'): "strips the known '_count' suffix from a key that ends with it (no width cut)",
     ("replay.py", "raw[:pos]"): "parsing up to a delimiter",
     ("config_edit.py", "self.text[:node.start]"): "TOML editing of the user's own config",
     ("config_edit.py", "path[:-1]"): "TOML key path list",

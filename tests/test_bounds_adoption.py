@@ -88,6 +88,9 @@ ALLOWED: dict[str, str] = {
         "clamped to a positive cell size, and post-downscale dimensions "
         "clamped so a degenerate image never rounds to a zero-token size"
     ),
+    "residence.py": (
+        "cache-amortization retained-token estimate floor, not an emission bound"
+    ),
 }
 
 #: file -> why a ``x or DEFAULT`` on a bound-ish name is correct there.
