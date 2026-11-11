@@ -1454,7 +1454,7 @@ def _is_ctx_invocation(command: str | None, cwd: str | None = None) -> bool:
         raw = shlex.split(command)
     except ValueError:
         return False
-    if any(t.startswith("PATH=") for t in raw):
+    if any(t.startswith("PATH=") or re.match(r"[A-Za-z_]\w*=", t) or os.path.basename(t) == "env" for t in raw[: len(raw) - len(_unwrap(raw))]) or any(t.startswith("PATH=") for t in raw):
         return False
     argv = _unwrap(raw)
     if not argv:
@@ -1466,7 +1466,7 @@ def _is_ctx_invocation(command: str | None, cwd: str | None = None) -> bool:
     if base in ("ctx", "ctx.exe"):
         path = tok if os.path.isabs(tok) else os.path.join(cwd or os.getcwd(), tok)
         return os.path.realpath(path) in _self_ctx_paths()
-    if base.startswith("python") and argv[1:3] == ["-m", "ctx"]:
+    if base.startswith("python") and argv[1:4] in (["-P", "-m", "ctx"], ["-I", "-m", "ctx"]):
         path = tok if os.sep in tok else (_which(tok) or "")
         return bool(path) and os.path.realpath(path) == os.path.realpath(sys.executable)
     return False

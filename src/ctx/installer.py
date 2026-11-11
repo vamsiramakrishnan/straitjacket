@@ -21,6 +21,12 @@ from ctx.config import CONFIG_FILENAME, IGNORE_FILENAME
 from ctx.workspace import Workspace
 
 PLUGIN_DIRNAME = "ctx-harness"
+#: Files `render_plugin` writes (commands live in hooks.json and mcp_config.json).
+_PLUGIN_FILES = ("plugin.json", "hooks.json", "mcp_config.json")
+#: Files `install_gateway` writes per host (each carries a ctx launch).
+_GATEWAY_FILES = {"claude": ".ctx-surface/gateway.claude.json",
+                  "codex": ".ctx-surface/config.codex.gateway.toml",
+                  "antigravity": ".ctx-surface/mcp_config.gateway.json"}
 
 _CTX_TOML_TEMPLATE = """\
 version = 1
@@ -90,12 +96,13 @@ def _template_dir(name: str = "antigravity", *, sentinel: str = "plugin.json") -
 
 
 def _ctx_executable() -> str:
-    """Return a shell-safe command string for hook command fields."""
-    exe = shutil.which("ctx")
-    if exe:
-        return shlex.join([exe])
-    # Fall back to `python -m ctx` semantics via the current interpreter.
-    return shlex.join([sys.executable, "-m", "ctx"])
+    """Return a shell-safe command string for hook command fields: the
+    installed entry point by absolute path, else ``<python> -P -m ctx`` —
+    never a form that imports ``ctx`` from the host's working directory
+    (see :mod:`ctx.selfcmd`)."""
+    from ctx.selfcmd import ctx_command
+
+    return ctx_command()
 
 
 def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
@@ -113,11 +120,28 @@ def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
     dest = workspace_root / ".agents" / "plugins" / PLUGIN_DIRNAME
     dest.mkdir(parents=True, exist_ok=True)
 
-    for name in ("plugin.json", "hooks.json", "mcp_config.json"):
-        content = (template / name).read_text(encoding="utf-8")
-        content = content.replace("{{CTX_EXECUTABLE}}", exe)
-        json.loads(content)  # rendered manifests must stay valid JSON
-        (dest / name).write_text(content, encoding="utf-8")
+    exe_argv = shlex.split(exe)
+
+    def substitute(value):
+        # Decoded string values, then JSON-encoded: a path with quotes or
+        # backslashes cannot break the manifest.
+        if isinstance(value, str):
+            return value.replace("{{CTX_EXECUTABLE}}", exe)
+        if isinstance(value, list):
+            return [substitute(v) for v in value]
+        if isinstance(value, dict):
+            out = {k: substitute(v) for k, v in value.items()}
+            # An MCP stdio entry is ONE executable plus args, so the fallback
+            # `<python> -P -m ctx` is split rather than written as "command".
+            if value.get("command") == "{{CTX_EXECUTABLE}}" and isinstance(value.get("args"), list):
+                out["command"] = exe_argv[0]
+                out["args"] = [*exe_argv[1:], *substitute(value["args"])]
+            return out
+        return value
+
+    for name in _PLUGIN_FILES:
+        doc = json.loads((template / name).read_text(encoding="utf-8"))
+        (dest / name).write_text(json.dumps(substitute(doc), indent=2) + "\n", encoding="utf-8")
 
     for subdir in ("skills", "agents"):
         src = template / subdir
@@ -166,8 +190,13 @@ def install_antigravity_statusline(exe: str, *, settings_path: Path | None = Non
 
 
 def install_antigravity(ws: Workspace, *, init_policy: bool = True) -> str:
+    from ctx.launchform import upgrade as upgrade_launch_forms
+
+    # Before anything that might refuse: a ctx status line still in the
+    # unsafe `python -m ctx` form is rewritten in place.
+    upgraded = upgrade_launch_forms(ws.root, ["antigravity"])
     dest = render_plugin(ws.root)
-    lines = [f"installed plugin: {dest}"]
+    lines = [*upgraded, f"installed plugin: {dest}"]
     exe = _ctx_executable()
     lines.append(install_antigravity_statusline(exe))
     if init_policy:
@@ -299,26 +328,30 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
     backends = {n: {"command": a[0], "args": a[1:]}
                 for n, a in surface._mcp_server_commands(root).items()
                 if not _is_gateway_argv(a)}
-    gw_args = ["surface", "gateway", "--workspace", str(root)]
+    # An MCP stdio entry is one executable plus args: the fallback
+    # `<python> -P -m ctx` must be split, never written as one "command".
+    exe_argv = shlex.split(exe)
+    gw_cmd = exe_argv[0]
+    gw_args = [*exe_argv[1:], "surface", "gateway", "--workspace", str(root)]
 
     files: dict[str, str] = {
         ".ctx-surface/backends.json": json.dumps({"mcpServers": backends}, indent=2) + "\n",
     }
     if host == "claude":
-        files[".ctx-surface/gateway.claude.json"] = json.dumps(
-            {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args}}}, indent=2) + "\n"
+        files[_GATEWAY_FILES["claude"]] = json.dumps(
+            {"mcpServers": {_GATEWAY_NAME: {"command": gw_cmd, "args": gw_args}}}, indent=2) + "\n"
         launch = "claude --strict-mcp-config --mcp-config .ctx-surface/gateway.claude.json"
     elif host == "codex":
         args_toml = ", ".join(json.dumps(a) for a in gw_args)
-        files[".ctx-surface/config.codex.gateway.toml"] = (
+        files[_GATEWAY_FILES["codex"]] = (
             "# ctx surface gateway — load ONLY the gateway; it fronts the\n"
             "# backends recorded in .ctx-surface/backends.json.\n"
             f"[mcp_servers.{_GATEWAY_NAME}]\n"
-            f'command = "{exe}"\nargs = [{args_toml}]\n')
+            f'command = {json.dumps(gw_cmd)}\nargs = [{args_toml}]\n')
         launch = "codex --config .ctx-surface/config.codex.gateway.toml"
     elif host == "antigravity":
-        files[".ctx-surface/mcp_config.gateway.json"] = json.dumps(
-            {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args, "disabled": False}}},
+        files[_GATEWAY_FILES["antigravity"]] = json.dumps(
+            {"mcpServers": {_GATEWAY_NAME: {"command": gw_cmd, "args": gw_args, "disabled": False}}},
             indent=2) + "\n"
         launch = ("point ~/.gemini/antigravity-cli at "
                   ".ctx-surface/mcp_config.gateway.json, then Refresh MCP servers")
@@ -521,9 +554,45 @@ def _is_ctx_hook_command(command: object, slug: str) -> bool:
         # `ctx-hook-native` is the Rust post-tool-use shim earlier releases
         # wrote in place of ctx (wrap.py `_post_hook_exe`, removed since).
         return os.path.basename(prefix[0]) in ("ctx", "ctx.exe", "ctx-hook-native")
-    if len(prefix) == 3 and prefix[1:] == ["-m", "ctx"]:
+    if prefix[1:] in (["-m", "ctx"], ["-P", "-m", "ctx"]):
+        # Both the pre-fix unsafe form and the safe ``-P`` form are ctx's.
         return os.path.basename(prefix[0]).startswith("python")
     return False
+
+
+def upgrade_unsafe_ctx_commands(existing_hooks: object, settings: object = None) -> list[str]:
+    """Rewrite ctx-owned commands still in the unsafe ``<python> -m ctx``
+    form (it imports ``ctx`` from the host's working directory, so a
+    repository could replace the guard) to ``<python> -P -m ctx``, in place.
+    Each command that is exactly a ctx hook command (or a ctx status line) is
+    rewritten wherever it sits, INCLUDING inside a hook group that also holds
+    a user's own command — the user's command is left as it is. Returns one
+    line, counting the ctx commands rewritten, when anything changed."""
+    from ctx.selfcmd import is_unsafe_ctx_command, make_safe
+
+    n = 0
+    if isinstance(existing_hooks, dict):
+        for stage, groups in existing_hooks.items():
+            slug = _CLAUDE_STAGE_SLUG.get(stage)
+            if not slug or not isinstance(groups, list):
+                continue
+            for group in groups:
+                for h in (group.get("hooks") if isinstance(group, dict) else None) or []:
+                    cmd = h.get("command") if isinstance(h, dict) else None
+                    if (isinstance(cmd, str) and _is_ctx_hook_command(cmd, slug)
+                            and is_unsafe_ctx_command(cmd)):
+                        h["command"] = shlex.join(make_safe(shlex.split(cmd)))
+                        n += 1
+    if isinstance(settings, dict) and isinstance(settings.get("statusLine"), dict):
+        cmd = settings["statusLine"].get("command")
+        if isinstance(cmd, str) and is_unsafe_ctx_command(cmd) \
+                and cmd.split()[-2:] == ["statusline", "claude-code"]:
+            settings["statusLine"]["command"] = shlex.join(make_safe(shlex.split(cmd)))
+            n += 1
+    if not n:
+        return []
+    return [f"updated {n} ctx command(s) in .claude/settings.json from the unsafe `python -m ctx` form to "
+            "`python -P -m ctx` (the old form could run a `ctx` package from the workspace)"]
 
 
 def _owned_claude_group(group: object, stage: str) -> bool:
@@ -645,6 +714,7 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     # are all ctx `hook claude-code <stage>` commands. Anything else --
     # including a group mixing ctx and foreign hooks -- is left untouched.
     updated = update_owned_claude_matchers(existing_hooks, full_stages)
+    updated += upgrade_unsafe_ctx_commands(existing_hooks, merged)
     for note in updated:
         lines.append(note)
     if any(n.startswith("updated ") for n in updated):
@@ -672,8 +742,15 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     else:
         lines.append("statusLine already set; left unchanged")
     if changed:
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        from ctx.launchform import UnsafeWrite, write_safely
+
+        try:
+            # Never through a symlink or a .claude/ symlinked out of the repo.
+            write_safely(settings_path, json.dumps(merged, indent=2) + "\n", root=root)
+        except UnsafeWrite as e:
+            return (f"cannot set up Claude Code: {settings_path.relative_to(root)} was not "
+                    f"written ({e}); ctx never writes through a link. Make it a regular "
+                    "file inside the workspace and re-run: ctx setup")
         lines.append(f"wrote {settings_path.relative_to(root)}")
 
     agent_src = _template_dir() / "agents" / "ctx-explorer.md"
@@ -1258,7 +1335,32 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     except Exception:
         pass
 
+    try:
+        from ctx.launchform import scan as _scan_launch_forms
+
+        findings = _scan_launch_forms(ws.root)
+        if findings:
+            # One row per finding, each naming its file and saying something
+            # true: setup rewrites it, or here is the exact replacement.
+            for f in findings:
+                check("ctx launch form", False,
+                      "`python -m ctx` without -P imports a `ctx` package from the "
+                      "workspace: " + f.message(ws.root))
+        else:
+            check("ctx launch form", True, "no installed command imports ctx from the working directory")
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("ctx launch form", False, f"{type(e).__name__}: {e}")
+
     return checks
+
+
+def unsafe_installed_commands(root: Path) -> list[str]:
+    """``<file> (<where>)`` for every installed command, in every file any
+    ctx installer writes and the hosts' own settings, that launches ctx as
+    ``python -m ctx`` without ``-P`` (see :mod:`ctx.launchform`)."""
+    from ctx.launchform import scan
+
+    return [f.message(Path(root)) for f in scan(root)]
 
 
 def install_hermes(ws, *, init_policy=True):

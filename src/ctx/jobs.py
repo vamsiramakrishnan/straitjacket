@@ -38,6 +38,8 @@ Single-writer discipline (race containment):
 
 from __future__ import annotations
 
+from ctx.selfcmd import module_argv
+
 from ctx import bounds
 
 import json
@@ -241,7 +243,8 @@ def start_job(
     sup_err = (jobdir / "supervisor.err").open("wb")
     try:
         sup = subprocess.Popen(
-            [sys.executable, "-m", "ctx", "job", "_supervise", str(jobdir)],
+            # -P: the cwd is the user's workspace; never import `ctx` from it.
+            [*module_argv("ctx"), "job", "_supervise", str(jobdir)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=sup_err,
@@ -324,7 +327,7 @@ def supervise_main(jobdir_str: str) -> int:
     if meta.get("announce"):
         try:
             subprocess.Popen(
-                [sys.executable, "-m", "ctx", "job", jobdir.name, "--announce"],
+                [*module_argv("ctx"), "job", jobdir.name, "--announce"],
                 cwd=meta["cwdAbs"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,

@@ -223,6 +223,10 @@ def cmd_setup(ns) -> int:
         if not hosts or any(h not in HOSTS for h in hosts) or ns.all or getattr(ns, "acp", False) or getattr(ns, "prune", False):
             print("ctx setup: --preview/--remove require explicit --host codex and/or --host opencode, without --all, --acp or --prune", file=sys.stderr)
             return 2
+        if apply and not remove:
+            from ctx.launchform import upgrade as upgrade_launch_forms
+            for line in upgrade_launch_forms(root, hosts):
+                print(line)
         plan = plan_configuration(root, hosts, remove=remove)
         print(plan.render())
         if plan.blockers:

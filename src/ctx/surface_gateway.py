@@ -217,7 +217,7 @@ BACKENDS_FILE = ".ctx-surface/backends.json"
 
 def _is_gateway_argv(argv: list[str]) -> bool:
     """True if this argv is the gateway itself (avoid fronting ourselves),
-    however ctx is invoked (``ctx …`` or ``python -m ctx …``)."""
+    however ctx is invoked (``ctx …`` or ``python -P -m ctx …``)."""
     return any(argv[i:i + 2] == ["surface", "gateway"] for i in range(1, len(argv) - 1))
 
 

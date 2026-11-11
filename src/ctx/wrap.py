@@ -813,6 +813,13 @@ def guided_setup(
     from ctx.host_config import HOSTS as CONFIG_HOSTS, plan_configuration
     from ctx.config_edit import ConfigError
     config_targets = [host for host in target if host in CONFIG_HOSTS]
+    # ctx-owned commands still in the unsafe `python -m ctx` form are
+    # rewritten in place before anything can refuse (ledger-tracked entries
+    # are upgraded by the plan itself).
+    from ctx.launchform import upgrade as upgrade_launch_forms
+    upgraded = upgrade_launch_forms(ws.root, target)
+    for line in upgraded:
+        print(line)
     config_plan = plan_configuration(ws.root, config_targets) if config_targets else None
     if config_plan and not config_plan.blockers and config_plan.requires_review and not apply_config:
         print(config_plan.render())
@@ -836,7 +843,8 @@ def guided_setup(
         for conflict in conflicts:
             for line in conflict.splitlines():
                 print(f"  {line}")
-        print("  managed files were not changed")
+        print("  managed files were not changed"
+              + (" (apart from the launch-form upgrade above)" if upgraded else ""))
         record_setup(
             ws.root,
             target,
@@ -997,6 +1005,9 @@ def wrap_setup(
         from ctx.hosts import detect_all
         selected = [d.name for d in detect_all(workspace_root=ws.root) if d.installed and d.harnessable] if not force_all else []
         selected = selected or [name for name in SETUP_HOSTS if name != "hermes"]
+    from ctx.launchform import upgrade as upgrade_launch_forms
+    for line in upgrade_launch_forms(ws.root, selected):
+        print(line)
     config_plan = plan_configuration(ws.root, [h for h in selected if h in CONFIG_HOSTS])
     if config_plan.blockers or config_plan.requires_review:
         print(config_plan.render())

@@ -1175,7 +1175,9 @@ def test_real_ctx_by_absolute_path_is_recognised(ws):
     if not os.path.exists(real):
         pytest.skip("no ctx script beside this interpreter")
     assert hook._is_ctx_invocation(f"{real} stats", str(ws))
-    assert hook._is_ctx_invocation(f"{sys.executable} -m ctx stats", str(ws))
+    assert hook._is_ctx_invocation(f"{sys.executable} -P -m ctx stats", str(ws))
+    # bare `-m ctx` imports from the cwd: it is NOT the real ctx
+    assert not hook._is_ctx_invocation(f"{sys.executable} -m ctx stats", str(ws))
     assert not hook._is_ctx_invocation("/tmp/elsewhere/ctx stats", str(ws))
     assert not hook._is_ctx_invocation("python9 -m ctx stats", str(ws))
 

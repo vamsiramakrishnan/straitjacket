@@ -653,7 +653,8 @@ def _pyflakes_diags(
 
     try:
         proc = subprocess.run(
-            [_sys.executable, "-m", "pyflakes", *rels],
+            # -P: run the installed pyflakes, never a `pyflakes` the repo plants.
+            [_sys.executable, "-P", "-m", "pyflakes", *rels],
             cwd=ws.root,
             capture_output=True,
             timeout=120,

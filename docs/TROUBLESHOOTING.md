@@ -62,7 +62,7 @@ at the reported location before a structural diff can be generated.
 An older generated fallback put the whole `python -m ctx` invocation in MCP
 `command`. Codex launches that field directly, without a shell. Preview the
 repair with `ctx setup --host codex --preview`. The corrected entry separates
-`command = "/path/to/python"` from `args = ["-m", "ctx", "mcp", "--bounded-only"]`.
+`command = "/path/to/python"` from `args = ["-P", "-m", "ctx", "mcp", "--bounded-only"]`.
 Owned entries are repairable when they still match the recorded value. Legacy
 entries without an ownership record need the shown correction reviewed and
 integrated before setup proceeds; the old banner does not authorize overwrites.
