@@ -30,7 +30,9 @@ from .config import (  # noqa: E402
     BenchConfig,
     RunMetrics,
     config_fingerprint,
+    ctx_code_identity,
     ctx_version,
+    harness_ctx_code_identity,
     load_cab_task,
     task_inputs_digest,
 )
@@ -504,15 +506,18 @@ def run_trial(
     meta_dir = config.runs_dir / f"{slug}_meta"
     result_file = meta_dir / "result.json"
 
-    fingerprint = config_fingerprint(
-        config,
-        _HARNESS_BEHAVIOUR,
-        {
-            "task_inputs": task_inputs_digest(Path(spec.case_dir)),
-            "bwrap_sandbox": sandbox_kind == "bwrap",
-            "ctx_version": ctx_version(config.ctx_bin) if is_sj else None,
-        },
-    )
+    trial_inputs: dict[str, Any] = {
+        "task_inputs": task_inputs_digest(Path(spec.case_dir)),
+        "bwrap_sandbox": sandbox_kind == "bwrap",
+        "ctx_version": ctx_version(config.ctx_bin) if is_sj else None,
+    }
+    if is_sj:
+        # The code itself, not only the version it reports: the ctx the trial launches and
+        # the ctx package this process runs in-process (residence, deliverable audits, the
+        # hook grammar). The raw arm uses neither, so its fingerprint leaves both out.
+        trial_inputs["ctx_code"] = ctx_code_identity(config.ctx_bin)
+        trial_inputs["harness_ctx_code"] = harness_ctx_code_identity()
+    fingerprint = config_fingerprint(config, _HARNESS_BEHAVIOUR, trial_inputs)
     if config.resume and result_file.is_file():
         try:
             saved = json.loads(result_file.read_text(encoding="utf-8"))

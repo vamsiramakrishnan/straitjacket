@@ -141,13 +141,30 @@ run without bwrap, but say that a scored run will be refused.
   compaction constants, a content hash of the task's own directory (prompt,
   `task.toml`, workspace, services, and the grader, rubric and private answers, since
   a changed grader changes the recorded score), the version the benchmarked ctx
-  reports (`ctx --version`, asked once per process; `sj` arm only), and whether the
-  bwrap sandbox is active). A cached result is reused only when its fingerprint
-  matches; worker counts, slot offsets, output paths, credentials and host paths are
-  not part of it (moving the dataset does not invalidate a workdir; changing its
-  content does). The ctx version is the string `ctx --version` prints, not a hash of
-  its source: an edit to ctx that keeps the version is NOT detected, so pass
-  `--no-cache` or a fresh `--workdir` when comparing two builds of the same version.
+  reports (`ctx --version`), a content hash of the ctx code itself (below), and
+  whether the bwrap sandbox is active). A cached result is reused only when its
+  fingerprint matches; worker counts, slot offsets, output paths, credentials and host
+  paths are not part of it (moving the dataset does not invalidate a workdir; changing
+  its content does).
+  **ctx code (`sj` arm only)**: the `sj` fingerprint carries two content hashes, so an
+  edit to ctx is detected even when its version stays the same. (1) The ctx the trial
+  launches (`--ctx-bin`, else the venv's or `PATH`'s `ctx`, else the source-checkout
+  shim): when it is a Python console-script entry point that imports `ctx`, a Python
+  interpreter (run as `-P -m ctx`), or the shim, the hash covers the `ctx` package that
+  interpreter would import, found with `importlib.util.find_spec` in a child run as
+  `python -P` from `/` (nothing is imported or run from a trial's directory). Any
+  other `ctx` (a shell wrapper, a compiled binary) falls back to a hash of the
+  executable's own bytes, so an edit behind such a wrapper is not seen: pass
+  `--no-cache` there. (2) The `ctx` package the harness imports in-process (residence
+  compaction, deliverable audits and the hook grammar, all used by the `sj` arm only).
+  The `raw` arm runs no ctx code, launched or in-process, so neither hash is part of
+  its fingerprint and an edit to ctx never re-runs `raw` trials. Both hashes read file
+  contents under relative paths (`__pycache__` and `.pyc` skipped), so moving a
+  checkout does not invalidate a workdir; each is computed once per process (about
+  25 ms for the launched ctx, most of it one interpreter start, and under 10 ms for the
+  in-process package, measured on one machine; about 0 afterwards). Adding these
+  hashes changed every `sj` fingerprint once: `sj` results written before them are
+  re-run on the next resume (`raw` results are kept).
   A result written before fingerprints existed is reused only if its
   `model_id` equals `--model` (one `[legacy]` line says so); never across models.
   When a result does not match, one `[rerun]` line says why and the previous trial

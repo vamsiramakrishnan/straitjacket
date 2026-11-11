@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import shlex
 import shutil
 import stat
@@ -247,7 +248,8 @@ def config_fingerprint(
 ) -> str:
     """A short stable hash of what a trial measured: FINGERPRINT_FIELDS, the harness's own
     behaviour constants (``harness``) and per-trial inputs (``trial``: the task's own
-    files, the ctx version, whether the bwrap sandbox is active)."""
+    files, the ctx version and code hashes on the sj arm, whether the bwrap sandbox is
+    active)."""
     doc = {name: getattr(config, name) for name in FINGERPRINT_FIELDS}
     doc["harness"] = dict(sorted((harness or {}).items()))
     if trial:
@@ -355,6 +357,134 @@ def ctx_version(ctx_bin: Path | None = None) -> str:
             ver = f"unknown ({type(exc).__name__})"
         _CTX_VERSION_CACHE[key] = ver
         return ver
+
+
+_CODE_ID_CACHE: dict[str, str] = {}
+_CODE_ID_LOCK = threading.Lock()
+# Printed by the probe below; run with ``-P`` and cwd="/" so nothing is imported from the
+# caller's (or a trial's) directory. ``find_spec`` of a top-level name does not import it.
+_FIND_CTX_PROBE = (
+    "import importlib.util as u\n"
+    "s = u.find_spec('ctx')\n"
+    "locs = list(s.submodule_search_locations or []) if s is not None else []\n"
+    "print(locs[0] if locs else (s.origin or '') if s is not None else '')\n"
+)
+_PY_IMPORTS_CTX_RE = re.compile(rb"^\s*(?:from\s+ctx(?:\.\w+)*\s+import\b|import\s+ctx\b)", re.M)
+_PIP_TRAMPOLINE_RE = re.compile(rb"^'''exec' \"?([^\"\s]+)\"?", re.M)
+
+
+def _code_digest(location: Path) -> str:
+    """Content hash of a package directory (``__pycache__``/``.pyc`` skipped, relative
+    paths only, so a moved checkout hashes the same) or of a single module file."""
+    if location.is_dir():
+        return task_inputs_digest(location)
+    return _file_digest(location, location.stat())[:16]
+
+
+def _ctx_shim_path() -> Path:
+    return Path(tempfile.gettempdir()) / f"straitjacket_ctx_bin_{os.getuid()}" / "ctx"
+
+
+def _entry_point_interpreter(exe: Path) -> Path | None:
+    """The Python interpreter of a console-script entry point that imports ``ctx``
+    (``#!/path/python``, ``#!/usr/bin/env python3`` or pip's ``/bin/sh`` trampoline for
+    long paths); ``None`` for anything else (a shell wrapper, a compiled binary)."""
+    try:
+        with exe.open("rb") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return None
+    if not head.startswith(b"#!") or not _PY_IMPORTS_CTX_RE.search(head):
+        return None
+    first = head[2:].split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+    try:
+        words = shlex.split(first)
+    except ValueError:
+        return None
+    cand: str | None = None
+    if words and Path(words[0]).name == "env":
+        cand = next((w for w in words[1:] if not w.startswith("-") and "=" not in w), None)
+        cand = shutil.which(cand) if cand else None
+    elif words and "python" in Path(words[0]).name.lower():
+        cand = words[0]
+    else:
+        m = _PIP_TRAMPOLINE_RE.search(head)
+        cand = m.group(1).decode("utf-8", "replace") if m else None
+    if not cand or "python" not in Path(cand).name.lower() or not Path(cand).is_file():
+        return None
+    return Path(cand)
+
+
+def _find_ctx_package(interpreter: Path, extra_pythonpath: str = "") -> Path | None:
+    """Where ``interpreter -P -m ctx`` would import ``ctx`` from, without importing it."""
+    import subprocess
+
+    env = dict(os.environ)
+    if extra_pythonpath:
+        env["PYTHONPATH"] = extra_pythonpath + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    try:
+        cp = subprocess.run(
+            [str(interpreter), "-P", "-c", _FIND_CTX_PROBE],
+            capture_output=True, text=True, timeout=30, cwd="/", env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = (cp.stdout or "").strip().splitlines()
+    if cp.returncode != 0 or not found or not found[-1].strip():
+        return None
+    loc = Path(found[-1].strip())
+    return loc if loc.exists() else None
+
+
+def ctx_code_identity(ctx_bin: Path | None = None) -> str:
+    """Identity of the code the ``sj`` arm launches as ctx, computed once per process per
+    executable: ``pkg:<hash>`` of the ``ctx`` package that executable imports (a
+    console-script entry point, a Python interpreter run as ``-P -m ctx``, or the
+    source-checkout shim), else ``exe:<hash>`` of the executable's own bytes (a shell
+    wrapper or a compiled binary), else ``unavailable``. Nothing is imported or run from a
+    trial directory: the probe runs the interpreter with ``-P`` from ``/``."""
+    try:
+        exe = resolve_ctx_bin(ctx_bin)
+    except FileNotFoundError:
+        return "unavailable"
+    key = str(exe)
+    with _CODE_ID_LOCK:
+        hit = _CODE_ID_CACHE.get(key)
+        if hit is not None:
+            return hit
+        pkg: Path | None = None
+        if exe == _ctx_shim_path():
+            repo_src = Path(__file__).resolve().parents[2] / "src"
+            pkg = _find_ctx_package(Path(sys.executable).resolve(), str(repo_src))
+        else:
+            interp = exe if "python" in exe.name.lower() else _entry_point_interpreter(exe)
+            if interp is not None:
+                pkg = _find_ctx_package(interp)
+        try:
+            ident = f"pkg:{_code_digest(pkg)}" if pkg is not None else f"exe:{_code_digest(exe)}"
+        except OSError:
+            ident = "unavailable"
+        _CODE_ID_CACHE[key] = ident
+        return ident
+
+
+def harness_ctx_code_identity() -> str:
+    """Content hash of the ``ctx`` package this process imports (the ``sj`` arm's
+    residence, deliverable audits and hook grammar run in-process), once per process."""
+    with _CODE_ID_LOCK:
+        hit = _CODE_ID_CACHE.get("<in-process>")
+        if hit is not None:
+            return hit
+        try:
+            import ctx  # noqa: PLC0415
+
+            origin = Path(getattr(ctx, "__file__", "") or "")
+            loc = origin.parent if origin.name == "__init__.py" else origin
+            ident = f"pkg:{_code_digest(loc)}"
+        except Exception as exc:
+            ident = f"unavailable ({type(exc).__name__})"
+        _CODE_ID_CACHE["<in-process>"] = ident
+        return ident
 
 
 def resolve_ctx_bin(explicit: Path | None = None) -> Path:

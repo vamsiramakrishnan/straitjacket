@@ -1794,6 +1794,97 @@ def test_run_reports_show_no_completed_run_when_every_trial_raised(
     assert doc["total_runs"] == 0 and doc["arms"] == {}
 
 
+def test_ctx_code_identity_hashes_the_launched_ctx_code_not_its_version_or_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An edit to ctx that keeps its version changes the identity; moving the checkout or
+    a new __pycache__ does not; nothing is imported from the caller's directory; a ctx
+    that is not a Python entry point is identified by its own bytes."""
+    from evals.acciobench import config as cfg_mod
+
+    def fresh(ctx_bin: Path) -> str:
+        cfg_mod._CODE_ID_CACHE.clear()  # one computation per process: start a "new process"
+        return cfg_mod.ctx_code_identity(ctx_bin)
+
+    def fake_ctx(root: Path, body: str = "VALUE = 1\n") -> Path:
+        pkg = root / "ctx"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("__version__ = '1.0'\n", encoding="utf-8")
+        (pkg / "cli.py").write_text(body + "def main():\n    return 0\n", encoding="utf-8")
+        return pkg
+
+    pkg = fake_ctx(tmp_path / "checkout_a")
+    monkeypatch.setenv("PYTHONPATH", str(pkg.parent))
+    entry = _write_executable(
+        tmp_path / "bin" / "ctx",
+        f"#!{sys.executable}\nimport sys\nfrom ctx.cli import main\nif __name__ == '__main__':\n    sys.exit(main())\n",
+    )
+    first = fresh(entry)
+    assert first.startswith("pkg:")
+    assert fresh(entry) == first
+    # A planted ctx/ in the current directory is never imported by the probe.
+    planted = tmp_path / "rundir"
+    marker = tmp_path / "planted_ran"
+    (planted / "ctx").mkdir(parents=True)
+    (planted / "ctx" / "__init__.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+    monkeypatch.chdir(planted)
+    assert fresh(entry) == first and not marker.exists()
+    # Byte-code caches are not code.
+    (pkg / "__pycache__").mkdir()
+    (pkg / "__pycache__" / "cli.cpython-311.pyc").write_bytes(b"\0" * 32)
+    assert fresh(entry) == first
+    # Same content elsewhere (a moved checkout): same identity.
+    moved = fake_ctx(tmp_path / "checkout_b")
+    monkeypatch.setenv("PYTHONPATH", str(moved.parent))
+    assert fresh(entry) == first
+    # An edit that keeps the version: a different identity.
+    (moved / "cli.py").write_text("VALUE = 22\ndef main():\n    return 0\n", encoding="utf-8")
+    edited = fresh(entry)
+    assert edited.startswith("pkg:") and edited != first
+    # A Python interpreter launched as `-P -m ctx` resolves the same package.
+    assert fresh(Path(sys.executable)) == edited
+    # Not a Python entry point (a shell wrapper): its own bytes, stably.
+    wrapper = _write_executable(tmp_path / "wrap" / "ctx", "#!/usr/bin/env bash\nexec ctx-real \"$@\"\n")
+    w1 = fresh(wrapper)
+    assert w1.startswith("exe:") and fresh(wrapper) == w1
+    wrapper.write_text("#!/usr/bin/env bash\nexec ctx-real --v2 \"$@\"\n", encoding="utf-8")
+    assert fresh(wrapper) not in (w1, edited)
+
+    # The ctx package this process imports: hashed by content, once per process.
+    monkeypatch.setitem(sys.modules, "ctx", types.SimpleNamespace(__file__=str(moved / "__init__.py")))
+    cfg_mod._CODE_ID_CACHE.clear()
+    assert cfg_mod.harness_ctx_code_identity() == edited
+
+
+def test_resume_reruns_sj_when_ctx_code_changes_and_raw_does_not(tmp_path: Path) -> None:
+    import evals.acciobench.loop as loop_mod
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-ctxcode")
+    cfg = BenchConfig(allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
+                      dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("raw", "sj"))
+
+    def reruns(arm: str) -> bool:
+        prov = _SolvingProvider()
+        run_trial(cfg, "file-ctxcode", arm, 41, prov)  # type: ignore[arg-type]
+        return prov.calls > 0
+
+    real = (loop_mod.ctx_code_identity, loop_mod.harness_ctx_code_identity)
+    try:
+        loop_mod.ctx_code_identity = lambda _bin=None: "pkg:aaaa"  # type: ignore[assignment]
+        loop_mod.harness_ctx_code_identity = lambda: "pkg:bbbb"  # type: ignore[assignment]
+        assert reruns("raw") and reruns("sj")
+        assert not reruns("raw") and not reruns("sj")
+        loop_mod.ctx_code_identity = lambda _bin=None: "pkg:cccc"  # type: ignore[assignment]
+        assert reruns("sj") and not reruns("raw")
+        loop_mod.harness_ctx_code_identity = lambda: "pkg:dddd"  # type: ignore[assignment]
+        assert reruns("sj") and not reruns("raw")
+        assert not reruns("sj")
+    finally:
+        loop_mod.ctx_code_identity, loop_mod.harness_ctx_code_identity = real  # type: ignore[assignment]
+
+
 def test_task_inputs_digest_follows_directory_links_like_staging_does(tmp_path: Path) -> None:
     """Staging copies through a directory symlink, so a change beneath one changes what a
     trial receives and must change the fingerprint; a link back to an ancestor must end."""
