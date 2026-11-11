@@ -884,6 +884,10 @@ def _select_dynamic_presets(
         used.add(task["id"])
         presets.append({"id": task["id"], "label": label, "tag": tag})
 
+    # Only tasks that have the arms a preset compares (a missing arm never raises).
+    tasks = [t for t in tasks if primary_arm in t["by_arm"]]
+    base_tasks = [t for t in tasks if baseline_arm and baseline_arm in t["by_arm"]]
+
     # 1. File/multimodal compaction showcase
     file_comp = [t for t in tasks if t["cat"] == "file" and t["epochs"] >= 1 and t["by_arm"][primary_arm]["cap"] >= 0.85]
     if file_comp:
@@ -894,7 +898,7 @@ def _select_dynamic_presets(
     # 2. Largest baseline monologue / token-ratio outlier
     if baseline_arm:
         monologue = sorted(
-            tasks,
+            base_tasks,
             key=lambda t: (t.get("ratio_tok_base", 0.0), t["by_arm"].get(baseline_arm, {}).get("msg_chars", 0)),
             reverse=True,
         )
@@ -909,7 +913,7 @@ def _select_dynamic_presets(
     cli_wins = [t for t in tasks if t["cat"] == "cli" and t["by_arm"][primary_arm]["passed"] and t["steps_delta_base"] < -5]
     if cli_wins:
         c0 = min(cli_wins, key=lambda t: t["steps_delta_base_pct"])
-        b_s = c0["by_arm"][baseline_arm]["steps"] if baseline_arm else c0["by_arm"][primary_arm]["steps"]
+        b_s = c0["by_arm"].get(baseline_arm or primary_arm, c0["by_arm"][primary_arm])["steps"]
         p_s = c0["by_arm"][primary_arm]["steps"]
         _add(c0, "CLI Fast-Path & Birth Gate", f"{b_s} -> {p_s} steps · {c0['by_arm'][primary_arm]['checks_str']}")
 
@@ -917,7 +921,7 @@ def _select_dynamic_presets(
     br_wins = [t for t in tasks if t["cat"] == "browser" and t["by_arm"][primary_arm]["passed"]]
     if br_wins:
         b0 = min(br_wins, key=lambda t: t["steps_delta_base_pct"])
-        if baseline_arm and b0["steps_delta_base"] < 0:
+        if baseline_arm and baseline_arm in b0["by_arm"] and b0["steps_delta_base"] < 0:
             _add(
                 b0,
                 "Browser UI Control Strip",
@@ -930,7 +934,7 @@ def _select_dynamic_presets(
     if baseline_arm:
         rescues = [
             t
-            for t in tasks
+            for t in base_tasks
             if t["by_arm"][primary_arm]["passed"]
             and not t["by_arm"][baseline_arm]["passed"]
             and t["cap_delta_base"] >= 30.0
@@ -1121,11 +1125,21 @@ def build_html_report_payload(
         elif reference_arm is None:
             reference_arm = a["id"]
 
-    # Collect union of task IDs (anchored on primary_arm when available).
+    # Tasks every live arm has a scorable result for. A task one live arm lacks (ungraded,
+    # API/setup error, not run, superseded) cannot be compared; it is left out of every
+    # view and listed as unpaired in the header instead.
     primary_map = collapsed_live.get(primary_arm, {})
-    task_ids = sorted(primary_map.keys()) if primary_map else sorted(
-        {tid for m in collapsed_live.values() for tid in m}
-    )
+    live_task_sets = [set(m) for m in collapsed_live.values()]
+    all_live_ids = set().union(*live_task_sets) if live_task_sets else set()
+    task_ids = sorted(set.intersection(*live_task_sets)) if live_task_sets else []
+    unpaired_tasks = [
+        {
+            "id": tid,
+            "present": [a for a in live_arms if tid in collapsed_live[a]],
+            "missing": [a for a in live_arms if tid not in collapsed_live[a]],
+        }
+        for tid in sorted(all_live_ids - set(task_ids))
+    ]
 
     tasks_list: list[dict[str, Any]] = []
     traces_map: dict[str, dict[str, Any]] = {}
@@ -1551,6 +1565,8 @@ def build_html_report_payload(
             # Ungraded trials (grader failed): excluded from every solve/score figure.
             "grading_errors": {a: count_grading_errors(by_arm_runs[a]) for a in live_arms},
             "grading_errors_total": sum(count_grading_errors(by_arm_runs[a]) for a in live_arms),
+            "unpaired_tasks": len(unpaired_tasks),
+            "unpaired": unpaired_tasks,
         },
         "arms_order": arms_order,
         "scopes": scopes,

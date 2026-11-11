@@ -169,6 +169,14 @@ python evals/acciobench_run.py report \
   --output ./acciobench_report.html
 ```
 
+**Unpaired tasks.** A task that one arm has no scorable result for (ungraded, API or
+setup error, not run, superseded by a configuration change) is left out of every paired
+figure, and out of every HTML view, and is counted as "Unpaired tasks" (with the
+missing arm) in the table, markdown, JSON (`unpaired_tasks`, `unpaired`) and HTML
+header. A report that fails to render at the end of `run` never fails the run: the
+results are already on disk, so `run` names the report that failed, prints the
+`report` command that regenerates it, and exits with the run's own status.
+
 ---
 
 ## 5. Architecture: `--arm raw` vs `--arm sj` & Performance Design

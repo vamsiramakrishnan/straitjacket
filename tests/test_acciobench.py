@@ -1526,6 +1526,83 @@ def test_resume_accepts_cached_results_only_for_the_same_configuration(
     assert (tmp_path / "work" / "superseded" / "legacy-model-old" / "file-fp__sj__t1_meta").is_dir()
 
 
+def _write_two_arm_results(workdir: Path, missing_arm: str, how: str) -> None:
+    """Tasks a and b on raw and sj; task b's ``missing_arm`` has no scorable result, by ``how``."""
+    import shutil as _shutil
+
+    def write(task: str, arm: str, **kw: Any) -> Path:
+        meta = workdir / "runs" / f"{task}__{arm}__t1_meta"
+        meta.mkdir(parents=True, exist_ok=True)
+        doc = dict(task_id=task, task_rel=f"file/{task}", category="file", arm=arm, model_id="m",
+                   steps=3, termination="present_files", passed=True, capacity_score=1.0,
+                   checks_passed=2, checks_total=2)
+        doc.update(kw)
+        (meta / "result.json").write_text(json.dumps(doc), encoding="utf-8")
+        return meta
+
+    for t in ("a", "b"):
+        for arm in ("raw", "sj"):
+            if (t, arm) == ("b", missing_arm) and how == "not_run":
+                continue
+            kw: dict[str, Any] = {}
+            if (t, arm) == ("b", missing_arm):
+                if how == "ungraded":
+                    kw = dict(passed=False, capacity_score=0.0, grading_error="grader timeout")
+                elif how == "api_error":
+                    kw = dict(termination="api_error", passed=False, capacity_score=0.0)
+            meta = write(t, arm, **kw)
+            if (t, arm) == ("b", missing_arm) and how == "superseded":
+                dest = workdir / "superseded" / "0123456789abcdef"
+                dest.mkdir(parents=True)
+                _shutil.move(str(meta), str(dest / meta.name))
+
+
+@pytest.mark.parametrize("missing_arm", ["raw", "sj"])
+@pytest.mark.parametrize("how", ["ungraded", "api_error", "not_run", "superseded"])
+def test_reports_leave_unpaired_tasks_out_and_count_them(tmp_path: Path, missing_arm: str, how: str) -> None:
+    from evals.acciobench.html_report import build_html_report_payload
+
+    workdir = tmp_path / "w"
+    _write_two_arm_results(workdir, missing_arm, how)
+    results = load_run_results(workdir)
+
+    table = render_summary_report(results, format="table")
+    assert "Unpaired tasks: 1" in table and "b (no " + missing_arm + ")" in table
+    md = render_summary_report(results, format="markdown")
+    assert "> Unpaired tasks: 1" in md
+    js = json.loads(render_summary_report(results, format="json"))
+    assert js["unpaired_tasks"] == 1 and js["unpaired"][0]["missing"] == missing_arm
+    assert js["paired"]["paired_tasks"] == 1
+    html = render_summary_report(results, format="html", workdir=workdir)
+    assert "<html" in html.lower()
+    meta = build_html_report_payload(results, workdir=workdir)["meta"]
+    assert meta["unpaired_tasks"] == 1 and meta["unpaired"][0]["missing"] == [missing_arm]
+    assert meta["total_tasks"] == 1
+
+
+def test_run_command_survives_a_report_that_fails_to_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-rep")
+    workdir = tmp_path / "w"
+    _write_two_arm_results(workdir, "raw", "ungraded")
+    monkeypatch.setattr(ab_cli, "run_suite", lambda *a, **k: [])
+
+    def boom(*a: Any, **k: Any) -> str:
+        raise KeyError("raw")
+
+    monkeypatch.setattr(ab_cli, "render_summary_report", boom)
+    args = ab_cli.build_parser().parse_args(
+        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-rep",
+         "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock"]
+    )
+    assert ab_cli._cmd_run(args) == 0
+    err = capsys.readouterr().err
+    assert "the table report failed to render" in err and "the HTML report failed to render" in err
+    assert f"report --workdir {workdir} --format html" in err
+
+
 def test_legacy_verifier_error_note_loads_as_grading_error() -> None:
     legacy = {"task_id": "t", "arm": "sj", "model_id": "m", "termination": "present_files",
               "passed": False, "notes": ["verifier error: Traceback ... TimeoutError"]}

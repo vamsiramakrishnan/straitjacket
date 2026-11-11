@@ -368,6 +368,12 @@ _JS_PART_1 = r"""<script>
           m.grading_errors_total + '</strong> ungraded (' +
           esc(Object.entries(m.grading_errors || {}).filter(([, v]) => v).map(([k, v]) => k + '=' + v).join(', ')) +
           '), excluded from solve rate &amp; score</span>'
+        : '') +
+      (m.unpaired_tasks
+        ? '<span class="sep">•</span><span id="unpaired-tasks" title="' +
+          esc((m.unpaired || []).map(u => u.id + ' (no ' + u.missing.join('/') + ')').join(', ')) +
+          '">Unpaired tasks: <strong style="color:var(--ink)">' + m.unpaired_tasks +
+          '</strong> (an arm has no scorable result), left out of all views</span>'
         : '');
     document.getElementById('subbar-date').textContent = 'Completed: ' + m.date + ' UTC';
 

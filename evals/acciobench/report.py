@@ -565,6 +565,23 @@ def compute_summary_payload(
         baseline_map = {tid: _metric_to_baseline_dict(m) for tid, m in collapsed_by_arm[baseline_label].items()}
         treatment_map = collapsed_by_arm[treatment_label]
 
+    unpaired: list[dict[str, Any]] = []
+    if baseline_label and treatment_label:
+        # A task one arm lacks (ungraded, API/setup error, not run, superseded) cannot be
+        # compared: it is left out of every paired figure and counted here instead.
+        # (An external baseline file covers the whole suite; only live tasks it lacks count.)
+        candidates = (
+            set(treatment_map) - set(baseline_map)
+            if baseline_label == "baseline_json"
+            else set(baseline_map) ^ set(treatment_map)
+        )
+        for tid in sorted(candidates):
+            unpaired.append({
+                "task_id": tid,
+                "present": baseline_label if tid in baseline_map else treatment_label,
+                "missing": treatment_label if tid in baseline_map else baseline_label,
+            })
+
     if baseline_map and treatment_map:
         shared_ids = sorted(set(baseline_map.keys()) & set(treatment_map.keys()))
         pairs = [(baseline_map[tid], treatment_map[tid]) for tid in shared_ids]
@@ -636,6 +653,8 @@ def compute_summary_payload(
     return {
         "total_runs": len(results),
         "grading_error_runs": sum(a["grading_error_runs"] for a in arms_payload.values()),
+        "unpaired_tasks": len(unpaired),
+        "unpaired": unpaired,
         "arms": arms_payload,
         "paired": paired_payload,
         "straitjacket_telemetry": sj_telemetry,
@@ -655,19 +674,28 @@ def _fmt_ev(val: float | None) -> str:
 
 
 def _grading_error_note(payload: dict[str, Any]) -> str:
-    """One line naming ungraded trials per arm, or "" when there are none."""
+    """Lines naming ungraded trials per arm and unpaired tasks, or "" when there are none."""
+    lines: list[str] = []
     per_arm = [
         f"{name}={a['grading_error_runs']}"
         for name, a in payload["arms"].items()
         if a.get("grading_error_runs")
     ]
-    if not per_arm:
-        return ""
-    return (
-        f"Grading errors: {payload.get('grading_error_runs', 0)} trial(s) ungraded "
-        f"({', '.join(per_arm)}); excluded from solve rate and score. "
-        "Re-run with resume to re-grade them."
-    )
+    if per_arm:
+        lines.append(
+            f"Grading errors: {payload.get('grading_error_runs', 0)} trial(s) ungraded "
+            f"({', '.join(per_arm)}); excluded from solve rate and score. "
+            "Re-run with resume to re-grade them."
+        )
+    unpaired = payload.get("unpaired") or []
+    if unpaired:
+        shown = ", ".join(f"{u['task_id']} (no {u['missing']})" for u in unpaired[:8])
+        more = f", +{len(unpaired) - 8} more" if len(unpaired) > 8 else ""
+        lines.append(
+            f"Unpaired tasks: {len(unpaired)} (an arm has no scorable result); "
+            f"left out of paired deltas: {shown}{more}"
+        )
+    return "\n".join(lines)
 
 
 def _render_table(payload: dict[str, Any]) -> str:
@@ -763,7 +791,9 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     arms = payload["arms"]
     gnote = _grading_error_note(payload)
     if not arms or all(a["completed_tasks"] == 0 for a in arms.values()):
-        return "## AccioBench Summary Report\n\nNo completed runs found.\n" + (f"\n{gnote}\n" if gnote else "")
+        return "## AccioBench Summary Report\n\nNo completed runs found.\n" + (
+            "".join(f"\n> {ln}" for ln in gnote.splitlines()) + "\n" if gnote else ""
+        )
 
     lines: list[str] = ["## AccioBench Summary Report", ""]
     lines.append("### Per-Arm Summary")
@@ -793,7 +823,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             )
     if gnote:
         lines.append("")
-        lines.append(f"> {gnote}")
+        lines.extend(f"> {ln}" for ln in gnote.splitlines())
 
     paired = payload.get("paired")
     if paired:
