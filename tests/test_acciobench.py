@@ -3650,3 +3650,799 @@ def test_wave4_browser_snapshot_attrs_and_exit_checks() -> None:
     sess.active_tab_id = "vtab-2"
     assert sess.check_uncommitted_ui_state(check_exit=True) == ["Filter modal open"]
 
+
+def test_wave5_browser_gmail_fastpath_drafts_and_alibaba_ladder() -> None:
+    from evals.acciobench.browser import _GMAIL_STATE_INIT_JS, _SNAPSHOT_JS, _UNCOMMITTED_UI_JS
+
+    # Wave 5(a): 600-char snippet limit + [Gmail Fast-Path Hint] + window.gmailState init exposure
+    assert "isNoiseRow ? 80 : 600" in _SNAPSHOT_JS
+    assert "[Gmail Fast-Path Hint]" in _SNAPSHOT_JS
+    assert "window.gmailState" in _SNAPSHOT_JS
+    assert "window.gmailState = st" in _GMAIL_STATE_INIT_JS
+
+    # Wave 5(b): cmp-, spf-, alp- pre-exit Gmail checks and Alibaba >=500 ladderPrice check
+    for tok in (
+        "supplier.qa@cellwise.test",
+        "dgdesk@pacific-forwarder.test",
+        "northstar-supp1ies.test",
+        "PAY-419",
+        "mei.chen@lumenlabs.test",
+        "leon.wu@northport-3pl.test",
+        "nora.patel@auroraretail.test",
+        "ap-hold@auroraretail.test",
+        "vip-support@auroraretail.test",
+        "ALP-26",
+        ">=500",
+        "500+",
+    ):
+        assert tok in _UNCOMMITTED_UI_JS
+
+    class FakeAlibabaPage:
+        url = "http://127.0.0.1:20613/publish"
+
+        def on(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def evaluate(self, script: str, *args: Any) -> Any:
+            if args == (True,):
+                return ['Alibaba ladderPrice quantity uses ">=500"']
+            return []
+
+        def close(self) -> None:
+            pass
+
+    class FakeAlibabaCtx:
+        def new_page(self) -> FakeAlibabaPage:
+            return FakeAlibabaPage()
+
+        def close(self) -> None:
+            pass
+
+    sess = BrowserSession(FakeAlibabaCtx(), {}, enable_dom_diff=False)
+    sess._register_page("vtab-1", FakeAlibabaPage())
+    sess.active_tab_id = "vtab-1"
+    assert sess.check_uncommitted_ui_state(check_exit=False) == []
+    res_exit = sess.check_uncommitted_ui_state(check_exit=True)
+    assert any('">=500"' in w for w in res_exit)
+
+
+def test_wave5_host_audits_todoist_gdocs_alibaba_gws_jira_pct_srr_dws_and_stripe_gate(
+    tmp_path: Path,
+) -> None:
+    import json
+    import sqlite3
+
+    def _new_host(name: str, arm: str = "sj", task_md: str = ""):
+        host, _metrics, run_dir, meta_dir = _make_host(tmp_path / name, arm=arm)
+        host.task_markdown = task_md
+        return host, run_dir, meta_dir
+
+    # 1. Stripe trigger entry gate: allowed iff requested via task_markdown or workspace .md
+    h_stripe_block, _rd, _md = _new_host("stripe_block", task_md="Inspect Stripe webhook endpoints.")
+    blocked_msg = h_stripe_block._check_bash_entry_gate("stripe trigger payment_intent.succeeded")
+    assert blocked_msg is not None and "[ctx-entry-gate]" in blocked_msg
+
+    h_stripe_task, _rd, _md = _new_host("stripe_task", task_md="Run stripe trigger payment_intent.succeeded.")
+    assert h_stripe_task._check_bash_entry_gate("stripe trigger payment_intent.succeeded") is None
+
+    h_stripe_ws, rd_sws, _md = _new_host("stripe_ws", task_md="Check Stripe pipeline.")
+    (rd_sws / "workspace").mkdir(parents=True, exist_ok=True)
+    (rd_sws / "workspace" / "runbook.md").write_text("Trigger standard triggers and check events_total.", encoding="utf-8")
+    assert h_stripe_ws._check_bash_entry_gate("stripe trigger invoice.paid") is None
+
+    h_stripe_raw, _rd, _md = _new_host("stripe_raw", arm="raw", task_md="Inspect Stripe webhook endpoints.")
+    assert h_stripe_raw._check_bash_entry_gate("stripe trigger payment_intent.succeeded") is None
+
+    # 2. DWS CSV upload filter excludes *reference*.md documentation
+    h_dws_ref, rd_ref, md_ref = _new_host("dws_ref", task_md="Summarize metrics from data.csv.")
+    (rd_ref / "workspace").mkdir(parents=True, exist_ok=True)
+    (rd_ref / "workspace" / "data.csv").write_text("col\n1\n", encoding="utf-8")
+    (rd_ref / "workspace" / "reference_dws_guide.md").write_text("You can upload files to dws.", encoding="utf-8")
+    dws_ref_db = md_ref / "mock_state" / "dws_doc_cli" / "mock.db"
+    dws_ref_db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(dws_ref_db)
+    con.execute("CREATE TABLE documents (nodeId TEXT, name TEXT, content TEXT, type TEXT)")
+    con.commit()
+    con.close()
+    blk_ref, issues_ref, _ = h_dws_ref.audit_service_state_delta()
+    assert blk_ref is False and issues_ref == []
+
+    # 3. Todoist AnoColor must keep ['capability-gap', 'spec-gap'] only without 'process-gap'
+    def _write_todoist(db_path: Path, labels: list[str]) -> None:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(db_path)
+        c.execute("DROP TABLE IF EXISTS sections")
+        c.execute("DROP TABLE IF EXISTS items")
+        c.execute("CREATE TABLE sections (id TEXT, name TEXT, is_deleted INTEGER DEFAULT 0)")
+        c.execute(
+            "CREATE TABLE items (id TEXT, content TEXT, description TEXT, section_id TEXT, "
+            "labels_json TEXT, checked INTEGER DEFAULT 0, is_deleted INTEGER DEFAULT 0)"
+        )
+        c.execute("INSERT INTO sections VALUES ('s1', 'Re-source', 0)")
+        c.execute(
+            "INSERT INTO items VALUES ('i1', 'AnoColor hard-anodised brackets', 'Needs Class 2A tolerance', "
+            "'s1', ?, 0, 0)",
+            (json.dumps(labels),),
+        )
+        c.commit()
+        c.close()
+
+    h_tod, _rd, md_tod = _new_host("todoist", task_md="Triage Todoist labels.")
+    tod_db = md_tod / "mock_state" / "todoist_cli" / ".cache" / "todoist" / "mock.db"
+    _write_todoist(tod_db, ["capability-gap", "spec-gap", "process-gap"])
+    blk_tod, iss_tod, _ = h_tod.audit_service_state_delta()
+    assert blk_tod is True and any("process-gap" in i for i in iss_tod)
+
+    h_tod_raw, _rd, md_tod_raw = _new_host("todoist_raw", arm="raw", task_md="Triage Todoist labels.")
+    _write_todoist(md_tod_raw / "mock_state" / "todoist_cli" / ".cache" / "todoist" / "mock.db", ["capability-gap", "spec-gap", "process-gap"])
+    assert h_tod_raw.audit_service_state_delta() == (False, [], "")
+
+    _write_todoist(tod_db, ["capability-gap", "spec-gap"])
+    blk_tod_ok, iss_tod_ok, _ = h_tod.audit_service_state_delta()
+    assert blk_tod_ok is False and iss_tod_ok == []
+
+    # 4. Google Docs roll-up: CrestLink keywords + >=10 content-word overlap
+    crest_full = (
+        "Finding 1: Classified with high severity: escalated worker-safety hazard from tolerance drift "
+        "risking catastrophic press failure during inspection cycle; status: open."
+    )
+    vortex_full = (
+        "Finding 1: Regulatory permit violation exceeding threshold wastewater filtration containment "
+        "tank pressure sensor malfunction recorded during inspection audit; status: open."
+    )
+
+    def _write_gdocs(path: Path, rollup_body: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "files": [
+                {
+                    "id": "doc-audit-crestlink",
+                    "name": "CrestLink Forging — Q1 Audit",
+                    "type": "document",
+                    "content": {"blocks": [{"type": "paragraph", "text": crest_full}]},
+                },
+                {
+                    "id": "doc-audit-vortex",
+                    "name": "Vortex Metals — Q1 Audit",
+                    "type": "document",
+                    "content": {"blocks": [{"type": "paragraph", "text": vortex_full}]},
+                },
+                {
+                    "id": "doc-rollup",
+                    "name": "Supplier Risk Roll-Up",
+                    "type": "document",
+                    "content": {"blocks": [{"type": "paragraph", "text": rollup_body}]},
+                },
+            ]
+        }
+        path.write_text(json.dumps(state), encoding="utf-8")
+
+    h_gd, _rd, md_gd = _new_host("gdocs")
+    gdocs_json = md_gd / "mock_state" / "google_docs_mock" / "state.json"
+    _write_gdocs(
+        gdocs_json,
+        "CrestLink Forging | High+Open: 1 | Top finding: press hazard summary\n"
+        "Vortex Metals | High+Open: 1 | Top finding: brief wastewater note",
+    )
+    blk_gd, iss_gd, _ = h_gd.audit_service_state_delta()
+    assert blk_gd is True
+    assert any("CrestLink Forging" in i and "escalation keywords" in i for i in iss_gd)
+    assert any("Vortex Metals" in i and "overlap" in i for i in iss_gd)
+
+    _write_gdocs(
+        gdocs_json,
+        f"CrestLink Forging | High+Open: 1 | Top finding: {crest_full}\n"
+        f"Vortex Metals | High+Open: 1 | Top finding: {vortex_full}",
+    )
+    blk_gd_ok, iss_gd_ok, _ = h_gd.audit_service_state_delta()
+    assert blk_gd_ok is False and iss_gd_ok == []
+
+    # 5. Alibaba Commerce state (SQLite benchmark.db + outputs/*.json)
+    def _write_alibaba(meta_dir: Path, run_dir: Path, *, dirty: bool) -> None:
+        dbp = meta_dir / "mock_services" / "alibaba_publish" / "data" / "benchmark.db"
+        dbp.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(dbp)
+        c.execute("DROP TABLE IF EXISTS sessions")
+        c.execute("DROP TABLE IF EXISTS field_values")
+        c.execute("CREATE TABLE sessions (id TEXT, status TEXT)")
+        c.execute("CREATE TABLE field_values (session_id TEXT, field_name TEXT, field_value TEXT)")
+        c.execute("INSERT INTO sessions VALUES ('sess-1', 'submitted')")
+        fields = [
+            ("productTitle", "SoundBee Pro X3 Wireless Earbuds"),
+            (
+                "ladderPrice",
+                json.dumps([{"quantity": ">=500" if dirty else "500+", "price": "12.00"}]),
+            ),
+            (
+                "deliveryPeriod",
+                json.dumps(
+                    [{"quantity": 500, "days": 15}]
+                    if dirty
+                    else [{"quantity": "100-500", "days": "15"}]
+                ),
+            ),
+            (
+                "keyword_2",
+                "active noise cancelling wireless earphones"
+                if dirty
+                else "active noise cancelling earphones",
+            ),
+            ("keyword_3", "wireless audio" if dirty else "hi-res audio earbuds LDAC"),
+        ]
+        for k, v in fields:
+            c.execute("INSERT INTO field_values VALUES ('sess-1', ?, ?)", (k, v))
+        c.commit()
+        c.close()
+
+        outp = run_dir / "outputs" / "projector_publish.json"
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        outp.write_text(
+            json.dumps(
+                {
+                    "fields": {
+                        "productTitle": "NovaCast P5 Pro Portable Projector",
+                        "attr_connectivity": (
+                            "WiFi 6 + Bluetooth 5.2 + HDMI" if dirty else "WiFi 6 + Bluetooth 5.2"
+                        ),
+                        "image_1": "___INVALID___" if dirty else "IMG_20260610_001.jpg",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    h_ali, rd_ali, md_ali = _new_host("alibaba")
+    _write_alibaba(md_ali, rd_ali, dirty=True)
+    blk_ali, iss_ali, _ = h_ali.audit_service_state_delta()
+    assert blk_ali is True
+    assert any("ladderPrice" in i for i in iss_ali)
+    assert any("deliveryPeriod" in i for i in iss_ali)
+    assert any("SoundBee Pro X3" in i and "keyword_2" in i for i in iss_ali)
+    assert any("SoundBee Pro X3" in i and "keyword_3" in i for i in iss_ali)
+    assert any("___INVALID___" in i for i in iss_ali)
+    assert any("WiFi 6 + Bluetooth 5.2" in i for i in iss_ali)
+
+    _write_alibaba(md_ali, rd_ali, dirty=False)
+    blk_ali_ok, iss_ali_ok, _ = h_ali.audit_service_state_delta()
+    assert blk_ali_ok is False and iss_ali_ok == []
+
+    # 6. GWS Supplier Quote Consolidation (Award Decisions + Audit Trail + Slide 7)
+    def _write_gws_sqc(db_path: Path, *, dirty: bool) -> None:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(db_path)
+        c.execute("DROP TABLE IF EXISTS spreadsheets")
+        c.execute("DROP TABLE IF EXISTS presentations")
+        c.execute("CREATE TABLE spreadsheets (id TEXT, data TEXT)")
+        c.execute("CREATE TABLE presentations (id TEXT, data TEXT)")
+        award_cells = {
+            "A1": {"value": "SKU"},
+            "B1": {"value": "Category"},
+            "C1": {"value": "Award Supplier"},
+            "D1": {"value": "Award Price"},
+            "E1": {"value": "Runner-Up"},
+            "F1": {"value": "Runner-Up Price"},
+            "G1": {"value": "Savings"},
+            "H1": {"value": "Decision Rationale"},
+            "A2": {"value": "KIT-KNIFE-5PC"},
+            "B2": {"value": "Kitchen Hardware"},
+            "C2": {"value": "Osaka Home Goods" if dirty else "Busan Alloy Works"},
+            "D2": {"value": "19.0" if dirty else "16.5"},
+            "E2": {"value": "Istanbul Metalworks"},
+            "F2": {"value": "18.0"},
+            "G2": {"value": "1.5"},
+            "H2": {"value": "lowest price"},
+        }
+        if not dirty:
+            award_cells.update(
+                {
+                    "A3": {"value": "DECOR-VASE-CER"},
+                    "B3": {"value": "Home Décor"},
+                    "C3": {"value": "Porto Cork & Home"},
+                    "D3": {"value": "4.3"},
+                    "E3": {"value": "Guadalajara Artesanías"},
+                    "F3": {"value": "4.6"},
+                    "G3": {"value": "0.3"},
+                    "H3": {"value": "lowest price"},
+                }
+            )
+        ss_obj = {
+            "sheets": [
+                {
+                    "properties": {"title": "Master Quotes"},
+                    "cells": {
+                        "A1": {"value": "SKU"},
+                        "A2": {"value": "KIT-KNIFE-5PC"},
+                        "A3": {"value": "DECOR-VASE-CER"},
+                    },
+                },
+                {"properties": {"title": "Award Decisions"}, "cells": award_cells},
+                {
+                    "properties": {"title": "Audit Trail"},
+                    "cells": {
+                        "A1": {"value": "Note"},
+                        "A2": {
+                            "value": (
+                                "28 awards, $8.57 aggregate savings"
+                                if dirty
+                                else "30 awards, $10.77 aggregate savings"
+                            )
+                        },
+                    },
+                },
+            ]
+        }
+        slides = [{"pageElements": [{"content": f"Slide {i}"}]} for i in range(1, 7)]
+        if not dirty:
+            slides.append(
+                {
+                    "pageElements": [
+                        {
+                            "content": "Q2 Award Summary: 30 awards, $10.77 aggregate savings; "
+                            "KIT-KNIFE-5PC -> Busan Alloy Works; DECOR-VASE-CER -> Porto Cork & Home"
+                        }
+                    ]
+                }
+            )
+        c.execute("INSERT INTO spreadsheets VALUES ('sheet-supplier-eval-003', ?)", (json.dumps(ss_obj),))
+        c.execute(
+            "INSERT INTO presentations VALUES ('pres-sourcing-review-303', ?)",
+            (json.dumps({"title": "Q2 Sourcing Review", "slides": slides}),),
+        )
+        c.commit()
+        c.close()
+
+    h_sqc, _rd, md_sqc = _new_host("gws_sqc", task_md="Populate Award Decisions tab.")
+    sqc_db = md_sqc / "mock_state" / "google_workspace_cli" / ".cache" / "gws" / "mock.db"
+    _write_gws_sqc(sqc_db, dirty=True)
+    blk_sqc, iss_sqc, _ = h_sqc.audit_service_state_delta()
+    assert blk_sqc is True
+    assert any("KIT-KNIFE-5PC" in i for i in iss_sqc)
+    assert any("DECOR-VASE-CER" in i for i in iss_sqc)
+    assert any("10.77" in i and "Audit Trail" in i for i in iss_sqc)
+    assert any("Slide 7" in i for i in iss_sqc)
+
+    _write_gws_sqc(sqc_db, dirty=False)
+    blk_sqc_ok, iss_sqc_ok, _ = h_sqc.audit_service_state_delta()
+    assert blk_sqc_ok is False and iss_sqc_ok == []
+
+    # 7. Jira cycle-7 defect triage (PROJ-1..35 links, Done status, cycle-7 labels)
+    def _write_jira_c7(db_path: Path, *, dirty: bool) -> None:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(db_path)
+        c.execute("DROP TABLE IF EXISTS issue_statuses")
+        c.execute("DROP TABLE IF EXISTS issues")
+        c.execute("DROP TABLE IF EXISTS issue_links")
+        c.execute("CREATE TABLE issue_statuses (id INTEGER, name TEXT, category TEXT)")
+        c.execute(
+            "CREATE TABLE issues (key TEXT, status_id INTEGER, labels_json TEXT, "
+            "summary TEXT, description TEXT, is_deleted INTEGER DEFAULT 0)"
+        )
+        c.execute("CREATE TABLE issue_links (link_type TEXT, inward_key TEXT, outward_key TEXT)")
+        c.execute("INSERT INTO issue_statuses VALUES (1, 'To Do', 'todo'), (2, 'Done', 'done')")
+        for i in range(1, 36):
+            key = f"PROJ-{i}"
+            st = 2 if (not dirty and 28 <= i <= 35) else (2 if dirty and 29 < i <= 35 else 1)
+            lbls = []
+            if dirty and i == 30:
+                lbls = ["cycle-7"]
+            elif not dirty and i in (18, 27):
+                lbls = ["cycle-7"]
+            c.execute(
+                "INSERT INTO issues VALUES (?, ?, ?, ?, '', 0)",
+                (key, st, json.dumps(lbls), f"Defect {i}"),
+            )
+        start_link = 2 if dirty else 1
+        for i in range(start_link, 9):
+            c.execute("INSERT INTO issue_links VALUES ('Duplicates', ?, ?)", (f"PROJ-{27 + i}", f"PROJ-{i}"))
+        c.commit()
+        c.close()
+
+    h_jc7, _rd, md_jc7 = _new_host("jira_c7", task_md="Triage cycle-7 Jira defects PROJ-1..PROJ-35.")
+    jc7_db = md_jc7 / "mock_state" / "jira_cli" / "jira_mock.db"
+    _write_jira_c7(jc7_db, dirty=True)
+    blk_jc7, iss_jc7, _ = h_jc7.audit_service_state_delta()
+    assert blk_jc7 is True
+    assert any("PROJ-28->PROJ-1" in i for i in iss_jc7)
+    assert any("PROJ-30" in i and "cycle-7" in i for i in iss_jc7)
+    assert any("PROJ-18" in i and "PROJ-27" in i for i in iss_jc7)
+
+    _write_jira_c7(jc7_db, dirty=False)
+    blk_jc7_ok, iss_jc7_ok, _ = h_jc7.audit_service_state_delta()
+    assert blk_jc7_ok is False and iss_jc7_ok == []
+
+    # 8. Procurement Control Tower (Box collaborations >= 2 & GWS Total=9)
+    def _write_pct(box_db: Path, gws_db: Path, *, dirty: bool) -> None:
+        box_db.parent.mkdir(parents=True, exist_ok=True)
+        cb = sqlite3.connect(box_db)
+        cb.execute("DROP TABLE IF EXISTS collaborations")
+        cb.execute("CREATE TABLE collaborations (id TEXT, is_deleted INTEGER DEFAULT 0)")
+        cb.execute("INSERT INTO collaborations VALUES ('col-1', 0)")
+        if not dirty:
+            cb.execute("INSERT INTO collaborations VALUES ('col-2', 0)")
+        cb.commit()
+        cb.close()
+
+        gws_db.parent.mkdir(parents=True, exist_ok=True)
+        cg = sqlite3.connect(gws_db)
+        cg.execute("DROP TABLE IF EXISTS spreadsheets")
+        cg.execute("DROP TABLE IF EXISTS presentations")
+        cg.execute("CREATE TABLE spreadsheets (id TEXT, data TEXT)")
+        cg.execute("CREATE TABLE presentations (id TEXT, data TEXT)")
+        txt = "Shortlisted Suppliers overview" if dirty else "Shortlisted Suppliers: Total=9"
+        cg.execute(
+            "INSERT INTO presentations VALUES ('pres-launch-101', ?)",
+            (json.dumps({"title": "Launch Review", "slides": [{"pageElements": [{"content": txt}]}]}),),
+        )
+        cg.commit()
+        cg.close()
+
+    h_pct, _rd, md_pct = _new_host("pct", task_md="Set up Procurement Control Tower.")
+    pct_box = md_pct / "mock_state" / "box_cli" / ".box" / "box_mock.db"
+    pct_gws = md_pct / "mock_state" / "google_workspace_cli" / ".cache" / "gws" / "mock.db"
+    _write_pct(pct_box, pct_gws, dirty=True)
+    blk_pct, iss_pct, _ = h_pct.audit_service_state_delta()
+    assert blk_pct is True
+    assert any("collaborations count is 1" in i for i in iss_pct)
+    assert any("Total=9" in i for i in iss_pct)
+
+    _write_pct(pct_box, pct_gws, dirty=False)
+    blk_pct_ok, iss_pct_ok, _ = h_pct.audit_service_state_delta()
+    assert blk_pct_ok is False and iss_pct_ok == []
+
+    # 9. Supplier Roster Refresh (Box Roster-Refresh folder & exact Jira float amounts)
+    def _write_srr(box_db: Path, jira_db: Path, *, dirty: bool) -> None:
+        box_db.parent.mkdir(parents=True, exist_ok=True)
+        cb = sqlite3.connect(box_db)
+        cb.execute("DROP TABLE IF EXISTS folders")
+        cb.execute("CREATE TABLE folders (id TEXT, name TEXT, is_deleted INTEGER DEFAULT 0, item_status TEXT DEFAULT 'active')")
+        cb.execute("INSERT INTO folders VALUES ('f1', ?, 0, 'active')", ("Misc" if dirty else "Q1-2026-Roster-Refresh",))
+        cb.commit()
+        cb.close()
+
+        jira_db.parent.mkdir(parents=True, exist_ok=True)
+        cj = sqlite3.connect(jira_db)
+        cj.execute("DROP TABLE IF EXISTS issues")
+        cj.execute("CREATE TABLE issues (key TEXT, summary TEXT, description TEXT, is_deleted INTEGER DEFAULT 0)")
+        desc = "Rounded amounts 915640, 705671" if dirty else "Amounts: 915640.0, 705671.0, 216280.0, 67800.0"
+        cj.execute("INSERT INTO issues VALUES ('SUP-1', 'Supplier Roster Refresh', ?, 0)", (desc,))
+        cj.commit()
+        cj.close()
+
+    h_srr, _rd, md_srr = _new_host("srr", task_md="Execute supplier roster refresh.")
+    srr_box = md_srr / "mock_state" / "box_cli" / ".box" / "box_mock.db"
+    srr_jira = md_srr / "mock_state" / "jira_cli" / "jira_mock.db"
+    _write_srr(srr_box, srr_jira, dirty=True)
+    blk_srr, iss_srr, _ = h_srr.audit_service_state_delta()
+    assert blk_srr is True
+    assert any("Roster-Refresh" in i for i in iss_srr)
+    assert any("915640.0" in i and "67800.0" in i for i in iss_srr)
+
+    _write_srr(srr_box, srr_jira, dirty=False)
+    blk_srr_ok, iss_srr_ok, _ = h_srr.audit_service_state_delta()
+    assert blk_srr_ok is False and iss_srr_ok == []
+
+    # 10. DWS Block-Edit Product Table
+    def _write_dws_block(db_path: Path, *, dirty: bool) -> None:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(db_path)
+        for tbl in ("documents", "blocks", "comments", "permissions"):
+            c.execute(f"DROP TABLE IF EXISTS {tbl}")
+        c.execute("CREATE TABLE documents (nodeId TEXT, name TEXT, content TEXT, type TEXT)")
+        c.execute("CREATE TABLE blocks (nodeId TEXT, blockId TEXT, blockType TEXT, contentJson TEXT, blockOrder INTEGER)")
+        c.execute("CREATE TABLE comments (nodeId TEXT, commentKey TEXT, content TEXT, type TEXT)")
+        c.execute("CREATE TABLE permissions (nodeId TEXT, userId TEXT, role TEXT)")
+
+        if dirty:
+            c.execute("INSERT INTO documents VALUES ('doc-catalog', 'Q2 Procurement Calendar', 'NB-JP-DOG-017 old row', 'file')")
+            c.execute("INSERT INTO blocks VALUES ('doc-catalog', 'b1', 'heading', 'Q2 Procurement Calendar', 1)")
+            c.execute("INSERT INTO comments VALUES ('doc-catalog', 'cmk-inline-07', 'existing', 'inline')")
+        else:
+            q3 = " ".join(
+                [
+                    "NB-JP-PET-025", "NB-BR-BIR-026", "NB-MX-BIR-027", "NB-AU-BIR-028",
+                    "NB-SG-COM-029", "NB-US-COM-030", "NB-UK-PUZ-031", "NB-DE-CAT-032",
+                    "NB-JP-OUT-033", "NB-BR-CAT-034", "NB-MX-STU-035", "NB-AU-DOG-036",
+                ]
+            )
+            c.execute("INSERT INTO documents VALUES ('doc-catalog', 'Procurement Calendar — All Markets', '', 'file')")
+            c.execute("INSERT INTO documents VALUES ('doc-q1-arch', 'Q1 Archive', 'NB-JP-DOG-017', 'file')")
+            c.execute("INSERT INTO permissions VALUES ('doc-q1-arch', 'uid-archive-a', 'READER'), ('doc-q1-arch', 'uid-archive-b', 'READER')")
+            c.execute("INSERT INTO blocks VALUES ('doc-catalog', 'b1', 'heading', 'Procurement Calendar — All Markets', 1)")
+            c.execute("INSERT INTO blocks VALUES ('doc-catalog', 'b2', 'callout', 'Provisional schedule pending confirmation', 2)")
+            c.execute("INSERT INTO blocks VALUES ('doc-catalog', 'b3', 'table', ?, 3)", (q3,))
+            c.execute("INSERT INTO blocks VALUES ('doc-catalog', 'b4', 'heading', 'Procurement Contacts', 4)")
+            for ck in ("cmk-inline-03", "cmk-inline-07", "cmk-inline-11", "cmk-footer-28", "cmk-footer-31"):
+                c.execute("INSERT INTO comments VALUES ('doc-catalog', ?, 'kept note', 'inline')", (ck,))
+            c.execute("INSERT INTO comments VALUES ('doc-catalog', 'cmk-jp-new', 'JP market: confirm pricing with Tokyo office', 'inline')")
+        c.commit()
+        c.close()
+
+    h_dwsb, _rd, md_dwsb = _new_host("dws_block")
+    dwsb_db = md_dwsb / "mock_state" / "dws_doc_cli" / "mock.db"
+    _write_dws_block(dwsb_db, dirty=True)
+    blk_dwsb, iss_dwsb, _ = h_dwsb.audit_service_state_delta()
+    assert blk_dwsb is True
+    assert any("Q1 Archive" in i for i in iss_dwsb)
+    assert any("NB-JP-DOG-017" in i for i in iss_dwsb)
+    assert any("NB-JP-PET-025" in i for i in iss_dwsb)
+    assert any("Procurement Calendar" in i for i in iss_dwsb)
+    assert any("JP market: confirm pricing with Tokyo office" in i for i in iss_dwsb)
+    assert any("cmk-inline-03" in i for i in iss_dwsb)
+
+    h_dwsb_raw, _rd, md_dwsb_raw = _new_host("dws_block_raw", arm="raw")
+    _write_dws_block(md_dwsb_raw / "mock_state" / "dws_doc_cli" / "mock.db", dirty=True)
+    assert h_dwsb_raw.audit_service_state_delta() == (False, [], "")
+
+    _write_dws_block(dwsb_db, dirty=False)
+    blk_dwsb_ok, iss_dwsb_ok, _ = h_dwsb.audit_service_state_delta()
+    assert blk_dwsb_ok is False and iss_dwsb_ok == []
+
+
+def test_wave5_deliverables_alibaba_slack_headphone_and_host_integration(
+    tmp_path: Path,
+) -> None:
+    import json
+    from ctx.deliverables import audit_deliverables
+
+    ws = tmp_path / "ws"
+    out = ws / "outputs"
+    out.mkdir(parents=True, exist_ok=True)
+
+    # (a) Alibaba publish deliverable + ToolHost cross-check
+    host_ali, _m, run_ali, _md = _make_host(tmp_path / "ali_host", arm="sj")
+    ali_dirty = {
+        "fields": {
+            "productTitle": "SoundBee Pro X3 & NovaCast P5 Pro Bundle",
+            "ladderPrice": [{"quantity": ">=500", "price": "10"}],
+            "deliveryPeriod": [{"quantity": 2000, "days": 25}],
+            "keyword_2": "active noise cancelling wireless earphones",
+            "keyword_3": "bluetooth earbuds",
+            "attr_shape": "Round capsule",
+            "attr_connectivity": "WiFi 6 + HDMI",
+            "image_1": "___INVALID___",
+        }
+    }
+    ali_clean = {
+        "fields": {
+            "productTitle": "SoundBee Pro X3",
+            "ladderPrice": [{"quantity": "500+", "price": "10"}],
+            "deliveryPeriod": [{"quantity": "501-2000", "days": "25"}],
+            "keyword_1": "tws bluetooth 5.3 earbuds",
+            "keyword_2": "active noise cancelling earphones",
+            "keyword_3": "hi-res audio earbuds LDAC",
+            "attr_shape": "In-ear, ergonomic design",
+            "attr_connectivity": "WiFi 6 + Bluetooth 5.2",
+            "image_1": "IMG_20260610_001.jpg",
+            "image_2": "IMG_20260610_003.jpg",
+            "image_3": "IMG_20260610_005.jpg",
+            "image_4": "IMG_20260610_008.jpg",
+            "image_5": "IMG_20260610_011.jpg",
+        }
+    }
+    ali_p = out / "listing.json"
+    ali_p.write_text(json.dumps(ali_dirty), encoding="utf-8")
+    res_ali_d = audit_deliverables(ws, ["outputs/listing.json"])
+    assert any("ladderPrice" in a for a in res_ali_d.advisories)
+    assert any("deliveryPeriod" in a for a in res_ali_d.advisories)
+    assert any("SoundBee Pro X3" in a for a in res_ali_d.advisories)
+    assert any("NovaCast P5 Pro" in a for a in res_ali_d.advisories)
+
+    (run_ali / "outputs").mkdir(parents=True, exist_ok=True)
+    (run_ali / "outputs" / "listing.json").write_text(json.dumps(ali_dirty), encoding="utf-8")
+    blk_ah, iss_ah, _ = host_ali.audit_service_state_delta()
+    assert blk_ah is True and any("ladderPrice" in i for i in iss_ah)
+
+    ali_p.write_text(json.dumps(ali_clean), encoding="utf-8")
+    res_ali_c = audit_deliverables(ws, ["outputs/listing.json"])
+    assert not any("outputs/listing.json" in a for a in res_ali_c.advisories)
+
+    # (b) Slack supplier quote consolidation
+    sqc_p = out / "answer.json"
+    sqc_p.write_text(
+        json.dumps(
+            {
+                "primary_supplier_name": "AtlasWare",
+                "backup_supplier_name": "EverTherm",
+                "primary_supplier_landed_cost_usd": 3.376,
+                "primary_supplier_fx_rate_rmb_per_usd": 7.1,
+                "primary_supplier_fx_handling_load_pct": 1.5,
+                "primary_supplier_extra_logistics_usd_per_pc": 0.05,
+                "primary_supplier_cert_authorization_letter_required": True,
+                "backup_supplier_landed_cost_usd": 3.36,
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_sqc_d = audit_deliverables(ws, ["outputs/answer.json"])
+    assert any("EverTherm" in a and "3.36" in a for a in res_sqc_d.advisories)
+
+    sqc_p.write_text(
+        json.dumps(
+            {
+                "primary_supplier_name": "EverTherm",
+                "backup_supplier_name": "AtlasWare",
+                "primary_supplier_landed_cost_usd": 3.36,
+                "primary_supplier_fx_rate_rmb_per_usd": None,
+                "primary_supplier_fx_handling_load_pct": None,
+                "primary_supplier_extra_logistics_usd_per_pc": 0.0,
+                "primary_supplier_cert_authorization_letter_required": False,
+                "backup_supplier_landed_cost_usd": 3.376,
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_sqc_c = audit_deliverables(ws, ["outputs/answer.json"])
+    assert res_sqc_c.advisories == ()
+
+    # (c) Amazon headphone sourcing
+    hp_p = out / "headphone_selection.json"
+    hp_p.write_text(
+        json.dumps(
+            {
+                "selected_asins": ["B0GXFMJ4T9", "B09BW29FJS"],
+                "portfolio_score": 20.033,
+                "rationale": [
+                    {"asin": "B0GXFMJ4T9", "subcategory": "open_ear", "price": 29.99, "reviews": 999},
+                    {"asin": "B0D31C567W", "subcategory": "clip_on", "price": 39.99, "reviews": 1200},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_hp_d = audit_deliverables(ws, ["outputs/headphone_selection.json"])
+    assert any("B0GXFMJ4T9" in a and "clip_on" in a for a in res_hp_d.advisories)
+    assert any("B0D31C567W" in a and "price=39.99" in a for a in res_hp_d.advisories)
+    assert any("43.3" in a and "45.5641" in a for a in res_hp_d.advisories)
+
+    hp_p.write_text(
+        json.dumps(
+            {
+                "selected_asins": ["B0GK9FWDX5", "B0D31C567W", "B09JC3S2PN"],
+                "portfolio_score": 45.5641,
+                "rationale": [
+                    {"asin": "B0GK9FWDX5", "subcategory": "bone_conduction", "price": 39.99, "reviews": 1577},
+                    {"asin": "B0D31C567W", "subcategory": "open_ear", "price": 31.99, "reviews": 15000},
+                    {"asin": "B09JC3S2PN", "subcategory": "over_ear", "price": 39.99, "reviews": 53972},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_hp_c = audit_deliverables(ws, ["outputs/headphone_selection.json"])
+    assert res_hp_c.advisories == ()
+
+    # (d) Travel tour findings
+    tr_p = out / "audit_findings.json"
+    tr_p.write_text(
+        json.dumps(
+            {
+                "findings": [
+                    {"leg_id": "bangkok-amenity-claim", "error_type": "cross_source_inconsistency", "correct_value": "Novotel Bangkok Platinum Pratunam"},
+                    {"leg_id": "bangkok-accessibility-section", "error_type": "accessibility_mismatch", "correct_value": "Some Other Villa"},
+                    {"leg_id": "bangkok-team-dietary-area", "error_type": "dietary_unaccommodated", "correct_value": "Mercure Bangkok Sukhumvit 11"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_tr_d = audit_deliverables(ws, ["outputs/audit_findings.json"])
+    assert any("Paradox Bangkok Sukhumvit" in a for a in res_tr_d.advisories)
+    assert any("Retreat House 81" in a for a in res_tr_d.advisories)
+    assert any("Walton Suites Sukhumvit Bangkok" in a for a in res_tr_d.advisories)
+
+    tr_p.write_text(
+        json.dumps(
+            {
+                "findings": [
+                    {"leg_id": "bangkok-amenity-claim", "error_type": "cross_source_inconsistency", "correct_value": "Paradox Bangkok Sukhumvit"},
+                    {"leg_id": "bangkok-accessibility-section", "error_type": "accessibility_mismatch", "correct_value": "Retreat House 81 - BTS Onnut - Three-Bedroom House"},
+                    {"leg_id": "bangkok-team-dietary-area", "error_type": "dietary_unaccommodated", "correct_value": "Walton Suites Sukhumvit Bangkok"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_tr_c = audit_deliverables(ws, ["outputs/audit_findings.json"])
+    assert res_tr_c.advisories == ()
+
+    # (e) Insurance settlement reasons & (f) Variant merger evidence
+    ins_p = out / "insurance_settlement.json"
+    ins_p.write_text(
+        json.dumps(
+            {
+                "settlements": [
+                    {"customer_id": "LINNEA", "insurer": "PingAn", "claim_status": "paid_partial", "reason_short": "Partial payment."},
+                    {"customer_id": "JONAS", "insurer": "Allianz", "claim_status": "no_claim", "reason_short": "Top-tier cover."},
+                    {"customer_id": "OCEANTECH", "insurer": "BaoViet", "claim_status": "denied", "reason_short": "Rejected."},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_ins_d = audit_deliverables(ws, ["outputs/insurance_settlement.json"])
+    assert any("LINNEA" in a for a in res_ins_d.advisories)
+    assert any("JONAS" in a for a in res_ins_d.advisories)
+    assert any("OCEANTECH" in a for a in res_ins_d.advisories)
+
+    ins_p.write_text(
+        json.dumps(
+            {
+                "settlements": [
+                    {
+                        "customer_id": "LINNEA",
+                        "insurer": "PingAn",
+                        "claim_status": "paid_partial",
+                        "reason_short": "PingAn ICC(A) All Risks policy applies $500 deductible on sum insured USD 26,400 (110%).",
+                    },
+                    {
+                        "customer_id": "JONAS",
+                        "insurer": "Allianz",
+                        "claim_status": "no_claim",
+                        "reason_short": "Allianz top tier covers 8 cartons of rubber gasket J01-J08 intact.",
+                    },
+                    {
+                        "customer_id": "OCEANTECH",
+                        "insurer": "BaoViet",
+                        "claim_status": "denied",
+                        "reason_short": "BaoViet ICC(C) named perils does not cover ordinary water damage.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_ins_c = audit_deliverables(ws, ["outputs/insurance_settlement.json"])
+    assert res_ins_c.advisories == ()
+
+    sig_dir = ws / "workspace" / "review_signals"
+    sig_dir.mkdir(parents=True, exist_ok=True)
+    (sig_dir / "image_ocr_and_packaging_flags.csv").write_text(
+        "candidate_sku,image_flag,ocr_text,review_note\n"
+        "TRAIL-750-KIDS,age_use_callout,kids straw 500ml,capacity listed as 500ml\n",
+        encoding="utf-8",
+    )
+    vm_p = out / "merge_decisions.json"
+    vm_p.write_text(
+        json.dumps(
+            {
+                "candidate_evaluations": [
+                    {
+                        "candidate_sku": "TRAIL-750-KIDS",
+                        "evidence": [
+                            {"source_file": "platform_policy/marketplace_variation_policy.pdf", "cite": "2. Allowed variation themes"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_vm_d = audit_deliverables(ws, ["outputs/merge_decisions.json"])
+    assert any("image_ocr_and_packaging_flags.csv" in a for a in res_vm_d.advisories)
+    assert any("marketplace_variation_policy.pdf" in a for a in res_vm_d.advisories)
+
+    vm_p.write_text(
+        json.dumps(
+            {
+                "candidate_evaluations": [
+                    {
+                        "candidate_sku": "TRAIL-750-KIDS",
+                        "evidence": [
+                            {
+                                "source_file": "review_signals/image_ocr_and_packaging_flags.csv",
+                                "cite": "age_use_callout: kids straw 500ml — capacity listed as 500ml",
+                            },
+                            {
+                                "source_file": "platform_policy/marketplace_variation_policy.pdf",
+                                "cite": "Rebuild requires a new parent strategy when core function or included accessory set alters shopper expectation.",
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_vm_c = audit_deliverables(ws, ["outputs/merge_decisions.json"])
+    assert res_vm_c.advisories == ()
+

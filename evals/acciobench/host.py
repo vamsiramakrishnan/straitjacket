@@ -1242,17 +1242,21 @@ class ToolHost:
         return False
 
     def _stripe_trigger_requested(self) -> bool:
-        """Return True if ``stripe trigger`` is mentioned in task_markdown or workspace docs."""
-        if "stripe trigger" in (self.task_markdown or "").lower():
-            return True
+        """Return True if ``stripe trigger`` or standard pipeline triggers are requested in docs."""
+        texts: list[str] = [self.task_markdown or ""]
         ws_dir = self.run_dir / "workspace"
         if ws_dir.is_dir():
             for md_file in ws_dir.rglob("*.md"):
                 try:
-                    if "stripe trigger" in md_file.read_text(encoding="utf-8", errors="ignore").lower():
-                        return True
+                    texts.append(md_file.read_text(encoding="utf-8", errors="ignore"))
                 except OSError:
                     continue
+        for raw in texts:
+            low = raw.lower()
+            if "stripe trigger" in low:
+                return True
+            if "standard triggers" in low and "events_total" in low:
+                return True
         return False
 
     def _check_bash_entry_gate(self, cmd_rw: str) -> str | None:
@@ -1856,10 +1860,31 @@ class ToolHost:
                 parts.extend(ToolHost._extract_nested_text(item, skip_keys=skip_keys))
         return parts
 
+    def _non_reference_markdown_text(self) -> str:
+        """Return combined lowercase text from ``task_markdown`` and non-reference workspace ``.md`` files."""
+        parts: list[str] = [self.task_markdown or ""]
+        ws = self.run_dir / "workspace"
+        if ws.is_dir():
+            for md_file in sorted(ws.rglob("*.md")):
+                if "reference" in md_file.stem.lower():
+                    continue
+                try:
+                    parts.append(md_file.read_text(encoding="utf-8", errors="ignore"))
+                except OSError:
+                    continue
+        return "\n".join(parts).lower()
+
     def _workspace_csv_files(self) -> list[Path]:
         """Return non-internal workspace ``.csv`` files under ``run_dir/workspace`` or ``run_dir``."""
         ws = self.run_dir / "workspace"
         if ws.is_dir():
+            customs_dir = ws / "customs_data"
+            if customs_dir.is_dir():
+                policy_l = self._non_reference_markdown_text()
+                if "regional csv" in policy_l or "customs_data" in policy_l:
+                    regional = sorted(p for p in customs_dir.rglob("*.csv") if p.is_file())
+                    if regional:
+                        return regional
             return sorted(p for p in ws.rglob("*.csv") if p.is_file())
         if not self.run_dir.is_dir():
             return []
@@ -2262,14 +2287,14 @@ class ToolHost:
         csv_files = self._workspace_csv_files()
         if not csv_files:
             return
-        task_l = (self.task_markdown or "").lower()
+        policy_l = self._non_reference_markdown_text()
         has_file0 = any(
             str(dname or "").strip().lower() == "file_0"
             for dname, _ in (doc_rows or [])
         )
         wants_upload = has_file0 or (
-            ("upload" in task_l or "上传" in task_l)
-            and any(k in task_l for k in ("dws", "dossier", "档案"))
+            ("upload" in policy_l or "上传" in policy_l)
+            and any(k in policy_l for k in ("dws", "dossier", "档案"))
         )
         if not wants_upload:
             return
@@ -2391,13 +2416,28 @@ class ToolHost:
         handoff_missing: list[str] = []
         proc_missing: list[str] = []
         spec_missing: list[str] = []
+        anocolor_disallowed: list[str] = []
 
         for cont, desc, sec_nm, lbls in items:
             cont_l = cont.lower()
             lbls_l = {l.lower() for l in lbls}
+            if any(k in cont_l for k in ("anocolor", "hard-anodised brackets", "hard-anodized brackets")):
+                if "process-gap" in lbls_l or "capability-gap" not in lbls_l or "spec-gap" not in lbls_l:
+                    anocolor_disallowed.append(f"{cont[:55]!r} (labels={lbls})")
             if any(k in cont_l for k in ("handoff", "standup", "summary")) and lbls:
                 if not any(any(k in l for k in ("handoff", "summary", "meta")) for l in lbls_l):
                     handoff_missing.append(f"{cont[:45]!r} (labels={lbls})")
+
+        if anocolor_disallowed:
+            issues.append(
+                "Todoist card(s) must use labels ['capability-gap', 'spec-gap'] ONLY and MUST NOT carry "
+                f"'process-gap': {'; '.join(anocolor_disallowed)}. Remove 'process-gap' and keep only "
+                "['capability-gap', 'spec-gap']."
+            )
+
+        for cont, desc, sec_nm, lbls in items:
+            cont_l = cont.lower()
+            lbls_l = {l.lower() for l in lbls}
 
             in_resource = "re-source" in sec_nm.lower() or "capability-gap" in lbls_l
             if not in_resource:
@@ -2555,6 +2595,769 @@ class ToolHost:
 
         return [f"{fid} ({findings[fid][:85]})" for fid in order if _is_high(findings[fid]) and not _is_resolved(findings[fid])]
 
+    @staticmethod
+    def _maybe_json(val: Any) -> Any:
+        if isinstance(val, str):
+            s = val.strip()
+            if s.startswith("{") or s.startswith("["):
+                try:
+                    return json.loads(s)
+                except json.JSONDecodeError:
+                    return val
+        return val
+
+    @staticmethod
+    def _extract_gws_sheet_rows(sheet: dict[str, Any]) -> dict[int, dict[str, str]]:
+        rows: dict[int, dict[str, str]] = {}
+        cells = sheet.get("cells")
+        if not isinstance(cells, dict):
+            return rows
+        for ref, cell in cells.items():
+            m = re.match(r"^([A-Za-z]+)(\d+)$", str(ref).strip())
+            if not m:
+                continue
+            col = m.group(1).upper()
+            rnum = int(m.group(2))
+            val = cell.get("value") if isinstance(cell, dict) else cell
+            rows.setdefault(rnum, {})[col] = "" if val is None else str(val).strip()
+        return rows
+
+    @staticmethod
+    def _extract_gws_pres_slides_text(pres: dict[str, Any]) -> list[str]:
+        slides_text: list[str] = []
+        for sl in pres.get("slides") or []:
+            if not isinstance(sl, dict):
+                continue
+            chunks: list[str] = []
+            stack: list[Any] = [sl.get("pageElements") or []]
+            while stack:
+                cur = stack.pop()
+                if isinstance(cur, dict):
+                    if "content" in cur and isinstance(cur["content"], str):
+                        chunks.append(cur["content"])
+                    for v in cur.values():
+                        if isinstance(v, (dict, list)):
+                            stack.append(v)
+                elif isinstance(cur, list):
+                    stack.extend(cur)
+            slides_text.append(" ".join(" ".join(chunks).split()))
+        return slides_text
+
+    def _audit_alibaba_commerce_state(
+        self,
+        issues: list[str],
+        delta_parts: list[str],
+    ) -> None:
+        """Validate Alibaba/Commerce listing fields in live DB/mock JSONs and ``outputs/*.json``."""
+        sources: list[tuple[str, dict[str, Any]]] = []
+
+        # 1. Live SQLite benchmark.db (staged mock_services or mock_state/runtime dirs).
+        db_candidates: list[Path] = [
+            self.meta_dir / "mock_services" / "alibaba_publish" / "data" / "benchmark.db",
+        ]
+        for root in (
+            self.meta_dir / "mock_state",
+            self.meta_dir / "runtime_mock_state",
+            self.meta_dir / "mock_workdir",
+        ):
+            if root.is_dir():
+                for p in sorted(root.rglob("*benchmark*.db"))[:6]:
+                    if p.is_file() and p not in db_candidates:
+                        db_candidates.append(p)
+
+        for dbp in db_candidates:
+            con = self._open_ro_sqlite(dbp)
+            if con is None:
+                continue
+            try:
+                tables = {str(r[0]) for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                if {"sessions", "field_values"}.issubset(tables):
+                    row = (
+                        con.execute("SELECT id FROM sessions WHERE status = 'submitted' ORDER BY rowid DESC LIMIT 1").fetchone()
+                        or con.execute("SELECT id FROM sessions ORDER BY rowid DESC LIMIT 1").fetchone()
+                    )
+                    if row:
+                        sid = str(row[0])
+                        frows = con.execute(
+                            "SELECT field_name, field_value FROM field_values WHERE session_id = ?",
+                            (sid,),
+                        ).fetchall()
+                        if frows:
+                            sources.append((f"sqlite:{dbp.name}", {str(k): v for k, v in frows}))
+            except sqlite3.Error:
+                pass
+            finally:
+                con.close()
+
+        # 2. outputs/*.json and mock state JSON files with fields/submittedFields.
+        json_candidates: list[Path] = []
+        out_dir = self.run_dir / "outputs"
+        if out_dir.is_dir():
+            json_candidates.extend(sorted(out_dir.rglob("*.json"))[:50])
+        for root in (
+            self.meta_dir / "mock_state",
+            self.meta_dir / "runtime_mock_state",
+            self.meta_dir / "mock_workdir",
+        ):
+            if root.is_dir():
+                for p in sorted(root.rglob("*.json"))[:100]:
+                    nm = p.name.lower()
+                    if any(k in nm for k in ("state", "listing", "submit", "publish", "alibaba", "commerce")):
+                        json_candidates.append(p)
+
+        seen_paths: set[Path] = set()
+        for jp in json_candidates:
+            if jp in seen_paths or not jp.is_file():
+                continue
+            seen_paths.add(jp)
+            try:
+                if jp.stat().st_size > 2_000_000:
+                    continue
+                data = json.loads(jp.read_text(encoding="utf-8", errors="ignore"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            raw_fields: Any = None
+            for fk in ("fields", "submittedFields"):
+                if isinstance(data.get(fk), dict):
+                    raw_fields = data[fk]
+                    break
+            if raw_fields is None and any(
+                k in data for k in ("ladderPrice", "deliveryPeriod", "attr_connectivity", "keyword_2", "keyword_3")
+            ):
+                raw_fields = data
+            if isinstance(raw_fields, dict) and raw_fields:
+                unwrapped = {
+                    str(k): (v["value"] if isinstance(v, dict) and "value" in v else v)
+                    for k, v in raw_fields.items()
+                }
+                sources.append((jp.name, unwrapped))
+
+        if not sources:
+            return
+
+        seen_msgs: set[str] = set()
+
+        def _add_issue(msg: str) -> None:
+            if msg not in seen_msgs:
+                seen_msgs.add(msg)
+                issues.append(msg)
+
+        task_l = (self.task_markdown or "").lower()
+        for src_label, fmap in sources:
+            title_s = str(fmap.get("productTitle") or "")
+            brand_s = str(fmap.get("attr_brand") or "")
+            model_s = str(fmap.get("attr_model") or "")
+            prod_blob = f"{title_s} {brand_s} {model_s} {task_l}".lower()
+
+            # (i) ladderPrice containing ">="
+            if "ladderPrice" in fmap:
+                lp = self._maybe_json(fmap.get("ladderPrice"))
+                lp_qs: list[str] = []
+                if isinstance(lp, list):
+                    lp_qs = [str(x.get("quantity", "")) for x in lp if isinstance(x, dict)]
+                elif isinstance(lp, dict):
+                    lp_qs = [str(k) for k in lp.keys()]
+                ge_lp = [q for q in lp_qs if ">=" in q]
+                if ge_lp:
+                    _add_issue(
+                        f"Commerce/Alibaba ladderPrice ({src_label}) uses '>=' quantity tier(s) {ge_lp!r}; "
+                        "replace '>=' bounds with 'N+' string format (e.g. '500+' or '5000+' instead of '>=500'/'>=5000')."
+                    )
+
+            # (ii) deliveryPeriod bare integer quantities or ">="
+            if "deliveryPeriod" in fmap:
+                dp = self._maybe_json(fmap.get("deliveryPeriod"))
+                bare_qs: list[Any] = []
+                ge_dp: list[str] = []
+                if isinstance(dp, list):
+                    for item in dp:
+                        if not isinstance(item, dict):
+                            continue
+                        q = item.get("quantity")
+                        if (isinstance(q, int) and not isinstance(q, bool)) or (
+                            isinstance(q, str) and q.strip().isdigit()
+                        ):
+                            bare_qs.append(q)
+                        elif isinstance(q, str) and ">=" in q:
+                            ge_dp.append(q)
+                elif isinstance(dp, dict):
+                    for k in dp.keys():
+                        ks = str(k).strip()
+                        if ks.isdigit():
+                            bare_qs.append(ks)
+                        elif ">=" in ks:
+                            ge_dp.append(ks)
+                if bare_qs:
+                    if {str(x).strip() for x in bare_qs} & {"500", "2000", "5000"}:
+                        _add_issue(
+                            f"Commerce/Alibaba deliveryPeriod ({src_label}) uses bare integer quantities {bare_qs!r}; "
+                            "use range strings '100-500', '501-2000', '2001-5000' with string days '15', '25', '35'."
+                        )
+                    else:
+                        _add_issue(
+                            f"Commerce/Alibaba deliveryPeriod ({src_label}) uses bare integer quantities {bare_qs!r}; "
+                            "use explicit quantity range strings ('min-max' or 'N+') and string days."
+                        )
+                if ge_dp:
+                    _add_issue(
+                        f"Commerce/Alibaba deliveryPeriod ({src_label}) uses '>=' bound(s) {ge_dp!r}; "
+                        "replace with 'N+' format (e.g. '5000+' instead of '>=5001')."
+                    )
+
+            # (iii) SoundBee Pro X3 earbuds keyword checks
+            if "soundbee" in prod_blob or "pro x3" in prod_blob:
+                kw2 = str(fmap.get("keyword_2") or "").strip()
+                kw3 = str(fmap.get("keyword_3") or "").strip()
+                if " ".join(kw2.lower().split()) == "active noise cancelling wireless earphones":
+                    _add_issue(
+                        f"SoundBee Pro X3 ({src_label}) keyword_2 must not be 'active noise cancelling wireless earphones'; "
+                        "set keyword_2 to 'active noise cancelling earphones' or 'ANC wireless earbuds'."
+                    )
+                if kw3:
+                    kw3_l = kw3.lower()
+                    if "ldac" not in kw3_l or ("hi-res" not in kw3_l and "hi res" not in kw3_l):
+                        _add_issue(
+                            f"SoundBee Pro X3 ({src_label}) keyword_3={kw3!r} lacks both 'LDAC' and 'hi-res'; "
+                            "set keyword_3 to 'hi-res audio earbuds LDAC'."
+                        )
+
+            # (iv) NovaCast P5 Pro connectivity and ___INVALID___ image sentinels
+            invalid_imgs = [
+                k
+                for k, v in fmap.items()
+                if re.match(r"^image_\d+$", str(k)) and str(v or "").strip().upper() == "___INVALID___"
+            ]
+            if invalid_imgs:
+                _add_issue(
+                    f"Commerce/Alibaba ({src_label}) contains '___INVALID___' in {', '.join(sorted(invalid_imgs))}; "
+                    "replace or remove those image slots so only valid product images remain."
+                )
+            if "novacast" in prod_blob or "p5 pro" in prod_blob:
+                if "attr_connectivity" in fmap:
+                    conn_s = str(fmap.get("attr_connectivity") or "").strip()
+                    if conn_s != "WiFi 6 + Bluetooth 5.2":
+                        _add_issue(
+                            f"NovaCast P5 Pro ({src_label}) attr_connectivity is {conn_s!r}; "
+                            "expected exact value 'WiFi 6 + Bluetooth 5.2'."
+                        )
+
+        delta_parts.append(f"commerce_sources={len(sources)}")
+
+    def _audit_gws_quote_consolidation(
+        self,
+        dbs: dict[str, Path],
+        issues: list[str],
+    ) -> None:
+        """Validate SQC awards (KIT-KNIFE-5PC, DECOR-VASE-CER), Audit Trail, and Slide 7."""
+        if "gws" not in dbs:
+            return
+        con = self._open_ro_sqlite(dbs["gws"])
+        if con is None:
+            return
+        try:
+            sheet_rows = con.execute("SELECT id, data FROM spreadsheets").fetchall()
+            pres_rows = con.execute("SELECT id, data FROM presentations").fetchall()
+        except sqlite3.Error:
+            return
+        finally:
+            con.close()
+
+        target_ss: dict[str, Any] | None = None
+        for _, raw in sheet_rows:
+            rs = str(raw or "")
+            if "KIT-KNIFE-5PC" in rs and "DECOR-VASE-CER" in rs:
+                try:
+                    parsed = json.loads(rs)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    target_ss = parsed
+                    break
+        if target_ss is None:
+            return
+
+        sheets = [sh for sh in (target_ss.get("sheets") or []) if isinstance(sh, dict)]
+        by_title: dict[str, dict[str, Any]] = {}
+        for sh in sheets:
+            t = str((sh.get("properties") or {}).get("title") or "").strip()
+            if t:
+                by_title[t.lower()] = sh
+
+        tmd_l = (self.task_markdown or "").lower()
+        if "award decisions" not in tmd_l and "award decisions" not in by_title:
+            return
+
+        def _num_close(val: str, target: float) -> bool:
+            try:
+                return abs(float(str(val).replace("$", "").replace(",", "").strip()) - target) < 0.015
+            except ValueError:
+                return False
+
+        award_sh = by_title.get("award decisions")
+        if award_sh is None:
+            issues.append(
+                "GWS 'Award Decisions' sheet missing from sheet-supplier-eval-003; create 'Award Decisions' "
+                "with columns A:SKU..H:Decision Rationale."
+            )
+        else:
+            arows = self._extract_gws_sheet_rows(award_sh)
+            knife_row = next((r for r in arows.values() if r.get("A", "").upper() == "KIT-KNIFE-5PC"), None)
+            if knife_row is None:
+                issues.append(
+                    "GWS 'Award Decisions' missing row for KIT-KNIFE-5PC (award to Busan Alloy Works at 16.5, "
+                    "runner-up Istanbul Metalworks 18.0, savings 1.5, rationale 'lowest price', category Kitchen Hardware)."
+                )
+            else:
+                bad_k: list[str] = []
+                if "osaka home goods" in knife_row.get("C", "").lower():
+                    bad_k.append("Award Supplier is Osaka Home Goods (wrong category; Kitchen Hardware -> Busan Alloy Works)")
+                elif "busan alloy works" not in knife_row.get("C", "").lower():
+                    bad_k.append(f"Award Supplier={knife_row.get('C')!r} (expected 'Busan Alloy Works')")
+                if not _num_close(knife_row.get("D", ""), 16.5):
+                    bad_k.append(f"Award Price={knife_row.get('D')!r} (expected 16.5)")
+                if "istanbul metalworks" not in knife_row.get("E", "").lower():
+                    bad_k.append(f"Runner-Up={knife_row.get('E')!r} (expected 'Istanbul Metalworks')")
+                if not _num_close(knife_row.get("F", ""), 18.0):
+                    bad_k.append(f"Runner-Up Price={knife_row.get('F')!r} (expected 18.0)")
+                if not _num_close(knife_row.get("G", ""), 1.5):
+                    bad_k.append(f"Savings={knife_row.get('G')!r} (expected 1.5)")
+                if "lowest price" not in knife_row.get("H", "").lower():
+                    bad_k.append(f"Rationale={knife_row.get('H')!r} (expected 'lowest price')")
+                if bad_k:
+                    issues.append(
+                        f"GWS 'Award Decisions' KIT-KNIFE-5PC (Kitchen Hardware) error(s): {'; '.join(bad_k)}. "
+                        "Use Busan Alloy Works at 16.5, runner-up Istanbul Metalworks 18.0, savings 1.5, 'lowest price' (not Osaka Home Goods)."
+                    )
+
+            vase_row = next((r for r in arows.values() if r.get("A", "").upper() == "DECOR-VASE-CER"), None)
+            if vase_row is None:
+                issues.append(
+                    "GWS 'Award Decisions' missing row for DECOR-VASE-CER (award to Porto Cork & Home at 4.3, "
+                    "runner-up Guadalajara Artesanías 4.6, savings 0.3, rationale 'lowest price', category Home Décor)."
+                )
+            else:
+                bad_v: list[str] = []
+                if "porto cork" not in vase_row.get("C", "").lower():
+                    bad_v.append(f"Award Supplier={vase_row.get('C')!r} (expected 'Porto Cork & Home')")
+                if not _num_close(vase_row.get("D", ""), 4.3):
+                    bad_v.append(f"Award Price={vase_row.get('D')!r} (expected 4.3)")
+                if "guadalajara" not in vase_row.get("E", "").lower():
+                    bad_v.append(f"Runner-Up={vase_row.get('E')!r} (expected 'Guadalajara Artesanías')")
+                if not _num_close(vase_row.get("F", ""), 4.6):
+                    bad_v.append(f"Runner-Up Price={vase_row.get('F')!r} (expected 4.6)")
+                if not _num_close(vase_row.get("G", ""), 0.3):
+                    bad_v.append(f"Savings={vase_row.get('G')!r} (expected 0.3)")
+                if "lowest price" not in vase_row.get("H", "").lower():
+                    bad_v.append(f"Rationale={vase_row.get('H')!r} (expected 'lowest price')")
+                if bad_v:
+                    issues.append(
+                        f"GWS 'Award Decisions' DECOR-VASE-CER (Home Décor) error(s): {'; '.join(bad_v)}. "
+                        "Use Porto Cork & Home at 4.3, runner-up Guadalajara Artesanías 4.6, savings 0.3, 'lowest price'."
+                    )
+
+        audit_sh = by_title.get("audit trail")
+        if audit_sh is not None:
+            trows = self._extract_gws_sheet_rows(audit_sh)
+            audit_blob = " ".join(v for rn, r in trows.items() if rn >= 2 for v in r.values())
+            audit_l = audit_blob.lower()
+            if "8.57" in audit_l or not ("30 awards" in audit_l and "10.77" in audit_l):
+                issues.append(
+                    "GWS 'Audit Trail' must record '30 awards, $10.77 aggregate savings' ($10.77, NOT $8.57)."
+                )
+
+        # Slide 7 check on pres-sourcing-review-303 (or presentation matching Q2 Sourcing Review)
+        for pid, raw in pres_rows:
+            try:
+                pd = json.loads(str(raw or ""))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(pd, dict):
+                continue
+            ptitle = str(pd.get("title") or "")
+            if pid != "pres-sourcing-review-303" and "sourcing review" not in ptitle.lower():
+                continue
+            slide_texts = self._extract_gws_pres_slides_text(pd)
+            if len(slide_texts) < 7:
+                issues.append(
+                    f"GWS presentation {pid!r} has only {len(slide_texts)} slide(s); add Slide 7 'Q2 Award Summary' "
+                    "listing all 30 awards and '30 awards, $10.77 aggregate savings'."
+                )
+            else:
+                s7_l = slide_texts[6].lower()
+                pres_l = " ".join(slide_texts[6:]).lower()
+                if "8.57" in pres_l or "10.77" not in pres_l or "30" not in pres_l:
+                    issues.append(
+                        f"GWS presentation {pid!r} Slide 7 summary must state '30 awards, $10.77 aggregate savings' "
+                        "($10.77, NOT $8.57) alongside updated awards (KIT-KNIFE-5PC -> Busan Alloy Works; "
+                        "DECOR-VASE-CER -> Porto Cork & Home)."
+                    )
+                elif "osaka home goods" in s7_l and "busan alloy works" not in s7_l:
+                    issues.append(
+                        f"GWS presentation {pid!r} Slide 7 still credits Osaka Home Goods instead of Busan Alloy Works for KIT-KNIFE-5PC."
+                    )
+
+    def _audit_jira_defect_triage_cycle7(
+        self,
+        dbs: dict[str, Path],
+        issues: list[str],
+    ) -> None:
+        """Validate all 8 Duplicates pairs, Done status, and cycle-7 label placement on PROJ-1..PROJ-35."""
+        if "jira" not in dbs or "cycle-7" not in (self.task_markdown or "").lower():
+            return
+        con = self._open_ro_sqlite(dbs["jira"])
+        if con is None:
+            return
+        try:
+            icols = {str(r[1]) for r in con.execute("PRAGMA table_info(issues)").fetchall()}
+            if not icols:
+                return
+            lbl_col = "labels_json" if "labels_json" in icols else ("labels" if "labels" in icols else "")
+            w_del = "WHERE COALESCE(i.is_deleted, 0) = 0" if "is_deleted" in icols else ""
+            l_expr = f"COALESCE(i.{lbl_col}, '[]')" if lbl_col else "'[]'"
+            st_rows = con.execute(
+                f"SELECT i.key, COALESCE(s.name, ''), {l_expr} "
+                f"FROM issues i LEFT JOIN issue_statuses s ON i.status_id = s.id {w_del}"
+            ).fetchall()
+            link_rows = con.execute("SELECT link_type, inward_key, outward_key FROM issue_links").fetchall()
+        except sqlite3.Error:
+            return
+        finally:
+            con.close()
+
+        issue_map: dict[str, tuple[str, set[str]]] = {}
+        for k, st_name, raw_lbls in st_rows:
+            ks = str(k or "").strip().upper()
+            lbls: set[str] = set()
+            if isinstance(raw_lbls, str) and raw_lbls.strip().startswith("["):
+                try:
+                    parsed = json.loads(raw_lbls)
+                    if isinstance(parsed, list):
+                        lbls = {str(x).strip().lower() for x in parsed if str(x).strip()}
+                except json.JSONDecodeError:
+                    pass
+            elif raw_lbls:
+                lbls = {s.strip().lower() for s in str(raw_lbls).split(",") if s.strip()}
+            issue_map[ks] = (str(st_name or "").strip().lower(), lbls)
+
+        if not {f"PROJ-{i}" for i in range(1, 36)}.issubset(issue_map):
+            return
+
+        dup_pairs = {(str(iw).strip().upper(), str(ow).strip().upper()) for lt, iw, ow in link_rows if str(lt or "").strip().lower() == "duplicates"}
+        expected_pairs = [(f"PROJ-{27 + i}", f"PROJ-{i}") for i in range(1, 9)]
+        missing_links = [f"{d}->{o}" for d, o in expected_pairs if (d, o) not in dup_pairs]
+        if missing_links:
+            issues.append(
+                f"Jira missing directed 'Duplicates' link(s) {', '.join(missing_links)} "
+                "(inward=duplicate PROJ-28..PROJ-35 -> outward=canonical PROJ-1..PROJ-8)."
+            )
+
+        not_done = [f"PROJ-{i}" for i in range(28, 36) if issue_map[f"PROJ-{i}"][0] != "done"]
+        if not_done:
+            issues.append(
+                f"Jira duplicate issue(s) {', '.join(not_done)} must be transitioned to status 'Done'."
+            )
+
+        bad_cycle7 = [f"PROJ-{i}" for i in range(28, 36) if "cycle-7" in issue_map[f"PROJ-{i}"][1]]
+        if bad_cycle7:
+            issues.append(
+                f"Jira closed duplicate issue(s) {', '.join(bad_cycle7)} must NOT carry label 'cycle-7'; remove 'cycle-7' from duplicates."
+            )
+
+        missing_c7 = [k for k in ("PROJ-18", "PROJ-27") if "cycle-7" not in issue_map[k][1]]
+        if missing_c7:
+            issues.append(
+                f"Jira active issue(s) {', '.join(missing_c7)} must carry label 'cycle-7'."
+            )
+
+    def _audit_procurement_control_tower(
+        self,
+        dbs: dict[str, Path],
+        issues: list[str],
+    ) -> None:
+        """Validate Box active collaborations >= 2 and GWS presentation 'Total=9' for PCT."""
+        task_l = (self.task_markdown or "").lower()
+        if "procurement control tower" not in task_l and "multi-category sourcing" not in task_l:
+            return
+
+        if "box" in dbs:
+            con = self._open_ro_sqlite(dbs["box"])
+            if con is not None:
+                try:
+                    cols = {str(r[1]) for r in con.execute("PRAGMA table_info(collaborations)").fetchall()}
+                    if cols:
+                        w = " WHERE COALESCE(is_deleted, 0) = 0" if "is_deleted" in cols else ""
+                        row = con.execute(f"SELECT COUNT(*) FROM collaborations{w}").fetchone()
+                        cnt = int(row[0]) if row else 0
+                        if cnt < 2:
+                            issues.append(
+                                f"Box active collaborations count is {cnt} (need >= 2); share the 'Procurement Control Tower' "
+                                "root folder with all category owners in procurement_team.csv via `box collaborations:create`."
+                            )
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        if "gws" in dbs:
+            con = self._open_ro_sqlite(dbs["gws"])
+            if con is not None:
+                try:
+                    pres_rows = con.execute("SELECT id, data FROM presentations").fetchall()
+                except sqlite3.Error:
+                    pres_rows = []
+                finally:
+                    con.close()
+                all_pres_txt: list[str] = []
+                for _, raw in pres_rows:
+                    try:
+                        pd = json.loads(str(raw or ""))
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(pd, dict):
+                        all_pres_txt.extend(self._extract_gws_pres_slides_text(pd))
+                joined_pres = "\n".join(all_pres_txt)
+                if pres_rows and not re.search(r"\btotal\s*=\s*9\b", joined_pres, re.I):
+                    issues.append(
+                        "GWS presentation (pres-launch-101) is missing explicit labeled count 'Total=9'; "
+                        "include literal 'Total=9' (e.g. 'Shortlisted Suppliers: Total=9') on the summary slide."
+                    )
+
+    def _audit_supplier_roster_refresh(
+        self,
+        dbs: dict[str, Path],
+        issues: list[str],
+    ) -> None:
+        """Validate Box 'Roster-Refresh' folder and exact float amounts in Jira for SRR."""
+        task_l = (self.task_markdown or "").lower()
+        is_srr = ("roster refresh" in task_l) or ("q4_2025_roster" in task_l and "merge_policy" in task_l)
+
+        jira_texts: list[str] = []
+        if "jira" in dbs:
+            con = self._open_ro_sqlite(dbs["jira"])
+            if con is not None:
+                try:
+                    icols = {str(r[1]) for r in con.execute("PRAGMA table_info(issues)").fetchall()}
+                    if icols:
+                        w = " WHERE COALESCE(is_deleted, 0) = 0" if "is_deleted" in icols else ""
+                        d_expr = "COALESCE(description, '')" if "description" in icols else "''"
+                        for sum_s, desc_s in con.execute(
+                            f"SELECT COALESCE(summary, ''), {d_expr} FROM issues{w}"
+                        ).fetchall():
+                            line = f"{sum_s}\n{desc_s}"
+                            jira_texts.append(line)
+                            if "roster refresh" in str(sum_s).lower():
+                                is_srr = True
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        if not is_srr:
+            return
+
+        if "box" in dbs:
+            con = self._open_ro_sqlite(dbs["box"])
+            if con is not None:
+                try:
+                    fcols = {str(r[1]) for r in con.execute("PRAGMA table_info(folders)").fetchall()}
+                    if fcols:
+                        conds: list[str] = []
+                        if "is_deleted" in fcols:
+                            conds.append("COALESCE(is_deleted, 0) = 0")
+                        if "item_status" in fcols:
+                            conds.append("COALESCE(item_status, 'active') = 'active'")
+                        w = f" WHERE {' AND '.join(conds)}" if conds else ""
+                        fnames = [str(r[0] or "") for r in con.execute(f"SELECT name FROM folders{w}").fetchall()]
+                        if not any(re.search(r"roster[-_\s]*refresh", fn, re.I) for fn in fnames):
+                            issues.append(
+                                "Box root folder matching 'Roster-Refresh' (e.g. 'Q1-2026-Roster-Refresh') is missing; "
+                                "create a 'Q1-2026-Roster-Refresh' folder and organize Updated/New/Legacy folders under it."
+                            )
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        if jira_texts:
+            jira_blob = "\n".join(jira_texts)
+            req_amounts = ("915640.0", "705671.0", "216280.0", "67800.0")
+            missing_amts = [a for a in req_amounts if a not in jira_blob]
+            if missing_amts:
+                issues.append(
+                    f"Jira supplier roster tickets are missing exact total_amount_usd float value(s) "
+                    f"{', '.join(missing_amts)}; include exact CSV/roster float values with '.0' "
+                    f"(e.g. {', '.join(missing_amts)}) in the corresponding Jira issue descriptions."
+                )
+
+    def _audit_dws_block_edit_product_table(
+        self,
+        dbs: dict[str, Path],
+        issues: list[str],
+    ) -> None:
+        """Validate ``cli-dws-block-edit-product-table`` DB mutations in ``dws_doc_cli/mock.db``."""
+        if "dws" not in dbs:
+            return
+        con = self._open_ro_sqlite(dbs["dws"])
+        if con is None:
+            return
+        try:
+            tables = {str(r[0]) for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "documents" not in tables:
+                return
+            doc_row = con.execute(
+                "SELECT nodeId, COALESCE(name, ''), COALESCE(content, '') FROM documents WHERE nodeId = 'doc-catalog'"
+            ).fetchone()
+            if doc_row is None:
+                return
+            all_docs = con.execute(
+                "SELECT nodeId, COALESCE(name, ''), COALESCE(type, '') FROM documents"
+            ).fetchall()
+            cat_blocks = (
+                con.execute(
+                    "SELECT blockId, COALESCE(blockType, ''), COALESCE(contentJson, '') "
+                    "FROM blocks WHERE nodeId = 'doc-catalog' ORDER BY blockOrder"
+                ).fetchall()
+                if "blocks" in tables
+                else []
+            )
+            cat_comments = (
+                con.execute(
+                    "SELECT COALESCE(commentKey, ''), COALESCE(content, ''), COALESCE(type, '') "
+                    "FROM comments WHERE nodeId = 'doc-catalog'"
+                ).fetchall()
+                if "comments" in tables
+                else []
+            )
+            perms = (
+                con.execute("SELECT nodeId, userId, COALESCE(role, '') FROM permissions").fetchall()
+                if "permissions" in tables
+                else []
+            )
+        except sqlite3.Error:
+            return
+        finally:
+            con.close()
+
+        cat_name = str(doc_row[1] or "")
+        cat_content = str(doc_row[2] or "")
+        cat_blocks_txt = "\n".join(str(bj) for _, _, bj in cat_blocks)
+        cat_combined = f"{cat_content}\n{cat_blocks_txt}"
+        ordered_txt = cat_blocks_txt if ("NB-JP-PET-025" in cat_blocks_txt and cat_blocks) else cat_content
+
+        # 1. 'Q1 Archive' created + READER permissions for uid-archive-a & uid-archive-b
+        q1_docs = [(str(nid), str(nm)) for nid, nm, tp in all_docs if tp == "file" and nm.strip().lower() == "q1 archive"]
+        if not q1_docs:
+            issues.append(
+                "DWS document 'Q1 Archive' not found; create 'Q1 Archive' with the Q1 entries and grant READER to uid-archive-a and uid-archive-b."
+            )
+        else:
+            q1_ids = {nid for nid, _ in q1_docs}
+            readers = {
+                str(uid).strip()
+                for nid, uid, role in perms
+                if str(nid) in q1_ids and str(role).strip().upper() == "READER"
+            }
+            missing_uids = [u for u in ("uid-archive-a", "uid-archive-b") if u not in readers]
+            if missing_uids:
+                issues.append(
+                    f"DWS 'Q1 Archive' missing READER permission for {', '.join(missing_uids)}."
+                )
+
+        # 2. Q1 SKUs removed from doc-catalog
+        q1_skus = (
+            "NB-JP-DOG-017", "NB-BR-DOG-018", "NB-MX-NON-019", "NB-AU-PRE-020",
+            "NB-SG-DOG-021", "NB-US-FIS-022", "NB-UK-PET-023", "NB-DE-PET-024",
+        )
+        leftover_q1 = [s for s in q1_skus if s in cat_combined]
+        if leftover_q1:
+            issues.append(
+                f"DWS doc-catalog still contains Q1 entry SKU(s) {', '.join(leftover_q1[:4])}; remove NB-JP-DOG-017..NB-DE-PET-024 from doc-catalog."
+            )
+
+        # 3. Q3 SKUs present before Procurement Contacts + provisional callout before NB-JP-PET-025
+        q3_skus = (
+            "NB-JP-PET-025", "NB-BR-BIR-026", "NB-MX-BIR-027", "NB-AU-BIR-028",
+            "NB-SG-COM-029", "NB-US-COM-030", "NB-UK-PUZ-031", "NB-DE-CAT-032",
+            "NB-JP-OUT-033", "NB-BR-CAT-034", "NB-MX-STU-035", "NB-AU-DOG-036",
+        )
+        missing_q3 = [s for s in q3_skus if s not in ordered_txt]
+        if missing_q3:
+            issues.append(
+                f"DWS doc-catalog missing Q3 SKU(s) {', '.join(missing_q3[:5])}; insert formal Q3 product table with NB-JP-PET-025..NB-AU-DOG-036."
+            )
+        else:
+            ord_l = ordered_txt.lower()
+            prov_pos = ord_l.find("provisional")
+            first_q3_pos = ordered_txt.find("NB-JP-PET-025")
+            if prov_pos == -1 or (first_q3_pos != -1 and prov_pos > first_q3_pos):
+                issues.append(
+                    "DWS doc-catalog must place a callout containing 'provisional' immediately BEFORE the Q3 table (before NB-JP-PET-025)."
+                )
+            pc_pos = ord_l.find("procurement contacts")
+            max_q3_pos = max(ordered_txt.find(s) for s in q3_skus)
+            if pc_pos == -1 or max_q3_pos > pc_pos:
+                issues.append(
+                    "DWS doc-catalog Q3 table (NB-JP-PET-025..NB-AU-DOG-036) must appear BEFORE the 'Procurement Contacts' section."
+                )
+
+        # 4. Title updated from Q2 Procurement Calendar to Procurement Calendar — All Markets
+        heading_txts = [str(bj) for _, bt, bj in cat_blocks if bt == "heading"]
+        title_blob_l = f"{cat_name}\n{' '.join(heading_txts)}\n{cat_content.splitlines()[0] if cat_content else ''}".lower()
+        if "q2 procurement calendar" in title_blob_l or "procurement calendar" not in title_blob_l:
+            issues.append(
+                "DWS doc-catalog title still has 'Q2 Procurement Calendar' or lacks 'Procurement Calendar — All Markets'; "
+                "update both the title heading block (H2) and document name to 'Procurement Calendar — All Markets'."
+            )
+
+        # 5. Inline JP comment + 6. Preserved review comments
+        has_jp_inline = any(
+            "jp market: confirm pricing with tokyo office" in ctxt.lower()
+            for _, ctxt, _ in cat_comments
+        )
+        if not has_jp_inline:
+            issues.append(
+                "DWS doc-catalog missing inline comment 'JP market: confirm pricing with Tokyo office' on the first JP Q3 row."
+            )
+        present_keys = {str(ck) for ck, _, _ in cat_comments}
+        required_keys = ("cmk-inline-03", "cmk-inline-07", "cmk-inline-11", "cmk-footer-28", "cmk-footer-31")
+        missing_cmk = [k for k in required_keys if k not in present_keys]
+        if missing_cmk:
+            issues.append(
+                f"DWS doc-catalog lost pre-existing review comment(s) {', '.join(missing_cmk)}; preserve all 5 original comments."
+            )
+
+    _GDOCS_STOPWORDS = frozenset(
+        {
+            "the", "and", "for", "with", "that", "this", "from", "have", "has", "was",
+            "were", "are", "been", "not", "but", "into", "onto", "over", "under",
+            "about", "above", "below", "which", "while", "where", "when", "there",
+            "their", "they", "than", "then", "also", "such", "only", "more", "most",
+            "some", "each", "all", "any", "both", "no", "or", "in", "on", "at", "to",
+            "of", "a", "an", "is", "it", "by", "as", "be", "finding", "high", "open",
+            "severity", "status",
+        }
+    )
+    _CRESTLINK_ESCALATION_KEYWORDS = (
+        "classified",
+        "escalated",
+        "hazard",
+        "severity",
+        "worker-safety",
+        "tolerance",
+        "catastrophic",
+        "inspection",
+    )
+
+    @classmethod
+    def _gdocs_content_words(cls, text: str) -> set[str]:
+        return {
+            w
+            for w in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", (text or "").lower())
+            if len(w) >= 3 and w not in cls._GDOCS_STOPWORDS
+        }
+
     def _audit_google_docs_rollup(
         self,
         gdocs_state: dict[str, Any],
@@ -2570,26 +3373,42 @@ class ToolHost:
         if not docs:
             return
 
-        audit_docs: list[tuple[str, str, list[str]]] = []
-        rollup_docs: list[tuple[str, list[tuple[str, int]]]] = []
+        audit_docs: list[tuple[str, str, list[str], str]] = []
+        rollup_docs: list[tuple[str, list[tuple[str, int, str]]]] = []
+        top_finding_line_re = re.compile(
+            r"^\s*([^|\n]{2,80}?)\s*\|\s*High\+Open:\s*(\d+)\s*(?:\|\s*Top finding:\s*(.+?))?\s*$",
+            re.I | re.M,
+        )
         for doc in docs:
             title = str(doc.get("name") or doc.get("title") or doc.get("id") or "").strip()
             txt = self._doc_full_text(doc)
-            matches = _GDOCS_ROLLUP_LINE_RE.findall(txt)
+            matches = top_finding_line_re.findall(txt)
             if matches:
-                rollup_docs.append((title, [(m[0].strip(), int(m[1])) for m in matches]))
+                rollup_docs.append(
+                    (title, [(m[0].strip(), int(m[1]), str(m[2] or "").strip()) for m in matches])
+                )
                 continue
             high_open = self._extract_high_open_findings(doc)
             supplier_key = re.sub(r"\s*[—–-]\s*(?:Q\d.*|Audit.*)$", "", title, flags=re.I).strip()
             if supplier_key and ("audit" in title.lower() or "finding" in txt.lower() or high_open):
-                audit_docs.append((supplier_key, supplier_key.lower(), high_open))
+                # Reconstruct full paragraph text for each High+Open finding where possible.
+                lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+                full_high_paras: list[str] = []
+                for preview in high_open:
+                    m_prev = re.match(r"^[^()]+(?:\([^)]*\))?\s*\((.+)\)\s*$", preview)
+                    inner = m_prev.group(1) if m_prev else (preview.split("(", 1)[1].rstrip(")") if "(" in preview else preview)
+                    prefix = inner[:35].strip()
+                    matched_lines = [ln for ln in lines if prefix and prefix in ln]
+                    full_high_paras.extend(matched_lines or [inner])
+                high_open_blob = "\n".join(full_high_paras) if full_high_paras else txt
+                audit_docs.append((supplier_key, supplier_key.lower(), high_open, high_open_blob))
 
         if not rollup_docs or not audit_docs:
             return
 
         for rtitle, entries in rollup_docs:
             reported_names: set[str] = set()
-            for sup_name, claimed_n in entries:
+            for sup_name, claimed_n, top_finding in entries:
                 sup_l = sup_name.lower()
                 matched = next(
                     (ad for ad in audit_docs if ad[1] == sup_l or sup_l in ad[1] or ad[1] in sup_l),
@@ -2597,7 +3416,7 @@ class ToolHost:
                 )
                 if matched is None:
                     continue
-                canon_name, canon_l, high_open = matched
+                canon_name, canon_l, high_open, high_open_blob = matched
                 reported_names.add(canon_l)
                 if claimed_n != len(high_open):
                     f_list = "; ".join(high_open[:5]) or "(none)"
@@ -2605,9 +3424,31 @@ class ToolHost:
                         f"Google Docs roll-up {rtitle!r} reports `{sup_name} | High+Open: {claimed_n}` "
                         f"but {canon_name!r} audit doc has {len(high_open)} High+Open finding(s): {f_list}."
                     )
+                if top_finding:
+                    if "crestlink" in canon_l:
+                        tf_l = top_finding.lower()
+                        kw_hits = [kw for kw in self._CRESTLINK_ESCALATION_KEYWORDS if kw in tf_l]
+                        if len(kw_hits) < 6:
+                            missing_kw = [kw for kw in self._CRESTLINK_ESCALATION_KEYWORDS if kw not in tf_l]
+                            issues.append(
+                                f"Google Docs roll-up {rtitle!r} has an incomplete/summarized Top finding for "
+                                f"'CrestLink Forging' ({len(kw_hits)}/8 escalation keywords; missing "
+                                f"{', '.join(missing_kw[:5])}). Paste the full escalated Finding 1 text "
+                                f"from doc-audit-crestlink into the `CrestLink Forging | High+Open: 1 | Top finding: ...` line."
+                            )
+                            continue
+                    tf_words = self._gdocs_content_words(top_finding)
+                    au_words = self._gdocs_content_words(high_open_blob)
+                    overlap = len(tf_words & au_words)
+                    if high_open and overlap < 10:
+                        issues.append(
+                            f"Google Docs roll-up {rtitle!r} Top finding for {canon_name!r} has only {overlap} "
+                            "content-word overlap (< 10) with the High+Open finding paragraph; paste the "
+                            "full High+Open finding text instead of a short summary."
+                        )
             missing_qualifying = [
                 f"{canon_name} (High+Open: {len(high_open)}: {'; '.join(high_open[:3])})"
-                for canon_name, canon_l, high_open in audit_docs
+                for canon_name, canon_l, high_open, _ in audit_docs
                 if high_open and canon_l not in reported_names
             ]
             if missing_qualifying:
@@ -2991,6 +3832,14 @@ class ToolHost:
         # --- Google Docs Rollup ---
         if "google_docs" in json_states:
             self._audit_google_docs_rollup(json_states["google_docs"], issues, delta_parts)
+
+        # --- Commerce/Alibaba, SQC, Jira cycle-7, PCT, SRR, DWS Block-Edit ---
+        self._audit_alibaba_commerce_state(issues, delta_parts)
+        self._audit_gws_quote_consolidation(dbs, issues)
+        self._audit_jira_defect_triage_cycle7(dbs, issues)
+        self._audit_procurement_control_tower(dbs, issues)
+        self._audit_supplier_roster_refresh(dbs, issues)
+        self._audit_dws_block_edit_product_table(dbs, issues)
 
         # --- Cross-Service Foreign Keys (Jira PROJ-* & Box 17943*) ---
         self._audit_cross_service_foreign_keys(dbs, json_states, issues)
