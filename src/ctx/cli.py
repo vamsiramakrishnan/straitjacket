@@ -58,7 +58,13 @@ def main(argv: list[str] | None = None) -> int:
         if "--workspace" in args:
             i = args.index("--workspace")
             ws = args[i + 1] if i + 1 < len(args) else None
-        return serve_gateway(ws or os.getcwd())
+        # --backends <file>: a per-session backend snapshot (from `ctx wrap
+        # --surface <profile>`); reveal state then stays in memory.
+        backends = None
+        if "--backends" in args:
+            i = args.index("--backends")
+            backends = args[i + 1] if i + 1 < len(args) else None
+        return serve_gateway(ws or os.getcwd(), backends_file=backends)
 
     # ------------------------------------------------- supervisor fast path
     # Hidden: `ctx job _supervise <jobdir>` is spawned detached by
@@ -1100,6 +1106,11 @@ def _build_parser():
     p_wrap.add_argument(
         "--print-config", action="store_true", dest="print_config",
         help="print the host configuration instead of launching",
+    )
+    p_wrap.add_argument(
+        "--surface", dest="surface", default=None, metavar="auto|off|PROFILE",
+        help="launch-time capability-surface plan for `wrap claude` "
+        "(default: [surface] wrap in ctx.toml, else auto)",
     )
     p_wrap.add_argument("agent_args", nargs=argparse.REMAINDER, help="-- <agent args...>")
 

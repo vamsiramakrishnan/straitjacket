@@ -339,6 +339,80 @@ def _claude_supports_settings(claude: str) -> bool:
     return "--settings" in (proc.stdout + proc.stderr)
 
 
+def _run_forwarding_signals(argv: list[str], *, cwd: Path, env: dict[str, str]) -> int:
+    """Run the agent like ``subprocess.run`` (same return code, same Ctrl-C
+    behaviour), but if the WRAPPER is sent SIGTERM or SIGHUP, forward it to
+    the agent and keep waiting, so the agent exits with its own status and
+    the caller's ``finally`` blocks still remove every temp file. The
+    previous handlers are restored before returning; nothing is installed
+    outside the main thread."""
+    import signal
+    import threading
+
+    proc = subprocess.Popen(argv, cwd=cwd, env=env)
+    previous: dict[int, object] = {}
+
+    def _forward(signum, _frame):  # pragma: no cover - exercised via a subprocess test
+        with contextlib.suppress(Exception):
+            proc.send_signal(signum)
+
+    if threading.current_thread() is threading.main_thread():
+        for name in ("SIGTERM", "SIGHUP"):
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            with contextlib.suppress(ValueError, OSError):
+                previous[sig] = signal.signal(sig, _forward)
+    try:
+        try:
+            return proc.wait()
+        except BaseException:
+            # subprocess.run semantics on Ctrl-C and other interrupts.
+            proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait()
+            raise
+    finally:
+        for sig, handler in previous.items():
+            with contextlib.suppress(ValueError, OSError, TypeError):
+                signal.signal(sig, handler)
+
+
+def _surface_plan(
+    workspace_root: Path,
+    agent_args: list[str],
+    child_env: dict[str, str],
+    exe: str,
+    surface: str | None,
+    tmpdir: Path,
+):
+    """The launch-time surface plan (ctx.surface_launch), or None. Fail-open:
+    any error launches the session unchanged with a one-line stderr note.
+    Writes only the documented receipt to the workspace; never stdout."""
+    try:
+        from ctx.surface_launch import plan_claude_launch, resolve_mode, write_receipt
+
+        mode, note = resolve_mode(surface, workspace_root)
+        if note:
+            print(f"ctx wrap: {note}", file=sys.stderr)
+        if mode == "off":
+            return None
+        plan = plan_claude_launch(
+            workspace_root, agent_args, mode=mode, child_env=child_env,
+            parent_env=dict(os.environ), ctx_exe=exe, tmpdir=tmpdir,
+        )
+        if note:
+            plan.receipt["config_note"] = note
+        if write_receipt(workspace_root, plan.receipt) is None:
+            plan.line = plan.line.rsplit(" · receipt", 1)[0] + " · receipt not written"
+        print(plan.line, file=sys.stderr)
+        return plan
+    except Exception as exc:  # fail-open: a surface problem never blocks a launch
+        print(f"ctx wrap: surface plan skipped ({type(exc).__name__}); launching unchanged",
+              file=sys.stderr)
+        return None
+
+
 def wrap_claude(
     workspace_root: Path,
     agent_args: list[str],
@@ -346,8 +420,13 @@ def wrap_claude(
     use_proxy: bool = False,
     rescue_pct: float = 0.0,
     orchestrate: bool = False,
+    surface: str | None = None,
 ) -> int:
-    """Launch `claude` with harness hooks injected; leave zero residue."""
+    """Launch `claude` with harness hooks injected; leave zero residue.
+
+    ``surface`` (``auto`` | ``off`` | a profile name; default from
+    ``[surface] wrap`` in ctx.toml, else ``auto``) selects the launch-time
+    surface plan — see ctx.surface_launch."""
     claude = shutil.which("claude")
     if claude is None:
         print(
@@ -384,22 +463,38 @@ def wrap_claude(
             )
             return _wrap_claude_merged(workspace_root, settings, claude, agent_args, child_env)
 
-        tmp = tempfile.NamedTemporaryFile(
-            "w", prefix="ctx-wrap-", suffix=".json", delete=False, encoding="utf-8"
-        )
+        surface_dir: Path | None = None
+        tmp = None
         try:
+            # Private (0700) per-launch dir for any surface files (a profile's
+            # MCP config, the gateway's backend snapshot); removed on exit,
+            # including when the wrapper is sent SIGTERM/SIGHUP.
+            surface_dir = Path(tempfile.mkdtemp(prefix="ctx-surface-"))
+            tmp = tempfile.NamedTemporaryFile(
+                "w", prefix="ctx-wrap-", suffix=".json", delete=False, encoding="utf-8"
+            )
+            plan = _surface_plan(workspace_root, agent_args, child_env, exe, surface,
+                                 surface_dir)
+            launch_args = list(agent_args)
+            if plan is not None:
+                settings = {**settings, **plan.settings}
+                launch_args = [*plan.args, *launch_args]
+                child_env = {**child_env, **plan.env}
             json.dump(settings, tmp)
             tmp.close()
             # Inherit stdio so interactive sessions work.
-            proc = subprocess.run(
-                [claude, "--settings", tmp.name, *agent_args],
-                cwd=workspace_root,
-                env=child_env,
+            return _run_forwarding_signals(
+                [claude, "--settings", tmp.name, *launch_args],
+                cwd=workspace_root, env=child_env,
             )
-            return proc.returncode
         finally:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp.name)
+            if tmp is not None:
+                with contextlib.suppress(OSError):
+                    tmp.close()
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp.name)
+            if surface_dir is not None:
+                shutil.rmtree(surface_dir, ignore_errors=True)
     finally:
         with contextlib.suppress(OSError):
             os.unlink(task_file.name)

@@ -33,21 +33,49 @@ def ws(tmp_path):
     (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
     (root / ".mcp.json").write_text(json.dumps({"mcpServers": {
         "big": {"command": sys.executable, "args": [str(fake)]}}}), encoding="utf-8")
+    # approved, as after the trust prompt (unapproved project servers cost 0)
+    (root / ".claude").mkdir()
+    (root / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enableAllProjectMcpServers": True}), encoding="utf-8")
     return root
 
 
-def test_preflight_fires_over_budget(ws):
+@pytest.fixture()
+def inline_host(monkeypatch):
+    """These fixtures price a host that INLINES schemas. Deliberate update:
+    the gate now prices on the basis that applies (Claude Code defers by
+    default), so the inline case is selected explicitly."""
+    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")
+
+
+def test_preflight_fires_over_budget(ws, inline_host):
     adv = surface.preflight(ws, max_static_tokens=100)
     assert "CTX_SURFACE_GUARD" in adv
+    assert "inline basis" in adv
     assert "mcp_tool" in adv          # the big tool schema is the heaviest kind
     assert "compile --profile" in adv
+
+
+def test_preflight_uses_deferred_basis_on_deferring_host(ws, monkeypatch):
+    monkeypatch.delenv("ENABLE_TOOL_SEARCH", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", raising=False)
+    a = surface.audit(ws, probe_mcp=True)
+    deferred = a["totals"]["upfront_estimate"]["mcp_deferred"]
+    inline = a["totals"]["static_tokens"]
+    assert deferred < inline
+    # over the deferred figure but under the inline one: fires, quoting deferred
+    adv = surface.preflight(ws, max_static_tokens=deferred - 1)
+    assert f"~{deferred:,} tokens up front" in adv and "deferred basis" in adv
+    assert f"~{inline:,} if every schema were inlined" in adv
+    assert surface.preflight(ws, max_static_tokens=deferred) == ""
 
 
 def test_preflight_silent_under_budget(ws):
     assert surface.preflight(ws, max_static_tokens=1_000_000) == ""
 
 
-def test_preflight_gateway_message(ws):
+def test_preflight_gateway_message(ws, inline_host):
     adv = surface.preflight(ws, max_static_tokens=100, gateway=True)
     assert "gateway active" in adv
 

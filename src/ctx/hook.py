@@ -3164,7 +3164,7 @@ def main_session_start(flavor: str = "antigravity") -> int:
                 advisory = preflight(
                     ws, max_static_tokens=sp.max_static_tokens,
                     default_profile=sp.default_profile, gateway=sp.gateway,
-                    probe=sp.probe)
+                    probe=sp.probe, host=_RELAY_HOST.get(flavor, flavor))
     except Exception:
         advisory = ""
     try:

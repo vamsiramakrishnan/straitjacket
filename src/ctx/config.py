@@ -217,6 +217,13 @@ class SurfacePolicy:
     default_profile: str = ""       # profile to suggest when over budget
     gateway: bool = False           # gateway is the MCP delivery (progressive disclosure)
     probe: bool = True              # measure real MCP tool schemas (cached) in the gate
+    # Surface plan applied when `ctx wrap claude` launches a session:
+    # auto (host-native disclosure, usage-evidenced skill trimming) | off |
+    # <profile name>. The `--surface` flag overrides it per launch.
+    wrap: str = "auto"
+    # Sessions of transcript evidence required before `auto` narrows any
+    # skill to name-only (one session says nothing about "never used").
+    wrap_min_sessions: int = 5
 
 
 @dataclass(frozen=True)

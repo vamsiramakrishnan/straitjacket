@@ -65,7 +65,10 @@ def cmd_surface(ws, ns) -> int:
             ws.root, ns.profile, host=ns.host, apply=ns.apply,
             probe_mcp=getattr(ns, "probe_mcp", False))
         if ns.json:
-            print(_json.dumps(rep, indent=2))
+            # File CONTENTS carry full server commands (argument values can be
+            # credentials): they belong in the 0600 files, never on stdout.
+            shown = {**rep, "files": sorted(k for k, v in (rep.get("files") or {}).items() if v)}
+            print(_json.dumps(shown, indent=2))
             return 0
         print(surface_profiles.render_compile(rep))
         return 1 if rep.get("error") else 0
@@ -88,7 +91,7 @@ def cmd_surface(ws, ns) -> int:
     if ns.surface_cmd == "inventory":
         base = surface.collect_surface(ws.root)
         if getattr(ns, "probe_mcp", False):
-            probed = surface.probe_surface(ws.root)
+            probed = surface.probe_surface(ws.root, explicit=True)
             provs = {p.provider for p in probed}
             base = [c for c in base
                     if not (c.kind == "mcp_server" and c.provider in provs)] + probed
@@ -121,9 +124,13 @@ def cmd_surface(ws, ns) -> int:
             return 0
         for cid in tp["ids"]:
             rec = next(c for c in a["records"] if c["id"] == cid)
-            print(f"  defer  {rec['tokens']:>6,} tok  {cid:<28} "
+            ud = rec.get("upfront_deferred", -1)
+            up = rec["tokens"] if ud is None or ud < 0 else ud
+            print(f"  defer  {up:>6,} tok  {cid:<28} "
                   f"auth={rec['authority']} → {rec['recommended_level']}")
-        print(f"  ── est {tp['est_token_reduction']:,} tokens/turn recoverable")
+        print(f"  ── est {tp.get('est_token_reduction_deferred', 0):,} tokens recoverable up "
+              "front (deferred basis: host lists tool names only); "
+              f"{tp['est_token_reduction']:,} on the inline basis")
         return 0
     print(surface.render_audit(a))
     return 0

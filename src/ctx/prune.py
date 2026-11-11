@@ -100,6 +100,9 @@ def plan_prune(ws_root: Path | str, *, probe_mcp: bool = False,
     from ctx.surface_profiles import _is_kernel
 
     audit = surface.audit(ws_root, probe_mcp=probe_mcp)
+    # Price on the basis that applies to Claude Code (prune's default host)
+    # in this environment; the inline figure rides along, labelled.
+    basis, basis_why = surface.host_basis("claude")
     decisions: list[dict[str, Any]] = []
     deferred: set[str] = set()
     for rec in audit["records"]:
@@ -116,7 +119,9 @@ def plan_prune(ws_root: Path | str, *, probe_mcp: bool = False,
             why, kept = f"{level}: unused or above authority; deferred", False
             deferred.add(cap.id)
         decisions.append({
-            "id": cap.id, "kind": cap.kind, "tokens": cap.tokens,
+            "id": cap.id, "kind": cap.kind,
+            "tokens": cap.upfront_if_deferred if basis == "deferred" else cap.tokens,
+            "tokens_inline": cap.tokens,
             "authority": cap.authority, "invocations": cap.invocations,
             "level": level, "keep": kept, "why": why,
         })
@@ -127,7 +132,8 @@ def plan_prune(ws_root: Path | str, *, probe_mcp: bool = False,
         "repo": profile_repo(ws_root),
         "decisions": decisions,
         "deferred": sorted(deferred),
-        "tokens_per_turn": {"before": before, "after": after, "saved": before - after},
+        "tokens_per_turn": {"before": before, "after": after, "saved": before - after,
+                            "basis": basis, "basis_why": basis_why, "estimate": True},
         "profile": Profile(
             "prune", exclude=frozenset(deferred),
             description="setup-time prune: defer what is unused or above authority",
@@ -228,7 +234,7 @@ def _describe(d: dict[str, Any], idx: int) -> str:
     used = "never used" if d["invocations"] == 0 else (
         f"used {d['invocations']}x" if d["invocations"] > 0 else "use not measurable")
     mark = "defer" if not d["keep"] else "keep "
-    return (f"  {idx:>2}. [{mark}] {d['id'][:44]:44} {d['tokens']:>6} tok/turn  "
+    return (f"  {idx:>2}. [{mark}] {d['id'][:44]:44} {d['tokens']:>6} tok up front  "
             f"{d['authority']:<12} {used}")
 
 
@@ -243,12 +249,12 @@ def interactive_prune(ws_root: Path | str, *, ask, say, hosts: tuple[str, ...] =
     plan = plan_prune(ws_root, probe_mcp=probe_mcp, keep=keep)
     decisions = plan["decisions"]
     t = plan["tokens_per_turn"]
-    say(f"[ctx prune] {len(decisions)} capabilities on the surface · {t['before']:,} tok/turn · "
-        f"rule recommends deferring {len(plan['deferred'])} ({t['saved']:,} tok/turn)")
+    say(f"[ctx prune] {len(decisions)} capabilities on the surface · {t['before']:,} tok up front ({t.get('basis', 'inline')} basis, est.) · "
+        f"rule recommends deferring {len(plan['deferred'])} ({t['saved']:,} tok up front)")
     kernel = [d for d in decisions if d["why"] == "kernel"]
     if kernel:
         say(f"kept without asking (kernel: ctx's own tools, policy, repo instructions): "
-            f"{len(kernel)} · {sum(d['tokens'] for d in kernel):,} tok/turn")
+            f"{len(kernel)} · {sum(d['tokens'] for d in kernel):,} tok up front")
     say("At each prompt, Enter accepts the recommendation; 'all' / 'none'; '1,3-5' picks "
         "exactly those; '+2' or '-3' adjusts the recommendation; '?2' explains one item.")
     chosen_defer: set[str] = set()
@@ -257,7 +263,7 @@ def interactive_prune(ws_root: Path | str, *, ask, say, hosts: tuple[str, ...] =
         if not group:
             continue
         say("")
-        say(f"{label}: {len(group)} · {sum(d['tokens'] for d in group):,} tok/turn")
+        say(f"{label}: {len(group)} · {sum(d['tokens'] for d in group):,} tok up front")
         default = {i for i, d in enumerate(group, 1) if not d["keep"]}
         if len(group) > _LIST_CAP:
             unused = [d for d in group if not d["keep"]]
@@ -297,7 +303,7 @@ def interactive_prune(ws_root: Path | str, *, ask, say, hosts: tuple[str, ...] =
     deferred = sorted(d["id"] for d in decisions if not d["keep"])
     after = sum(d["tokens"] for d in decisions if d["keep"])
     say("")
-    say(f"plan: defer {len(deferred)} · {t['before']:,} -> {after:,} tok/turn")
+    say(f"plan: defer {len(deferred)} · {t['before']:,} -> {after:,} tok up front")
     while True:
         a = ask(f"compile for which hosts? [Enter = {','.join(hosts)}] ").strip().lower()
         if not a:
@@ -327,7 +333,7 @@ def interactive_prune(ws_root: Path | str, *, ask, say, hosts: tuple[str, ...] =
         "schema": PRUNE_SCHEMA, "ts": int(time.time()), "applied": apply,
         "interactive": True, "repo": plan["repo"], "decisions": decisions,
         "deferred": deferred,
-        "tokens_per_turn": {"before": t["before"], "after": after, "saved": t["before"] - after},
+        "tokens_per_turn": {**t, "after": after, "saved": t["before"] - after},
         "hosts": per_host,
     }
     if apply:
@@ -348,7 +354,7 @@ def render_prune(rep: dict[str, Any]) -> str:
     langs = ", ".join(f"{d['ext']} x{d['files']}" for d in repo.get("languages", [])) or "-"
     out.append(f"repo: {repo.get('files', 0)} files · {langs} · runners: "
                f"{', '.join(repo.get('runners') or []) or '-'}")
-    out.append(f"surface: {t['before']:,} tok/turn before · {t['after']:,} after · "
+    out.append(f"surface: {t['before']:,} tok up front before ({t.get('basis', 'inline')} basis, est.) · {t['after']:,} after · "
                f"{t['saved']:,} deferred")
     kept = [d for d in rep["decisions"] if d["keep"]]
     gone = [d for d in rep["decisions"] if not d["keep"]]
@@ -361,14 +367,21 @@ def render_prune(rep: dict[str, Any]) -> str:
             out.append(f"{host}: {h['error']}")
             continue
         tk = h.get("tokens", {})
-        out.append(f"{host}: servers kept {len(h.get('servers_kept', []))} · dropped "
-                   f"{len(h.get('servers_dropped', []))} · tokens {tk.get('before', 0):,} -> "
-                   f"{tk.get('after_server', 0):,} (gateway {tk.get('after_gateway', 0):,})"
+        rs = h.get("remote_servers") or {}
+        out.append(f"{host}: servers kept "
+                   f"{len(h.get('servers_kept', [])) + len(rs.get('kept') or [])} · dropped "
+                   f"{len(h.get('servers_dropped', [])) + len(rs.get('dropped') or [])} · "
+                   f"not included {len(h.get('not_included') or [])} (user/local scope) · "
+                   f"tokens {tk.get('before', 0):,} -> "
+                   f"{tk.get('after_server', 0):,} (gateway {tk.get('after_gateway', 0):,}; {tk.get('basis', 'inline')} basis, est.)"
                    + (f" · wrote {', '.join(h['written'])}" if h.get("written") else ""))
         if h.get("issues"):
             out.append("  issues: " + "; ".join(h["issues"][:3]))
         if h.get("launch"):
             out.append(f"  launch: {h['launch']}")
+            from ctx.surface_profiles import render_absent
+
+            out.extend(render_absent({**h, "host": host}))
     if rep.get("receipt"):
         out.append(f"receipt: {rep['receipt']}")
     if not gone:

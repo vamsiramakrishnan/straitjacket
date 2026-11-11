@@ -79,6 +79,32 @@ def cmd_wrap(ns) -> int:
         if agent_args.index("--gateway") < tail:
             use_gateway = True
             agent_args.remove("--gateway")
+    # --surface auto|off|<profile>: the launch-time surface plan (Claude Code
+    # only). Accepts `--surface X` and `--surface=X`; never past the `--`.
+    surface_mode: str | None = getattr(ns, "surface", None)
+    # A bare, empty or repeated --surface is an error here: passed through,
+    # the host CLI would reject an option it does not know.
+    seen_surface = 1 if surface_mode is not None else 0
+    i = 0
+    tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
+    while i < tail:
+        a = agent_args[i]
+        if a == "--surface" or a.startswith("--surface="):
+            if a == "--surface":
+                value = agent_args[i + 1] if i + 1 < tail else ""
+                width = 2 if i + 1 < tail else 1
+            else:
+                value, width = a.split("=", 1)[1], 1
+            seen_surface += 1
+            if not value.strip() or value.startswith("-") or seen_surface > 1:
+                print("ctx wrap: --surface takes exactly one value (auto, off, or a profile "
+                      "name) and may be given once", file=sys.stderr)
+                return 2
+            surface_mode = value.strip()
+            del agent_args[i : i + width]
+            tail -= width
+            continue
+        i += 1
     rescue_pct = 0.0
     if "--rescue-pct" in agent_args:
         tail = agent_args.index("--") if "--" in agent_args else len(agent_args)
@@ -121,6 +147,10 @@ def cmd_wrap(ns) -> int:
 
     from ctx.mcp_hosts import HOSTS as MCP_HOSTS
 
+    if surface_mode is not None and ns.host != "claude":
+        print(f"ctx wrap {ns.host}: --surface applies to `ctx wrap claude` launches only; "
+              "ignored (preview a profile with `ctx surface compile --profile <name> "
+              f"--host {ns.host}`)", file=sys.stderr)
     if ns.host in MCP_HOSTS:
         if use_gateway or use_proxy or use_orchestrate:
             print(f"ctx wrap {ns.host}: gateway, proxy, and orchestration adapters are not implemented for this host", file=sys.stderr)
@@ -158,7 +188,7 @@ def cmd_wrap(ns) -> int:
         if agent_args:
             return wrapper(
                 ws.root, agent_args, use_proxy=use_proxy, rescue_pct=rescue_pct,
-                orchestrate=use_orchestrate,
+                orchestrate=use_orchestrate, surface=surface_mode,
             )
         return guided_setup(ws, hosts=["claude"])
     return wrapper(ws.root)

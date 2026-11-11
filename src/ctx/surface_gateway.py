@@ -71,10 +71,16 @@ class MCPBackend:
     """A persistent stdio connection to one backend MCP server. Lazy: the
     subprocess is spawned on first use and reused for the session."""
 
-    def __init__(self, name: str, argv: list[str], *, timeout: float = 15.0):
+    def __init__(self, name: str, argv: list[str], *, timeout: float = 15.0,
+                 env: dict[str, str] | None = None, cwd: str | None = None):
         self.name = name
         self.argv = argv
         self.timeout = timeout
+        # The environment and working directory the backend was CONFIGURED
+        # with. Values live only in this process's memory and the child's
+        # environment; they are never logged, rendered or written.
+        self._env = env
+        self.cwd = cwd
         self._proc: subprocess.Popen | None = None
         self._id = 0
         self._tools: list[dict[str, Any]] | None = None
@@ -87,8 +93,9 @@ class MCPBackend:
             self._proc = subprocess.Popen(
                 self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                env=self._env, cwd=self.cwd or None,
             )
-        except OSError:
+        except (OSError, ValueError):
             self._proc = None
             return None
         self._id = 0
@@ -209,25 +216,68 @@ BACKENDS_FILE = ".ctx-surface/backends.json"
 
 
 def _is_gateway_argv(argv: list[str]) -> bool:
-    """True if this argv is the gateway itself (avoid fronting ourselves)."""
-    return len(argv) >= 3 and argv[1:3] == ["surface", "gateway"]
+    """True if this argv is the gateway itself (avoid fronting ourselves),
+    however ctx is invoked (``ctx …`` or ``python -m ctx …``)."""
+    return any(argv[i:i + 2] == ["surface", "gateway"] for i in range(1, len(argv) - 1))
 
 
-def gateway_backends(ws_root: Path | str) -> dict[str, list[str]]:
-    """Backend servers the gateway fronts. Prefer the stable snapshot written
-    at install time (``.ctx-surface/backends.json``) so the host can load ONLY
-    the gateway while the gateway still finds the backends; fall back to live
-    config discovery. The gateway never fronts itself."""
-    root = Path(ws_root)
-    servers: dict[str, list[str]] = {}
+def _snapshot_specs(path: Path) -> dict[str, surface.ServerSpec] | None:
+    """Backends named by a snapshot file, or None when it is absent/unreadable.
+    A snapshot written by ctx carries NO environment values — at most the
+    names in ``env_keys`` — so it is safe at the permissions of any workspace
+    file; values are rehydrated from the live config at spawn time."""
     try:
-        doc = json.loads((root / BACKENDS_FILE).read_text(encoding="utf-8"))
-        for name, cfg in (doc.get("mcpServers") or {}).items():
-            if isinstance(cfg, dict) and cfg.get("command"):
-                servers[str(name)] = [str(cfg["command"])] + [str(a) for a in cfg.get("args", [])]
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        servers = dict(surface._mcp_server_commands(ws_root))
-    return {n: a for n, a in servers.items() if not _is_gateway_argv(a)}
+        return None
+    out: dict[str, surface.ServerSpec] = {}
+    for name, cfg in ((doc.get("mcpServers") if isinstance(doc, dict) else None) or {}).items():
+        if not isinstance(cfg, dict) or not cfg.get("command"):
+            continue  # remote servers are not proxied by a stdio gateway
+        spec = surface._spec(str(name), cfg, host="ctx", scope=str(cfg.get("scope") or "snapshot"),
+                             source=str(path))
+        if spec is not None:
+            out[spec.name] = spec
+    return out
+
+
+def gateway_backend_specs(ws_root: Path | str, backends_file: Path | str | None = None
+                          ) -> dict[str, surface.ServerSpec]:
+    """Backend servers the gateway fronts, with the environment and working
+    directory each was configured with.
+
+    Prefer a snapshot (``backends_file``, else ``.ctx-surface/backends.json``)
+    so the host can load ONLY the gateway while the gateway still finds the
+    backends; fall back to live config discovery. A snapshot entry whose
+    command matches a live config entry of the same name inherits that
+    entry's ``env`` and ``cwd`` (values are read from the user's own config
+    file at spawn time, never copied). Remote servers are never fronted. The
+    gateway never fronts itself."""
+    root = Path(ws_root)
+    live: dict[str, surface.ServerSpec] = {}
+    for s in surface.mcp_server_specs(root):
+        if s.transport == "stdio" and s.name not in live:
+            live[s.name] = s
+    snap = _snapshot_specs(Path(backends_file) if backends_file else root / BACKENDS_FILE)
+    if snap is None:
+        # Without a snapshot only WORKSPACE servers are fronted: a user- or
+        # local-scope server is started only when a snapshot names it.
+        specs = {n: s for n, s in live.items() if s.scope == "workspace"}
+    else:
+        specs = {}
+        for name, s in snap.items():
+            src = live.get(name)
+            if src is not None and src.command == s.command:
+                s.env = {**src.env, **s.env}
+                s.cwd = s.cwd or src.cwd
+            specs[name] = s
+    return {n: s for n, s in specs.items() if not _is_gateway_argv(s.argv)}
+
+
+def gateway_backends(ws_root: Path | str, backends_file: Path | str | None = None
+                     ) -> dict[str, list[str]]:
+    """Backend name → argv (see :func:`gateway_backend_specs`)."""
+    return {n: s.argv for n, s in gateway_backend_specs(ws_root, backends_file).items()}
 
 
 def _server_family(name: str, argv: list[str]) -> str:
@@ -236,62 +286,103 @@ def _server_family(name: str, argv: list[str]) -> str:
     return surface.family_of(cap)
 
 
+def _state_doc(ws_root: Path | str) -> dict[str, Any]:
+    try:
+        doc = json.loads((Path(ws_root) / STATE_FILE).read_text(encoding="utf-8"))
+        return doc if isinstance(doc, dict) else {}
+    except Exception:
+        return {}
+
+
 def load_state(ws_root: Path | str) -> set[str]:
     """Revealed families, persisted. Kernel families are always included."""
     revealed = set(KERNEL_FAMILIES)
-    try:
-        doc = json.loads((Path(ws_root) / STATE_FILE).read_text(encoding="utf-8"))
-        for f in doc.get("revealed", []):
-            revealed.add(str(f))
-    except Exception:
-        pass
+    for f in _state_doc(ws_root).get("revealed", []) or []:
+        revealed.add(str(f))
     return revealed
 
 
-def save_state(ws_root: Path | str, revealed: set[str]) -> None:
+def save_state(ws_root: Path | str, revealed: set[str], *,
+               servers: set[str] | None = None,
+               tools: set[tuple[str, str]] | None = None) -> None:
+    """Persist revealed families (and, when given, servers/tools). Keys not
+    passed are preserved, so a family-only writer (reconcile) never drops a
+    finer-grained reveal."""
     try:
+        doc = _state_doc(ws_root)
+        doc["revealed"] = sorted(revealed)
+        if servers is not None:
+            doc["servers"] = sorted(servers)
+        if tools is not None:
+            doc["tools"] = sorted([list(t) for t in tools])
+        doc = {k: v for k, v in doc.items() if v or k == "revealed"}
         path = Path(ws_root) / STATE_FILE
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"revealed": sorted(revealed)}, indent=2) + "\n",
-                        encoding="utf-8")
+        path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except Exception:
         pass
 
 
 # ------------------------------------------------------------ gateway core
+# The gateway's own schemas are the fixed cost it charges every turn, so new
+# behaviour rides the existing three tools: `query` on the index, `target`
+# (a family, a server, or one tool) on reveal/hide. No fourth tool.
+_TARGET = {"type": "string", "description": "family, server, or mcp__server__tool"}
 _META_TOOLS = [
     {
         "name": "surface_index",
         "description": "List capability families and which are revealed. The "
-                       "compact directory of what this session can do.",
-        "inputSchema": {"type": "object", "properties": {}},
+                       "compact directory of what this session can do. With "
+                       "query: find matching tools without revealing them.",
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}},
     },
     {
         "name": "surface_reveal",
         "description": "Reveal a capability family so its tools become callable "
-                       "(e.g. remote-source-control, testing, deployment).",
+                       "(e.g. remote-source-control, testing, deployment), or one "
+                       "server or tool.",
         "inputSchema": {"type": "object", "properties": {
-            "family": {"type": "string"}}, "required": ["family"]},
+            "family": {"type": "string"}, "target": _TARGET}},
     },
     {
         "name": "surface_hide",
         "description": "Hide a capability family's tools again once its phase is done.",
         "inputSchema": {"type": "object", "properties": {
-            "family": {"type": "string"}}, "required": ["family"]},
+            "family": {"type": "string"}, "target": _TARGET}},
     },
 ]
+
+_MAX_INDEX_MATCHES = 12
+_MAX_DESC_CHARS = 120
 
 
 class Gateway:
     """Pure-ish gateway logic: which tools are visible, how a call routes, and
-    the family directory. The serve loop wraps this over stdio."""
+    the family directory. The serve loop wraps this over stdio.
 
-    def __init__(self, ws_root: Path | str):
+    ``backends_file`` names an explicit snapshot (as ``ctx wrap`` passes for
+    one session); ``persist`` False keeps reveal state in memory only, so an
+    ephemeral session leaves nothing behind and inherits nothing."""
+
+    def __init__(self, ws_root: Path | str, *, backends_file: Path | str | None = None,
+                 persist: bool = True):
         self.ws_root = Path(ws_root)
-        self.commands = gateway_backends(ws_root)
+        self.persist = persist
+        self.specs = gateway_backend_specs(ws_root, backends_file)
+        self.commands = {n: s.argv for n, s in self.specs.items()}
         self.family_of = {n: _server_family(n, a) for n, a in self.commands.items()}
-        self.revealed = load_state(ws_root)
+        self.excluded = {n: {str(t) for t in (s.raw.get("exclude_tools") or [])}
+                         for n, s in self.specs.items()}
+        doc = _state_doc(ws_root) if persist else {}
+        self.revealed = load_state(ws_root) if persist else set(KERNEL_FAMILIES)
+        self.revealed_servers = {str(x) for x in doc.get("servers", []) or []}
+        # (server, tool) pairs: never a joined string, since server names may
+        # contain dots or underscores.
+        self.revealed_tools: set[tuple[str, str]] = {
+            (str(x[0]), str(x[1])) for x in doc.get("tools", []) or []
+            if isinstance(x, list) and len(x) == 2}
         self._backends: dict[str, MCPBackend] = {}
+        self._cache = surface.read_probe_cache(self.ws_root)
 
     # -- families -------------------------------------------------------
     def families(self) -> dict[str, list[str]]:
@@ -302,58 +393,127 @@ class Gateway:
 
     def _backend(self, name: str) -> MCPBackend:
         if name not in self._backends:
-            self._backends[name] = MCPBackend(name, self.commands[name])
+            argv, env, cwd = surface.spawn_params(self.specs[name])
+            self._backends[name] = MCPBackend(name, argv, env=env, cwd=cwd)
         return self._backends[name]
+
+    def _tools_of(self, server: str) -> list[dict[str, Any]]:
+        return [t for t in self._backend(server).list_tools()
+                if str(t.get("name", "")) not in self.excluded.get(server, set())]
+
+    def _visible(self, server: str, tool: str) -> bool:
+        if tool in self.excluded.get(server, set()):
+            return False
+        return (self.family_of.get(server) in self.revealed
+                or server in self.revealed_servers
+                or (server, tool) in self.revealed_tools)
+
+    def _server_open(self, server: str) -> bool:
+        return self.family_of.get(server) in self.revealed or server in self.revealed_servers
 
     # -- visible surface ------------------------------------------------
     def visible_tools(self) -> list[dict[str, Any]]:
         tools = list(_META_TOOLS)
-        for name, fam in sorted(self.family_of.items()):
-            if fam not in self.revealed:
+        for name in sorted(self.family_of):
+            wanted = {t for s, t in self.revealed_tools if s == name}
+            if not self._server_open(name) and not wanted:
                 continue
-            for t in self._backend(name).list_tools():
+            for t in self._tools_of(name):
+                if not self._visible(name, str(t.get("name", ""))):
+                    continue
                 schema = dict(t)
                 schema["name"] = f"mcp__{name}__{t.get('name', '')}"
                 tools.append(schema)
         return tools
 
     # -- routing --------------------------------------------------------
+    def _split(self, rest: str, sep: str) -> tuple[str, str] | None:
+        """(server, tool) from ``<server><sep><tool>``, matching the LONGEST
+        known server name so dotted/underscored names resolve exactly."""
+        for server in sorted(self.commands, key=len, reverse=True):
+            if rest.startswith(server + sep) and len(rest) > len(server) + len(sep):
+                return server, rest[len(server) + len(sep):]
+        return None
+
+    def _resolve(self, raw: str) -> tuple[str, Any]:
+        """(kind, key) for a reveal/hide target: ('family', f) | ('server', s)
+        | ('tool', (server, tool)) | ('unknown', raw)."""
+        t = raw.strip()
+        if t.startswith("mcp__"):
+            pair = self._split(t[len("mcp__"):], "__")
+            return ("tool", pair) if pair else ("unknown", t)
+        known = set(self.family_of.values()) | set(KERNEL_FAMILIES)
+        if t in known:
+            return "family", t
+        if t in self.commands:
+            return "server", t
+        pair = self._split(t, ".")
+        return ("tool", pair) if pair else ("unknown", t)
+
+    def _save(self) -> None:
+        if self.persist:
+            save_state(self.ws_root, self.revealed, servers=self.revealed_servers,
+                       tools=self.revealed_tools)
+
     def call(self, name: str, arguments: dict) -> tuple[dict[str, Any], bool]:
         """Return (result, surface_changed). surface_changed=True after a
         reveal/hide so the server emits tools/list_changed."""
         if name == "surface_index":
-            return self._index_result(), False
+            query = str((arguments or {}).get("query") or "").strip()
+            return (self._query_result(query) if query else self._index_result()), False
         if name in ("surface_reveal", "surface_hide"):
-            fam = str(arguments.get("family", "")).strip()
-            known = set(self.family_of.values()) | set(KERNEL_FAMILIES)
-            if fam not in known:
-                return (self._text(f"unknown family {fam!r}; available: "
-                                   f"{', '.join(sorted(known))}"), False)
-            if name == "surface_reveal":
-                if fam in KERNEL_FAMILIES or fam in self.revealed:
-                    return self._text(f"family {fam} already revealed"), False
-                self.revealed.add(fam)
+            raw = str(arguments.get("target") or arguments.get("family") or "").strip()
+            kind, key = self._resolve(raw)
+            reveal = name == "surface_reveal"
+            if kind == "unknown":
+                known = set(self.family_of.values()) | set(KERNEL_FAMILIES)
+                return (self._text(f"unknown family {raw!r}; available: "
+                                   f"{', '.join(sorted(known))} (or a server: "
+                                   f"{', '.join(sorted(self.commands)) or 'none'})"), False)
+            if kind == "family":
+                fam = key
+                if reveal:
+                    if fam in KERNEL_FAMILIES or fam in self.revealed:
+                        return self._text(f"family {fam} already revealed"), False
+                    self.revealed.add(fam)
+                else:
+                    if fam in KERNEL_FAMILIES:
+                        return self._text(f"family {fam} is kernel; cannot hide"), False
+                    if fam not in self.revealed:
+                        # Mirror of the reveal guard: a no-op must not report
+                        # surface_changed, or the server emits a spurious
+                        # tools/list_changed and the caller reads "hid" for
+                        # something that was never shown.
+                        return self._text(f"family {fam} already hidden"), False
+                    self.revealed.discard(fam)
+                self._save()
+                servers = self.families().get(fam, [])
+                return (self._text(f"{'revealed' if reveal else 'hid'} "
+                                   f"{fam}: {', '.join(servers) or '(no servers)'}"), True)
+            pool = self.revealed_servers if kind == "server" else self.revealed_tools
+            server = key if kind == "server" else key[0]
+            label = key if kind == "server" else f"mcp__{key[0]}__{key[1]}"
+            if reveal:
+                if key in pool:
+                    return self._text(f"{kind} {label} already revealed"), False
+                if kind == "tool" and key[1] in self.excluded.get(server, set()):
+                    return self._text(f"{label} is excluded by this session's profile"), False
+                pool.add(key)
             else:
-                if fam in KERNEL_FAMILIES:
-                    return self._text(f"family {fam} is kernel; cannot hide"), False
-                if fam not in self.revealed:
-                    # Mirror of the reveal guard: a no-op must not report
-                    # surface_changed, or the server emits a spurious
-                    # tools/list_changed and the caller reads "hid" for
-                    # something that was never shown.
-                    return self._text(f"family {fam} already hidden"), False
-                self.revealed.discard(fam)
-            save_state(self.ws_root, self.revealed)
-            servers = self.families().get(fam, [])
-            return (self._text(f"{'revealed' if name == 'surface_reveal' else 'hid'} "
-                               f"{fam}: {', '.join(servers) or '(no servers)'}"), True)
+                if key not in pool:
+                    via = self.family_of.get(server)
+                    note = f" (visible via family {via})" if via in self.revealed else ""
+                    return self._text(f"{kind} {label} not individually revealed{note}"), False
+                pool.discard(key)
+            self._save()
+            return self._text(f"{'revealed' if reveal else 'hid'} {kind} {label}"), True
         # proxied backend tool: mcp__<server>__<tool>
         if name.startswith("mcp__"):
-            _, _, rest = name.partition("mcp__")
-            server, _, tool = rest.partition("__")
-            if server not in self.commands:
-                return self._text(f"no backend {server!r}"), False
-            if self.family_of.get(server) not in self.revealed:
+            pair = self._split(name[len("mcp__"):], "__")
+            if pair is None:
+                return self._text(f"no backend for {name!r}"), False
+            server, tool = pair
+            if not self._visible(server, tool):
                 return self._text(f"{server} is hidden; surface_reveal "
                                   f"'{self.family_of.get(server)}' first"), False
             return _bound_result(self._backend(server).call(tool, arguments)), False
@@ -364,8 +524,52 @@ class Gateway:
         for fam, servers in sorted(self.families().items()):
             mark = "●" if fam in self.revealed else "○"
             lines.append(f"  {mark} {fam}: {', '.join(servers)}")
-        lines.append("● revealed  ○ available")
+        if self.revealed_servers or self.revealed_tools:
+            lines.append("  also revealed: " + ", ".join(
+                sorted(self.revealed_servers)
+                + [f"mcp__{s_}__{t_}" for s_, t_ in sorted(self.revealed_tools)]))
+        lines.append("● revealed  ○ available · surface_index query=<words> finds tools")
         return self._text("\n".join(lines))
+
+    def _query_result(self, query: str) -> dict[str, Any]:
+        """Tools whose name or description match the query, ranked by term
+        hits, WITHOUT revealing them. Lists each backend's tools (spawning it
+        lazily); bounded to :data:`_MAX_INDEX_MATCHES` lines with the rest
+        declared as omitted."""
+        terms = [t for t in query.lower().replace("_", " ").split() if t]
+        hits: list[tuple[int, str, str, bool]] = []
+        for server in sorted(self.commands):
+            for t in self._catalog(server):
+                tool = str(t.get("name", ""))
+                desc = " ".join(str(t.get("description") or t.get("summary") or "").split())
+                blob = f"{server} {tool} {desc}".lower().replace("_", " ")
+                score = sum(blob.count(term) for term in terms)
+                if score:
+                    hits.append((score, f"mcp__{server}__{tool}", desc, self._visible(server, tool)))
+        hits.sort(key=lambda h: (-h[0], h[1]))
+        if not hits:
+            return self._text(f"no tool matches {query!r}; surface_index lists families")
+        lines = [f"Tools matching {query!r} (surface_reveal target=<name> to enable one):"]
+        for _, name, desc, shown in hits[:_MAX_INDEX_MATCHES]:
+            d = desc[:_MAX_DESC_CHARS] + ("…" if len(desc) > _MAX_DESC_CHARS else "")
+            lines.append(f"  {'●' if shown else '○'} {name} — {d}".rstrip(" —"))
+        if len(hits) > _MAX_INDEX_MATCHES:
+            lines.append(f"  … {len(hits) - _MAX_INDEX_MATCHES} more matches omitted; "
+                         "narrow the query")
+        return self._text("\n".join(lines))
+
+    def _catalog(self, server: str) -> list[dict[str, Any]]:
+        """Tool names + descriptions for a query: from a live connection if
+        one is already open, else from the probe cache, else (only then) by
+        starting the backend, bounded by its RPC deadline."""
+        if server in self._backends:
+            return self._tools_of(server)
+        entry = self._cache.get(server)
+        if (isinstance(entry, dict) and entry.get("tools")
+                and entry.get("key") == surface._probe_cache_key(self.commands[server])):
+            return [t for t in entry["tools"] if isinstance(t, dict)
+                    and str(t.get("name", "")) not in self.excluded.get(server, set())]
+        return self._tools_of(server)
 
     @staticmethod
     def _text(msg: str) -> dict[str, Any]:
@@ -377,11 +581,15 @@ class Gateway:
 
 
 # ------------------------------------------------------------ serve loop
-def serve_gateway(ws_root: Path | str | None = None) -> int:
-    """Run the gateway as a stdio MCP server until EOF."""
+def serve_gateway(ws_root: Path | str | None = None, *,
+                  backends_file: Path | str | None = None) -> int:
+    """Run the gateway as a stdio MCP server until EOF. With an explicit
+    ``backends_file`` (a per-session snapshot from ``ctx wrap``) reveal state
+    stays in memory: the session leaves no state file behind."""
     import os
 
-    gw = Gateway(ws_root or os.getcwd())
+    gw = Gateway(ws_root or os.getcwd(), backends_file=backends_file,
+                 persist=backends_file is None)
     out = sys.stdout
 
     def reply(msg_id: Any, result: Any = None, error: dict | None = None) -> None:
@@ -435,4 +643,4 @@ def serve_gateway(ws_root: Path | str | None = None) -> int:
 
 
 __all__ = ["Gateway", "MCPBackend", "serve_gateway", "load_state", "save_state",
-           "KERNEL_FAMILIES", "STATE_FILE"]
+           "KERNEL_FAMILIES", "STATE_FILE", "gateway_backends", "gateway_backend_specs"]

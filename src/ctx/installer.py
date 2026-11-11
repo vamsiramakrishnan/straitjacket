@@ -304,10 +304,10 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
     lines.append(f"gateway wiring for {host}: fronts {len(backends)} backend(s) "
                  f"[{', '.join(sorted(backends)) or 'none'}]")
     if apply:
+        from ctx.surface_profiles import write_private
+
         for rel, content in files.items():
-            path = root / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            write_private(root / rel, content)  # 0600: carries full server commands
         lines.append("  wrote: " + ", ".join(files))
         lines.append("  tip: set [surface] gateway = true in ctx.toml so the "
                      "SessionStart gate knows disclosure is progressive")
