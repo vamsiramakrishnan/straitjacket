@@ -3823,10 +3823,13 @@ from ctx.refgrammar import HANDLE_PREFIX_RE as _HANDLE_PREFIX_RE  # noqa: E402
 from ctx.refgrammar import RUN_HANDLE_RE as _RUN_HANDLE_RE  # noqa: E402
 from ctx.refgrammar import SPAN_ID_RE as _SPAN_ID_RE  # noqa: E402
 _PLAIN_TOKEN_RE = re.compile(r"[A-Za-z0-9_./:@%+,=-]+")
-_QUOTED_TOKEN_RE = re.compile(r"'[^'\\\n]*'")
-#: One word: a whole single-quoted string or a run of non-blank, non-quote
-#: characters, followed by blanks or the end.
-_WORD_RE = re.compile(r"('[^'\\\n]*'|[^\s']+)(?:[ \t]+|$)")
+#: A quoted word whose text is exactly its literal content: a single-quoted
+#: string, or a double-quoted one holding none of ``$``, backtick and
+#: backslash (the only characters a non-interactive shell expands there).
+_QUOTED_TOKEN_RE = re.compile(r"'[^'\\\n]*'|\"[^\"$`\\\n]*\"")
+#: One word: a whole quoted string (as above) or a run of non-blank,
+#: non-quote characters, followed by blanks or the end.
+_WORD_RE = re.compile(r"('[^'\\\n]*'|\"[^\"$`\\\n]*\"|[^\s'\"]+)(?:[ \t]+|$)")
 #: Flags each verb may carry in an approved call, and whether they take a value.
 _VERB_FLAGS: dict[str, dict[str, bool]] = {
     "get": {"--lines": True, "--bytes": True, "--records": True, "--json-pointer": True,
@@ -3847,13 +3850,19 @@ _PATH_FLAGS = frozenset({"--symbol", "--glob", "--scope"})
 def _ctx_words(command: str) -> list[str] | None:
     """``ctx`` and its arguments, or None unless the command is exactly one
     plain ctx call: words of ``[A-Za-z0-9_./:@%+,=-]``, single-quoted
-    strings, and store handles -- the only place a ``#`` may appear, and
-    only as ``#stdout``/``#stderr`` at the end of a handle. A ``#`` that
-    starts a comment, a redirection, an assignment prefix, a second command,
-    a variable or a double quote all fail."""
+    strings, double-quoted strings with no ``$``, backtick or backslash
+    (both mean exactly their literal text; once unquoted, a handle inside
+    one is checked against the handle grammar like any other argument), and
+    store handles -- the only place an unquoted ``#`` may appear, and only
+    as ``#stdout``/``#stderr`` at the end of a handle. A ``#`` that starts a
+    comment, a redirection, an assignment prefix, a second command, a
+    variable, a substitution, an escape or an unterminated quote all fail."""
     if not command or "\n" in command or "\r" in command:
         return None
-    text = command.strip()
+    # Only what a shell itself skips around a command. A no-break space, a
+    # vertical tab or any other "whitespace" is part of a word to the shell
+    # (`<NBSP>ctx` names a different program), so it must not be stripped here.
+    text = command.strip(" \t")
     # Words are separated by blanks; a single-quoted string is ONE word and
     # may hold blanks (`ctx q 'refs X | group file'`) but must stand alone:
     # a quote glued to other characters is not a plain word.
@@ -3875,6 +3884,23 @@ def _ctx_words(command: str) -> list[str] | None:
         else:
             return None
     return ["ctx", *out]
+
+
+def ctx_command_words(command: str) -> list[str] | None:
+    """Public form of :func:`_ctx_words` for callers outside the hook (the
+    AccioBench harness decides with it which ctx calls may skip its sandbox)."""
+    return _ctx_words(command)
+
+
+def ctx_read_kind(argv: list[str]) -> str | None:
+    """``"store"``, ``"path"`` or None for ctx's arguments ``[verb, *args]``
+    (no leading ``ctx``), classified exactly as the hook's self-approval
+    classifies them (:func:`_printed_read`). Only ``"store"`` reads nothing
+    but ctx's own store by a ``run:`` handle: no path, no execution, no
+    write outside ctx's store and private directories."""
+    if not argv:
+        return None
+    return _printed_read(argv[0], list(argv[1:]))[0]
 
 
 def _printed_read_kind(verb: str, args: list[str]) -> str | None:
@@ -3991,8 +4017,9 @@ def _ctx_self_approved(payload: dict[str, Any], ws_root: str | None = None) -> b
                                and _RUN_HANDLE_RE.fullmatch(ref)) else "path"
             command = None
         elif name == "Bash":
-            command = (_tool_command(payload) or "").strip()
-            argv = _ctx_words(command)
+            # Blanks and newlines only: see _ctx_words on other whitespace.
+            command = (_tool_command(payload) or "").strip(" \t\n")
+            argv = ctx_command_words(command)
             if not argv or len(argv) < 2 or not _is_ctx_invocation(command, payload.get("cwd")):
                 return False
             verb, args = argv[1], argv[2:]

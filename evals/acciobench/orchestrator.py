@@ -39,8 +39,13 @@ def run_suite(
     *,
     wave_map: dict[str, str] | None = None,
     bucket_map: dict[str, str] | None = None,
+    raised: list[RunMetrics] | None = None,
 ) -> list[RunMetrics]:
-    """Execute ``task_ids`` across ``config.arms`` with isolated worker slots and pooled browsers."""
+    """Execute ``task_ids`` across ``config.arms`` with isolated worker slots and pooled browsers.
+
+    A trial that raises is returned as an in-memory stand-in (``termination="error"``)
+    and nothing is written for it; when ``raised`` is given, each stand-in is appended
+    to it too, so the caller can tell them from results that are on disk."""
     arms = _normalize_arms(config.arms)
     cleaned_tasks = [t.strip() for t in task_ids if t and t.strip()]
     if not cleaned_tasks or not arms:
@@ -102,6 +107,8 @@ def run_suite(
                         notes=[str(exc)],
                     )
                     results[item_idx] = fallback
+                    if raised is not None:
+                        raised.append(fallback)
                 finally:
                     work_queue.task_done()
         finally:

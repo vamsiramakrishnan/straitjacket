@@ -115,6 +115,55 @@ python evals/acciobench_run.py run \
 - `--wave-file plan.json --wave wave1`: run predefined stratified waves.
 - `--sample N --seed 42`: deterministic random subsample.
 - `--no-cache`: force re-execution instead of resuming from completed `*_meta/result.json` receipts in `--workdir`.
+- **Resume is per configuration**: every `result.json` carries `config_fingerprint`, a
+  hash of the settings that change what a trial measures (`model`, `provider`,
+  `thinking_level`, `max_output_tokens`, `max_steps`, `entry_gate_bytes`,
+  `baseline_raw_cap`, `judge_provider`, `judge_model`, the loop's own gate and
+  compaction constants, a content hash of the task's own directory (prompt,
+  `task.toml`, workspace, services, and the grader, rubric and private answers, since
+  a changed grader changes the recorded score), the version the benchmarked ctx
+  reports (`ctx --version`, asked once per process; `sj` arm only), and whether the
+  bwrap sandbox is active). A cached result is reused only when its fingerprint
+  matches; worker counts, slot offsets, output paths, credentials and host paths are
+  not part of it (moving the dataset does not invalidate a workdir; changing its
+  content does). The ctx version is the string `ctx --version` prints, not a hash of
+  its source: an edit to ctx that keeps the version is NOT detected, so pass
+  `--no-cache` or a fresh `--workdir` when comparing two builds of the same version.
+  A result written before fingerprints existed is reused only if its
+  `model_id` equals `--model` (one `[legacy]` line says so); never across models.
+  When a result does not match, one `[rerun]` line says why and the previous trial
+  (its run directory and `_meta` directory) is moved to
+  `<workdir>/superseded/<old fingerprint>/` (or `legacy-<model>/`; a `.2`, `.3`, ...
+  suffix when that already holds a trial), where reports do not look. Nothing is ever
+  deleted: if the move fails, that trial stops with an error and its directories stay
+  where they were. `run` then prints a `[not recorded]` line for the trial and leaves
+  the earlier result still in its slot out of the reports it writes (a later
+  `report` on the same workdir reads whatever is on disk, so it will show that earlier
+  result until the trial is run again). If every selected trial raised, those reports
+  show no completed run. `ctx_state/` is shared by all configurations.
+  The task-directory hash reads regular files only; a FIFO, a device, a dangling
+  symlink or an unreadable file is recorded by what it is instead of being opened.
+  It follows directory symlinks, because staging copies through them: a change beneath
+  a linked input directory is a change to the task. Each real directory is hashed
+  once; a second link to it, or a link back to an ancestor, is recorded by name.
+- **Grading errors are not failures**: when the official grader itself fails (timeout,
+  missing, unparsable or uninterpretable `reward.json`: not an object, a non-numeric
+  or non-finite score, checks_passed > checks_total, neither a score nor checks, a
+  malformed checks_breakdown), `result.json` records `grading_error` (the grader's
+  message) with `passed=false` and zero scores, and the agent's `termination` is kept.
+  Reports (table, markdown, JSON `grading_error_runs`, HTML header) exclude such trials
+  from solve rate and score aggregates and show their count separately. On resume, a
+  trial in this state is **re-graded only**: the grader runs again against the outputs
+  still in its run directory (same staged case, same port map from
+  `sandbox_ports.json`, mock services restarted from the trial's persisted state), with
+  no model call and nothing wiped. Only if its run directory is gone is it re-run.
+  A re-grade must bind the ports its trial ran with, and trials that ran one after
+  another in one worker slot recorded the same ports, so sandboxes in one run take
+  turns on a host port: a re-grade waits (up to 30 minutes) for a port another trial
+  holds, and if something outside the run is listening on it the trial stays ungraded
+  with that reason, rather than being graded against another trial's service.
+  Results written before this change that carry a `verifier error:` note and
+  `passed=false` load as grading errors.
 - **Untouched model defaults**: `thinkingConfig` and `maxOutputTokens` are left unset by default so models run at their native provider defaults. Optional `--thinking-level` and `--max-output-tokens` flags are exposed strictly for explicit ablation studies.
 
 ---
@@ -146,6 +195,14 @@ python evals/acciobench_run.py report \
   --output ./acciobench_report.html
 ```
 
+**Unpaired tasks.** A task that one arm has no scorable result for (ungraded, API or
+setup error, not run, superseded by a configuration change) is left out of every paired
+figure, and out of every HTML view, and is counted as "Unpaired tasks" (with the
+missing arm) in the table, markdown, JSON (`unpaired_tasks`, `unpaired`) and HTML
+header. A report that fails to render at the end of `run` never fails the run: the
+results are already on disk, so `run` names the report that failed, prints the
+`report` command that regenerates it, and exits with the run's own status.
+
 ---
 
 ## 5. Architecture: `--arm raw` vs `--arm sj` & Performance Design
@@ -157,12 +214,62 @@ python evals/acciobench_run.py report \
 | Tool schemas | `bash`, `read`, `write`, `edit`, `list`, `glob`, `grep`, `present_files` + `browser_*` (no `state_note`) | Identical tool roster + optional 1-line `state_note` checkpoint parameter |
 | Turn-0 prompt | Official `task.md` + workspace/anti-tamper contract | Same + **Birth Gate** compact workspace file manifest (`<=80` files) |
 | Output containment | Raw subprocess / file output truncated at `400,000` chars | **Entry Gate** (`24,576` B): large outputs stored via `ctx run --json`, returning structured digests + `ctx get`/`ctx search` handles |
-| Redundant call & file guards | None | Readonly call dedup per `mutation_epoch` + content-addressed `sha256` file re-read dedup |
+| Redundant call & file guards | None | Readonly call dedup per `mutation_epoch` (a bash signature normalizes only blanks, a trailing `#` comment as the shell reads it and short-flag clusters; `#` inside a word such as `run:ID#stdout` is text, so each `--lines` page is its own call) + content-addressed `sha256` file re-read dedup |
 |CLI discovery | Raw `--help` stdout | Concurrent subcommand `--help` signature enrichment (`[cli-lsp subcommand signatures]`) |
 | Process & filesystem sandbox | Linux `bubblewrap` (`bwrap`) mount + PID namespace isolation (`/task` mount, isolated `/tmp`, `dataset_root`/sibling `runs`/`mock_case` masked via `--tmpfs`, graceful fallback on macOS) | Identical `bwrap` mount + PID namespace isolation |
 | Context residence | Append-only full transcript | `WatermarkResidence` preserving mutating turns & `state_note` checkpoints while compacting stale thoughts, read-only floods, and old UI control listings |
 | Finalization check | Direct `present_files` | Structural **Emission Gate** catching missing/0-byte/malformed-JSON deliverables and stray scratch scripts in `/task/outputs` |
 | System instruction | None | Concise 4-rule domain-agnostic `SJ_EXECUTION_PROTOCOL` |
+
+### `/tmp` without bubblewrap
+
+With `bwrap`, bash sees the run's private directory (`<run>_meta/sandbox_tmp`) as
+`/tmp`, the same directory the file tools map `/tmp/...` to. Without it (macOS,
+`ACCIOBENCH_NO_BWRAP=1`, `use_bwrap=False`) both arms rewrite `/tmp` paths in commands
+and helper scripts by one rule: a `/tmp` path (`/tmp` as a whole component at the
+start of a path word, after the start, a blank, a quote, `=`, `:`, `(`, a backtick or
+a shell operator, and followed by `/`, a blank, a quote, an operator or the end; so not
+`/tmpfoo`, `/tmp.txt`, `/tmp~`, `~/tmp`, `/var/tmp`, `${X}/tmp` or `http://x/tmp/y`) is
+the private one unless its first component below `/tmp` exists in the host's `/tmp`
+and not in the private directory, in which case it is a host path (the ctx
+executable, the run directory or workdir when they live under `/tmp`) and is left
+alone. `TMPDIR` points at the private directory as well. So the file tools and bash
+round-trip in both directions, `ls /tmp` shows the run's files, and new files land in
+the private directory, never the host's `/tmp`.
+
+What the fallback cannot do, by design: it has **no filesystem isolation** (bash can
+read and write anything the harness user can, the dataset and grader files included);
+a path built at run time (`T=/t; T=${T}mp`, `$(echo /tm)p`) is not seen by the rewrite;
+and a name that already exists only in the host's `/tmp` is left to the host, so bash
+can read and write it. Run with bubblewrap for any result you intend to publish.
+
+### Which `ctx` calls run on the host (`sj` arm)
+
+Every command the model issues runs inside the sandbox, with one exception kept for
+speed: a `bash` call that is exactly one plain `ctx` call reading only ctx's own store
+by a `run:` handle is answered by the harness directly, without starting the sandbox.
+Measured on one machine (median of 40 interleaved calls): about 125 ms on the host
+against about 130 ms for the same call started inside the sandbox, so the shortcut is
+worth about 5 ms; nearly all of a ctx call is ctx itself starting. The larger saving
+is that no plain ctx call, on the host or in the sandbox, is wrapped in a second
+`ctx run` the way an ordinary command is (about 360 ms when it is). That is `ctx get run:ID[#stdout|#stderr] [--lines|--bytes|--records|--json-pointer|--span V] [--hashlines]`,
+`ctx search run:ID PATTERN...`, `ctx stats run:ID`, `ctx diff run:A run:B`,
+`ctx intake --chunks run:ID` and `ctx view run:ID ...`. The classification is the
+product's own (`ctx.hook.ctx_command_words` / `ctx.hook.ctx_read_kind`, the same
+grammar the PreToolUse hook uses to self-approve store reads), not a harness regex:
+quoted words are fine when they mean exactly their text (`'foo bar'`, or `"foo bar"`
+with no `$`, backtick or backslash inside), but a comment, `$(...)`, backticks, a
+redirection, `&`, a here-string, any other double-quoted word, an assignment prefix, `--workspace`, a path, a `repo:`/`blob:`/other handle,
+`--glob`/`--scope`/`--symbol`, `q`, `run`, `py`, `seq`, `job` or any verb the grammar
+does not know all run inside the sandbox (a plain call with the same argv, anything
+else under `bash -c`). `ctx_retrieve` follows the same rule on the argv it builds
+from the model's `handle`, `pattern`, `query` and flag values; its `mode='query'`
+(`ctx q`, which can name files) always runs in the sandbox. The sandbox's mount
+arguments are computed once per working directory and reused. When ctx is launched
+as a module (`--ctx-bin` pointing at a Python interpreter, or the source-checkout
+shim), every launch, including the `ctx` shim on the model's `PATH`, uses
+`python -P -m ctx` (as `ctx.selfcmd` does), so a `ctx.py` or `ctx/` the model writes
+into its task directory is never imported.
 
 ### Harness Performance Optimizations (Both Arms Benefit Equally)
 
