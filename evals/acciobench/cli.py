@@ -514,11 +514,26 @@ def _cmd_run(args: argparse.Namespace) -> int:
         f"provider={config.provider} | model={config.model} | workers={config.workers}",
         flush=True,
     )
-    suite_results = run_suite(config, task_ids, wave_map=wave_map, bucket_map=bucket_map)
+    raised: list[Any] = []
+    suite_results = run_suite(config, task_ids, wave_map=wave_map, bucket_map=bucket_map, raised=raised)
 
     all_results = load_run_results(config.runs_dir)
     selected_set = set(task_ids)
-    scoped_results = [r for r in all_results if r.task_id in selected_set and r.arm in config.arms] or suite_results
+    # A trial that raised wrote nothing. Whatever its slot in runs/ holds is an earlier
+    # run's result (for example a previous configuration's that could not be moved
+    # aside), so it must not stand in for this run's in the reports below.
+    not_recorded = {(r.task_id, r.arm) for r in raised}
+    for r in raised:
+        print(
+            f"[not recorded] {r.task_id} ({r.arm}): {'; '.join(str(n) for n in r.notes) or 'the trial raised'}. "
+            "No result was written for it; any earlier result in its slot is left out of this run's reports.",
+            file=sys.stderr,
+            flush=True,
+        )
+    scoped_results = [
+        r for r in all_results
+        if r.task_id in selected_set and r.arm in config.arms and (r.task_id, r.arm) not in not_recorded
+    ] or suite_results
 
     # The trials are done and their results are on disk: a report that fails to render
     # must not cost the run. Say which one failed and how to regenerate it.

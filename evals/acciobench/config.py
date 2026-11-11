@@ -12,6 +12,7 @@ from pathlib import Path
 import random
 import shlex
 import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -288,12 +289,17 @@ def task_inputs_digest(case_dir: Path) -> str:
             if name in _DIGEST_SKIP_FILES or name.endswith(".pyc"):
                 continue
             p = Path(dirpath) / name
+            rel = p.relative_to(root).as_posix()
+            # Only a regular file is opened: a FIFO would block the read forever and a
+            # device has no content to hash. Whatever cannot be read is recorded by
+            # what it is, so the digest stays stable and the trial decides what a
+            # missing or unreadable input means.
             try:
                 st = p.stat()
-            except OSError:
-                continue
-            rel = p.relative_to(root).as_posix()
-            h.update(rel.encode("utf-8") + b"\0" + _file_digest(p, st).encode() + b"\n")
+                entry = _file_digest(p, st) if stat.S_ISREG(st.st_mode) else f"not-a-file:{stat.S_IFMT(st.st_mode):o}"
+            except OSError as exc:
+                entry = f"unreadable:{type(exc).__name__}"
+            h.update(rel.encode("utf-8") + b"\0" + entry.encode() + b"\n")
     return h.hexdigest()[:16]
 
 

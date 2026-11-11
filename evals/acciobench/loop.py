@@ -414,6 +414,7 @@ def _supersede(config: BenchConfig, run_dir: Path, meta_dir: Path, saved: dict[s
     )
     srcs = [p for p in (run_dir, meta_dir) if p.exists()]
     moved: list[tuple[Path, Path]] = []
+    created: Path | None = None  # the directory this call made, if it got that far
     try:
         parent = config.workdir / "superseded"
         parent.mkdir(parents=True, exist_ok=True)
@@ -422,6 +423,7 @@ def _supersede(config: BenchConfig, run_dir: Path, meta_dir: Path, saved: dict[s
             dest_root = parent / (tag if n == 1 else f"{tag}.{n}")
             try:
                 dest_root.mkdir()  # exclusive: never reuse a directory that holds a trial
+                created = dest_root
                 break
             except FileExistsError:
                 n += 1
@@ -433,6 +435,11 @@ def _supersede(config: BenchConfig, run_dir: Path, meta_dir: Path, saved: dict[s
         for src, dest in reversed(moved):
             try:
                 os.rename(dest, src)
+            except OSError:
+                pass
+        if created is not None:
+            try:
+                os.rmdir(created)  # removes it only if it is empty again
             except OSError:
                 pass
         raise SupersedeError(

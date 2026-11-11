@@ -136,7 +136,12 @@ python evals/acciobench_run.py run \
   `<workdir>/superseded/<old fingerprint>/` (or `legacy-<model>/`; a `.2`, `.3`, ...
   suffix when that already holds a trial), where reports do not look. Nothing is ever
   deleted: if the move fails, that trial stops with an error and its directories stay
-  where they were. `ctx_state/` is shared by all configurations.
+  where they were. `run` then prints a `[not recorded]` line for the trial and leaves
+  the earlier result still in its slot out of the reports it writes (a later
+  `report` on the same workdir reads whatever is on disk, so it will show that earlier
+  result until the trial is run again). `ctx_state/` is shared by all configurations.
+  The task-directory hash reads regular files only; a FIFO, a device, a dangling
+  symlink or an unreadable file is recorded by what it is instead of being opened.
 - **Grading errors are not failures**: when the official grader itself fails (timeout,
   missing, unparsable or uninterpretable `reward.json`: not an object, a non-numeric
   or non-finite score, checks_passed > checks_total, neither a score nor checks, a

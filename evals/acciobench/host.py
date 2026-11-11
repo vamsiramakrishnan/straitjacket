@@ -1226,7 +1226,7 @@ class ToolHost:
         the same argv; anything the grammar cannot read as one plain call runs in
         the sandbox under ``bash -c``, so the shell, not the harness, interprets it."""
         wd_path = wd or self.run_dir
-        argv = ctx_command_words(command.strip())
+        argv = ctx_command_words(command.strip(" \t\n"))
         if argv is not None:
             args = argv[1:]
             verb = args[0] if args else ""

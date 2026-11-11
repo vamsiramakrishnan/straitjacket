@@ -1629,6 +1629,7 @@ def test_supersede_never_deletes_a_previous_configurations_trial(
     assert (run_dir / "workspace" / "MARK_B2.txt").is_file()
     assert (cfg_a.runs_dir / "file-sup__sj__t1_meta" / "result.json").is_file()
     assert len(list(sup.glob("*/file-sup__sj__t1/workspace/MARK_A1.txt"))) == 1
+    assert all(any(d.iterdir()) for d in sup.iterdir()), "a failed move left an empty directory"
 
 
 def _write_two_arm_results(workdir: Path, missing_arm: str, how: str) -> None:
@@ -1706,6 +1707,81 @@ def test_run_command_survives_a_report_that_fails_to_render(
     err = capsys.readouterr().err
     assert "the table report failed to render" in err and "the HTML report failed to render" in err
     assert f"report --workdir {workdir} --format html" in err
+
+
+def test_run_reports_leave_out_an_earlier_result_for_a_trial_that_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A trial that raises writes nothing, so its slot still holds whatever an earlier run
+    left there (a previous configuration's result that could not be moved aside). The
+    run's reports must not present that as this run's result."""
+    ds_root = tmp_path / "cab"
+    workdir = tmp_path / "w"
+    for task in ("file-a", "file-b"):
+        _create_synthetic_task(ds_root, category="file", task_id=task)
+        for arm in ("raw", "sj"):
+            meta = workdir / "runs" / f"{task}__{arm}__t1_meta"
+            meta.mkdir(parents=True)
+            (meta / "result.json").write_text(json.dumps(dict(
+                task_id=task, task_rel=f"file/{task}", category="file", arm=arm, model_id="earlier-model",
+                steps=3, termination="present_files", passed=True, capacity_score=1.0,
+                checks_passed=2, checks_total=2)), encoding="utf-8")
+
+    def fake_suite(config: Any, task_ids: list[str], *, raised: list[RunMetrics], **_: Any) -> list[RunMetrics]:
+        on_disk = [r for r in load_run_results(config.runs_dir) if (r.task_id, r.arm) != ("file-b", "sj")]
+        stand_in = RunMetrics(task_id="file-b", task_rel="file-b", category="file", arm="sj",
+                              model_id=config.model, termination="error",
+                              notes=["file-b__sj__t1: could not move the previous configuration's trial aside"])
+        raised.append(stand_in)
+        return [*on_disk, stand_in]
+
+    monkeypatch.setattr(ab_cli, "run_suite", fake_suite)
+    out_json = tmp_path / "report.json"
+    args = ab_cli.build_parser().parse_args(
+        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-a,file-b",
+         "--arms", "raw,sj", "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock",
+         "--format", "json", "--output", str(out_json), "--no-html-report"]
+    )
+    assert ab_cli._cmd_run(args) == 0
+    err = capsys.readouterr().err
+    assert "[not recorded] file-b (sj)" in err and "could not move" in err
+    doc = json.loads(out_json.read_text(encoding="utf-8"))
+    assert doc["unpaired_tasks"] == 1
+    assert doc["unpaired"][0]["task_id"] == "file-b" and doc["unpaired"][0]["missing"] == "sj"
+    assert doc["paired"]["paired_tasks"] == 1
+    # The earlier result itself is untouched on disk.
+    assert (workdir / "runs" / "file-b__sj__t1_meta" / "result.json").is_file()
+
+
+def test_task_inputs_digest_never_blocks_or_raises_on_odd_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evals.acciobench import config as cfg_mod
+
+    case = tmp_path / "case"
+    case.mkdir()
+    (case / "task.md").write_text("prompt", encoding="utf-8")
+    base = cfg_mod.task_inputs_digest(case)
+
+    os.mkfifo(case / "pipe")  # opening this for reading would block forever
+    (case / "dangling").symlink_to(case / "nowhere")
+    with_odd = cfg_mod.task_inputs_digest(case)
+    assert with_odd != base and with_odd == cfg_mod.task_inputs_digest(case)
+
+    secret = case / "private.txt"
+    secret.write_text("x", encoding="utf-8")
+    readable = cfg_mod.task_inputs_digest(case)
+    real_open = Path.open
+
+    def deny(self: Path, *a: Any, **k: Any) -> Any:
+        if self.name == "private.txt":
+            raise PermissionError(13, "Permission denied")
+        return real_open(self, *a, **k)
+
+    cfg_mod._FILE_DIGEST_CACHE.clear()
+    monkeypatch.setattr(Path, "open", deny)
+    unreadable = cfg_mod.task_inputs_digest(case)
+    assert unreadable != readable and unreadable == cfg_mod.task_inputs_digest(case)
 
 
 @pytest.mark.parametrize(
