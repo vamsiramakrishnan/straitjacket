@@ -6,6 +6,45 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- Security: ctx no longer starts itself in a form that imports it from the workspace,
+  and installer writes no longer follow a symlink. `python -m ctx` puts the current
+  directory first on the import path, and ctx wrote that form into host configuration
+  when `ctx` was not on `PATH`, and used it for background jobs, so a repository with a
+  top-level `ctx/` package or `ctx.py` could run its own code as the guard on every
+  tool call and as the job supervisor. `ctx.selfcmd` now decides every self-launch: the
+  installed entry point by absolute path (a `PATH` hit inside the workspace, or inside
+  the outermost enclosing repository, is refused), otherwise `<python> -P -m ctx`. The
+  hook treats a command as ctx only as `ctx …` or `<this interpreter> -P|-I -m ctx …`,
+  never when a variable assignment or `env` precedes it, so `PYTHONPATH=. ctx …` no
+  longer passes as ctx. `ctx setup` upgrades ctx-owned old-form commands for all seven
+  hosts and names the file; `ctx doctor` gains a "ctx launch form" check. Plugin files,
+  gateway configs, `CLAUDE.md`, `ctx.toml`, `.ctxignore`, the explorer agent and the
+  OMP, Hermes and DSH files are written by exclusive create and rename, and a target
+  that is a link, or behind a linked directory leaving the workspace, is refused with a
+  message naming the file. Existing installs should run `ctx setup`, then `ctx doctor`.
+  Not closed: `PYTHONPATH` set in the user's own environment, a different `ctx` earlier
+  on `PATH`, and launches wrapped in `uv run`.
+- Media-aware file reads: when the model opens an image or video with the host's own
+  file tool, the read guard says what the host will deliver and names the `ctx view`
+  command that gets the detail back. New `[media]` section: `image_read`
+  (`advise` default, `redirect`, `off`), `video_read` (`steer` default, `off`),
+  `file_mentions` (default off; under `ctx wrap claude` routes `@file` mentions through
+  `Read`) and `redirect_budget_ms` (6000, clamped to 500-8000). `advise` adds one note
+  with the downscale and an estimate with its basis; `redirect` replaces the read with
+  a gridded overview and steps aside without Pillow, on error, past the budget, or when
+  a visible settings file has a `Read` deny or ask rule. A video or audio read is
+  answered with the `ctx view` command and a shell `ffmpeg`/`ffprobe`/`ffplay` call on
+  a video gets the same hint once per file per session; on Claude Code 2.1.322 `Read`
+  rejects binary extensions before any hook, so only the shell hint runs there. A text
+  read the guard narrowed now tells the model it is a window and gives the offset to
+  continue. Image token estimates name the tier (`CTX_MODEL`) or a range labelled
+  `model unknown`, and `ctx view --json` gains `derived.tokens_before_basis`. Nothing
+  was run on Codex; managed-policy and `--settings` rules are not visible to the hook.
+- `ctx.pathglob` matching no longer backtracks: it tracks the reachable pattern
+  positions and is roughly linear, with the same results as the old matcher on 60,067
+  generated glob and path pairs. A `.ctxignore` of ordinary size could cost one image
+  read the hook's whole 10 s timeout. `ctx search --glob` and retrieval `--glob` use the
+  same matcher.
 - `ctx intake [PATH|-]` stores pasted text, a workspace file, stdin or the clipboard
   once and prints a bounded digest with a handle, without a command or tool call to
   hang it on (`--label`, `--name`, `--focus`, `--json`, `--clip`, `--copy`, and

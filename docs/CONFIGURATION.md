@@ -247,6 +247,27 @@ restriction (an `include` or `exclude` naming one tool of a server, or an
 `authority_ceiling` below `destructive`) is enforced through the gateway, or the
 server is left out of the session; it is never half-applied.
 
+## `[media]`: what a native read of an image or video does
+
+When the model opens an image, video or audio file with the host's own file tool
+(`Read` on Claude Code, `view_image` on Codex), the read guard can say what the host
+will deliver and name the `ctx view` command that gets the detail back. See
+[Pastes and media](PASTES-AND-MEDIA.md#the-agent-opens-an-image-or-video-with-the-hosts-own-tool).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `image_read` | `"advise"` | `advise` \| `redirect` \| `off`. `advise` lets the read proceed unchanged and adds one note with the source size, the size the host shows, a token estimate and the `ctx view … --grid … --cell …` command for a region at original resolution. `redirect` replaces the read with a gridded overview instead; it falls back to the note without Pillow, on error, or past `redirect_budget_ms`. `off` leaves image reads alone. |
+| `video_read` | `"steer"` | `steer` \| `off`. `steer` answers a read of a video or audio file with the exact `ctx view` command, and gives the same hint once per file per session when a shell command runs `ffmpeg`, `ffprobe` or `ffplay` on a video. `off` leaves both alone. |
+| `file_mentions` | `false` | Under `ctx wrap claude` only, route `@file` prompt mentions through the `Read` tool, so the guard and the image note see them, by setting `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1` in the child process. Never applies outside the wrapper, never overrides a value the user set, and is skipped when `[guard] mode = "advisory"` or when `CTX_WRAP_NO_FILE_MENTIONS=1`. |
+| `redirect_budget_ms` | `6000` | Time the `redirect` overview may take. Clamped to 500-8000 because the hook's own timeout is 10 s. |
+
+An unrecognised `image_read` or `video_read` value, or a `redirect_budget_ms` that is
+not an integer, uses the default for that key; it never selects a different
+behaviour. Without Pillow, `image_read = "redirect"` and the `ctx view` crop command
+are unavailable and the note says so. Media handling runs only for a read the guard was
+going to allow: secret, outside-workspace, ignored or symlinked files keep the
+ordinary path.
+
 ## `[intake]`: the prompt gate for oversized pastes
 
 A prompt hook on Claude Code and Codex (`UserPromptSubmit`) can add context to a

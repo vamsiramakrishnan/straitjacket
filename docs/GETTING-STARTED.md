@@ -196,6 +196,11 @@ using the diff, then rerun preview. Duplicate keys, invalid syntax, symlinks
 and ambiguous config files refuse with a diagnostic. A parse error must be
 fixed before a trustworthy structural diff can be generated.
 
+Setup never writes through a symlink: for any host, a target that is a link, or that
+sits behind a linked directory leaving the workspace, is not written, and the message
+names the file (for example "did not update CLAUDE.md: …: it is a symlink; ctx never
+writes through a link").
+
 Setup records individual contributions in `.ctx/host-config.json`; the
 readiness receipt remains content-free. Repair updates a previously owned
 value only when its value and source still match the installed contribution,

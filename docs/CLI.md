@@ -778,8 +778,8 @@ ctx view demo.mp4 --scenes                    # where the picture changes sharpl
 [ctx view shot.png]
 view: overview
 source: image png 640×360 · 48.3 KiB · sha256 afbd016dee1b…
-raw cost: ~299 tok (image-patch)
-derived: overview 640×360 image/jpeg · 26.8 KiB · ~299 tok (no saving) · pillow 13.0.0
+raw cost: ~299 tok (image-patch, same on either tier)
+derived: overview 640×360 image/jpeg · 26.8 KiB · ~299 tok (same on either tier; no saving against the source) · pillow 13.0.0
 grid: 3 rows (1-3, top to bottom) × 5 columns (A-E, left to right); cell = column letter + row number, e.g. B2
 omitted: metadata (EXIF/ICC) stripped
 omitted: grid lines and cell labels are drawn on the overview only
@@ -814,7 +814,7 @@ markup and is not rasterized. Other bytes get a typed digest and no pixels.
 | `--sheet` | Contact sheet of timestamped frames. The default for video: 12 frames, at most 36. |
 | `--scenes` | Timestamps where the picture changes sharply (score threshold 0.30; at most 48 found, 16 listed). Takes only an optional `--range`. |
 | `--subs` | Extract an embedded text subtitle track (256 KiB at most, 12 lines shown). Takes no other timeline flag. A bitmap subtitle track is declined. |
-| `--json` | The same facts as JSON, schema `ctx.view/v1`. An error is also a JSON object. |
+| `--json` | The same facts as JSON, schema `ctx.view/v1`: `status`, `target`, `view`, `source`, `derived`, `omitted`, `notes`, `next`, and `read` when a time was given. `derived` carries `tokens` with its `tokens_basis` and `tokens_before` with its `tokens_before_basis`, plus `op`, `mime`, `path`, `address`, `width`, `height`, `bytes`, `engine`, `engine_version`, `source_sha256`, `output_sha256`, `params` and `meta`. An error is also a JSON object. |
 
 `--grid`, `--cell` and `--region` apply to still images. `--at` and the other time
 flags apply to video and animated images. `--at` cannot be combined with another
@@ -829,8 +829,9 @@ covers every image operation and animated images. ffmpeg without Pillow covers
 Pillow to tile and label. The matrix is in
 [Pastes and media](PASTES-AND-MEDIA.md#optional-engines-and-what-works-without-each).
 
-Token figures are estimates for a model on the standard image tier, not
-measurements of any model; see
+Token figures are estimates, not measurements of any model. The image tier comes
+from `CTX_MODEL` when it names a known model, otherwise a range across both tiers
+is shown and labelled `model unknown`; see
 [Pastes and media](PASTES-AND-MEDIA.md#token-figures-are-estimates).
 
 Exit status: `0` a view; `1` declined with a reason (missing engine, an unreadable

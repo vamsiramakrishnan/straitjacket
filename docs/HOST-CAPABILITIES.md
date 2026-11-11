@@ -93,8 +93,11 @@ Other facts from the same runs:
 - **Claude Code, settings.** `skillOverrides` passed through `--settings` is
   honoured and merged key by key with the settings the user already has.
 - **Claude Code, `Read`.** The `Read` tool refuses files with binary extensions
-  before any hook runs, so no ctx hook sees those reads. Use
-  [`ctx view` or `ctx intake`](PASTES-AND-MEDIA.md) for them.
+  before any hook runs, and a rejection of that kind fires no failure hook, so no ctx
+  hook sees a read of a video or audio file. The `ctx view` hint for a video therefore
+  rides the model's next `ffmpeg` or `ffprobe` shell command on that file. Reads of an
+  image extension do reach `PreToolUse`, where ctx adds a note (see
+  [Pastes and media](PASTES-AND-MEDIA.md#the-agent-opens-an-image-or-video-with-the-hosts-own-tool)).
 - **Claude Code, permissions.** Observed on Claude Code 2.1.322: a hook's `allow`
   together with a rewritten input overrides the user's `deny` and `ask` rules. A hook
   that returns no decision leaves the host to evaluate its rules, against the rewritten
@@ -113,6 +116,7 @@ What each point lets ctx do:
 | Store a paste and give the model a handle | Yes: `advise` mode (the paste still reaches the model this turn). | Same, from documentation. | No. |
 | Bound a flooding command before it runs | Yes, by rewrite. | Yes, by rewrite (not run live). | Yes for `run_command` and `read_file`, by rewrite; other tools are denied with the command named. |
 | Replace an oversized result | Yes, for a built-in tool only in its own result shape; if the digest does not fit the shape within budget, nothing is replaced. | Yes, by block with a reason (not run live). | No. |
+| Tell the model what an image read will deliver, and how to get a region | Yes, a note on `Read` of a large image; the video hint comes with a later shell command. | Yes for `view_image` (contract only; nothing run). | No. |
 | Add a once-per-session advisory | Yes, at `SessionStart`. | Yes, at `SessionStart` (documented). | Yes, at `SessionStart` on 1.5.5. |
 
 ## Configuration validation

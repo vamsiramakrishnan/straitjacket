@@ -57,12 +57,43 @@ disabled hook or replace a different `ctx-harness` server. Comments and other
 integrations are preserved. Invalid syntax and duplicate keys require repair
 at the reported location before a structural diff can be generated.
 
+### `ctx doctor`: "ctx launch form"
+
+```text
+  ✗ ctx launch form — `python -m ctx` without -P imports a `ctx` package from the workspace: .claude/settings.json (hooks.PreToolUse[0].hooks[0]): `ctx setup --host claude` rewrites it to the -P form
+  ✗ ctx launch form — `python -m ctx` without -P imports a `ctx` package from the workspace: .mcp.json (mcpServers.mine): ctx does not manage this entry; set "command": "python3", "args": ["-P", "-m", "ctx", "mcp"]
+```
+
+**Cause:** an installed hook, status-line or MCP command starts ctx as
+`python -m ctx` without `-P`. Python puts the current directory first on the import
+path, so a repository with a top-level `ctx/` package or `ctx.py` would run its own
+code as the guard on every tool call. Releases before the fix wrote that form into
+host configuration whenever `ctx` was not on `PATH`, and used it for background jobs.
+Doctor reads every file a ctx installer writes, plus the hosts' own user-scope
+settings, and prints one row per finding. A passing row reads "no installed command
+imports ctx from the working directory".
+
+**Fix:** the row says which of two cases it is.
+
+- **"`ctx setup --host <host>` rewrites it to the -P form"**: the command is one ctx
+  wrote, in a file ctx manages. Run that setup command. It upgrades ctx-owned commands
+  in place and prints the file it changed, for example "updated 1 ctx command(s) in
+  .claude/settings.json from the unsafe `python -m ctx` form to `python -P -m ctx`".
+  Run `ctx doctor` again.
+- **"ctx does not manage this entry; …"** (or setup will not rewrite it, with the
+  reason, such as a symlink or a read-only file): setup will not touch it. Apply the
+  exact replacement the row prints by hand.
+
+Existing installs should run `ctx setup` once and then `ctx doctor`. Setup refuses to
+write through a symlink and names the file.
+
 ### Codex: `MCP client for ctx-harness failed to start: No such file or directory`
 
 An older generated fallback put the whole `python -m ctx` invocation in MCP
 `command`. Codex launches that field directly, without a shell. Preview the
 repair with `ctx setup --host codex --preview`. The corrected entry separates
-`command = "/path/to/python"` from `args = ["-P", "-m", "ctx", "mcp", "--bounded-only"]`.
+`command = "/path/to/python"` from `args = ["-P", "-m", "ctx", "mcp", "--bounded-only"]`
+(`-P` keeps a `ctx` package in the repository from being imported).
 Owned entries are repairable when they still match the recorded value. Legacy
 entries without an ownership record need the shown correction reviewed and
 integrated before setup proceeds; the old banner does not authorize overwrites.

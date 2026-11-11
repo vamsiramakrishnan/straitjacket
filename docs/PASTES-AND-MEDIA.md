@@ -21,10 +21,12 @@ read [How it works](HOW-IT-WORKS.md) first.
 |---|---|---|---|
 | **You paste a large block into the prompt** | The prompt gate stores it. `advise` (default) adds handles as context; the paste still reaches the model this turn. `block` stops the prompt and tells you what to resend. | Same behaviour, taken from Codex's documentation; not run live. | No prompt hook. The paste reaches the model whole. Run `ctx intake` yourself first. |
 | **The agent reads a large text file** | `Read` is rewritten to the first 240 lines, or denied with an outline, with a `ctx get` hint. | The same route in the governance table (documented; not run live). | `read_file` is bounded by rewriting its line range; `view_file` is denied with the command named. |
-| **The agent looks at an image or video** | The agent runs `ctx view`. `Read` refuses binary extensions before any hook runs. A result the host declares as an image or document is left untouched. | The agent runs `ctx view`. The host's own image tool is not governed. | The agent runs `ctx view`. Image generation is not governed. |
+| **The agent opens an image or video with the host's own tool** | A large image: `Read` proceeds and the model gets a note naming the `ctx view` crop command (`[media] image_read`). A video: `Read` refuses the extension before any hook runs, so the hint comes with the model's next `ffmpeg` or `ffprobe` call. | `view_image` gets the same note for an image and a deny naming `ctx view` for a video. Contract only; nothing was run on Codex. | No media handling. Image generation is not governed. |
+| **The agent or you runs `ctx view`** | Works on every host: it is a command. | Same. | Same. |
 
-Nothing here is automatic for media: ctx has no hook that turns an image or video
-into an overview. The agent, or you, runs `ctx view`.
+ctx never puts pixels into the model's context itself. The hooks above only tell the
+model what its own tool will deliver and which `ctx view` command to run; the agent,
+or you, runs `ctx view`, and the derived file is opened with the host's own tool.
 
 ## A large paste
 
@@ -229,6 +231,12 @@ watches `read_file` and `view_file`. A file above `[budgets] max_inline_bytes`
   `StartLine` and `EndLine`, keeping the requested start and never passing the
   requested end, bounded by bytes as well as lines. `view_file` is denied with a
   range that fits.
+- When the guard narrows a text read, the model is told it is a window and given the
+  offset to continue. A real note, from running the hook on a 402,979-byte log:
+  "the guard limited this Read to at most 240 lines starting at line 1 (the file is
+  402,979 bytes). If the result ends at line 240, the file may continue: Read it again
+  with offset=241 limit=240, or search it for what you need." Before, the model was
+  not told.
 - A cumulative session read budget (`session_read_budget_bytes`, 256 KiB) tightens
   later reads.
 - Secret-bearing paths and paths outside the workspace always ask; they are never
@@ -244,6 +252,86 @@ all of it is addressable by byte range.
 
 A file that an `@`-reference puts in the context on Claude Code enters with no tool
 call, so no hook sees it.
+
+## The agent opens an image or video with the host's own tool
+
+Controlled by [`[media]`](CONFIGURATION.md#media-what-a-native-read-of-an-image-or-video-does).
+Media handling runs only for a read the guard was going to allow, and the decision to
+look at a file is made from its suffix first, so reading a source file costs one set
+lookup. Rules from managed policy or `--settings` are not visible to the hook.
+
+**Claude Code, a large image (`image_read = "advise"`, the default).** The read
+proceeds unchanged and the model gets one note: the source size, what the host will
+show, a token estimate with its basis, and the command for a region at original
+resolution. A real note for a 4000x3000 JPEG, from running the hook (observed on
+Claude Code 2.1.322 for the host's downscale, `CTX_MEDIA` text unchanged):
+
+```text
+CTX_MEDIA: the image this Read opens is a 4000x3000 JPEG. Read gives you a downscaled copy (2000x1500 as observed on Claude Code 2.1.322; ~1,568-3,888 tok est., standard-to-high-res tier range, model unknown), so small text and fine detail may be unreadable. For any region at the original resolution, run `ctx view photo.jpg --grid 3x4 --cell B2` (one cell ~1,296 tok est., same on either tier) and Read the file it prints after `open:`. …
+```
+
+The host's downscale (long edge 2,000 px) is an observation of 2.1.322, not a
+documented constant, and an image within it reached the model whole there, so it gets
+no note. The token range is both image tiers because ctx does not know the model; set
+`CTX_MODEL` to a model ctx knows and the estimate names the tier. All figures are
+estimates. BMP, TIFF and ICO get a note naming `ctx view` when Pillow is installed,
+because the host may not show them. Without Pillow the note says a crop needs it.
+
+**`image_read = "redirect"` (opt in).** The read is replaced with a gridded overview
+and the model is told so:
+
+```text
+CTX_MEDIA: this Read was redirected. What you see is a REDUCED OVERVIEW (1024x768, with a labelled 3x4 grid: columns A-D left to right, rows 1-3 top to bottom), not the original 4000x3000 image, and small text may be unreadable in it. The original is unchanged. For any cell at the original resolution, run `ctx view photo.jpg --grid 3x4 --cell B2` …
+```
+
+It steps aside, and the plain note is given instead, when Pillow is missing, when the
+overview fails or passes `redirect_budget_ms`, when the image is over 32 MiB or 40
+megapixels, and when a visible settings file (including one under
+`CLAUDE_CONFIG_DIR`) has a `Read` deny or ask rule. A rule from managed policy or from
+`--settings` is invisible to the hook, and a path-specific `Read` rule from those is
+not checked against the overview's path. The overview file is verified by hash before
+the redirect, but the host opens it later; that window is inside the session
+directory and was not tested.
+
+**A video or audio file.** With `video_read = "steer"` (default) the guard denies a
+read of a video (MP4, MOV, MKV, WebM, AVI) or audio file with the exact `ctx view`
+command, or says what is missing (ffmpeg, Pillow). On Claude Code 2.1.322 this never
+runs: `Read` refuses a binary extension in its own input validation before any hook,
+so the model gets the host's "cannot read binary files" error and no hook sees the
+call, and a validation rejection fires no failure hook either. The hint therefore
+rides the model's next shell command that runs `ffmpeg`, `ffprobe` or `ffplay` on
+that file, once per file per session, and only when `ctx view` has the engines it
+needs:
+
+```text
+CTX_MEDIA: to look at this video, run `ctx view clip.mp4`: one contact sheet of timestamped frames to Read (the file it prints after `open:`), then --at <seconds> or --range A-B to zoom. No frame extraction needed.
+```
+
+The hint also fires when the named video is only the command's output (`ffmpeg -i in.png
+v.mp4`), and misses `sudo -u USER ffmpeg` and commands inside `if`, `for` or `while`
+bodies. File names appear only shell-quoted inside the printed command, up to 200
+characters; a longer name, or one with control or format characters, is replaced by a
+`PATH` placeholder. Audio is never transcribed: the hint offers its duration and
+codecs.
+
+**`@file` mentions.** A file the user `@`-references enters the context with no tool
+call, so no hook sees it. Observed on 2.1.322: a large mention is not inlined, only
+referenced. With `[media] file_mentions = true`, `ctx wrap claude` sets
+`CLAUDE_CODE_DISABLE_FILE_MENTIONS=1` for that session so the model reads mentions
+with `Read`, where the guard and the image note apply. It does nothing outside
+`ctx wrap claude`, never overrides a value you set, and is off by default. Observed
+once on haiku: a 58 KB log routed through `Read` was bounded to 240 lines and the model,
+not yet told of the bound, answered wrongly; the bound is now stated (see below).
+Images pasted from the clipboard or attached to a prompt also enter with no tool call.
+
+**Codex.** `view_image` of a large image gets the note as `additionalContext`;
+`redirect` rewrites its `path`; video or audio is denied with the `ctx view` command.
+This follows Codex's hooks documentation and nothing was run on Codex. **Antigravity,
+Hermes, OMP, OpenCode and DSH:** no media handling.
+
+Other limits: media reads skip the session read-budget ledger because an image is priced
+in tokens, not bytes; and files that are secret, outside the workspace, ignored or
+symlinked keep the ordinary read path.
 
 ## Images and video
 
@@ -322,19 +410,22 @@ than six hours, holding only ctx's own file names) are removed at start.
 
 ### Token figures are estimates
 
-Every token figure in a `ctx view` digest is an estimate. Images use the
-28-pixel-patch rule, `ceil(width / 28) x ceil(height / 28)`, after scaling to fit the
-**standard** image tier (1,568 px on the long edge and at most 1,568 tokens). The
-tier a given model uses is the model's, not ctx's: a model on a higher-resolution tier
-prices the same picture differently, and ctx does not know which model will read it.
+Every token figure in a `ctx view` digest, and in the read notes above, is an estimate.
+Images use the 28-pixel-patch rule, `ceil(width / 28) x ceil(height / 28)`, after
+scaling to fit an image tier: standard (1,568 px on the long edge, at most 1,568
+tokens) or high-resolution (2,576 px, at most 4,784 tokens). The tier is the model's,
+not ctx's. When `CTX_MODEL` names a model ctx has a tier for, the figure names the tier
+and model; otherwise it is a range across both tiers labelled `model unknown`, and where
+both tiers agree it says `same on either tier`. The model table comes from the Claude
+Code 2.1.322 bundle.
 A video's raw cost is one frame per second at its own resolution, labelled
 `video@1fps`. Anything else falls back to bytes divided by 4.
 
 Because the API already scales a large image to a bounded cost, compression alone
-saves little: a 4000 x 3000 photo is about 1,568 tokens raw and about 1,036 as a
-1024-pixel overview. The saving is selection. A legible grid-cell crop of a
-2560 x 1440 screenshot is about 342 tokens against 1,568, and a 10-second clip is one
-contact sheet of about 1,120 tokens against about 2,990 raw. The figures in
+saves little: a 4000 x 3000 photo is about 1,568 tokens raw on the standard tier (4,784 on the
+high-resolution tier) and about 1,036 as a 1024-pixel overview. The saving is selection. A legible grid-cell crop of a
+2560 x 1440 screenshot is about 342 tokens against 1,568 or more, and a 10-second clip
+is one contact sheet of about 1,120-1,160 tokens against about 2,990 raw. The figures in
 this paragraph were produced by running `ctx view` on generated files, not measured on
 any model's bill.
 
@@ -345,7 +436,7 @@ any model's bill.
 | A paste cannot be removed from the prompt already sent | [A large paste](#a-large-paste), [Host capabilities](HOST-CAPABILITIES.md#what-ctx-can-do-at-each-point) |
 | 32 MiB parse cap; the unmapped tail is addressed by bytes | [`ctx intake`](CLI.md#store-a-paste-file-or-clipboard-ctx-intake) |
 | No video without ffmpeg; no image resizing or grids without Pillow | [Optional engines](#optional-engines-and-what-works-without-each) |
-| Token figures are estimates for the standard image tier | [Token figures](#token-figures-are-estimates) |
+| Token figures are estimates; the tier is the model's | [Token figures](#token-figures-are-estimates) |
 | Redaction in the paste views is pattern-based | [What these views guarantee](#what-these-views-guarantee) |
 
 ---
