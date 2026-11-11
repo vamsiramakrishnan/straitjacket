@@ -462,7 +462,9 @@ def _traceback(depth: int = 90) -> bytes:
 
 def test_traceback_paste_surfaces_its_decisive_line(env):
     ws, store = env
-    data = _traceback()
+    # A traceback that IS the paste gets the stack-trace view (tests/test_trace_profile.py);
+    # one buried at the end of a long document is what the chunk map is for.
+    data = _markdown(150) + _traceback(30)
     r = intake_bytes(store, ws, data, label="trace")
     assert r.profile == "chunkmap/v1"
     d = r.digest

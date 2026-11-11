@@ -15,6 +15,7 @@ from typing import Any
 from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile, from_intake
 from ctx.digest.binprof import BinaryProfile
+from ctx.digest.delimprof import DelimitedDataProfile
 from ctx.digest.intakeprof import ChunkMapProfile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
@@ -30,6 +31,8 @@ from ctx.digest.moreprofs import (
 )
 from ctx.digest.pytestprof import PytestProfile
 from ctx.digest.tableprof import TableProfile
+from ctx.digest.traceprof import StackTraceProfile
+from ctx.digest.udiffprof import UnifiedDiffProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
@@ -47,12 +50,22 @@ _PROFILES: tuple[Profile, ...] = (
     #                     Django runtests.py (SWE-bench mine, 2026-07-19)
     JestProfile(),
     GitDiffProfile(),
+    UnifiedDiffProfile(),  # intake-only (from_intake): a plain ---/+++/@@ diff.
+    #                        After the anchored runners and gitdiff/v1, before the
+    #                        loose file:line shapes (lint/search/build)
+    StackTraceProfile(),  # intake-only: a paste dominated by trace structure.
+    #                       Same slot for the same reason: frames carry file:line
+    #                       and severity words the lint/search profiles would claim
     LintProfile(),  # before Build/LogTemplate: both would misclaim lint shapes
     SearchProfile(),  # grep/rg file:line:content — AFTER Lint: diagnostics
     #                   (which share the shape but carry severity tokens) win first
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),
+    DelimitedDataProfile(),  # intake-only: CSV/TSV/;/| found from field-count
+    #                          structure. After JSON/JSON-lines (a JSONL paste has
+    #                          a consistent comma count too), before the table and
+    #                          log profiles, which would claim numeric/level-word CSVs
     TableProfile(),  # caps-header aligned tables (docker/kubectl family);
     #                  strict header rule keeps logs and prose out
     LogTemplateProfile(),
