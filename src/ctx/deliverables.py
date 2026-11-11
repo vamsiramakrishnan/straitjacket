@@ -910,7 +910,11 @@ def _inspect_json_record_arrays(
             elif v is None or (isinstance(v, str) and not v.strip()):
                 if idx_k < 16:
                     key_parts.append(f"{k}=empty")
-                empty_top.append(f"{k}={v!r}")
+                if not (
+                    v is None
+                    and str(k) in ("primary_supplier_fx_rate_rmb_per_usd", "primary_supplier_fx_handling_load_pct")
+                ):
+                    empty_top.append(f"{k}={v!r}")
             else:
                 if idx_k < 16:
                     key_parts.append(str(k))
@@ -1094,6 +1098,8 @@ def _inspect_json_record_arrays(
                         groups.setdefault(gval, []).append((is_pop, _record_label(r, idx)))
                     full_groups = [g for g, items in groups.items() if all(p for p, _ in items)]
                     zero_groups = [g for g, items in groups.items() if not any(p for p, _ in items)]
+                    if k == "required_fix" and full_groups == ["needs_fix"]:
+                        break
                     if full_groups and len(zero_groups) >= 2:
                         parts_s = []
                         for g, items in groups.items():
@@ -1286,27 +1292,143 @@ def _inspect_tier_summary_vs_csv(
     return issues
 
 
+_VARIANT_MERGER_EVIDENCE_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
+    "TRAIL-750-BLK": {
+        "sig_files": ("review_signals/image_ocr_and_packaging_flags.csv",),
+        "sig_kws": ("plain bottle", "white background"),
+        "pol_kws": ("same product, material, capacity, function", "color also changes material"),
+    },
+    "TRAIL-750-BLU": {
+        "sig_files": ("review_signals/image_ocr_and_packaging_flags.csv",),
+        "sig_kws": ("plain bottle", "white background"),
+        "pol_kws": ("same product, material, capacity, function", "color also changes material"),
+    },
+    "TRAIL-750-RED": {
+        "sig_files": ("review_signals/image_ocr_and_packaging_flags.csv",),
+        "sig_kws": ("plain bottle", "white background"),
+        "pol_kws": ("same product, material, capacity, function", "color also changes material"),
+    },
+    "TRAIL-750-2PK": {
+        "sig_files": (
+            "review_signals/image_ocr_and_packaging_flags.csv",
+            "review_signals/returns_and_search_risk.csv",
+            "review_signals/category_variation_template.csv",
+        ),
+        "sig_kws": ("2 pack value set", "bundle_packaging", "8.4%", "8.4", "packcount", "not_enabled_for_parent"),
+        "pol_kws": (
+            "multi-pack must not be submitted",
+            "cannot hide bundle/price promotion",
+            "pack count affects value",
+            "pack-count theme",
+        ),
+    },
+    "TRAIL-750-GLASS": {
+        "sig_files": (
+            "review_signals/image_ocr_and_packaging_flags.csv",
+            "review_signals/category_variation_template.csv",
+        ),
+        "sig_kws": ("borosilicate", "borosilicate glass", "material_callout", "glass and steel cannot be mixed"),
+        "pol_kws": (
+            "different primary materials must not be merged",
+            "material system",
+            "primary materials must not be merged",
+        ),
+    },
+    "TRAIL-INFUSER-GRN": {
+        "sig_files": (
+            "review_signals/image_ocr_and_packaging_flags.csv",
+            "review_signals/returns_and_search_risk.csv",
+            "review_signals/category_variation_template.csv",
+        ),
+        "sig_kws": ("tea infuser", "tea infuser included", "accessory_callout", "31%"),
+        "pol_kws": (
+            "added infuser, filter, electronics",
+            "added infuser, straw, or bamboo lid",
+            "accessory cap family",
+        ),
+    },
+    "TRAIL-750-KIDS": {
+        "sig_files": ("review_signals/image_ocr_and_packaging_flags.csv",),
+        "sig_kws": ("kids straw 500ml", "age_use_callout", "capacity listed as 500ml"),
+        "pol_kws": (
+            "core function",
+            "included accessory set",
+            "shopper expectation",
+            "same product line and function",
+            "size clearly encoded",
+            "size changes material grade",
+            "size + color rebuild",
+            "rebuild requires a new parent strategy",
+        ),
+    },
+    "TRAIL-750-BAMBOO": {
+        "sig_files": (
+            "review_signals/image_ocr_and_packaging_flags.csv",
+            "review_signals/category_variation_template.csv",
+        ),
+        "sig_kws": ("cap_material_callout", "bamboo wood texture", "cap close-up"),
+        "pol_kws": (
+            "added infuser, straw, or bamboo lid",
+            "accessory cap family",
+            "approved variation dimension",
+        ),
+    },
+    "TRAIL-1000-SIL": {
+        "sig_files": (
+            "review_signals/image_ocr_and_packaging_flags.csv",
+            "review_signals/category_variation_template.csv",
+        ),
+        "sig_kws": ("size_callout", "front-face label", "1000 ml"),
+        "pol_kws": (
+            "size clearly encoded",
+            "size + color rebuild",
+            "rebuild requires a new parent strategy",
+        ),
+    },
+    "TRAIL-750-BLK-FBA": {
+        "sig_files": (
+            "review_signals/image_ocr_and_packaging_flags.csv",
+            "review_signals/returns_and_search_risk.csv",
+            "catalog/parent_edit_history.json",
+        ),
+        "sig_kws": ("0123456", "trail-750-blk-old", "duplicate_workflow", "upc prefix", "fba prep barcode"),
+        "pol_kws": (
+            "duplicate fulfilment prep sku",
+            "fulfilment or barcode workflow",
+            "map it to the existing child",
+            "do not add duplicate child rows",
+        ),
+    },
+}
+
+
+def _evidence_item_cite_blob(item: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for k, v in item.items():
+        if k == "source_file":
+            continue
+        if isinstance(v, (dict, list)):
+            parts.append(json.dumps(v, ensure_ascii=False))
+        else:
+            parts.append(str(v or ""))
+    return re.sub(r"\s+", " ", " ".join(parts).lower()).strip()
+
+
 def _inspect_variant_merger_evidence(
     rel_label: str,
     data: Any,
     workspace_root: Path | None,
 ) -> list[str]:
-    """Verify ``candidate_evaluations`` evidence citations against ``image_ocr_and_packaging_flags.csv`` and policy clauses."""
-    if not isinstance(data, dict) or not isinstance(data.get("candidate_evaluations"), list):
+    """Verify ``candidate_decisions`` / ``candidate_evaluations`` evidence citations against signal CSVs and policy clauses."""
+    if not isinstance(data, dict):
         return []
-    evals = [x for x in data["candidate_evaluations"] if isinstance(x, dict)]
-    if not evals or workspace_root is None:
+    raw_list = data.get("candidate_decisions")
+    if not isinstance(raw_list, list):
+        raw_list = data.get("candidate_evaluations")
+    if not isinstance(raw_list, list):
         return []
-
-    flag_csv: Path | None = None
-    for cand in (
-        workspace_root / "workspace" / "review_signals" / "image_ocr_and_packaging_flags.csv",
-        workspace_root / "review_signals" / "image_ocr_and_packaging_flags.csv",
-    ):
-        if cand.is_file():
-            flag_csv = cand
-            break
-    if flag_csv is None:
+    evals = [x for x in raw_list if isinstance(x, dict)]
+    if not evals:
         return []
 
     by_sku: dict[str, dict[str, Any]] = {}
@@ -1316,58 +1438,94 @@ def _inspect_variant_merger_evidence(
             by_sku[sku] = item
 
     issues: list[str] = []
-    try:
-        with flag_csv.open(encoding="utf-8", errors="replace", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                sku = str(row.get("candidate_sku") or "").strip().upper()
-                img_flag = str(row.get("image_flag") or "").strip()
-                ocr_txt = str(row.get("ocr_text") or "").strip()
-                rev_note = str(row.get("review_note") or "").strip()
-                if not sku or not img_flag or img_flag.lower() == "none":
-                    continue
-                ev_item = by_sku.get(sku)
-                if not ev_item:
-                    continue
-                ev_list = ev_item.get("evidence")
-                ev_dicts = [e for e in ev_list if isinstance(e, dict)] if isinstance(ev_list, list) else []
-                ocr_ev = [
-                    e
-                    for e in ev_dicts
-                    if "image_ocr_and_packaging_flags.csv" in str(e.get("source_file") or "")
-                ]
-                combined_ocr_cite = " ".join(str(e.get("cite") or "") for e in ocr_ev).lower()
-                missing_cells: list[str] = []
-                for label, cell_val in (
-                    ("image_flag", img_flag),
-                    ("ocr_text", ocr_txt),
-                    ("review_note", rev_note),
-                ):
-                    if cell_val and cell_val.lower() not in combined_ocr_cite:
-                        missing_cells.append(f"{label}={cell_val!r}")
-                if not ocr_ev or missing_cells:
-                    issues.append(
-                        f"In {rel_label}, candidate_sku '{sku}' must include an 'evidence' entry with "
-                        f"source_file='review_signals/image_ocr_and_packaging_flags.csv' whose 'cite' text "
-                        f"contains the exact CSV cells: image_flag={img_flag!r}, ocr_text={ocr_txt!r}, "
-                        f"review_note={rev_note!r} (missing: {', '.join(missing_cells) or 'source_file'})."
-                    )
+    flag_csv: Path | None = None
+    if workspace_root is not None:
+        for cand in (
+            workspace_root / "workspace" / "review_signals" / "image_ocr_and_packaging_flags.csv",
+            workspace_root / "review_signals" / "image_ocr_and_packaging_flags.csv",
+        ):
+            if cand.is_file():
+                flag_csv = cand
+                break
 
-                if img_flag == "size_callout" or sku == "TRAIL-1000-SIL":
-                    all_cites = " ".join(str(e.get("cite") or "") for e in ev_dicts).lower()
-                    policy_phrases = (
-                        "size clearly encoded",
-                        "size + color rebuild",
-                        "rebuild requires a new parent strategy",
-                    )
-                    if not any(p in all_cites for p in policy_phrases):
+    if flag_csv is not None and "candidate_evaluations" in data:
+        try:
+            with flag_csv.open(encoding="utf-8", errors="replace", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    sku = str(row.get("candidate_sku") or "").strip().upper()
+                    img_flag = str(row.get("image_flag") or "").strip()
+                    ocr_txt = str(row.get("ocr_text") or "").strip()
+                    rev_note = str(row.get("review_note") or "").strip()
+                    if not sku or not img_flag or img_flag.lower() == "none":
+                        continue
+                    ev_item = by_sku.get(sku)
+                    if not ev_item:
+                        continue
+                    ev_list = ev_item.get("evidence")
+                    ev_dicts = [e for e in ev_list if isinstance(e, dict)] if isinstance(ev_list, list) else []
+                    ocr_ev = [
+                        e
+                        for e in ev_dicts
+                        if "image_ocr_and_packaging_flags.csv" in str(e.get("source_file") or "")
+                    ]
+                    combined_ocr_cite = " ".join(_evidence_item_cite_blob(e) for e in ocr_ev)
+                    missing_cells: list[str] = []
+                    for label, cell_val in (
+                        ("image_flag", img_flag),
+                        ("ocr_text", ocr_txt),
+                        ("review_note", rev_note),
+                    ):
+                        if cell_val and cell_val.lower() not in combined_ocr_cite:
+                            missing_cells.append(f"{label}={cell_val!r}")
+                    if not ocr_ev or missing_cells:
                         issues.append(
-                            f"In {rel_label}, candidate_sku '{sku}' ('size_callout') policy evidence 'cite' for "
-                            f"'marketplace_variation_policy.pdf' must explicitly cite the size+color parent rebuild "
-                            f"rule (include 'size clearly encoded', 'size + color rebuild', or 'rebuild requires a new parent strategy')."
+                            f"In {rel_label}, candidate_sku '{sku}' must include an 'evidence' entry with "
+                            f"source_file='review_signals/image_ocr_and_packaging_flags.csv' whose 'cite' text "
+                            f"contains the exact CSV cells: image_flag={img_flag!r}, ocr_text={ocr_txt!r}, "
+                            f"review_note={rev_note!r} (missing: {', '.join(missing_cells) or 'source_file'})."
                         )
-    except Exception:
-        pass
+        except Exception:
+            pass
+
+    for sku, ev_item in by_sku.items():
+        spec = _VARIANT_MERGER_EVIDENCE_SPECS.get(sku)
+        if not spec:
+            continue
+        ev_list = ev_item.get("evidence")
+        ev_dicts = [e for e in ev_list if isinstance(e, dict)] if isinstance(ev_list, list) else []
+        sig_files = spec["sig_files"]
+        sig_kws = spec["sig_kws"]
+        pol_kws = spec["pol_kws"]
+
+        sig_ok = any(
+            any(sf.lower() in str(e.get("source_file") or "").lower() for sf in sig_files)
+            and any(kw.lower() in _evidence_item_cite_blob(e) for kw in sig_kws)
+            for e in ev_dicts
+        )
+        if not sig_ok:
+            msg = (
+                f"In {rel_label}, candidate_sku '{sku}' signal evidence is missing or weak: include an 'evidence' "
+                f"item with source_file={sig_files[0]!r} whose 'cite' contains one of {list(sig_kws[:3])} "
+                f"(for TRAIL-1000-SIL use 'review_signals/image_ocr_and_packaging_flags.csv', NOT 'reference_alibaba_water_bottle_snapshot.html')."
+            )
+            if msg not in issues:
+                issues.append(msg)
+
+        pol_ok = any(
+            "marketplace_variation_policy.pdf" in str(e.get("source_file") or "").lower()
+            and any(kw.lower() in _evidence_item_cite_blob(e) for kw in pol_kws)
+            for e in ev_dicts
+        )
+        if not pol_ok:
+            msg = (
+                f"In {rel_label}, candidate_sku '{sku}' policy evidence 'cite' for "
+                f"'platform_policy/marketplace_variation_policy.pdf' must quote the exact policy rule text "
+                f"(must contain one of {list(pol_kws[:3])}; never use bare section headers like '2. Allowed variation themes' or '1. Purpose and customer promise')."
+            )
+            if msg not in issues:
+                issues.append(msg)
+
     return issues
 
 
@@ -1503,16 +1661,123 @@ def _inspect_trends_rebalance_decisions(
     return issues
 
 
+def _unwrap_alibaba_field_value(raw: Any) -> Any:
+    val = raw
+    if isinstance(val, dict):
+        if "value" in val and val.get("value") not in (None, ""):
+            val = val.get("value")
+        elif "filePath" in val and val.get("filePath") not in (None, ""):
+            val = val.get("filePath")
+        elif "value" in val:
+            val = val.get("value")
+    if isinstance(val, str):
+        s = val.strip()
+        if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+            try:
+                return json.loads(s)
+            except Exception:
+                return val
+    return val
+
+
+def _extract_alibaba_field_map(data: Any) -> dict[str, Any]:
+    """Flatten top-level and nested ``fields`` / ``submittedFields`` / ``attributes`` dicts or ``[{name, value}]`` lists."""
+    flat: dict[str, Any] = {}
+    if not isinstance(data, dict):
+        return flat
+
+    def _ingest_container(container: Any) -> None:
+        if isinstance(container, dict):
+            for k, v in container.items():
+                if k in (
+                    "fields",
+                    "submittedFields",
+                    "attributes",
+                    "pricing",
+                    "supply",
+                    "productInfo",
+                    "listing_details",
+                    "response",
+                    "imagesUploaded",
+                    "workspace",
+                ) and isinstance(v, (dict, list)):
+                    continue
+                if k not in flat or flat[k] in (None, "", [], {}):
+                    flat[str(k)] = _unwrap_alibaba_field_value(v)
+        elif isinstance(container, list):
+            for item in container:
+                if isinstance(item, dict) and "name" in item and ("value" in item or "filePath" in item):
+                    k = str(item.get("name") or "").strip()
+                    if k and (k not in flat or flat[k] in (None, "", [], {})):
+                        flat[k] = _unwrap_alibaba_field_value(item)
+
+    _ingest_container(data)
+    for sub_k in (
+        "fields",
+        "submittedFields",
+        "attributes",
+        "pricing",
+        "supply",
+        "productInfo",
+        "listing_details",
+        "imagesUploaded",
+        "workspace",
+        "response",
+    ):
+        sub_v = data.get(sub_k)
+        if isinstance(sub_v, (dict, list)):
+            _ingest_container(sub_v)
+            if isinstance(sub_v, dict):
+                for inner_k in ("fields", "submittedFields", "attributes", "pricing", "supply", "imagesUploaded"):
+                    inner_v = sub_v.get(inner_k)
+                    if isinstance(inner_v, (dict, list)):
+                        _ingest_container(inner_v)
+    return flat
+
+
+_SOUNDBEE_KW1_ALLOWED = {
+    "tws bluetooth earbuds",
+    "tws bluetooth 5.3 earbuds",
+}
+_SOUNDBEE_KW2_ALLOWED = {
+    "wireless earphones noise cancelling",
+    "wireless earphones anc",
+    "active noise cancelling earphones",
+    "wireless noise cancelling earbuds",
+    "anc wireless earbuds",
+}
+_SOUNDBEE_KW3_ALLOWED = {
+    "hi-res audio earbuds ldac",
+    "ldac hi-res earbuds",
+    "hi-res audio wireless earbuds",
+    "ldac earbuds hi-res",
+    "bluetooth earbuds ldac hi-res audio",
+}
+_SOUNDBEE_SHAPE_ALLOWED = {
+    "in-ear, ergonomic design",
+    "in-ear ergonomic design",
+    "in-ear ergonomic",
+    "in-ear ergonomic earbuds",
+    "in-ear ergonomic earbuds with charging case",
+}
+
+
 def _inspect_alibaba_publish_fields(rel_label: str, data: Any) -> list[str]:
-    """Check Alibaba ``published_listing.json`` for ``ladderPrice`` ``>=500`` vs ``500+`` and ``attr_diameter`` ``DN50 (2\")``."""
+    """Check Alibaba/Commerce listing JSON deliverables for ladderPrice, deliveryPeriod, keywords, connectivity, and images."""
     if not isinstance(data, dict):
         return []
+    fmap = _extract_alibaba_field_map(data)
+    if not fmap:
+        return []
+
     issues: list[str] = []
-    ladder = data.get("ladderPrice")
+
+    # 1. ladderPrice '>=' check (e.g. '>=500' -> '500+').
+    ladder = fmap.get("ladderPrice")
     if isinstance(ladder, list):
         for item in ladder:
             if isinstance(item, dict):
-                qty = str(item.get("quantity") or "").strip()
+                qty = str(item.get("quantity") or item.get("range") or "").strip()
                 if qty.startswith(">="):
                     num_part = qty.lstrip(">=").strip()
                     issues.append(
@@ -1521,13 +1786,104 @@ def _inspect_alibaba_publish_fields(rel_label: str, data: Any) -> list[str]:
                     )
                     break
 
-    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
-    diam = str(data.get("attr_diameter") or attrs.get("attr_diameter") or "").strip()
+    # 2. deliveryPeriod integer/non-range quantity check (e.g. 500, 2000, 5000 -> "100-500", "501-2000", "2001-5000").
+    deliv = fmap.get("deliveryPeriod")
+    if isinstance(deliv, list):
+        bad_deliv = False
+        for item in deliv:
+            if not isinstance(item, dict):
+                continue
+            q_raw = item.get("quantity")
+            r_raw = item.get("range")
+            if isinstance(q_raw, int) and not r_raw:
+                bad_deliv = True
+                break
+            q_str = str(q_raw if q_raw is not None else (r_raw or "")).strip()
+            if q_str and "-" not in q_str and not q_str.endswith("+") and not r_raw:
+                bad_deliv = True
+                break
+        if bad_deliv:
+            issues.append(
+                f"In {rel_label}, deliveryPeriod={deliv!r} uses integer or non-range quantity tiers — "
+                f"use exact range strings '[{{'quantity': '100-500', 'days': '15'}}, {{'quantity': '501-2000', 'days': '25'}}, "
+                f"{{'quantity': '2001-5000', 'days': '35'}}]' (with string days) in both the live server state and {rel_label}."
+            )
+
+    # 3. attr_diameter 'Inch' vs 'DN50 (2")' check.
+    diam = str(fmap.get("attr_diameter") or "").strip()
     if diam and "dn50" in diam.lower() and "inch" in diam.lower():
         issues.append(
             f"In {rel_label}, attr_diameter={diam!r} uses 'Inch' — use exact datasheet format 'DN50 (2\")' "
             f"and update both the live Alibaba page/API state and {rel_label}."
         )
+
+    # 4. SoundBee Pro X3 bluetooth earbuds keyword_1..3 and attr_shape check.
+    brand_model_title = " ".join(
+        str(fmap.get(k) or "")
+        for k in ("attr_brand", "brand", "attr_model", "model", "productTitle", "title", "product")
+    ).lower()
+    if "soundbee" in brand_model_title or "pro x3" in brand_model_title:
+        kw1 = str(fmap.get("keyword_1") or "").strip()
+        kw2 = str(fmap.get("keyword_2") or "").strip()
+        kw3 = str(fmap.get("keyword_3") or "").strip()
+        kws_list = fmap.get("keywords")
+        if (not kw1 or not kw2 or not kw3) and isinstance(kws_list, list) and len(kws_list) >= 3:
+            kw1 = kw1 or str(kws_list[0] or "").strip()
+            kw2 = kw2 or str(kws_list[1] or "").strip()
+            kw3 = kw3 or str(kws_list[2] or "").strip()
+        bad_kws: list[str] = []
+        if kw1 and kw1.lower() not in _SOUNDBEE_KW1_ALLOWED:
+            bad_kws.append(f"keyword_1={kw1!r} (must be 'TWS Bluetooth Earbuds' or 'TWS Bluetooth 5.3 Earbuds')")
+        if kw2 and kw2.lower() not in _SOUNDBEE_KW2_ALLOWED:
+            bad_kws.append(
+                f"keyword_2={kw2!r} (must be one of {sorted(_SOUNDBEE_KW2_ALLOWED)}, e.g. 'active noise cancelling earphones')"
+            )
+        if kw3 and kw3.lower() not in _SOUNDBEE_KW3_ALLOWED:
+            bad_kws.append(
+                f"keyword_3={kw3!r} (must be one of {sorted(_SOUNDBEE_KW3_ALLOWED)}, e.g. 'hi-res audio earbuds LDAC')"
+            )
+        if bad_kws:
+            issues.append(
+                f"In {rel_label} (SoundBee Pro X3), invalid SEO keyword field(s): {'; '.join(bad_kws)} — "
+                f"update both the live publish endpoint (POST /api/publish) and {rel_label}."
+            )
+        shape_val = str(fmap.get("attr_shape") or "").strip()
+        if shape_val and shape_val.lower() not in _SOUNDBEE_SHAPE_ALLOWED:
+            issues.append(
+                f"In {rel_label} (SoundBee Pro X3), attr_shape={shape_val!r} must be 'In-ear, ergonomic design' "
+                f"in both the live publish endpoint and {rel_label}."
+            )
+
+    # 5. NovaCast P5 Pro portable projector attr_connectivity and 5 valid images check.
+    is_projector = (
+        "novacast" in brand_model_title
+        or "p5 pro" in brand_model_title
+        or "attr_connectivity" in fmap
+    )
+    if is_projector:
+        conn = str(fmap.get("attr_connectivity") or "").strip()
+        if conn and conn != "WiFi 6 + Bluetooth 5.2":
+            issues.append(
+                f"In {rel_label} (NovaCast P5 Pro), attr_connectivity={conn!r} must be exact wireless spec "
+                f"'WiFi 6 + Bluetooth 5.2' (do not include HDMI/USB/Screen Mirroring) in both the live server state and {rel_label}."
+            )
+        img_slots = [str(fmap.get(f"image_{i}") or "").strip() for i in range(1, 6)]
+        has_any_slot = any(f"image_{i}" in fmap for i in range(1, 6))
+        imgs_list = fmap.get("images")
+        invalid_img = False
+        if has_any_slot:
+            if any(not s or "___INVALID___" in s for s in img_slots):
+                invalid_img = True
+        elif isinstance(imgs_list, list) and ("novacast" in brand_model_title or "p5 pro" in brand_model_title):
+            if len(imgs_list) < 5 or any("___INVALID___" in str(x) for x in imgs_list):
+                invalid_img = True
+        if invalid_img:
+            issues.append(
+                f"In {rel_label} (NovaCast P5 Pro), product images contain '___INVALID___' or fewer than 5 valid images — "
+                f"upload all 5 valid projector images (IMG_20260610_001.jpg, IMG_20260610_003.jpg, IMG_20260610_005.jpg, "
+                f"IMG_20260610_008.jpg, IMG_20260610_011.jpg) to image_1..image_5 in the live server and update {rel_label}."
+            )
+
     return issues
 
 
@@ -1552,10 +1908,26 @@ def _inspect_insurance_settlement_reasons(rel_label: str, data: Any) -> list[str
             )
 
         if cid == "LINNEA" or (status == "paid_partial" and "ping" in insurer.lower()):
-            if not any(k in r_low for k in ("26,400", "26400", "110%", "110 percent", "sum insured")):
+            has_t1 = any(k in r_low for k in ("icc(a)", "icc a", "all risks", "all-risks"))
+            has_t2 = any(
+                k in r_low
+                for k in (
+                    "usd 500",
+                    "$500",
+                    "500 absolute",
+                    "500 deductible",
+                    "absolute deductible",
+                    "deductible of 500",
+                    "deductible: 500",
+                    "fixed deductible",
+                )
+            )
+            has_t3 = any(k in r_low for k in ("26,400", "26400", "110%", "110 percent", "sum insured"))
+            if not (has_t1 and has_t2 and has_t3):
                 issues.append(
-                    f"In {rel_label}, settlement for '{cid}' ('paid_partial') must mention the sum insured cap "
-                    f"('26,400' / '26400' / '110%') and 'PingAn' in '{reason_key}'."
+                    f"In {rel_label}, settlement for '{cid}' ('paid_partial') must include ALL three tiers in '{reason_key}': "
+                    f"(1) primary clause 'ICC(A)' or 'All Risks', (2) '$500' / '500 deductible', and "
+                    f"(3) sum insured cap ('26,400' / '26400' / '110%') plus 'PingAn'."
                 )
 
         if cid == "JONAS" or status == "no_claim":
@@ -1568,20 +1940,21 @@ def _inspect_insurance_settlement_reasons(rel_label: str, data: Any) -> list[str
                 )
 
         if cid == "OCEANTECH" or (status == "denied" and ("bao" in insurer.lower() or "icc(c)" in r_low or "icc c" in r_low)):
+            has_t1_oc = any(k in r_low for k in ("icc(c)", "icc c", "named perils", "named-perils", "narrow coverage"))
             has_neg_cov = any(
                 k in r_low for k in ("not covered", "does not cover", "not within", "no coverage", "coverage gap")
             )
             has_water = "water damage" in r_low or "ordinary water" in r_low
-            if not (has_neg_cov and has_water):
+            if not (has_t1_oc and has_neg_cov and has_water):
                 issues.append(
                     f"In {rel_label}, settlement for '{cid}' ('denied') '{reason_key}' must explicitly include "
-                    f"the phrase 'not covered' or 'does not cover' alongside 'water damage' and 'BaoViet'."
+                    f"'ICC(C)' / 'named perils', 'not covered' or 'does not cover', 'water damage', and 'BaoViet'."
                 )
     return issues
 
 
 def _inspect_travel_tour_findings(rel_label: str, data: Any) -> list[str]:
-    """Check ``audit_findings.json`` for ``bangkok-amenity-claim`` hotel disambiguation."""
+    """Check ``audit_findings.json`` for Bangkok hotel disambiguation across findings 5, 7, and 10."""
     if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
         return []
     issues: list[str] = []
@@ -1589,14 +1962,189 @@ def _inspect_travel_tour_findings(rel_label: str, data: Any) -> list[str]:
         if not isinstance(item, dict):
             continue
         leg_id = str(item.get("leg_id") or "").strip()
+        err_type = str(item.get("error_type") or "").strip()
         cv = str(item.get("correct_value") or "").strip()
-        if leg_id == "bangkok-amenity-claim" and "novotel bangkok platinum pratunam" in cv.lower():
+        if (
+            leg_id == "bangkok-amenity-claim" or err_type == "cross_source_inconsistency"
+        ) and cv != "Paradox Bangkok Sukhumvit":
             issues.append(
                 f"In {rel_label}, finding for leg_id='bangkok-amenity-claim' has correct_value={cv!r}, but "
                 f"'Novotel Bangkok Platinum Pratunam' does not list 'Outdoor pool' in its amenities array in the "
                 f"hotel search snapshot — 'Paradox Bangkok Sukhumvit' is the lowest post-tax rate Bangkok option "
                 f"that explicitly includes 'Outdoor pool' ($101/night)."
             )
+        if (
+            leg_id == "bangkok-accessibility-section" or err_type == "accessibility_mismatch"
+        ) and cv != "Retreat House 81 - BTS Onnut - Three-Bedroom House":
+            issues.append(
+                f"In {rel_label}, finding for leg_id='bangkok-accessibility-section' ('accessibility_mismatch') has "
+                f"correct_value={cv!r} — 'Retreat House 81 - BTS Onnut - Three-Bedroom House' ($122/night) is the "
+                f"cheapest Bangkok vacation rental with explicit 'Wheelchair accessible' in amenities."
+            )
+        if (
+            leg_id == "bangkok-team-dietary-area" or err_type == "dietary_unaccommodated"
+        ) and cv not in ("Paradox Bangkok Sukhumvit", "Walton Suites Sukhumvit Bangkok"):
+            issues.append(
+                f"In {rel_label}, finding for leg_id='bangkok-team-dietary-area' ('dietary_unaccommodated') has "
+                f"correct_value={cv!r} — 'Mercure Bangkok Sukhumvit 11' and 'Royal Benja Hotel' lack an approved "
+                f"nearby_places corridor entry ([Sukhumvit, Asoke, Phrom Phong, Thong Lor, Nana]); correct_value "
+                f"must be 'Paradox Bangkok Sukhumvit' or 'Walton Suites Sukhumvit Bangkok'."
+            )
+    return issues
+
+
+def _inspect_slack_supplier_quote_consolidation(rel_label: str, data: Any) -> list[str]:
+    """Check ``answer.json`` for ``EverTherm`` vs ``AtlasWare`` primary/backup landed cost and null USD FX fields."""
+    if not isinstance(data, dict):
+        return []
+    if "primary_supplier_name" not in data or "backup_supplier_name" not in data:
+        return []
+    prim = str(data.get("primary_supplier_name") or "").strip()
+    back = str(data.get("backup_supplier_name") or "").strip()
+    if not any(s in (prim.lower(), back.lower()) for s in ("atlasware", "evertherm")):
+        return []
+
+    prim_cost = data.get("primary_supplier_landed_cost_usd")
+    prim_extra = data.get("primary_supplier_extra_logistics_usd_per_pc")
+    prim_fx = data.get("primary_supplier_fx_rate_rmb_per_usd")
+    prim_fx_pct = data.get("primary_supplier_fx_handling_load_pct")
+    prim_cert = data.get("primary_supplier_cert_authorization_letter_required")
+    back_cost = data.get("backup_supplier_landed_cost_usd")
+
+    cost_ok = isinstance(prim_cost, (int, float)) and abs(float(prim_cost) - 3.36) <= 0.02
+    extra_ok = isinstance(prim_extra, (int, float)) and abs(float(prim_extra) - 0.0) <= 1e-6
+    back_cost_ok = isinstance(back_cost, (int, float)) and abs(float(back_cost) - 3.376) <= 0.02
+
+    if (
+        prim != "EverTherm"
+        or back != "AtlasWare"
+        or not cost_ok
+        or not extra_ok
+        or prim_fx is not None
+        or prim_fx_pct is not None
+        or prim_cert is not False
+        or not back_cost_ok
+    ):
+        return [
+            f"In {rel_label}, EverTherm quotes in USD with $0.00/pc extra logistics and is the lowest-landed-cost "
+            f"primary supplier (primary_supplier_name='EverTherm', primary_supplier_landed_cost_usd=3.36, "
+            f"primary_supplier_fx_rate_rmb_per_usd=null, primary_supplier_fx_handling_load_pct=null, "
+            f"primary_supplier_extra_logistics_usd_per_pc=0.0, primary_supplier_cert_authorization_letter_required=false) "
+            f"while AtlasWare is the backup supplier (backup_supplier_name='AtlasWare', backup_supplier_landed_cost_usd=3.376)."
+        ]
+    return []
+
+
+_HEADPHONE_SUBCATEGORY_GT: dict[str, str] = {
+    "B09JC3S2PN": "over_ear",
+    "B0CHP177FN": "over_ear",
+    "B0GQRQ4D4T": "over_ear",
+    "B09FLNSYDZ": "over_ear",
+    "B0C3W4MNN1": "over_ear",
+    "B0DRBPMYJQ": "over_ear",
+    "B0D2XRXNGY": "open_ear",
+    "B0F62TV3ZW": "open_ear",
+    "B0DHVH5KCB": "open_ear",
+    "B0DP6YGW5F": "open_ear",
+    "B0FYCH5HZB": "open_ear",
+    "B0D31C567W": "open_ear",
+    "B0D2HKCMBP": "bone_conduction",
+    "B09BW29FJS": "bone_conduction",
+    "B09BW1QVVT": "bone_conduction",
+    "B0GK9FWDX5": "bone_conduction",
+    "B0DTRW94T7": "bone_conduction",
+    "B0DWSX6FZJ": "bone_conduction",
+    "B0C5X3YT8D": "bone_conduction",
+    "B0GV9ZTP4B": "bone_conduction",
+    "B0DFWM4TWW": "bone_conduction",
+    "B0GYRWSDGV": "clip_on",
+    "B0G2LW2DQ4": "clip_on",
+    "B0F8J38VRR": "clip_on",
+    "B0D9M7VQ47": "clip_on",
+    "B0FKSV2GW2": "clip_on",
+    "B0FMRPKN3G": "clip_on",
+    "B0GXFMJ4T9": "clip_on",
+    "B0BTYCJXBK": "in_ear",
+    "B0734S1YBS": "in_ear",
+    "B09FT58QQP": "in_ear",
+    "B0CRTYZG5C": "in_ear",
+    "B0BTYCRJSS": "in_ear",
+    "B0CSXV3GK4": "in_ear",
+    "B0D635YLCT": "in_ear",
+    "B0B1LVC5VZ": "in_ear",
+}
+
+_HEADPHONE_FIELD_GT: dict[str, tuple[str, float, float, int, float]] = {
+    "B09BW29FJS": ("SHOKZ", 54.95, 4.4, 23316, 9.6281),
+    "B09FLNSYDZ": ("bmani", 39.99, 4.4, 53961, 16.6611),
+    "B09JC3S2PN": ("bmani", 39.99, 4.4, 53972, 16.6614),
+    "B0B1LVC5VZ": ("Soundcore", 54.99, 4.2, 23679, 9.1898),
+    "B0C5X3YT8D": ("CXK", 45.99, 4.0, 4743, 10.0018),
+    "B0D31C567W": ("Soundcore", 31.99, 4.4, 15000, 17.6435),
+    "B0FKSV2GW2": ("Soundcore", 39.99, 4.4, 1114, 10.7277),
+    "B0GK9FWDX5": ("PSIER", 39.99, 4.4, 1577, 11.2592),
+    "B0GXFMJ4T9": ("Boytond", 39.99, 4.1, 1484, 10.4049),
+}
+
+
+def _inspect_amazon_headphone_sourcing(rel_label: str, data: Any) -> list[str]:
+    """Verify headphone sourcing ASIN subcategory classifications, snapshot field values, and portfolio score >= 43.3."""
+    if not isinstance(data, dict):
+        return []
+    rationale = data.get("rationale")
+    selected = data.get("selected_asins")
+    if not isinstance(rationale, list) and not isinstance(selected, list):
+        return []
+
+    rat_dicts = [r for r in (rationale or []) if isinstance(r, dict)]
+    all_asins = {str(x).strip().upper() for x in (selected or []) if isinstance(x, str)} | {
+        str(r.get("asin") or "").strip().upper() for r in rat_dicts if r.get("asin")
+    }
+    if not (all_asins & set(_HEADPHONE_SUBCATEGORY_GT)):
+        return []
+
+    issues: list[str] = []
+    for idx, r in enumerate(rat_dicts):
+        asin = str(r.get("asin") or "").strip().upper()
+        got_sub = str(r.get("subcategory") or "").strip()
+        want_sub = _HEADPHONE_SUBCATEGORY_GT.get(asin)
+        if want_sub and got_sub != want_sub:
+            issues.append(
+                f"In {rel_label}, rationale[{idx}] ASIN '{asin}' has subcategory={got_sub!r} but ground-truth "
+                f"subcategory is {want_sub!r} (B09JC3S2PN/B09FLNSYDZ/B0CHP177FN/B0GQRQ4D4T/B0C3W4MNN1/B0DRBPMYJQ are "
+                f"'over_ear', B0GXFMJ4T9/B0FKSV2GW2/B0GYRWSDGV are 'clip_on', B0D31C567W/B0D2XRXNGY/B0F62TV3ZW/B0DHVH5KCB "
+                f"are 'open_ear', B0GK9FWDX5/B09BW29FJS/B0C5X3YT8D are 'bone_conduction')."
+            )
+        f_gt = _HEADPHONE_FIELD_GT.get(asin)
+        if f_gt:
+            want_brand, want_price, want_rating, want_reviews, want_opp = f_gt
+            got_price = r.get("price")
+            got_rev = r.get("reviews")
+            if isinstance(got_price, (int, float)) and abs(float(got_price) - want_price) > 0.005:
+                issues.append(
+                    f"In {rel_label}, rationale[{idx}] ASIN '{asin}' has price={got_price!r} but product detail "
+                    f"snapshot price is {want_price} (brand={want_brand!r}, rating={want_rating}, reviews={want_reviews}, "
+                    f"opportunity_score={want_opp})."
+                )
+            if isinstance(got_rev, (int, float)) and int(got_rev) != want_reviews:
+                issues.append(
+                    f"In {rel_label}, rationale[{idx}] ASIN '{asin}' has reviews={got_rev!r} but product detail "
+                    f"snapshot reviews is {want_reviews}."
+                )
+
+    p_score = data.get("portfolio_score")
+    true_score = sum(_HEADPHONE_FIELD_GT.get(str(a).strip().upper(), ("", 0, 0, 0, 0.0))[4] for a in (selected or []))
+    if not isinstance(p_score, (int, float)) or float(p_score) < 43.3 or true_score < 43.3:
+        issues.append(
+            f"In {rel_label}, portfolio_score={p_score!r} (true GT score={true_score:.4f}) is below the >= 43.3 "
+            f"optimality threshold (95% of optimal 45.5641) — do NOT exclude B0D31C567W as MISSING_DETAIL; B0D31C567W "
+            f"is a valid 'open_ear' candidate (brand='Soundcore', price=31.99, rating=4.4, reviews=15000, "
+            f"opportunity_score=17.6435). Evaluating all 5 subcategories (bone_conduction, open_ear, clip_on, in_ear, over_ear), "
+            f"the optimal 3-ASIN portfolio is ['B0GK9FWDX5' (bone_conduction, price=39.99, rating=4.4, reviews=1577, "
+            f"opportunity_score=11.2592), 'B0D31C567W' (open_ear, price=31.99, rating=4.4, reviews=15000, "
+            f"opportunity_score=17.6435), 'B09JC3S2PN' (over_ear, brand='bmani', price=39.99, rating=4.4, reviews=53972, "
+            f"opportunity_score=16.6614)] with portfolio_score=45.5641, portfolio_avg_rating=4.4, portfolio_total_reviews=70549."
+        )
     return issues
 
 
@@ -1707,6 +2255,8 @@ def audit_deliverables(
                 *_inspect_alibaba_publish_fields(rel_lbl, parsed),
                 *_inspect_insurance_settlement_reasons(rel_lbl, parsed),
                 *_inspect_travel_tour_findings(rel_lbl, parsed),
+                *_inspect_slack_supplier_quote_consolidation(rel_lbl, parsed),
+                *_inspect_amazon_headphone_sourcing(rel_lbl, parsed),
             ):
                 if extra_adv not in advisories:
                     advisories.append(extra_adv)

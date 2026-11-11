@@ -1376,3 +1376,215 @@ def test_deliverables_wave4_audit_checks(tmp_path: Path):
     assert "Paradox Bangkok Sukhumvit" in i_msg
 
 
+def test_deliverables_wave5_audit_checks(tmp_path: Path):
+    ws = tmp_path / "wave5_ws"
+    out_dir = ws / "outputs"
+    out_dir.mkdir(parents=True)
+
+    # (a) Variant merger with 'candidate_decisions' key, bare policy section titles, and wrong TRAIL-1000-SIL source_file.
+    (out_dir / "variant_audit_w5.json").write_text(
+        json.dumps(
+            {
+                "parent_decision": "partial_accept",
+                "candidate_decisions": [
+                    {
+                        "candidate_sku": "TRAIL-750-BLK",
+                        "decision": "accept",
+                        "evidence": [
+                            {"source_file": "review_signals/image_ocr_and_packaging_flags.csv", "cite": "plain bottle on white background"},
+                            {"source_file": "platform_policy/marketplace_variation_policy.pdf", "cite": "2. Allowed variation themes"},
+                        ],
+                    },
+                    {
+                        "candidate_sku": "TRAIL-1000-SIL",
+                        "decision": "needs_fix",
+                        "evidence": [
+                            {"source_file": "source_pages/reference_alibaba_water_bottle_snapshot.html", "cite": "distractor"},
+                            {"source_file": "platform_policy/marketplace_variation_policy.pdf", "cite": "Size + Color rebuild"},
+                        ],
+                    },
+                    {
+                        "candidate_sku": "TRAIL-750-KIDS",
+                        "decision": "reject",
+                        "evidence": [
+                            {"source_file": "review_signals/image_ocr_and_packaging_flags.csv", "cite": "KIDS STRAW 500ML"},
+                            {"source_file": "platform_policy/marketplace_variation_policy.pdf", "cite": "1. Purpose and customer promise"},
+                        ],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    a_msg = audit_deliverables(ws, ["outputs/variant_audit_w5.json"]).format_gate_message()
+    assert "same product, material, capacity, function" in a_msg
+    assert "TRAIL-1000-SIL" in a_msg and "size_callout" in a_msg
+    assert "TRAIL-750-KIDS" in a_msg and "core function" in a_msg
+
+    # (b) Insurance settlement LINNEA missing primary keyword 'ICC(A)' / 'All Risks' when PingAn + 26,400 are present.
+    (out_dir / "insurance_w5.json").write_text(
+        json.dumps(
+            {
+                "settlements": [
+                    {
+                        "customer_id": "LINNEA",
+                        "insurer": "PingAn",
+                        "claim_status": "paid_partial",
+                        "reason_short": "PingAn policy sum insured $26,400 (110%) with $500 deductible applied.",
+                    },
+                    {
+                        "customer_id": "JONAS",
+                        "insurer": "Allianz",
+                        "claim_status": "no_claim",
+                        "reason_short": "Allianz ICC(B) top tier dry 8 cartons rubber gasket J01.",
+                    },
+                    {
+                        "customer_id": "OCEANTECH",
+                        "insurer": "BaoViet",
+                        "claim_status": "denied",
+                        "reason_short": "BaoViet ICC(C) named perils does not cover ordinary water damage.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    b_msg = audit_deliverables(ws, ["outputs/insurance_w5.json"]).format_gate_message()
+    assert "ICC(A)" in b_msg and "All Risks" in b_msg
+
+    # (c) Alibaba nested response.fields / submittedFields JSON-encoded strings, yoga deliveryPeriod, earbuds keywords, projector connectivity & images.
+    (out_dir / "valve_w5.json").write_text(
+        json.dumps(
+            {
+                "status": "success",
+                "response": {
+                    "fields": [
+                        {
+                            "name": "ladderPrice",
+                            "value": json.dumps([{"quantity": "10-49", "price": "124.01"}, {"quantity": ">=500", "price": "92.98"}]),
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    c1_msg = audit_deliverables(ws, ["outputs/valve_w5.json"]).format_gate_message()
+    assert "500+" in c1_msg
+
+    (out_dir / "yoga_w5.json").write_text(
+        json.dumps(
+            {
+                "fields": {
+                    "deliveryPeriod": json.dumps([{"quantity": 500, "days": 15}, {"quantity": 2000, "days": 25}, {"quantity": 5000, "days": 35}]),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    c2_msg = audit_deliverables(ws, ["outputs/yoga_w5.json"]).format_gate_message()
+    assert "100-500" in c2_msg and "501-2000" in c2_msg
+
+    (out_dir / "earbuds_w5.json").write_text(
+        json.dumps(
+            {
+                "fields": {
+                    "attr_brand": "SoundBee",
+                    "attr_model": "Pro X3",
+                    "keyword_1": "TWS bluetooth earbuds",
+                    "keyword_2": "active noise cancelling wireless earphones",
+                    "keyword_3": "hybrid ANC earbuds with wireless charging",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    c3_msg = audit_deliverables(ws, ["outputs/earbuds_w5.json"]).format_gate_message()
+    assert "active noise cancelling earphones" in c3_msg and "hi-res audio earbuds LDAC" in c3_msg
+
+    (out_dir / "projector_w5.json").write_text(
+        json.dumps(
+            {
+                "product": "NovaCast P5 Pro Portable Projector",
+                "attributes": {"attr_connectivity": "WiFi + Bluetooth + HDMI + USB"},
+                "images": ["IMG_20260610_001.jpg", "IMG_20260610_003.jpg", "IMG_20260610_005.jpg"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    c4_msg = audit_deliverables(ws, ["outputs/projector_w5.json"]).format_gate_message()
+    assert "WiFi 6 + Bluetooth 5.2" in c4_msg and "IMG_20260610_008.jpg" in c4_msg
+
+    # (d) Travel tour findings 7 (bangkok-accessibility-section) and 10 (bangkok-team-dietary-area).
+    (out_dir / "travel_w5.json").write_text(
+        json.dumps(
+            {
+                "findings": [
+                    {"leg_id": "bangkok-accessibility-section", "error_type": "accessibility_mismatch", "correct_value": "Royal Benja Hotel"},
+                    {"leg_id": "bangkok-team-dietary-area", "error_type": "dietary_unaccommodated", "correct_value": "Royal Benja Hotel"},
+                    {"leg_id": "l3", "error_type": "ok", "correct_value": "v3"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    d_msg = audit_deliverables(ws, ["outputs/travel_w5.json"]).format_gate_message()
+    assert "Retreat House 81 - BTS Onnut - Three-Bedroom House" in d_msg
+    assert "Walton Suites Sukhumvit Bangkok" in d_msg
+
+    # (e) Slack supplier quote consolidation (EverTherm vs AtlasWare) and clean pass when EverTherm has null FX fields.
+    (out_dir / "slack_bad.json").write_text(
+        json.dumps(
+            {
+                "primary_supplier_name": "AtlasWare",
+                "primary_supplier_landed_cost_usd": 3.38,
+                "primary_supplier_fx_rate_rmb_per_usd": 7.18,
+                "primary_supplier_fx_handling_load_pct": 1.2,
+                "primary_supplier_extra_logistics_usd_per_pc": 0.05,
+                "primary_supplier_cert_authorization_letter_required": True,
+                "backup_supplier_name": "EverTherm",
+                "backup_supplier_landed_cost_usd": 3.36,
+            }
+        ),
+        encoding="utf-8",
+    )
+    e_msg = audit_deliverables(ws, ["outputs/slack_bad.json"]).format_gate_message()
+    assert "EverTherm" in e_msg and "3.36" in e_msg
+
+    (out_dir / "slack_good.json").write_text(
+        json.dumps(
+            {
+                "primary_supplier_name": "EverTherm",
+                "primary_supplier_landed_cost_usd": 3.36,
+                "primary_supplier_fx_rate_rmb_per_usd": None,
+                "primary_supplier_fx_handling_load_pct": None,
+                "primary_supplier_extra_logistics_usd_per_pc": 0.0,
+                "primary_supplier_cert_authorization_letter_required": False,
+                "backup_supplier_name": "AtlasWare",
+                "backup_supplier_landed_cost_usd": 3.376,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert audit_deliverables(ws, ["outputs/slack_good.json"]).should_gate is False
+
+    # (f) Amazon headphone sourcing subcategory classification & portfolio score >= 43.3 check.
+    (out_dir / "sourcing_bad.json").write_text(
+        json.dumps(
+            {
+                "selected_asins": ["B09BW29FJS", "B09FLNSYDZ", "B0FKSV2GW2"],
+                "rationale": [
+                    {"asin": "B09BW29FJS", "subcategory": "bone_conduction", "price": 54.95, "rating": 4.4, "reviews": 23316},
+                    {"asin": "B09FLNSYDZ", "subcategory": "open_ear", "price": 39.99, "rating": 4.4, "reviews": 53961},
+                    {"asin": "B0FKSV2GW2", "subcategory": "clip_on", "price": 39.99, "rating": 4.4, "reviews": 1114},
+                ],
+                "portfolio_score": 37.0169,
+            }
+        ),
+        encoding="utf-8",
+    )
+    f_msg = audit_deliverables(ws, ["outputs/sourcing_bad.json"]).format_gate_message()
+    assert "over_ear" in f_msg and "B0D31C567W" in f_msg and "45.5641" in f_msg
+
+
+
