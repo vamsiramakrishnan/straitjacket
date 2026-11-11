@@ -302,8 +302,9 @@ def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> s
     if shifts:
         out.append(f"  count shifts (>2x): {fmt_int(len(shifts))}")
         for _ratio, ca, cb, t in shifts[:_TOP]:
-            out.append(f"    {fmt_int(ca)}× → {fmt_int(cb)}×: {display_template(lines_b[tpl_b[t][1] - 1], 130,
-                                                      in_key_block=in_line_ranges(tpl_b[t][1], keys_b))}")
+            shown = display_template(lines_b[tpl_b[t][1] - 1], 130,
+                                     in_key_block=in_line_ranges(tpl_b[t][1], keys_b))
+            out.append(f"    {fmt_int(ca)}× → {fmt_int(cb)}×: {shown}")
         if len(shifts) > _TOP:
             out.append(f"    … +{fmt_int(len(shifts) - _TOP)} more")
 
