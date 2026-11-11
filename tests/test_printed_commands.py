@@ -191,6 +191,36 @@ def test_malformed_hash_and_other_shapes_are_not_approved(tmp_path, monkeypatch,
     assert hook._ctx_self_approved(payload, str(tmp_path)) is False, command
 
 
+#: Characters Python's ``str.strip()`` removes but a shell does not treat as a
+#: blank: around a command they are part of a word (``<NBSP>ctx`` is another
+#: program's name; a trailing one is glued to, or is, a further argument).
+NOT_SHELL_BLANKS = [" ", "\x0b", "\x0c", "\x1c", "\x1f", "\x85", " ", "　", "\r"]
+
+
+@pytest.mark.parametrize("ws", NOT_SHELL_BLANKS)
+@pytest.mark.parametrize("template", [
+    "{ws}ctx get run:0660dede8dbe", " {ws}ctx get run:0660dede8dbe", "{ws} ctx get run:0660dede8dbe",
+    "ctx get run:0660dede8dbe{ws}", "ctx get run:0660dede8dbe {ws}", "ctx get run:0660dede8dbe{ws} ",
+    "ctx{ws}get run:0660dede8dbe", "ctx get{ws}run:0660dede8dbe",
+])
+def test_only_shell_blanks_are_stripped_around_a_command(tmp_path, monkeypatch, ws, template):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    command = template.format(ws=ws)
+    assert hook.ctx_command_words(command) is None, command
+    payload = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": command}}
+    assert hook._ctx_self_approved(payload, str(tmp_path)) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    "  ctx get run:0660dede8dbe", "ctx get run:0660dede8dbe  ", "\tctx get run:0660dede8dbe\t",
+    "ctx get run:0660dede8dbe\n", "\nctx get run:0660dede8dbe", " \t\nctx  get \t run:0660dede8dbe \n",
+])
+def test_blanks_and_a_surrounding_newline_do_not_change_a_command(tmp_path, monkeypatch, command):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    payload = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": command}}
+    assert hook._ctx_self_approved(payload, str(tmp_path)) is True, command
+
+
 # ------------------------------------------- handle grammar, one definition
 BAD_IDS = [
     "run:../../etc/passwd", "run:", "run:abc12", "run:" + "a" * 65, "run:%2e%2e/x",

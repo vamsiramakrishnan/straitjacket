@@ -3859,7 +3859,10 @@ def _ctx_words(command: str) -> list[str] | None:
     variable, a substitution, an escape or an unterminated quote all fail."""
     if not command or "\n" in command or "\r" in command:
         return None
-    text = command.strip()
+    # Only what a shell itself skips around a command. A no-break space, a
+    # vertical tab or any other "whitespace" is part of a word to the shell
+    # (`<NBSP>ctx` names a different program), so it must not be stripped here.
+    text = command.strip(" \t")
     # Words are separated by blanks; a single-quoted string is ONE word and
     # may hold blanks (`ctx q 'refs X | group file'`) but must stand alone:
     # a quote glued to other characters is not a plain word.
@@ -4014,7 +4017,8 @@ def _ctx_self_approved(payload: dict[str, Any], ws_root: str | None = None) -> b
                                and _RUN_HANDLE_RE.fullmatch(ref)) else "path"
             command = None
         elif name == "Bash":
-            command = (_tool_command(payload) or "").strip()
+            # Blanks and newlines only: see _ctx_words on other whitespace.
+            command = (_tool_command(payload) or "").strip(" \t\n")
             argv = ctx_command_words(command)
             if not argv or len(argv) < 2 or not _is_ctx_invocation(command, payload.get("cwd")):
                 return False
