@@ -104,8 +104,8 @@ Restart Codex afterward.
 **Cause:** an older hook emitted an explicit `allow` for ordinary pass-through
 calls. Codex reserves that decision for input rewrites that also contain
 `updatedInput`. **Fix:** upgrade `ctx-harness` and restart Codex. The current
-hook emits `{}` for pass-through, `allow` plus `updatedInput` for transparent
-containment, and `deny` for blocked calls.
+hook emits `{}` for pass-through and for shell commands (rewrites are withheld on
+Codex), and `deny` for blocked calls.
 
 ### `--workspace is not a directory: <path>` (exit 2)
 
@@ -143,7 +143,7 @@ tools unusually, route the work through `ctx run -- <command>` explicitly.
 **Cause:** a host's built-in `Grep`/`Glob` tools bypass the shell path, so while
 the guard can classify them, their *output* isn't captured or digested. **Fix:**
 this is exactly why `ctx wrap` removes the native `Grep`/`Glob` tools under the
-default collapse setting — make sure you set the host up with `ctx wrap` (not a
+default `[guard] collapse` setting (which now governs only this) — make sure you set the host up with `ctx wrap` (not a
 hand-rolled hook), and prefer `ctx search` / `ctx q` for repository search.
 
 ### The guard isn't confining paths
@@ -154,6 +154,24 @@ the host passes several unrelated workspace paths and none matches, the root is
 or run from inside the repo so the root resolves.
 
 ## Permission prompts you didn't expect
+
+### "ctx used to run my commands without asking and now Claude Code prompts"
+
+**Cause:** an earlier ctx answered `allow` together with its rewrite of a shell
+command, and for commands it passed through. On Claude Code an `allow` together with a
+rewritten command overrides your deny and ask rules, and a plain `allow` skips the
+default prompt, so installing ctx approved shell commands (and MCP calls) you were
+never asked about. ctx no longer does that. By
+default (`[guard] steering = "auto"`) a shell command reaches Claude Code exactly as
+written and the host asks as it would without ctx; ctx approves only its own commands that read
+its store or the workspace (the follow-ups a digest prints), never `ctx run` or a
+rewritten command. **Fix, two legitimate remedies:** add your own allow rules on the original
+commands (for example `Bash(pytest:*)`) in your Claude Code settings; or set `steering
+= "rewrite"` to capture at birth, accepting the caveats: the host's prompts and rules
+then concern the `ctx run` wrapper, and a rule from a source ctx cannot read (managed
+policy) does not see the original command. A third option, `ctx run -- <command>`
+yourself, goes through the same prompts. `ctx doctor` prints a "claude code approval"
+row stating the current behaviour.
 
 ### "secret-bearing path … requires an explicit permission step"
 
@@ -185,13 +203,13 @@ routine for your setup.
 ### "unknown output bound for '`<prog>`'"
 
 **Cause:** under `guarded` mode, a command the classifier doesn't recognize is
-force-asked in case its output is large or it mutates state. Known bounded and
-structured queries already run directly; known read-only noisy commands are
-captured automatically on hosts that support substitution. **Fix:** confirm a
-genuinely safe unknown command, or use `ctx run -- …` when it can flood. You can
-change `[guard] unknown_command` (`allow` / `deny` / `ask` / `force_ask`), but a
-blanket `allow` removes the review boundary for both unclassified reads and
-unclassified mutations.
+force-asked in case its output is large or it mutates state. This prompt comes from
+Antigravity's guard; on Claude Code and Codex ctx no longer asks about an unknown
+output bound, and the host decides about the command. **Fix:** confirm a genuinely
+safe unknown command, or use `ctx run -- …` when it can flood. You can change `[guard]
+unknown_command` (`allow` / `deny` / `ask` / `force_ask`), but a blanket `allow`
+removes the review boundary for both unclassified reads and unclassified mutations.
+See [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 
 ### "in-place sed/awk" or "deeply nested shell" prompts
 

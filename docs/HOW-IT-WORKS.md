@@ -157,13 +157,13 @@ That buys:
 
 Once 98,000 tokens enter the transcript, any repair mechanism is late.
 
-`ctx setup` installs a birth-time classifier. It separates operations into four practical classes:
+`ctx setup` installs a birth-time classifier. On Claude Code and Codex, by default, it does not rewrite or approve a shell command: the command reaches the host exactly as written, the host decides about it as it would without ctx, and the output is bounded after the command runs. (`[guard] steering = "rewrite"` opts in to capture at birth on Claude Code; see [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).) The classes it still separates:
 
 ```text
 known bounded read ─────→ pass through
-known noisy read ───────→ rewrite through ctx capture
-known mutation ─────────→ preserve approval boundary
-unknown operation ──────→ apply configured guard policy
+known noisy read ───────→ run as written; bound the output afterwards
+known mutation ─────────→ the host's own approval, untouched
+unknown operation ──────→ the host's own approval (Antigravity: configured guard policy)
 ```
 
 Supported hosts also provide an entry-time safety net for oversized results that were not predictable from the call itself.
@@ -172,7 +172,7 @@ Host contracts are not equal:
 
 | Host | Pre-execution | Post-execution |
 |---|---|---|
-| Claude Code | can rewrite arguments | can replace output |
+| Claude Code | can rewrite arguments; ctx does not by default | can replace output |
 | Codex | implemented and contract-tested | implemented and contract-tested; live CLI receipt pending |
 | Antigravity | can rewrite `run_command` and `read_file` (when the payload carries `hookEventName`, added in `agy` 1.5.4; observed on 1.5.5 only); denies other tools | cannot replace output |
 
@@ -240,7 +240,7 @@ That boundary matters. A perfectly optimized investigation of the wrong theory i
 
 straitjacket contains evidence. It does not sandbox execution.
 
-Commands run with the invoking user's authority. A captured deletion is still a deletion. A deterministic digest is not a security boundary. The guard preserves mutation approvals; it does not launder mutations into reads.
+Commands run with the invoking user's authority. A captured deletion is still a deletion. A deterministic digest is not a security boundary. The guard never approves a mutation, and it does not launder mutations into reads.
 
 It also does not promise that every task improves. Small outputs should pass through. Cheap, already-bounded operations may be faster natively. The evaluation suite includes these losing regimes because the correct policy is conditional.
 

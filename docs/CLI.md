@@ -225,8 +225,10 @@ ctx get 0f44195122
 Small requests select exact stored coordinates. Model-visible bytes remain
 subject to the current redaction policy; an exact-byte request declares when
 redaction changed it. A region too large for the retrieval budget returns a
-bounded zoom digest with further spans. Retrieval cannot recursively re-flood
-the transcript.
+bounded zoom digest with further spans. A span id printed in a digest is honoured
+only on the artifact the reference names: `ctx get run:A#stdout --span <id from run B>`
+is refused with "span … does not belong to …; use the reference the digest printed with
+it". Retrieval cannot recursively re-flood the transcript.
 
 A handle is an address today. It becomes an authorization capability only in the
 broker-era design; do not present current content identifiers as a sandbox boundary.
@@ -989,7 +991,7 @@ registrations and this command all read:
 
 | Route | What happens |
 |---|---|
-| `rewrite` | PreToolUse replaces the call's input in place; the call runs, as its bounded `ctx` form. |
+| `rewrite` | PreToolUse replaces the call's input in place; the call runs, as its bounded `ctx` form. For shell commands on Claude Code and Codex this route is not taken by default (`steering = "auto"`): the command runs as written. |
 | `bound` | PreToolUse narrows the input (a `limit`), or past the inline budget denies with a map of the file. |
 | `deny_steer` | PreToolUse denies and names the `ctx` command to run instead. |
 | `output_gate` | PostToolUse replaces an over-budget result with a digest and a retrieval address. Under budget it passes unchanged. |
@@ -1099,7 +1101,7 @@ used, and they answer three different questions.
 | `0` | Success | Continue |
 | `1` | **ctx** failed | Not your invocation's fault: an internal error, an unreadable store, an engine that would not start. Retry or run `ctx doctor` |
 | `2` | ctx **rejected the invocation** | Fix the arguments. Unknown command or flag, a malformed selector (`--lines nope`), an ungrammatical reference (`zzz:xyz`), a missing required argument, a workspace that will not resolve, or a handle that no longer resolves because `ctx gc` or the retention window collected it |
-| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output. Exception: `ctx run --passthrough` (the form the hooks rewrite tool calls into) exits with the child's own status, and prints small, complete output verbatim with the `run:` handle on one trailing line, so a rewritten tool call looks to the host exactly like the native one |
+| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output. Exception: `ctx run --passthrough` (hook mode, the form the hooks rewrite a tool call into where a rewrite happens: Antigravity, and Claude Code with `steering = "rewrite"`) exits with the child's own status, and prints small, complete output verbatim with the `run:` handle on one trailing line, so a rewritten tool call looks to the host like the native one. Hooks pass the original command verbatim as `ctx run --passthrough --shell -- '<original>'` |
 | `124` | Timed out | The child exceeded `--timeout` (or `ctx job --wait` gave up). Matches `timeout(1)` |
 | `127` | Not found | The program ctx was asked to launch or wrap is not on `PATH`. Matches the shell's convention |
 

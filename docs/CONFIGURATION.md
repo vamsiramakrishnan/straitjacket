@@ -90,44 +90,78 @@ before it runs.
 | Key | Default | Meaning |
 |---|---|---|
 | `mode` | `"guarded"` | `advisory` \| `guarded` \| `strict`. **`advisory` switches the guard off**: PreToolUse allows every call and the PostToolUse output gate replaces nothing. **`strict` is accepted but has no code path of its own: it behaves exactly as `guarded`.** Any other value also behaves as `guarded`. |
-| `unknown_command` | `"force_ask"` | Disposition for a command the classifier doesn't recognize: `allow` \| `deny` \| `ask` \| `force_ask`. |
+| `unknown_command` | `"force_ask"` | `allow` \| `deny` \| `ask` \| `force_ask`. Disposition for a shell command the classifier does not recognize. On **Claude Code and Codex it does nothing under the default `steering`**: the command reaches the host as written and the host decides. `deny` takes effect only together with `steering = "rewrite"` (Claude Code: the command is rewritten to run under `ctx run`, with no decision) or `steering = "deny"` (refused). On **Antigravity** `force_ask` and `ask` ask, `allow` allows, and `deny` rewrites the command under `ctx run` (refused with `steering = "deny"`). |
 | `internal_error` | `"allow"` | What to do if the guard itself errors. The default is availability-safe (fail-open); set `"deny"` to fail-closed. |
-| `steering` | `"auto"` | `auto` \| `rewrite` \| `deny`. `deny` disables all transparent rewrites, so you see plain denials instead of substitutions. |
-| `collapse` | `true` | Master switch for the transparent command-substitution surface. Set `collapse = false` to break-glass it off. |
-| `speculative_native` | `true` | On Claude Code and Codex only, let one explicitly named pytest node run without the `ctx run` wrapper while the session is passive and that signature has not flooded. The fail-closed PostToolUse gate still captures any result over `max_tool_output_bytes`. Set `false` to always capture tests at birth. |
+| `steering` | `"auto"` | `auto` \| `rewrite` \| `deny`. See below. |
+| `collapse` | `true` | Governs only the steering of native search tools (`Grep`, `Glob`): with it on they are denied with the `ctx` command named. Set `collapse = false` to let them run. It no longer controls any command substitution: those were retired. |
+| `speculative_native` | `true` | Applies only where ctx rewrites a command at birth. Lets one explicitly named pytest node run without the `ctx run` wrapper while the session is passive and that signature has not flooded; the PostToolUse gate still captures any result over `max_tool_output_bytes`. Under the default `steering` on Claude Code and Codex no shell command is rewritten, so there is nothing for it to skip. |
 
-Secret-bearing paths and outside-workspace access are **always** force-asked and
-**never** rewritten, regardless of `steering` or `collapse`.
+### `steering`: what happens to a shell command
 
-Before `unknown_command` is consulted, the command-span registry recognizes
-bounded/structured queries for direct execution and known read-only noisy
-commands for capture. Unknown and mutation-shaped commands intentionally remain
-at the configured permission boundary. On hosts without input substitution,
-capture is emitted as an exact bounded rerun instruction rather than being
-executed transparently.
+| Value | Claude Code | Codex | Antigravity |
+|---|---|---|---|
+| `auto` (default) | The command is **not rewritten and not approved**. It reaches the host exactly as written, with no decision, and the host's rules and prompts apply as they would without ctx. The output gate bounds the result after the command runs. | Same: commands run as written under Codex's own approval and a large output is replaced after the fact. Not run live on Codex. | The command is rewritten in place to `ctx run --passthrough --shell -- '<original>'`, because the host cannot replace output. The user's permission rules are checked against the original (see [Host capabilities](HOST-CAPABILITIES.md#antigravity-agy-155)). |
+| `rewrite` | Capture at birth: the command is rewritten as above with **no decision**. The host's prompts and rules then concern the `ctx run` wrapper, and a rule from a source ctx cannot read (managed policy) does not see the original. ctx refuses only where a visible rule would deny or ask about the original. | Rewrites are withheld on Codex; behaves as `auto`. | As `auto`. |
+| `deny` | A flooding command is refused with the `ctx run` form named; nothing runs until you re-issue it. | Same. | Same. |
 
-The speculative-native fast path never applies to whole suites, directories,
-file-only pytest targets, shell expressions, active/high-pressure sessions, or
-hosts without output substitution. An unexpected flood is digested once and
-marks that signature so subsequent calls return to birth-time capture.
-This policy is the first reviewed AlphaEvolve product canary; its measured
-tradeoffs and remaining proof boundary are documented in the
-[optimization guide](ALPHAEVOLVE-OPTIMIZATION.md#how-those-benefits-reached-the-product).
+A rewritten command is the original passed verbatim to the shell: `ctx run
+--passthrough --shell -- '<original>'`, in the caller's directory, in the shell family
+the host uses (bash or zsh, verified by running it; `/bin/sh` only when neither exists,
+and the output says so). A compound command is split on every joiner, including a
+newline; anything that cannot be split is left alone, and the least permitted part
+decides. The earlier substitutions that could return a different answer than the
+original are retired: search to symbol lookup, `cat`, `wc`, `head`, `sed`, `find`,
+`ls -R`/`tree`, and the pytest re-run.
+
+On Claude Code under `auto`, a large output is digested in full: the hook is handed
+the last 30,000 characters and the path of the host's saved copy, and reads the full
+output from there (only this session's own results directory, never through a link,
+only when the size matches). When that copy is unavailable the digest says its copy is
+partial and names `ctx run -- <command>`; see
+[Pastes and media](PASTES-AND-MEDIA.md#a-large-command-output-on-claude-code).
+
+**What ctx still asks or denies.** On every host: secret-bearing paths, outside-workspace
+access and container escape surfaces (asked, never rewritten; Codex has no `ask`, so there they are denied); in-place edits such as
+`sed -i`; the repository's `deny_commands`; never-ending commands such as `tail -f`
+(denied, with `ctx run -- …` named); and native `Grep`/`Glob` (denied with the `ctx`
+command named, unless `collapse = false`). **What it no longer asks or denies for volume
+on Claude Code and Codex:** an unknown output bound, compound commands it cannot split,
+`xargs`, `gh` mutations and the python heredoc note.
+
+**ctx's own approvals.** ctx never approves a rewritten command, and everything
+including `ctx run` goes through the host's own prompts. It approves only its own commands, in two classes, so that the
+follow-up commands a digest prints run without a prompt. **Approved always**, because
+they read only ctx's store by a `run:` handle: `get` (with `#stdout` or `#stderr` and its
+range flags `--lines`, `--bytes`, `--records`, `--json-pointer`, `--span`), `search`,
+`stats`, `diff`, `intake --chunks`, and `view run:…`. **Approved only when** no `Read`
+deny or ask rule and no outside-directory block is visible in any settings source and
+nothing leaves the workspace: `view <file>`, `get`, `search` and `stats` on paths and
+`repo:` references, `q`, `map`, `def`, `refs`, and the `blob:`, `snapshot:`, `search:`
+and `checkpoint:` handles. **Never approved:** `run`, the other forms of `intake` (a
+path, stdin, the clipboard, `--copy`), `--snapcompact`, `stats --session`, and anything
+that writes; these go through the host's own prompts. A token that looks like a handle
+but is not one (for example `run:../../etc/passwd`) is never approved. A `Read` rule in a source ctx cannot read (managed policy, `--settings`)
+does not bind ctx's own verbs; if that matters, deny `Bash(ctx:*)` and `mcp__ctx__*`
+there. `ctx doctor` prints a "claude code approval" row and `ctx coverage` an
+`approval:` line stating this for the workspace.
 
 **To make the harness stricter,** use `steering`, `unknown_command` and
-`internal_error`, not `mode`. `mode` has one effect today: `advisory` turns the
-guard off, and every other value is `guarded`. `steering` sets *what happens* to
-a flooding command: `auto`/`rewrite` transparently reroute it through `ctx run`,
-and `steering = "deny"` blocks it outright so nothing runs until you re-issue it
-yourself. `unknown_command` decides what happens to a command the classifier does not
-recognise: the default `force_ask` asks you; `allow` lets it run; `deny` sends it
-down the same path as a recognised flood, so under the default `steering` it is
-rewritten to run under `ctx run` and allowed, and it is refused only together with
-`steering = "deny"`. `internal_error = "deny"` makes a broken guard fail closed. A
-locked-down install pairs `steering = "deny"` with `unknown_command = "deny"` and
-`internal_error = "deny"`. `ctx coverage`
-prints a note when a workspace sets `mode = "strict"`, so the setting cannot be
-mistaken for one that does something.
+`internal_error`, not `mode`. `mode` has one effect today: `advisory` turns the guard
+off, and every other value is `guarded`. `steering = "deny"` makes a flooding command
+refuse until you re-issue it as `ctx run`; with it, `unknown_command = "deny"` refuses
+commands the classifier does not recognise. `internal_error = "deny"` makes a broken
+guard fail closed. `ctx coverage` prints a note when a workspace sets `mode =
+"strict"`, so the setting cannot be mistaken for one that does something. The
+`steering = "rewrite"` caveat above is the reason it is not the default: it changes
+which command your host's rules see.
+
+**Where ctx's records live.** Ledgers that record command text, and the guard's policy
+and permission caches, are in the ctx state directory (mode `0700`), not in the
+workspace. A default session leaves a few small files under `.ctx-session-reads/`
+(typically `.gitignore`, `coverage.jsonl`, `engagement.json`, `<session>.count` and
+`edit-outcomes.jsonl`; `ctx coverage` lists every file a feature can add). They appear
+in listings, content searches and file counts as `.git` does. A copy an older ctx left
+in a workspace is moved on first use.
 
 ## `[workspace]` — capture boundaries
 
@@ -323,6 +357,54 @@ Advise mode records no token saving, because nothing was avoided.
 A guard rail worth knowing: if `patterns` is set to something that isn't a list
 (a bare string typo, say), straitjacket rejects it and falls back to the full
 default set — a typo can't silently disable redaction.
+
+### What is guaranteed
+
+A secret that matches an enabled pattern is masked in model-visible text, wherever
+that text is cut, taken apart or transformed first: digests, chunk-map labels and
+rows, range reads (`ctx get --bytes`, `--lines`, `--span`), search results, `ctx q`
+(and the MCP `q` op), `ctx compress`, and the commands that show text stored by an
+earlier call (`debt list`, `collab`, `task`, `relay`, `lsp`, `orchestrate`). That holds
+when a width cut, a byte-piece boundary or a window edge falls inside the secret.
+Redaction runs before the cut, the line split or a template that replaces digits, not
+after. A multi-line private key is masked as a block, so a window that starts inside
+one does not show its body lines. Stored bytes are never redacted; only what the model is
+shown is.
+
+A masked secret looks like `[ctx:redacted:<pattern>:<hash of the whole match>]`
+wherever the text may change width. Where a width must be kept (a clip that a budget
+already measured, or a range answer whose header declares its bytes), only the visible
+part of a secret that crosses the cut is blanked, one `*` per byte. A private-key body
+line in a digest is shown as `[ctx:redacted:private-key]`. A `redaction: applied
+[...]` note names the patterns whose marker reached the text shown. With `enabled =
+false`, or a pattern removed from `patterns`, nothing is blanked for it.
+
+```text
+  first signal stdout:L3001: ERROR: deploy step failed with xxxx…xxxx ***************
+```
+
+That is a real line from `ctx run -- cat` on a file whose line holds a synthetic
+`ghp_` token (36 random characters) that crosses the digest's display width: the
+visible part of the token is blanked at the same width, and no prefix of it is shown.
+
+**Not a goal.** An argument echoed back in the same call to the caller who supplied it is
+not redacted: a command quoted in a hook ask or deny message, or the suggested
+`ctx run` line. The caller already holds it, and a suggested command must be exact to be
+useful.
+
+**Limits.** These are stated in the `ctx.textutil` module and measured:
+
+- A run of token characters longer than 64 KiB is not judged at a cut, so a byte piece
+  inside a token that long shows raw token characters. Unbounded tokens (JWT, `sk-`,
+  `ghp_` and similar) up to 60 KiB are fully masked.
+- A window inside a private-key block is masked only when its BEGIN line is at most
+  16 KiB behind the window.
+- Fixed-shape secrets are judged on 1,024 characters around a cut: the second half of a
+  SendGrid key, or an `aws_secret_access_key=` value, further than that from the shown
+  text is not recognised.
+- A token directly adjacent to a non-ASCII letter is not matched, because the shared
+  patterns are word-boundary anchored and Python treats that letter as a word character.
+- A secret disguised so that no pattern matches it is not detected anywhere.
 
 ## `[scopes]` — named monorepo roots
 

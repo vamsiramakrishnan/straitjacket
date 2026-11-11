@@ -138,7 +138,7 @@ This is the plane most contributions touch. The flow is
 | `anchors.py` | Content anchors and line tags: the verify → relocate → refuse ladder that keeps a `repo:` line address meaningful after an edit. Pure and total ([ANCHORS.md](ANCHORS.md)). |
 | `retrieval.py`, `_retrieval/` | Bounded `ctx search` / `get` / `stats` / spans: deterministic, budget-capped, provenance-bearing (SPEC §6.3–6.5). |
 | `refs.py` | The reference/handle grammar (`run:…#stdout`, spans) (SPEC §6.1). |
-| `substitute.py` | The collapse substitution layer (the replacement surface). |
+| `substitute.py` | The retired collapse substitutions: the types and entry point remain, `collapse` returns nothing, and `symbol_hint` offers `ctx q refs` beside an identifier search. |
 | `prefixassets.py` | The prefix-stability contract: every byte injected into the prompt prefix is locked behind a manifest. |
 | `pricing.py`, `data/model-prices.json` | Host-neutral model pricing. |
 | `debt.py` | `ctx debt` — declared omission for engineering scope. |

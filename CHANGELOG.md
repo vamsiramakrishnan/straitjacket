@@ -6,6 +6,55 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- **BREAKING:** on Claude Code and Codex, shell commands are no longer rewritten or
+  approved by default. If you upgrade, commands the hook used to approve silently now go
+  through the host's own prompts, as they do without ctx. On Claude Code a hook `allow`
+  together with a rewritten command overrides your deny and ask rules, and a plain
+  `allow` skips the default prompt; the hook sent `allow` with every rewrite and for
+  every command it passed through, so installing ctx approved shell commands and MCP
+  calls you were never asked about, and a rewritten command escaped rules written for
+  the original. Now `[guard] steering = "auto"` (default) leaves a shell command exactly
+  as it arrived, the host decides, and the output is bounded after the command runs; on
+  Claude Code the gate reads the full output from the host's saved copy (this session's
+  own results directory, never through a link, only when the size matches), so a 5 MB
+  output is digested whole, and otherwise the digest says its copy is partial and names
+  `ctx run -- <command>`. `steering = "rewrite"` opts in to capture at birth: the
+  command is rewritten with no decision, the host's prompts and rules then concern the
+  `ctx run` wrapper, a rule from a source ctx cannot read does not see the original,
+  and ctx only refuses where a visible rule would deny or ask about the original.
+  Rewrites are withheld on Codex. Antigravity still rewrites by default because it
+  cannot replace output. ctx approves only its own commands, so the follow-up
+  commands a digest prints run without a prompt: always those that read only its store by
+  a `run:` handle (`get` with `#stdout`/`#stderr` and its range flags, `search`, `stats`,
+  `diff`, `intake --chunks`, `view run:…`); only when no `Read` deny or ask rule and no
+  outside-directory block is visible in any settings source and nothing leaves the
+  workspace, `view <file>`, `get`/`search`/`stats` on paths, `q`, `map`, `def`, `refs`
+  and `blob:`/`snapshot:`/`search:`/`checkpoint:` handles; never `run`, other `intake`
+  forms or anything that writes (a token that only looks like a handle is never
+  approved); a `Read` rule in a source ctx cannot read (managed policy) does not
+  bind them, so deny `Bash(ctx:*)` and `mcp__ctx__*` there if that matters. To restore
+  the old quiet behaviour, add your own allow rules for the original commands. No ask or
+  deny is sent for volume on these hosts any more (unknown output bound, compound
+  commands ctx cannot split, `xargs`, `gh` mutations, the python heredoc note); secret
+  paths, container escape, in-place edits, repository deny rules, never-ending commands
+  such as `tail -f` and steering of native search tools remain. Ledgers that record
+  command text, and the policy and permission caches, moved to the ctx state directory
+  (a copy an older ctx left in a workspace is moved on first use); a default session
+  leaves a few small files under `.ctx-session-reads/` that appear in listings and counts
+  as `.git` does. `ctx doctor` gains a "claude code approval" row and `ctx coverage` an
+  `approval:` line.
+- Answer fidelity: where ctx still rewrites a shell command (Antigravity, and
+  `steering = "rewrite"` on Claude Code), the original is passed verbatim to the shell
+  as `ctx run --passthrough --shell -- '<original>'`, in the caller's directory, in bash
+  or zsh (verified by running it; `/bin/sh` only when neither exists, and said so). The
+  substitutions that could not return the original's answer are retired: search to symbol
+  lookup, `cat`, `wc`, `head`, `sed`, `find`, `ls -R`/`tree` and the pytest re-run. A
+  `cat *.txt` ran with the glob quoted, `grep -rn TOKEN .` became a symbol lookup with one
+  of three matches, a whole-suite `pytest` became a lookup of earlier failures and
+  `head f.txt` from a subdirectory read the root's file. `[guard] collapse` now governs
+  only the steering of native search tools, and the Capture ladder in `ctx ladders`
+  receives no records. A compound command is split on every joiner, including newline;
+  anything that cannot be split is left alone and the least permitted part decides.
 - Security: ctx no longer starts itself in a form that imports it from the workspace,
   and installer writes no longer follow a symlink. `python -m ctx` puts the current
   directory first on the import path, and ctx wrote that form into host configuration
@@ -24,27 +73,33 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
   message naming the file. Existing installs should run `ctx setup`, then `ctx doctor`.
   Not closed: `PYTHONPATH` set in the user's own environment, a different `ctx` earlier
   on `PATH`, and launches wrapped in `uv run`.
-- Media-aware file reads: when the model opens an image or video with the host's own
-  file tool, the read guard says what the host will deliver and names the `ctx view`
-  command that gets the detail back. New `[media]` section: `image_read`
-  (`advise` default, `redirect`, `off`), `video_read` (`steer` default, `off`),
-  `file_mentions` (default off; under `ctx wrap claude` routes `@file` mentions through
-  `Read`) and `redirect_budget_ms` (6000, clamped to 500-8000). `advise` adds one note
-  with the downscale and an estimate with its basis; `redirect` replaces the read with
-  a gridded overview and steps aside without Pillow, on error, past the budget, or when
-  a visible settings file has a `Read` deny or ask rule. A video or audio read is
-  answered with the `ctx view` command and a shell `ffmpeg`/`ffprobe`/`ffplay` call on
-  a video gets the same hint once per file per session; on Claude Code 2.1.322 `Read`
-  rejects binary extensions before any hook, so only the shell hint runs there. A text
-  read the guard narrowed now tells the model it is a window and gives the offset to
-  continue. Image token estimates name the tier (`CTX_MODEL`) or a range labelled
-  `model unknown`, and `ctx view --json` gains `derived.tokens_before_basis`. Nothing
-  was run on Codex; managed-policy and `--settings` rules are not visible to the hook.
-- `ctx.pathglob` matching no longer backtracks: it tracks the reachable pattern
-  positions and is roughly linear, with the same results as the old matcher on 60,067
-  generated glob and path pairs. A `.ctxignore` of ordinary size could cost one image
-  read the hook's whole 10 s timeout. `ctx search --glob` and retrieval `--glob` use the
-  same matcher.
+- Security: model-visible text is redacted before it is cut, taken apart or transformed,
+  in every content-bearing command. A secret that matches an enabled pattern is masked in
+  digests, chunk-map labels and rows, range reads (`ctx get --bytes`, `--lines`,
+  `--span`), search, `ctx q` and the MCP `q` op, `ctx compress`, and the commands that
+  show text stored by an earlier call (`debt list`, `collab`, `task`, `relay`, `lsp`,
+  `orchestrate`), including when a width cut, a byte-piece boundary or a window edge
+  falls inside it. Before, a token straddling a cut was left as a prefix too short for
+  its pattern (`ghp_` plus 19 characters), a token split across two chunk-map pieces
+  could be read back in halves, log templates mangled a token before it was matched, a
+  window starting inside a private-key block showed key body lines, and `ctx q` and
+  `ctx compress` printed matched lines with whole secrets. Multi-line private keys are
+  masked as blocks. A masked part shows as `[ctx:redacted:<name>:<hash>]`, or as
+  same-width `*` where a width must be kept. With redaction off, or a pattern removed,
+  nothing is blanked. Not a goal: an argument echoed back in the same call to the caller
+  who supplied it (a command quoted in a hook message, the suggested `ctx run` line).
+  Limits: a run of token characters over 64 KiB, a private-key block whose BEGIN line is
+  more than 16 KiB behind the shown window, fixed-shape secrets further than 1,024
+  characters from the shown text, and a token adjacent to a non-ASCII letter. `ctx get
+  --span` is now honoured only on the artifact the reference names. See
+  [Configuration](docs/CONFIGURATION.md).
+- Hardening that changes documented behaviour: payload text can no longer break a
+  digest line (JSON and JSONL keys, PDF version bytes, and CR, U+0085, U+2028 and
+  U+2029 are escaped) so tool output cannot plant a `next:` line; a shell command that merely starts with `ctx` is not exempt from either gate unless
+  the whole command is one invocation of the ctx the hook runs as, and an MCP server is
+  exempt only by exact ctx name; a launch profile that restricts individual tools is enforced
+  through the gateway or the whole server is left out, instead of leaving an excluded
+  tool callable under a receipt that said the profile was applied.
 - `ctx intake [PATH|-]` stores pasted text, a workspace file, stdin or the clipboard
   once and prints a bounded digest with a handle, without a command or tool call to
   hang it on (`--label`, `--name`, `--focus`, `--json`, `--clip`, `--copy`, and
@@ -124,19 +179,32 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
   only, and passes every payload string through one quoter that redacts the original,
   cleans, redacts again, then clips; a secret disguised so neither reading matches a
   shared pattern is not detected.
-- Hardening that changes documented behaviour: payload text can no longer break a
-  digest line (JSON and JSONL keys, PDF version bytes, and CR, U+0085, U+2028 and
-  U+2029 are escaped) so tool output cannot plant a `next:` line; a shell command
-  that merely starts with `ctx` is not exempt from either gate unless the whole
-  command is one invocation of the ctx the hook runs as, and an MCP server is exempt
-  only by exact ctx name; a launch profile that restricts individual tools is enforced
-  through the gateway or the whole server is left out, instead of leaving an excluded
-  tool callable under a receipt that said the profile was applied.
+- Media-aware file reads: when the model opens an image or video with the host's own
+  file tool, the read guard says what the host will deliver and names the `ctx view`
+  command that gets the detail back. New `[media]` section: `image_read`
+  (`advise` default, `redirect`, `off`), `video_read` (`steer` default, `off`),
+  `file_mentions` (default off; under `ctx wrap claude` routes `@file` mentions through
+  `Read`) and `redirect_budget_ms` (6000, clamped to 500-8000). `advise` adds one note
+  with the downscale and an estimate with its basis; `redirect` replaces the read with
+  a gridded overview and steps aside without Pillow, on error, past the budget, or when
+  a visible settings file has a `Read` deny or ask rule. A video or audio read is
+  answered with the `ctx view` command and a shell `ffmpeg`/`ffprobe`/`ffplay` call on
+  a video gets the same hint once per file per session; on Claude Code 2.1.322 `Read`
+  rejects binary extensions before any hook, so only the shell hint runs there. A text
+  read the guard narrowed now tells the model it is a window and gives the offset to
+  continue. Image token estimates name the tier (`CTX_MODEL`) or a range labelled
+  `model unknown`, and `ctx view --json` gains `derived.tokens_before_basis`. Nothing
+  was run on Codex; managed-policy and `--settings` rules are not visible to the hook.
 - Preview and safely merge Codex TOML and OpenCode JSON/JSONC configuration
   through parsed source edits. Preserve comments and other integrations,
   refuse conflicting values with exact diffs, and track contributions for
   idempotent repair and owned removal. Doctor checks every Codex lifecycle
   stage and detects partial OpenCode JSONC integrations.
+- `ctx.pathglob` matching no longer backtracks: it tracks the reachable pattern
+  positions and is roughly linear, with the same results as the old matcher on 60,067
+  generated glob and path pairs. A `.ctxignore` of ordinary size could cost one image
+  read the hook's whole 10 s timeout. `ctx search --glob` and retrieval `--glob` use the
+  same matcher.
 
 ## [0.43.0] - 2026-11-07
 

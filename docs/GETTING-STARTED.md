@@ -111,9 +111,9 @@ Retrieval remains bounded. If the requested region is too large, `ctx get` retur
 
 | Host | Birth-time containment | Oversized result substitution |
 |---|---|---|
-| Claude Code | Transparent rewrite | Yes |
-| Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
-| Antigravity | Rewrite `run_command` and `read_file` in place when the payload carries `hookEventName` (added in `agy` 1.5.4; observed on 1.5.5 only); deny and name the bounded command for other tools | No |
+| Claude Code | Output bounded after the command runs; command not rewritten by default (`steering = "rewrite"` captures at birth) | Yes |
+| Codex | Commands run as written under Codex's own approval; rewrites withheld | Implemented and contract-tested; live CLI receipt pending |
+| Antigravity | Rewrite by default (it cannot replace output): `run_command` and `read_file` in place when the payload carries `hookEventName` (added in `agy` 1.5.4; observed on 1.5.5 only); deny and name the bounded command for other tools | No |
 | Hermes, OMP, OpenCode | Native plugin argument rewrite | Text-output replacement; contract-tested |
 | DSH | Deny with a bounded replacement command | Native text-output replacement; contract-tested |
 

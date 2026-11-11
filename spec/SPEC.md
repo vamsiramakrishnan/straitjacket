@@ -448,7 +448,9 @@ A security-oriented installation MAY choose fail-closed, but that is a separate 
 > `SessionStart`. Its `PreToolUse` hook rewrites `run_command` and `read_file`
 > arguments in place through the host's `overwrite` field instead of only denying.
 > See `spec/adr/005-antigravity-hook-contract.md`. The requirements in this section
-> are unchanged.
+> are unchanged. A later note (2026-11-11): on Claude Code and Codex, by default,
+> shell commands are not rewritten or approved by the hook; output is bounded after the
+> command runs (`spec/adr/003-pretool-routing.md`, second update).
 
 ### 10.4 MCP server
 

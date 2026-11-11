@@ -253,6 +253,52 @@ all of it is addressable by byte range.
 A file that an `@`-reference puts in the context on Claude Code enters with no tool
 call, so no hook sees it.
 
+## A large command output on Claude Code
+
+A command's output is the case ctx handled first, and by default it is handled after
+the command runs. With `[guard] steering = "auto"` the command is not rewritten or
+approved: it reaches Claude Code as written and the host decides about it as it would
+without ctx. When the result is over `max_tool_output_bytes`, the PostToolUse gate
+replaces it with a digest and a handle.
+
+Claude Code hands the hook only the last 30,000 characters of a large output, plus the
+path and size of the copy it saved. The gate reads the full output from that saved copy
+(observed on 2.1.322 for a 300 KB and a 5 MB output). It trusts only a file in this
+session's own `tool-results` directory under the host's projects directory, never one
+reached through a link, and only when its size matches what the host reported. A 2 MB
+output then gets a digest of the whole, here trimmed:
+
+```text
+[ctx run:88941c34ab7e profile=text/v1]
+cwd: .
+command: make all
+exit: 0
+stdout: 60,001 lines · 2.0 MiB · est 519,237 tokens
+summary:
+  first signal stdout:L41001: ERROR: linker failed: undefined reference to `parse_config'
+coverage:
+  parsed: 60,001/60,001 lines
+next:
+  ctx search run:88941c34ab7e '<pattern>' --context 3
+```
+
+When the saved copy is not available, the digest is built from the tail the host
+handed over, says so, and names the way to get a full capture:
+
+```text
+[ctx run:da66cb105f5f profile=text/v1]
+…
+stdout: 862 lines · 29.3 KiB · est 7,500 tokens
+…
+[ctx: stored copy is what Claude Code handed the hook: the last 30000 characters of 2076950 bytes. For a full capture run: ctx run -- make all]
+```
+
+The command has already run, with the host's own permission decision, so the digest
+bounds what the model reads, not what the command did. For capture at birth, see
+`steering = "rewrite"` in [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
+On Codex the same replacement happens after the command (documented; not run live).
+Antigravity cannot replace output, so there ctx rewrites the command instead.
+
 ## The agent opens an image or video with the host's own tool
 
 Controlled by [`[media]`](CONFIGURATION.md#media-what-a-native-read-of-an-image-or-video-does).

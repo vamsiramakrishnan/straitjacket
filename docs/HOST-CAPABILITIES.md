@@ -46,9 +46,9 @@ per host.
 
 | host | birth gate | output gate | how |
 |---|---|---|---|
-| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/claude.svg" width="24" height="24" alt=""> **claude** (Claude Code) | ✅ rewrites transparently | ✅ replaces the result, in the tool's own result shape | `updatedInput` / `updatedToolOutput` |
-| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/codex.svg" width="24" height="24" alt=""> **codex** (Codex CLI) | 🧪 implemented + contract-tested | 🧪 implemented + contract-tested | live CLI receipt pending |
-| <img src="../assets/agents/antigravity.png" width="24" height="24" alt=""> **antigravity** (`agy` CLI) | ✅ rewrites `run_command` and `read_file` in place when the payload carries `hookEventName` (added in `agy` 1.5.4; observed on 1.5.5 only); other tools **deny** and name the command | ❌ **none** | `overwrite`; see below |
+| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/claude.svg" width="24" height="24" alt=""> **claude** (Claude Code) | Able to rewrite; by default ctx does not, and runs no command differently (`steering = "auto"`) | ✅ replaces the result, in the tool's own result shape | `updatedInput` / `updatedToolOutput` |
+| <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/codex.svg" width="24" height="24" alt=""> **codex** (Codex CLI) | Rewrites withheld: commands run as written under Codex's own approval | 🧪 implemented + contract-tested | live CLI receipt pending |
+| <img src="../assets/agents/antigravity.png" width="24" height="24" alt=""> **antigravity** (`agy` CLI) | ✅ rewrites by default (it cannot replace output) `run_command` and `read_file` in place when the payload carries `hookEventName` (added in `agy` 1.5.4; observed on 1.5.5 only); other tools **deny** and name the command | ❌ **none** | `overwrite`; see below |
 | **antigravity-sdk** (ctx's own agent) | ✅ bounded inside the tool | ✅ bounded inside the tool | see below |
 | <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/hermes.svg" width="24" height="24" alt=""> **hermes** (Nous Hermes Agent) | Contract-tested argument rewrite | Contract-tested text replacement | `pre_tool_call` / `transform_tool_result` |
 | <img src="https://raw.githubusercontent.com/vamsiramakrishnan/straitjacket/main/assets/agents/omp.svg" width="24" height="24" alt=""> **omp** (Oh My Pi) | Contract-tested argument rewrite | Contract-tested text replacement | `tool_call` / `tool_result` |
@@ -69,10 +69,19 @@ sealed input arguments; its post-hook also preserves a downstream plugin's
 canonical-value rewrite rather than substituting stale presentation text.
 These paths still have explicit `ctx run` and verified edit tools available.
 
-On Claude Code, containment is invisible: you type `pytest -q`, the hook
-silently substitutes `ctx run -- pytest -q`, and the agent never sees a refusal.
-The Codex implementation targets the same experience; call it live only after a
-version-pinned Codex run records both gates.
+On Claude Code and Codex, by default (`[guard] steering = "auto"`), ctx does not rewrite
+or approve a shell command. You type `pytest -q`, the command reaches the host exactly
+as written, the host decides about it exactly as it would without ctx, and ctx bounds
+the output after the command runs: a large result is replaced by a digest with a
+retrieval handle. On Claude Code the full output is read from the host's saved copy;
+when that is not available the digest says its copy is partial and names
+`ctx run -- <command>`. The cost is that the command itself is not captured at birth.
+`steering = "rewrite"` opts in to capture at birth on Claude Code, with the caveats in
+[Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command). Antigravity
+still rewrites by default, because it cannot replace output. Where a rewrite happens, the
+original command is passed verbatim to the shell as `ctx run --passthrough --shell --
+'<original>'`. The Codex implementation is contract-tested only; call it live only after
+a version-pinned Codex run records both gates.
 
 ## What ctx can do at each point
 
@@ -84,7 +93,7 @@ means it is taken from the vendor's documentation and has not been run here.
 | Point | Claude Code 2.1.322 (observed unless marked) | Codex CLI 0.167.1 (documented, not observed) | Antigravity `agy` 1.5.5 (observed) |
 |---|---|---|---|
 | **Prompt** (user submits) | `UserPromptSubmit` can **add context** or **block** the prompt. It cannot replace or shorten it. Added context over 10,000 characters is delivered as a file path plus a preview of about 2 KB. A block makes no model call. | `UserPromptSubmit` can **block** the prompt or **add context**. Added context is capped near 2,500 tokens. | No prompt hook is registered. An oversized prompt reaches the model unmodified. |
-| **Tool input** (before the call) | `PreToolUse` can **rewrite the input** (`updatedInput`). Context it adds reaches the model. | `PreToolUse` can **allow with a rewritten input**. `ask` is unsupported and becomes a deny. | `PreToolUse` can **rewrite arguments**: `{"decision": "allow", "overwrite": {…}}` is merged into the call's arguments before it runs. An empty object is a **deny**. |
+| **Tool input** (before the call) | `PreToolUse` can **rewrite the input** (`updatedInput`). Context it adds reaches the model. | `PreToolUse` can **allow with a rewritten input**. `ask` is unsupported and becomes a deny. ctx withholds rewrites on Codex. | `PreToolUse` can **rewrite arguments**: `{"decision": "allow", "overwrite": {…}}` is merged into the call's arguments before it runs. An empty object is a **deny**. |
 | **Tool output** (after the call) | `PostToolUse` can **replace a built-in tool's output**, but only with an object in that tool's own result shape. A plain string is silently ignored. | `PostToolUse` can **replace the output** by blocking with a reason. | `PostToolUse` accepts **only an empty object** and is **not given the tool's output**. Output cannot be replaced or captured. |
 | **Session start** | A `SessionStart` hook returns context once (documented; not separately observed here). | A `SessionStart` hook exists and ctx registers it (documented). | A `SessionStart` stage exists. A message injected there stays in the conversation: a canary injected at `SessionStart` was obeyed on a later model call. ctx applies `SessionStart` when the payload carries `hookEventName` (added in 1.5.4 per its changelog); observed on 1.5.5 only. |
 
@@ -99,9 +108,22 @@ Other facts from the same runs:
   image extension do reach `PreToolUse`, where ctx adds a note (see
   [Pastes and media](PASTES-AND-MEDIA.md#the-agent-opens-an-image-or-video-with-the-hosts-own-tool)).
 - **Claude Code, permissions.** Observed on Claude Code 2.1.322: a hook's `allow`
-  together with a rewritten input overrides the user's `deny` and `ask` rules. A hook
-  that returns no decision leaves the host to evaluate its rules, against the rewritten
-  command only.
+  together with a rewritten input overrides the user's `deny` and `ask` rules, and a plain
+  `allow` skips the default prompt for a call no rule covers (an MCP tool). A hook that
+  returns no decision leaves the host to evaluate its rules, against the rewritten
+  command only. What ctx does about it: it never approves a rewritten command, and it
+  sends an `allow` only for its own commands, so that the follow-up commands a digest
+  prints run without a prompt: always for those that read only ctx's store by a `run:`
+  handle (`get`, `search`, `stats`, `diff`, `intake --chunks`, `view run:…`); only when
+  no `Read` deny or ask rule and no outside-directory block is visible in any settings
+  source, and nothing leaves the workspace, for `view <file>`, `get`/`search`/`stats` on
+  paths, `q`, `map`, `def`, `refs` and the `blob:`, `snapshot:`, `search:` and
+  `checkpoint:` handles; never for `run`, other `intake` forms or anything that writes. A `Read` rule in a source ctx cannot read (managed policy) does not
+  bind those verbs; deny `Bash(ctx:*)` and `mcp__ctx__*` there if that matters. Upgrading
+  consequence: commands an earlier ctx approved silently now go through Claude Code's own
+  prompts, as they do without ctx. If you want those prompts gone, add your own allow
+  rules for the original commands. Details:
+  [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 - **Antigravity, permissions.** The host checks its permission rules against the
   *rewritten* command. `ctx.agyperm` accounts for that; see below.
 - **Codex.** Hooks that are not managed require the user to trust the project
@@ -114,7 +136,7 @@ What each point lets ctx do:
 |---|---|---|---|
 | Keep an oversized paste out of the model's context | Only by `block`: the prompt is stopped and the user resends it with a handle. `advise` cannot remove the paste. | Same, from documentation. | No prompt hook. |
 | Store a paste and give the model a handle | Yes: `advise` mode (the paste still reaches the model this turn). | Same, from documentation. | No. |
-| Bound a flooding command before it runs | Yes, by rewrite. | Yes, by rewrite (not run live). | Yes for `run_command` and `read_file`, by rewrite; other tools are denied with the command named. |
+| Bound a flooding command before it runs | Only with `steering = "rewrite"`; by default the command runs as written and the output is bounded afterwards. | No: rewrites are withheld; the output is bounded afterwards (documented, not run live). | Yes for `run_command` and `read_file`, by rewrite; other tools are denied with the command named. |
 | Replace an oversized result | Yes, for a built-in tool only in its own result shape; if the digest does not fit the shape within budget, nothing is replaced. | Yes, by block with a reason (not run live). | No. |
 | Tell the model what an image read will deliver, and how to get a region | Yes, a note on `Read` of a large image; the video hint comes with a later shell command. | Yes for `view_image` (contract only; nothing run). | No. |
 | Add a once-per-session advisory | Yes, at `SessionStart`. | Yes, at `SessionStart` (documented). | Yes, at `SessionStart` on 1.5.5. |
