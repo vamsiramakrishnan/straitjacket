@@ -1949,6 +1949,33 @@ def _ff_frame(src: "_Src", wd: str, fmt: str, t: float, edge: int, *, codec: str
     raise MediaError(f"no frame at {fmt_ts(t)}: " + _failure(cp))
 
 
+def _validate_jpeg(raw: bytes) -> tuple[int, int]:
+    """Check ffmpeg's JPEG output WITHOUT any third-party library and return
+    (width, height): start-of-image, a frame header with sane dimensions, a
+    start-of-scan, and the end-of-image marker where the data ends (so a
+    truncated or empty output is a failure, not a picture)."""
+    bad = MediaError("ffmpeg produced bytes that are not a complete JPEG image")
+    if len(raw) < 128 or raw[:3] != b"\xff\xd8\xff" or raw[-2:] != b"\xff\xd9":
+        raise bad
+    w, h, _ = binfmt._jpeg_dims(raw)
+    if not (w and h) or b"\xff\xda" not in raw:
+        raise bad
+    return w, h
+
+
+def _check_frame_size(size: tuple[int, int] | None, edge: int, p: MediaProbe) -> None:
+    """A frame must be no larger than what was asked for and keep the aspect
+    ratio the container declared (within rounding)."""
+    wrong = MediaError("ffmpeg returned a frame of an unexpected size")
+    if not size or min(size) < 1 or max(size) > edge + 1:
+        raise wrong
+    if p.width and p.height:
+        want = p.width / p.height
+        got = size[0] / size[1]
+        if abs(got - want) / want > 0.05 + 1.0 / min(size):
+            raise wrong
+
+
 def _decode_frame(raw: bytes):
     """ffmpeg's PNG bytes -> a normalised PIL image, or a plain MediaError."""
     from PIL import Image
@@ -2036,12 +2063,14 @@ def frame_at(source: Any, t: float | str, *, max_edge: int = DEFAULT_FRAME_EDGE,
                             timeout=FRAME_TIMEOUT_S, px=_pixel_cap(p))
         if with_pillow:
             im = _decode_frame(raw)
+            _check_frame_size(im.size, edge, p)
             picked = _encode_best(im, input_len=1 << 60, original_ok=False)
             data, fmt = picked  # type: ignore[misc]
             size = im.size
         else:
+            size = _validate_jpeg(raw)                   # no Pillow: validate by hand
+            _check_frame_size(size, edge, p)
             data, fmt = raw, "jpeg"
-            size = _jpeg_size(raw)
         engine = _engine_video(with_pillow)
     return _make_derived(
         src=src, src_dims=(p.width, p.height), op="frame",
@@ -2180,6 +2209,7 @@ def contact_sheet(source: Any, *, count: int | None = None,
                                 timeout=min(FRAME_TIMEOUT_S, deadline.left()),
                                 px=_pixel_cap(p))
                 tile = _decode_frame(raw).convert("RGB")
+                _check_frame_size(tile.size, max(tile_w, tile_h), p)
             if tile.size != (tile_w, tile_h):
                 tile = tile.resize((tile_w, tile_h), Image.Resampling.LANCZOS)
             r, c = divmod(i, cols)

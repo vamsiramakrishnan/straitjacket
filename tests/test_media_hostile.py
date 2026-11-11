@@ -18,6 +18,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 
 import media_headers as H
 import pytest
@@ -614,3 +615,56 @@ def test_a_stream_that_grows_after_declaring_a_small_size_is_refused(tmp_path):
     raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "matroska", "-ss", "1.5", "-i",
                           str(mkv), "-frames:v", "1", "-f", "null", "-"], capture_output=True)
     assert raw.returncode == 0
+
+
+# ============ frames are validated even when Pillow is absent
+def _real_jpeg(tmp_path, size="320x240"):
+    out = tmp_path / f"real-{size}.jpg"
+    _ffmpeg(["-f", "lavfi", "-i", f"testsrc=s={size}", "-frames:v", "1"], out)
+    return out
+
+
+@needs_ffmpeg
+def test_jpeg_validation_needs_no_library(tmp_path):
+    good = _real_jpeg(tmp_path).read_bytes()
+    assert media._validate_jpeg(good) == (320, 240)
+    for bad in (b"", good[:60], good[: len(good) // 2], good[:-2], b"\xff\xd8\xff" + os.urandom(3000),
+                os.urandom(3000), good[:-2] + b"\x00\x00"):
+        with pytest.raises(media.MediaError, match="complete JPEG"):
+            media._validate_jpeg(bad)
+    probe = media.MediaProbe(kind="video", format="mp4", bytes=1, sha256="", width=320, height=240)
+    media._check_frame_size((320, 240), 1024, probe)
+    media._check_frame_size((160, 120), 160, probe)
+    for size in ((8, 8), (2000, 1500), (0, 5), (320, 100), None):
+        with pytest.raises(media.MediaError, match="unexpected size"):
+            media._check_frame_size(size, 1024, probe)
+
+
+@needs_ffmpeg
+def test_without_pillow_bad_ffmpeg_output_is_a_failure_not_a_picture(clip, ws, capsys, monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "PIL", None)
+    monkeypatch.setitem(sys.modules, "PIL.Image", None)
+    shutil.copy(clip, ws / "c.mp4")
+    good = _real_jpeg(tmp_path)
+    tiny = _real_jpeg(tmp_path, "8x8")
+    stubs = {
+        "random bytes": "head -c 3000 /dev/urandom",
+        "empty output": "exit 0",
+        "truncated jpeg": f"head -c 900 {good}",
+        "wrong-size jpeg": f"cat {tiny}",
+    }
+    for i, (label, body) in enumerate(stubs.items()):
+        sub = tmp_path / f"stub{i}"
+        sub.mkdir()
+        _fake_tools(sub, monkeypatch, ffmpeg=body)
+        rc, out, err = run(ws, "c.mp4", "--at", "1", capsys=capsys)
+        assert rc == 1, label
+        assert "open:" not in out
+        assert not list(ws.glob(".ctx-session-reads/media/frame-*")), label
+    # the real thing still works without Pillow, as a validated JPEG
+    monkeypatch.undo()
+    monkeypatch.setitem(sys.modules, "PIL", None)
+    monkeypatch.setitem(sys.modules, "PIL.Image", None)
+    rc, out, err = run(ws, "c.mp4", "--at", "1", capsys=capsys)
+    assert rc == 0, err
+    assert "image/jpeg" in out and "320×240" in out
