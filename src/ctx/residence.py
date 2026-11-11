@@ -26,7 +26,7 @@ a sliding window on every turn invalidates prefix caching on every step.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import hashlib
 import json
 import re
@@ -34,7 +34,14 @@ from typing import Any
 
 from ctx import bounds
 
-__all__ = ["WatermarkResidence", "extract_mutation_receipts"]
+__all__ = [
+    "WatermarkResidence",
+    "_extract_computed_receipts",
+    "_extract_state_notes_from_part",
+    "_inject_compaction_recap",
+    "_is_fact_bearing_state_note",
+    "extract_mutation_receipts",
+]
 
 _UI_CONTROLS_RE = re.compile(
     r"(=== Interactive Elements \(\d+\) ===\n).*?(\n\n=== Visible Page Text ===\n)",
@@ -110,6 +117,195 @@ def extract_mutation_receipts(output_text: str) -> list[str]:
                 if len(receipts) >= 4:
                     return receipts
     return receipts
+
+
+_FACT_BEARING_NOTE_RE = re.compile(
+    r"(?:\bassumed\s*:|=|\d|"
+    r"\b(?:verified|confirmed|written|wrote|found|matched|total|count|sum|"
+    r"min|max|mean|median|avg|rate|status|passed|failed|created|updated|"
+    r"deleted|uploaded|sent|resolved|linked|empty|none|null|true|false)\b)",
+    re.I,
+)
+_GENERIC_INTENT_PREFIX_RE = re.compile(
+    r"^(?:check(?:ing)?|read(?:ing)?|inspect(?:ing)?|list(?:ing)?|look(?:ing)?|"
+    r"search(?:ing)?|run(?:ning)?|open(?:ing)?|view(?:ing)?|navigat(?:e|ing)|"
+    r"click(?:ing)?|scroll(?:ing)?|wait(?:ing)?|fetch(?:ing)?|get(?:ting)?|"
+    r"prob(?:e|ing)|explor(?:e|ing)|examin(?:e|ing)|test(?:ing)?|try(?:ing)?)\b",
+    re.I,
+)
+_COMPUTED_KV_SUMMARY_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,36}\s*=\s*[$€£¥+-]?\d[\d,.%]*|"
+    r"[A-Za-z_][A-Za-z0-9_.\s-]{0,36}\s+=\s+[$€£¥+-]?\d[\d,._%\sA-Za-z-]{0,50})$"
+)
+_DELIVERABLE_CONTRACT_RE = re.compile(
+    r"(\[deliverable-contract\][\s\S]{1,800}?)(?=\n\n\[|\Z)"
+)
+
+
+def _is_fact_bearing_state_note(note: str) -> bool:
+    """Return True if ``note`` records a concrete fact, value, verification, or ``assumed:`` choice."""
+    cleaned = " ".join(str(note or "").splitlines()).strip()
+    if not cleaned:
+        return False
+    if _FACT_BEARING_NOTE_RE.search(cleaned):
+        return True
+    if _GENERIC_INTENT_PREFIX_RE.match(cleaned):
+        return False
+    return ":" in cleaned
+
+
+def _order_verified_notes(notes: Sequence[str]) -> list[str]:
+    """Deduplicate fact-bearing notes while prioritizing ``assumed:`` entries first."""
+    assumed: list[str] = []
+    facts: list[str] = []
+    seen: set[str] = set()
+    for raw in notes:
+        cleaned = " ".join(str(raw or "").splitlines()).strip()[:280]
+        if not cleaned or not _is_fact_bearing_state_note(cleaned) or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        if cleaned.lower().startswith("assumed:") or "assumed:" in cleaned.lower():
+            assumed.append(cleaned)
+        else:
+            facts.append(cleaned)
+    combined = assumed + facts
+    return combined[-12:]
+
+
+def _extract_state_notes_from_part(part: dict[str, Any] | str) -> list[str]:
+    """Extract fact-bearing ``state_note`` entries from a model part, turn dict, or text string."""
+    raw_notes: list[str] = []
+    if isinstance(part, str):
+        for ln in part.splitlines():
+            s = ln.strip()
+            if s.startswith("[state]"):
+                raw_notes.append(s[len("[state]") :].strip())
+            elif s:
+                raw_notes.append(s)
+        return _order_verified_notes(raw_notes)
+    if not isinstance(part, dict):
+        return []
+    if isinstance(part.get("parts"), list):
+        for sub in part["parts"]:
+            raw_notes.extend(_extract_state_notes_from_part(sub))
+        return _order_verified_notes(raw_notes)
+    if "functionCall" in part and isinstance(part["functionCall"], dict):
+        args = part["functionCall"].get("args")
+        if isinstance(args, dict) and args.get("state_note"):
+            raw_notes.append(str(args["state_note"]))
+    if "text" in part and not part.get("thought"):
+        for ln in str(part.get("text") or "").splitlines():
+            s = ln.strip()
+            if s.startswith("[state]"):
+                raw_notes.append(s[len("[state]") :].strip())
+    return _order_verified_notes(raw_notes)
+
+
+def _extract_computed_receipts(output_text: str) -> list[str]:
+    """Extract compact ``[data-shape:...]``, ``[write-receipt:...]``, ``[section:...]``, or ``k = v`` receipts."""
+    if not output_text:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for raw_line in output_text.splitlines():
+        s = raw_line.strip()
+        if not s:
+            continue
+        if s.startswith(("[data-shape:", "[write-receipt:", "[section:", "[section-receipt:")):
+            item = s[:140]
+        elif _COMPUTED_KV_SUMMARY_RE.match(s):
+            item = s[:100]
+        else:
+            continue
+        if item not in seen:
+            seen.add(item)
+            found.append(item)
+            if len(found) >= 8:
+                break
+    return found
+
+
+def _extract_deliverable_contract_from_contents(
+    contents: list[dict[str, Any]], deliverable_contract: str = ""
+) -> str:
+    """Resolve explicit ``deliverable_contract`` or extract ``[deliverable-contract]`` from ``contents[0]``."""
+    explicit = str(deliverable_contract or "").strip()
+    if explicit:
+        return explicit[:600]
+    if not contents or not isinstance(contents[0], dict):
+        return ""
+    for p in contents[0].get("parts") or []:
+        if isinstance(p, dict) and "text" in p:
+            txt = str(p.get("text") or "")
+            m = _DELIVERABLE_CONTRACT_RE.search(txt)
+            if m:
+                return " ".join(m.group(1).strip().splitlines())[:600]
+    return ""
+
+
+def _inject_compaction_recap(
+    target: str | dict[str, Any] | list[dict[str, Any]] = "",
+    state_notes: Sequence[str] | None = None,
+    mutations: Sequence[str] | None = None,
+    *,
+    verified_notes: Sequence[str] = (),
+    computed_receipts: Sequence[str] = (),
+    deliverable_contract: str = "",
+    idx: int | None = None,
+) -> str:
+    """Format and inject a ``[compaction-recap]`` block preserving verified notes, receipts, and contract."""
+    raw_notes = list(state_notes) if state_notes is not None else list(verified_notes)
+    ordered_notes = _order_verified_notes(raw_notes)
+    dedup_receipts: list[str] = []
+    seen_r: set[str] = set()
+    for r in computed_receipts:
+        rs = " ".join(str(r or "").splitlines()).strip()[:140]
+        if rs and rs not in seen_r:
+            seen_r.add(rs)
+            dedup_receipts.append(rs)
+    recent_receipts = dedup_receipts[-10:]
+    recent_muts = [str(m).strip() for m in (mutations or ()) if str(m).strip()][-12:]
+    contract_str = " ".join(str(deliverable_contract or "").splitlines()).strip()[:600]
+
+    recap_lines: list[str] = []
+    if recent_muts:
+        recap_lines.append(
+            f"[prior-mutations ({len(recent_muts)})] " + " | ".join(recent_muts)
+        )
+    if ordered_notes or recent_receipts or contract_str:
+        recap_lines.append("[compaction-recap]")
+        if ordered_notes:
+            recap_lines.append("[verified-notes: " + " | ".join(ordered_notes) + "]")
+        if recent_receipts:
+            recap_lines.append("[computed-receipts: " + " | ".join(recent_receipts) + "]")
+        if contract_str:
+            if contract_str.startswith("[deliverable-contract"):
+                recap_lines.append(contract_str)
+            else:
+                recap_lines.append(f"[deliverable-contract: {contract_str}]")
+    recap_block = "\n".join(recap_lines)
+
+    if isinstance(target, str):
+        if not recap_block:
+            return target
+        return f"{recap_block}\n{target}".strip() if target else recap_block
+    if isinstance(target, dict):
+        parts = target.get("parts") or []
+        cur = str(parts[0].get("text") or "") if parts and isinstance(parts[0], dict) else ""
+        merged = f"{recap_block}\n{cur}".strip() if recap_block else cur
+        target["parts"] = [{"text": merged}]
+        return merged
+    if isinstance(target, list) and target:
+        pos = len(target) - 1 if idx is None else idx
+        if 0 <= pos < len(target) and isinstance(target[pos], dict):
+            return _inject_compaction_recap(
+                target[pos],
+                ordered_notes,
+                recent_muts,
+                computed_receipts=recent_receipts,
+                deliverable_contract=contract_str,
+            )
+    return recap_block
 
 
 def _default_is_mutating(name: str, args: dict[str, Any]) -> bool:
@@ -233,6 +429,8 @@ class WatermarkResidence:
         self._turn_thoughts: dict[int, int] = {}
         self._seen_ui_body_hashes: dict[str, int] = {}
         self._compacted_mutations: list[str] = []
+        self._compacted_state_notes: list[str] = []
+        self._compacted_computed_receipts: list[str] = []
         self._last_prompt_tokens: int = 0
         self._last_cached_tokens: int = 0
         self._retained_cache_floor: int = 0
@@ -240,12 +438,64 @@ class WatermarkResidence:
         self._expected_retained_prefix_tokens: int = 0
         self._compacted_first_idx: int = 0
         self._single_tip_cache: bool = False
+        self._last_compact_turn: int | None = None
+        self._sub_block_cache_steps: int = 0
+        self._has_observed_cache: bool = False
         self.epochs: int = 0
         self.pairs_compacted: int = 0
         self.thoughts_compacted: int = 0
         self.state_notes_preserved: int = 0
         self.mutations_preserved: int = 0
         self.ui_controls_stripped_chars: int = 0
+
+    @property
+    def single_tip_cache_detected(self) -> bool:
+        """Whether empirical prefix-cache telemetry detected single-tip rolling invalidation."""
+        return bool(self._single_tip_cache)
+
+    @single_tip_cache_detected.setter
+    def single_tip_cache_detected(self, val: bool) -> None:
+        self._single_tip_cache = bool(val)
+
+    def get_telemetry(self) -> dict[str, Any]:
+        """Return a snapshot of compaction and prefix-cache calibration telemetry."""
+        return {
+            "epochs": self.epochs,
+            "pairs_compacted": self.pairs_compacted,
+            "thoughts_compacted": self.thoughts_compacted,
+            "state_notes_preserved": self.state_notes_preserved,
+            "mutations_preserved": self.mutations_preserved,
+            "ui_controls_stripped_chars": self.ui_controls_stripped_chars,
+            "single_tip_cache_detected": bool(self._single_tip_cache),
+            "retained_cache_floor": self._retained_cache_floor,
+            "sub_block_cache_steps": self._sub_block_cache_steps,
+            "last_compact_turn": self._last_compact_turn,
+        }
+
+    def _inject_compaction_recap(
+        self,
+        contents: list[dict[str, Any]],
+        state_notes: list[str] | None = None,
+        mutations: list[str] | None = None,
+        *,
+        computed_receipts: list[str] | None = None,
+        deliverable_contract: str = "",
+    ) -> str:
+        """Build and inject a structured ``[compaction-recap]`` block into ``contents``."""
+        notes = self._compacted_state_notes if state_notes is None else state_notes
+        muts = self._compacted_mutations if mutations is None else mutations
+        receipts = (
+            self._compacted_computed_receipts
+            if computed_receipts is None
+            else computed_receipts
+        )
+        return _inject_compaction_recap(
+            contents,
+            notes,
+            muts,
+            computed_receipts=receipts,
+            deliverable_contract=deliverable_contract,
+        )
 
     def record_model_turn(self, turn_idx: int, thought_tokens: int) -> None:
         """Record ``thought_tokens`` carried by an uncompacted ``model`` tool-call turn."""
@@ -273,8 +523,19 @@ class WatermarkResidence:
                     self._single_tip_cache = False
             elif self._retained_cache_floor == 0 or (0 < c_tok < self._retained_cache_floor):
                 self._retained_cache_floor = c_tok
+        elif self._has_observed_cache and self.epochs < 2:
+            delta_c = c_tok - self._last_cached_tokens
+            if 256 < delta_c < 3_000:
+                self._sub_block_cache_steps += 1
+                if self._sub_block_cache_steps >= 3:
+                    self._single_tip_cache = True
+            if self._retained_cache_floor == 0 and c_tok > 0:
+                self._retained_cache_floor = c_tok
+        elif self._retained_cache_floor == 0 and c_tok > 0:
+            self._retained_cache_floor = c_tok
         self._last_prompt_tokens = p_tok
         self._last_cached_tokens = c_tok
+        self._has_observed_cache = True
 
     def _transform_output_text(
         self,
@@ -355,11 +616,17 @@ class WatermarkResidence:
         contents: list[dict[str, Any]],
         *,
         remaining_steps: int | None = None,
+        has_final_output_write: bool = False,
+        min_turn_gap: int = 6,
+        deliverable_contract: str = "",
     ) -> tuple[int, int]:
         """Compact eligible ``(model, user)`` tool pairs in-place when cache-amortized.
 
         Returns ``(pairs_compacted_now, thoughts_compacted_now)``.
         """
+        if remaining_steps is not None and int(remaining_steps) <= 10:
+            return 0, 0
+
         epoch_ceiling = (
             self.media_max_epochs
             if (self.media_max_epochs is not None and _contents_has_media(contents))
@@ -405,7 +672,29 @@ class WatermarkResidence:
         if not eligible:
             return 0, 0
 
-        if self.thought_watermark is not None or self.char_watermark is not None:
+        legacy_watermark_mode = (
+            self.thought_watermark is not None or self.char_watermark is not None
+        )
+        turn_idx = (
+            len(contents)
+            if legacy_watermark_mode
+            else (self.pairs_compacted + len(call_idxs))
+        )
+        uncompacted_thoughts = sum(self._turn_thoughts.values())
+        gap_steps = max(0, int(min_turn_gap))
+        if (
+            not under_window_pressure
+            and self._last_compact_turn is not None
+            and gap_steps > 0
+        ):
+            if (turn_idx - self._last_compact_turn) < gap_steps and uncompacted_thoughts < 25_000:
+                return 0, 0
+
+        first_idx = eligible[0]
+        cutoff_idx = older[-1] + 2
+        eligible_set = set(eligible)
+
+        if legacy_watermark_mode:
             carried_thoughts = sum(self._turn_thoughts.get(i, 0) for i in eligible)
             carried_chars = 0
             if self.char_watermark is not None:
@@ -427,19 +716,18 @@ class WatermarkResidence:
                 d_tok, r_tok = self._estimate_pair_compaction(contents, i, preview_hashes)
                 dead_tokens += d_tok
                 cand_retained[i] = r_tok
+            for m_idx in range(first_idx, min(cutoff_idx, len(contents))):
+                if m_idx not in eligible_set and contents[m_idx].get("role") == "model":
+                    dead_tokens += self._turn_thoughts.get(m_idx, 0)
 
             if not under_window_pressure:
                 if dead_tokens < self.min_cache_tokens:
-                    return 0, 0
-                if remaining_steps is not None and int(remaining_steps) <= 0:
                     return 0, 0
                 # On multi-checkpoint caches, contents[:first_idx] stays cached and only
                 # contents[first_idx : -2] is invalidated; on empirically detected single-tip
                 # rolling caches, rewriting contents[first_idx] invalidates down to the
                 # observed Turn-0 floor.
-                first_idx = eligible[0]
                 cached_limit = max(first_idx, len(contents) - 2)
-                eligible_set = set(eligible)
                 suffix_invalidated = 0
                 t_cursor = first_idx
                 while t_cursor < cached_limit:
@@ -453,21 +741,46 @@ class WatermarkResidence:
                         )
                         t_cursor += 1
 
-                if self._single_tip_cache and self._last_cached_tokens > self._retained_cache_floor:
+                total_pairs_seen = self.pairs_compacted + len(call_idxs)
+                if self._single_tip_cache:
+                    if self._last_cached_tokens > self._retained_cache_floor:
+                        invalidated_cached_tokens = max(
+                            suffix_invalidated,
+                            self._last_cached_tokens - self._retained_cache_floor,
+                        )
+                    else:
+                        full_prefix_est = sum(
+                            (_turn_text_chars(contents[i]) // 4) + self._turn_thoughts.get(i, 0)
+                            for i in range(cached_limit)
+                        )
+                        invalidated_cached_tokens = max(
+                            suffix_invalidated,
+                            max(0, full_prefix_est - self._retained_cache_floor),
+                        )
+                elif (
+                    first_idx == 1
+                    and total_pairs_seen > 12
+                    and self._last_cached_tokens > self._retained_cache_floor
+                ):
                     invalidated_cached_tokens = max(
                         suffix_invalidated,
-                        self._last_cached_tokens - self._retained_cache_floor,
+                        self._last_cached_tokens - self._retained_cache_floor - dead_tokens,
                     )
                 else:
                     invalidated_cached_tokens = suffix_invalidated
 
-                total_pairs_seen = self.pairs_compacted + len(call_idxs)
-                expected_horizon = max(total_pairs_seen, self.k_keep + 1)
+                damped_cap = max(
+                    self.k_keep + 1,
+                    24 - max(0, (total_pairs_seen - 24) // 3),
+                )
+                expected_horizon = max(self.k_keep + 1, min(total_pairs_seen, damped_cap))
                 if self._single_tip_cache:
                     # EOQ inter-epoch interval: compacting after m=len(eligible) steps instead
                     # of waiting to 2m saves cached reads over the next m steps at the cost of
                     # one full prefix-cache reset.
                     expected_horizon = min(expected_horizon, max(len(eligible), self.k_keep + 1))
+                if has_final_output_write:
+                    expected_horizon = min(expected_horizon, 4)
                 if remaining_steps is not None:
                     expected_horizon = min(expected_horizon, max(0, int(remaining_steps)))
 
@@ -476,7 +789,6 @@ class WatermarkResidence:
                 if expected_savings < rewrite_miss_cost:
                     return 0, 0
 
-        first_idx = eligible[0]
         est_prev_req = sum(
             (_turn_text_chars(contents[i]) // 4) + self._turn_thoughts.get(i, 0)
             for i in range(max(0, len(contents) - 2))
@@ -486,6 +798,10 @@ class WatermarkResidence:
             for i in range(first_idx)
         )
         static_overhead = max(0, self._last_prompt_tokens - est_prev_req)
+        resolved_contract = (
+            deliverable_contract.strip()
+            or _extract_deliverable_contract_from_contents(contents)
+        )
 
         n_pairs = 0
         dropped_thoughts = 0
@@ -509,6 +825,10 @@ class WatermarkResidence:
                         str(resp_d.get("output", "")) if isinstance(resp_d, dict) else ""
                     )
 
+            for rcpt in _extract_computed_receipts("\n".join(fr_outputs)):
+                if rcpt not in self._compacted_computed_receipts:
+                    self._compacted_computed_receipts.append(rcpt)
+
             call_lines: list[str] = []
             state_lines: list[str] = []
             fc_idx = 0
@@ -530,22 +850,42 @@ class WatermarkResidence:
                         self.mutations_preserved += 1
                     else:
                         call_lines.append("[called] " + c_sum)
-                    if s_note:
+                    if s_note and _is_fact_bearing_state_note(s_note):
                         cleaned_note = " ".join(s_note.splitlines())[:280]
                         if cleaned_note not in state_lines:
                             state_lines.append(cleaned_note)
                             self.state_notes_preserved += 1
+                        if cleaned_note not in self._compacted_state_notes:
+                            self._compacted_state_notes.append(cleaned_note)
 
             ledger_prefix = ""
-            if idx == last_eligible_idx and self._compacted_mutations:
-                recent_muts = self._compacted_mutations[-12:]
-                extra_cnt = len(self._compacted_mutations) - len(recent_muts)
-                head_tag = (
-                    f"[prior-mutations ({len(self._compacted_mutations)} total, latest {len(recent_muts)})] "
-                    if extra_cnt > 0
-                    else f"[prior-mutations ({len(recent_muts)})] "
-                )
-                ledger_prefix = head_tag + " | ".join(recent_muts) + "\n"
+            if idx == last_eligible_idx:
+                recap_lines: list[str] = []
+                if self._compacted_mutations:
+                    recent_muts = self._compacted_mutations[-12:]
+                    extra_cnt = len(self._compacted_mutations) - len(recent_muts)
+                    head_tag = (
+                        f"[prior-mutations ({len(self._compacted_mutations)} total, latest {len(recent_muts)})] "
+                        if extra_cnt > 0
+                        else f"[prior-mutations ({len(recent_muts)})] "
+                    )
+                    recap_lines.append(head_tag + " | ".join(recent_muts))
+                ordered_notes = _order_verified_notes(self._compacted_state_notes)
+                recent_receipts = self._compacted_computed_receipts[-10:]
+                if ordered_notes or recent_receipts or resolved_contract:
+                    recap_lines.append("[compaction-recap]")
+                    if ordered_notes:
+                        recap_lines.append(
+                            "[verified-notes: " + " | ".join(ordered_notes) + "]"
+                        )
+                    if recent_receipts:
+                        recap_lines.append(
+                            "[computed-receipts: " + " | ".join(recent_receipts) + "]"
+                        )
+                    if resolved_contract:
+                        recap_lines.append(resolved_contract)
+                if recap_lines:
+                    ledger_prefix = "\n".join(recap_lines) + "\n"
 
             state_prefix = (
                 "\n".join(f"[state] {sn}" for sn in state_lines) + "\n"
@@ -586,10 +926,33 @@ class WatermarkResidence:
             n_pairs += 1
             dropped_thoughts += self._turn_thoughts.pop(idx, 0)
 
+        for m_idx in range(first_idx, min(cutoff_idx, len(contents))):
+            if m_idx not in eligible_set and contents[m_idx].get("role") == "model":
+                m_parts_cur = contents[m_idx].get("parts") or []
+                kept_parts: list[dict[str, Any]] = []
+                stripped_t_chars = 0
+                had_thought_part = False
+                for p in m_parts_cur:
+                    if isinstance(p, dict) and p.get("thought"):
+                        had_thought_part = True
+                        stripped_t_chars += len(str(p.get("text") or ""))
+                    else:
+                        kept_parts.append(p)
+                popped_t = self._turn_thoughts.pop(m_idx, 0)
+                if had_thought_part:
+                    contents[m_idx]["parts"] = kept_parts or [{"text": "[called]"}]
+                if popped_t > 0:
+                    dropped_thoughts += popped_t
+                elif stripped_t_chars > 0:
+                    dropped_thoughts += stripped_t_chars // 4
+
         if n_pairs:
             self.epochs += 1
             self.pairs_compacted += n_pairs
             self.thoughts_compacted += dropped_thoughts
+            self._last_compact_turn = (
+                len(contents) if legacy_watermark_mode else self.pairs_compacted
+            )
             if self._last_prompt_tokens > 0:
                 self._compacted_first_idx = first_idx
                 self._expected_retained_prefix_tokens = static_overhead + est_before_first

@@ -797,3 +797,198 @@ def test_watermark_residence_empirical_single_tip_cache_avoids_thrash_and_respec
             res_multi.observe_cache_usage(45_000, max(20_000, int(0.9 * res_multi._expected_retained_prefix_tokens)))
             break
     assert res_multi._single_tip_cache is False
+
+
+def test_watermark_residence_c1_horizon_gates_min_turn_gap_and_sub_block_single_tip_detector():
+    # 1. Pre-Epoch-2 single-tip detector via >=3 sub-block cache increments (256 < delta_c < 3_000).
+    res = WatermarkResidence(k_keep=2)
+    contents: list[dict] = [{"role": "user", "parts": [{"text": "Task instructions " * 60}]}]
+    res.observe_cache_usage(4_000, 3_200)
+    res.observe_cache_usage(5_200, 4_200)  # delta_c = 1,000 (#1)
+    res.observe_cache_usage(6_500, 5_400)  # delta_c = 1,200 (#2)
+    assert res.single_tip_cache_detected is False
+    res.observe_cache_usage(7_800, 6_600)  # delta_c = 1,200 (#3 -> triggers single_tip_cache_detected)
+    assert res.single_tip_cache_detected is True
+    assert res.get_telemetry()["single_tip_cache_detected"] is True
+    assert res.get_telemetry()["sub_block_cache_steps"] == 3
+
+    # 2. remaining_steps <= 10 gate: never compact in the final 10 steps regardless of dead_tokens.
+    for step in range(1, 7):
+        idx = len(contents)
+        contents.extend(_tool_pair("bash", {"command": f"echo {step}"}, "output " * 120))
+        res.record_model_turn(idx, 5_000)
+    assert res.maybe_compact(contents, remaining_steps=10) == (0, 0)
+    assert res.maybe_compact(contents, remaining_steps=1) == (0, 0)
+
+    # 3. has_final_output_write=True caps expected_horizon at 4 -> blocks marginal compaction on a deep prefix.
+    res.observe_cache_usage(36_000, 32_000)
+    assert (
+        res.maybe_compact(
+            contents,
+            remaining_steps=40,
+            has_final_output_write=True,
+        )
+        == (0, 0)
+    )
+
+    # With has_final_output_write=False and enough dead thoughts to beat full-prefix invalidation, Epoch 1 fires.
+    for step in range(7, 10):
+        idx = len(contents)
+        contents.extend(_tool_pair("bash", {"command": f"echo {step}"}, "output " * 80))
+        res.record_model_turn(idx, 9_000)
+    comp1, _ = res.maybe_compact(contents, remaining_steps=40, has_final_output_write=False)
+    assert comp1 > 0
+    assert res.epochs == 1
+
+    # 4. min_turn_gap=6 blocks another epoch within <6 new pairs when uncompacted_thoughts < 25,000,
+    #    then allows an emergency override once uncompacted_thoughts >= 25,000.
+    res_gap = WatermarkResidence(k_keep=2)
+    g_contents: list[dict] = [{"role": "user", "parts": [{"text": "Start"}]}]
+    for step in range(1, 6):
+        idx = len(g_contents)
+        g_contents.extend(_tool_pair("bash", {"command": f"echo g_{step}"}, "ok\n"))
+        res_gap.record_model_turn(idx, 3_500)
+    assert res_gap.maybe_compact(g_contents, remaining_steps=50)[0] == 3
+    assert res_gap.epochs == 1
+
+    # Add 2 more pairs (gap = 2 < 6), total uncompacted thoughts = 2*3,500 + 2*4,000 = 15,000 < 25,000 -> blocked!
+    for step in (6, 7):
+        idx = len(g_contents)
+        g_contents.extend(_tool_pair("bash", {"command": f"echo g_{step}"}, "ok\n"))
+        res_gap.record_model_turn(idx, 4_000)
+    assert res_gap.maybe_compact(g_contents, remaining_steps=50, min_turn_gap=6) == (0, 0)
+
+    # Push uncompacted thoughts to >= 25,000 within the same <6 turn window -> emergency override fires!
+    idx = len(g_contents)
+    g_contents.extend(_tool_pair("bash", {"command": "echo spike"}, "ok\n"))
+    res_gap.record_model_turn(idx, 12_000)
+    assert res_gap.maybe_compact(g_contents, remaining_steps=50, min_turn_gap=6)[0] > 0
+    assert res_gap.epochs == 2
+
+
+def test_watermark_residence_c3_strips_thoughts_on_media_turns_inside_invalidated_range():
+    res = WatermarkResidence(k_keep=2)
+    img = {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}
+    contents: list[dict] = [{"role": "user", "parts": [{"text": "Inspect images and compute"}]}]
+
+    # Pair 1 (idx 1, 2): early media turn BEFORE first_idx -> must stay 100% untouched (thoughts kept).
+    contents.extend(_tool_pair("read", {"file_path": "early.png"}, "Loaded early.png", media_parts=[img]))
+    res.record_model_turn(1, 2_000)
+
+    # Pair 2 (idx 3, 4): non-media turn (becomes first_idx = 3).
+    contents.extend(_tool_pair("bash", {"command": "echo p2"}, "p2\n"))
+    res.record_model_turn(3, 4_000)
+
+    # Pair 3 (idx 5, 6): mid-array media turn at idx=5 >= first_idx=3 -> pinned for image retention,
+    # but its 6,000 thought tokens and {"thought": True} part MUST be stripped by C3!
+    contents.extend(_tool_pair("read", {"file_path": "mid.png"}, "Loaded mid.png", media_parts=[img]))
+    res.record_model_turn(5, 6_000)
+
+    # Pair 4 (idx 7, 8): non-media turn inside eligible.
+    contents.extend(_tool_pair("bash", {"command": "echo p4"}, "p4\n"))
+    res.record_model_turn(7, 4_000)
+
+    # Pairs 5 & 6 (idx 9..12): trailing k_keep=2 pairs.
+    for step in (5, 6):
+        idx = len(contents)
+        contents.extend(_tool_pair("bash", {"command": f"echo p{step}"}, "ok\n"))
+        res.record_model_turn(idx, 500)
+
+    pairs_c, thoughts_c = res.maybe_compact(contents, remaining_steps=50)
+    assert pairs_c == 2  # pairs 2 & 4 rewritten to text
+    assert thoughts_c == (4_000 + 6_000 + 4_000)  # includes 6,000 thoughts stripped from mid media turn!
+
+    # Early media turn (idx 1) before first_idx=3 still has its thought part untouched.
+    assert any(p.get("thought") for p in contents[1]["parts"])
+    # Mid media turn (idx 5 >= first_idx=3) keeps its functionCall and image part, but its thought part is gone!
+    assert not any(p.get("thought") for p in contents[5]["parts"])
+    assert any("functionCall" in p for p in contents[5]["parts"])
+    assert contents[6]["parts"][0]["functionResponse"]["parts"] == [img]
+
+
+def test_watermark_residence_k1_fact_bearing_state_notes_and_compaction_recap():
+    from ctx.residence import (
+        _extract_state_notes_from_part,
+        _inject_compaction_recap,
+        _is_fact_bearing_state_note,
+    )
+
+    assert _is_fact_bearing_state_note("Check directory") is False
+    assert _is_fact_bearing_state_note("Read file") is False
+    assert _is_fact_bearing_state_note("Inspect workspace") is False
+    assert _is_fact_bearing_state_note("assumed: fiscal year ends Dec 31") is True
+    assert _is_fact_bearing_state_note("total_revenue = 148250.50") is True
+    assert _is_fact_bearing_state_note("verified all 12 rows match schema") is True
+
+    part_generic = {"functionCall": {"name": "bash", "args": {"command": "ls", "state_note": "Check directory"}}}
+    part_fact = {"functionCall": {"name": "bash", "args": {"command": "ls", "state_note": "found 14 CSV files"}}}
+    assert _extract_state_notes_from_part(part_generic) == []
+    assert _extract_state_notes_from_part(part_fact) == ["found 14 CSV files"]
+
+    res = WatermarkResidence(k_keep=1, thought_watermark=1_000)
+    contents: list[dict] = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "text": (
+                        "Analyze sales.\n"
+                        "[deliverable-contract]\n"
+                        "- outputs/report.json (json): keys=[total, rows]"
+                    )
+                }
+            ],
+        }
+    ]
+    # Pair 1: generic state_note ("Check directory") -> filtered out; output has [data-shape: ...] receipt.
+    contents.extend(
+        _tool_pair(
+            "bash",
+            {"command": "ls -la", "state_note": "Check directory"},
+            "[data-shape: format=csv, rows=24, fields=[id, amount]]\nid,amount\n1,10.0\n",
+        )
+    )
+    res.record_model_turn(1, 2_000)
+
+    # Pair 2: fact-bearing state_note + assumed state_note + [section: ...] and key=value receipts.
+    contents.extend(
+        _tool_pair(
+            "bash",
+            {
+                "command": "python3 calc.py",
+                "state_note": "assumed: USD currency; total_amount=4820.50",
+            },
+            "[section: totals]\nnet_revenue = 4820.50\n[write-receipt: path=outputs/report.json bytes=128 sha256=abcd1234]\n",
+        )
+    )
+    res.record_model_turn(3, 2_000)
+
+    # Pair 3 (trailing k_keep=1)
+    contents.extend(_tool_pair("bash", {"command": "echo done"}, "done\n"))
+    res.record_model_turn(5, 200)
+
+    pairs_c, _ = res.maybe_compact(contents, remaining_steps=40)
+    assert pairs_c == 2
+    assert res.state_notes_preserved == 1
+
+    # Pair 1 summary does NOT contain generic "Check directory".
+    m1_txt = contents[1]["parts"][0]["text"]
+    assert "Check directory" not in m1_txt
+
+    # Pair 2 (last_eligible_idx) carries [compaction-recap] with [verified-notes], [computed-receipts], and [deliverable-contract].
+    m2_txt = contents[3]["parts"][0]["text"]
+    assert "[compaction-recap]" in m2_txt
+    assert "[verified-notes: assumed: USD currency; total_amount=4820.50]" in m2_txt
+    assert "[computed-receipts:" in m2_txt
+    assert "[data-shape: format=csv, rows=24, fields=[id, amount]]" in m2_txt
+    assert "net_revenue = 4820.50" in m2_txt
+    assert "[deliverable-contract]" in m2_txt
+
+    # Direct helper _inject_compaction_recap prioritizes assumed: notes first.
+    dummy_contents = [{"role": "model", "parts": [{"text": "[called] bash('ls')"}]}]
+    recap_block = _inject_compaction_recap(
+        dummy_contents,
+        ["verified 10 items", "assumed: tax_rate=0.08"],
+        ["write('outputs/a.json')"],
+    )
+    assert recap_block.index("assumed: tax_rate=0.08") < recap_block.index("verified 10 items")
