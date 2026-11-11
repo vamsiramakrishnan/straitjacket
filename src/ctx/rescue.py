@@ -30,6 +30,7 @@ concurrent handler threads agree on the frozen sets.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import hashlib
 import json
 import os
@@ -88,7 +89,7 @@ def head_line(text: str) -> str:
         line = " ".join(_CONTROL_RE.sub(" ", raw).split())
         if line:
             if len(line) > HEAD_LINE_MAX:
-                return line[: HEAD_LINE_MAX - 1] + "\u2026"
+                return clip_redacting(line, HEAD_LINE_MAX - 1) + "\u2026"
             return line
     return ""
 

@@ -60,6 +60,7 @@ orderings everywhere; content-addressed provenance only).
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import math
 
 from ctx import bounds
@@ -470,7 +471,7 @@ def _stage_refs(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
     for rel, line, text in sites:
         uniq.setdefault((rel, line), text)
     rows = [
-        {"file": rel, "line": line, "text": text.strip()[:EVIDENCE_LINE_CHARS], "symbol": symbol}
+        {"file": rel, "line": line, "text": clip_redacting(text.strip(), EVIDENCE_LINE_CHARS), "symbol": symbol}
         for (rel, line), text in sorted(uniq.items())
     ]
     out = Stream("sites", rows)
@@ -607,7 +608,7 @@ def _stage_search(qc: _Ctx, stream: Stream, args: list[str]) -> Stream:
                         "line": i,
                         "col_a": m.start() + 1,
                         "col_b": m.end() + 1,
-                        "text": ln.strip()[:EVIDENCE_LINE_CHARS],
+                        "text": clip_redacting(ln.strip(), EVIDENCE_LINE_CHARS),
                     }
                 )
     return Stream("sites", rows)
@@ -1218,8 +1219,8 @@ def _qdry_write(root, dry: list[str]) -> None:
     """Atomic temp+rename write of the dry-pipeline state (house pattern:
     reflex.json). Fail-open — never raises."""
     try:
-        d = session_reads_path(root)
-        d.mkdir(parents=True, exist_ok=True)
+        d = session_reads_path(root, _QDRY_STATE).parent
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = json.dumps({"dry": dry[-Q_DRY_REMEMBER:]}, sort_keys=True)
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".q-dry-")
         try:
@@ -1236,8 +1237,8 @@ def _qdry_ledger_append(root, pipeline: str) -> None:
     operational-only (house rule: the ledger minus ts is a pure function
     of the session's query sequence). Fail-open — never raises."""
     try:
-        d = session_reads_path(root)
-        d.mkdir(parents=True, exist_ok=True)
+        d = session_reads_path(root, _QDRY_LEDGER).parent
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
         line = json.dumps(
             {"op": "q_dry_rerun", "pipeline": pipeline, "ts": time.time()},
             sort_keys=True,
@@ -1429,4 +1430,11 @@ def run_query(
     )
     # EDC-spirit emission backstop: the caller may re-bound under a plan;
     # library callers get a bounded digest either way.
+    # The model-visible pipeline, once, for the CLI and the MCP op alike:
+    # stages quote repository lines, commit subjects and run output.
+    from ctx.textutil import sanitize_for_model
+
+    rendered, redactions = sanitize_for_model(rendered, ws.config.redaction)
+    if redactions:
+        rendered += "\nredaction: applied [" + ", ".join(redactions) + "]"
     return bounded(rendered, ws.config.budgets.result_tokens), 0

@@ -177,22 +177,23 @@ def test_head_tail_cap_scales_with_window(tmp_path):
     d = _cmd(cmd, tmp_path)
     assert d["decision"] == "deny"
     assert d["reason"].endswith(" [window 84% full — budgets tightened]")
-    assert d["rewrite"]["updatedInput"]["CommandLine"] == f"ctx run --passthrough -- tail -n 300 {f.name}"
+    assert d["rewrite"]["updatedInput"]["CommandLine"] == f"ctx run --passthrough --shell -- 'tail -n 300 {f.name}'"
     assert " [window 84% full — budgets tightened]" in d["rewrite"]["reason"]
     # Still inside the tightened cap: unchanged allow.
     assert _cmd(f"tail -n 200 {f.name}", tmp_path) == {"decision": "allow"}
 
 
-def test_head_is_collapsed_before_the_cap_applies(tmp_path):
+def test_head_over_the_pressured_cap_is_captured_not_swapped(tmp_path):
     """The interaction the test above documents, asserted rather than implied.
 
-    A `head` under window pressure must still not flood: it is replaced by a
-    bounded `ctx get`, whose own budget tightens with the same pressure.
+    A `head` under window pressure must still not flood. It is no longer
+    replaced by `ctx get` (that substitute resolved paths from the workspace
+    root, not the shell's cwd); past the pressured cap the operator's own
+    `head` runs under bounded capture.
     """
     f = _make_file(tmp_path, "notes.txt", 100)
     _window(tmp_path, 84.0)
     d = _cmd(f"head -n 300 {f.name}", tmp_path)
-    assert d["decision"] == "allow"
     assert d["rewrite"]["updatedInput"]["CommandLine"] == (
-        f"ctx get repo:{f.name} --lines 1:300"
+        f"ctx run --passthrough --shell -- 'head -n 300 {f.name}'"
     )

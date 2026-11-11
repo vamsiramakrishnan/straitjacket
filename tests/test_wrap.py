@@ -26,11 +26,22 @@ def test_prepare_claude_settings_shape(tmp_path):
     assert hook["command"].startswith("/opt/bin/ctx")
 
     # PostToolUse: the universal emission gate covers every faucet that emits
-    # into the window (incl. MCP), excludes tiny status tools, and runs in
-    # Python (the Rust shim can't digest).
+    # into the window (incl. MCP, sub-agents under both names, and tools not
+    # yet invented), excludes the declared exempt status tools, and runs in
+    # Python (the Rust shim can't digest). Edits are matched so their outcome
+    # is recorded; the hook observes them and never gates them.
+    import re
+
+    from ctx.governance import claude_post_matcher
+
     post = settings["hooks"]["PostToolUse"][0]
-    assert post["matcher"] == "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*"
-    assert "Edit" not in post["matcher"] and "Write" not in post["matcher"]
+    assert post["matcher"] == claude_post_matcher()
+    rx = re.compile(post["matcher"])
+    for hooked in ("Bash", "Read", "Agent", "Task", "WebFetch", "mcp__gh__list_issues",
+                   "Edit", "Write", "SomeFutureTool"):
+        assert rx.search(hooked), hooked
+    for exempt in ("AskUserQuestion", "TodoWrite", "ToolSearch", "TaskUpdate"):
+        assert not rx.search(exempt), exempt
     post_cmd = post["hooks"][0]["command"]
     assert post_cmd == "/opt/bin/ctx hook claude-code post-tool-use"
 

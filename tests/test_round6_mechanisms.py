@@ -57,9 +57,11 @@ def test_install_codex_refuses_a_non_object_hooks_value(tmp_path):
     hooks.write_text(json.dumps({"hooks": ["wrong shape"]}), encoding="utf-8")
     (tmp_path / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
 
-    out = install_codex(resolve_workspace(str(tmp_path)), init_policy=False)
-    assert "cannot set up Codex hooks" in out
-    assert "not an object" in out
+    from ctx.mcp_hosts import IntegrationError
+    import pytest
+    with pytest.raises(IntegrationError, match="not a table/object"):
+        install_codex(resolve_workspace(str(tmp_path)), init_policy=False)
+    assert not (tmp_path / ".codex/config.toml").exists()
     assert json.loads(hooks.read_text(encoding="utf-8")) == {"hooks": ["wrong shape"]}
 
 

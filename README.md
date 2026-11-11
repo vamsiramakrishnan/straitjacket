@@ -182,17 +182,20 @@ context residency—not the highest compression ratio.
 | Entry point | Current behavior |
 |---|---|
 | Direct `ctx` CLI | Capture and retrieval without a host plugin |
-| Claude Code | Command rewriting and oversized-result substitution on supported hooks |
-| Codex | Implemented and contract-tested gates; live CLI receipt pending |
-| Antigravity | Deny recognized floods and supply a bounded replacement command; no output substitution |
+| Claude Code | Commands run as written and the host decides about them; oversized results are replaced by a digest after the command runs. Capture at birth is opt-in (`steering = "rewrite"`) |
+| Codex | Commands run as written under Codex's own approval; oversized results replaced after the command runs. Contract-tested; live CLI receipt pending |
+| Antigravity | Rewrites by default (it cannot replace output): recognized floods in `run_command` and `read_file` in place (`agy` 1.5.5), deny and name the bounded command for other tools; no output substitution |
 | Hermes / Open Hermes | Native argument rewriting and text-output replacement; active-profile plugin + MCP |
 | Oh My Pi (`omp`) | Native argument rewriting and text-output replacement; project plugin + MCP |
 | OpenCode | Native argument rewriting and text-output replacement; project plugin + MCP |
 | DeepSeek Harness (`dsh`) | Native gating and text-output replacement; sealed arguments require an explicit retry |
 
-`ctx setup` merges JSON where safe and refreshes ctx-managed blocks. For
-user-owned Codex TOML it prints a reviewed snippet rather than replacing the
-file. See [host capabilities](docs/HOST-CAPABILITIES.md) for exact coverage.
+`ctx setup` preserves unrelated settings and refreshes managed blocks. For
+Codex TOML and OpenCode JSONC, preview exact source edits with
+`ctx setup --host codex --host opencode --preview`; accept safe additions with
+`--apply`. Conflicting user values still refuse. See
+[setup and removal](docs/GETTING-STARTED.md) and
+[host capabilities](docs/HOST-CAPABILITIES.md) for exact coverage.
 
 [Set up Hermes, OMP, OpenCode, or DSH](docs/AGENT-INTEGRATIONS.md). These adapters
 have executable contract tests; live model-session receipts remain pending.

@@ -192,9 +192,25 @@ def _excluded_servers(records, selected, ws_root) -> list[str]:
     return sorted(n for n in surface._mcp_server_commands(ws_root) if n not in kept)
 
 
+def write_private(path: Path, content: str, *, root: Path | None = None) -> None:
+    """Write a launch file at 0600: it carries full server commands (argument
+    values can be credentials), whatever scope they came from. Never through
+    a symlink, nor through a directory symlinked outside ``root`` (raises
+    ``ctx.launchform.UnsafeWrite`` naming the file)."""
+    from ctx.launchform import write_safely
+
+    write_safely(path, content, root=root if root is not None else path.parent,
+                 mode=0o600, force_mode=True)
+
+
 def emit_claude(servers: dict[str, list[str]], excluded: list[str],
-                deferred_tools: dict[str, list[str]]) -> dict[str, Any]:
+                deferred_tools: dict[str, list[str]],
+                remote: dict[str, dict] | None = None) -> dict[str, Any]:
     mcp = {name: {"command": argv[0], "args": argv[1:]} for name, argv in servers.items()}
+    # Kept remote (url) servers are carried verbatim: --strict-mcp-config
+    # would otherwise drop them from the session.
+    for name, raw in sorted((remote or {}).items()):
+        mcp[name] = raw
     # Whole-server drops reduce context (the server isn't loaded). Per-tool
     # deny gates *callability* only — a denied tool is still listed to the
     # model, so it still costs tokens; use `ctx surface gateway` for per-tool
@@ -253,7 +269,8 @@ _EMITTERS = {"claude": emit_claude, "codex": emit_codex, "antigravity": emit_ant
 
 def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
                     apply: bool = False, probe_mcp: bool = False,
-                    profile: Profile | None = None) -> dict[str, Any]:
+                    profile: Profile | None = None,
+                    cached_tools: bool = False) -> dict[str, Any]:
     """Compile ``name`` for ``host``. Returns a structured report; with
     ``apply`` also writes the emitted files under ``.ctx-surface/``. A
     caller that already decided the selection (``ctx prune``) passes the
@@ -265,7 +282,7 @@ def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
     if host not in _EMITTERS:
         return {"error": f"unknown host {host!r}; one of {', '.join(HOSTS)}"}
 
-    a = surface.audit(ws_root, probe_mcp=probe_mcp)
+    a = surface.audit(ws_root, probe_mcp=probe_mcp, cached_tools=cached_tools)
     records = [surface.Capability(**{k: (tuple(v) if isinstance(v, list) else v)
                                      for k, v in r.items() if k != "recommended_level"})
                for r in a["records"]]
@@ -284,18 +301,43 @@ def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
     for srv in deferred_tools:
         deferred_tools[srv].sort()
 
-    emitted = _EMITTERS[host](servers, excl_servers, deferred_tools)
+    # Remote (url) WORKSPACE servers: selected like any capability. Only the
+    # Claude emitter can carry them; elsewhere they are named as not emitted.
+    remote_specs = {s_.name: s_ for s_ in surface.mcp_server_specs(ws_root, user_scope=False)
+                    if s_.transport != "stdio"}
+    selected_ids = {c.id for c in selected}
+    remote_kept = sorted(n for n in remote_specs if f"mcp.{n}" in selected_ids)
+    remote_dropped = sorted(n for n in remote_specs if n not in remote_kept)
+    if host == "claude":
+        emitted = emit_claude(servers, excl_servers, deferred_tools,
+                              remote={n: remote_specs[n].raw for n in remote_kept})
+    else:
+        emitted = _EMITTERS[host](servers, excl_servers, deferred_tools)
+    not_included = [x for x in surface.servers_not_included(ws_root)
+                    if x["host"] == host]
 
-    before = sum(c.tokens for c in records)
     # Two honest numbers. after_gateway honours per-tool selection (achievable
     # only by the gateway, which controls exactly what it lists). after_server
     # is what dropping whole servers alone yields — kept servers keep ALL their
     # tools' tokens, because a host deny/disable lists the tool anyway on
     # Claude (tokens unchanged). The gap is what the gateway recovers.
-    after_gateway = sum(c.tokens for c in selected)
-    after_server = (sum(c.tokens for c in selected if c.kind != "mcp_tool")
-                    + sum(c.tokens for c in records
-                          if c.kind == "mcp_tool" and c.provider in kept_providers))
+    # Every figure is priced on the basis that applies to ``host`` (deferred
+    # where the host lists tool names only); the inline figures ride along,
+    # labelled.
+    basis, basis_why = surface.host_basis(host)
+
+    def _sums(cost) -> dict[str, int]:
+        before = sum(cost(c) for c in records)
+        after_gateway = sum(cost(c) for c in selected)
+        after_server = (sum(cost(c) for c in selected if c.kind != "mcp_tool")
+                        + sum(cost(c) for c in records
+                              if c.kind == "mcp_tool" and c.provider in kept_providers))
+        return {"before": before, "after_server": after_server,
+                "saved_server": before - after_server, "after_gateway": after_gateway,
+                "saved_gateway": before - after_gateway}
+
+    inline_sums = _sums(lambda c: c.tokens)
+    applied = (_sums(lambda c: c.upfront_if_deferred) if basis == "deferred" else inline_sums)
 
     written: list[str] = []
     if apply:
@@ -303,13 +345,17 @@ def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
         for rel, content in emitted["files"].items():
             if not content:
                 continue
-            path = root / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
-            written.append(rel)
+            from ctx.launchform import UnsafeWrite
+
+            try:
+                write_private(root / rel, content, root=root)
+                written.append(rel)
+            except UnsafeWrite as e:
+                issues.append(f"refused to write {rel}: {e}; ctx never writes through a link")
 
     return {
-        "schema": "ctx.surface-compile/v1",
+        # v2: `tokens` is priced on `tokens.basis` for this host (v1: inline).
+        "schema": "ctx.surface-compile/v2",
         "profile": profile.name,
         "host": host,
         "selected": [c.id for c in selected],
@@ -318,9 +364,14 @@ def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
         "servers_dropped": excl_servers,
         "deferred_tools": deferred_tools,
         "issues": issues,
-        "tokens": {"before": before,
-                   "after_server": after_server, "saved_server": before - after_server,
-                   "after_gateway": after_gateway, "saved_gateway": before - after_gateway},
+        "tokens": {**applied, "basis": basis, "basis_why": basis_why,
+                   "inline": inline_sums, "estimate": True},
+        # User/local-scope servers are never copied into a workspace file.
+        "not_included": not_included,
+        "remote_servers": {"kept": remote_kept, "dropped": remote_dropped,
+                           "emitted": host == "claude"},
+        "absent_from_launch": absent_from_launch(host, not_included, excl_servers,
+                                                 remote_kept, remote_dropped),
         "launch": emitted["launch"],
         "files": emitted["files"],
         "written": written,
@@ -333,7 +384,8 @@ def render_compile(rep: dict[str, Any]) -> str:
     t = rep["tokens"]
     lines = [
         f"[ctx surface compile · profile={rep['profile']} · host={rep['host']}]",
-        f"selected {len(rep['selected'])} capabilities of {t['before']:,} tok/turn",
+        f"selected {len(rep['selected'])} capabilities of ~{t['before']:,} tok up front "
+        f"(estimate, {t.get('basis', 'inline')} basis: {t.get('basis_why', '')})",
         f"  enforced by config (drop whole servers): {t['before']:,} → "
         f"{t['after_server']:,} tok (−{t['saved_server']:,})",
     ]
@@ -344,6 +396,12 @@ def render_compile(rep: dict[str, Any]) -> str:
         lines.append("  keep servers: " + ", ".join(rep["servers_kept"]))
     if rep["servers_dropped"]:
         lines.append("  drop servers: " + ", ".join(rep["servers_dropped"]))
+    rs = rep.get("remote_servers") or {}
+    if rs.get("kept") or rs.get("dropped"):
+        lines.append("  remote servers: kept " + (", ".join(rs.get("kept") or []) or "none")
+                     + " · dropped " + (", ".join(rs.get("dropped") or []) or "none"))
+    for item in rep.get("not_included") or []:
+        lines.append(f"  not included: {item['name']} ({item['reason']})")
     if rep["deferred_tools"]:
         n = sum(len(v) for v in rep["deferred_tools"].values())
         lines.append(f"  defer {n} tools within kept servers "
@@ -359,7 +417,33 @@ def render_compile(rep: dict[str, Any]) -> str:
     else:
         lines.append("  preview only — pass --apply to write the config")
     lines.append(f"  launch: {rep['launch']}")
+    lines.extend(render_absent(rep))
     return "\n".join(lines)
+
+
+def absent_from_launch(host: str, not_included: list[dict[str, str]], dropped: list[str],
+                       remote_kept: list[str], remote_dropped: list[str]) -> list[dict[str, str]]:
+    """Servers a session started with the compiled launch line will NOT
+    have, each with why — stated beside the launch hint, at the point of
+    action."""
+    out = [{"name": x["name"], "why": f"{x['scope']}-scope, never copied into workspace files"}
+           for x in not_included]
+    out += [{"name": n, "why": "dropped by this profile"} for n in dropped]
+    out += [{"name": n, "why": "remote server dropped by this profile"} for n in remote_dropped]
+    if host != "claude":
+        out += [{"name": n, "why": f"remote server not emitted for {host}"} for n in remote_kept]
+    return out
+
+
+def render_absent(rep: dict[str, Any]) -> list[str]:
+    absent = rep.get("absent_from_launch") or []
+    if not absent:
+        return []
+    verb = ("WILL NOT have" if rep.get("host") == "claude"
+            else "may not have (depends on how the host merges its own config)")
+    lines = [f"  ⚠ a session started with that launch line {verb}:"]
+    lines += [f"      {a['name']} — {a['why']}" for a in absent]
+    return lines
 
 
 __all__ = [

@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 import pytest
+from ctx.sessiondir import session_reads_path
 
 
 @pytest.fixture()
@@ -76,7 +77,12 @@ def test_codex_containment_distinguishes_tool_error_and_preserves_retrieval(ws, 
     recovered = get(Store(workspace.workspace_id), workspace,
                     f"run:{ref[1]}#stdout", Selector(json_pointer="/0"))
     assert json.loads(recovered[recovered.index("{"):])["sha"] == "c0000"
-    assert _run_post(_mcp_payload(ws, reason + "x" * 40000), flavor="codex") == {}
+    # ctx's own contained output is not re-gated when ctx is what ran; the
+    # header alone (which any tool could print) no longer earns that trust.
+    rerun = {"tool_name": "Bash", "cwd": str(ws), "tool_input": {"command": f"ctx get run:{ref[1]}"},
+             "tool_response": reason + "x" * 40000}
+    assert _run_post(rerun, flavor="codex") == {}
+    assert _run_post(_mcp_payload(ws, reason + "x" * 40000), flavor="codex")["decision"] == "block"
 
 
 def test_codex_gate_failure_is_not_reported_as_stored(ws, monkeypatch):
@@ -132,7 +138,8 @@ def test_retrieval_ref_resolves_to_original(ws):
 
 def test_idempotence_guard_skips_own_digest(ws):
     # A tool result that is already a ctx digest must not be re-digested.
-    d = _run_post({"tool_name": "Bash", "cwd": str(ws),
+    # Trusted because ctx is what ran, not because the output says so.
+    d = _run_post({"tool_name": "Bash", "cwd": str(ws), "tool_input": {"command": "ctx run -- make"},
                    "tool_response": "[ctx run:abcdef012345 profile=json/v1]\n" + "y" * 40000})
     assert d == {}
 
@@ -158,8 +165,10 @@ def test_error_result_gets_larger_budget(ws):
                     "tool_response": {"stdout": log, "stderr": ""}})
     err = _run_post({"tool_name": "Bash", "cwd": str(ws), "is_error": True,
                      "tool_response": {"stdout": log, "stderr": ""}})
-    ok_uto = ok["hookSpecificOutput"]["updatedToolOutput"]
-    err_uto = err["hookSpecificOutput"]["updatedToolOutput"]
+    # Bash's result is an object, so the digest is fitted into its stdout
+    # (Claude Code ignores a replacement that does not match the tool's shape).
+    ok_uto = ok["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
+    err_uto = err["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
     assert len(err_uto) >= len(ok_uto)
 
 
@@ -188,7 +197,7 @@ def test_named_test_flood_is_typed_and_disables_next_speculation(ws):
         "tool_response": {"stdout": failure, "stderr": ""},
     }
     d = _run_post(payload)
-    rendered = d["hookSpecificOutput"]["updatedToolOutput"]
+    rendered = d["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
     assert "profile=pytest/" in rendered
     assert "test_api.py::test_health" in rendered
     assert reflex.steering_would_bypass(ws, command) is False
@@ -204,7 +213,7 @@ def test_small_named_test_result_remains_byte_identical(ws):
     assert _run_post(payload) == {}
     rows = [
         json.loads(line)
-        for line in (ws / ".ctx-session-reads" / "steering-decisions.jsonl")
+        for line in (session_reads_path(ws, "steering-decisions.jsonl"))
         .read_text(encoding="utf-8")
         .splitlines()
     ]
@@ -233,6 +242,7 @@ def test_ctx_retrieval_output_not_redigested(ws):
     # recursion guard must let it pass through untouched (not re-digest it).
     for header in ("[ctx get run:abc123#stdout]", "[ctx search run:abc123]", "[ctx stats run:abc123]"):
         d = _run_post({"tool_name": "Bash", "cwd": str(ws),
+                       "tool_input": {"command": "ctx get run:abc123#stdout --lines 1:4000"},
                        "tool_response": {"stdout": header + "\n" + "z" * 40000, "stderr": ""}})
         assert d == {}, header
 

@@ -6,6 +6,7 @@ as Claude/Codex instead of copying policy into Python/JavaScript plugins.
 """
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import json
 from pathlib import Path
 
@@ -35,7 +36,7 @@ def decision_for(host: str, decision: dict) -> dict:
             return {"action": "rewrite", "input": rewrite["updatedInput"]}
         return {"action": "block", "reason": str(rewrite.get("reason", "Use a bounded ctx operation"))
                 + "\nDSH cannot rewrite sealed tool arguments. Retry with: "
-                + json.dumps(rewrite["updatedInput"], ensure_ascii=False)[:2000]}
+                + clip_redacting(json.dumps(rewrite["updatedInput"], ensure_ascii=False), 2000)}
     action = {"allow": "allow", "deny": "block", "force_ask": "ask"}.get(decision.get("decision"), "block")
     return {"action": action, "reason": decision.get("reason", "")}
 
@@ -112,10 +113,11 @@ def install(host: str, root: Path) -> str:
 
 def checks(root: Path):
     from ctx.mcp_hosts import FILES
+    from ctx.host_config import owned_hosts
     rows = []
     for host, relative in PATHS.items():
         path = root / relative
-        if not path.exists() and not (root / FILES[host]).exists():
+        if not path.exists() and not (root / FILES[host]).exists() and not (host == "opencode" and ((root / "opencode.jsonc").exists() or host in owned_hosts(root))):
             continue
         try:
             ok = path.read_text() == render(host)

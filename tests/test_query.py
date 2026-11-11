@@ -17,6 +17,7 @@ import re
 import subprocess
 
 import pytest
+from ctx.sessiondir import session_reads_path
 
 # --------------------------------------------------------------- constants
 # The eval-arm scripts, verbatim from evals/evalset_collapse.py — the token
@@ -494,7 +495,7 @@ def test_dry_rerun_banner_ledger_and_still_executes(ws_store):
     assert "0 rows after stage 1 (search):" in out2
     # One ledger line per dry re-issue, for the reflex plane.
     lines = (
-        (ws.root / ".ctx-session-reads" / "q-dry.jsonl")
+        (session_reads_path(ws.root, "q-dry.jsonl"))
         .read_text(encoding="utf-8").splitlines()
     )
     recs = [json.loads(ln) for ln in lines]
@@ -508,8 +509,8 @@ def test_dry_rerun_banner_ledger_and_still_executes(ws_store):
 def test_dry_guard_fail_open(ws_store):
     """Garbage guard state must never break a query (house ledger rule)."""
     ws, _ = ws_store
-    state = ws.root / ".ctx-session-reads" / "q-dry.json"
-    state.parent.mkdir(exist_ok=True)
+    state = session_reads_path(ws.root, "q-dry.json")
+    state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text("{not json", encoding="utf-8")
     out, code = run_q(ws_store, "search zzz_failopen_probe")
     assert code == 0

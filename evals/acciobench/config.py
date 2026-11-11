@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import asdict, dataclass, field
+import hashlib
 import importlib.util
 import json
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 import random
 import shlex
 import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -145,6 +147,17 @@ class RunMetrics:
     checks_total: int = 0
     failed_checks: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # Non-empty when the official grader itself failed (timeout, missing or invalid
+    # reward.json): the trial is UNGRADED, not failed. Reports leave it out of solve
+    # rate and score aggregates; resume re-grades it without re-running the agent.
+    grading_error: str = ""
+    # config_fingerprint(config) of the configuration that produced this result; resume
+    # accepts a cached result only for the same fingerprint ("" = written before it).
+    config_fingerprint: str = ""
+
+    @property
+    def is_grading_error(self) -> bool:
+        return bool(self.grading_error)
 
     @property
     def gen_tokens(self) -> int:
@@ -187,8 +200,154 @@ class RunMetrics:
             kwargs["failed_checks"] = [str(x) for x in kwargs["failed_checks"]]
         if "notes" in kwargs and isinstance(kwargs["notes"], list):
             kwargs["notes"] = [str(x) for x in kwargs["notes"]]
+        if "grading_error" not in data:
+            # Results written before the grading-error state recorded a grader failure
+            # only as a "verifier error: ..." note on an otherwise failed trial.
+            legacy = next(
+                (n for n in kwargs.get("notes") or [] if str(n).startswith("verifier error:")), ""
+            )
+            if legacy and not kwargs.get("passed"):
+                kwargs["grading_error"] = str(legacy)[len("verifier error:"):].strip() or "verifier error"
+        else:
+            kwargs["grading_error"] = str(data.get("grading_error") or "")
 
         return cls(**kwargs)
+
+
+#: BenchConfig fields that change what a trial measures. Everything else is left out on
+#: purpose: where results go and how fast they are produced (workdir, workers,
+#: slot_offset, resume), which arms run (the arm is part of the result's own path),
+#: credentials and account routing (api_key, project_id, location), and host paths
+#: (dataset_root, runtime_dir, ctx_bin, chrome_bin), which name WHERE an input lives,
+#: not what it is, so moving a checkout does not invalidate a workdir.
+FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "model",
+    "provider",
+    "thinking_level",
+    "max_output_tokens",
+    "max_steps",
+    "entry_gate_bytes",
+    "baseline_raw_cap",
+    "judge_provider",
+    "judge_model",
+)
+
+
+def config_fingerprint(
+    config: BenchConfig,
+    harness: dict[str, Any] | None = None,
+    trial: dict[str, Any] | None = None,
+) -> str:
+    """A short stable hash of what a trial measured: FINGERPRINT_FIELDS, the harness's own
+    behaviour constants (``harness``) and per-trial inputs (``trial``: the task's own
+    files, the ctx version, whether the bwrap sandbox is active)."""
+    doc = {name: getattr(config, name) for name in FINGERPRINT_FIELDS}
+    doc["harness"] = dict(sorted((harness or {}).items()))
+    if trial:
+        doc["trial"] = dict(sorted(trial.items()))
+    blob = json.dumps(doc, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+_SMALL_FILE_BYTES = 1 << 20
+_EDGE_BYTES = 64 << 10
+_FILE_DIGEST_CACHE: dict[tuple[str, int, int], str] = {}
+_DIGEST_SKIP_DIRS = frozenset({"node_modules", ".git", "__pycache__"})
+_DIGEST_SKIP_FILES = frozenset({".DS_Store"})
+
+
+def _file_digest(path: Path, st: os.stat_result) -> str:
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    hit = _FILE_DIGEST_CACHE.get(key)
+    if hit is not None:
+        return hit
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        if st.st_size <= _SMALL_FILE_BYTES:
+            h.update(fh.read())
+        else:  # large binary assets: size + both ends (cheap, and catches any re-export)
+            h.update(str(st.st_size).encode())
+            h.update(fh.read(_EDGE_BYTES))
+            fh.seek(-_EDGE_BYTES, os.SEEK_END)
+            h.update(fh.read(_EDGE_BYTES))
+    digest = h.hexdigest()
+    _FILE_DIGEST_CACHE[key] = digest
+    return digest
+
+
+def task_inputs_digest(case_dir: Path) -> str:
+    """Hash of a task's own directory: the prompt (task.md), task.toml, the workspace the
+    agent is given, its services, and the grader, rubric and private answer files (a
+    changed grader changes the recorded score, so its results must not be reused).
+    Content-hashed, not path-hashed, so moving the dataset does not change it; files over
+    1 MiB are hashed by size and both ends; per-file digests are memoized per process."""
+    root = Path(case_dir).resolve()
+    h = hashlib.sha256()
+    # Staging copies through directory symlinks (shutil.copytree's default), so the walk
+    # follows them too: what a trial receives is what is hashed. Each real directory is
+    # hashed once, under the first path that reaches it; any further path to it (a second
+    # link, or a link back to an ancestor, which would otherwise never end) is recorded
+    # by name only.
+    seen_dirs: set[tuple[int, int]] = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        try:
+            st_dir = os.stat(dirpath)
+            dir_key = (st_dir.st_dev, st_dir.st_ino)
+        except OSError:
+            dir_key = None
+        if dir_key is None or dir_key in seen_dirs:
+            rel_dir = Path(dirpath).relative_to(root).as_posix()
+            marker = "unreadable-dir" if dir_key is None else "dir-already-hashed"
+            h.update(rel_dir.encode("utf-8") + b"\0" + marker.encode() + b"\n")
+            dirnames[:] = []
+            continue
+        seen_dirs.add(dir_key)
+        dirnames[:] = sorted(d for d in dirnames if d not in _DIGEST_SKIP_DIRS)
+        for name in sorted(filenames):
+            if name in _DIGEST_SKIP_FILES or name.endswith(".pyc"):
+                continue
+            p = Path(dirpath) / name
+            rel = p.relative_to(root).as_posix()
+            # Only a regular file is opened: a FIFO would block the read forever and a
+            # device has no content to hash. Whatever cannot be read is recorded by
+            # what it is, so the digest stays stable and the trial decides what a
+            # missing or unreadable input means.
+            try:
+                st = p.stat()
+                entry = _file_digest(p, st) if stat.S_ISREG(st.st_mode) else f"not-a-file:{stat.S_IFMT(st.st_mode):o}"
+            except OSError as exc:
+                entry = f"unreadable:{type(exc).__name__}"
+            h.update(rel.encode("utf-8") + b"\0" + entry.encode() + b"\n")
+    return h.hexdigest()[:16]
+
+
+_CTX_VERSION_CACHE: dict[str, str] = {}
+_CTX_VERSION_LOCK = threading.Lock()
+
+
+def ctx_version(ctx_bin: Path | None = None) -> str:
+    """The version the benchmarked ctx reports (``ctx --version``), asked once per process
+    per executable. "unknown" when it cannot be asked."""
+    try:
+        exe = resolve_ctx_bin(ctx_bin)
+    except FileNotFoundError:
+        return "unavailable"
+    key = str(exe)
+    with _CTX_VERSION_LOCK:
+        cached = _CTX_VERSION_CACHE.get(key)
+        if cached is not None:
+            return cached
+        argv = [key, "-P", "-m", "ctx", "--version"] if "python" in exe.name.lower() else [key, "--version"]
+        try:
+            import subprocess
+
+            cp = subprocess.run(argv, capture_output=True, text=True, timeout=30, cwd="/")
+            out = (cp.stdout or cp.stderr).strip().splitlines()
+            ver = out[0].strip() if (cp.returncode == 0 and out) else f"unknown (exit {cp.returncode})"
+        except Exception as exc:
+            ver = f"unknown ({type(exc).__name__})"
+        _CTX_VERSION_CACHE[key] = ver
+        return ver
 
 
 def resolve_ctx_bin(explicit: Path | None = None) -> Path:
@@ -221,7 +380,8 @@ def resolve_ctx_bin(explicit: Path | None = None) -> Path:
         script = (
             "#!/usr/bin/env bash\n"
             f'export PYTHONPATH={src_q}${{PYTHONPATH:+:$PYTHONPATH}}\n'
-            f'exec {py_exec} -m ctx "$@"\n'
+            # -P (see ctx.selfcmd): never import a `ctx` from the caller's directory.
+            f'exec {py_exec} -P -m ctx "$@"\n'
         )
         if not shim_path.is_file() or shim_path.read_text(encoding="utf-8", errors="ignore") != script:
             tmp_shim = shim_dir / f".ctx.{os.getpid()}"

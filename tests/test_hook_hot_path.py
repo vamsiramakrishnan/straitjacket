@@ -32,7 +32,8 @@ _FORBIDDEN = ("typing", "pathlib", "dataclasses", "inspect", "ast", "dis",
               "tokenize", "linecache", "tempfile", "subprocess", "argparse")
 
 # Every module hook.py imports per call, so the same discipline binds them.
-_HOT_MODULES = ("ctx.hook", "ctx.engagement", "ctx.reflex", "ctx.substitute")
+_HOT_MODULES = ("ctx.hook", "ctx.engagement", "ctx.reflex", "ctx.substitute",
+                "ctx.governance", "ctx.ccperm", "ctx.shsplit", "ctx.agyperm", "ctx.refgrammar")
 
 _PROBE = f"','.join(m for m in {_FORBIDDEN!r} if m in sys.modules)"
 
@@ -89,7 +90,7 @@ def test_guard_entry_point_does_not_load_expensive_modules():
         [sys.executable, "-c", code, "hook", "claude-code", "pre-tool-use"],
         input=payload, capture_output=True, text=True,
         env={"PYTHONPATH": str(root / "src"), "PATH": "/usr/bin:/bin"}, cwd=str(root))
-    assert json.loads(out.stdout)  # exactly one decision was emitted
+    assert isinstance(json.loads(out.stdout), dict)  # exactly one JSON answer was emitted
     loaded = {m for m in out.stderr.strip().split(",") if m}
     added = loaded - _interpreter_baseline()
     assert added == set(), f"entry point loaded {', '.join(sorted(added))}"
@@ -97,9 +98,12 @@ def test_guard_entry_point_does_not_load_expensive_modules():
 
 # ---------------------------------------------------------------- P6 cursor
 def _ledger(ws: Path) -> Path:
-    d = ws / _LEDGER_DIR_NAME
-    d.mkdir(parents=True, exist_ok=True)
-    return d / "interventions.jsonl"
+    from ctx.sessiondir import session_reads_path
+
+    (ws / _LEDGER_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    path = session_reads_path(ws, "interventions.jsonl")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _append(path: Path, doc: dict) -> None:
@@ -190,9 +194,10 @@ def test_symbols_resolvable_honours_a_scip_index(tmp_path):
 
 # ------------------------------------------------- probes are only paid lazily
 def test_collapse_does_not_consult_probes_it_cannot_use():
-    """Both probes do real I/O but only two recogniser branches read them, so
+    """Both probes do real I/O but only one recogniser branch reads them, so
     the guard hands them over as thunks. A command that matches no shape, or a
-    shape that needs neither answer, must never call them."""
+    shape that needs neither answer, must never call them -- and search
+    commands, which are never substituted, never consult either."""
     calls = []
     probes = {
         "failure_available": lambda: (calls.append("failure"), True)[1],
@@ -200,25 +205,16 @@ def test_collapse_does_not_consult_probes_it_cannot_use():
     }
     for cmd in ("ls -la", "echo hi", "git status", "npm install",
                 "cat notes.txt", "grep -n foo one_file.py",
-                "grep -rn Foo . | wc -l", "pytest -k test_x"):
+                "grep -rn Foo . | wc -l", "pytest -k test_x",
+                "grep -rn WidgetFactory .", "rg WidgetFactory"):
         collapse(cmd, **probes)
     assert calls == [], f"probes evaluated for commands that cannot use them: {calls}"
 
-    # a bare-identifier recursive grep needs `symbols_resolvable` and nothing else
-    collapse("grep -rn WidgetFactory .", **probes)
-    assert calls == ["symbols"]
-
-    # a bare whole-suite pytest re-run needs `failure_available` and nothing else
-    calls.clear()
-    collapse("pytest", **probes)
-    assert calls == ["failure"]
-
 
 def test_collapse_still_accepts_plain_bools():
-    assert collapse("grep -rn Widget .", symbols_resolvable=False).shape == "grep_content"
-    assert collapse("grep -rn Widget .", symbols_resolvable=True).shape == "grep_symbol"
+    assert collapse("grep -rn Widget .", symbols_resolvable=False) is None
+    assert collapse("grep -rn Widget .", symbols_resolvable=True) is None
     assert collapse("pytest", failure_available=False) is None
-    assert collapse("pytest", failure_available=True).rung == "failure-slice"
 
 
 def test_substitution_keeps_frozen_dataclass_semantics():

@@ -113,7 +113,10 @@ def cmd_debt(ws, ns) -> int:
         ok = _debt.resolve(ws.root, ns.id)
         print("resolved" if ok else f"unknown debt id: {ns.id}")
         return 0 if ok else 1
-    print(_debt.render(ws.root))
+    from ctx.textutil import model_visible
+
+    # Notes stored by an earlier call are model-visible content now.
+    print(model_visible(_debt.render(ws.root), ws.config.redaction))
     return 0
 
 

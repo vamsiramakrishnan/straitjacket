@@ -37,6 +37,7 @@ Reused single sources of truth (no parallel implementations):
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -352,7 +353,7 @@ def actions_from_calls(calls: list[dict[str, Any]]) -> list[Action]:
                 )
             )
         else:
-            out.append(Action(index=i, kind="other", command=str(inp)[:120]))
+            out.append(Action(index=i, kind="other", command=clip_redacting(str(inp), 120)))
     return out
 
 

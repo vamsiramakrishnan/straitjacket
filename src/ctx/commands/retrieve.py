@@ -216,7 +216,11 @@ def cmd_lsp(ws, ns) -> int:
                     write_json(ws.confine(ns.out), result.pop('plan'))
                     result['plan_file'] = ns.out
                     result['next'] = ['ctx edit preview ' + ns.out, 'ctx edit apply ' + ns.out]
-            out = json.dumps(result, ensure_ascii=False, indent=2)
+            from ctx.textutil import redact_strings
+
+            # Server-supplied text (diagnostics, action titles, edits) quotes
+            # the source: the model-visible pipeline, once.
+            out = json.dumps(redact_strings(result, ws.config.redaction), ensure_ascii=False, indent=2)
             _emit_retrieval(ws, store, out)
             return 0 if what != 'diagnostics' or result['outcome'] == 'clean' else 3
         except (EditTransactionError, _lsp.LspError, OSError, ValueError) as exc:
@@ -238,9 +242,16 @@ def cmd_lsp(ws, ns) -> int:
     else:
         sites = answer or []
         lines = [head]
-        lines.extend(f"repo:{r}:L{ln}: {text[:EVIDENCE_LINE_CHARS]}" for r, ln, text in sites)
+        from ctx.textutil import clip_redacting
+
+        lines.extend(f"repo:{r}:L{ln}: {clip_redacting(text, EVIDENCE_LINE_CHARS, ws.config.redaction)}"
+                     for r, ln, text in sites)
         lines.append(f"coverage:\n  sites: {len(sites)}")
         out = "\n".join(lines)
+    from ctx.textutil import model_visible
+
+    # Hover text and site lines come from the server and the source verbatim.
+    out = model_visible(out, ws.config.redaction)
     return _emit_retrieval(ws, store, out)
 
 

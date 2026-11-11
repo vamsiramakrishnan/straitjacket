@@ -1,0 +1,49 @@
+Safe host configuration validation — 2026-11-09
+Validated revision: 8b08e9267d52f54686a0346da676c64283ca9295 (initial implementation)
+Base: e23ce52fb65a45d345bf1a9fa4d17344d6d8bbe6
+Branch: feat/safe-host-config; validation recorded before publication
+
+Focused setup/integration selection: 209 passed; 0 skipped; 0 failed
+Full suite: 3,051 passed; 106 skipped; 16 failed
+Full suite, builtin engines: 3,051 passed; 106 skipped; 16 failed
+Final normal/minimal failures exactly match untouched-main baseline failure identifiers: PASS
+
+Baseline/current failure set:
+tests/test_improve_round.py::test_wait_or_kill_zero_misses_the_orphaned_grandchild_when_leader_already_exited
+tests/test_lsp.py::test_cli_lsp_verb_renders_sites_and_engine
+tests/test_lsp.py::test_definition_references_hover_through_the_client
+tests/test_lsp.py::test_refs_ladder_uses_the_language_server_rung_and_discloses_it
+tests/test_lsp_edit_loop.py::test_broker_reuses_across_processes_and_expires
+tests/test_lsp_edit_loop.py::test_changed_documents_receive_fresh_diagnostics
+tests/test_lsp_edit_loop.py::test_cli_rename_requires_plan_and_preserves_source
+tests/test_lsp_edit_loop.py::test_code_action_only_plans_literal_edits
+tests/test_lsp_edit_loop.py::test_empty_pull_diagnostics_do_not_hide_versioned_push_errors
+tests/test_lsp_edit_loop.py::test_rename_preview_apply_and_post_edit_checks
+tests/test_lsp_edit_loop.py::test_semantic_plan_does_not_relocate_after_an_import_is_added
+tests/test_lsp_edit_loop.py::test_stale_rename_refuses_all_writes
+tests/test_lsp_edit_loop.py::test_unversioned_diagnostics_cannot_prove_clean
+tests/test_lsp_edit_loop.py::test_versioned_closed_files_are_opened_and_rename_recomputed
+tests/test_lsp_edit_loop.py::test_versioned_rename_at_document_limit_keeps_origin_open
+tests/test_lsp_edit_loop.py::test_versioned_rename_refuses_more_than_document_limit
+
+Wheel contents match final source:
+db6f11742fc434034f81026baf6f21158b7cf4eb7429d9d6b9fb0904c09bc907  src/ctx/config_edit.py
+866966bd3edbfbc59d9d3a70377ea884d6a4922b6e39d8d6822d3b145fe92070  src/ctx/host_config.py
+657951e22d54d9501ffe70f82c8e0f2c38b5722cb2e5c8b81bb9ebdb2461fe1c  src/ctx/installer.py
+51074b370fbdc7fe2a764ae3af3b9099af02b4a5d7b97223404933a17f8f36a2  src/ctx/commands/hosts.py
+
+distribution OK: ctx_harness-0.43.0-py3-none-any.whl + ctx_harness-0.43.0.tar.gz (ctx 0.43.0, all host assets present)
+* Getting build dependencies for sdist...
+* Building sdist...
+* Building wheel from sdist
+* Getting build dependencies for wheel...
+* Building wheel...
+Successfully built ctx_harness-0.43.0.tar.gz and ctx_harness-0.43.0-py3-none-any.whl
+Checking dist/ctx_harness-0.43.0-py3-none-any.whl: PASSED
+Checking dist/ctx_harness-0.43.0.tar.gz: PASSED
+Documentation facts: PASS (version v0.43.0, 7 ctx ask intents, 2,538 test functions, field needle 302,628→531)
+Documentation integrity: PASS (423 local/repository references checked)
+SVG normalization and generated evidence visual checks: PASS
+Documentation site build: 36 pages, PASS
+No live Codex/OpenCode host sessions or configurations used.
+All new configuration fixtures and package smoke use isolated directories/HOME.

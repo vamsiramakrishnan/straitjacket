@@ -44,33 +44,68 @@ skill. The two must not coexist.
 **Fix:** remove `.agents/skills/ctx-harness`, then re-run setup. (`ctx doctor
 --antigravity` reports this as the `no duplicate installation` check.)
 
-### Codex: setup printed a snippet instead of editing `.codex/config.toml`
+### Codex or OpenCode: setup stopped with a configuration diff
 
-**Not a failure — by design.** straitjacket never rewrites an existing
-`.codex/config.toml` in place (editing a TOML with duplicate tables is a
-data-loss hazard). If the file exists but doesn't yet register `ctx-harness`,
-setup prints the exact `[mcp_servers.ctx-harness]` snippet for you to paste.
-Add it, then ensure the existing `[features]` table contains `hooks = true`
-(create the table if absent; do not add a duplicate table). Rerun `ctx setup`
-after both changes.
+Setup previews changes before editing existing user configuration. Review the
+exact diff, then run `ctx setup --host codex --apply` or
+`ctx setup --host opencode --apply` for safe additions. The same plan powers
+`ctx setup --host <name> --preview`, repair and removal.
+
+If setup names a conflict, `--apply` still refuses. Reconcile that exact entry
+using the proposed diff: for example, decide whether to enable an explicitly
+disabled hook or replace a different `ctx-harness` server. Comments and other
+integrations are preserved. Invalid syntax and duplicate keys require repair
+at the reported location before a structural diff can be generated.
+
+### `ctx doctor`: "ctx launch form"
+
+```text
+  ✗ ctx launch form — `python -m ctx` without -P imports a `ctx` package from the workspace: .claude/settings.json (hooks.PreToolUse[0].hooks[0]): `ctx setup --host claude` rewrites it to the -P form
+  ✗ ctx launch form — `python -m ctx` without -P imports a `ctx` package from the workspace: .mcp.json (mcpServers.mine): ctx does not manage this entry; set "command": "python3", "args": ["-P", "-m", "ctx", "mcp"]
+```
+
+**Cause:** an installed hook, status-line or MCP command starts ctx as
+`python -m ctx` without `-P`. Python puts the current directory first on the import
+path, so a repository with a top-level `ctx/` package or `ctx.py` would run its own
+code as the guard on every tool call. Releases before the fix wrote that form into
+host configuration whenever `ctx` was not on `PATH`, and used it for background jobs.
+Doctor reads every file a ctx installer writes, plus the hosts' own user-scope
+settings, and prints one row per finding. A passing row reads "no installed command
+imports ctx from the working directory".
+
+**Fix:** the row says which of two cases it is.
+
+- **"`ctx setup --host <host>` rewrites it to the -P form"**: the command is one ctx
+  wrote, in a file ctx manages. Run that setup command. It upgrades ctx-owned commands
+  in place and prints the file it changed, for example "updated 1 ctx command(s) in
+  .claude/settings.json from the unsafe `python -m ctx` form to `python -P -m ctx`".
+  Run `ctx doctor` again.
+- **"ctx does not manage this entry; …"** (or setup will not rewrite it, with the
+  reason, such as a symlink or a read-only file): setup will not touch it. Apply the
+  exact replacement the row prints by hand.
+
+Existing installs should run `ctx setup` once and then `ctx doctor`. Setup refuses to
+write through a symlink and names the file.
 
 ### Codex: `MCP client for ctx-harness failed to start: No such file or directory`
 
-**Cause:** an older generated fallback put the whole `python -m ctx` invocation
-in the MCP `command` field. Codex launches that field directly, without a
-shell, so the executable and its arguments must be separate. **Fix:** upgrade
-`ctx-harness`, run `ctx wrap codex` once to refresh a ctx-managed config, and
-restart Codex. The corrected block has `command = "/path/to/python"` and begins
-`args` with `"-m", "ctx"`. If your `.codex/config.toml` is user-managed, setup
-will print the corrected snippet instead of rewriting the file.
+An older generated fallback put the whole `python -m ctx` invocation in MCP
+`command`. Codex launches that field directly, without a shell. Preview the
+repair with `ctx setup --host codex --preview`. The corrected entry separates
+`command = "/path/to/python"` from `args = ["-P", "-m", "ctx", "mcp", "--bounded-only"]`
+(`-P` keeps a `ctx` package in the repository from being imported).
+Owned entries are repairable when they still match the recorded value. Legacy
+entries without an ownership record need the shown correction reviewed and
+integrated before setup proceeds; the old banner does not authorize overwrites.
+Restart Codex afterward.
 
 ### Codex: `PreToolUse hook returned unsupported permissionDecision:allow`
 
 **Cause:** an older hook emitted an explicit `allow` for ordinary pass-through
 calls. Codex reserves that decision for input rewrites that also contain
 `updatedInput`. **Fix:** upgrade `ctx-harness` and restart Codex. The current
-hook emits `{}` for pass-through, `allow` plus `updatedInput` for transparent
-containment, and `deny` for blocked calls.
+hook emits `{}` for pass-through and for shell commands (rewrites are withheld on
+Codex), and `deny` for blocked calls.
 
 ### `--workspace is not a directory: <path>` (exit 2)
 
@@ -84,13 +119,16 @@ This is the most common report, and it almost always has a mundane cause.
 
 ### The guard is a complete no-op
 
-**Cause:** `[guard] mode = "advisory"` turns the guard off — it allows
-everything unconditionally. **Fix:** set `mode = "guarded"` (the default) or
-`"strict"` in `ctx.toml`.
+**Cause:** `[guard] mode = "advisory"` turns the guard off — PreToolUse allows
+everything unconditionally and the PostToolUse output gate replaces nothing.
+**Fix:** set `mode = "guarded"` (the default) in `ctx.toml`. `"strict"` is accepted
+but behaves exactly as `guarded`; `ctx coverage` says so when a workspace sets it.
 
 Related: a **syntax error in `ctx.toml`** silently reverts settings to their
-defaults rather than erroring, so an intended `mode = "strict"` sitting under a
-malformed line behaves as the default. Confirm the file parses.
+defaults rather than erroring, so an intended `mode = "advisory"` sitting under a
+malformed line behaves as the default. Confirm the file parses. The one setting
+that fails the other way is `[intake] mode`: an unreadable `ctx.toml` turns the
+prompt gate off.
 
 ### A specific command isn't being captured
 
@@ -105,7 +143,7 @@ tools unusually, route the work through `ctx run -- <command>` explicitly.
 **Cause:** a host's built-in `Grep`/`Glob` tools bypass the shell path, so while
 the guard can classify them, their *output* isn't captured or digested. **Fix:**
 this is exactly why `ctx wrap` removes the native `Grep`/`Glob` tools under the
-default collapse setting — make sure you set the host up with `ctx wrap` (not a
+default `[guard] collapse` setting (which now governs only this) — make sure you set the host up with `ctx wrap` (not a
 hand-rolled hook), and prefer `ctx search` / `ctx q` for repository search.
 
 ### The guard isn't confining paths
@@ -116,6 +154,24 @@ the host passes several unrelated workspace paths and none matches, the root is
 or run from inside the repo so the root resolves.
 
 ## Permission prompts you didn't expect
+
+### "ctx used to run my commands without asking and now Claude Code prompts"
+
+**Cause:** an earlier ctx answered `allow` together with its rewrite of a shell
+command, and for commands it passed through. On Claude Code an `allow` together with a
+rewritten command overrides your deny and ask rules, and a plain `allow` skips the
+default prompt, so installing ctx approved shell commands (and MCP calls) you were
+never asked about. ctx no longer does that. By
+default (`[guard] steering = "auto"`) a shell command reaches Claude Code exactly as
+written and the host asks as it would without ctx; ctx approves only its own commands that read
+its store or the workspace (the follow-ups a digest prints), never `ctx run` or a
+rewritten command. **Fix, two legitimate remedies:** add your own allow rules on the original
+commands (for example `Bash(pytest:*)`) in your Claude Code settings; or set `steering
+= "rewrite"` to capture at birth, accepting the caveats: the host's prompts and rules
+then concern the `ctx run` wrapper, and a rule from a source ctx cannot read (managed
+policy) does not see the original command. A third option, `ctx run -- <command>`
+yourself, goes through the same prompts. `ctx doctor` prints a "claude code approval"
+row stating the current behaviour.
 
 ### "secret-bearing path … requires an explicit permission step"
 
@@ -147,13 +203,13 @@ routine for your setup.
 ### "unknown output bound for '`<prog>`'"
 
 **Cause:** under `guarded` mode, a command the classifier doesn't recognize is
-force-asked in case its output is large or it mutates state. Known bounded and
-structured queries already run directly; known read-only noisy commands are
-captured automatically on hosts that support substitution. **Fix:** confirm a
-genuinely safe unknown command, or use `ctx run -- …` when it can flood. You can
-change `[guard] unknown_command` (`allow` / `deny` / `ask` / `force_ask`), but a
-blanket `allow` removes the review boundary for both unclassified reads and
-unclassified mutations.
+force-asked in case its output is large or it mutates state. This prompt comes from
+Antigravity's guard; on Claude Code and Codex ctx no longer asks about an unknown
+output bound, and the host decides about the command. **Fix:** confirm a genuinely
+safe unknown command, or use `ctx run -- …` when it can flood. You can change `[guard]
+unknown_command` (`allow` / `deny` / `ask` / `force_ask`), but a blanket `allow`
+removes the review boundary for both unclassified reads and unclassified mutations.
+See [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 
 ### "in-place sed/awk" or "deeply nested shell" prompts
 
@@ -259,10 +315,16 @@ telemetry may remain under the normal retention policy.
 
 ## How do I turn the harness off, or uninstall it?
 For a single break-glass command, confirm the force-ask prompt. To disable
-steering everywhere, set `[guard] mode = "advisory"` — but note that only
-neutralizes the PreToolUse guard; the PostToolUse digest gate and the `ctx` MCP
-tool stay registered. To fully remove the host integration, delete the files
+steering everywhere, set `[guard] mode = "advisory"` — that makes both the
+PreToolUse guard and the PostToolUse digest gate allow everything, but the hooks
+and the `ctx` MCP tool stay registered. The prompt gate has its own switch,
+`[intake] mode = "off"`. To fully remove the host integration, delete the files
 `ctx wrap` added (this is exactly what each host's setup output tells you):
+
+For Codex and OpenCode installs created by the configuration planner, use
+`ctx setup --host codex --host opencode --remove` to preview owned removal;
+add `--apply` to execute it. Other integrations and unowned entries remain.
+The following manual steps also cover older installs without ownership records.
 
 - **Antigravity** — remove the `.agents/plugins/ctx-harness/` directory. In
   `~/.gemini/antigravity-cli/settings.json`, remove `statusLine` only when its

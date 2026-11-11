@@ -122,6 +122,9 @@ def test_two_number_honesty_when_tools_deferred_within_kept_server(tmp_path):
     (root / "ctx.toml").write_text("version=1\n", encoding="utf-8")
     (root / ".mcp.json").write_text(json.dumps({"mcpServers": {
         "fs": {"command": sys.executable, "args": [str(fake)]}}}), encoding="utf-8")
+    (root / ".claude").mkdir()   # approved project server (unapproved ones cost 0)
+    (root / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enableAllProjectMcpServers": True}), encoding="utf-8")
 
     rep = sp.compile_profile(root, "read-only", host="claude", probe_mcp=True)
     assert "fs" in rep["servers_kept"]                     # kept for read_file

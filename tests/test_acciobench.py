@@ -979,6 +979,52 @@ def test_tool_host_readonly_dedup_and_sha256_file_dedup(tmp_path: Path) -> None:
     assert "22.0%" in r3["functionResponse"]["response"]["output"]
 
 
+def test_bash_dedup_signature_keeps_paging_and_words_with_hash_distinct(tmp_path: Path) -> None:
+    from evals.acciobench.host import _normalize_bash_cmd_for_dedup as sig
+
+    # `#` inside a word is text; `:` never splits a word.
+    a = sig("ctx get run:4088c70a0973#stdout --lines 1:5")
+    b = sig("ctx get run:4088c70a0973#stdout --lines 121:240")
+    assert a != b and "run:4088c70a0973#stdout" in a and "1:5" in a
+    assert sig("ctx get run:4088c70a0973#stdout --lines 1:5") != sig("ctx get run:4088c70a0974#stdout --lines 1:5")
+    assert sig("ctx get run:aaaaaa#stdout --lines 1:5") != sig("ctx get run:aaaaaa#stderr --lines 1:5")
+    assert sig("echo a#b c") != sig("echo a#b d")
+    assert sig("echo a:b") != sig("echo a : b")
+    assert sig("curl http://x/y#one") != sig("curl http://x/y#two")
+    assert sig("grep 'a#b' f") != sig("grep 'a#c' f")
+    # A real trailing comment, blanks and flag clusters still normalize.
+    assert sig("ls -la # list") == sig("ls -la") == sig("ls   -al")
+    assert sig("cat x|wc -l") == sig("cat x | wc  -l")
+    assert sig("echo '#' x") == "echo '#' x" and sig('echo "#" x') == 'echo "#" x'
+    assert sig("echo '#' x") != sig("echo")
+
+    host, metrics, _, _ = _make_host(tmp_path, arm="sj", entry_gate_bytes=2_048)
+    host.step = 1
+    fr, _, _ = host.execute_part("bash", {"command": "seq 1 3000 | sed 's/^/PAGE_ROW_/'"})
+    m = re.search(r"\brun:([0-9a-f]{6,64})\b", fr["functionResponse"]["response"]["output"])
+    assert m is not None
+    h = f"run:{m.group(1)}"
+
+    def bash(step: int, cmd: str) -> str:
+        host.step = step
+        out, _, _ = host.execute_part("bash", {"command": cmd})
+        return out["functionResponse"]["response"]["output"]
+
+    p1 = bash(2, f"ctx get {h}#stdout --lines 1:5")
+    assert "PAGE_ROW_1" in p1 and host.last_call_was_dup is False
+    p2 = bash(3, f"ctx get {h}#stdout --lines 121:240")
+    assert host.last_call_was_dup is False and "PAGE_ROW_121" in p2 and "Identical call" not in p2
+    p3 = bash(4, f"ctx get {h}#stdout --lines 2:6")
+    assert host.last_call_was_dup is False and "PAGE_ROW_6" in p3
+    dup_before = metrics.dup_blocked
+    p4 = bash(5, f"ctx get {h}#stdout --lines 1:5")
+    assert host.last_call_was_dup is True and metrics.dup_blocked == dup_before + 1
+    assert "Identical call already ran" in p4
+    bash(6, "ls -la")
+    bash(7, "ls -la # list again")
+    assert host.last_call_was_dup is True
+
+
 def test_tool_host_parallel_cli_help_enrichment(tmp_path: Path) -> None:
     cli_dir = tmp_path / "cli_bin"
     _write_executable(
@@ -1295,6 +1341,679 @@ def test_run_trial_and_run_suite_paired_arms_with_residence_and_resume(tmp_path:
         assert provider.calls == calls_after_first_run
     finally:
         orch_mod.create_provider = orig_create
+
+
+class _SolvingProvider:
+    """Reads orders.json, writes the expected summary and presents it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.models: list[str] = []
+
+    def generate(self, model_id: str, contents: list[dict[str, Any]], tools: list[dict[str, Any]], **_kw: Any) -> dict[str, Any]:
+        self.calls += 1
+        self.models.append(model_id)
+        user_turns = len([c for c in contents if c.get("role") == "user"])
+        if user_turns == 1:
+            part: dict[str, Any] = {"functionCall": {"name": "read", "args": {"path": "/task/workspace/orders.json"}}}
+        elif user_turns == 2:
+            part = {"functionCall": {"name": "write", "args": {
+                "path": "/task/outputs/summary.json",
+                "content": json.dumps({"total_usd": 420, "status": "verified"}),
+            }}}
+        elif user_turns == 3:
+            part = {"functionCall": {"name": "present_files", "args": {"files": ["/task/outputs/summary.json"]}}}
+        else:
+            part = {"text": "Completed."}
+        return {
+            "candidates": [{"content": {"role": "model", "parts": [part]}}],
+            "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 10},
+        }
+
+    def judge_access_token(self) -> str:
+        return ""
+
+    def close(self) -> None:
+        pass
+
+
+class _MustNotGenerateProvider(_SolvingProvider):
+    def generate(self, *a: Any, **kw: Any) -> dict[str, Any]:
+        pytest.fail("resume made a model call")
+
+
+def _flaky_grader_task(ds_root: Path, task_id: str, flag: Path) -> Path:
+    """A task whose grader crashes (no reward.json) until ``flag`` exists, then grades for real."""
+    case_dir = _create_synthetic_task(ds_root, category="file", task_id=task_id)
+    grader = case_dir / "grader"
+    (grader / "run.sh").rename(grader / "real.sh")
+    _write_executable(
+        grader / "run.sh",
+        "#!/usr/bin/env bash\n"
+        f'FLAG="{flag}"\n'
+        'if [ ! -e "$FLAG" ]; then : > "$FLAG"; echo "grader crashed: judge timeout" >&2; exit 2; fi\n'
+        'exec bash "$(dirname "$0")/real.sh"\n',
+    )
+    return case_dir
+
+
+def test_grading_error_is_ungraded_reported_apart_and_regraded_on_resume(tmp_path: Path) -> None:
+    from evals.acciobench.html_report import build_html_report_payload
+    from evals.acciobench.report import compute_summary_payload
+
+    ds_root = tmp_path / "cab"
+    flag = tmp_path / "grader_has_run_once"
+    _flaky_grader_task(ds_root, "file-flaky-grader", flag)
+    cfg = BenchConfig(
+        dataset_root=ds_root, workdir=tmp_path / "work", provider="gemini", api_key="dummy",
+        judge_provider="mock", arms=("sj",), slot_offset=70,
+    )
+
+    first = run_trial(cfg, "file-flaky-grader", "sj", 71, _SolvingProvider())  # type: ignore[arg-type]
+    assert first.termination == "present_files"
+    assert first.grading_error and "grader crashed" in first.grading_error
+    assert first.passed is False
+    result_file = cfg.runs_dir / "file-flaky-grader__sj__t1_meta" / "result.json"
+    saved = json.loads(result_file.read_text(encoding="utf-8"))
+    assert saved["grading_error"]
+
+    # Reports: an ungraded trial is not a failed one; it is counted apart in every format.
+    loaded = load_run_results(cfg.workdir)
+    payload = compute_summary_payload(loaded)
+    assert payload["arms"]["sj"]["grading_error_runs"] == 1
+    assert payload["arms"]["sj"]["overall"]["n"] == 0
+    assert payload["grading_error_runs"] == 1
+    assert "Grading errors: 1" in render_summary_report(loaded, format="table")
+    assert "Grading errors: 1" in render_summary_report(loaded, format="markdown")
+    assert json.loads(render_summary_report(loaded, format="json"))["grading_error_runs"] == 1
+    html_meta = build_html_report_payload(loaded, workdir=cfg.workdir)["meta"]
+    assert html_meta["grading_errors_total"] == 1 and html_meta["grading_errors"] == {"sj": 1}
+
+    # Resume re-grades the existing outputs: no model call, run directory untouched.
+    run_dir = cfg.runs_dir / "file-flaky-grader__sj__t1"
+    keep = run_dir / "tmp" / "agent_scratch.txt"
+    keep.write_text("keep me", encoding="utf-8")
+    second = run_trial(cfg, "file-flaky-grader", "sj", 71, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert second.grading_error == ""
+    assert second.passed is True and second.capacity_score == 1.0
+    assert second.steps == first.steps and second.prompt_tokens == first.prompt_tokens
+    assert keep.read_text(encoding="utf-8") == "keep me"
+    assert json.loads(result_file.read_text(encoding="utf-8"))["passed"] is True
+    payload2 = compute_summary_payload(load_run_results(cfg.workdir))
+    assert payload2["arms"]["sj"]["grading_error_runs"] == 0
+    assert payload2["arms"]["sj"]["overall"]["passed"] == 1
+
+    # A graded result is then plainly cached (no model call, no grader run).
+    flag.unlink()
+    third = run_trial(cfg, "file-flaky-grader", "sj", 71, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert third.passed is True and not flag.exists()
+
+    # Re-grading impossible (run directory gone): only then is the trial re-run.
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    doc.update(grading_error="grader timeout", passed=False)
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    import shutil as _shutil
+
+    _shutil.rmtree(run_dir)
+    flag.touch()
+    rerun_provider = _SolvingProvider()
+    fourth = run_trial(cfg, "file-flaky-grader", "sj", 71, rerun_provider)  # type: ignore[arg-type]
+    assert rerun_provider.calls >= 3
+    assert fourth.passed is True and fourth.grading_error == ""
+
+
+def test_resume_accepts_cached_results_only_for_the_same_configuration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import dataclasses as _dc
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-fp")
+    base = BenchConfig(
+        dataset_root=ds_root, workdir=tmp_path / "work", model="model-a", provider="gemini",
+        api_key="dummy", judge_provider="mock", arms=("sj",), slot_offset=60,
+    )
+    meta = base.runs_dir / "file-fp__sj__t1_meta"
+    result_file = meta / "result.json"
+
+    def run(cfg: BenchConfig, provider: Any) -> RunMetrics:
+        return run_trial(cfg, "file-fp", "sj", 61, provider)
+
+    p0 = _SolvingProvider()
+    first = run(base, p0)
+    assert p0.calls >= 3 and first.passed
+    fp_a = json.loads(result_file.read_text(encoding="utf-8"))["config_fingerprint"]
+    assert fp_a
+
+    # Same configuration (other workers, slot and resume settings): cached, no model call.
+    same = _dc.replace(base, workers=9, slot_offset=3)
+    assert run(same, _MustNotGenerateProvider()).passed
+
+    # Each behaviour-changing setting re-runs the trial and says why in one line.
+    for i, change in enumerate(({"model": "model-b"}, {"thinking_level": "HIGH"}, {"entry_gate_bytes": 1_000})):
+        capsys.readouterr()
+        cfg = _dc.replace(base, **change)
+        prov = _SolvingProvider()
+        res = run(cfg, prov)
+        assert prov.calls >= 3, change
+        assert set(prov.models) == {cfg.model}
+        assert res.model_id == cfg.model
+        out = capsys.readouterr().out
+        assert "configuration changed" in out, (change, out)
+        new_fp = json.loads(result_file.read_text(encoding="utf-8"))["config_fingerprint"]
+        assert new_fp != fp_a
+        # The previous configuration's trial is kept aside, never loaded by reports.
+        assert any((tmp_path / "work" / "superseded").glob("*/file-fp__sj__t1_meta/result.json"))
+        assert len(load_run_results(base.workdir)) == 1
+        fp_a = new_fp
+
+    import evals.acciobench.loop as loop_mod
+
+    def reruns(cfg: BenchConfig) -> bool:
+        prov = _SolvingProvider()
+        run(cfg, prov)
+        return prov.calls > 0
+
+    # The task itself: same id, changed prompt, under another dataset root.
+    last_cfg = _dc.replace(base, entry_gate_bytes=1_000)
+    assert not reruns(last_cfg)
+    ds2 = tmp_path / "cab2"
+    import shutil as _shutil
+
+    _shutil.copytree(ds_root, ds2)
+    task_md = ds2 / "datasets_domain_v1" / "file" / "file-fp" / "task.md"
+    task_md.write_text(task_md.read_text(encoding="utf-8") + "\nAlso report the median.\n", encoding="utf-8")
+    cfg_ds2 = _dc.replace(last_cfg, dataset_root=ds2)
+    assert reruns(cfg_ds2)
+    assert not reruns(cfg_ds2)
+    # A grader-only change also re-runs (the recorded score must come from the current grader).
+    grader = ds2 / "datasets_domain_v1" / "file" / "file-fp" / "grader" / "run.sh"
+    grader.write_text(grader.read_text(encoding="utf-8") + "\n# v2\n", encoding="utf-8")
+    assert reruns(cfg_ds2)
+    # The ctx being benchmarked: a ctx that reports another version (same behaviour otherwise).
+    real_ctx = resolve_ctx_bin(None)
+    other_ctx = _write_executable(
+        tmp_path / "otherctx" / "ctx",
+        f'#!/usr/bin/env bash\nif [ "$1" = --version ]; then echo "ctx 99.0.0"; exit 0; fi\nexec "{real_ctx}" "$@"\n',
+    )
+    assert reruns(_dc.replace(cfg_ds2, ctx_bin=other_ctx))
+    assert not reruns(_dc.replace(cfg_ds2, ctx_bin=other_ctx))
+    # Whether the bwrap sandbox is active.
+    real_probe = loop_mod.bwrap_sandbox_executable
+    try:
+        loop_mod.bwrap_sandbox_executable = lambda: None  # type: ignore[assignment]
+        assert reruns(cfg_ds2)
+        loop_mod.bwrap_sandbox_executable = lambda: "/usr/bin/bwrap"  # type: ignore[assignment]
+        assert reruns(cfg_ds2)
+        assert not reruns(cfg_ds2)
+    finally:
+        loop_mod.bwrap_sandbox_executable = real_probe  # type: ignore[assignment]
+    capsys.readouterr()
+
+    # Legacy results (no fingerprint): accepted only for the same model, with a notice.
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    doc.pop("config_fingerprint")
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    capsys.readouterr()
+    assert run(last_cfg, _MustNotGenerateProvider()).model_id == "model-a"
+    assert "predates config fingerprints" in capsys.readouterr().out
+
+    doc["model_id"] = "model-old"
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    prov = _SolvingProvider()
+    res = run(last_cfg, prov)
+    out = capsys.readouterr().out
+    assert prov.calls >= 3 and res.model_id == "model-a"
+    assert "model_id=model-old, not model-a" in out
+    assert (tmp_path / "work" / "superseded" / "legacy-model-old" / "file-fp__sj__t1_meta").is_dir()
+
+
+def test_supersede_never_deletes_a_previous_configurations_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dataclasses as _dc
+
+    import evals.acciobench.loop as loop_mod
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-sup")
+    cfg_a = BenchConfig(
+        dataset_root=ds_root, workdir=tmp_path / "work", model="model-a", provider="gemini",
+        api_key="dummy", judge_provider="mock", arms=("sj",),
+    )
+    cfg_b = _dc.replace(cfg_a, model="model-b")
+    run_dir = cfg_a.runs_dir / "file-sup__sj__t1"
+    sup = cfg_a.workdir / "superseded"
+
+    def go(cfg: BenchConfig) -> RunMetrics:
+        return run_trial(cfg, "file-sup", "sj", 33, _SolvingProvider())  # type: ignore[arg-type]
+
+    # A#1 -> B supersedes it -> A#2 supersedes B -> B supersedes A#2 under A's fingerprint again.
+    go(cfg_a)
+    (run_dir / "workspace" / "MARK_A1.txt").write_text("A1", encoding="utf-8")
+    go(cfg_b)
+    go(cfg_a)
+    (run_dir / "workspace" / "MARK_A2.txt").write_text("A2", encoding="utf-8")
+    go(cfg_b)
+    a1 = list(sup.glob("*/file-sup__sj__t1/workspace/MARK_A1.txt"))
+    a2 = list(sup.glob("*/file-sup__sj__t1/workspace/MARK_A2.txt"))
+    assert len(a1) == 1 and len(a2) == 1 and a1[0].parent.parent.parent != a2[0].parent.parent.parent
+    assert {p.name for p in sup.iterdir()} >= {a1[0].parents[2].name, a2[0].parents[2].name}
+    assert all((p / "file-sup__sj__t1_meta" / "result.json").is_file() for p in sup.iterdir())
+
+    # The move cannot start (superseded/ is a file): the trial stops, nothing is deleted.
+    (run_dir / "workspace" / "MARK_B2.txt").write_text("B2", encoding="utf-8")
+    moved_aside = sup.rename(tmp_path / "superseded_kept")
+    sup.write_text("blocking", encoding="utf-8")
+    with pytest.raises(loop_mod.SupersedeError):
+        go(cfg_a)
+    assert (run_dir / "workspace" / "MARK_B2.txt").read_text(encoding="utf-8") == "B2"
+    assert json.loads((cfg_a.runs_dir / "file-sup__sj__t1_meta" / "result.json").read_text())["model_id"] == "model-b"
+    sup.unlink()
+    moved_aside.rename(sup)
+
+    # The second rename fails: the first is undone, both directories stay in runs/.
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def flaky_rename(src: Any, dst: Any) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError(18, "Invalid cross-device link")
+        real_rename(src, dst)
+
+    monkeypatch.setattr(loop_mod.os, "rename", flaky_rename)
+    with pytest.raises(loop_mod.SupersedeError):
+        go(cfg_a)
+    monkeypatch.setattr(loop_mod.os, "rename", real_rename)
+    assert (run_dir / "workspace" / "MARK_B2.txt").is_file()
+    assert (cfg_a.runs_dir / "file-sup__sj__t1_meta" / "result.json").is_file()
+    assert len(list(sup.glob("*/file-sup__sj__t1/workspace/MARK_A1.txt"))) == 1
+    assert all(any(d.iterdir()) for d in sup.iterdir()), "a failed move left an empty directory"
+
+
+def _write_two_arm_results(workdir: Path, missing_arm: str, how: str) -> None:
+    """Tasks a and b on raw and sj; task b's ``missing_arm`` has no scorable result, by ``how``."""
+    import shutil as _shutil
+
+    def write(task: str, arm: str, **kw: Any) -> Path:
+        meta = workdir / "runs" / f"{task}__{arm}__t1_meta"
+        meta.mkdir(parents=True, exist_ok=True)
+        doc = dict(task_id=task, task_rel=f"file/{task}", category="file", arm=arm, model_id="m",
+                   steps=3, termination="present_files", passed=True, capacity_score=1.0,
+                   checks_passed=2, checks_total=2)
+        doc.update(kw)
+        (meta / "result.json").write_text(json.dumps(doc), encoding="utf-8")
+        return meta
+
+    for t in ("a", "b"):
+        for arm in ("raw", "sj"):
+            if (t, arm) == ("b", missing_arm) and how == "not_run":
+                continue
+            kw: dict[str, Any] = {}
+            if (t, arm) == ("b", missing_arm):
+                if how == "ungraded":
+                    kw = dict(passed=False, capacity_score=0.0, grading_error="grader timeout")
+                elif how == "api_error":
+                    kw = dict(termination="api_error", passed=False, capacity_score=0.0)
+            meta = write(t, arm, **kw)
+            if (t, arm) == ("b", missing_arm) and how == "superseded":
+                dest = workdir / "superseded" / "0123456789abcdef"
+                dest.mkdir(parents=True)
+                _shutil.move(str(meta), str(dest / meta.name))
+
+
+@pytest.mark.parametrize("missing_arm", ["raw", "sj"])
+@pytest.mark.parametrize("how", ["ungraded", "api_error", "not_run", "superseded"])
+def test_reports_leave_unpaired_tasks_out_and_count_them(tmp_path: Path, missing_arm: str, how: str) -> None:
+    from evals.acciobench.html_report import build_html_report_payload
+
+    workdir = tmp_path / "w"
+    _write_two_arm_results(workdir, missing_arm, how)
+    results = load_run_results(workdir)
+
+    table = render_summary_report(results, format="table")
+    assert "Unpaired tasks: 1" in table and "b (no " + missing_arm + ")" in table
+    md = render_summary_report(results, format="markdown")
+    assert "> Unpaired tasks: 1" in md
+    js = json.loads(render_summary_report(results, format="json"))
+    assert js["unpaired_tasks"] == 1 and js["unpaired"][0]["missing"] == missing_arm
+    assert js["paired"]["paired_tasks"] == 1
+    html = render_summary_report(results, format="html", workdir=workdir)
+    assert "<html" in html.lower()
+    meta = build_html_report_payload(results, workdir=workdir)["meta"]
+    assert meta["unpaired_tasks"] == 1 and meta["unpaired"][0]["missing"] == [missing_arm]
+    assert meta["total_tasks"] == 1
+
+
+def test_run_command_survives_a_report_that_fails_to_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-rep")
+    workdir = tmp_path / "w"
+    _write_two_arm_results(workdir, "raw", "ungraded")
+    monkeypatch.setattr(ab_cli, "run_suite", lambda *a, **k: [])
+
+    def boom(*a: Any, **k: Any) -> str:
+        raise KeyError("raw")
+
+    monkeypatch.setattr(ab_cli, "render_summary_report", boom)
+    args = ab_cli.build_parser().parse_args(
+        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-rep",
+         "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock"]
+    )
+    assert ab_cli._cmd_run(args) == 0
+    err = capsys.readouterr().err
+    assert "the table report failed to render" in err and "the HTML report failed to render" in err
+    assert f"report --workdir {workdir} --format html" in err
+
+
+def test_run_reports_leave_out_an_earlier_result_for_a_trial_that_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A trial that raises writes nothing, so its slot still holds whatever an earlier run
+    left there (a previous configuration's result that could not be moved aside). The
+    run's reports must not present that as this run's result."""
+    ds_root = tmp_path / "cab"
+    workdir = tmp_path / "w"
+    for task in ("file-a", "file-b"):
+        _create_synthetic_task(ds_root, category="file", task_id=task)
+        for arm in ("raw", "sj"):
+            meta = workdir / "runs" / f"{task}__{arm}__t1_meta"
+            meta.mkdir(parents=True)
+            (meta / "result.json").write_text(json.dumps(dict(
+                task_id=task, task_rel=f"file/{task}", category="file", arm=arm, model_id="earlier-model",
+                steps=3, termination="present_files", passed=True, capacity_score=1.0,
+                checks_passed=2, checks_total=2)), encoding="utf-8")
+
+    def fake_suite(config: Any, task_ids: list[str], *, raised: list[RunMetrics], **_: Any) -> list[RunMetrics]:
+        on_disk = [r for r in load_run_results(config.runs_dir) if (r.task_id, r.arm) != ("file-b", "sj")]
+        stand_in = RunMetrics(task_id="file-b", task_rel="file-b", category="file", arm="sj",
+                              model_id=config.model, termination="error",
+                              notes=["file-b__sj__t1: could not move the previous configuration's trial aside"])
+        raised.append(stand_in)
+        return [*on_disk, stand_in]
+
+    monkeypatch.setattr(ab_cli, "run_suite", fake_suite)
+    out_json = tmp_path / "report.json"
+    args = ab_cli.build_parser().parse_args(
+        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-a,file-b",
+         "--arms", "raw,sj", "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock",
+         "--format", "json", "--output", str(out_json), "--no-html-report"]
+    )
+    assert ab_cli._cmd_run(args) == 0
+    err = capsys.readouterr().err
+    assert "[not recorded] file-b (sj)" in err and "could not move" in err
+    doc = json.loads(out_json.read_text(encoding="utf-8"))
+    assert doc["unpaired_tasks"] == 1
+    assert doc["unpaired"][0]["task_id"] == "file-b" and doc["unpaired"][0]["missing"] == "sj"
+    assert doc["paired"]["paired_tasks"] == 1
+    # The earlier result itself is untouched on disk.
+    assert (workdir / "runs" / "file-b__sj__t1_meta" / "result.json").is_file()
+
+
+def test_run_reports_show_no_completed_run_when_every_trial_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With nothing usable on disk the run falls back to its in-memory results; the
+    stand-ins for trials that raised are not results and must not come back that way."""
+    ds_root = tmp_path / "cab"
+    workdir = tmp_path / "w"
+    for task in ("file-a", "file-b"):
+        _create_synthetic_task(ds_root, category="file", task_id=task)
+        meta = workdir / "runs" / f"{task}__sj__t1_meta"
+        meta.mkdir(parents=True)
+        (meta / "result.json").write_text(json.dumps(dict(
+            task_id=task, task_rel=f"file/{task}", category="file", arm="sj", model_id="earlier-model",
+            steps=3, termination="present_files", passed=True, capacity_score=1.0,
+            checks_passed=2, checks_total=2)), encoding="utf-8")
+
+    def all_raise(config: Any, task_ids: list[str], *, raised: list[RunMetrics], **_: Any) -> list[RunMetrics]:
+        for task in task_ids:
+            raised.append(RunMetrics(task_id=task, task_rel=task, category="file", arm="sj",
+                                     model_id=config.model, termination="error", notes=["could not move"]))
+        return list(raised)
+
+    monkeypatch.setattr(ab_cli, "run_suite", all_raise)
+    out_json = tmp_path / "report.json"
+    args = ab_cli.build_parser().parse_args(
+        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-a,file-b",
+         "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock",
+         "--format", "json", "--output", str(out_json), "--no-html-report"]
+    )
+    assert ab_cli._cmd_run(args) == 0
+    assert capsys.readouterr().err.count("[not recorded]") == 2
+    doc = json.loads(out_json.read_text(encoding="utf-8"))
+    assert doc["total_runs"] == 0 and doc["arms"] == {}
+
+
+def test_task_inputs_digest_follows_directory_links_like_staging_does(tmp_path: Path) -> None:
+    """Staging copies through a directory symlink, so a change beneath one changes what a
+    trial receives and must change the fingerprint; a link back to an ancestor must end."""
+    from evals.acciobench import config as cfg_mod
+
+    shared = tmp_path / "shared_inputs"
+    shared.mkdir()
+    (shared / "prices.csv").write_text("sku,usd\nA,1\n", encoding="utf-8")
+    case = tmp_path / "case"
+    (case / "workspace").mkdir(parents=True)
+    (case / "task.md").write_text("prompt", encoding="utf-8")
+    without_link = cfg_mod.task_inputs_digest(case)
+
+    (case / "workspace" / "data").symlink_to(shared, target_is_directory=True)
+    linked = cfg_mod.task_inputs_digest(case)
+    assert linked != without_link
+
+    (shared / "prices.csv").write_text("sku,usd\nA,2\n", encoding="utf-8")
+    edited = cfg_mod.task_inputs_digest(case)
+    assert edited != linked, "a file beneath a linked input directory changed"
+
+    other = tmp_path / "other_inputs"
+    other.mkdir()
+    (other / "prices.csv").write_text("sku,usd\nA,2\n", encoding="utf-8")
+    (case / "workspace" / "data").unlink()
+    (case / "workspace" / "data").symlink_to(other, target_is_directory=True)
+    assert cfg_mod.task_inputs_digest(case) == edited, "same content through another target"
+    (other / "extra.csv").write_text("x", encoding="utf-8")
+    assert cfg_mod.task_inputs_digest(case) != edited
+
+    # Links that lead back up (a cycle) or to an already hashed directory end the walk
+    # there, and adding one is itself a change.
+    before_cycle = cfg_mod.task_inputs_digest(case)
+    (case / "workspace" / "loop").symlink_to(case, target_is_directory=True)
+    (case / "workspace" / "again").symlink_to(other, target_is_directory=True)
+    with_cycle = cfg_mod.task_inputs_digest(case)
+    assert with_cycle != before_cycle and with_cycle == cfg_mod.task_inputs_digest(case)
+
+
+def test_sandboxes_take_turns_on_a_host_port(tmp_path: Path) -> None:
+    import socket
+    import threading
+
+    from evals.acciobench import sandbox as sb
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    assert port not in sb._HELD_PORTS
+
+    # 1. Two claims of the same port: the second returns only after the first is released.
+    sb._claim_saved_ports({port}, "first")
+    order: list[str] = []
+    got_it = threading.Event()
+
+    def second() -> None:
+        sb._claim_saved_ports({port}, "second", wait_s=20)
+        order.append("second-claimed")
+        got_it.set()
+
+    th = threading.Thread(target=second)
+    th.start()
+    assert not got_it.wait(0.4), "the second claim did not wait for the first"
+    order.append("first-released")
+    sb._release_ports({port})
+    assert got_it.wait(10)
+    th.join(5)
+    assert order == ["first-released", "second-claimed"]
+
+    # 2. A new trial never allocates a port another sandbox holds, listening or not.
+    mapping, held = sb._claim_fresh_ports([8080], port, has_notion=False)
+    assert mapping[8080] != port and held == {mapping[8080]}
+    sb._release_ports(held)
+
+    # 3. A claim that cannot be had in time raises and holds nothing more.
+    with pytest.raises(RuntimeError, match="held by another trial"):
+        sb._claim_saved_ports({port}, "third", wait_s=0.3)
+    sb._release_ports({port})
+    assert port not in sb._HELD_PORTS
+
+    # 4. A listener outside this run: the claim raises instead of grading against it.
+    with socket.socket() as foreign:
+        foreign.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        foreign.bind(("127.0.0.1", port))
+        foreign.listen(1)
+        with pytest.raises(RuntimeError, match="in use outside this run"):
+            sb._claim_saved_ports({port}, "fourth", grace_s=0.4)
+    assert port not in sb._HELD_PORTS
+
+
+def test_concurrent_regrades_with_the_same_saved_port_each_get_their_own_service(tmp_path: Path) -> None:
+    """Trials that ran one after another in one worker slot recorded the same host port.
+    Re-grading them at the same time must not let the second one's readiness probe be
+    answered by the first one's service: each waits for the port and starts its own."""
+    import socket
+    import threading
+
+    ds_root = tmp_path / "cab"
+    runtime_dir = tmp_path / "runtime"
+    (runtime_dir / "mock_services").mkdir(parents=True)
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "work", runtime_dir=runtime_dir, judge_provider="mock")
+
+    def listening(port: int) -> bool:
+        with socket.socket() as s:
+            s.settimeout(0.5)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    trials = []
+    for name in ("api-turn-a", "api-turn-b"):
+        _create_synthetic_task(ds_root, category="api", task_id=name, mock_services=True, service_port=4477)
+        spec = load_cab_task(ds_root, name)
+        run_dir, meta_dir = cfg.runs_dir / f"{name}__sj__t1", cfg.runs_dir / f"{name}__sj__t1_meta"
+        first = TaskSandbox(cfg, spec, run_dir, meta_dir, slot=86)  # both in the same slot, in turn
+        try:
+            first.setup()
+            port = first.port_map[4477]
+        finally:
+            first.cleanup()
+        trials.append((spec, run_dir, meta_dir, port))
+    assert trials[0][3] == trials[1][3], "sequential trials in one slot share the port"
+    port = trials[0][3]
+    for _ in range(50):
+        if not listening(port):
+            break
+        time.sleep(0.05)
+
+    a = TaskSandbox(cfg, trials[0][0], trials[0][1], trials[0][2], slot=87)
+    b = TaskSandbox(cfg, trials[1][0], trials[1][1], trials[1][2], slot=88)
+    b_ready = threading.Event()
+    errors: list[BaseException] = []
+
+    def regrade_b() -> None:
+        try:
+            b.prepare_regrade()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            b_ready.set()
+
+    try:
+        a.prepare_regrade()
+        assert listening(port)
+        th = threading.Thread(target=regrade_b)
+        th.start()
+        assert not b_ready.wait(1.0), "the second re-grade did not wait for the first one's port"
+        a.cleanup()
+        assert b_ready.wait(30)
+        th.join(5)
+        assert not errors, errors
+        assert listening(port), "the second re-grade has no service of its own"
+    finally:
+        a.cleanup()
+        b.cleanup()
+    for _ in range(50):
+        if not listening(port):
+            break
+        time.sleep(0.05)
+    assert not listening(port)
+
+
+def test_task_inputs_digest_never_blocks_or_raises_on_odd_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evals.acciobench import config as cfg_mod
+
+    case = tmp_path / "case"
+    case.mkdir()
+    (case / "task.md").write_text("prompt", encoding="utf-8")
+    base = cfg_mod.task_inputs_digest(case)
+
+    os.mkfifo(case / "pipe")  # opening this for reading would block forever
+    (case / "dangling").symlink_to(case / "nowhere")
+    with_odd = cfg_mod.task_inputs_digest(case)
+    assert with_odd != base and with_odd == cfg_mod.task_inputs_digest(case)
+
+    secret = case / "private.txt"
+    secret.write_text("x", encoding="utf-8")
+    readable = cfg_mod.task_inputs_digest(case)
+    real_open = Path.open
+
+    def deny(self: Path, *a: Any, **k: Any) -> Any:
+        if self.name == "private.txt":
+            raise PermissionError(13, "Permission denied")
+        return real_open(self, *a, **k)
+
+    cfg_mod._FILE_DIGEST_CACHE.clear()
+    monkeypatch.setattr(Path, "open", deny)
+    unreadable = cfg_mod.task_inputs_digest(case)
+    assert unreadable != readable and unreadable == cfg_mod.task_inputs_digest(case)
+
+
+@pytest.mark.parametrize(
+    "bad_reward",
+    ["[]", '{"score": "abc"}', "{}", '{"checks_passed": 3, "checks_total": 2}', '{"score": true}',
+     '{"score": 1.0, "checks_breakdown": "x"}', '"passed"', "null", '{"score": NaN}'],
+)
+def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Path, bad_reward: str) -> None:
+    ds_root = tmp_path / "cab"
+    flag = tmp_path / "grader_fixed"
+    case_dir = _create_synthetic_task(ds_root, category="file", task_id="file-badreward")
+    grader = case_dir / "grader"
+    (grader / "run.sh").rename(grader / "real.sh")
+    (grader / "bad.json").write_text(bad_reward, encoding="utf-8")
+    _write_executable(
+        grader / "run.sh",
+        "#!/usr/bin/env bash\n"
+        f'if [ ! -e "{flag}" ]; then cp "$(dirname "$0")/bad.json" "$REWARD_JSON"; exit 0; fi\n'
+        'exec bash "$(dirname "$0")/real.sh"\n',
+    )
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("sj",))
+    first = run_trial(cfg, "file-badreward", "sj", 21, _SolvingProvider())  # type: ignore[arg-type]
+    assert first.termination == "present_files"
+    assert first.grading_error and first.passed is False, first.notes
+    flag.touch()
+    second = run_trial(cfg, "file-badreward", "sj", 21, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert second.grading_error == "" and second.passed is True
+
+
+def test_legacy_verifier_error_note_loads_as_grading_error() -> None:
+    legacy = {"task_id": "t", "arm": "sj", "model_id": "m", "termination": "present_files",
+              "passed": False, "notes": ["verifier error: Traceback ... TimeoutError"]}
+    m = RunMetrics.from_dict(legacy)
+    assert m.grading_error.startswith("Traceback")
+    ok = RunMetrics.from_dict({"task_id": "t", "arm": "sj", "model_id": "m", "passed": True})
+    assert ok.grading_error == ""
 
 
 # ---------------------------------------------------------------------------
@@ -2157,6 +2876,72 @@ def test_wave2_dom_diff_browser_batch_ctx_retrieve_and_external_mutation_audit(t
     assert "Deliverables presented:" in fr_done["functionResponse"]["response"]["output"]
 
 
+def _assert_private_tmp_round_trip(host: ToolHost, tag: str, host_tmp_marker: Path) -> None:
+    """File tools and bash agree on a private /tmp, in both directions, with or without bwrap."""
+
+    def bash(cmd: str) -> str:
+        host.mutation_epoch += 1  # never answered by the readonly dedup
+        fr, _, _ = host.execute_part("bash", {"command": cmd})
+        return fr["functionResponse"]["response"]["output"]
+
+    def tool(name: str, args: dict[str, Any]) -> str:
+        host.mutation_epoch += 1
+        fr, _, _ = host.execute_part(name, args)
+        return fr["functionResponse"]["response"]["output"]
+
+    note, made = f"step_note_{tag}.txt", f"bash_made_{tag}.txt"
+    host_tmp_before = set(os.listdir("/tmp"))
+
+    # write tool -> bash
+    tool("write", {"file_path": f"/tmp/{note}", "content": f"NOTE_{tag}"})
+    assert not (Path("/tmp") / note).exists()
+    assert f"NOTE_{tag}" in bash(f"cat /tmp/{note}")
+    # bash -> read tool (a new file lands in the private directory)
+    bash(f"echo BASH_{tag} > /tmp/{made} && mkdir -p /tmp/sub_{tag} && echo NESTED > /tmp/sub_{tag}/n.txt")
+    assert (host.sandbox_tmp / made).read_text(encoding="utf-8").strip() == f"BASH_{tag}"
+    assert f"BASH_{tag}" in tool("read", {"file_path": f"/tmp/{made}"})
+    assert "NESTED" in tool("read", {"file_path": f"/tmp/sub_{tag}/n.txt"})
+    # ls /tmp shows the run's files
+    listing = bash("ls /tmp")
+    assert note in listing and made in listing and f"sub_{tag}" in listing
+    assert "NESTED" in bash(f"cd /tmp/sub_{tag} && cat n.txt")
+    # look-alikes are untouched
+    looks = ["/tmpfoo", "/tmp.txt", "http://x/tmp/y", "~/tmp", "/var/tmp", "file:///tmp/z",
+             "/tmp~/z", "${X}/tmp/zz", "$(pwd)/tmp/q", "a/tmp/b", "x/tmp"]
+    if not host._use_bwrap:
+        priv = str(host.sandbox_tmp)
+        for s in looks:
+            assert host._rewrite_tmp(s) == s, s
+            assert host._rewrite_tmp(f"cat {s} | wc") == f"cat {s} | wc", s
+        for raw, want in (
+            ("cat /tmp/zz_new", f"cat {priv}/zz_new"),
+            ("X=/tmp/zz_new", f"X={priv}/zz_new"),
+            ("--out=/tmp/zz_new", f"--out={priv}/zz_new"),
+            ('cat "/tmp/zz_new"', f'cat "{priv}/zz_new"'),
+            ("ls /tmp", f"ls {priv}"),
+            ("ls /tmp/", f"ls {priv}/"),
+            ("(cd /tmp;ls)", f"(cd {priv};ls)"),
+            ("a</tmp/zz_new>/tmp/zz2", f"a<{priv}/zz_new>{priv}/zz2"),
+            ("PATH=/x:/tmp/zz_new", f"PATH=/x:{priv}/zz_new"),
+        ):
+            assert host._rewrite_tmp(raw) == want, raw
+    out_lines = bash("printf '%s\\n' " + " ".join(f"'{s}'" for s in looks)).splitlines()
+    assert out_lines[-len(looks):] == looks
+    # host paths under /tmp the harness itself uses keep working (run dir, ctx, python)
+    if str(host.run_dir).startswith("/tmp/"):
+        (host.run_dir / "workspace").mkdir(parents=True, exist_ok=True)
+        (host.run_dir / "workspace" / f"hp_{tag}.txt").write_text("HOSTPATH_OK", encoding="utf-8")
+        assert "HOSTPATH_OK" in bash(f"cat {host.run_dir}/workspace/hp_{tag}.txt")
+    if not host._use_bwrap:
+        # an existing host /tmp entry the run does not shadow stays reachable
+        assert "HOST_TMP_SECRET" in bash(f"cat {host_tmp_marker}")
+    # nothing new appeared in the host's /tmp
+    assert not (Path("/tmp") / made).exists()
+    assert not (Path("/tmp") / f"sub_{tag}").exists()
+    leaked = {n for n in set(os.listdir("/tmp")) - host_tmp_before if tag in n}
+    assert leaked == set()
+
+
 def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2203,11 +2988,10 @@ def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
             fr_gr_mc, _, _ = host.execute_part("grep", {"pattern": "SECRET_GRADER", "path": str(meta_dir)})
             assert fr_gr_mc["functionResponse"]["response"]["output"] == "(no matches)"
 
-            # /tmp round-trips cleanly between write/read and bash without touching host /tmp.
-            host.execute_part("write", {"file_path": "/tmp/step_note.txt", "content": f"NOTE_{arm}"})
-            fr_cat_tmp, _, _ = host.execute_part("bash", {"command": "cat /tmp/step_note.txt"})
-            assert f"NOTE_{arm}" in fr_cat_tmp["functionResponse"]["response"]["output"]
-            assert not (Path("/tmp") / "step_note.txt").exists()
+            # The write tool keeps /tmp in the run's private directory, never the host's,
+            # and bash sees that same directory as /tmp: with bwrap through the mount
+            # namespace, without it through the fallback's /tmp rule.
+            _assert_private_tmp_round_trip(host, f"{arm}_default", host_tmp_marker)
 
             if bwrap_sandbox_executable() is not None:
                 assert host._use_bwrap is True
@@ -2245,6 +3029,21 @@ def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
         assert fb_host._use_bwrap is False
         fr_fb, _, _ = fb_host.execute_part("bash", {"command": "cat /task/workspace/w.txt"})
         assert "FB_OK" in fr_fb["functionResponse"]["response"]["output"]
+        # The same /tmp checks on an explicit fallback host, also where bwrap exists.
+        _assert_private_tmp_round_trip(fb_host, "sj_fallback", host_tmp_marker)
+        fb_host.mutation_epoch += 1
+        fr_tmpd, _, _ = fb_host.execute_part(
+            "bash", {"command": "python3 -c 'import tempfile; print(tempfile.gettempdir())'"}
+        )
+        assert str(fb_host.sandbox_tmp) in fr_tmpd["functionResponse"]["response"]["output"]
+        raw_fb_run = cfg.runs_dir / "t_fb__raw"
+        (raw_fb_run / "workspace").mkdir(parents=True, exist_ok=True)
+        raw_fb_host = ToolHost(
+            cfg, raw_fb_run, cfg.runs_dir / "t_fb__raw_meta", {}, dict(os.environ),
+            RunMetrics(task_id="t_fb", task_rel="file/t_fb", category="file", arm="raw", model_id="m"),
+            None, arm="raw", use_bwrap=False,
+        )
+        _assert_private_tmp_round_trip(raw_fb_host, "raw_fallback", host_tmp_marker)
 
         # Broken inline python3 -c quote syntax surfaces 1-line heredoc hint on sj arm.
         fr_syn, _, _ = fb_host.execute_part("bash", {"command": 'python3 -c "x = \'unterminated"'})
@@ -2264,6 +3063,249 @@ def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
     assert "Python package 'pdfplumber'" in doc_report
     assert "Python package 'fitz'" in doc_report
     assert "bwrap sandbox:" in doc_report
+
+
+_DS_SENTINEL = "DS_SENTINEL_7731"
+_MC_SENTINEL = "MC_SENTINEL_4412"
+
+# Every ctx form a model could use to read a file, run a program or reach the host
+# through the bash tool. {p} is the absolute path of a grader-side sentinel, {h} a
+# real run: handle (so a store read is attached to an escape).
+_CTX_ESCAPE_BASH_FORMS = (
+    'ctx run --shell "cat {p}"',
+    "ctx run --shell 'cat {p}'",
+    "ctx run -- cat {p}",
+    "ctx run --json -- cat {p}",
+    "ctx py \"print(open('{p}').read())\"",
+    "ctx py 'print(open(\"{p}\").read())'",
+    "ctx seq 'cat {p}'",
+    "ctx get {p}",
+    "ctx get {p} --lines 1:5",
+    "ctx get repo:{p}",
+    "ctx search SENTINEL {p}",
+    "ctx search {p} SENTINEL",
+    "ctx search {h} SENTINEL --glob {p}",
+    "ctx stats {p}",
+    "ctx diff {p} {p}",
+    "ctx diff {h} {p}",
+    "ctx intake {p}",
+    "ctx intake --chunks {p}",
+    "ctx view {p}",
+    "ctx q 'lines {p}'",
+    "ctx --workspace /tmp get {p}",
+    "ctx get {h} --lines 1:5 # {p}",
+    "ctx get $(cat {p})",
+    "ctx get `cat {p}`",
+    "ctx get {h} --lines 1:5 < {p}",
+    "ctx get {h} & cat {p}",
+    "ctx get {h} <<< $(cat {p})",
+    "FOO=1 ctx get {p}",
+    "ctx get \"{p}\"",
+)
+
+
+def _ctx_retrieve_escape_forms(p: str, h: str) -> list[dict[str, Any]]:
+    return [
+        {"handle": p},
+        {"handle": p, "lines": "1:5"},
+        {"handle": p, "mode": "search", "pattern": "SENTINEL"},
+        {"handle": p, "mode": "stats"},
+        {"handle": h, "mode": "query", "query": f"lines {p}"},
+        {"handle": p, "mode": "query", "query": "count"},
+        {"handle": h, "mode": "search", "pattern": f"--glob={p}"},
+        {"handle": f"repo:{p}"},
+        {"handle": f"blob:{'a' * 12}"},
+    ]
+
+
+@pytest.mark.parametrize("use_bwrap", [None, False], ids=["bwrap_if_available", "fallback"])
+def test_ctx_host_fast_path_serves_only_store_handle_reads(
+    tmp_path: Path, use_bwrap: bool | None
+) -> None:
+    from evals.acciobench.host import bwrap_sandbox_executable
+
+    ds_root = tmp_path / "cab"
+    (ds_root / "secret").mkdir(parents=True)
+    ds_secret = ds_root / "secret" / "expected.json"
+    ds_secret.write_text(f'{{"answer": "{_DS_SENTINEL}"}}\n', encoding="utf-8")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "work", arms=("sj",), entry_gate_bytes=2_048)
+    run_dir = cfg.runs_dir / "t__sj__t1"
+    meta_dir = cfg.runs_dir / "t__sj__t1_meta"
+    (run_dir / "workspace").mkdir(parents=True)
+    (run_dir / "outputs").mkdir(parents=True)
+    mc_secret = meta_dir / "mock_case" / "grader" / "expected.json"
+    mc_secret.parent.mkdir(parents=True)
+    mc_secret.write_text(f"{_MC_SENTINEL}\n", encoding="utf-8")
+    metrics = RunMetrics(task_id="t", task_rel="file/t", category="file", arm="sj", model_id="m")
+    host = ToolHost(cfg, run_dir, meta_dir, {}, dict(os.environ), metrics, None, arm="sj", use_bwrap=use_bwrap)
+    isolated = host._use_bwrap
+    assert isolated == (use_bwrap is None and bwrap_sandbox_executable() is not None)
+
+    sandbox_calls: list[list[str]] = []
+    real_run_in_sandbox = host._run_in_sandbox
+
+    def counting_run_in_sandbox(wd: Path, inner_argv: list[str], **kw: Any) -> Any:
+        sandbox_calls.append(list(inner_argv))
+        return real_run_in_sandbox(wd, inner_argv, **kw)
+
+    host_ctx_calls: list[list[str]] = []
+    real_ctx = host.ctx
+
+    def counting_ctx(args: list[str], timeout: int = 120) -> Any:
+        host_ctx_calls.append(list(args))
+        return real_ctx(args, timeout=timeout)
+
+    host._run_in_sandbox = counting_run_in_sandbox  # type: ignore[method-assign]
+    host.ctx = counting_ctx  # type: ignore[method-assign]
+
+    step = [0]
+
+    # Each call gets a fresh mutation epoch so the readonly dedup never answers in place of routing.
+    def bash(cmd: str) -> str:
+        step[0] += 1
+        host.step = step[0]
+        host.mutation_epoch += 1
+        fr, _, _ = host.execute_part("bash", {"command": cmd})
+        return fr["functionResponse"]["response"]["output"]
+
+    def retrieve(args: dict[str, Any]) -> str:
+        step[0] += 1
+        host.step = step[0]
+        host.mutation_epoch += 1
+        fr, _, _ = host.execute_part("ctx_retrieve", args)
+        return fr["functionResponse"]["response"]["output"]
+
+    flood = bash("seq 1 3000 | sed 's/^/LEDGER_ROW_/'")
+    m = re.search(r"\brun:([0-9a-f]{6,64})\b", flood)
+    assert m is not None, flood[:400]
+    h = f"run:{m.group(1)}"
+
+    # Store-handle reads: answered correctly, by the host fast path, never the sandbox.
+    store_reads: list[tuple[str, str]] = [
+        (f"ctx get {h} --lines 1:3", "LEDGER_ROW_1"),
+        (f"ctx get {h}#stdout --lines 2:4", "LEDGER_ROW_3"),
+        (f"ctx search {h} LEDGER_ROW_2999", "LEDGER_ROW_2999"),
+        (f"ctx stats {h}", ""),
+    ]
+    for cmd, expect in store_reads:
+        n_sb, n_host = len(sandbox_calls), len(host_ctx_calls)
+        out = bash(cmd)
+        assert expect in out, (cmd, out[:300])
+        assert len(sandbox_calls) == n_sb, f"store read went to the sandbox: {cmd}"
+        assert len(host_ctx_calls) == n_host + 1, f"store read not served by the host path: {cmd}"
+    for args, expect in (
+        ({"handle": h, "lines": "5:7"}, "LEDGER_ROW_6"),
+        ({"handle": h, "mode": "search", "pattern": "LEDGER_ROW_2998"}, "LEDGER_ROW_2998"),
+        ({"handle": h, "mode": "stats"}, ""),
+    ):
+        n_sb, n_host = len(sandbox_calls), len(host_ctx_calls)
+        out = retrieve(args)
+        assert expect in out, (args, out[:300])
+        assert len(sandbox_calls) == n_sb and len(host_ctx_calls) == n_host + 1, args
+
+    # Every escape form: never the host path, always the sandbox; with bwrap it cannot see either sentinel.
+    for secret, sentinel in ((ds_secret, _DS_SENTINEL), (mc_secret, _MC_SENTINEL)):
+        for tmpl in _CTX_ESCAPE_BASH_FORMS:
+            cmd = tmpl.format(p=secret, h=h)
+            n_sb, n_host = len(sandbox_calls), len(host_ctx_calls)
+            out = bash(cmd)
+            assert len(host_ctx_calls) == n_host, f"host fast path served: {cmd}"
+            assert len(sandbox_calls) > n_sb, f"not sandboxed: {cmd}"
+            if isolated:
+                assert sentinel not in out, f"sandbox escape through: {cmd}\n{out[:400]}"
+        for args in _ctx_retrieve_escape_forms(str(secret), h):
+            n_sb, n_host = len(sandbox_calls), len(host_ctx_calls)
+            out = retrieve(args)
+            assert len(host_ctx_calls) == n_host, f"host fast path served ctx_retrieve {args}"
+            assert len(sandbox_calls) > n_sb, f"ctx_retrieve not sandboxed: {args}"
+            if isolated:
+                assert sentinel not in out, f"ctx_retrieve escape through {args}\n{out[:400]}"
+
+    # The sandboxed ctx calls still work: a run inside the sandbox sees /task.
+    (run_dir / "workspace" / "note.txt").write_text("INSIDE_OK\n", encoding="utf-8")
+    assert "INSIDE_OK" in bash("ctx run -- cat /task/workspace/note.txt")
+    assert "INSIDE_OK" in bash('ctx run --shell "cat /task/workspace/note.txt"')
+    assert host.ctx_host_fastpath_calls == len(host_ctx_calls)
+
+
+_PLANT_BODY = (
+    "import os, sys\n"
+    "open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'PLANTED_RAN_' + str(os.getpid())), 'w').close()\n"
+    "print('PLANTED_CODE_RAN')\n"
+    "sys.exit(3)\n"
+)
+
+
+def _plant_markers(root: Path) -> list[Path]:
+    return sorted(root.rglob("PLANTED_RAN_*"))
+
+
+@pytest.mark.parametrize("use_bwrap", [None, False], ids=["bwrap_if_available", "fallback"])
+@pytest.mark.parametrize("plant", ["package", "module"])
+def test_ctx_module_launch_never_imports_from_run_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_bwrap: bool | None, plant: str
+) -> None:
+    # A Python interpreter as ctx_bin takes the `<python> -m ctx` branch (prefix and shim).
+    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT / "src"))
+    ds_root = tmp_path / "cab"
+    ds_root.mkdir()
+    cfg = BenchConfig(
+        dataset_root=ds_root, workdir=tmp_path / "work", arms=("sj",),
+        entry_gate_bytes=2_048, ctx_bin=Path(sys.executable),
+    )
+    run_dir = cfg.runs_dir / "t__sj__t1"
+    meta_dir = cfg.runs_dir / "t__sj__t1_meta"
+    (run_dir / "workspace").mkdir(parents=True)
+    (run_dir / "outputs").mkdir(parents=True)
+    if plant == "package":
+        (run_dir / "ctx").mkdir()
+        (run_dir / "ctx" / "__init__.py").write_text(_PLANT_BODY, encoding="utf-8")
+        (run_dir / "ctx" / "__main__.py").write_text(_PLANT_BODY, encoding="utf-8")
+    else:
+        (run_dir / "ctx.py").write_text(_PLANT_BODY, encoding="utf-8")
+
+    # Control: the old launch form does run the planted code from this directory.
+    ctl = subprocess.run(
+        [str(cfg.ctx_bin), "-m", "ctx", "--version"], cwd=str(run_dir),
+        capture_output=True, text=True, timeout=60,
+    )
+    assert "PLANTED_CODE_RAN" in ctl.stdout
+    for mk in _plant_markers(run_dir):
+        mk.unlink()
+
+    metrics = RunMetrics(task_id="t", task_rel="file/t", category="file", arm="sj", model_id="m")
+    host = ToolHost(cfg, run_dir, meta_dir, {}, dict(os.environ), metrics, None, arm="sj", use_bwrap=use_bwrap)
+    assert host._ctx_cmd_prefix[1:] == ["-P", "-m", "ctx"]
+    assert " -P -m ctx " in (host.bin_dir / "ctx").read_text(encoding="utf-8")
+
+    outs: list[str] = []
+    for i, cmd in enumerate(
+        [
+            "seq 1 3000 | sed 's/^/ROW_/'",  # ordinary sj bash: ctx run inside the sandbox
+            "ctx run -- echo SANDBOXED_CTX_OK",  # plain non-store ctx call: sandboxed argv
+            'ctx run --shell "echo SHELL_CTX_OK"',  # non-plain ctx call: sandboxed bash -c
+            "ctx --version | cat",  # the shim on PATH, via the ordinary path
+        ],
+        1,
+    ):
+        host.step = i
+        fr, _, _ = host.execute_part("bash", {"command": cmd})
+        outs.append(fr["functionResponse"]["response"]["output"])
+    m = re.search(r"\brun:([0-9a-f]{6,64})\b", outs[0])
+    assert m is not None, outs[0][:300]
+    host.step = 9
+    fr, _, _ = host.execute_part("bash", {"command": f"ctx get run:{m.group(1)} --lines 1:2"})  # host path
+    outs.append(fr["functionResponse"]["response"]["output"])
+    host.step = 10
+    fr, _, _ = host.execute_part("ctx_retrieve", {"handle": f"run:{m.group(1)}", "lines": "3:4"})
+    outs.append(fr["functionResponse"]["response"]["output"])
+    assert host.ctx_host_fastpath_calls == 2 and host.ctx_sandboxed_calls >= 2
+
+    assert "SANDBOXED_CTX_OK" in outs[1]
+    assert "SHELL_CTX_OK" in outs[2]
+    assert "ROW_1" in outs[4] and "ROW_3" in outs[5]
+    assert not any("PLANTED_CODE_RAN" in o for o in outs), outs
+    assert _plant_markers(run_dir) == []
 
 
 def test_deliverable_contract_and_q4_cross_row_outlier_detection(tmp_path: Path) -> None:

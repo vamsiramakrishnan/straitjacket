@@ -76,7 +76,7 @@ def launch(workspace: Path, task_id: str, prompt: str, *, model: str,
     _write(root / "state.json", state)
     try:
         with (root / "supervisor.log").open("ab") as log:
-            supervisor = subprocess.Popen([sys.executable, "-m", "ctx.collab_sessions", str(root)],
+            supervisor = subprocess.Popen([sys.executable, "-P", "-m", "ctx.collab_sessions", str(root)],
                              cwd=workspace, stdin=subprocess.DEVNULL, stdout=log,
                              stderr=log, start_new_session=True)
             (root / "supervisor.pid").write_text(str(supervisor.pid))

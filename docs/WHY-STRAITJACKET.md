@@ -70,11 +70,18 @@ later result cannot assign the correction to either one. The original design
 mistake was still concrete: denial spent another turn teaching the agent how to
 rerun the command.
 
-The shipped Claude Code path now rewrites recognized noisy commands
-transparently. The Codex path implements and contract-tests the same behavior,
-but still lacks a live CLI receipt. Antigravity has to deny and name the bounded
-replacement because its published hook contract does not permit argument
-replacement.
+The Claude Code path first rewrote recognized noisy commands transparently. That
+was retired: a rewrite could change the command's answer (a glob quoted so it never
+expanded, a recursive `grep` answered by a symbol lookup that returned one of three
+matches), and on Claude Code an `allow` sent with a rewrite overrode the user's deny
+and ask rules. By default ctx now leaves a shell command exactly as written, the host
+decides about it, and the output is bounded after it runs; capture at birth is opt-in
+(`steering = "rewrite"`). The Codex path is contract-tested only and still lacks a live
+CLI receipt. Antigravity first had to deny and name the
+bounded replacement, because its published hook contract listed no argument
+replacement. On `agy` 1.5.5 a hook can rewrite arguments (observed live), so ctx
+now rewrites `run_command` and `read_file` in place and still denies and names the
+command for its other tools.
 
 The lesson was not that agents cannot manage output themselves. Strong agents
 often can.
@@ -177,9 +184,9 @@ Host APIs determine how much can be enforced.
 
 | Host | Before execution | After execution |
 |---|---|---|
-| Claude Code | Rewrites recognized noisy calls | Replaces oversized results |
+| Claude Code | Runs commands as written by default; rewrites only with `steering = "rewrite"` | Replaces oversized results |
 | Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
-| Antigravity CLI | Denies and names the bounded command | Cannot replace output |
+| Antigravity CLI | Rewrites `run_command` and `read_file`; denies and names the bounded command for other tools | Cannot replace output |
 | ctx-owned Antigravity SDK | Uses bounded tools directly | Uses bounded tools directly |
 
 On Antigravity, a verbose connector result can still enter the transcript
@@ -338,7 +345,7 @@ The report refuses records not marked as live provenance.
 
 The current AgentBench `sj` arm is a bundled wrapper intervention, not an
 output-containment ablation. With the default collapse policy it can disallow
-native `Grep` and `Glob`, while also adding guidance, ctx tools, and the proxy.
+native `Grep` and `Glob` (`collapse` now governs only that), while also adding guidance, ctx tools, and the proxy.
 The result therefore mixes two questions:
 
 1. Does bounded output preserve enough evidence?

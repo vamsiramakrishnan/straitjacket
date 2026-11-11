@@ -7,6 +7,7 @@ infer it from ctx's process exit or from a human-facing header.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import csv
 import hashlib
 import io
@@ -339,13 +340,15 @@ def fit_model_view(head: str, body: str, ref: str, max_bytes: int) -> str:
     low, high = 0, len(body)
     while low < high:
         n = (low + high + 1) // 2
-        notice = f"\n[ctx:omitted {total - len(body[:n].encode())} body bytes]\nnext: ctx get {ref}"
-        if len((head + body[:n] + notice).encode()) <= cap:
+        part = clip_redacting(body, n)
+        notice = f"\n[ctx:omitted {total - len(part.encode())} body bytes]\nnext: ctx get {ref}"
+        if len((head + part + notice).encode()) <= cap:
             low = n
         else:
             high = n - 1
-    notice = f"\n[ctx:omitted {total - len(body[:low].encode())} body bytes]\nnext: ctx get {ref}"
-    return head + body[:low] + notice
+    part = clip_redacting(body, low)
+    notice = f"\n[ctx:omitted {total - len(part.encode())} body bytes]\nnext: ctx get {ref}"
+    return head + part + notice
 
 
 _PROJECTION_PROGS = frozenset({

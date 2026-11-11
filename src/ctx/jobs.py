@@ -38,6 +38,9 @@ Single-writer discipline (race containment):
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
+from ctx.selfcmd import module_argv
+
 from ctx import bounds
 
 import json
@@ -241,7 +244,8 @@ def start_job(
     sup_err = (jobdir / "supervisor.err").open("wb")
     try:
         sup = subprocess.Popen(
-            [sys.executable, "-m", "ctx", "job", "_supervise", str(jobdir)],
+            # -P: the cwd is the user's workspace; never import `ctx` from it.
+            [*module_argv("ctx"), "job", "_supervise", str(jobdir)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=sup_err,
@@ -272,14 +276,19 @@ def supervise_main(jobdir_str: str) -> int:
     meta = json.loads((jobdir / "meta.json").read_text(encoding="utf-8"))
     argv = list(meta["argv"])
     shell = bool(meta["shell"])
-    popen_args: Any = argv[0] if shell else argv
+    if shell:
+        from ctx._proc import shell_popen_args
+
+        popen_args, popen_shell = shell_popen_args(argv[0])
+    else:
+        popen_args, popen_shell = argv, False
 
     with (jobdir / "stdout").open("wb") as out_fh, (jobdir / "stderr").open("wb") as err_fh:
         try:
             proc = subprocess.Popen(
                 popen_args,
                 cwd=meta["cwdAbs"],
-                shell=shell,
+                shell=popen_shell,
                 stdout=out_fh,
                 stderr=err_fh,
                 stdin=subprocess.DEVNULL,
@@ -324,7 +333,7 @@ def supervise_main(jobdir_str: str) -> int:
     if meta.get("announce"):
         try:
             subprocess.Popen(
-                [sys.executable, "-m", "ctx", "job", jobdir.name, "--announce"],
+                [*module_argv("ctx"), "job", jobdir.name, "--announce"],
                 cwd=meta["cwdAbs"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -358,7 +367,7 @@ def announce_job(ws: Workspace, store: Store, job_id: str) -> list[dict[str, Any
         if result.get("signal")
         else f"exit {code}"
     )
-    argv = " ".join(str(a) for a in (meta.get("argv") or []))[:80]
+    argv = clip_redacting(" ".join(str(a) for a in (meta.get("argv") or [])), 80)
     short = short_id(manifest["id"])
     return relay.publish(
         ws.root,
@@ -499,7 +508,7 @@ def kill_job(ws: Workspace, store: Store, job_id: str, *, settle_s: float = 8.0)
 
 # ------------------------------------------------------------------ status
 def _clip(line: str) -> str:
-    return line if len(line) <= _CLIP_COLS else line[: _CLIP_COLS - 1] + "…"
+    return line if len(line) <= _CLIP_COLS else clip_redacting(line, _CLIP_COLS - 1) + "…"
 
 
 def _tail_of(lines: list[str], tail: int) -> list[str]:
@@ -565,7 +574,7 @@ def _runtime_s(meta: dict[str, Any]) -> int:
 
 def _command_display(meta: dict[str, Any]) -> str:
     cmd = meta["argv"][0] if meta.get("shell") else " ".join(meta["argv"])
-    return cmd if len(cmd) <= 120 else cmd[:119] + "…"
+    return cmd if len(cmd) <= 120 else clip_redacting(cmd, 119) + "…"
 
 
 def backgrounded_status(store: Store, job_id: str) -> str:

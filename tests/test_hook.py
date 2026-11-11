@@ -239,7 +239,11 @@ def test_codex_plain_allow_emits_no_unsupported_decision():
     assert _to_codex_schema({"decision": "allow"}) == {}
 
 
-def test_codex_rewrite_is_allow_with_updated_input():
+def test_codex_rewrite_is_withheld():
+    """Codex takes a rewrite only as `allow` + `updatedInput`, and its docs do
+    not establish that its approval policy survives a hook allow (on Claude
+    Code the same shape skipped the user's deny and ask rules, live). So the
+    original runs under Codex's own approval; the output gate bounds it."""
     from ctx.hook import _to_codex_schema
 
     out = _to_codex_schema(
@@ -251,9 +255,7 @@ def test_codex_rewrite_is_allow_with_updated_input():
             },
         }
     )
-    hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    assert hso["updatedInput"] == {"command": "ctx run -- pytest -q"}
+    assert out == {}
 
 
 def test_codex_force_ask_degrades_safely_to_deny():

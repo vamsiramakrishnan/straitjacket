@@ -34,7 +34,7 @@ from pathlib import Path
 
 from ctx import pricing
 from ctx.gitstatus import changed_paths
-from ctx.sessiondir import session_reads_path
+from ctx.sessiondir import ledger_file, session_reads_path
 
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "write_to_file", "replace_file_content"}
 
@@ -80,7 +80,7 @@ def _behavioral_anomalies(session_reads_dir: Path) -> dict | None:
     per_sig: dict[str, int] = {}
     try:
         lines = (
-            (session_reads_dir / "reflex-outcomes.jsonl")
+            ledger_file(session_reads_dir, "reflex-outcomes.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
         )
@@ -202,7 +202,7 @@ def _interventions_v2(session_reads_dir: Path) -> dict | None:
     byte-identical. Corrupt lines are skipped individually; never raises."""
     try:
         lines = (
-            (session_reads_dir / "interventions.jsonl")
+            ledger_file(session_reads_dir, "interventions.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
         )

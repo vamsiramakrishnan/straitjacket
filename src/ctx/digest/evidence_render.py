@@ -50,7 +50,7 @@ from ctx.evidence import (
     graph_id,
 )
 from ctx.store import canonical_json
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_bytes, fmt_int, short_id
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_bytes, fmt_int, short_id
 
 CENSUS_BLOB_SCHEMA = "ctx.pytest-census/v1"
 
@@ -120,7 +120,9 @@ def _nbytes(lines: list[str]) -> int:
 def _short_nodeid(nid: str) -> str:
     if "::" not in nid:
         return nid
-    path, rest = nid.split("::", 1)
+    from ctx.textutil import redact_before_transform
+
+    path, rest = redact_before_transform(nid).split("::", 1)
     parts = path.replace("\\", "/").split("/")
     if len(parts) > 2:
         path = "/".join(parts[-2:])
@@ -162,16 +164,16 @@ def _file_key(item: EvidenceItem) -> str:
 
 
 def _row_lines(idx: int, item: EvidenceItem, summaries: str, indent: str) -> list[str]:
-    row = f"{indent}{idx}. {_short_nodeid(item.id)[:EVIDENCE_LINE_CHARS]}  {item.location or '?'} · {item.failure_class or '?'}"
+    row = f"{indent}{idx}. {clip_redacting(_short_nodeid(item.id), EVIDENCE_LINE_CHARS)}  {item.location or '?'} · {item.failure_class or '?'}"
     if summaries in ("one_line", "expanded") and item.summary:
-        row += f" · {item.summary[:120]}"
+        row += f" · {clip_redacting(item.summary, 120)}"
     addr = _addr(item)
     if addr:
         row += f" · {addr}"
     lines = [row]
     if summaries == "expanded":
         for ev in tuple(item.attributes.get("evidence_lines", ()))[:2]:
-            lines.append(indent + "    " + str(ev)[:EVIDENCE_LINE_CHARS])
+            lines.append(indent + "    " + clip_redacting(str(ev), EVIDENCE_LINE_CHARS))
     return lines
 
 
@@ -345,11 +347,11 @@ def _compose(
         shown += 1
         if detail_body:
             for raw in tuple(root.attributes.get("detail_head", ())):
-                lines.append(f"    | {str(raw)[:EVIDENCE_LINE_CHARS]}")
+                lines.append(f"    | {clip_redacting(str(raw), EVIDENCE_LINE_CHARS)}")
 
     # ---- run-context evidence (stderr head, focus spans)
     if env.stderr_head:
-        lines.append(f"  stderr head stderr:L1: {env.stderr_head[:140]}")
+        lines.append(f"  stderr head stderr:L1: {clip_redacting(env.stderr_head, 140)}")
         shown += 1
     for focus_line in env.focus_lines:
         lines.append(focus_line)

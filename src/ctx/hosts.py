@@ -96,10 +96,10 @@ class HostSpec:
     wrapper: str = ""              # ctx.wrap.<wrapper>(...)
     output_substitution: bool = False  # PostToolUse can replace a result (enforced) vs nudge-only
     # PreToolUse can rewrite the tool's arguments before it runs. Claude Code
-    # and Codex both expose `updatedInput`; Antigravity's published PreToolUse
-    # schema has no field for modified arguments, so the birth gate there has
-    # to deny and name the contained command rather than substitute it
-    # transparently (https://antigravity.google/docs/hooks).
+    # and Codex expose `updatedInput`; Antigravity an `overwrite` object that
+    # was verified only for some tools, which ctx.governance.REWRITABLE names.
+    # Where a call cannot be rewritten, the birth gate denies and names the
+    # contained command instead.
     input_substitution: bool = False
     # The dialect name this host's hooks are invoked with
     # (`ctx hook <flavor> pre-tool-use`). Usually the host name; Claude Code's
@@ -182,12 +182,14 @@ _REGISTRY: tuple[HostSpec, ...] = (
         model_env=("ANTIGRAVITY_MODEL", "GEMINI_MODEL"),
         installer="install_antigravity",
         wrapper="wrap_antigravity",
-        # Neither gate can alter the transcript on this host: the published
-        # PostToolUse output schema is `{}` and PreToolUse carries no
-        # `updatedInput`. Containment is a PreToolUse deny that names the
-        # contained command (https://antigravity.google/docs/hooks).
+        # PostToolUse cannot alter the transcript (its only legal output is
+        # `{}`). PreToolUse can: agy 1.5.5 merges an `overwrite` object into
+        # the tool's args before it runs, observed live for run_command and
+        # read_file; ctx.governance.REWRITABLE limits rewriting to those and
+        # every other tool stays deny-and-steer
+        # (https://antigravity.google/docs/hooks).
         output_substitution=False,  # PostToolUse output schema is {} only
-        input_substitution=False,   # no updatedInput in the PreToolUse schema
+        input_substitution=True,    # `overwrite`, per tool (governance.REWRITABLE)
         supports_mcp=True,
         supports_hooks=True,
         unattended=False,

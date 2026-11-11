@@ -75,7 +75,7 @@ def test_small_reads_accumulate_and_flip_past_default_budget(tmp_path):
     assert "ctx search repo:" in reason
     assert "ctx get repo:" in reason
 
-    # Emitters: Claude Code turns the pressured decision into allow+updatedInput.
+    # Emitters: Claude Code turns the pressured decision into updatedInput, no decision.
     # Antigravity has no updatedInput field, so the same decision becomes a deny
     # carrying the reason — the bound is enforced either way, but only one host
     # can apply it without spending a turn.
@@ -85,7 +85,7 @@ def test_small_reads_accumulate_and_flip_past_default_budget(tmp_path):
     assert wire["decision"] == "deny"
     assert "updatedInput" not in wire
     hso = _to_claude_code_schema(dict(d))["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
+    assert "permissionDecision" not in hso  # R1: a rewritten input never carries allow
     assert PRESSURE_FLOOR <= hso["updatedInput"]["limit"] <= PRESSURE_CEILING
 
 

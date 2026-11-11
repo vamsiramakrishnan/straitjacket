@@ -111,16 +111,18 @@ Retrieval remains bounded. If the requested region is too large, `ctx get` retur
 
 | Host | Birth-time containment | Oversized result substitution |
 |---|---|---|
-| Claude Code | Transparent rewrite | Yes |
-| Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
-| Antigravity | Deny with a bounded replacement command | No |
+| Claude Code | Output bounded after the command runs; command not rewritten by default (`steering = "rewrite"` captures at birth) | Yes |
+| Codex | Commands run as written under Codex's own approval; rewrites withheld | Implemented and contract-tested; live CLI receipt pending |
+| Antigravity | Rewrite by default (it cannot replace output): `run_command` and `read_file` in place when the payload carries `hookEventName` (added in `agy` 1.5.4; observed on 1.5.5 only); deny and name the bounded command for other tools | No |
 | Hermes, OMP, OpenCode | Native plugin argument rewrite | Text-output replacement; contract-tested |
 | DSH | Deny with a bounded replacement command | Native text-output replacement; contract-tested |
 
-Antigravity's published PreToolUse contract cannot modify arguments. Its
-PostToolUse contract cannot replace tool output. straitjacket can prevent a
-known command flood before execution, but a verbose connector result can still
-enter the transcript unchanged.
+On Antigravity (observed on `agy` 1.5.5) a PreToolUse hook can rewrite a call's
+arguments, and ctx does so for `run_command` and `read_file`; every other read or
+search tool is denied with the bounded command named. Its PostToolUse hook accepts
+only an empty reply and is not given the tool's output, so it cannot replace
+output. straitjacket can prevent a known command flood before execution, but a
+verbose connector result can still enter the transcript unchanged.
 
 See [Host capabilities](HOST-CAPABILITIES.md) for the full matrix.
 
@@ -146,10 +148,13 @@ ctx doctor
 5. records a content-free fingerprint of the managed setup surfaces for fast
    reruns.
 
-It preserves unrelated user-owned settings. It merges JSON settings where safe,
-refreshes ctx-managed files and marker-delimited blocks, and refuses to rewrite
-user-owned Codex TOML. A matching readiness receipt can skip repeated writes;
-use `ctx setup --repair` to force all checks and repair. Use `ctx setup --all` to
+It preserves unrelated user-owned settings. Codex TOML and OpenCode JSON/JSONC
+are edited through parsed source spans: comments, other integrations and
+unrelated formatting stay in place. Changes to a pre-existing configuration
+are previewed before the first write; rerun with `--apply` to accept safe
+additions. Explicit conflicts still refuse, including `hooks = false` or a
+different `ctx-harness` server. A matching readiness receipt can skip repeated
+writes; use `ctx setup --repair` to force all checks and repair owned entries. Use `ctx setup --all` to
 prepare all registered vendor integrations; `antigravity-sdk` remains an
 explicit opt-in. Hermes needs its installed CLI to activate profile settings;
 DSH needs the generated `--patch` at launch. See
@@ -165,32 +170,57 @@ Setup reports host-configuration writes. The persistent host configuration is:
 | Codex | ctx entries in `.codex/config.toml` and `.codex/hooks.json`, a managed block in `AGENTS.md` |
 | Hermes | Active profile's MCP entry and enabled `straitjacket` plugin; `.ctx/hosts/hermes.json` records the recipe |
 | OMP | `mcpServers.ctx-harness` in `.omp/mcp.json` |
-| OpenCode | `mcp.ctx-harness` in `opencode.json`; existing JSONC requires a manual merge |
+| OpenCode | `mcp.ctx-harness` in the existing `opencode.json` or `opencode.jsonc`, plus `.opencode/plugins/straitjacket.js`; two project configs refuse |
 | DSH | `.ctx/hosts/dsh.cordis.patch.yml`, loaded with `--patch` |
 
 Setup also writes a content-free readiness receipt to
 `.ctx-session-reads/setup.json`; this is not host configuration.
 
-If a user-owned Codex configuration cannot be merged safely, setup prints the
-MCP table instead of replacing the file. Add that table, and ensure the existing
-`[features]` table contains `hooks = true` (create the table if absent; do not
-duplicate it). Then rerun `ctx setup`. Preview one host without writing:
+Preview the exact changes to your existing configuration without writing:
 
 ```bash
-ctx wrap codex --print-config
+ctx setup --host codex --host opencode --preview
+ctx setup --host codex --host opencode --apply
+ctx doctor
 ```
 
-To remove the integration, remove only the ctx-managed directory, entries, and
-marker-delimited blocks. Keep unrelated settings. The exact host-by-host steps
-are in [Troubleshooting](TROUBLESHOOTING.md#how-do-i-turn-the-harness-off-or-uninstall-it).
+`--preview` requires explicit Codex/OpenCode hosts. It creates no files or
+readiness receipt. The default `ctx setup` also stops for review before editing
+a pre-existing configuration. Fresh installs retain the existing setup flow.
+`ctx wrap codex --print-config` still renders a generic configuration; use
+`--preview` for a diff against your actual files.
 
-Configure one host only:
+A conflict prints a unified diff naming the exact key and proposed value.
+`--apply` does not override conflicting user settings. Reconcile those entries
+using the diff, then rerun preview. Duplicate keys, invalid syntax, symlinks
+and ambiguous config files refuse with a diagnostic. A parse error must be
+fixed before a trustworthy structural diff can be generated.
+
+Setup never writes through a symlink: for any host, a target that is a link, or that
+sits behind a linked directory leaving the workspace, is not written, and the message
+names the file (for example "did not update CLAUDE.md: …: it is a symlink; ctx never
+writes through a link").
+
+Setup records individual contributions in `.ctx/host-config.json`; the
+readiness receipt remains content-free. Repair updates a previously owned
+value only when its value and source still match the installed contribution,
+and restores missing contributions. Comments added inside an owned value are
+user edits; repair/removal refuses to overwrite them and shows the exact diff. A banner comment alone never authorizes replacing a
+whole file. Existing matching entries are not claimed by setup.
+
+To remove contributions introduced by this flow:
 
 ```bash
-ctx wrap antigravity
-ctx wrap claude
-ctx wrap codex
+ctx setup --host codex --host opencode --remove
+ctx setup --host codex --host opencode --remove --apply
 ```
+
+Removal defaults to a preview. An untouched configuration is restored exactly;
+if unrelated settings changed afterward, removal deletes only owned entries
+and retains those settings and comments. Modified owned values refuse removal.
+Pre-existing unowned entries, workspace policy, and captured artifacts remain.
+For older installs without ownership records, use the
+[manual removal steps](TROUBLESHOOTING.md#how-do-i-turn-the-harness-off-or-uninstall-it).
 
 ## Choose the command by work shape
 

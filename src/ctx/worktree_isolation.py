@@ -41,7 +41,12 @@ def _git(root: Path, *args: str, input_bytes: bytes | None = None) -> subprocess
 
 
 def _git_error(proc: subprocess.CompletedProcess) -> str:
-    return proc.stderr.decode("utf-8", "replace").strip()[:500] or "git command failed"
+    from ctx.textutil import clip_redacting
+
+    # stderr can quote a remote URL with credentials; it reaches the model in
+    # error messages, so the cut is redaction-aware.
+    text = proc.stderr.decode("utf-8", "replace").strip()
+    return clip_redacting(text, 500) or "git command failed"
 
 
 def normalize_targets(targets: tuple[str, ...]) -> tuple[str, ...]:

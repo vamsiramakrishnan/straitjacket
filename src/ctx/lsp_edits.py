@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlparse
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 from ctx import anchors, lsp
 from ctx.edit_transactions import EditTransactionError, create_edit_plan
 
@@ -136,7 +137,7 @@ def propose(ws, store, rel: str, operation: str, *, line=1, col=1, new_name=None
             raise EditTransactionError('server returned more than 64 code actions; narrow the target')
         if action_index is None:
             return {'server': result['server'], 'actions': [
-                {'index': i, 'title': str(a.get('title', ''))[:200],
+                {'index': i, 'title': clip_redacting(str(a.get('title', '')), 200),
                  'plannable': bool(a.get('edit')) and not a.get('command') and not a.get('disabled')}
                 for i, a in enumerate(actions)]}
         if type(action_index) is not int or not 0 <= action_index < len(actions):

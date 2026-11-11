@@ -29,6 +29,7 @@ loop is tested without a live CLI.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import contextlib
 import json
 import os
@@ -1802,7 +1803,7 @@ def run_route(
             return NodeOutcome(
                 node_id=a.node.id, host_name=f"{host.name}/{model.id}",
                 status="ok" if cls.reason == "done" else "failed", checkpoint_ref=ref,
-                detail=(tail[-1][:200] if tail else "(no output)"), escalated_to=escalated,
+                detail=(clip_redacting(tail[-1], 200) if tail else "(no output)"), escalated_to=escalated,
                 exit_code=code, usage_attempts=tuple(node_usage), handoff_policy=handoff_strategy,
                 isolation="git_worktree" if use_isolation else "shared_workspace",
                 changed_paths=patch.changed_paths if patch else (),
@@ -2092,7 +2093,7 @@ def run_route(
                 else:
                     execution.outcome.merge_status = "aborted"
                     execution.stderr = "isolated wave aborted because another patch conflicted"
-                execution.outcome.detail = execution.stderr[:200]
+                execution.outcome.detail = clip_redacting(execution.stderr, 200)
                 merge_failed.append(execution)
         elif isolated_execs:
             ok, detail = apply_patches(
@@ -2104,7 +2105,7 @@ def run_route(
                     execution.outcome.status = "failed"
                     execution.outcome.exit_code = 1
                     execution.stderr = f"isolated patch apply failed: {detail}"
-                    execution.outcome.detail = execution.stderr[:200]
+                    execution.outcome.detail = clip_redacting(execution.stderr, 200)
                     merge_failed.append(execution)
 
         results: list[NodeOutcome] = []

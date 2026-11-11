@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
         if args[2] == "user-prompt-submit":
             from ctx.task_context import main_prompt
 
-            return main_prompt()
+            return main_prompt(flavor=args[1])
         if args[2] == "pre-tool-use":
             from ctx.hook import main_pre_tool_use
 
@@ -27,6 +27,10 @@ def main(argv: list[str] | None = None) -> int:
             from ctx.hook import main_post_tool_use
 
             return main_post_tool_use(flavor=args[1])
+        if args[2] == "post-tool-use-failure":
+            from ctx.hook import main_post_tool_use_failure
+
+            return main_post_tool_use_failure(flavor=args[1])
         # Antigravity has no SessionStart event; its pre-invocation hook is the
         # equivalent slot and shares the pre-flight body.
         if args[2] in ("session-start", "pre-invocation"):
@@ -58,7 +62,13 @@ def main(argv: list[str] | None = None) -> int:
         if "--workspace" in args:
             i = args.index("--workspace")
             ws = args[i + 1] if i + 1 < len(args) else None
-        return serve_gateway(ws or os.getcwd())
+        # --backends <file>: a per-session backend snapshot (from `ctx wrap
+        # --surface <profile>`); reveal state then stays in memory.
+        backends = None
+        if "--backends" in args:
+            i = args.index("--backends")
+            backends = args[i + 1] if i + 1 < len(args) else None
+        return serve_gateway(ws or os.getcwd(), backends_file=backends)
 
     # ------------------------------------------------- supervisor fast path
     # Hidden: `ctx job _supervise <jobdir>` is spawned detached by
@@ -175,6 +185,8 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "stats": ("retrieve", "cmd_stats", True),
     "diff": ("retrieve", "cmd_diff", True),
     "image": ("binary", "cmd_image", True),
+    "intake": ("intake", "cmd_intake", True),
+    "view": ("view", "cmd_view", True),
     "map": ("retrieve", "cmd_map", True),
     "def": ("retrieve", "cmd_def", True),
     "refs": ("retrieve", "cmd_refs", True),
@@ -205,6 +217,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "debt": ("admin", "cmd_debt", True),
     "policy": ("admin", "cmd_policy", True),
     "ladders": ("admin", "cmd_ladders", True),
+    "coverage": ("coverage", "cmd_coverage", True),
     "orchestrate": ("hosts", "cmd_orchestrate", True),
     "collab": ("collab", "cmd_collab", True),
     "compress": ("compress", "cmd_compress", True),
@@ -220,6 +233,31 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
 
 
 # --------------------------------------------------------------- full CLI
+#: Verbs that print text stored by an EARLIER call (ledger notes and goals,
+#: relay messages): their whole stdout passes the model-visible pipeline
+#: once before it is printed (textutil's "what is redacted" statement).
+_STORED_TEXT_VERBS = frozenset({"task", "relay"})
+
+
+def _run_redacting_stdout(handler, ws, ns) -> int:
+    import io
+
+    from ctx.textutil import model_visible
+
+    buf = io.StringIO()
+    real = sys.stdout
+    sys.stdout = buf
+    try:
+        code = handler(ws, ns)
+    finally:
+        sys.stdout = real
+    out = buf.getvalue()
+    if out:
+        text = model_visible(out.rstrip("\n"), ws.config.redaction)
+        sys.stdout.write(text + "\n")
+    return code
+
+
 def _main_slow(args: list[str]) -> int:
     """The front door, then parse, then one handler. Every command is a row
     in _COMMANDS; nothing is special-cased here."""
@@ -239,7 +277,15 @@ def _main_slow(args: list[str]) -> int:
             return 2  # pragma: no cover
         if not wants_workspace:
             return handler(ns)
-        return handler(resolve_workspace(ns.workspace), ns)
+        ws = resolve_workspace(ns.workspace)
+        # Every clip of model-visible text honours this workspace's
+        # [redaction] policy (textutil.clip_redacting reads the scope).
+        from ctx.textutil import redaction_scope
+
+        with redaction_scope(ws.config.redaction):
+            if ns.cmd in _STORED_TEXT_VERBS:
+                return _run_redacting_stdout(handler, ws, ns)
+            return handler(ws, ns)
     except WorkspaceError as e:
         print(f"ctx: workspace error: {e}", file=sys.stderr)
         return 2
@@ -399,6 +445,10 @@ def _build_parser():
         "--repair", action="store_true",
         help="bypass the ready receipt, refresh managed config, and verify again",
     )
+    config_mode = p_setup.add_mutually_exclusive_group()
+    config_mode.add_argument("--preview", action="store_true", help="show exact Codex/OpenCode configuration diffs without writing")
+    config_mode.add_argument("--apply", action="store_true", help="apply safe configuration additions after preview; conflicts still refuse")
+    p_setup.add_argument("--remove", action="store_true", help="preview removal of owned Codex/OpenCode contributions; add --apply to remove")
     p_setup.add_argument("--acp", action="store_true", help="configure ACP orchestration for one --host")
     p_setup.add_argument("--acp-model", help="exact model id advertised by the ACP agent")
     p_setup.add_argument("--acp-command", help="override ACP command as a JSON argv array")
@@ -477,6 +527,76 @@ def _build_parser():
         help="digest <file>... or diff <before> <after>",
     )
     p_image.add_argument("files", nargs="+", help="workspace-relative file path(s)")
+
+    p_intake = sub.add_parser(
+        "intake",
+        help="store pasted text, a file, stdin or the clipboard; print a short digest and a handle",
+    )
+    p_intake.add_argument(
+        "path", nargs="?", metavar="PATH",
+        help="workspace file to store, or - for stdin (default when stdin is piped)",
+    )
+    p_intake.add_argument("--label", help="what this is (paste, log, spec…); part of its identity")
+    p_intake.add_argument("--name", help="display name, e.g. the original file name")
+    p_intake.add_argument("--focus", help="terms the digest should favour")
+    p_intake.add_argument("--json", action="store_true", help="print the ctx.intake/v1 receipt")
+    p_intake.add_argument("--clip", action="store_true", help="read the system clipboard")
+    p_intake.add_argument(
+        "--copy", action="store_true",
+        help="put the digest on the clipboard, to paste instead of the payload",
+    )
+    p_intake.add_argument(
+        "--chunks", metavar="handle",
+        help="list every chunk of a stored text handle (paged), instead of storing anything",
+    )
+    p_intake.add_argument(
+        "--from", dest="start", type=int, default=1, metavar="N",
+        help="with --chunks: first chunk number to list",
+    )
+    p_view = sub.add_parser(
+        "view",
+        help="overview-first look at an image or video, with zoom on demand",
+        description=(
+            "Look at an image, screen recording or video without paying for "
+            "every pixel. With no selector an image gives a downscaled "
+            "overview with a labelled grid, and a video gives a contact sheet "
+            "of timestamped frames plus a metadata census. Zoom reads the "
+            "ORIGINAL pixels or frames. The result is a short digest, a "
+            "workspace-relative file to open, and exact `next:` commands. "
+            "Needs the `image` extra (Pillow) for images and ffmpeg for video; "
+            "a missing engine is reported, never a traceback."
+        ),
+    )
+    p_view.add_argument(
+        "target",
+        help="a file inside the workspace, or a blob:<id> / run:<id>[#stream] address")
+    p_view.add_argument("--fit", type=int, metavar="N",
+                        help="longest edge in pixels (image/frame) or sheet width")
+    p_view.add_argument("--grid", metavar="RxC",
+                        help="rows x columns of the labelled grid, e.g. 3x4")
+    p_view.add_argument("--cell", metavar="C",
+                        help="crop a grid cell (B2) or range (A1:B2) from the original")
+    p_view.add_argument("--region", metavar="R",
+                        help="crop pixels x,y,w,h or percentages x%%,y%%,w%%,h%% "
+                             "from the original")
+    p_view.add_argument("--at", metavar="T",
+                        help="one video frame at T: seconds (90) or clock (1:30 = 90s)")
+    p_view.add_argument("--range", metavar="A-B",
+                        help="a time range, each side seconds or clock: 2-9 or "
+                             "1:23-1:30 ('A:B' is refused as ambiguous); the "
+                             "sheet or scenes cover just this")
+    p_view.add_argument("--every", type=float, metavar="S",
+                        help="with --range: a frame every S seconds")
+    p_view.add_argument("--count", type=int, metavar="N",
+                        help="with --range or --sheet: N evenly spaced frames")
+    p_view.add_argument("--sheet", action="store_true",
+                        help="contact sheet of timestamped frames (video default)")
+    p_view.add_argument("--scenes", action="store_true",
+                        help="timestamps where the picture changes sharply")
+    p_view.add_argument("--subs", action="store_true",
+                        help="extract an embedded text subtitle track")
+    p_view.add_argument("--json", action="store_true",
+                        help="emit the same facts as JSON (schema ctx.view/v1)")
 
     p_edit = sub.add_parser(
         "edit", help="plan, preview, and safely apply anchored line edits"
@@ -807,6 +927,21 @@ def _build_parser():
                             "value per workspace, so their distribution is only "
                             "visible across a corpus")
 
+    from ctx.governance import HOSTS as _GOV_HOSTS
+
+    p_cov = sub.add_parser(
+        "coverage",
+        help="per host, which tool calls ctx governs and by which route, and "
+             "which recorded calls escaped it",
+    )
+    p_cov.add_argument("--json", action="store_true", dest="coverage_json",
+                       help="machine-readable")
+    p_cov.add_argument("--host", dest="coverage_host", choices=_GOV_HOSTS, default=None,
+                       help="show one host dialect only")
+    p_cov.add_argument("--session", dest="coverage_session", metavar="ID", default=None,
+                       help="observed calls for one session id, or 'last' for the newest "
+                            "(default: every session on record)")
+
     p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
     p_map.add_argument("--budget", type=int, default=600, help="token budget")
     p_map.add_argument("--focus", help="boost files whose path or symbols match")
@@ -1069,6 +1204,11 @@ def _build_parser():
     p_wrap.add_argument(
         "--print-config", action="store_true", dest="print_config",
         help="print the host configuration instead of launching",
+    )
+    p_wrap.add_argument(
+        "--surface", dest="surface", default=None, metavar="auto|off|PROFILE",
+        help="launch-time capability-surface plan for `wrap claude` "
+        "(default: [surface] wrap in ctx.toml, else auto)",
     )
     p_wrap.add_argument("agent_args", nargs=argparse.REMAINDER, help="-- <agent args...>")
 

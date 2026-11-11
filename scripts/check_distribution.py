@@ -31,6 +31,8 @@ REQUIRED_FILES = {
     "ctx/acp.py",
     "ctx/deliverables.py",
     "ctx/residence.py",
+    "ctx/config_edit.py",
+    "ctx/host_config.py",
     "ctx/sdk.py",
     "ctx/toolresult.py",
     "ctx/tooltelemetry.py",
@@ -200,6 +202,27 @@ try:
         assert resumed.perform('observe', 'fixture.observe', {}, lambda timeout: None)['answer'] == 42
 finally:
     store.close()
+""")
+
+            _run(python, clean_root, "-c", """
+import pathlib, shlex, sys
+from ctx.host_config import plan_configuration
+root = pathlib.Path('host-config-workspace').resolve()
+(root / '.codex').mkdir(parents=True)
+(root / '.codex/config.toml').write_text('# keep comment\\nmodel = "fixture"\\n')
+(root / 'opencode.jsonc').write_text('{ // keep comment\\n "model": "fixture",\\n}')
+def files():
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+before = files()
+plan = plan_configuration(root, ['codex', 'opencode'], exe=shlex.join([sys.executable, '-m', 'ctx']))
+assert not plan.blockers, plan.render()
+assert files() == before
+plan.apply()
+assert not plan_configuration(root, ['codex', 'opencode'], exe=shlex.join([sys.executable, '-m', 'ctx'])).changes
+remove = plan_configuration(root, ['codex', 'opencode'], remove=True)
+assert not remove.blockers, remove.render()
+remove.apply()
+assert files() == before
 """)
 
             for host in ("antigravity", "claude", "codex", "hermes", "omp", "opencode", "dsh"):

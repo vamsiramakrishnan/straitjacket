@@ -54,6 +54,52 @@ def _emit(
     return bounded(text, budget_tokens, continuation, truncation_continuation=fallback)
 
 
+#: Bytes read either side of a returned range so a secret crossing its edge
+#: is judged whole: the regex context (as bytes, 4 per char at most) after,
+#: and the private-key look-behind before.
+def _edge_context_bytes() -> tuple[int, int]:
+    from ctx.textutil import PEM_LOOKBEHIND_CHARS, REDACTION_CONTEXT_CHARS, TOKEN_RUN_SCAN_CHARS
+
+    before = 4 * max(REDACTION_CONTEXT_CHARS, PEM_LOOKBEHIND_CHARS, TOKEN_RUN_SCAN_CHARS)
+    after = 4 * max(REDACTION_CONTEXT_CHARS, TOKEN_RUN_SCAN_CHARS)
+    return before, after
+
+
+def edge_masked_bytes(read, start: int, end: int, total: int, policy, *, exact: bool = False) -> str:
+    """Bytes ``[start, end)`` (0-based) of an artifact, decoded, with every
+    secret that CROSSES the range's edges blanked at the same width.
+
+    Every range ctx returns -- ``--bytes``, ``--lines``, ``--records``,
+    ``--span``, and the continuation windows ctx prints for them -- has
+    edges somebody chose, often ctx itself, and a secret cut by an edge is
+    recognized by the emission pass on neither side: the head of a token in
+    one answer and its tail in the next reassemble it. So the range is
+    judged with a bounded amount of the artifact around it
+    (:func:`_edge_context_bytes`) and the crossing part is blanked with
+    ``*`` -- one per byte, newlines kept -- so the answer's declared width,
+    byte count and line count do not move and continuations still tile the
+    artifact. Secrets wholly inside are left to the emission pass.
+
+    ``read(a, b)`` returns bytes ``[a, b)``; ``exact`` decodes with the
+    byte-exact error handler (``--bytes``), else with replacement.
+    """
+    from ctx.textutil import decode_exact, edge_masked
+
+    before, after = _edge_context_bytes()
+    lo, hi = max(0, start - before), min(total, end + after)
+    raw = read(lo, hi)
+    dec = decode_exact if exact else (lambda b: b.decode("utf-8", "replace"))
+    pre, mid, post = dec(raw[: start - lo]), dec(raw[start - lo: end - lo]), dec(raw[end - lo:])
+    return edge_masked(pre, mid, post, policy)
+
+
+def blob_reader(store: Store, blob_hash: str):
+    """``read(a, b)`` over a stored blob by seek (bounded memory)."""
+    def read(a: int, b: int) -> bytes:
+        return _read_bytes_range(store, blob_hash, a + 1, b)
+    return read
+
+
 def _parse(ref_text: str) -> Ref:
     return parse_ref(ref_text)
 

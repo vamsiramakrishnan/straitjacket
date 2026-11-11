@@ -10,6 +10,7 @@ span-tagged, so evidence stays resolvable after the worktree changes.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import os
 import re
 from pathlib import Path
@@ -599,7 +600,7 @@ def cmd_refs(
     scope_note = f" · path {scope_path}" if scope_path else ""
     out = [f"[ctx refs {symbol}{scope_note} · engine {label}]"]
     for (rel, line), text in shown:
-        out.append(f"repo:{rel}:L{line}: {text[:EVIDENCE_LINE_CHARS]}")
+        out.append(f"repo:{rel}:L{line}: {clip_redacting(text, EVIDENCE_LINE_CHARS, ws.config.redaction)}")
     out.append("coverage:")
     out.append(
         f"  sites: {fmt_int(len(ordered))} · shown: {fmt_int(len(shown))}"
@@ -653,7 +654,8 @@ def _pyflakes_diags(
 
     try:
         proc = subprocess.run(
-            [_sys.executable, "-m", "pyflakes", *rels],
+            # -P: run the installed pyflakes, never a `pyflakes` the repo plants.
+            [_sys.executable, "-P", "-m", "pyflakes", *rels],
             cwd=ws.root,
             capture_output=True,
             timeout=120,
@@ -726,7 +728,7 @@ def cmd_diag(store: Store, ws: Workspace, path: str | None = None) -> str:
         counts = " · ".join(f"{sev} {fmt_int(by_sev[sev])}" for sev in sorted(by_sev))
         out.append(f"diagnostics (exact): {fmt_int(len(diags))} · {counts}")
         for rel, line, _, msg in diags[:10]:
-            out.append(f"repo:{rel}:L{line}: {msg[:EVIDENCE_LINE_CHARS]}")
+            out.append(f"repo:{rel}:L{line}: {clip_redacting(msg, EVIDENCE_LINE_CHARS, ws.config.redaction)}")
         if len(diags) > 10:
             out.append(f"… +{fmt_int(len(diags) - 10)} more diagnostics")
     else:

@@ -120,7 +120,7 @@ def run_doctor(config: BenchConfig) -> tuple[bool, list[str]]:
     # 2. Straitjacket `ctx` binary / module
     try:
         ctx_bin = resolve_ctx_bin(config.ctx_bin)
-        cmd = [str(ctx_bin), "-m", "ctx", "--version"] if "python" in ctx_bin.name.lower() else [str(ctx_bin), "--version"]
+        cmd = [str(ctx_bin), "-P", "-m", "ctx", "--version"] if "python" in ctx_bin.name.lower() else [str(ctx_bin), "--version"]
         cp = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         ver = (cp.stdout or cp.stderr).strip().splitlines()[0] if (cp.stdout or cp.stderr).strip() else "ok"
         if cp.returncode == 0:
@@ -213,7 +213,7 @@ def run_doctor(config: BenchConfig) -> tuple[bool, list[str]]:
         lines.append(f"[OK] bwrap sandbox: {bwrap_bin} (mount + PID namespace isolation active)")
     else:
         lines.append(
-            "[WARN] bwrap sandbox unavailable (falling back to path/env confinement; "
+            "[WARN] bwrap sandbox: unavailable (falling back to path/env confinement; "
             "install bubblewrap on Linux for mount + PID namespace isolation)"
         )
 

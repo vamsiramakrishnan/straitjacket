@@ -11,6 +11,30 @@ from ctx.commands.emit import (
 )
 
 
+def _caller_cwd(ws, ns) -> str | None:
+    """Where the command runs: ``--cwd`` (relative to the workspace) when
+    given, else the directory ``ctx run`` was invoked from -- exactly where
+    the command would have run without ctx. A hook rewrite is executed by the
+    host's shell in the agent's current directory, so that is this process's
+    working directory.
+
+    Outside the workspace (reachable only when the workspace was named
+    explicitly) there is no current directory inside it: the workspace root,
+    as before. The hook never rewrites a call made from outside the
+    workspace, so a rewritten command never moves."""
+    if getattr(ns, "cwd", None):
+        return ns.cwd
+    import os
+    from pathlib import Path
+
+    try:
+        rel = Path(os.getcwd()).resolve().relative_to(ws.root.resolve())
+    except (OSError, ValueError):
+        return None
+    text = rel.as_posix()
+    return None if text in ("", ".") else text
+
+
 def cmd_run(ws, ns) -> int:
     from ctx.digest import render_run_digest
     from ctx.execution import ExecutionError, run_capture
@@ -34,6 +58,7 @@ def cmd_run(ws, ns) -> int:
         print("ctx run: --json requires a foreground run without --passthrough", file=sys.stderr)
         return 2
 
+    ns.cwd = _caller_cwd(ws, ns)
     if ns.bg or ns.bg_after is not None:
         return _run_bg(ws, store, ns, command)
 
@@ -147,8 +172,15 @@ def cmd_run(ws, ns) -> int:
         from ctx.reflex import DENSIFY_HEADER
 
         digest = DENSIFY_HEADER + "\n" + digest
+    note = None
+    if ns.shell:
+        from ctx._proc import capture_shell_choice
+
+        note = capture_shell_choice()[1]
     if verbatim:
-        return _emit_passthrough(ws, store, manifest)
+        return _emit_passthrough(ws, store, manifest, note=note)
+    if note:
+        digest = digest.rstrip("\n") + "\n" + note
     rc = _emit_run_digest(ws, digest, manifest, store=store, signature=sig)
     # Under a hook rewrite the host renders our exit status as the command's.
     # ctx's own `3` ("the thing you asked about failed") is right for a human
@@ -187,9 +219,10 @@ def _passthrough_fits(ws, manifest: dict) -> bool:
         return False
 
 
-def _emit_passthrough(ws, store, manifest: dict) -> int:
+def _emit_passthrough(ws, store, manifest: dict, note: str | None = None) -> int:
     """Print the captured output verbatim (redacted like a digest would be),
-    then the run handle on one line so the artifact stays retrievable."""
+    then the run handle on one line so the artifact stays retrievable.
+    ``note`` (one line) says the shell was not one the host would use."""
     from ctx.digest.base import DigestContext
     from ctx.textutil import sanitize_for_model, short_id, write_exact
 
@@ -198,7 +231,7 @@ def _emit_passthrough(ws, store, manifest: dict) -> int:
     text = "".join(p if p.endswith("\n") else p + "\n" for p in parts)
     text, _redactions = sanitize_for_model(text, ws.config.redaction)
     code = _native_exit(manifest)
-    emitted = text + f"[ctx run:{short_id(manifest['id'])} · exit {code}]"
+    emitted = text + (note + "\n" if note else "") + f"[ctx run:{short_id(manifest['id'])} · exit {code}]"
     from ctx.retrieval import record_telemetry
     record_telemetry(store, "run", sum(s["bytes"] for s in manifest["streams"].values()),
                      len(emitted.encode("utf-8")) + 1)

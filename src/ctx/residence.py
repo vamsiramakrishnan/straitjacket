@@ -26,6 +26,7 @@ a sliding window on every turn invalidates prefix caching on every step.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting, elide_redacting, tail_redacting  # redaction-aware clips
 from collections.abc import Callable, Sequence
 import hashlib
 import json
@@ -108,9 +109,9 @@ def extract_mutation_receipts(output_text: str) -> list[str]:
             if len(groups) == 2:
                 label = f"{groups[0]} ({groups[1]})"
             elif len(groups) == 1:
-                label = " ".join(groups[0].split())[:110]
+                label = clip_redacting(" ".join(groups[0].split()), 110)
             else:
-                label = " ".join(m.group(0).split())[:80]
+                label = clip_redacting(" ".join(m.group(0).split()), 80)
             if label and label not in seen:
                 seen.add(label)
                 receipts.append(label)
@@ -160,7 +161,7 @@ def _order_verified_notes(notes: Sequence[str]) -> list[str]:
     facts: list[str] = []
     seen: set[str] = set()
     for raw in notes:
-        cleaned = " ".join(str(raw or "").splitlines()).strip()[:280]
+        cleaned = clip_redacting(" ".join(str(raw or "").splitlines()).strip(), 280)
         if not cleaned or not _is_fact_bearing_state_note(cleaned) or cleaned in seen:
             continue
         seen.add(cleaned)
@@ -212,9 +213,9 @@ def _extract_computed_receipts(output_text: str) -> list[str]:
         if not s:
             continue
         if s.startswith(("[data-shape:", "[write-receipt:", "[section:", "[section-receipt:")):
-            item = s[:140]
+            item = clip_redacting(s, 140)
         elif _COMPUTED_KV_SUMMARY_RE.match(s):
-            item = s[:100]
+            item = clip_redacting(s, 100)
         else:
             continue
         if item not in seen:
@@ -231,7 +232,7 @@ def _extract_deliverable_contract_from_contents(
     """Resolve explicit ``deliverable_contract`` or extract ``[deliverable-contract]`` from ``contents[0]``."""
     explicit = str(deliverable_contract or "").strip()
     if explicit:
-        return explicit[:600]
+        return clip_redacting(explicit, 600)
     if not contents or not isinstance(contents[0], dict):
         return ""
     for p in contents[0].get("parts") or []:
@@ -239,7 +240,7 @@ def _extract_deliverable_contract_from_contents(
             txt = str(p.get("text") or "")
             m = _DELIVERABLE_CONTRACT_RE.search(txt)
             if m:
-                return " ".join(m.group(1).strip().splitlines())[:600]
+                return clip_redacting(" ".join(m.group(1).strip().splitlines()), 600)
     return ""
 
 
@@ -259,13 +260,13 @@ def _inject_compaction_recap(
     dedup_receipts: list[str] = []
     seen_r: set[str] = set()
     for r in computed_receipts:
-        rs = " ".join(str(r or "").splitlines()).strip()[:140]
+        rs = clip_redacting(" ".join(str(r or "").splitlines()).strip(), 140)
         if rs and rs not in seen_r:
             seen_r.add(rs)
             dedup_receipts.append(rs)
     recent_receipts = dedup_receipts[-10:]
     recent_muts = [str(m).strip() for m in (mutations or ()) if str(m).strip()][-12:]
-    contract_str = " ".join(str(deliverable_contract or "").splitlines()).strip()[:600]
+    contract_str = clip_redacting(" ".join(str(deliverable_contract or "").splitlines()).strip(), 600)
 
     recap_lines: list[str] = []
     if recent_muts:
@@ -325,7 +326,7 @@ def _summarize_call(fc: dict[str, Any]) -> tuple[str, str]:
     if name == "bash":
         cmd = str(args.get("command") or "")
         if len(cmd) > 2400:
-            cmd = cmd[:2000] + " ... " + cmd[-300:]
+            cmd = elide_redacting(cmd, 2000, 300, " ... ")
         return f"bash({cmd!r})", state_note
     if name == "write":
         fp = str(args.get("file_path") or args.get("path") or "")
@@ -334,11 +335,11 @@ def _summarize_call(fc: dict[str, Any]) -> tuple[str, str]:
             return f"write(file_path={fp!r}, content={body!r})", state_note
         return (
             f"write(file_path={fp!r}, chars={len(body)}, "
-            f"head={body[:600]!r}, tail={body[-400:]!r})"
+            f"head={clip_redacting(body, 600)!r}, tail={tail_redacting(body, 400)!r})"
         ), state_note
     raw = json.dumps(args, ensure_ascii=False, sort_keys=True)
     if len(raw) > 1200:
-        raw = raw[:900] + "..." + raw[-200:]
+        raw = elide_redacting(raw, 900, 200, "...")
     return f"{name}({raw})", state_note
 
 
@@ -346,7 +347,7 @@ def _compact_mutation_label(call_summary: str) -> str:
     one_line = " ".join(call_summary.splitlines()).strip()
     if len(one_line) <= 120:
         return one_line
-    return one_line[:95] + "..." + one_line[-20:]
+    return elide_redacting(one_line, 95, 20, "...")
 
 
 def _turn_has_media(turn: dict[str, Any]) -> bool:
@@ -851,7 +852,7 @@ class WatermarkResidence:
                     else:
                         call_lines.append("[called] " + c_sum)
                     if s_note and _is_fact_bearing_state_note(s_note):
-                        cleaned_note = " ".join(s_note.splitlines())[:280]
+                        cleaned_note = clip_redacting(" ".join(s_note.splitlines()), 280)
                         if cleaned_note not in state_lines:
                             state_lines.append(cleaned_note)
                             self.state_notes_preserved += 1
@@ -892,7 +893,7 @@ class WatermarkResidence:
                 if state_lines
                 else ""
             )
-            prefix = ("\n".join(visible_texts)[:800] + "\n") if visible_texts else ""
+            prefix = (clip_redacting("\n".join(visible_texts), 800) + "\n") if visible_texts else ""
             m_summary = (
                 (ledger_prefix + state_prefix + prefix + "\n".join(call_lines)).strip()
                 or "[called]"

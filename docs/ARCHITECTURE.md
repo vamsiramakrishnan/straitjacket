@@ -59,8 +59,12 @@ No behavioural signal may weaken anything here.
 |---|---|
 | `workspace.py` | Workspace resolution, identity, path confinement; absolute paths never leave here in model-visible form (SPEC §5). |
 | `hook.py` | The PreToolUse context guard — runs on the hot path of every intercepted tool call; **stdlib-only** for latency and reliability (SPEC §10.2, §11). |
+| `governance.py`, `coverage.py` | The governance table (which route each native tool call takes, per host) that `hook.py` reads and the registrations are pinned to, and `ctx coverage`, which prints it next to the coverage ledger. |
+| `promptgate.py`, `task_context.py` | The `UserPromptSubmit` hook entry and the prompt gate for oversized pastes (`[intake]`): stores a paste through intake and adds context or blocks the prompt. Hot path: imports `json`, `os` and `sys` only. |
+| `agyperm.py` | Keeps the user's Antigravity permission rules in force across a rewrite, by judging the original command and never approving more than it would. |
 | `textutil.py` | Deterministic text: token estimation, ANSI/control stripping, **secret redaction**, bounded emission (SPEC §8, §16). |
 | `surface.py`, `surface_profiles.py`, `surface_gateway.py`, `surface_reconcile.py` | The input side: `ctx surface` capability-context audit, minimal-surface compilation, the progressive-disclosure MCP gateway, and shadow reconciliation. |
+| `surface_launch.py` | The launch-time surface plan `ctx wrap claude --surface` applies through ephemeral channels, and its `ctx.surface.wrap/v1` receipt. |
 | `prune.py` | `ctx prune` / `ctx setup --prune`: the audit's recommended disclosure levels applied as a decision at setup time (kernel and L0/L1 stay, L2+ deferred), compiled into each host's minimal config through `surface_profiles`, with a receipt of tokens per turn before and after. Never deletes. |
 
 ## Execution — running and capturing work
@@ -70,6 +74,8 @@ No behavioural signal may weaken anything here.
 | `execution.py` | Birth-time capture runner; output spools to disk and is content-addressed before the model sees it (SPEC §6.2, §7). |
 | `sdk.py`, `toolresult.py`, `tooltelemetry.py` | Provider-independent async tool session, typed command results, serialized-size-aware delivery and operational observations. Shares execution, retrieval, resolver and capsule mechanisms. |
 | `store.py` | The content-addressed artifact store and quota enforcement (SPEC §12). |
+| `intake.py` | `ctx intake`: store pasted text, a file, stdin or the clipboard once and return a bounded digest and a handle (`ctx.intake/v1`); binary goes to the store as a leased blob. |
+| `media.py` | `ctx view`: probe, overview, crop, frames, contact sheet, scene changes and subtitles for images and video, with Pillow and ffmpeg optional and ffmpeg pinned to an allow-list. |
 | `jobs.py` | Long-runner backgrounding: `ctx run --bg`, `ctx job(s)`. |
 | `seq.py` | `ctx seq` — declared command trees (round economy without losing gates). |
 | `pyeval.py` | `ctx py` — programmable capture; a Python script runs under the birth gate, only its digest returns. |
@@ -114,6 +120,8 @@ This is the plane most contributions touch. The flow is
 | `digest/pytestprof.py` | The pytest profile (pass path `pytest/v1`; census failures `pytest/v2`) — the reference EDC instance. |
 | `digest/lintprof.py`, `logprof.py`, `jsonprof.py`, `tableprof.py`, `searchprof.py`, `moreprofs.py` | Profiles for diagnostics, logs, JSON/JSONL, tables, search results, and go/cargo/jest/git-diff families. |
 | `digest/text.py` | The generic text profile — the universal deterministic fallback (`text/v1`). |
+| `digest/chunkmap.py`, `digest/intakeprof.py` | The chunk map (`chunkmap/v1`): an intake-only table of contents for large text, and the paging that lists every chunk. |
+| `digest/traceprof.py`, `delimprof.py`, `udiffprof.py`, `shapeutil.py` | Intake-only views for a pasted stack trace (`trace/v1`), delimited table (`delimited/v1`) and plain unified diff (`udiff/v1`), and the shared quoting and fitting they use. |
 | `rundiff.py` | `ctx diff run:A run:B` — structural run-to-run regression digest. |
 
 ## Delivery — selecting and rendering views
@@ -130,7 +138,7 @@ This is the plane most contributions touch. The flow is
 | `anchors.py` | Content anchors and line tags: the verify → relocate → refuse ladder that keeps a `repo:` line address meaningful after an edit. Pure and total ([ANCHORS.md](ANCHORS.md)). |
 | `retrieval.py`, `_retrieval/` | Bounded `ctx search` / `get` / `stats` / spans: deterministic, budget-capped, provenance-bearing (SPEC §6.3–6.5). |
 | `refs.py` | The reference/handle grammar (`run:…#stdout`, spans) (SPEC §6.1). |
-| `substitute.py` | The collapse substitution layer (the replacement surface). |
+| `substitute.py` | The retired collapse substitutions: the types and entry point remain, `collapse` returns nothing, and `symbol_hint` offers `ctx q refs` beside an identifier search. |
 | `prefixassets.py` | The prefix-stability contract: every byte injected into the prompt prefix is locked behind a manifest. |
 | `pricing.py`, `data/model-prices.json` | Host-neutral model pricing. |
 | `debt.py` | `ctx debt` — declared omission for engineering scope. |

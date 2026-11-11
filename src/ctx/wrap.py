@@ -123,6 +123,47 @@ def _with_print_bg_wait_ceiling(
     return {**base, _PRINT_BG_WAIT_CEILING_VAR: "0"}
 
 
+_FILE_MENTIONS_VAR = "CLAUDE_CODE_DISABLE_FILE_MENTIONS"
+
+
+def _with_file_mention_routing(
+    workspace_root: Path, env: dict[str, str]
+) -> tuple[dict[str, str], str | None]:
+    """Route ``@file`` prompt mentions through the Read tool.
+
+    Without this, Claude Code inlines an ``@``-mentioned file into the prompt
+    itself and no hook fires: a 3 MB log or a 4K screenshot enters whole, past
+    the read guard and the media note. With CLAUDE_CODE_DISABLE_FILE_MENTIONS
+    set, the prompt carries only a marker naming the file and the model calls
+    Read, which the guard sees (observed on Claude Code 2.1.322; the variable
+    is in that build's environment allow-list). The CLI ignores the variable
+    when it comes from a settings file, so it is set in the child's
+    environment. A build that does not know it ignores it and inlines as
+    before, so an older CLI is unaffected.
+
+    Opt-in (``[media] file_mentions = true``; see ctx.config.MediaPolicy for
+    the live evidence behind that default). Even then not when the user set
+    the variable themselves (any value), not with CTX_WRAP_NO_FILE_MENTIONS=1, and not when ``[guard] mode = "advisory"``, where
+    no hook would act on the Read. Returns the environment and a one-line
+    startup note (None when nothing was changed)."""
+    if os.environ.get("CTX_WRAP_NO_FILE_MENTIONS"):
+        return env, None
+    if _FILE_MENTIONS_VAR in env or _FILE_MENTIONS_VAR in os.environ:
+        return env, None  # the user's own setting wins
+    try:
+        from ctx.config import load_config
+
+        cfg = load_config(workspace_root)
+        if not cfg.media.file_mentions or cfg.guard.mode == "advisory":
+            return env, None
+    except Exception:
+        return env, None  # fail-open: a config problem never changes the launch
+    note = ("ctx wrap: @file mentions are read through the Read tool, so the guard "
+            f"sees them ({_FILE_MENTIONS_VAR}=1; opt out with "
+            "CTX_WRAP_NO_FILE_MENTIONS=1, or drop [media] file_mentions = true)")
+    return {**env, _FILE_MENTIONS_VAR: "1"}, note
+
+
 _NATIVE_SEARCH_TOOLS = ("Grep", "Glob")
 
 
@@ -339,6 +380,80 @@ def _claude_supports_settings(claude: str) -> bool:
     return "--settings" in (proc.stdout + proc.stderr)
 
 
+def _run_forwarding_signals(argv: list[str], *, cwd: Path, env: dict[str, str]) -> int:
+    """Run the agent like ``subprocess.run`` (same return code, same Ctrl-C
+    behaviour), but if the WRAPPER is sent SIGTERM or SIGHUP, forward it to
+    the agent and keep waiting, so the agent exits with its own status and
+    the caller's ``finally`` blocks still remove every temp file. The
+    previous handlers are restored before returning; nothing is installed
+    outside the main thread."""
+    import signal
+    import threading
+
+    proc = subprocess.Popen(argv, cwd=cwd, env=env)
+    previous: dict[int, object] = {}
+
+    def _forward(signum, _frame):  # pragma: no cover - exercised via a subprocess test
+        with contextlib.suppress(Exception):
+            proc.send_signal(signum)
+
+    if threading.current_thread() is threading.main_thread():
+        for name in ("SIGTERM", "SIGHUP"):
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            with contextlib.suppress(ValueError, OSError):
+                previous[sig] = signal.signal(sig, _forward)
+    try:
+        try:
+            return proc.wait()
+        except BaseException:
+            # subprocess.run semantics on Ctrl-C and other interrupts.
+            proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait()
+            raise
+    finally:
+        for sig, handler in previous.items():
+            with contextlib.suppress(ValueError, OSError, TypeError):
+                signal.signal(sig, handler)
+
+
+def _surface_plan(
+    workspace_root: Path,
+    agent_args: list[str],
+    child_env: dict[str, str],
+    exe: str,
+    surface: str | None,
+    tmpdir: Path,
+):
+    """The launch-time surface plan (ctx.surface_launch), or None. Fail-open:
+    any error launches the session unchanged with a one-line stderr note.
+    Writes only the documented receipt to the workspace; never stdout."""
+    try:
+        from ctx.surface_launch import plan_claude_launch, resolve_mode, write_receipt
+
+        mode, note = resolve_mode(surface, workspace_root)
+        if note:
+            print(f"ctx wrap: {note}", file=sys.stderr)
+        if mode == "off":
+            return None
+        plan = plan_claude_launch(
+            workspace_root, agent_args, mode=mode, child_env=child_env,
+            parent_env=dict(os.environ), ctx_exe=exe, tmpdir=tmpdir,
+        )
+        if note:
+            plan.receipt["config_note"] = note
+        if write_receipt(workspace_root, plan.receipt) is None:
+            plan.line = plan.line.rsplit(" · receipt", 1)[0] + " · receipt not written"
+        print(plan.line, file=sys.stderr)
+        return plan
+    except Exception as exc:  # fail-open: a surface problem never blocks a launch
+        print(f"ctx wrap: surface plan skipped ({type(exc).__name__}); launching unchanged",
+              file=sys.stderr)
+        return None
+
+
 def wrap_claude(
     workspace_root: Path,
     agent_args: list[str],
@@ -346,8 +461,13 @@ def wrap_claude(
     use_proxy: bool = False,
     rescue_pct: float = 0.0,
     orchestrate: bool = False,
+    surface: str | None = None,
 ) -> int:
-    """Launch `claude` with harness hooks injected; leave zero residue."""
+    """Launch `claude` with harness hooks injected; leave zero residue.
+
+    ``surface`` (``auto`` | ``off`` | a profile name; default from
+    ``[surface] wrap`` in ctx.toml, else ``auto``) selects the launch-time
+    surface plan — see ctx.surface_launch."""
     claude = shutil.which("claude")
     if claude is None:
         print(
@@ -376,6 +496,9 @@ def wrap_claude(
         child_env = {**(child_env if child_env is not None else os.environ),
                      "CTX_TASK_CONTEXT_FILE": task_file.name}
         child_env.pop("CTX_TASK_QUERY", None)
+        child_env, mentions_note = _with_file_mention_routing(workspace_root, child_env)
+        if mentions_note:
+            print(mentions_note, file=sys.stderr)
         if not _claude_supports_settings(claude):
             print(
                 "ctx wrap: this claude build lacks --settings; "
@@ -384,22 +507,38 @@ def wrap_claude(
             )
             return _wrap_claude_merged(workspace_root, settings, claude, agent_args, child_env)
 
-        tmp = tempfile.NamedTemporaryFile(
-            "w", prefix="ctx-wrap-", suffix=".json", delete=False, encoding="utf-8"
-        )
+        surface_dir: Path | None = None
+        tmp = None
         try:
+            # Private (0700) per-launch dir for any surface files (a profile's
+            # MCP config, the gateway's backend snapshot); removed on exit,
+            # including when the wrapper is sent SIGTERM/SIGHUP.
+            surface_dir = Path(tempfile.mkdtemp(prefix="ctx-surface-"))
+            tmp = tempfile.NamedTemporaryFile(
+                "w", prefix="ctx-wrap-", suffix=".json", delete=False, encoding="utf-8"
+            )
+            plan = _surface_plan(workspace_root, agent_args, child_env, exe, surface,
+                                 surface_dir)
+            launch_args = list(agent_args)
+            if plan is not None:
+                settings = {**settings, **plan.settings}
+                launch_args = [*plan.args, *launch_args]
+                child_env = {**child_env, **plan.env}
             json.dump(settings, tmp)
             tmp.close()
             # Inherit stdio so interactive sessions work.
-            proc = subprocess.run(
-                [claude, "--settings", tmp.name, *agent_args],
-                cwd=workspace_root,
-                env=child_env,
+            return _run_forwarding_signals(
+                [claude, "--settings", tmp.name, *launch_args],
+                cwd=workspace_root, env=child_env,
             )
-            return proc.returncode
         finally:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp.name)
+            if tmp is not None:
+                with contextlib.suppress(OSError):
+                    tmp.close()
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp.name)
+            if surface_dir is not None:
+                shutil.rmtree(surface_dir, ignore_errors=True)
     finally:
         with contextlib.suppress(OSError):
             os.unlink(task_file.name)
@@ -639,6 +778,7 @@ def guided_setup(
     *,
     force_all: bool = False,
     force_repair: bool = False,
+    apply_config: bool = False,
 ) -> int:
     """`ctx setup`, narrated: survey → harness → verify → what next.
 
@@ -668,6 +808,23 @@ def guided_setup(
         # Hermes needs its installed profile writer. An implicit inert recipe
         # would poison doctor checks for every later host setup.
         target = [name for name in target if name != "hermes"]
+    # The planner is shared by preview, direct installers, repair and removal.
+    # A default setup never silently edits a pre-existing user configuration.
+    from ctx.host_config import HOSTS as CONFIG_HOSTS, plan_configuration
+    from ctx.config_edit import ConfigError
+    config_targets = [host for host in target if host in CONFIG_HOSTS]
+    # ctx-owned commands still in the unsafe `python -m ctx` form are
+    # rewritten in place before anything can refuse (ledger-tracked entries
+    # are upgraded by the plan itself).
+    from ctx.launchform import upgrade as upgrade_launch_forms
+    upgraded = upgrade_launch_forms(ws.root, target)
+    for line in upgraded:
+        print(line)
+    config_plan = plan_configuration(ws.root, config_targets) if config_targets else None
+    if config_plan and not config_plan.blockers and config_plan.requires_review and not apply_config:
+        print(config_plan.render())
+        print("Existing configuration requires review; no files or readiness receipt were changed.")
+        return 1
     prior = load_setup_receipt(ws.root)
     conflicts = setup_conflicts(ws, target)
     strategy = choose_setup(
@@ -686,7 +843,8 @@ def guided_setup(
         for conflict in conflicts:
             for line in conflict.splitlines():
                 print(f"  {line}")
-        print("  managed files were not changed")
+        print("  managed files were not changed"
+              + (" (apart from the launch-form upgrade above)" if upgraded else ""))
         record_setup(
             ws.root,
             target,
@@ -750,8 +908,11 @@ def guided_setup(
     from ctx.mcp_hosts import IntegrationError
 
     try:
+        if config_plan and config_plan.changes:
+            print(config_plan.render())
+            config_plan.apply()
         setup_report = setup_hosts(ws, target)
-    except (IntegrationError, OSError) as exc:
+    except (ConfigError, IntegrationError, OSError) as exc:
         print(f"  setup incomplete: {exc}", file=sys.stderr)
         record_setup(ws.root, target, strategy=strategy, success=False,
                      checks_total=1, checks_passed=0,
@@ -813,6 +974,7 @@ def wrap_setup(
     *,
     force_all: bool = False,
     force_repair: bool = False,
+    apply_config: bool = False,
 ) -> int:
     """Single-command multi-host setup. By default this now *detects* which
     coding-agent CLIs are installed and configures exactly those (reporting the
@@ -832,10 +994,24 @@ def wrap_setup(
 
     ws = resolve_workspace(str(workspace_root))
 
-    if os.environ.get("CTX_SETUP_PLAIN") != "1":
+    if os.environ.get("CTX_SETUP_PLAIN") != "1" or apply_config:
         return guided_setup(
-            ws, hosts, force_all=force_all, force_repair=force_repair
+            ws, hosts, force_all=force_all, force_repair=force_repair, apply_config=apply_config
         )
+
+    from ctx.host_config import HOSTS as CONFIG_HOSTS, plan_configuration
+    selected = hosts
+    if selected is None:
+        from ctx.hosts import detect_all
+        selected = [d.name for d in detect_all(workspace_root=ws.root) if d.installed and d.harnessable] if not force_all else []
+        selected = selected or [name for name in SETUP_HOSTS if name != "hermes"]
+    from ctx.launchform import upgrade as upgrade_launch_forms
+    for line in upgrade_launch_forms(ws.root, selected):
+        print(line)
+    config_plan = plan_configuration(ws.root, [h for h in selected if h in CONFIG_HOSTS])
+    if config_plan.blockers or config_plan.requires_review:
+        print(config_plan.render())
+        return 1
 
     if hosts is None and not force_all:
         from ctx.hosts import detect_all

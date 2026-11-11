@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import re
 
-from ctx.digest.base import DigestContext, Profile, StreamView
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
+from ctx.digest.base import DigestContext, Profile, StreamView, from_intake
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int
 
 # Deterministic salience: error-ish lines first, then head/tail anchors.
 _ERROR_RE = re.compile(
@@ -32,6 +32,14 @@ _COORDINATE_RE = re.compile(
     r"|\bat \S+\(\w+\.java:\d+\)"
     r"|\b\S+\.(?:go|py|rs|ts|js|java):\d+",
 )
+# A necessary condition for _COORDINATE_RE, tested first. Every alternative
+# above contains either the literal ``file "`` or a colon followed by a digit.
+# The pattern itself restarts its unanchored ``[\w.\-/\\]+`` / ``\S+`` scan at
+# every word boundary, which is quadratic on a long whitespace-free line full
+# of boundaries (minified or encoded output: 200 KB of ``ab/ab/…`` took 140 s
+# in this one search). The hint is linear and changes no rank: a line it
+# rejects could not have matched.
+_COORDINATE_HINT_RE = re.compile(r':\d|file "')
 _HTTP_STATUS_RE = re.compile(r"HTTP/[12]\.\d+\s+[45]\d\d|\bstatus(?:_code)?\s*[:=]\s*[45]\d\d\b")
 _EXIT_CODE_RE = re.compile(
     r"\b(?:exit(?:ed)?(?: with)?(?: code| status)?\s*[:=]?\s*[1-9]\d*|code\s+[1-9]\d*\s*\((?:OOMKilled|Error)\))\b",
@@ -62,7 +70,7 @@ def _signal_rank(line: str) -> int:
     rank = 0
     if _WEAK_ERR_RE.search(line):
         rank = 1
-    if _COORDINATE_RE.search(line):
+    if _COORDINATE_HINT_RE.search(line) and _COORDINATE_RE.search(line):
         rank = max(rank, 2)
     if (
         _REAL_FAILURES_RE.search(line)
@@ -118,6 +126,13 @@ class TextProfile(Profile):
             # than the output). Provenance keeps command + exit; the content
             # rides unindented. rtk lesson inverted: our tax was overhead,
             # not under-compression.
+            if from_intake(ctx):
+                # Handed-over content: name it, no command or exit status.
+                slim = [f"{ctx.intake_line(sizes=False)} · output (complete):"]
+                for view in (ctx.stdout, ctx.stderr):
+                    if view.bytes:
+                        slim.extend(view.text_lines)
+                return "\n".join(slim)
             r = ctx.manifest["result"]
             status = (
                 f"exit {r['exitCode']}" if r["exitCode"] is not None else f"signal {r['signal']}"
@@ -200,7 +215,7 @@ class TextProfile(Profile):
                     return "\n".join(lines + summary + self.coverage_lines(ctx, shown_lines)
                                      + self.next_lines(ctx, suggestions))
                 for stream, number, sample in selected:
-                    summary.append(f"  evidence {stream}:L{number}: {sample[:EVIDENCE_LINE_CHARS]}")
+                    summary.append(f"  evidence {stream}:L{number}: {clip_redacting(sample, EVIDENCE_LINE_CHARS)}")
                 suggestions = [
                     f"ctx get run:PENDING#{stream} --lines {max(1, number - 1)}:{number}"
                     for stream, number, _ in selected
@@ -226,11 +241,11 @@ class TextProfile(Profile):
                 hits = [h for h in hits if h[2] > 0]
                 if hits:
                     i, ln, rank = max(hits, key=lambda h: (h[2], -h[0]))
-                    summary.append(f"  first signal {view.name}:L{i}: {ln[:EVIDENCE_LINE_CHARS]}")
+                    summary.append(f"  first signal {view.name}:L{i}: {clip_redacting(ln, EVIDENCE_LINE_CHARS)}")
                     shown += 1
                     j, lj, _ = hits[-1]
                     if j != i:
-                        summary.append(f"  terminal signal {view.name}:L{j}: {lj[:EVIDENCE_LINE_CHARS]}")
+                        summary.append(f"  terminal signal {view.name}:L{j}: {clip_redacting(lj, EVIDENCE_LINE_CHARS)}")
                         shown += 1
                     break
         rid = "run:PENDING"
@@ -302,7 +317,7 @@ class TextProfile(Profile):
         h = min(head_n, n)
         t_start = max(h + 1, n - tail_n + 1) if tail_n > 0 else end_total + 1
         out = [
-            f"  head {view.name}:L{i}: {text_lines[i - 1].strip()[:EVIDENCE_LINE_CHARS]}"
+            f"  head {view.name}:L{i}: {clip_redacting(text_lines[i - 1].strip(), EVIDENCE_LINE_CHARS)}"
             for i in range(1, h + 1)
         ]
         shown = h
@@ -316,6 +331,6 @@ class TextProfile(Profile):
                 marker += f" · span {sid}"
             out.append(marker)
         for i in range(t_start, n + 1):
-            out.append(f"  tail {view.name}:L{i}: {text_lines[i - 1].strip()[:EVIDENCE_LINE_CHARS]}")
+            out.append(f"  tail {view.name}:L{i}: {clip_redacting(text_lines[i - 1].strip(), EVIDENCE_LINE_CHARS)}")
             shown += 1
         return out, shown, mid

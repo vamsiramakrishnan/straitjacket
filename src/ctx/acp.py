@@ -224,7 +224,11 @@ class Client:
             elif message.get("id") == rid:
                 if "error" in message:
                     error = message["error"]
-                    raise ACPError(f"ACP {method}: {str(error)[:2000]}")
+                    from ctx.textutil import clip_redacting
+
+                    # The peer's error text can echo our request (and any
+                    # secret in it) and reaches the model: redaction-aware cut.
+                    raise ACPError(f"ACP {method}: {clip_redacting(str(error), 2000)}")
                 if "result" not in message:
                     raise ACPError("ACP response has no result")
                 return message["result"]

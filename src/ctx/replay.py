@@ -52,6 +52,7 @@ samples pass through the workspace redaction patterns.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import glob
 import json
 import os
@@ -173,7 +174,7 @@ def downstream_facts(calls: list[dict[str, Any]], idx: int) -> list[str]:
             for line in frag.splitlines():
                 line = line.strip()
                 if len(line) >= 12 and line in res:
-                    facts.add(line[:120])
+                    facts.add(clip_redacting(line, 120))
     coords = set(_COORD_RE.findall(res)) | set(_NODEID_RE.findall(res))
     for c in later:
         if c["tool"] == "Bash":
@@ -293,7 +294,7 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
                     facts_inline += 1
                 else:
                     facts_hop += 1
-                    misses.append(fact[:80])
+                    misses.append(clip_redacting(fact, 80))
             prof = (
                 res.split("profile=", 1)[1].split("]", 1)[0]
                 if "profile=" in res
@@ -334,7 +335,7 @@ def simulate_session(path: str | Path) -> dict[str, Any]:
                 facts_inline += 1
             else:
                 facts_hop += 1
-                misses.append(fact[:80])
+                misses.append(clip_redacting(fact, 80))
         _tally_regret(
             "inline" if inline else prof,
             facts,

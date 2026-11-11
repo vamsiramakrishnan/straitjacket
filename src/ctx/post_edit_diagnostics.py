@@ -17,6 +17,7 @@ contract honestly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import hashlib
 import json
 from pathlib import Path
@@ -114,7 +115,7 @@ def _document_digest(path: Path) -> str | None:
 
 def _diagnostic_doc(diagnostic: Diagnostic) -> dict[str, Any]:
     doc: dict[str, Any] = {
-        "message": str(diagnostic.message)[:MAX_MESSAGE_CHARS],
+        "message": clip_redacting(str(diagnostic.message), MAX_MESSAGE_CHARS),
         "severity": str(diagnostic.severity).lower()[:24] or "error",
     }
     if diagnostic.line is not None:

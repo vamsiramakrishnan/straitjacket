@@ -83,14 +83,17 @@ not the OpenHermes model family.
 |---|---|---|
 | Hermes | Active profile's MCP entry and enabled `plugins/straitjacket/`; local recipe in `.ctx/hosts/hermes.json` | `hermes chat` |
 | Oh My Pi | `.omp/mcp.json` and `.omp/hooks/pre/straitjacket.js` | `omp` |
-| OpenCode | `opencode.json` and `.opencode/plugins/straitjacket.js` | `opencode` |
+| OpenCode | Existing `opencode.json` or `opencode.jsonc`, and `.opencode/plugins/straitjacket.js` | `opencode` |
 | DeepSeek Harness | `.ctx/hosts/dsh.cordis.patch.yml`, loading MCP and `.ctx/hosts/straitjacket-dsh.mjs` | `ctx wrap dsh -- --profile web` |
 
-OMP and OpenCode setup merges unrelated JSON settings and MCP servers. An
-existing conflicting `ctx-harness` entry, malformed file, or symlink refuses
-the write. If `opencode.jsonc` exists, setup prints an actionable refusal;
-merge the rendered `mcp` entry into that file yourself. Straitjacket does not
-rewrite comments or create a competing JSON file.
+OMP setup merges unrelated JSON settings and MCP servers. OpenCode uses parsed
+source edits for JSON and JSONC, preserving comments, trailing commas and
+existing integrations. Preview with `ctx setup --host opencode --preview`,
+then accept safe additions with `ctx setup --host opencode --apply`.
+A conflicting entry, duplicate key, malformed file or symlink refuses the
+write. When both project configuration files exist, setup refuses rather than
+choosing precedence or creating another file. See
+[setup and removal](GETTING-STARTED.md) for ownership and repair behavior.
 
 Preview a host's native configuration without writing:
 

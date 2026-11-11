@@ -1,4 +1,12 @@
 """Local compression and deterministic prompt wrapping; no model requests."""
+def _redacted(value, policy):
+    """Every string in the result through the model-visible pipeline once:
+    the selected evidence (and the cache wrap) quote the file verbatim."""
+    from ctx.textutil import redact_strings
+
+    return redact_strings(value, policy)
+
+
 def cmd_compress(ws, ns):
     from pathlib import Path
     import json
@@ -12,7 +20,7 @@ def cmd_compress(ws, ns):
         result = compress_stored(store, text, ns.query, ns.budget_bytes, tuple(ns.require_line))
         if ns.cache_prefix:
             result['cache_wrap'] = cache_wrap(Path(ns.cache_prefix).read_text(), result['text'], ns.query)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(_redacted(result, ws.config.redaction), ensure_ascii=False, indent=2))
         return 0 if result['status'] == 'selected' else 3
     except (OSError, ValueError) as exc:
         print(f"ctx compress: {exc}")

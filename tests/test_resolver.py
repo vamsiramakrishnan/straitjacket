@@ -332,7 +332,11 @@ def test_session_state_reads_reflex_latches_readonly(tmp_path):
     assert resolver.session_state(tmp_path, "go test").circuit == "bypass"
     assert resolver.session_state(tmp_path, "other").circuit == "normal"
     assert resolver.session_state(tmp_path, None).circuit == "normal"
-    assert (led / "reflex.json").read_text(encoding="utf-8") == before  # read-only
+    # Read-only: the state is unchanged (an older ctx's copy under the
+    # workspace is adopted into the private ledger directory, byte for byte).
+    from ctx.sessiondir import session_reads_path
+
+    assert session_reads_path(tmp_path, "reflex.json").read_text(encoding="utf-8") == before
 
 
 def test_retrieval_budget_returns_current_values_exactly(tmp_path):

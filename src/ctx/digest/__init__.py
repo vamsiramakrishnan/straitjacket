@@ -13,8 +13,10 @@ import hashlib
 from typing import Any
 
 from ctx import POLICY_VERSION
-from ctx.digest.base import DigestContext, Profile
+from ctx.digest.base import DigestContext, Profile, from_intake
 from ctx.digest.binprof import BinaryProfile
+from ctx.digest.delimprof import DelimitedDataProfile
+from ctx.digest.intakeprof import ChunkMapProfile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
 from ctx.digest.searchprof import SearchProfile
@@ -29,10 +31,18 @@ from ctx.digest.moreprofs import (
 )
 from ctx.digest.pytestprof import PytestProfile
 from ctx.digest.tableprof import TableProfile
+from ctx.digest.traceprof import StackTraceProfile
+from ctx.digest.udiffprof import UnifiedDiffProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
-from ctx.textutil import decode_stream, sanitize_for_model, short_id
+from ctx.textutil import (
+    decode_stream,
+    neutralize_line_breaks,
+    redaction_scope,
+    sanitize_for_model,
+    short_id,
+)
 from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
@@ -46,15 +56,28 @@ _PROFILES: tuple[Profile, ...] = (
     #                     Django runtests.py (SWE-bench mine, 2026-07-19)
     JestProfile(),
     GitDiffProfile(),
+    UnifiedDiffProfile(),  # intake-only (from_intake): a plain ---/+++/@@ diff.
+    #                        After the anchored runners and gitdiff/v1, before the
+    #                        loose file:line shapes (lint/search/build)
+    StackTraceProfile(),  # intake-only: a paste dominated by trace structure.
+    #                       Same slot for the same reason: frames carry file:line
+    #                       and severity words the lint/search profiles would claim
     LintProfile(),  # before Build/LogTemplate: both would misclaim lint shapes
     SearchProfile(),  # grep/rg file:line:content — AFTER Lint: diagnostics
     #                   (which share the shape but carry severity tokens) win first
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),
+    DelimitedDataProfile(),  # intake-only: CSV/TSV/;/| found from field-count
+    #                          structure. After JSON/JSON-lines (a JSONL paste has
+    #                          a consistent comma count too), before the table and
+    #                          log profiles, which would claim numeric/level-word CSVs
     TableProfile(),  # caps-header aligned tables (docker/kubectl family);
     #                  strict header rule keeps logs and prose out
     LogTemplateProfile(),
+    ChunkMapProfile(),  # intake-only (from_intake): large pasted/attached
+    #                     text that text/v1 cannot inline gets a chunk table;
+    #                     never matches command output
     TextProfile(),
 )
 
@@ -137,15 +160,26 @@ def _pass_through_if_digest_earned_nothing(ctx: Any, body: str, ws: Workspace) -
         content = sum(v.bytes for v in (ctx.stdout, ctx.stderr) if v.bytes)
         if not content or content > ws.config.budgets.max_inline_bytes:
             return body  # large enough that the digest is doing real work
-        if not _only_accounting(body):
+        intake = from_intake(ctx)
+        checked = body
+        if intake:
+            # The intake provenance line is bookkeeping too (intake digests
+            # carry it instead of cwd/command/exit).
+            checked = "\n".join(
+                ln for ln in body.splitlines() if not ln.startswith("intake: ")
+            )
+        if not _only_accounting(checked):
             return body  # the profile found something; keep it
-        r = ctx.manifest["result"]
-        status = (
-            f"exit {r['exitCode']}" if r.get("exitCode") is not None
-            else f"signal {r.get('signal')}"
-        )
-        if r.get("timedOut"):
-            status += " · timed out"
+        if intake:
+            status = ctx.intake_line(sizes=False)
+        else:
+            r = ctx.manifest["result"]
+            status = (
+                f"exit {r['exitCode']}" if r.get("exitCode") is not None
+                else f"signal {r.get('signal')}"
+            )
+            if r.get("timedOut"):
+                status += " · timed out"
         out = [f"{status} · output (complete):"]
         for view in (ctx.stdout, ctx.stderr):
             if view.bytes:
@@ -156,6 +190,49 @@ def _pass_through_if_digest_earned_nothing(ctx: Any, body: str, ws: Workspace) -
         return plain if len(plain.encode("utf-8")) < len(body.encode("utf-8")) else body
     except Exception:
         return body
+
+
+_PEM_GRAM = 6
+
+
+def _blank_private_key_fragments(ctx: Any, body: str) -> str:
+    """Blank, at the same width, any text in ``body`` copied from inside a
+    private-key block of the captured streams.
+
+    A profile shows single lines -- a log template, an exceptional line, a
+    table cell, a diagnostic -- and a key's body lines carry nothing a
+    pattern can match without the BEGIN line, which is usually not among
+    them. So the blocks are located in the stream (plain ``str.find``,
+    linear; :func:`ctx.textutil.pem_spans`) and every run of the body that
+    is covered by a 6-character window of a block's content is blanked --
+    which also catches a line the profile transformed (digits masked to
+    ``<*>``) or clipped. Identity when the streams hold no private key or
+    the policy excludes the pattern.
+    """
+    from ctx.textutil import active_patterns, pem_spans
+
+    if "private-key" not in {n for n, _ in active_patterns()}:
+        return body
+    grams: set[str] = set()
+    for view in (ctx.stdout, ctx.stderr):
+        text = view.text
+        if "PRIVATE KEY-----" not in text:
+            continue
+        for a, b in pem_spans(text):
+            for ln in text[a:b].split("\n"):
+                ln = ln.strip()
+                if ln.startswith("-----") or len(ln) < _PEM_GRAM:
+                    continue
+                grams.update(ln[i:i + _PEM_GRAM] for i in range(len(ln) - _PEM_GRAM + 1))
+    if not grams:
+        return body
+    cover = bytearray(len(body))
+    for i in range(len(body) - _PEM_GRAM + 1):
+        if body[i:i + _PEM_GRAM] in grams:
+            cover[i:i + _PEM_GRAM] = b"\x01" * _PEM_GRAM
+    if not any(cover):
+        return body
+    return "".join("*" if c and ch != "\n" else ch for ch, c in zip(body, cover))
 
 
 def render_run_digest(
@@ -207,8 +284,17 @@ def render_run_digest(
             focused.dense, focused.plan = ctx.dense, ctx.plan
             ctx = focused
 
-    body = profile.render(ctx)
+    # Clip helpers (textutil.clip_redacting) honour the workspace policy:
+    # redaction off means no clip is ever blanked.
+    with redaction_scope(ws.config.redaction):
+        body = profile.render(ctx)
     body = _pass_through_if_digest_earned_nothing(ctx, body, ws)
+    # Payload text inside the body may carry a line break other than \n
+    # (a lone \r, U+0085, U+2028, U+2029); render it visibly so content can
+    # never start a digest line. Identity for bodies without one.
+    body = neutralize_line_breaks(body)
+    with redaction_scope(ws.config.redaction):
+        body = _blank_private_key_fragments(ctx, body)
     body, redactions = sanitize_for_model(body, ws.config.redaction)
     if redactions:
         body += "\nredaction: applied [" + ", ".join(redactions) + "]"
@@ -312,7 +398,7 @@ def _announce_expensive_capture(
         pass
 
 
-def digest_output(
+def synthesize_manifest(
     store: Store,
     ws: Workspace,
     tool_name: str,
@@ -321,32 +407,14 @@ def digest_output(
     *,
     is_error: bool = False,
     argv: list[str] | None = None,
-    contained: bool = True,
-    producer: str | None = None,
-) -> tuple[str, str]:
-    """Digest an already-produced tool result (not a shell capture).
+) -> dict[str, Any]:
+    """Store ``stdout``/``stderr`` as blobs and build the pending
+    ``ctx.invocation/v1`` manifest :func:`digest_output` digests.
 
-    ``contained`` is False when the calling host has no output-substitution
-    field, so this digest is stored and addressable but never replaces the raw
-    result in the transcript. It only affects telemetry honesty (see
-    :func:`render_run_digest`), never the digest bytes.
-
-    The universal emission gate (``ctx.hook._emission_gate``) calls this when a
-    PostToolUse tool result exceeds the byte budget: it persists the raw bytes
-    losslessly, synthesizes a ``ctx.invocation/v1`` manifest, and reuses
-    :func:`render_run_digest` to produce a bounded digest carrying a working
-    ``ctx get run:<short>#stdout`` retrieval ref.
-
-    By default the manifest ``argv`` is ``[tool_name]`` only — never the
-    tool's arguments — so the command-anchored profiles (git-diff, pytest,
-    search, build) decline and the result is classified purely on its
-    *shape*. That is the if-ladder cure: a new tool needs no new code
-    because dispatch is by output shape. A caller that *knows* the true
-    command (session replay reconstructing a steered `ctx run`) may pass
-    ``argv`` explicitly to restore command-anchored detection; identity is
-    then a pure function of (bytes, argv).
-
-    Returns ``(bounded_digest_text, short_run_id)``.
+    Split out of :func:`digest_output` unchanged so a caller that needs the
+    render without the emission-boundary filtering (``ctx.intake``, whose
+    digest must not depend on session engagement state) shares the one
+    manifest synthesis instead of keeping a copy of it.
     """
     out_b = stdout.encode("utf-8")
     err_b = stderr.encode("utf-8")
@@ -392,6 +460,48 @@ def digest_output(
             "bytesHash": "sha256:" + "0" * 64,
         },
     }
+    return manifest
+
+
+def digest_output(
+    store: Store,
+    ws: Workspace,
+    tool_name: str,
+    stdout: str,
+    stderr: str = "",
+    *,
+    is_error: bool = False,
+    argv: list[str] | None = None,
+    contained: bool = True,
+    producer: str | None = None,
+) -> tuple[str, str]:
+    """Digest an already-produced tool result (not a shell capture).
+
+    ``contained`` is False when the calling host has no output-substitution
+    field, so this digest is stored and addressable but never replaces the raw
+    result in the transcript. It only affects telemetry honesty (see
+    :func:`render_run_digest`), never the digest bytes.
+
+    The universal emission gate (``ctx.hook._emission_gate``) calls this when a
+    PostToolUse tool result exceeds the byte budget: it persists the raw bytes
+    losslessly, synthesizes a ``ctx.invocation/v1`` manifest, and reuses
+    :func:`render_run_digest` to produce a bounded digest carrying a working
+    ``ctx get run:<short>#stdout`` retrieval ref.
+
+    By default the manifest ``argv`` is ``[tool_name]`` only — never the
+    tool's arguments — so the command-anchored profiles (git-diff, pytest,
+    search, build) decline and the result is classified purely on its
+    *shape*. That is the if-ladder cure: a new tool needs no new code
+    because dispatch is by output shape. A caller that *knows* the true
+    command (session replay reconstructing a steered `ctx run`) may pass
+    ``argv`` explicitly to restore command-anchored detection; identity is
+    then a pure function of (bytes, argv).
+
+    Returns ``(bounded_digest_text, short_run_id)``.
+    """
+    manifest = synthesize_manifest(
+        store, ws, tool_name, stdout, stderr, is_error=is_error, argv=argv
+    )
 
     digest, final = render_run_digest(store, ws, manifest, focus=None,
                                       contained=contained, producer=producer)

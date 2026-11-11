@@ -39,7 +39,7 @@ class Ref:
         return base
 
 
-_HEX_RE = re.compile(r"^[0-9a-fA-F]{6,64}$")
+from ctx.refgrammar import HEX_RE as _HEX_RE  # one definition (ctx.refgrammar)
 _WS_RE = re.compile(r"^ws:(?P<alias>[A-Za-z0-9_.-]+)/(?P<rest>.+)$")
 
 

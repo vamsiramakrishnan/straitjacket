@@ -1,21 +1,15 @@
 """A self-test asserts the PROPERTY, not one shape that satisfies it.
 
-`ctx doctor`'s hook check asserted `decision == "deny"` for a bare
-`pytest -q`. That is one of the ways the guard keeps its promise, not the
-promise itself: under the replacement surface a recognised loop-shape is
-ALLOWED and rewritten into the collapsed `ctx q` op, so the flood is
-contained by substitution rather than refusal.
-
-A bug bash found the consequence: having captured one pytest failure
-earlier in the session -- an entirely normal thing to have done -- flipped
-the probe's decision and made `ctx doctor` report PROBLEMS FOUND while the
-guard was behaving exactly as designed. A self-test pinned to a proxy fails
-when the implementation finds a better way to keep the promise.
+The property of the Claude Code hook today (rules R1/R2): an unbounded
+command is never approved together with a rewritten input, and by default
+it reaches the host exactly as written, with the output gate as the bound.
+`ctx doctor`'s hook line runs a `pytest -q` payload through the real gate
+and choke point and says which of those it saw. (It used to report "deny +
+collapsed rewrite", which described retired behaviour.)
 """
 
 from __future__ import annotations
 
-import pytest
 from conftest import make_ws
 
 
@@ -28,58 +22,36 @@ def _hook_line(ws) -> tuple[bool, str]:
     raise AssertionError("the hook classifier check must always run")
 
 
-def test_a_refused_flood_passes(state_home, workspace_dir, monkeypatch):
-    import ctx.hook as hook
-
-    monkeypatch.setattr(hook, "classify", lambda _p: {"decision": "deny"})
+def test_default_runs_as_written_and_says_so(state_home, workspace_dir):
     ok, detail = _hook_line(make_ws(workspace_dir))
     assert ok, detail
-    assert "deny" in detail
+    assert "runs as written, no decision" in detail and "output gate" in detail
+    for stale in ("collapse", "substitut", "deny +"):
+        assert stale not in detail
 
 
-def test_a_substituted_flood_passes_too(state_home, workspace_dir, monkeypatch):
-    """The case that broke it. `allow` plus a rewrite means the unbounded
-    command never reaches the terminal as written -- which is the whole
-    property -- so the self-test must accept it."""
-    import ctx.hook as hook
-
-    monkeypatch.setattr(
-        hook, "classify",
-        lambda _p: {"decision": "allow",
-                    "rewrite": {
-                        "updatedInput": {"CommandLine": "ctx q 'fails'"},
-                        "reason": "collapsed",
-                    }},
-    )
+def test_opt_in_rewrite_is_described(state_home, workspace_dir):
+    (workspace_dir / "ctx.toml").write_text('version = 1\n[guard]\nsteering = "rewrite"\n')
     ok, detail = _hook_line(make_ws(workspace_dir))
     assert ok, detail
-    assert "collapsed rewrite" in detail, (
-        "and it must say HOW the flood was contained, not just that it was"
-    )
+    assert "rewritten to `ctx run`, no decision" in detail
 
 
-def test_force_ask_passes(state_home, workspace_dir, monkeypatch):
+def test_an_allow_with_a_rewrite_fails(state_home, workspace_dir, monkeypatch):
+    """R1 broken somewhere upstream of the choke point must not pass."""
     import ctx.hook as hook
 
-    monkeypatch.setattr(hook, "classify", lambda _p: {"decision": "force_ask"})
-    ok, _ = _hook_line(make_ws(workspace_dir))
-    assert ok
-
-
-def test_a_bare_allow_still_fails(state_home, workspace_dir, monkeypatch):
-    """The check must not be widened into uselessness: an unbounded pytest
-    allowed through UNCHANGED is the flood the guard exists to stop."""
-    import ctx.hook as hook
-
-    monkeypatch.setattr(hook, "classify", lambda _p: {"decision": "allow"})
+    monkeypatch.setattr(hook, "claude_code_pre_tool_use_output", lambda e, d: {
+        "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                               "updatedInput": {"command": "ctx run -- pytest -q"}}})
     ok, detail = _hook_line(make_ws(workspace_dir))
-    assert not ok, f"a bare allow is a real problem: {detail}"
+    assert not ok, detail
 
 
 def test_a_broken_classifier_still_fails(state_home, workspace_dir, monkeypatch):
     import ctx.hook as hook
 
-    def _boom(_p):
+    def _boom(*_a, **_k):
         raise RuntimeError("classifier exploded")
 
     monkeypatch.setattr(hook, "classify", _boom)

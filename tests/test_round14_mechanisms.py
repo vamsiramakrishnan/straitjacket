@@ -39,39 +39,18 @@ def test_every_collapsed_command_actually_parses(cmd):
     _assert_parses(sub.command)
 
 
-def test_the_scope_rides_inside_the_query():
+def test_a_scoped_search_runs_as_itself():
     from ctx.substitute import collapse
 
-    sub = collapse("grep -rn NEEDLE tests/", failure_available=False,
-                   symbols_resolvable=False)
-    assert sub is not None
-    # Asserted through the PARSER, not by matching a spelling: the fields are
-    # shlex-quoted inside the query so a pattern carrying `|` or a quote
-    # survives as one token, which makes the literal text unstable but the
-    # parsed result exact.
-    from ctx.query import parse_query
-
-    argv = shlex.split(sub.command)
-    assert argv[1] == "q" and len(argv) == 3, "the query is ONE argument"
-    stages = parse_query(argv[2])
-    assert stages[0][0] == "search"
-    assert "tests/**" in stages[0][1], stages
-    _assert_parses(sub.command)
+    assert collapse("grep -rn NEEDLE tests/", failure_available=False,
+                    symbols_resolvable=False) is None
 
 
 def test_a_scope_with_a_quote_declines_rather_than_emitting_garbage():
-    from ctx.substitute import _scope_hint
-
-    assert _scope_hint(["tests/"]) == "tests/**"
-    # The whole query is quoted once; a scope carrying a quote cannot survive
-    # that single layer, so the caller declines instead of emitting a
-    # malformed command.
     from ctx.substitute import collapse
 
-    sub = collapse("grep -rn NEEDLE \"a'b/\"", failure_available=False,
-                   symbols_resolvable=False)
-    if sub is not None:
-        _assert_parses(sub.command)
+    assert collapse("grep -rn NEEDLE \"a'b/\"", failure_available=False,
+                    symbols_resolvable=False) is None
 
 
 # ---------------------------------------- an id must not collide by joining

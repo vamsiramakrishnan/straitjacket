@@ -44,6 +44,7 @@ retrieval returns bounded regions on demand
 | Understand the product decision | [Why straitjacket](WHY-STRAITJACKET.md) |
 | Configure budgets, storage, or redaction | [Configuration](CONFIGURATION.md) |
 | Compare host enforcement | [Host capabilities](HOST-CAPABILITIES.md) |
+| Handle a large paste, a large file, an image or a video | [Pastes and media](PASTES-AND-MEDIA.md) |
 | Connect Hermes, OMP, OpenCode, or DSH | [Agent integrations](AGENT-INTEGRATIONS.md) |
 | Embed bounded tools in your own harness | [Tool SDK](TOOL-SDK.md) |
 | Understand handles, spans, and profiles | [Core concepts](CONCEPTS.md) |

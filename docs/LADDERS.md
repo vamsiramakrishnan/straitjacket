@@ -78,11 +78,11 @@ it; "latching" says whether it can flap.
 | ladder | axis | steps | traversed by | signal | latching | measured today? |
 |---|---|---|---|---|---|---|
 | Solution ladder (skill r13) | what code to write | not-needed → reuse → native feature → stdlib → one-liner → new code (exempt: trust boundaries, data loss, security, accessibility) | model (advisory) | none (in-prompt) | n/a | ❌ **not scored** — the rung is chosen inside the model's reasoning and never crosses a tool boundary; existing A/Bs did not isolate or instrument its effect |
-| Capture ladder | how work executes | native → `run` → pipeline (`--shell`) → `seq` → `eval` → `job` (this wave) | model (taught) + hook (steered) | command shape | n/a | ✅ **measured** — `collapse.jsonl` carries a rung per substitution; `ctx ladders` shows the distribution |
+| Capture ladder | how work executes | native → `run` → pipeline (`--shell`) → `seq` → `eval` → `job` (this wave) | model (taught) + hook (steered) | command shape | n/a | ⚠️ **receives no records** — the substitutions that wrote `collapse.jsonl` rungs are retired, so `ctx ladders` has nothing to show for this ladder |
 | Emission budgets | how much rides | inline-complete → digest → failure×2 → truncation note | harness | output size, exit code | no (per event) | ✅ **measured (derived)** — `plan-emissions.jsonl` `visible_tokens`, bucketed against the configured budgets. The tier a size falls under, not a record of which check bound it |
 | Graduated engagement | affordance surface | passive → active | harness | call count ≥ 8, truncation events, model tier | latches up per session | ✅ **measured** (point sample) — `engagement.json` carries the current level; still no transition history |
 | Window pressure | residency defense | normal → tightened budgets → epoch-latched rescue | harness (hook + proxy) | window.json fullness % | rescue latches | ✅ **measured** — proxy `window.json` fullness, bucketed onto the rungs |
-| Guard modes | steering strength | advisory → guarded → strict; allow → ask → force_ask → deny | static config | none at runtime | static | ✅ **measured** — `guard-policy-cache.json` `policy.mode`; one value per workspace, so use `ctx ladders --corpus` for the distribution |
+| Guard modes | steering strength | advisory → guarded → strict (strict has no code path of its own; it behaves as guarded); allow → ask → force_ask → deny | static config | none at runtime | static | ✅ **measured** — `guard-policy-cache.json` `policy.mode`; one value per workspace, so use `ctx ladders --corpus` for the distribution |
 | Policy epochs | per-command trust | unknown → promoted / demoted | compiler (offline) | run telemetry: bounded-output reliability | committed epochs | ✅ **measured** — promoted/demoted command counts in the committed policy. (`planMode` is a *different* axis and is deliberately not read here) |
 | Deployment tiers | enforcement depth | skill → plugin → native → hardened | human | none | static | ✅ **measured (probe)** — read from what `ctx wrap` actually installed, not from a ledger |
 | Model tiers (Maki steal, open) | who reasons | economy → adaptive → flagship | router | task complexity | per node | ⚠️ **instrumented, silent** — `route.jsonl` records a tier per routed node; no data until `ctx orchestrate` runs |
@@ -95,7 +95,9 @@ Two observations fall out of just writing the table:
    partially measured; statically-set ladders (guard modes, deployment)
    are never traversed at runtime and generate **no outcome data at all** —
    we cannot say whether `strict` beats `guarded` because nothing records
-   what each mode cost or saved.
+   what each mode cost or saved. (As of this writing the question has a
+   shorter answer: `strict` behaves exactly as `guarded`, so there is
+   nothing to compare.)
 2. **Latching discipline is inconsistent.** Rescue latches (deliberately,
    to protect the cache prefix); engagement latches up; pressure
    tightening un-latches freely (flaps with window %); failure budgets are

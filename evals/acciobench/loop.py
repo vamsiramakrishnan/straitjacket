@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -25,8 +26,15 @@ from ctx.deliverables import (  # noqa: E402
 from ctx.residence import WatermarkResidence  # noqa: E402
 
 from .browser import BrowserPool, BrowserSession  # noqa: E402
-from .config import BenchConfig, RunMetrics, load_cab_task  # noqa: E402
-from .host import ToolHost  # noqa: E402
+from .config import (  # noqa: E402
+    BenchConfig,
+    RunMetrics,
+    config_fingerprint,
+    ctx_version,
+    load_cab_task,
+    task_inputs_digest,
+)
+from .host import ToolHost, bwrap_sandbox_executable  # noqa: E402
 from .providers import ModelProvider  # noqa: E402
 from .sandbox import TaskSandbox  # noqa: E402
 from .schemas import (  # noqa: E402
@@ -215,7 +223,230 @@ def _format_progress(metrics: RunMetrics) -> str:
         f"tot {metrics.total_tokens:>9,} | {metrics.wall_clock_s:>5.1f}s | "
         f"pass={'Y' if metrics.passed else 'N'} cap={metrics.capacity_score:.2f} "
         f"({metrics.checks_passed}/{metrics.checks_total}) | {metrics.termination}"
+        + (" | UNGRADED (grading error)" if metrics.grading_error else "")
     )
+
+
+def _interpret_reward(data: Any) -> tuple[float, int, int, list[dict[str, Any]]]:
+    """The one place a grader's reward is read: ``(score, checks_passed, checks_total,
+    checks_breakdown)``. Anything the harness cannot interpret raises ``ValueError`` and
+    becomes a grading error (ungraded), never a task failure."""
+    import math
+
+    if not isinstance(data, dict):
+        raise ValueError(f"reward.json is a {type(data).__name__}, not an object")
+    if "_error" in data:
+        raise ValueError(str(data.get("_error") or "grader failed"))
+
+    def _num(key: str) -> float | None:
+        v = data.get(key)
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError(f"reward.json {key!r} is not a finite number: {v!r}"[:_MAX_VERIFIER_ERR_CHARS])
+        return float(v)
+
+    score = _num("score")
+    cp = _num("checks_passed")
+    ct = _num("checks_total")
+    for key, v in (("checks_passed", cp), ("checks_total", ct)):
+        if v is not None and (v < 0 or v != int(v)):
+            raise ValueError(f"reward.json {key!r} is not a non-negative integer: {v!r}")
+    cp_i, ct_i = int(cp or 0), int(ct or 0)
+    if cp_i > ct_i:
+        raise ValueError(f"reward.json checks_passed {cp_i} > checks_total {ct_i}")
+    if score is None and ct_i == 0:
+        raise ValueError("reward.json has neither a score nor any checks")
+    if score is not None and score < 0:
+        raise ValueError(f"reward.json score is negative: {score!r}")
+    breakdown = data.get("checks_breakdown")
+    if breakdown is None:
+        breakdown = []
+    if not isinstance(breakdown, list) or not all(isinstance(c, dict) for c in breakdown):
+        raise ValueError("reward.json 'checks_breakdown' is not a list of objects")
+    return float(score or 0.0), cp_i, ct_i, breakdown
+
+
+def _grade_into(
+    config: BenchConfig,
+    provider: ModelProvider,
+    sandbox: TaskSandbox,
+    meta_dir: Path,
+    metrics: RunMetrics,
+) -> None:
+    """Run the official grader and record its verdict, or a grading error, in ``metrics``.
+
+    A grader failure (timeout, missing or invalid ``reward.json``) is NOT a task
+    failure: ``metrics.grading_error`` is set, the score fields stay at zero and
+    reports leave the trial out of every aggregate until it is re-graded."""
+    judge_tok = (
+        provider.judge_access_token() if config.judge_provider == "vertex" else ""
+    )
+    reward_json = meta_dir / "reward.json"
+    reward_json.unlink(missing_ok=True)  # never read a previous grade as this one
+    try:
+        grade_data: Any = sandbox.grade(reward_json, judge_token=judge_tok)
+    except Exception as exc:
+        grade_data = {"_error": f"grader could not run: {type(exc).__name__}: {exc}"}
+    metrics.notes = [n for n in metrics.notes if not n.startswith("verifier error:")]
+    try:
+        raw_score, cp_cnt, ct_cnt, breakdown = _interpret_reward(grade_data)
+    except ValueError as exc:
+        grade_data = {"_error": str(exc)}
+    if "_error" not in grade_data:
+        metrics.grading_error = ""
+        metrics.raw_verifier_score = raw_score
+        metrics.checks_passed = cp_cnt
+        metrics.checks_total = ct_cnt
+        if ct_cnt > 0:
+            metrics.capacity_score = cp_cnt / ct_cnt
+            metrics.passed = (cp_cnt == ct_cnt) or (raw_score >= _PASS_SCORE_THRESHOLD)
+        else:
+            metrics.capacity_score = raw_score
+            metrics.passed = raw_score >= _PASS_SCORE_THRESHOLD
+        metrics.failed_checks = [
+            f"{chk.get('id')}: {str(chk.get('reason', ''))[:_MAX_CHECK_REASON_CHARS]}"
+            for chk in breakdown
+            if not chk.get("passed")
+        ]
+    else:
+        err_msg = str(grade_data.get("_error", ""))[:_MAX_VERIFIER_ERR_CHARS]
+        metrics.grading_error = err_msg.strip() or f"grader exited {grade_data.get('_exit')}"
+        metrics.passed = False
+        metrics.capacity_score = 0.0
+        metrics.raw_verifier_score = 0.0
+        metrics.checks_passed = 0
+        metrics.checks_total = 0
+        metrics.failed_checks = []
+        metrics.notes.append(f"verifier error: {err_msg}")
+
+
+def _regrade_cached(
+    config: BenchConfig,
+    spec: Any,
+    provider: ModelProvider,
+    cached: RunMetrics,
+    run_dir: Path,
+    meta_dir: Path,
+    result_file: Path,
+    slot: int,
+) -> RunMetrics | None:
+    """Grade a finished trial's outputs again, without any model call and without
+    touching its run directory. ``None`` when that is impossible (directories gone)."""
+    sandbox = TaskSandbox(config, spec, run_dir, meta_dir, slot)
+    try:
+        try:
+            sandbox.prepare_regrade()
+        except FileNotFoundError:
+            return None
+        _grade_into(config, provider, sandbox, meta_dir, cached)
+    except Exception as exc:
+        cached.grading_error = f"re-grade failed: {str(exc)[:_MAX_VERIFIER_ERR_CHARS]}"
+    finally:
+        sandbox.cleanup()
+    result_file.write_text(
+        json.dumps(cached.to_dict(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return cached
+
+
+#: Harness constants that change what a trial measures (residence/compaction cadence,
+#: loop gates); part of the resume fingerprint alongside config.FINGERPRINT_FIELDS.
+_HARNESS_BEHAVIOUR: dict[str, Any] = {
+    "max_empty_turns": _MAX_EMPTY_TURNS,
+    "max_text_nudges": _MAX_TEXT_NUDGES,
+    "min_steps_for_text_complete": _MIN_STEPS_FOR_TEXT_COMPLETE,
+    "max_identical_turn_streak": _MAX_IDENTICAL_TURN_STREAK,
+    "max_dup_turn_streak": _MAX_DUP_TURN_STREAK,
+    "max_service_delta_gate_hits": _MAX_SERVICE_DELTA_GATE_HITS,
+    "compact_min_turn_gap": _COMPACT_MIN_TURN_GAP,
+    "micro_py_streak_limit": _MICRO_PY_STREAK_LIMIT,
+    "pass_score_threshold": _PASS_SCORE_THRESHOLD,
+}
+
+
+def _accept_for_config(saved: dict[str, Any], config: BenchConfig, fingerprint: str, slug: str) -> bool:
+    """May a cached result stand for a trial under ``config``? One line explains a refusal
+    or a legacy acceptance."""
+    saved_fp = str(saved.get("config_fingerprint") or "")
+    if saved_fp:
+        if saved_fp == fingerprint:
+            return True
+        with _PRINT_LOCK:
+            print(
+                f"  [rerun] {slug}: configuration changed since this result "
+                f"(fingerprint {saved_fp} -> {fingerprint})",
+                flush=True,
+            )
+        return False
+    saved_model = str(saved.get("model_id") or "")
+    with _PRINT_LOCK:
+        if saved_model == config.model:
+            print(
+                f"  [legacy] {slug}: result predates config fingerprints; accepted because "
+                f"model_id={saved_model} matches",
+                flush=True,
+            )
+            return True
+        print(
+            f"  [rerun] {slug}: result predates config fingerprints and was produced by "
+            f"model_id={saved_model or '?'}, not {config.model}",
+            flush=True,
+        )
+    return False
+
+
+class SupersedeError(RuntimeError):
+    """A previous configuration's trial could not be moved aside; nothing was deleted."""
+
+
+def _supersede(config: BenchConfig, run_dir: Path, meta_dir: Path, saved: dict[str, Any]) -> Path:
+    """Move a previous configuration's trial out of ``runs/`` (reports never load it from
+    there) into its OWN new directory ``<workdir>/superseded/<fingerprint>[.N]/``.
+
+    Never deletes: an existing destination gets a counter suffix, and the moves are plain
+    renames (no copy-then-delete). If a rename fails, the ones already done are undone,
+    the trial's directories are left where they were, and ``SupersedeError`` stops this
+    trial so the caller never wipes them."""
+    tag = str(saved.get("config_fingerprint") or "") or (
+        "legacy-" + "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in str(saved.get("model_id") or "unknown"))
+    )
+    srcs = [p for p in (run_dir, meta_dir) if p.exists()]
+    moved: list[tuple[Path, Path]] = []
+    created: Path | None = None  # the directory this call made, if it got that far
+    try:
+        parent = config.workdir / "superseded"
+        parent.mkdir(parents=True, exist_ok=True)
+        n = 1
+        while True:
+            dest_root = parent / (tag if n == 1 else f"{tag}.{n}")
+            try:
+                dest_root.mkdir()  # exclusive: never reuse a directory that holds a trial
+                created = dest_root
+                break
+            except FileExistsError:
+                n += 1
+        for src in srcs:
+            dest = dest_root / src.name
+            os.rename(src, dest)
+            moved.append((src, dest))
+    except OSError as exc:
+        for src, dest in reversed(moved):
+            try:
+                os.rename(dest, src)
+            except OSError:
+                pass
+        if created is not None:
+            try:
+                os.rmdir(created)  # removes it only if it is empty again
+            except OSError:
+                pass
+        raise SupersedeError(
+            f"{run_dir.name}: could not move the previous configuration's trial aside "
+            f"({exc}); it was left in place and this trial was not run"
+        ) from exc
+    return dest_root
 
 
 def run_trial(
@@ -248,14 +479,46 @@ def run_trial(
     meta_dir = config.runs_dir / f"{slug}_meta"
     result_file = meta_dir / "result.json"
 
+    fingerprint = config_fingerprint(
+        config,
+        _HARNESS_BEHAVIOUR,
+        {
+            "task_inputs": task_inputs_digest(Path(spec.case_dir)),
+            "bwrap_sandbox": bwrap_sandbox_executable() is not None,
+            "ctx_version": ctx_version(config.ctx_bin) if is_sj else None,
+        },
+    )
     if config.resume and result_file.is_file():
         try:
             saved = json.loads(result_file.read_text(encoding="utf-8"))
-            if str(saved.get("termination", "")) not in _RESUMABLE_ERROR_TERMINATIONS:
+        except Exception:
+            saved = None
+        if isinstance(saved, dict) and not _accept_for_config(saved, config, fingerprint, slug):
+            _supersede(config, run_dir, meta_dir, saved)  # SupersedeError stops this trial
+            saved = None
+        try:
+            if saved is None:
+                pass
+            elif str(saved.get("termination", "")) not in _RESUMABLE_ERROR_TERMINATIONS:
                 cached = RunMetrics.from_dict(saved)
-                with _PRINT_LOCK:
-                    print(f"  [cached] {_format_progress(cached)}", flush=True)
-                return cached
+                if cached.grading_error:
+                    # The agent finished; only the grader failed. Grade its outputs again.
+                    regraded = _regrade_cached(
+                        config, spec, provider, cached, run_dir, meta_dir, result_file, slot
+                    )
+                    if regraded is not None:
+                        with _PRINT_LOCK:
+                            print(f"  [regraded] {_format_progress(regraded)}", flush=True)
+                        return regraded
+                    with _PRINT_LOCK:
+                        print(
+                            f"  [rerun] {slug}: grading error and the trial's directories are gone",
+                            flush=True,
+                        )
+                else:
+                    with _PRINT_LOCK:
+                        print(f"  [cached] {_format_progress(cached)}", flush=True)
+                    return cached
         except Exception:
             pass
 
@@ -273,6 +536,7 @@ def run_trial(
         model_id=config.model,
         wave=wave,
         bucket=bucket,
+        config_fingerprint=fingerprint,
     )
 
     sandbox = TaskSandbox(config, spec, run_dir, meta_dir, slot)
@@ -722,32 +986,7 @@ def run_trial(
             browser.close()
             browser = None
 
-        judge_tok = (
-            provider.judge_access_token() if config.judge_provider == "vertex" else ""
-        )
-        reward_json = meta_dir / "reward.json"
-        grade_data = sandbox.grade(reward_json, judge_token=judge_tok)
-        if "_error" not in grade_data:
-            raw_score = float(grade_data.get("score", 0.0) or 0.0)
-            cp_cnt = int(grade_data.get("checks_passed", 0) or 0)
-            ct_cnt = int(grade_data.get("checks_total", 0) or 0)
-            metrics.raw_verifier_score = raw_score
-            metrics.checks_passed = cp_cnt
-            metrics.checks_total = ct_cnt
-            if ct_cnt > 0:
-                metrics.capacity_score = cp_cnt / ct_cnt
-                metrics.passed = (cp_cnt == ct_cnt) or (raw_score >= _PASS_SCORE_THRESHOLD)
-            else:
-                metrics.capacity_score = raw_score
-                metrics.passed = raw_score >= _PASS_SCORE_THRESHOLD
-            metrics.failed_checks = [
-                f"{chk.get('id')}: {str(chk.get('reason', ''))[:_MAX_CHECK_REASON_CHARS]}"
-                for chk in (grade_data.get("checks_breakdown") or [])
-                if not chk.get("passed")
-            ]
-        else:
-            err_msg = str(grade_data.get("_error", ""))[:_MAX_VERIFIER_ERR_CHARS]
-            metrics.notes.append(f"verifier error: {err_msg}")
+        _grade_into(config, provider, sandbox, meta_dir, metrics)
 
     except Exception as exc:
         metrics.wall_clock_s = round(time.time() - t0, 1)

@@ -514,52 +514,83 @@ def _cmd_run(args: argparse.Namespace) -> int:
         f"provider={config.provider} | model={config.model} | workers={config.workers}",
         flush=True,
     )
-    suite_results = run_suite(config, task_ids, wave_map=wave_map, bucket_map=bucket_map)
+    raised: list[Any] = []
+    suite_results = run_suite(config, task_ids, wave_map=wave_map, bucket_map=bucket_map, raised=raised)
 
     all_results = load_run_results(config.runs_dir)
     selected_set = set(task_ids)
-    scoped_results = [r for r in all_results if r.task_id in selected_set and r.arm in config.arms] or suite_results
+    # A trial that raised wrote nothing. Whatever its slot in runs/ holds is an earlier
+    # run's result (for example a previous configuration's that could not be moved
+    # aside), so it must not stand in for this run's in the reports below.
+    not_recorded = {(r.task_id, r.arm) for r in raised}
+    for r in raised:
+        print(
+            f"[not recorded] {r.task_id} ({r.arm}): {'; '.join(str(n) for n in r.notes) or 'the trial raised'}. "
+            "No result was written for it; any earlier result in its slot is left out of this run's reports.",
+            file=sys.stderr,
+            flush=True,
+        )
+    # The in-memory results stand in only when nothing on disk matches the selection
+    # (ids given as paths, say). The stand-ins for raised trials are never results:
+    # when every trial raised, the reports show no completed run.
+    raised_ids = {id(r) for r in raised}
+    scoped_results = [
+        r for r in all_results
+        if r.task_id in selected_set and r.arm in config.arms and (r.task_id, r.arm) not in not_recorded
+    ] or [r for r in suite_results if id(r) not in raised_ids]
+
+    # The trials are done and their results are on disk: a report that fails to render
+    # must not cost the run. Say which one failed and how to regenerate it.
+    def _report_failed(kind: str, fmt_name: str, exc: BaseException) -> None:
+        print(
+            f"\n[report] the {kind} report failed to render ({type(exc).__name__}: {exc}); "
+            f"the run's results are intact in {config.runs_dir}. Regenerate it with:\n"
+            f"  python evals/acciobench_run.py report --workdir {config.workdir} --format {fmt_name}"
+            + (f" --dataset-root {config.dataset_root}" if fmt_name == "html" else ""),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def _write_html(out_path: Path, label: str) -> None:
+        try:
+            html_doc = render_summary_report(
+                scoped_results,
+                baseline_json=args.baseline_json,
+                format="html",
+                workdir=config.workdir,
+                dataset_root=config.dataset_root,
+                ctx_state_dir=config.ctx_state_home,
+            )
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(html_doc, encoding="utf-8")
+        except Exception as exc:
+            _report_failed("HTML", "html", exc)
+            return
+        print(f"\n{label}: {out_path}")
 
     fmt = (args.format or "table").strip().lower()
     if fmt == "html":
-        html_doc = render_summary_report(
-            scoped_results,
-            baseline_json=args.baseline_json,
-            format="html",
-            workdir=config.workdir,
-            dataset_root=config.dataset_root,
-            ctx_state_dir=config.ctx_state_home,
-        )
         out_path = Path(args.output or args.html_output or (config.workdir / "acciobench_report.html")).expanduser().resolve()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(html_doc, encoding="utf-8")
-        print(f"\nInteractive HTML report written to: {out_path}")
+        _write_html(out_path, "Interactive HTML report written to")
         return 0
 
-    rendered = render_summary_report(
-        scoped_results,
-        baseline_json=args.baseline_json,
-        format=args.format,
-    )
-    print("\n" + rendered)
-    if args.output is not None:
-        out_path = Path(args.output).expanduser().resolve()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(rendered, encoding="utf-8")
+    try:
+        rendered = render_summary_report(
+            scoped_results,
+            baseline_json=args.baseline_json,
+            format=args.format,
+        )
+        print("\n" + rendered)
+        if args.output is not None:
+            out_path = Path(args.output).expanduser().resolve()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(rendered, encoding="utf-8")
+    except Exception as exc:
+        _report_failed(fmt, fmt, exc)
 
     if not getattr(args, "no_html_report", False):
         html_target = Path(args.html_output or (config.workdir / "acciobench_report.html")).expanduser().resolve()
-        html_doc = render_summary_report(
-            scoped_results,
-            baseline_json=args.baseline_json,
-            format="html",
-            workdir=config.workdir,
-            dataset_root=config.dataset_root,
-            ctx_state_dir=config.ctx_state_home,
-        )
-        html_target.parent.mkdir(parents=True, exist_ok=True)
-        html_target.write_text(html_doc, encoding="utf-8")
-        print(f"\nAuto-generated interactive HTML report: {html_target}")
+        _write_html(html_target, "Auto-generated interactive HTML report")
     return 0
 
 

@@ -2,6 +2,8 @@
 
 **Status:** accepted · **Date:** 2026-07-25 ·
 **Source:** <https://antigravity.google/docs/hooks> (read 2026-07-25)
+> Updated 2026-11-11: see [the dated update at the end](#update-2026-11-11-observed-on-agy-155). It supersedes "cannot modify tool arguments", "There is no `SessionStart`", the advisory on `PreInvocation`, and `input_substitution` False for Antigravity.
+
 **Supersedes:** the assumed input-substitution contract previously encoded in
 `ctx.hook._to_antigravity_schema`
 
@@ -85,3 +87,31 @@ carries the URL; if Antigravity later publishes an input- or output-substitution
 field, the mapper in `ctx.hook` is the single place that changes, and
 `HostSpec.input_substitution` / `output_substitution` are the flags that record
 it.
+
+## Update 2026-11-11: observed on `agy` 1.5.5
+
+The decision above records the contract as published on 2026-07-25. Three of its
+statements no longer describe `agy` 1.5.5, which was exercised live (receipt:
+[`evals/agy-rewrite-live-2026-11-11.md`](../../evals/agy-rewrite-live-2026-11-11.md)).
+The history above is kept as written.
+
+- **PreToolUse can modify arguments.** `{"decision": "allow", "overwrite": {…}}` is
+  merged into `toolCall.args` before the tool runs. An empty object `{}` is read as a
+  deny. The hook payload nests the call as `toolCall: {name, args, id}` beside
+  `hookEventName` (added in `agy` 1.5.4); a payload without `hookEventName` is treated
+  as the older contract. ctx rewrites `run_command` and `read_file` only, and
+  `HostSpec.input_substitution` is now `True` for Antigravity, limited per tool by
+  `ctx.governance.REWRITABLE`. Every other tool keeps the deny-and-name behaviour
+  decided above.
+- **A `SessionStart` event exists.** A `systemMessage` step injected there stays in the
+  conversation. The pre-flight advisory therefore moved from `PreInvocation`, where it
+  was ephemeral and repeated, to `SessionStart`; `PreInvocation` keeps only relay text.
+  An `agy` older than 1.5.4 keeps the earlier arrangement.
+- **PostToolUse is unchanged and gives less than assumed.** It accepts only `{}`, and
+  its payload carries no tool result, so the post stage records the call and captures
+  nothing. `output_substitution` stays `False`. The consequence above, that Antigravity
+  has no output-side safety net, still stands.
+
+A permission consequence follows from the first point: the host checks its permission
+rules against the rewritten command. `ctx.agyperm` evaluates the user's rules against
+the original command, so a rewrite is never more permitted than the original.

@@ -33,8 +33,10 @@ def ctx_argv(exe: str | None = None) -> list[str]:
     if exe is not None:
         argv = shlex.split(exe)
     else:
-        binary = shutil.which("ctx")
-        argv = [binary] if binary else [sys.executable, "-m", "ctx"]
+        # Never a form that imports `ctx` from the host's working directory.
+        from ctx.selfcmd import ctx_argv as _safe_ctx_argv
+
+        argv = _safe_ctx_argv()
     if not argv:
         raise IntegrationError("ctx executable command is empty")
     return argv
@@ -103,8 +105,6 @@ def _merged(host: str, root: Path, expected: dict | list) -> dict | list:
     path = root / FILES[host]
     if path.is_symlink() or any(p.is_symlink() for p in path.parents if p != root and root in p.parents):
         raise IntegrationError(f"Refusing to write through a symlink: {FILES[host]}")
-    if host == "opencode" and (root / "opencode.jsonc").exists():
-        raise IntegrationError("opencode.jsonc exists; merge the `ctx wrap opencode --print-config` mcp entry there. ctx will not shadow or rewrite JSONC.")
     if not path.exists():
         return expected
     current = _read(path)
@@ -112,7 +112,7 @@ def _merged(host: str, root: Path, expected: dict | list) -> dict | list:
         if current != expected:
             raise IntegrationError(f"{FILES[host]} differs from the generated configuration; move it aside or reconcile it before setup.")
         return current
-    key = "mcp" if host == "opencode" else "mcpServers"
+    key = "mcpServers"
     if not isinstance(current, dict) or not isinstance(current.get(key, {}), dict):
         raise IntegrationError(f"{FILES[host]} must contain an object at {key}.")
     servers = current.setdefault(key, {})
@@ -129,6 +129,10 @@ def _merged(host: str, root: Path, expected: dict | list) -> dict | list:
 
 
 def conflicts(host: str, root: Path) -> list[str]:
+    if host == "opencode":
+        from ctx.host_config import plan_configuration
+        plan = plan_configuration(root, [host])
+        return [plan.render()] if plan.blockers else []
     from ctx.native_hooks import conflicts as hook_conflicts
     problems = hook_conflicts(host, root)
     if problems:
@@ -145,29 +149,52 @@ def conflicts(host: str, root: Path) -> list[str]:
     return []
 
 
-def _write(path: Path, value: dict | list) -> None:
-    text = json.dumps(value, indent=2) + "\n"
-    if path.exists() and path.read_text(encoding="utf-8") == text:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Exclusive temp file; do not leave a truncated user configuration on failure.
-    import tempfile
+def _write(path: Path, value: dict | list, *, root: Path | None = None) -> None:
+    """Exclusive temp file + rename; never through a symlink or a directory
+    symlinked outside ``root`` (safe by construction, not by the callers'
+    earlier checks)."""
+    from ctx.launchform import UnsafeWrite, write_safely
 
-    fd, temporary = tempfile.mkstemp(prefix=".ctx-", dir=path.parent)
+    text = json.dumps(value, indent=2) + "\n"
+    if path.exists() and not path.is_symlink() and path.read_text(encoding="utf-8") == text:
+        return
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(text)
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+        write_safely(path, text, root=root if root is not None else path.parent)
+    except UnsafeWrite as exc:
+        raise IntegrationError(f"Refusing to write {_display_rel(path, root or path.parent)}: {exc}") from None
+
+
+def _display_rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def install(host: str, ws, *, init_policy: bool = True) -> str:
     from ctx.installer import init_workspace
+    from ctx.launchform import upgrade as upgrade_launch_forms
+
+    # ctx-owned commands still in the unsafe `python -m ctx` form are
+    # rewritten in place FIRST, even if setup then refuses the rest.
+    upgraded = upgrade_launch_forms(ws.root, [host])
+    if host == "opencode":
+        from ctx.config_edit import ConfigError
+        from ctx.host_config import plan_configuration
+        plan = plan_configuration(ws.root, [host])
+        if plan.blockers:
+            raise IntegrationError("\n".join([*upgraded, plan.render()]))
+        try:
+            plan.apply()
+        except ConfigError as exc:
+            raise IntegrationError(str(exc)) from exc
+        if init_policy:
+            init_workspace(ws.root, quiet=True)
+        return "\n".join([*upgraded, plan.render(), next_step(host, ws.root)])
 
     problems = conflicts(host, ws.root)
     if problems:
-        raise IntegrationError("\n".join(problems))
+        raise IntegrationError("\n".join([*upgraded, *problems]))
     expected = configuration(host, ws.root)
     merged = _merged(host, ws.root, expected)
     if host == "hermes" and shutil.which("hermes"):
@@ -176,12 +203,13 @@ def install(host: str, ws, *, init_policy: bool = True) -> str:
             result = _hermes("set", f"mcp_servers.{SERVER}", json.dumps(wanted))
             if result.returncode or _hermes_servers().get(SERVER) != wanted:
                 raise IntegrationError("Hermes did not activate ctx-harness; inspect its active profile with `hermes config path`.")
-    _write(ws.root / FILES[host], merged)
+    _write(ws.root / FILES[host], merged, root=ws.root)
     if init_policy:
         init_workspace(ws.root, quiet=True)
     from ctx.native_hooks import install as install_hooks
     hook_note = install_hooks(host, ws.root)
-    return (f"{host}: wrote {FILES[host]}\n"
+    return ("".join(line + "\n" for line in upgraded)
+            + f"{host}: wrote {FILES[host]}\n"
             + hook_note + "\n"
             + next_step(host, ws.root))
 
@@ -200,6 +228,27 @@ def checks(root: Path) -> list[tuple[str, bool, str]]:
     rows = []
     for host in HOSTS:
         path = root / FILES[host]
+        if host == "opencode":
+            from ctx.config_edit import ConfigError, JSONSource
+            from ctx.host_config import opencode_path, owned_hosts, _read as read_config
+            from ctx.native_hooks import PATHS
+            if not any((root / p).exists() for p in ("opencode.json", "opencode.jsonc", PATHS[host])) and host not in owned_hosts(root):
+                continue
+            try:
+                path = root / opencode_path(root)
+                raw = read_config(root, path.name)
+                if raw is None:
+                    raise ConfigError(f"{path.name} is missing; rerun ctx setup --host opencode --preview")
+                current = JSONSource(raw.decode("utf-8")).data
+                expected = configuration(host, root)["mcp"][SERVER]
+                actual = current.get("mcp", {}).get(SERVER) if isinstance(current, dict) and isinstance(current.get("mcp", {}), dict) else None
+                disabled = current.get("disabledServers", []) if isinstance(current, dict) else []
+                ok = (isinstance(actual, dict) and isinstance(disabled, list) and SERVER not in disabled
+                      and all(type(actual.get(k)) is type(v) and actual.get(k) == v for k, v in expected.items()))
+                rows.append(("opencode MCP", ok, str(path.name) + (" verified; Start: opencode" if ok else ": MCP entry missing, disabled or changed; rerun ctx setup --host opencode --preview")))
+            except (ConfigError, OSError, UnicodeError, ValueError) as exc:
+                rows.append(("opencode MCP", False, str(exc)))
+            continue
         if not path.exists():
             continue
         try:
@@ -210,12 +259,10 @@ def checks(root: Path) -> list[tuple[str, bool, str]]:
             elif host == "dsh":
                 ok = current == expected
             else:
-                key = "mcp" if host == "opencode" else "mcpServers"
+                key = "mcpServers"
                 ok = (isinstance(current, dict) and isinstance(current.get(key), dict)
                       and current[key].get(SERVER) == expected[key][SERVER]
                       and SERVER not in current.get("disabledServers", []))
-                if host == "opencode" and (root / "opencode.jsonc").exists():
-                    ok = False
             detail = "config verified; " + next_step(host, root) if ok else "configuration missing or changed; rerun setup"
         except (IntegrationError, TypeError) as exc:
             ok, detail = False, str(exc)
@@ -231,6 +278,14 @@ def wrap(host: str, root: Path, agent_args: list[str] | None = None) -> int:
     try:
         if host == "hermes" and any(arg in ("--profile", "-p") or arg.startswith("--profile=") for arg in (agent_args or [])):
             raise IntegrationError("Select the Hermes profile before setup (or set HERMES_HOME for setup and launch); a launch-only --profile would configure a different profile.")
+        if host == "opencode":
+            from ctx.host_config import plan_configuration
+            plan = plan_configuration(root, [host])
+            if plan.blockers or plan.requires_review:
+                print(plan.render())
+                return 1
+            if plan.changes:
+                print(plan.render())
         print(install(host, resolve_workspace(str(root))))
         if not agent_args:
             return 0 if all(ok for name, ok, _ in checks(root) if name.startswith(host + " ")) else 1
