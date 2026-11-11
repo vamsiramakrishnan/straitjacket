@@ -181,7 +181,11 @@ does not know all run inside the sandbox (a plain call with the same argv, anyth
 else under `bash -c`). `ctx_retrieve` follows the same rule on the argv it builds
 from the model's `handle`, `pattern`, `query` and flag values; its `mode='query'`
 (`ctx q`, which can name files) always runs in the sandbox. The sandbox's mount
-arguments are computed once per working directory and reused.
+arguments are computed once per working directory and reused. When ctx is launched
+as a module (`--ctx-bin` pointing at a Python interpreter, or the source-checkout
+shim), every launch, including the `ctx` shim on the model's `PATH`, uses
+`python -P -m ctx` (as `ctx.selfcmd` does), so a `ctx.py` or `ctx/` the model writes
+into its task directory is never imported.
 
 ### Harness Performance Optimizations (Both Arms Benefit Equally)
 

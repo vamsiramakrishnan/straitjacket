@@ -2432,6 +2432,86 @@ def test_ctx_host_fast_path_serves_only_store_handle_reads(
     assert host.ctx_host_fastpath_calls == len(host_ctx_calls)
 
 
+_PLANT_BODY = (
+    "import os, sys\n"
+    "open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'PLANTED_RAN_' + str(os.getpid())), 'w').close()\n"
+    "print('PLANTED_CODE_RAN')\n"
+    "sys.exit(3)\n"
+)
+
+
+def _plant_markers(root: Path) -> list[Path]:
+    return sorted(root.rglob("PLANTED_RAN_*"))
+
+
+@pytest.mark.parametrize("use_bwrap", [None, False], ids=["bwrap_if_available", "fallback"])
+@pytest.mark.parametrize("plant", ["package", "module"])
+def test_ctx_module_launch_never_imports_from_run_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_bwrap: bool | None, plant: str
+) -> None:
+    # A Python interpreter as ctx_bin takes the `<python> -m ctx` branch (prefix and shim).
+    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT / "src"))
+    ds_root = tmp_path / "cab"
+    ds_root.mkdir()
+    cfg = BenchConfig(
+        dataset_root=ds_root, workdir=tmp_path / "work", arms=("sj",),
+        entry_gate_bytes=2_048, ctx_bin=Path(sys.executable),
+    )
+    run_dir = cfg.runs_dir / "t__sj__t1"
+    meta_dir = cfg.runs_dir / "t__sj__t1_meta"
+    (run_dir / "workspace").mkdir(parents=True)
+    (run_dir / "outputs").mkdir(parents=True)
+    if plant == "package":
+        (run_dir / "ctx").mkdir()
+        (run_dir / "ctx" / "__init__.py").write_text(_PLANT_BODY, encoding="utf-8")
+        (run_dir / "ctx" / "__main__.py").write_text(_PLANT_BODY, encoding="utf-8")
+    else:
+        (run_dir / "ctx.py").write_text(_PLANT_BODY, encoding="utf-8")
+
+    # Control: the old launch form does run the planted code from this directory.
+    ctl = subprocess.run(
+        [str(cfg.ctx_bin), "-m", "ctx", "--version"], cwd=str(run_dir),
+        capture_output=True, text=True, timeout=60,
+    )
+    assert "PLANTED_CODE_RAN" in ctl.stdout
+    for mk in _plant_markers(run_dir):
+        mk.unlink()
+
+    metrics = RunMetrics(task_id="t", task_rel="file/t", category="file", arm="sj", model_id="m")
+    host = ToolHost(cfg, run_dir, meta_dir, {}, dict(os.environ), metrics, None, arm="sj", use_bwrap=use_bwrap)
+    assert host._ctx_cmd_prefix[1:] == ["-P", "-m", "ctx"]
+    assert " -P -m ctx " in (host.bin_dir / "ctx").read_text(encoding="utf-8")
+
+    outs: list[str] = []
+    for i, cmd in enumerate(
+        [
+            "seq 1 3000 | sed 's/^/ROW_/'",  # ordinary sj bash: ctx run inside the sandbox
+            "ctx run -- echo SANDBOXED_CTX_OK",  # plain non-store ctx call: sandboxed argv
+            'ctx run --shell "echo SHELL_CTX_OK"',  # non-plain ctx call: sandboxed bash -c
+            "ctx --version | cat",  # the shim on PATH, via the ordinary path
+        ],
+        1,
+    ):
+        host.step = i
+        fr, _, _ = host.execute_part("bash", {"command": cmd})
+        outs.append(fr["functionResponse"]["response"]["output"])
+    m = re.search(r"\brun:([0-9a-f]{6,64})\b", outs[0])
+    assert m is not None, outs[0][:300]
+    host.step = 9
+    fr, _, _ = host.execute_part("bash", {"command": f"ctx get run:{m.group(1)} --lines 1:2"})  # host path
+    outs.append(fr["functionResponse"]["response"]["output"])
+    host.step = 10
+    fr, _, _ = host.execute_part("ctx_retrieve", {"handle": f"run:{m.group(1)}", "lines": "3:4"})
+    outs.append(fr["functionResponse"]["response"]["output"])
+    assert host.ctx_host_fastpath_calls == 2 and host.ctx_sandboxed_calls >= 2
+
+    assert "SANDBOXED_CTX_OK" in outs[1]
+    assert "SHELL_CTX_OK" in outs[2]
+    assert "ROW_1" in outs[4] and "ROW_3" in outs[5]
+    assert not any("PLANTED_CODE_RAN" in o for o in outs), outs
+    assert _plant_markers(run_dir) == []
+
+
 def test_deliverable_contract_and_q4_cross_row_outlier_detection(tmp_path: Path) -> None:
     from ctx.deliverables import (
         CLOSED_WORLD_CONTRACT_RULE,

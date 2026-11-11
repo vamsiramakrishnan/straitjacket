@@ -221,7 +221,8 @@ def resolve_ctx_bin(explicit: Path | None = None) -> Path:
         script = (
             "#!/usr/bin/env bash\n"
             f'export PYTHONPATH={src_q}${{PYTHONPATH:+:$PYTHONPATH}}\n'
-            f'exec {py_exec} -m ctx "$@"\n'
+            # -P (see ctx.selfcmd): never import a `ctx` from the caller's directory.
+            f'exec {py_exec} -P -m ctx "$@"\n'
         )
         if not shim_path.is_file() or shim_path.read_text(encoding="utf-8", errors="ignore") != script:
             tmp_shim = shim_dir / f".ctx.{os.getpid()}"

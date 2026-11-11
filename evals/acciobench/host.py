@@ -33,6 +33,7 @@ for _p in (_REPO_ROOT, _REPO_SRC):
 from ctx.deliverables import audit_deliverables  # noqa: E402
 from ctx.hook import ctx_command_words, ctx_read_kind  # noqa: E402
 from ctx.residence import extract_mutation_receipts  # noqa: E402
+from ctx.selfcmd import SAFE_PATH_FLAG  # noqa: E402
 from ctx.sessiondir import session_reads_path  # noqa: E402
 from ctx.toolresult import prepend_structured_data_shape  # noqa: E402
 
@@ -649,8 +650,11 @@ class ToolHost:
         if self.is_sj:
             ctx_bin = resolve_ctx_bin(config.ctx_bin)
             if "python" in ctx_bin.name.lower():
-                self._ctx_cmd_prefix = [str(ctx_bin), "-m", "ctx"]
-                shim_exec = f'exec "{ctx_bin}" -m ctx --workspace "{self.ctx_ws}" "$@"'
+                # `-P` (ctx.selfcmd): `python -m` would put the current directory -- the
+                # run directory the model writes into -- first on sys.path, so a planted
+                # `ctx.py` or `ctx/` would run as the harness's ctx.
+                self._ctx_cmd_prefix = [str(ctx_bin), SAFE_PATH_FLAG, "-m", "ctx"]
+                shim_exec = f'exec "{ctx_bin}" {SAFE_PATH_FLAG} -m ctx --workspace "{self.ctx_ws}" "$@"'
             else:
                 self._ctx_cmd_prefix = [str(ctx_bin)]
                 shim_exec = f'exec "{ctx_bin}" --workspace "{self.ctx_ws}" "$@"'
