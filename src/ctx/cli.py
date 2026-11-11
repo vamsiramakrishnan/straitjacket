@@ -186,6 +186,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "diff": ("retrieve", "cmd_diff", True),
     "image": ("binary", "cmd_image", True),
     "intake": ("intake", "cmd_intake", True),
+    "view": ("view", "cmd_view", True),
     "map": ("retrieve", "cmd_map", True),
     "def": ("retrieve", "cmd_def", True),
     "refs": ("retrieve", "cmd_refs", True),
@@ -519,6 +520,50 @@ def _build_parser():
         "--from", dest="start", type=int, default=1, metavar="N",
         help="with --chunks: first chunk number to list",
     )
+    p_view = sub.add_parser(
+        "view",
+        help="overview-first look at an image or video, with zoom on demand",
+        description=(
+            "Look at an image, screen recording or video without paying for "
+            "every pixel. With no selector an image gives a downscaled "
+            "overview with a labelled grid, and a video gives a contact sheet "
+            "of timestamped frames plus a metadata census. Zoom reads the "
+            "ORIGINAL pixels or frames. The result is a short digest, a "
+            "workspace-relative file to open, and exact `next:` commands. "
+            "Needs the `image` extra (Pillow) for images and ffmpeg for video; "
+            "a missing engine is reported, never a traceback."
+        ),
+    )
+    p_view.add_argument(
+        "target",
+        help="a file inside the workspace, or a blob:<id> / run:<id>[#stream] address")
+    p_view.add_argument("--fit", type=int, metavar="N",
+                        help="longest edge in pixels (image/frame) or sheet width")
+    p_view.add_argument("--grid", metavar="RxC",
+                        help="rows x columns of the labelled grid, e.g. 3x4")
+    p_view.add_argument("--cell", metavar="C",
+                        help="crop a grid cell (B2) or range (A1:B2) from the original")
+    p_view.add_argument("--region", metavar="R",
+                        help="crop pixels x,y,w,h or percentages x%%,y%%,w%%,h%% "
+                             "from the original")
+    p_view.add_argument("--at", metavar="T",
+                        help="one video frame at T: seconds (90) or clock (1:30 = 90s)")
+    p_view.add_argument("--range", metavar="A-B",
+                        help="a time range, each side seconds or clock: 2-9 or "
+                             "1:23-1:30 ('A:B' is refused as ambiguous); the "
+                             "sheet or scenes cover just this")
+    p_view.add_argument("--every", type=float, metavar="S",
+                        help="with --range: a frame every S seconds")
+    p_view.add_argument("--count", type=int, metavar="N",
+                        help="with --range or --sheet: N evenly spaced frames")
+    p_view.add_argument("--sheet", action="store_true",
+                        help="contact sheet of timestamped frames (video default)")
+    p_view.add_argument("--scenes", action="store_true",
+                        help="timestamps where the picture changes sharply")
+    p_view.add_argument("--subs", action="store_true",
+                        help="extract an embedded text subtitle track")
+    p_view.add_argument("--json", action="store_true",
+                        help="emit the same facts as JSON (schema ctx.view/v1)")
 
     p_edit = sub.add_parser(
         "edit", help="plan, preview, and safely apply anchored line edits"

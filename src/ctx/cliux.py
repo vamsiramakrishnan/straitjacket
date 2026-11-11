@@ -82,6 +82,8 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("image", "inspect image/PDF structure or compare two image renders"),
             ("intake", "store a paste, file or clipboard once; the agent sees a short "
                        "digest and a handle"),
+            ("view", "look at an image or video cheaply: an overview first, "
+                     "then zoom into one cell or moment"),
         ),
     ),
     (

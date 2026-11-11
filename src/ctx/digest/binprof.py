@@ -16,7 +16,7 @@ from ctx.digest.base import DigestContext, Profile, from_intake
 
 # Formats worth a typed binary digest. Plain "text" declines (falls through to
 # the text/log/table profiles); a NUL-bearing unknown blob is still bounded.
-_BINARY_FORMATS = binfmt.IMAGE_FORMATS | {"pdf", "binary", "gzip", "zip", "elf", "ogg"}
+_BINARY_FORMATS = binfmt.IMAGE_FORMATS | binfmt.MEDIA_FORMATS | {"pdf", "binary", "gzip", "zip", "elf", "ogg"}
 
 
 class BinaryProfile(Profile):
