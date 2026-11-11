@@ -139,9 +139,13 @@ python evals/acciobench_run.py run \
   where they were. `run` then prints a `[not recorded]` line for the trial and leaves
   the earlier result still in its slot out of the reports it writes (a later
   `report` on the same workdir reads whatever is on disk, so it will show that earlier
-  result until the trial is run again). `ctx_state/` is shared by all configurations.
+  result until the trial is run again). If every selected trial raised, those reports
+  show no completed run. `ctx_state/` is shared by all configurations.
   The task-directory hash reads regular files only; a FIFO, a device, a dangling
   symlink or an unreadable file is recorded by what it is instead of being opened.
+  It follows directory symlinks, because staging copies through them: a change beneath
+  a linked input directory is a change to the task. Each real directory is hashed
+  once; a second link to it, or a link back to an ancestor, is recorded by name.
 - **Grading errors are not failures**: when the official grader itself fails (timeout,
   missing, unparsable or uninterpretable `reward.json`: not an object, a non-numeric
   or non-finite score, checks_passed > checks_total, neither a score nor checks, a
@@ -153,6 +157,11 @@ python evals/acciobench_run.py run \
   still in its run directory (same staged case, same port map from
   `sandbox_ports.json`, mock services restarted from the trial's persisted state), with
   no model call and nothing wiped. Only if its run directory is gone is it re-run.
+  A re-grade must bind the ports its trial ran with, and trials that ran one after
+  another in one worker slot recorded the same ports, so sandboxes in one run take
+  turns on a host port: a re-grade waits (up to 30 minutes) for a port another trial
+  holds, and if something outside the run is listening on it the trial stays ungraded
+  with that reason, rather than being graded against another trial's service.
   Results written before this change that carry a `verifier error:` note and
   `passed=false` load as grading errors.
 - **Untouched model defaults**: `thinkingConfig` and `maxOutputTokens` are left unset by default so models run at their native provider defaults. Optional `--thinking-level` and `--max-output-tokens` flags are exposed strictly for explicit ablation studies.

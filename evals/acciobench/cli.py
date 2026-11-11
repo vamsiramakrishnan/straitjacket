@@ -530,10 +530,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
             flush=True,
         )
+    # The in-memory results stand in only when nothing on disk matches the selection
+    # (ids given as paths, say). The stand-ins for raised trials are never results:
+    # when every trial raised, the reports show no completed run.
+    raised_ids = {id(r) for r in raised}
     scoped_results = [
         r for r in all_results
         if r.task_id in selected_set and r.arm in config.arms and (r.task_id, r.arm) not in not_recorded
-    ] or suite_results
+    ] or [r for r in suite_results if id(r) not in raised_ids]
 
     # The trials are done and their results are on disk: a report that fails to render
     # must not cost the run. Say which one failed and how to regenerate it.

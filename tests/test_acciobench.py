@@ -1753,6 +1753,201 @@ def test_run_reports_leave_out_an_earlier_result_for_a_trial_that_raised(
     assert (workdir / "runs" / "file-b__sj__t1_meta" / "result.json").is_file()
 
 
+def test_run_reports_show_no_completed_run_when_every_trial_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With nothing usable on disk the run falls back to its in-memory results; the
+    stand-ins for trials that raised are not results and must not come back that way."""
+    ds_root = tmp_path / "cab"
+    workdir = tmp_path / "w"
+    for task in ("file-a", "file-b"):
+        _create_synthetic_task(ds_root, category="file", task_id=task)
+        meta = workdir / "runs" / f"{task}__sj__t1_meta"
+        meta.mkdir(parents=True)
+        (meta / "result.json").write_text(json.dumps(dict(
+            task_id=task, task_rel=f"file/{task}", category="file", arm="sj", model_id="earlier-model",
+            steps=3, termination="present_files", passed=True, capacity_score=1.0,
+            checks_passed=2, checks_total=2)), encoding="utf-8")
+
+    def all_raise(config: Any, task_ids: list[str], *, raised: list[RunMetrics], **_: Any) -> list[RunMetrics]:
+        for task in task_ids:
+            raised.append(RunMetrics(task_id=task, task_rel=task, category="file", arm="sj",
+                                     model_id=config.model, termination="error", notes=["could not move"]))
+        return list(raised)
+
+    monkeypatch.setattr(ab_cli, "run_suite", all_raise)
+    out_json = tmp_path / "report.json"
+    args = ab_cli.build_parser().parse_args(
+        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-a,file-b",
+         "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock",
+         "--format", "json", "--output", str(out_json), "--no-html-report"]
+    )
+    assert ab_cli._cmd_run(args) == 0
+    assert capsys.readouterr().err.count("[not recorded]") == 2
+    doc = json.loads(out_json.read_text(encoding="utf-8"))
+    assert doc["total_runs"] == 0 and doc["arms"] == {}
+
+
+def test_task_inputs_digest_follows_directory_links_like_staging_does(tmp_path: Path) -> None:
+    """Staging copies through a directory symlink, so a change beneath one changes what a
+    trial receives and must change the fingerprint; a link back to an ancestor must end."""
+    from evals.acciobench import config as cfg_mod
+
+    shared = tmp_path / "shared_inputs"
+    shared.mkdir()
+    (shared / "prices.csv").write_text("sku,usd\nA,1\n", encoding="utf-8")
+    case = tmp_path / "case"
+    (case / "workspace").mkdir(parents=True)
+    (case / "task.md").write_text("prompt", encoding="utf-8")
+    without_link = cfg_mod.task_inputs_digest(case)
+
+    (case / "workspace" / "data").symlink_to(shared, target_is_directory=True)
+    linked = cfg_mod.task_inputs_digest(case)
+    assert linked != without_link
+
+    (shared / "prices.csv").write_text("sku,usd\nA,2\n", encoding="utf-8")
+    edited = cfg_mod.task_inputs_digest(case)
+    assert edited != linked, "a file beneath a linked input directory changed"
+
+    other = tmp_path / "other_inputs"
+    other.mkdir()
+    (other / "prices.csv").write_text("sku,usd\nA,2\n", encoding="utf-8")
+    (case / "workspace" / "data").unlink()
+    (case / "workspace" / "data").symlink_to(other, target_is_directory=True)
+    assert cfg_mod.task_inputs_digest(case) == edited, "same content through another target"
+    (other / "extra.csv").write_text("x", encoding="utf-8")
+    assert cfg_mod.task_inputs_digest(case) != edited
+
+    # Links that lead back up (a cycle) or to an already hashed directory end the walk
+    # there, and adding one is itself a change.
+    before_cycle = cfg_mod.task_inputs_digest(case)
+    (case / "workspace" / "loop").symlink_to(case, target_is_directory=True)
+    (case / "workspace" / "again").symlink_to(other, target_is_directory=True)
+    with_cycle = cfg_mod.task_inputs_digest(case)
+    assert with_cycle != before_cycle and with_cycle == cfg_mod.task_inputs_digest(case)
+
+
+def test_sandboxes_take_turns_on_a_host_port(tmp_path: Path) -> None:
+    import socket
+    import threading
+
+    from evals.acciobench import sandbox as sb
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    assert port not in sb._HELD_PORTS
+
+    # 1. Two claims of the same port: the second returns only after the first is released.
+    sb._claim_saved_ports({port}, "first")
+    order: list[str] = []
+    got_it = threading.Event()
+
+    def second() -> None:
+        sb._claim_saved_ports({port}, "second", wait_s=20)
+        order.append("second-claimed")
+        got_it.set()
+
+    th = threading.Thread(target=second)
+    th.start()
+    assert not got_it.wait(0.4), "the second claim did not wait for the first"
+    order.append("first-released")
+    sb._release_ports({port})
+    assert got_it.wait(10)
+    th.join(5)
+    assert order == ["first-released", "second-claimed"]
+
+    # 2. A new trial never allocates a port another sandbox holds, listening or not.
+    mapping, held = sb._claim_fresh_ports([8080], port, has_notion=False)
+    assert mapping[8080] != port and held == {mapping[8080]}
+    sb._release_ports(held)
+
+    # 3. A claim that cannot be had in time raises and holds nothing more.
+    with pytest.raises(RuntimeError, match="held by another trial"):
+        sb._claim_saved_ports({port}, "third", wait_s=0.3)
+    sb._release_ports({port})
+    assert port not in sb._HELD_PORTS
+
+    # 4. A listener outside this run: the claim raises instead of grading against it.
+    with socket.socket() as foreign:
+        foreign.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        foreign.bind(("127.0.0.1", port))
+        foreign.listen(1)
+        with pytest.raises(RuntimeError, match="in use outside this run"):
+            sb._claim_saved_ports({port}, "fourth", grace_s=0.4)
+    assert port not in sb._HELD_PORTS
+
+
+def test_concurrent_regrades_with_the_same_saved_port_each_get_their_own_service(tmp_path: Path) -> None:
+    """Trials that ran one after another in one worker slot recorded the same host port.
+    Re-grading them at the same time must not let the second one's readiness probe be
+    answered by the first one's service: each waits for the port and starts its own."""
+    import socket
+    import threading
+
+    ds_root = tmp_path / "cab"
+    runtime_dir = tmp_path / "runtime"
+    (runtime_dir / "mock_services").mkdir(parents=True)
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "work", runtime_dir=runtime_dir, judge_provider="mock")
+
+    def listening(port: int) -> bool:
+        with socket.socket() as s:
+            s.settimeout(0.5)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    trials = []
+    for name in ("api-turn-a", "api-turn-b"):
+        _create_synthetic_task(ds_root, category="api", task_id=name, mock_services=True, service_port=4477)
+        spec = load_cab_task(ds_root, name)
+        run_dir, meta_dir = cfg.runs_dir / f"{name}__sj__t1", cfg.runs_dir / f"{name}__sj__t1_meta"
+        first = TaskSandbox(cfg, spec, run_dir, meta_dir, slot=86)  # both in the same slot, in turn
+        try:
+            first.setup()
+            port = first.port_map[4477]
+        finally:
+            first.cleanup()
+        trials.append((spec, run_dir, meta_dir, port))
+    assert trials[0][3] == trials[1][3], "sequential trials in one slot share the port"
+    port = trials[0][3]
+    for _ in range(50):
+        if not listening(port):
+            break
+        time.sleep(0.05)
+
+    a = TaskSandbox(cfg, trials[0][0], trials[0][1], trials[0][2], slot=87)
+    b = TaskSandbox(cfg, trials[1][0], trials[1][1], trials[1][2], slot=88)
+    b_ready = threading.Event()
+    errors: list[BaseException] = []
+
+    def regrade_b() -> None:
+        try:
+            b.prepare_regrade()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        finally:
+            b_ready.set()
+
+    try:
+        a.prepare_regrade()
+        assert listening(port)
+        th = threading.Thread(target=regrade_b)
+        th.start()
+        assert not b_ready.wait(1.0), "the second re-grade did not wait for the first one's port"
+        a.cleanup()
+        assert b_ready.wait(30)
+        th.join(5)
+        assert not errors, errors
+        assert listening(port), "the second re-grade has no service of its own"
+    finally:
+        a.cleanup()
+        b.cleanup()
+    for _ in range(50):
+        if not listening(port):
+            break
+        time.sleep(0.05)
+    assert not listening(port)
+
+
 def test_task_inputs_digest_never_blocks_or_raises_on_odd_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
