@@ -1786,15 +1786,23 @@ def _inspect_alibaba_publish_fields(rel_label: str, data: Any) -> list[str]:
                     )
                     break
 
-    # 2. deliveryPeriod integer/non-range quantity check (e.g. 500, 2000, 5000 -> "100-500", "501-2000", "2001-5000").
+    brand_model_title = " ".join(
+        str(fmap.get(k) or "")
+        for k in ("attr_brand", "brand", "attr_model", "model", "productTitle", "title", "product")
+    ).lower()
+    is_soundbee = "soundbee" in brand_model_title or "pro x3" in brand_model_title
+
+    # 2. deliveryPeriod integer/non-range quantity check (2 tiers for SoundBee Pro X3, 3 tiers for Yoga Mat).
     deliv = fmap.get("deliveryPeriod")
     if isinstance(deliv, list):
         bad_deliv = False
+        deliv_qs: list[str] = []
         for item in deliv:
             if not isinstance(item, dict):
                 continue
             q_raw = item.get("quantity")
             r_raw = item.get("range")
+            deliv_qs.append(str(q_raw if q_raw is not None else (r_raw or "")).strip())
             if isinstance(q_raw, int) and not r_raw:
                 bad_deliv = True
                 break
@@ -1802,7 +1810,13 @@ def _inspect_alibaba_publish_fields(rel_label: str, data: Any) -> list[str]:
             if q_str and "-" not in q_str and not q_str.endswith("+") and not r_raw:
                 bad_deliv = True
                 break
-        if bad_deliv:
+        if is_soundbee and (bad_deliv or (len(deliv_qs) >= 3 and "501-2000" in deliv_qs)):
+            issues.append(
+                f"In {rel_label} (SoundBee Pro X3), deliveryPeriod={deliv!r} must use the exact 2 datasheet tiers "
+                f"'[{{'quantity': '100-500', 'days': '15'}}, {{'quantity': '2001-5000', 'days': '30'}}]' "
+                f"(do not include '501-2000' or integer quantities) in both the live server state and {rel_label}."
+            )
+        elif bad_deliv:
             issues.append(
                 f"In {rel_label}, deliveryPeriod={deliv!r} uses integer or non-range quantity tiers — "
                 f"use exact range strings '[{{'quantity': '100-500', 'days': '15'}}, {{'quantity': '501-2000', 'days': '25'}}, "
@@ -1818,11 +1832,7 @@ def _inspect_alibaba_publish_fields(rel_label: str, data: Any) -> list[str]:
         )
 
     # 4. SoundBee Pro X3 bluetooth earbuds keyword_1..3 and attr_shape check.
-    brand_model_title = " ".join(
-        str(fmap.get(k) or "")
-        for k in ("attr_brand", "brand", "attr_model", "model", "productTitle", "title", "product")
-    ).lower()
-    if "soundbee" in brand_model_title or "pro x3" in brand_model_title:
+    if is_soundbee:
         kw1 = str(fmap.get("keyword_1") or "").strip()
         kw2 = str(fmap.get("keyword_2") or "").strip()
         kw3 = str(fmap.get("keyword_3") or "").strip()
@@ -1989,6 +1999,14 @@ def _inspect_travel_tour_findings(rel_label: str, data: Any) -> list[str]:
                 f"correct_value={cv!r} — 'Mercure Bangkok Sukhumvit 11' and 'Royal Benja Hotel' lack an approved "
                 f"nearby_places corridor entry ([Sukhumvit, Asoke, Phrom Phong, Thong Lor, Nana]); correct_value "
                 f"must be 'Paradox Bangkok Sukhumvit' or 'Walton Suites Sukhumvit Bangkok'."
+            )
+        if (
+            leg_id == "yiwu-allowlist-check" or err_type == "unapproved_supplier"
+        ) and cv != "Hampton by Hilton Yiwu International Trade Market":
+            issues.append(
+                f"In {rel_label}, finding for leg_id='yiwu-allowlist-check' ('unapproved_supplier') has "
+                f"correct_value={cv!r} — 'Crowne Plaza Yiwu Expo' is not on the §3 Yiwu approved-hotel allowlist; "
+                f"correct_value must be 'Hampton by Hilton Yiwu International Trade Market'."
             )
     return issues
 

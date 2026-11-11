@@ -362,6 +362,9 @@ def _extract_cli_invocations(cmd: str) -> list[tuple[str, str, int]]:
     return hits
 
 
+_JIRA_ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
+
+
 def _parse_jira_link_call(rest: str) -> tuple[str, str, str] | None:
     """Parse ``jira issue link INWARD OUTWARD LINK_TYPE`` positional tuple if matched."""
     try:
@@ -383,7 +386,7 @@ def _parse_jira_link_call(rest: str) -> tuple[str, str, str] | None:
         src = pos_args[2].strip().upper()
         tgt = pos_args[3].strip().upper()
         ltype = " ".join(pos_args[4:]).strip().lower()
-        if src and tgt and ltype:
+        if _JIRA_ISSUE_KEY_RE.match(src) and _JIRA_ISSUE_KEY_RE.match(tgt) and ltype:
             return (src, tgt, ltype)
     return None
 
@@ -2654,15 +2657,22 @@ class ToolHost:
         # 1. Live SQLite benchmark.db (staged mock_services or mock_state/runtime dirs).
         db_candidates: list[Path] = [
             self.meta_dir / "mock_services" / "alibaba_publish" / "data" / "benchmark.db",
+            self.meta_dir / "mock_services" / "commerce_listing" / "data" / "benchmark.db",
         ]
         for root in (
             self.meta_dir / "mock_state",
             self.meta_dir / "runtime_mock_state",
             self.meta_dir / "mock_workdir",
+            self.meta_dir,
+            self.run_dir,
         ):
             if root.is_dir():
-                for p in sorted(root.rglob("*benchmark*.db"))[:6]:
-                    if p.is_file() and p not in db_candidates:
+                for p in sorted(root.rglob("*.db"))[:20]:
+                    if p.is_file() and p not in db_candidates and (
+                        "benchmark" in p.name.lower()
+                        or "alibaba" in str(p).lower()
+                        or "commerce" in str(p).lower()
+                    ):
                         db_candidates.append(p)
 
         for dbp in db_candidates:
@@ -2766,16 +2776,20 @@ class ToolHost:
                         "replace '>=' bounds with 'N+' string format (e.g. '500+' or '5000+' instead of '>=500'/'>=5000')."
                     )
 
+            is_soundbee = "soundbee" in prod_blob or "pro x3" in prod_blob
+
             # (ii) deliveryPeriod bare integer quantities or ">="
             if "deliveryPeriod" in fmap:
                 dp = self._maybe_json(fmap.get("deliveryPeriod"))
                 bare_qs: list[Any] = []
                 ge_dp: list[str] = []
+                dp_qs: list[str] = []
                 if isinstance(dp, list):
                     for item in dp:
                         if not isinstance(item, dict):
                             continue
                         q = item.get("quantity")
+                        dp_qs.append(str(q or "").strip())
                         if (isinstance(q, int) and not isinstance(q, bool)) or (
                             isinstance(q, str) and q.strip().isdigit()
                         ):
@@ -2785,11 +2799,18 @@ class ToolHost:
                 elif isinstance(dp, dict):
                     for k in dp.keys():
                         ks = str(k).strip()
+                        dp_qs.append(ks)
                         if ks.isdigit():
                             bare_qs.append(ks)
                         elif ">=" in ks:
                             ge_dp.append(ks)
-                if bare_qs:
+                if is_soundbee and ((len(dp_qs) >= 3 and "501-2000" in dp_qs) or bare_qs):
+                    _add_issue(
+                        f"SoundBee Pro X3 deliveryPeriod ({src_label}) must use the 2 datasheet tiers "
+                        "[{'quantity': '100-500', 'days': '15'}, {'quantity': '2001-5000', 'days': '30'}] "
+                        "(do not invent a 501-2000 tier or bare integer quantities)."
+                    )
+                elif bare_qs:
                     if {str(x).strip() for x in bare_qs} & {"500", "2000", "5000"}:
                         _add_issue(
                             f"Commerce/Alibaba deliveryPeriod ({src_label}) uses bare integer quantities {bare_qs!r}; "
@@ -2806,14 +2827,30 @@ class ToolHost:
                         "replace with 'N+' format (e.g. '5000+' instead of '>=5001')."
                     )
 
-            # (iii) SoundBee Pro X3 earbuds keyword checks
-            if "soundbee" in prod_blob or "pro x3" in prod_blob:
+            # (iii) SoundBee Pro X3 earbuds keyword and shape checks
+            if is_soundbee:
+                kw1 = str(fmap.get("keyword_1") or "").strip()
                 kw2 = str(fmap.get("keyword_2") or "").strip()
                 kw3 = str(fmap.get("keyword_3") or "").strip()
-                if " ".join(kw2.lower().split()) == "active noise cancelling wireless earphones":
+                kw1_allowed = {"tws bluetooth earbuds", "tws bluetooth 5.3 earbuds"}
+                kw2_allowed = {
+                    "wireless earphones noise cancelling",
+                    "wireless earphones anc",
+                    "active noise cancelling earphones",
+                    "wireless noise cancelling earbuds",
+                    "anc wireless earbuds",
+                }
+                if kw1 and " ".join(kw1.lower().split()) not in kw1_allowed:
                     _add_issue(
-                        f"SoundBee Pro X3 ({src_label}) keyword_2 must not be 'active noise cancelling wireless earphones'; "
-                        "set keyword_2 to 'active noise cancelling earphones' or 'ANC wireless earbuds'."
+                        f"SoundBee Pro X3 ({src_label}) keyword_1={kw1!r} must be 'TWS Bluetooth Earbuds' "
+                        "or 'TWS Bluetooth 5.3 Earbuds'."
+                    )
+                if kw2 and " ".join(kw2.lower().split()) not in kw2_allowed:
+                    _add_issue(
+                        f"SoundBee Pro X3 ({src_label}) keyword_2={kw2!r} must be one of "
+                        "{'active noise cancelling earphones', 'ANC wireless earbuds', "
+                        "'wireless earphones noise cancelling', 'wireless earphones ANC', "
+                        "'wireless noise cancelling earbuds'}."
                     )
                 if kw3:
                     kw3_l = kw3.lower()
@@ -2823,7 +2860,7 @@ class ToolHost:
                             "set keyword_3 to 'hi-res audio earbuds LDAC'."
                         )
 
-            # (iv) NovaCast P5 Pro connectivity and ___INVALID___ image sentinels
+            # (iv) NovaCast P5 Pro connectivity and 5 valid images check
             invalid_imgs = [
                 k
                 for k, v in fmap.items()
@@ -2842,6 +2879,20 @@ class ToolHost:
                             f"NovaCast P5 Pro ({src_label}) attr_connectivity is {conn_s!r}; "
                             "expected exact value 'WiFi 6 + Bluetooth 5.2'."
                         )
+                empty_or_bad = [
+                    f"image_{i}"
+                    for i in range(1, 6)
+                    if f"image_{i}" in fmap
+                    and (
+                        not str(fmap.get(f"image_{i}") or "").strip()
+                        or "___INVALID___" in str(fmap.get(f"image_{i}") or "").upper()
+                    )
+                ]
+                if empty_or_bad:
+                    _add_issue(
+                        f"NovaCast P5 Pro ({src_label}) has empty or invalid image slot(s) {', '.join(empty_or_bad)}; "
+                        "upload all 5 valid projector images (IMG_20260610_001.jpg, 003, 005, 008, 011) to image_1..image_5."
+                    )
 
         delta_parts.append(f"commerce_sources={len(sources)}")
 
@@ -3230,6 +3281,20 @@ class ToolHost:
                 if "comments" in tables
                 else []
             )
+            c_cols = (
+                {str(r[1]) for r in con.execute("PRAGMA table_info(comments)").fetchall()}
+                if "comments" in tables
+                else set()
+            )
+            w_cdel = " AND COALESCE(is_deleted, 0) = 0" if "is_deleted" in c_cols else ""
+            all_jp_comments = (
+                con.execute(
+                    f"SELECT COALESCE(commentKey, ''), COALESCE(nodeId, ''), COALESCE(type, '') "
+                    f"FROM comments WHERE LOWER(COALESCE(content, '')) LIKE '%jp market: confirm pricing with tokyo office%'{w_cdel}"
+                ).fetchall()
+                if "comments" in tables
+                else []
+            )
             perms = (
                 con.execute("SELECT nodeId, userId, COALESCE(role, '') FROM permissions").fetchall()
                 if "permissions" in tables
@@ -3319,6 +3384,12 @@ class ToolHost:
         if not has_jp_inline:
             issues.append(
                 "DWS doc-catalog missing inline comment 'JP market: confirm pricing with Tokyo office' on the first JP Q3 row."
+            )
+        elif len(all_jp_comments) > 1:
+            dup_locs = ", ".join(f"{ck}@{nid}" for ck, nid, _ in all_jp_comments)
+            issues.append(
+                f"DWS comments table has {len(all_jp_comments)} copies of 'JP market: confirm pricing with Tokyo office' "
+                f"({dup_locs}; expected exactly 1 on doc-catalog) — delete extra duplicate comments or scratch docs."
             )
         present_keys = {str(ck) for ck, _, _ in cat_comments}
         required_keys = ("cmk-inline-03", "cmk-inline-07", "cmk-inline-11", "cmk-footer-28", "cmk-footer-31")
