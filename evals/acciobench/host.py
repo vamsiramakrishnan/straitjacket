@@ -59,10 +59,13 @@ __all__ = [
 
 IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 _TASK_PATH_RE = re.compile(r"(^|(?<![A-Za-z0-9_.-]))/task(?=/|$|[^A-Za-z0-9_-])")
-# `/tmp` as a whole leading path component (not /tmpfoo, /tmp.txt, ~/tmp, /var/tmp,
-# http://x/tmp/y, file:///tmp/y), with the first component below it captured.
+# `/tmp` as a whole component at the START of a path word: preceded by the start, a
+# blank, a quote, `=`, `:`, `(`, a backtick or a shell operator (not by `}`, `)`, a
+# `$VAR`, a path or word character: not ${X}/tmp, ~/tmp, /var/tmp, http://x/tmp/y),
+# and followed by `/`, a blank, a quote, a shell operator or the end (not /tmpfoo,
+# /tmp.txt, /tmp~). The first component below it is captured.
 _TMP_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9_.~/$-])/tmp(?=/|$|[^A-Za-z0-9_.-])(?:/([^/\s'\"`;|&<>(){}$\\]*))?"
+    r"(?<![^\s'\"=:(;|&<>`])/tmp(?=[/\s'\"`;|&<>()]|$)(?:/([^/\s'\"`;|&<>(){}$\\]*))?"
 )
 _DIGEST_SIZE_RE = re.compile(r"stdout:\s*\d+\s*lines\s*\u00b7\s*([\d.]+)\s*(B|KiB|MiB)")
 _SHELL_HISTORY_RE = re.compile(r"\.(?:bash|zsh)_history\b")

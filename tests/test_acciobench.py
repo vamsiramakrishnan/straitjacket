@@ -2635,7 +2635,25 @@ def _assert_private_tmp_round_trip(host: ToolHost, tag: str, host_tmp_marker: Pa
     assert note in listing and made in listing and f"sub_{tag}" in listing
     assert "NESTED" in bash(f"cd /tmp/sub_{tag} && cat n.txt")
     # look-alikes are untouched
-    looks = ["/tmpfoo", "/tmp.txt", "http://x/tmp/y", "~/tmp", "/var/tmp", "file:///tmp/z"]
+    looks = ["/tmpfoo", "/tmp.txt", "http://x/tmp/y", "~/tmp", "/var/tmp", "file:///tmp/z",
+             "/tmp~/z", "${X}/tmp/zz", "$(pwd)/tmp/q", "a/tmp/b", "x/tmp"]
+    if not host._use_bwrap:
+        priv = str(host.sandbox_tmp)
+        for s in looks:
+            assert host._rewrite_tmp(s) == s, s
+            assert host._rewrite_tmp(f"cat {s} | wc") == f"cat {s} | wc", s
+        for raw, want in (
+            ("cat /tmp/zz_new", f"cat {priv}/zz_new"),
+            ("X=/tmp/zz_new", f"X={priv}/zz_new"),
+            ("--out=/tmp/zz_new", f"--out={priv}/zz_new"),
+            ('cat "/tmp/zz_new"', f'cat "{priv}/zz_new"'),
+            ("ls /tmp", f"ls {priv}"),
+            ("ls /tmp/", f"ls {priv}/"),
+            ("(cd /tmp;ls)", f"(cd {priv};ls)"),
+            ("a</tmp/zz_new>/tmp/zz2", f"a<{priv}/zz_new>{priv}/zz2"),
+            ("PATH=/x:/tmp/zz_new", f"PATH=/x:{priv}/zz_new"),
+        ):
+            assert host._rewrite_tmp(raw) == want, raw
     out_lines = bash("printf '%s\\n' " + " ".join(f"'{s}'" for s in looks)).splitlines()
     assert out_lines[-len(looks):] == looks
     # host paths under /tmp the harness itself uses keep working (run dir, ctx, python)
