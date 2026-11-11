@@ -192,7 +192,8 @@ def test_a_pending_interrupt_stops_the_next_tool_call(ws):
 def test_an_interrupt_never_blocks_the_ctx_call_that_resolves_it(ws):
     relay.interrupt(ws, to="claude", ref="checkpoint:d914ee702801", origin="codex")
     out = _hook(ws, "pre-tool-use", _payload(ws, "ctx get checkpoint:d914ee702801"))
-    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    # Not blocked: no decision at all, so the host decides as without ctx.
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") not in ("ask", "deny")
 
 
 def test_a_delivered_interrupt_does_not_stop_every_later_call(ws):
@@ -230,7 +231,7 @@ def test_a_corrupt_queue_degrades_to_silence_not_a_failed_tool_call(ws):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json at all\n\x00\x00\n", encoding="utf-8")
     out = _hook(ws, "pre-tool-use", _payload(ws))
-    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") not in ("ask", "deny")
     assert relay.drain_quietly(ws, "claude", stage="post-tool-use") == ("", [])
 
 
@@ -246,7 +247,7 @@ def test_a_torn_write_does_not_poison_the_queue(ws):
 
 def test_a_workspace_with_no_relay_is_unaffected(ws):
     out = _hook(ws, "pre-tool-use", _payload(ws))
-    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") not in ("ask", "deny")
     assert not relay.relay_path(ws).exists()
 
 

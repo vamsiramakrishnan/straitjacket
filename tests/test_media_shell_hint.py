@@ -104,8 +104,9 @@ def test_an_ask_reaches_the_model_after_the_call_runs(ws, monkeypatch, capsys): 
     (ws / "clip.mp4").write_bytes(mp4_header())
     out = bash(ws, "ffprobe clip.mp4", monkeypatch, capsys)
     h = hso(out)
-    assert h["permissionDecision"] == "ask" and "CTX_MEDIA" in h["permissionDecisionReason"]
-    assert "additionalContext" not in h
+    # Claude Code: the volume ask is not emitted (it would add a prompt the
+    # host does not show), so the hint goes to the model as context at once.
+    assert "permissionDecision" not in h and "CTX_MEDIA" in h["additionalContext"]
     payload = {"session_id": "s1", "tool_name": "Bash", "cwd": str(ws),
                "hook_event_name": "PostToolUse",
                "tool_input": {"command": "ffprobe clip.mp4"},
@@ -117,9 +118,7 @@ def test_an_ask_reaches_the_model_after_the_call_runs(ws, monkeypatch, capsys): 
         hook.main_post_tool_use("claude-code")
         return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
-    first = post()
-    assert "ctx view clip.mp4" in first["hookSpecificOutput"]["additionalContext"]
-    assert "ctx view clip.mp4" not in json.dumps(post())  # once
+    assert "ctx view clip.mp4" not in json.dumps(post())  # once: already delivered
 
 
 def test_a_deny_carries_the_hint_in_its_reason(ws, monkeypatch, capsys):  # noqa: F811

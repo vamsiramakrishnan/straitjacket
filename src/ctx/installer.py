@@ -1358,6 +1358,37 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     except Exception as e:
         check("hook classifier", False, str(e))
 
+    # Claude Code approval: a rewrite never carries an approval the user's own
+    # rules do not give the original, so prompts follow those rules. A
+    # wholesale allow rule for the wrapper defeats that: every wrapped command
+    # then runs without a prompt, whatever it wraps.
+    try:
+        from ctx.ccperm import wholesale_wrapper_allows
+
+        home = os.path.expanduser("~")
+        wide = [w.replace(home, "~", 1) if home and home != "/" else w
+                for w in wholesale_wrapper_allows(str(ws.root))]
+        if wide:
+            check(
+                "claude code approval",
+                False,
+                "allow rule(s) approve every wrapped command: " + "; ".join(wide)
+                + ". ctx rewrites commands into `ctx run ... -- '<original>'`, so with"
+                " this rule Claude Code runs ANY command (rm, curl, git push) without"
+                " asking. Narrow or remove it to keep your prompts",
+            )
+        else:
+            check(
+                "claude code approval",
+                True,
+                "shell commands reach Claude Code exactly as written (steering ="
+                " \"auto\"); you are asked about them exactly as without ctx and the"
+                " output is bounded afterwards. ctx approves only its own read-only"
+                " verbs, and never a rewritten call",
+            )
+    except Exception as e:
+        check("claude code approval", False, f"could not read Claude Code settings: {e}")
+
     # Cumulative savings from the telemetry ledger (operational, not identity).
     try:
         from ctx.retrieval import telemetry_summary

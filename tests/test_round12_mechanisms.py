@@ -151,37 +151,25 @@ def test_search_matches_carry_their_stdout_line():
 
 
 # ------------------------------ a substitution may not WIDEN the request
-def test_grep_collapse_preserves_directory_scope():
-    """`grep -rn X tests/` and `grep -rn X` collapsed to the identical
-    whole-repo command. The replacement surface may make a search cheaper;
-    it may not make it bigger, because the extra results are
-    indistinguishable from real ones."""
-    from ctx.substitute import _scope_hint
+def test_grep_is_never_collapsed_whatever_its_scope():
+    """A scoped search used to be collapsed into a `ctx q search --glob`, and
+    the scope logic had to be right for that to not WIDEN the request. Search
+    is no longer substituted at all: the user's own command runs, so its
+    scope is its own by construction."""
+    from ctx.substitute import collapse
 
-    assert _scope_hint(["tests/"]) == "tests/**"
-    assert _scope_hint(["src/ctx/hook.py"]) == "src/ctx/hook.py"
-    assert _scope_hint(["*.py"]) == "*.py"
-    assert _scope_hint(["."]) == "", "the whole repo needs no narrowing"
-    assert _scope_hint([]) == ""
-    assert _scope_hint(["a/", "b/"]) is None, "inexpressible: do not substitute"
+    for cmd in ("grep -rn NEEDLE tests/", "grep -rn NEEDLE src/ctx/hook.py",
+                "grep -rn NEEDLE '*.py'", "grep -rn NEEDLE ."):
+        assert collapse(cmd, failure_available=False, symbols_resolvable=False) is None
 
 
 def test_grep_collapse_declines_rather_than_widening():
-    import shlex
-
     from ctx.substitute import collapse
 
-    sub = collapse(
-        "grep -rn NEEDLE dir_a/ dir_b/",
-        failure_available=False, symbols_resolvable=False,
-    )
-    assert sub is None, "two scopes cannot be one --glob; leave it alone"
-
-    scoped = collapse(
-        "grep -rn NEEDLE tests/", failure_available=False, symbols_resolvable=False
-    )
-    assert scoped is not None and "tests/**" in scoped.command
-    assert shlex.split(scoped.command)
+    assert collapse("grep -rn NEEDLE dir_a/ dir_b/",
+                    failure_available=False, symbols_resolvable=False) is None
+    assert collapse("grep -rn NEEDLE tests/",
+                    failure_available=False, symbols_resolvable=False) is None
 
 
 # ------------------------- a bound must count what was actually spent

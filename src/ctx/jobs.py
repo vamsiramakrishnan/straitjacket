@@ -275,14 +275,19 @@ def supervise_main(jobdir_str: str) -> int:
     meta = json.loads((jobdir / "meta.json").read_text(encoding="utf-8"))
     argv = list(meta["argv"])
     shell = bool(meta["shell"])
-    popen_args: Any = argv[0] if shell else argv
+    if shell:
+        from ctx._proc import shell_popen_args
+
+        popen_args, popen_shell = shell_popen_args(argv[0])
+    else:
+        popen_args, popen_shell = argv, False
 
     with (jobdir / "stdout").open("wb") as out_fh, (jobdir / "stderr").open("wb") as err_fh:
         try:
             proc = subprocess.Popen(
                 popen_args,
                 cwd=meta["cwdAbs"],
-                shell=shell,
+                shell=popen_shell,
                 stdout=out_fh,
                 stderr=err_fh,
                 stdin=subprocess.DEVNULL,

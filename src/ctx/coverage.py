@@ -160,6 +160,8 @@ def render_static(host: str, regs: dict[str, dict[str, Any]] | None = None) -> l
     rewrite = yn[bool(caps.get('input_substitution'))]
     if caps.get("input_substitution") and host in gov.REWRITABLE:
         rewrite = ", ".join(sorted(gov.REWRITABLE[host])) + " only"
+    if host in gov.REWRITE_WITHHELD:
+        rewrite = "withheld"
     out = [f"{host}  (rewrite input: {rewrite}, "
            f"replace output: {yn[bool(caps.get('output_substitution'))]})"]
     groups: dict[tuple[str, str, str], list[str]] = {}
@@ -183,6 +185,10 @@ def render_static(host: str, regs: dict[str, dict[str, Any]] | None = None) -> l
     loose = ungoverned_static(rows)
     if loose:
         out.append("  UNGOVERNED (no hooked stage): " + ", ".join(loose))
+    if host in gov.APPROVAL:
+        out.append(f"  approval: {gov.APPROVAL[host]}")
+    out.append("  footprint in the workspace (.ctx-session-reads/): "
+               + ", ".join(gov.WORKSPACE_FOOTPRINT))
     out.extend(render_prompt(host, regs))
     out.append("  cannot govern:")
     for line in gov.LIMITS.get(host, ()):
@@ -390,6 +396,7 @@ def report(root, *, host: str | None = None, session: str | None = None) -> dict
             "tools": rows,
             "ungoverned": ungoverned_static(rows),
             "cannot_govern": list(gov.LIMITS.get(h, ())),
+            "approval": gov.APPROVAL.get(h, ""),
             "media_reads": list(gov.MEDIA_READS.get(h, ())),
             "prompt": prompt_row(h, regs),
         }

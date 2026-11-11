@@ -135,7 +135,7 @@ def test_codex_native_mcp_resource_tools_are_not_listings(ws):
 
 
 @pytest.mark.parametrize("flavor,name,args", [
-    ("codex", "Bash", {"command": "find . -type f"}),
+    ("codex", "list_dir", {"path": "."}),  # Codex shell rewrites are withheld
     ("opencode", "bash", {"command": "find . -type f"}),
     ("opencode", "list", {"path": "."}),
     ("antigravity", "view_file", {"AbsolutePath": "BIG"}),
@@ -413,8 +413,8 @@ def test_ledger_failure_never_changes_a_decision(ws):
     (ws / ".ctx-session-reads").write_text("not a directory")
     out = _run("pre", {"tool_name": "Bash", "cwd": str(ws),
                        "tool_input": {"command": "find . -type f"}}, "claude-code")
-    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert "updatedInput" in out["hookSpecificOutput"]
+    # Default steering on Claude Code: the command runs as written, no decision.
+    assert out == {}
     out = _run("post", {"tool_name": "Bash", "cwd": str(ws),
                         "tool_response": {"stdout": "y" * 40000, "stderr": ""}}, "claude-code")
     assert "ctx" in out["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
@@ -1127,8 +1127,9 @@ def _pre_shell(ws, flavor, command) -> dict:
 def _runs_unchanged(flavor: str, out: dict, command: str) -> bool:
     """Would the host run exactly ``command`` with no confirmation?"""
     if flavor == "claude-code":
-        hso = out["hookSpecificOutput"]
-        return hso["permissionDecision"] == "allow" and "updatedInput" not in hso
+        hso = out.get("hookSpecificOutput", {})
+        return (hso.get("permissionDecision", "allow") == "allow"
+                and "updatedInput" not in hso)
     if flavor == "codex":
         return out == {}
     return out.get("action") == "allow"
@@ -1152,7 +1153,10 @@ def _runs_unchanged(flavor: str, out: dict, command: str) -> bool:
 ])
 def test_commands_that_merely_start_with_ctx_are_gated_both_sides(ws, flavor, command):
     (ws / "fake").mkdir(exist_ok=True)
-    assert not _runs_unchanged(flavor, _pre_shell(ws, flavor, command), command)
+    # Codex: rewrites withheld. Claude Code: rewritten only with a proven allow;
+    # unproven, it runs as written. Either way the output gate is the bound.
+    if flavor not in ("codex", "claude-code"):
+        assert not _runs_unchanged(flavor, _pre_shell(ws, flavor, command), command)
     _out, nbytes = _post_shell(ws, flavor, command)
     assert nbytes <= 16384 + 2048, (flavor, command, nbytes)  # bounded, not 1.3 MB
 

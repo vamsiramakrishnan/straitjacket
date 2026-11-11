@@ -37,7 +37,7 @@ def test_a_repeated_lesson_gets_cheaper(state_home, git_workspace):
 
 def test_a_new_lesson_is_still_taught_in_full(state_home, git_workspace):
     _decide("python3 -c 'print(1)'", git_workspace)  # teach lesson A
-    other = _reason(_decide("find . -name '*.py' -exec cat {} ;", git_workspace))
+    other = _reason(_decide("find . -name '*.py' | xargs wc -l", git_workspace))
     assert other, "an unfamiliar shape must still get its explanation"
 
 

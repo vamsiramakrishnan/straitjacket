@@ -237,13 +237,19 @@ def note_symbol_grep(workspace_root: Path | str | None, symbol: str) -> tuple[in
     if workspace_root is None:
         return 0, True
     result = {"count": 0, "fired": False}
+    # Only the count of DISTINCT symbols matters, so a short digest is kept
+    # rather than the pattern: this file lives under the workspace, and a
+    # stored pattern made a later content search match its own earlier one.
+    import hashlib
+
+    token = "h:" + hashlib.sha256(symbol[:64].encode("utf-8", "surrogateescape")).hexdigest()[:12]
 
     def step(state: dict[str, Any]) -> dict[str, Any]:
         syms = state.get("grep_symbols")
         if not isinstance(syms, list):
             syms = []
-        if symbol not in syms:
-            syms.append(symbol[:64])
+        if token not in syms:
+            syms.append(token)
         # Most recent 64, not the first 64 ever seen: `syms[:64]` dropped
         # every new symbol once the list was full, so the count froze.
         state["grep_symbols"] = syms[-64:]
@@ -319,14 +325,19 @@ def note_taught(workspace_root: Path | str | None, lesson: str) -> bool:
         return True
     try:
         seen: list[str] = []
+        # A digest, not the headline: this file lives under the workspace,
+        # and a stored phrase is something a content search can match.
+        import hashlib
+
+        token = "h:" + hashlib.sha256(lesson.encode("utf-8", "surrogateescape")).hexdigest()[:12]
 
         def _fn(state: dict[str, Any]) -> dict[str, Any]:
             taught = state.get("taught")
             if not isinstance(taught, list):
                 taught = []
-            seen.append(lesson if lesson in taught else "")
-            if lesson not in taught:
-                taught = [*taught, lesson][-32:]  # bounded: a session's lessons
+            seen.append(lesson if token in taught else "")
+            if token not in taught:
+                taught = [*taught, token][-32:]  # bounded: a session's lessons
             state["taught"] = taught
             return state
 

@@ -244,10 +244,9 @@ def test_codex_pre_tool_use_rewrites_flood(workspace_dir):
         },
         "codex",
     )
-    hso = out["hookSpecificOutput"]
-    assert hso["hookEventName"] == "PreToolUse"
-    assert hso["permissionDecision"] == "allow"
-    assert hso["updatedInput"]["command"].startswith("ctx run")
+    # Rewrites are withheld on Codex (approval policy not established to
+    # survive a hook allow): the original runs, the output gate bounds it.
+    assert out == {}
 
 
 def test_codex_pre_tool_use_allows_bounded(workspace_dir):

@@ -71,7 +71,12 @@ class Guard:
     mode: str = "guarded"  # advisory | guarded | strict
     unknown_command: str = "force_ask"  # allow | deny | ask | force_ask
     internal_error: str = "allow"  # availability-safe default (SPEC §10.2)
-    steering: str = "auto"  # auto | rewrite | deny — deny keeps pure deny-with-remediation
+    # auto (default): on Claude Code and Codex shell commands run as written and
+    # the output gate bounds them afterwards. rewrite: also capture at birth on
+    # Claude Code -- its prompts and rules then concern the `ctx run` wrapper,
+    # and a rule from a source ctx cannot read does not see the original.
+    # deny: deny with remediation instead of either.
+    steering: str = "auto"  # auto | rewrite | deny
     # Replacement surface (default posture): substitute loop-shapes with
     # collapsed ctx ops; set collapse=false to break-glass off.
     collapse: bool = True

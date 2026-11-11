@@ -209,29 +209,22 @@ def test_span_anchors_include_the_summary_banner():
 
 # ================================================= round 16 corrections
 def test_a_pattern_carrying_a_pipe_survives_as_one_token():
-    """`ctx q`'s parser is shlex-AWARE: it splits on the `|` TOKEN, so a
-    quoted pipe survives. Round 14 removed the inner shlex.quote because
-    nested quoting is ugly -- trading correctness for readability -- and a
-    grep for `a | b` then collapsed into a query that split into two stages
-    and searched for something else entirely."""
+    """The pattern reaches the user's own grep untouched: search is never
+    substituted, and the hook's capture rewrite quotes it as one argument."""
     import shlex
 
-    from ctx.query import parse_query
+    from ctx.hook import classify_command
     from ctx.substitute import collapse
 
+    pol = {"collapse": True, "steering": "auto", "unknown_command": "force_ask"}
     for pattern in ("a | b", "TODO's", 'say "hi"', "plain"):
-        sub = collapse(
-            f"grep -rn {shlex.quote(pattern)} src/",
-            failure_available=False, symbols_resolvable=False,
-        )
-        assert sub is not None, pattern
-        stages = parse_query(shlex.split(sub.command)[2])
-        assert stages[0][1][0] == pattern, (
-            f"{pattern!r} did not round-trip: {stages}"
-        )
-        assert [s[0] for s in stages] == ["search", "files"], (
-            f"{pattern!r} changed the pipeline shape: {stages}"
-        )
+        cmd = f"grep -rn {shlex.quote(pattern)} src/"
+        assert collapse(cmd, failure_available=False, symbols_resolvable=False) is None
+        d = classify_command(cmd, dict(pol))
+        routed = d["_rewrite"]["command"]
+        inner = shlex.split(routed)
+        inner = shlex.split(inner[-1]) if "--shell" in inner else inner[inner.index("--") + 1:]
+        assert pattern in inner, (pattern, routed)
 
 
 def test_config_list_fields_survive_a_scalar():

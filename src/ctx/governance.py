@@ -259,6 +259,8 @@ def stage_routes(
     gate = "output_gate" if caps.get("output_substitution") else "observe"
     if kind in ("control", "schema", "media"):
         return "exempt", "exempt"
+    if host in REWRITE_WITHHELD and kind in ("command", "read"):
+        return None, gate  # runs as itself under the host's approval; gated after
     if kind == "command":
         return ("rewrite" if can_in else "deny_steer"), gate
     if kind == "read":
@@ -272,6 +274,46 @@ def stage_routes(
     if kind == "skill":
         return None, "observe"
     return None, gate  # tool, mcp, or never seen
+
+
+#: Hosts where the hook could rewrite input but does not: the host takes a
+#: rewrite only together with an approval its own policy may not re-check.
+REWRITE_WITHHELD = frozenset({"codex"})
+
+#: What a rewrite does to the host's own approval. Printed by `ctx coverage`.
+APPROVAL: dict[str, str] = {
+    "claude-code": (
+        "ctx never approves a rewritten call and, by default (steering = \"auto\"), does "
+        "not rewrite shell commands at all: each command reaches Claude Code exactly as "
+        "written, with no decision, so its rules, links, directory settings and prompts "
+        "apply as without ctx; the output gate then bounds the result, taking the full "
+        "output from the file Claude Code saved for it (its tool-results directory for "
+        "this session only). No ask or deny is sent for output volume; safety asks "
+        "(secret paths, container escapes, in-place edits, repository deny rules) stay. "
+        "steering = \"rewrite\" opts in to capture at birth: the command is rewritten with "
+        "no decision, so Claude Code's prompts and rules see the `ctx run` wrapper, and a "
+        "rule from a source ctx cannot read never sees the original; ctx only refuses "
+        "(deny/ask) where a visible rule would refuse the original. The only allow ctx "
+        "sends is for its own read-only verbs (get, search, stats, q, diff, map, def, "
+        "refs): by store handle always; over workspace paths only when no Read deny/ask "
+        "rule or outside-directory block is visible and every settings source was "
+        "readable. A Read rule in a source ctx cannot read does not bind these verbs"),
+    "codex": (
+        "rewrites withheld and no ask or deny for volume: commands run as written under "
+        "Codex's own approval; its PostToolUse block replaces a large output with ctx's "
+        "digest after the command ran (the command still ran in full)"),
+    "antigravity": (
+        "rewrite stays the default (the host cannot replace output); the user's rules are "
+        "evaluated against the original (ctx.agyperm). Whether the hook's allow skips "
+        "Antigravity's own checks: not observed by this package"),
+    "hermes": ("the bridge returns modified args and no approval of its own; whatever "
+               "Hermes checks then sees the wrapper (not verified live)"),
+    "omp": ("the bridge replaces the input and grants no approval of its own "
+            "(not verified live)"),
+    "opencode": ("the bridge mutates args before OpenCode's permission check, which then "
+                 "matches the wrapper, not the original program (not verified live)"),
+    "dsh": "no rewrite: the bridge blocks with the exact retry, which DSH's policy then judges",
+}
 
 
 def exempt_reason(kind: str | None) -> str:
@@ -460,3 +502,22 @@ def claude_post_matcher() -> str:
     in a later release falls to the output gate instead of to nothing.
     """
     return "^(?!(?:" + "|".join(claude_post_exempt()) + ")$)"
+
+
+#: Files ctx itself writes under the workspace (``.ctx-session-reads/``,
+#: self-ignored for git and ripgrep). None holds command text or tool
+#: content; a listing or a count over the whole tree includes them, as it
+#: includes ``.git``. Always: ``.gitignore``, ``coverage.jsonl``,
+#: ``engagement.json``, ``<session>.count``; after edits:
+#: ``edit-outcomes.jsonl``; when they occur: ``guard-failures.jsonl``,
+#: ``failure-available.json``, ``eval-adoption.jsonl``,
+#: ``records-adoption.jsonl``, ``collapse.jsonl``, ``route.jsonl``,
+#: ``plan-emissions.jsonl``, ``media/`` (image overviews), ``gate-fallback/``,
+#: ``proxy/window.json``, ``relay/``, ``tasks/``, and ``store/`` only when
+#: the state directory is not writable.
+WORKSPACE_FOOTPRINT = (
+    ".gitignore", "coverage.jsonl", "engagement.json", "<session>.count", "edit-outcomes.jsonl",
+    "guard-failures.jsonl", "failure-available.json", "eval-adoption.jsonl",
+    "records-adoption.jsonl", "collapse.jsonl", "route.jsonl", "plan-emissions.jsonl",
+    "media/", "gate-fallback/", "proxy/window.json", "relay/", "tasks/", "store/ (fallback)",
+)

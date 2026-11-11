@@ -128,7 +128,7 @@ def test_source_reads_never_touch_the_media_path(ws, monkeypatch, capsys):
     monkeypatch.setattr(mediaread, "read_head", boom)
     monkeypatch.setattr(hook, "_media_read", boom)
     out = read(ws, ws / "app.py", monkeypatch, capsys)
-    assert hso(out)["permissionDecision"] == "allow"
+    assert "permissionDecision" not in hso(out)  # no decision on Claude Code: the host's rules decide (hook.claude_code_pre_tool_use_output)
     assert "additionalContext" not in hso(out)
 
 
@@ -216,7 +216,7 @@ def test_large_image_is_allowed_unchanged_with_an_exact_note(ws, monkeypatch, ca
     (ws / "shots" / "screen.png").write_bytes(png_header(2560, 1440))
     out = read(ws, ws / "shots" / "screen.png", monkeypatch, capsys)
     h = hso(out)
-    assert h["permissionDecision"] == "allow"
+    assert "permissionDecision" not in h  # no decision on Claude Code: the host's rules decide (hook.claude_code_pre_tool_use_output)
     assert "updatedInput" not in h  # the read itself is not touched
     note = h["additionalContext"]
     assert note.startswith("CTX_MEDIA: the image this Read opens is a 2560x1440 PNG.")
@@ -260,7 +260,7 @@ def test_image_the_host_sends_whole_gets_nothing(ws, monkeypatch, capsys, w, h):
     the ordinary size bound (meaningless for an image) is not applied either."""
     (ws / "icon.png").write_bytes(png_header(w, h) + b"\x00" * 40000)
     out = hso(read(ws, ws / "icon.png", monkeypatch, capsys))
-    assert out["permissionDecision"] == "allow"
+    assert "permissionDecision" not in out  # no decision on Claude Code: the host's rules decide (hook.claude_code_pre_tool_use_output)
     assert "additionalContext" not in out and "updatedInput" not in out
     assert ledger(ws)[-1]["note"] == "media:small"
     if max(w, h) == 2000:  # one pixel past the cap on the long edge: noted
@@ -321,21 +321,21 @@ def test_audio_read_is_denied_and_never_transcribed(ws, monkeypatch, capsys, nam
 
 def test_a_text_file_named_mp4_is_not_denied(ws, monkeypatch, capsys):
     (ws / "notes.mp4").write_text("ftyp is a box name\n")
-    assert hso(read(ws, ws / "notes.mp4", monkeypatch, capsys))["permissionDecision"] == "allow"
+    assert "permissionDecision" not in hso(read(ws, ws / "notes.mp4", monkeypatch, capsys))  # no decision on Claude Code: the host's rules decide (hook.claude_code_pre_tool_use_output)
 
 
 def test_modes_off_restore_the_ordinary_path(ws, monkeypatch, capsys):
     (ws / "ctx.toml").write_text('[media]\nimage_read = "off"\nvideo_read = "off"\n')
     (ws / "clip.mp4").write_bytes(mp4_header())
     (ws / "big.png").write_bytes(png_header(4000, 3000))
-    assert hso(read(ws, ws / "clip.mp4", monkeypatch, capsys))["permissionDecision"] == "allow"
+    assert "permissionDecision" not in hso(read(ws, ws / "clip.mp4", monkeypatch, capsys))  # no decision on Claude Code: the host's rules decide (hook.claude_code_pre_tool_use_output)
     assert "additionalContext" not in hso(read(ws, ws / "big.png", monkeypatch, capsys))
 
 
 def test_guard_advisory_mode_does_nothing(ws, monkeypatch, capsys):
     (ws / "ctx.toml").write_text('[guard]\nmode = "advisory"\n')
     (ws / "clip.mp4").write_bytes(mp4_header())
-    assert hso(read(ws, ws / "clip.mp4", monkeypatch, capsys))["permissionDecision"] == "allow"
+    assert "permissionDecision" not in hso(read(ws, ws / "clip.mp4", monkeypatch, capsys))  # no decision on Claude Code: the host's rules decide (hook.claude_code_pre_tool_use_output)
 
 
 def test_unknown_media_values_keep_the_defaults(ws, monkeypatch, capsys):
@@ -615,9 +615,9 @@ def test_codex_view_image_redirect_replaces_path(ws, monkeypatch, capsys):
     shot = _redirect_ws(ws)
     out = pre(ws, "view_image", {"path": str(shot)}, monkeypatch, capsys, "codex")
     h = hso(out)
-    assert h["permissionDecision"] == "allow"
-    assert set(h["updatedInput"]) == {"path"}
-    assert ".ctx-session-reads/media/overview-" in h["updatedInput"]["path"]
+    # Codex rewrites are withheld (its approval policy is not shown to
+    # survive a hook allow): the read proceeds as asked, the advice rides along.
+    assert "permissionDecision" not in h and "updatedInput" not in h
     assert "REDUCED OVERVIEW" in h["additionalContext"]
 
 

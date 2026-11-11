@@ -1218,8 +1218,8 @@ def _qdry_write(root, dry: list[str]) -> None:
     """Atomic temp+rename write of the dry-pipeline state (house pattern:
     reflex.json). Fail-open — never raises."""
     try:
-        d = session_reads_path(root)
-        d.mkdir(parents=True, exist_ok=True)
+        d = session_reads_path(root, _QDRY_STATE).parent
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = json.dumps({"dry": dry[-Q_DRY_REMEMBER:]}, sort_keys=True)
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".q-dry-")
         try:
@@ -1236,8 +1236,8 @@ def _qdry_ledger_append(root, pipeline: str) -> None:
     operational-only (house rule: the ledger minus ts is a pure function
     of the session's query sequence). Fail-open — never raises."""
     try:
-        d = session_reads_path(root)
-        d.mkdir(parents=True, exist_ok=True)
+        d = session_reads_path(root, _QDRY_LEDGER).parent
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
         line = json.dumps(
             {"op": "q_dry_rerun", "pipeline": pipeline, "ts": time.time()},
             sort_keys=True,

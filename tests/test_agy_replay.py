@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import json
+import shlex
 import os
 import subprocess
 import sys
@@ -145,7 +146,8 @@ def test_replayed_flooding_command_is_rewritten_in_place(env):
     # only the changed argument is sent; the host merges it into the args
     assert set(out["overwrite"]) == {"CommandLine"}
     assert out["overwrite"]["CommandLine"].startswith("ctx run")
-    assert out["overwrite"]["CommandLine"].endswith("cat big.log")
+    # The original is carried verbatim, shell-quoted (ctx run --shell).
+    assert shlex.split(out["overwrite"]["CommandLine"])[-1] == "cat big.log"
 
 
 def test_replayed_large_read_file_is_bounded_in_place(env):

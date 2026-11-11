@@ -13,14 +13,24 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from ctx.sessiondir import session_reads_path
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 
 
-def _invoke_hook(payload: str, flavor: str = "antigravity") -> dict:
-    """Run the real hook entry end-to-end (stdin JSON → stdout JSON)."""
+def _invoke_hook(payload: str, flavor: str = "antigravity", settings: dict | None = None) -> dict:
+    """Run the real hook entry end-to-end (stdin JSON → stdout JSON).
+    ``settings``: the user's Claude Code settings (written under a fresh HOME)."""
     env = dict(os.environ)
     env["PYTHONPATH"] = str(SRC)
+    if settings is not None:
+        import tempfile
+
+        home = tempfile.mkdtemp(prefix="ctx-home-")
+        os.makedirs(os.path.join(home, ".claude"))
+        with open(os.path.join(home, ".claude", "settings.json"), "w") as fh:
+            json.dump(settings, fh)
+        env["HOME"] = home
     proc = subprocess.run(
         [sys.executable, "-m", "ctx", "hook", flavor, "pre-tool-use"],
         input=payload.encode(),
@@ -71,7 +81,7 @@ def test_pytest_rewrite_antigravity_dialect(tmp_path):
     # rewrite cannot be applied transparently: it degrades to a deny whose
     # reason names the contained command for the agent to re-issue.
     assert out["decision"] == "deny"
-    assert "ctx run --passthrough -- pytest -q" in out["reason"]
+    assert "ctx run --passthrough --shell -- 'pytest -q'" in out["reason"]
     assert "updatedInput" not in out
     assert set(out) <= {"decision", "reason", "permissionOverrides"}
 
@@ -81,11 +91,18 @@ def test_pytest_rewrite_claude_code_dialect(tmp_path):
         _payload({"command": "pytest -q", "Cwd": str(tmp_path)}, tmp_path, tool_name="Bash"),
         flavor="claude-code",
     )
-    hso = out["hookSpecificOutput"]
-    assert hso["hookEventName"] == "PreToolUse"
-    assert hso["permissionDecision"] == "allow"
-    assert hso["updatedInput"]["command"] == "ctx run --passthrough -- pytest -q"
-    assert "bounded capture" in hso["permissionDecisionReason"]
+    # Default steering on Claude Code: not rewritten; it reaches the host as
+    # written and the output gate bounds it afterwards.
+    assert out == {}
+    (tmp_path / "ctx.toml").write_text('version = 1\n[guard]\nsteering = "rewrite"\n')
+    rewritten = _invoke_hook(
+        _payload({"command": "pytest -q", "Cwd": str(tmp_path)}, tmp_path, tool_name="Bash"),
+        flavor="claude-code",
+        settings={"permissions": {"allow": ["Bash(pytest *)"]}},
+    )
+    hso = rewritten["hookSpecificOutput"]
+    assert "permissionDecision" not in hso  # R1: never allow with a rewrite
+    assert hso["updatedInput"]["command"] == "ctx run --passthrough --shell -- 'pytest -q'"
 
 
 def test_single_named_pytest_uses_guarded_native_fast_path(tmp_path):
@@ -102,13 +119,11 @@ def test_single_named_pytest_uses_guarded_native_fast_path(tmp_path):
         ),
         flavor="claude-code",
     )
-    hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    assert "updatedInput" not in hso
+    assert out == {}  # runs unchanged, with no decision: the host decides
 
     rows = [
         json.loads(line)
-        for line in (tmp_path / ".ctx-session-reads" / "steering-decisions.jsonl")
+        for line in (session_reads_path(tmp_path, "steering-decisions.jsonl"))
         .read_text(encoding="utf-8")
         .splitlines()
     ]
@@ -125,12 +140,13 @@ def test_single_named_pytest_stays_captured_without_output_substitution(tmp_path
         flavor="antigravity",
     )
     assert out["decision"] == "deny"
-    assert "ctx run --passthrough -- pytest" in out["reason"]
+    assert "ctx run --passthrough --shell -- 'pytest" in out["reason"]
 
 
 def test_speculative_native_can_be_disabled(tmp_path):
     (tmp_path / "ctx.toml").write_text(
-        'version = 1\n[guard]\nspeculative_native = false\n', encoding="utf-8"
+        'version = 1\n[guard]\nspeculative_native = false\nsteering = "rewrite"\n',
+        encoding="utf-8"
     )
     out = _invoke_hook(
         _payload(
@@ -139,8 +155,9 @@ def test_speculative_native_can_be_disabled(tmp_path):
             tool_name="Bash",
         ),
         flavor="claude-code",
+        settings={"permissions": {"allow": ["Bash(pytest *)"]}},
     )
-    assert "ctx run --passthrough -- pytest" in out["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "ctx run --passthrough --shell -- 'pytest" in out["hookSpecificOutput"]["updatedInput"]["command"]
 
 
 def test_original_command_key_name_preserved(tmp_path):
@@ -148,7 +165,7 @@ def test_original_command_key_name_preserved(tmp_path):
         d = _classify("run_command", {key: "pytest -q", "Cwd": str(tmp_path)}, tmp_path)
         assert d["decision"] == "deny"  # canonical layer stays deny (doctor contract)
         updated = d["rewrite"]["updatedInput"]
-        assert updated[key] == "ctx run --passthrough -- pytest -q"
+        assert updated[key] == "ctx run --passthrough --shell -- 'pytest -q'"
         assert set(updated) == {key, "Cwd"}
 
 
@@ -164,7 +181,7 @@ def test_extra_input_fields_survive_in_updated_input(tmp_path):
         tmp_path,
     )
     updated = d["rewrite"]["updatedInput"]
-    assert updated["command"] == "ctx run --passthrough -- pytest -q"
+    assert updated["command"] == "ctx run --passthrough --shell -- 'pytest -q'"
     assert updated["description"] == "run the test suite"
     assert updated["timeout"] == 120000
 
@@ -219,15 +236,13 @@ def test_grep_single_file_gets_match_cap_injected(tmp_path):
 
 
 # ------------------------------------------------- text tools (M-K5.3)
-def test_sed_range_read_collapses_to_an_addressed_get(tmp_path):
-    """`sed -n 'A,Bp' <file>` now has a rung on the replacement surface.
+def test_sed_range_read_runs_as_itself_under_capture(tmp_path):
+    """`sed -n 'A,Bp' <file>` is captured whole, not swapped for `ctx get`.
 
-    It used to land on the generic steer — deny, plus `ctx run -- sed …`,
-    which captures the output but keeps the operator's own unaddressed range.
-    The collapse rung is strictly better: `ctx get repo:<f> --lines A:B` is
-    the same bytes with a handle and a continuation that advances, so the
-    replacement surface overrides the deny the same way it does for the
-    flagship `grep -rn` case.
+    The `ctx get repo:<f> --lines A:B` rung was retired: `repo:` paths
+    resolve from the workspace root rather than the shell's cwd, and a range
+    past EOF became an error instead of sed's short output -- a different
+    answer. The generic steer runs the operator's own sed, bounded.
     """
     (tmp_path / "notes.txt").write_text("a\nb\n", encoding="utf-8")
     d = _classify(
@@ -235,9 +250,8 @@ def test_sed_range_read_collapses_to_an_addressed_get(tmp_path):
         {"CommandLine": "sed -n 1,5p notes.txt", "Cwd": str(tmp_path)},
         tmp_path,
     )
-    assert d["decision"] == "allow"
     assert d["rewrite"]["updatedInput"]["CommandLine"] == (
-        "ctx get repo:notes.txt --lines 1:5"
+        "ctx run --passthrough --shell -- 'sed -n 1,5p notes.txt'"
     )
 
 
@@ -255,7 +269,7 @@ def test_sed_outside_the_collapsible_range_shape_still_steers_to_ctx_run(tmp_pat
         tmp_path,
     )
     assert d["decision"] == "deny"  # canonical layer: unbounded output
-    assert d["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --passthrough -- sed")
+    assert d["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --passthrough --shell -- 'sed")
 
 
 def test_sed_inplace_force_asks_with_preview_remediation(tmp_path):
@@ -294,7 +308,7 @@ def test_awk_inplace_force_asks_readonly_steers(tmp_path):
         tmp_path,
     )
     assert d3["decision"] == "deny"
-    assert d3["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --passthrough -- awk")
+    assert d3["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run --passthrough --shell -- 'awk")
 
 
 # ----------------------------------------------------------- read rewrites

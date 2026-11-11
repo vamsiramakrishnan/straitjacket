@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 import pytest
+from ctx.sessiondir import session_reads_path
 
 
 @pytest.fixture()
@@ -212,7 +213,7 @@ def test_small_named_test_result_remains_byte_identical(ws):
     assert _run_post(payload) == {}
     rows = [
         json.loads(line)
-        for line in (ws / ".ctx-session-reads" / "steering-decisions.jsonl")
+        for line in (session_reads_path(ws, "steering-decisions.jsonl"))
         .read_text(encoding="utf-8")
         .splitlines()
     ]

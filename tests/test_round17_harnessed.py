@@ -194,7 +194,13 @@ def test_symbol_grep_count_keeps_growing_past_64(state_home, workspace_dir):
     from ctx import engagement
 
     state = engagement._mutate_state(ws.root, lambda s: s)
-    assert "sym69" in state["grep_symbols"] and "sym0" not in state["grep_symbols"]
+    import hashlib
+
+    def token(s):  # only a digest is kept: the file lives under the workspace
+        return "h:" + hashlib.sha256(s.encode()).hexdigest()[:12]
+
+    assert token("sym69") in state["grep_symbols"] and token("sym0") not in state["grep_symbols"]
+    assert not any("sym" in t for t in state["grep_symbols"])
 
 
 # ------------------------------ 9. a timed-out host launch kills what it forked

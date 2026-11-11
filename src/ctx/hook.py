@@ -712,7 +712,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
             pass
     try:
         cache_dir = os.path.dirname(cache_path)
-        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(cache_dir, mode=0o700, exist_ok=True)
         tmp = os.path.join(
             cache_dir, f"{_POLICY_CACHE_NAME}.{os.getpid()}.{os.urandom(4).hex()}"
         )
@@ -1024,7 +1024,7 @@ def _failure_available(workspace_root: str | None) -> bool:
     if not workspace_root:
         return False
     ledger_dir = session_reads_dir(workspace_root)
-    path = os.path.join(ledger_dir, "interventions.jsonl")
+    path = session_reads_dir(workspace_root, "interventions.jsonl")
     try:
         st = os.stat(path)
     except OSError:
@@ -1203,6 +1203,22 @@ def _note_guard_failure(
         pass
 
 
+def _capture_command(command: str, bg: str = "") -> str:
+    """The rewrite for a command the guard captures: ``ctx run``, then
+    exactly what the agent typed.
+
+    The original string is passed VERBATIM as one argument to ``ctx run
+    --shell``, which runs it with ``-c`` in the same shell family the host's
+    own shell tool uses (``ctx._proc.capture_shell``). It is never re-split
+    into words and re-quoted: that was only correct for a command containing
+    nothing the shell interprets, and it turned `cat *.txt` into a literal
+    `*.txt`, a trailing `# comment` into three arguments, and a
+    `FOO=bar cmd` prefix into a program name. Classification may parse the
+    command; execution never depends on that parse.
+    """
+    return f"ctx run{bg}{_REWRITE_FLAGS} --shell -- " + shlex.quote(command)
+
+
 def _deny_cmd(
     argv: list[str],
     policy: dict[str, Any],
@@ -1211,9 +1227,8 @@ def _deny_cmd(
     has_meta: bool = False,
 ) -> dict[str, Any]:
     """Command deny with remediation. Under rewrite steering, attach the
-    substitution hint (layer 1): plain argv routes through ``ctx run --``;
-    a denied command that already contained shell metacharacters routes
-    through ``ctx run --shell -- '<original string>'``."""
+    substitution hint (layer 1): the agent's ORIGINAL command string, carried
+    verbatim to ``ctx run --shell`` (see :func:`_capture_command`)."""
     decision: dict[str, Any] = _deny(_remediation(argv))
     if not _steering_allows(policy):
         return decision
@@ -1222,16 +1237,8 @@ def _deny_cmd(
         return decision
     # A never-terminating command must not be steered into a blocking capture.
     bg = " --bg" if _follows_forever(argv) else ""
-    if has_meta and original:
-        cmd = f"ctx run{bg}{_REWRITE_FLAGS} --shell -- " + shlex.quote(original)
-    else:
-        # Classification deliberately unwraps ``env``, ``timeout``, ``nice``
-        # and similar launchers to see the real program. Execution must retain
-        # those wrappers: they carry credentials, limits, buffering, and other
-        # semantics. Reparse the already validated original string only for a
-        # metacharacter-free direct argv rewrite.
-        routed_argv = shlex.split(original) if original else argv
-        cmd = f"ctx run{bg}{_REWRITE_FLAGS} -- " + " ".join(shlex.quote(a) for a in routed_argv)
+    del has_meta  # execution no longer depends on how the command parsed
+    cmd = _capture_command(original if original else shlex.join(argv), bg)
     reason = _REWRITE_REASON
     if bg:
         reason = (
@@ -1548,6 +1555,29 @@ _RESPONSE_KEYS_FLAT = ("tool_response", "toolResponse", "tool_output", "toolOutp
                        "output", "result")
 
 
+def _ancestor_workspace(start: str) -> str:
+    """The workspace containing ``start``, by the same markers
+    ``ctx.workspace.resolve_workspace`` uses after explicit and hook paths:
+    the nearest ancestor with ``ctx.toml``, else with ``.git``, else with
+    ``.agents/``, else ``start`` itself. A host reports the shell's current
+    directory as ``cwd``; taking it for the workspace put ledgers, policy and
+    the confinement root in whatever subdirectory the agent had cd'd into."""
+    here = os.path.abspath(start)
+    chain = []
+    cur = here
+    for _ in range(64):
+        chain.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    for marker in ("ctx.toml", ".git", ".agents"):
+        for d in chain:
+            if os.path.exists(os.path.join(d, marker)):
+                return d
+    return here
+
+
 def _resolve_workspace_root(payload: dict[str, Any]) -> str | None:
     """Longest containing workspacePath match against Cwd/Path/TargetFile
     (SPEC §5.1 rule 2). Never depends on the hook process CWD."""
@@ -1567,7 +1597,8 @@ def _resolve_workspace_root(payload: dict[str, Any]) -> str | None:
     if isinstance(ws_paths, str):
         ws_paths = [ws_paths]
     if not ws_paths:
-        return probe if probe and os.path.isdir(probe) else payload.get("cwd")
+        start = probe if probe and os.path.isdir(probe) else payload.get("cwd")
+        return _ancestor_workspace(start) if isinstance(start, str) and start else start
     if probe:
         probe_abs = os.path.abspath(probe)
         best = None
@@ -1806,6 +1837,146 @@ def _container_escape_force_ask(why: str) -> dict[str, str]:
     )
 
 
+#: Programs whose part in a compound command ctx can vouch for: they read,
+#: filter or print, or change only the shell's own state. A capture that
+#: runs them as a side effect runs nothing the agent would need approval
+#: for. Anything else that alone is merely "not ctx's business" (an allow
+#: such as `git push`) keeps the whole command away from capture.
+_INERT_PARTS = frozenset({
+    "true", "false", ":", "test", "[", "[[", "echo", "printf", "pwd", "cd",
+    "head", "tail", "wc", "cat", "grep", "egrep", "fgrep", "rg", "ls", "sort",
+    "uniq", "cut", "tr", "nl", "column", "fold", "fmt", "rev", "tac", "paste",
+    "comm", "expand", "unexpand", "basename", "dirname", "realpath", "date",
+    "seq", "sleep", "jq", "tee", "set", "export", "exit", "return", "wait",
+    "shift", "unset", "local", "declare", "typeset", "readonly", "alias",
+    "unalias", "read", "shopt", "diff", "cmp", "stat", "file",
+})
+#: git subcommands that only read (no form of them writes).
+_GIT_READ_SUBCOMMANDS = frozenset({
+    "status", "log", "diff", "show", "blame", "ls-files", "grep", "rev-parse",
+    "describe", "shortlog", "whatchanged", "cat-file", "ls-tree", "rev-list",
+})
+#: ctx verbs that only read: vouched as a part. `ctx run` and friends run
+#: arbitrary commands and are not.
+_CTX_READ_VERBS = frozenset({
+    "stats", "get", "search", "q", "diff", "show", "outline", "refs", "doctor",
+    "coverage", "jobs", "ladders", "status", "help", "--help", "--version",
+})
+_ASSIGN_ONLY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+#: find primaries that act on what they find.
+_FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir",
+                           "-fprint", "-fprint0", "-fprintf", "-fls"})
+
+
+def _find_acts(argv: list[str]) -> bool:
+    return bool(argv) and os.path.basename(argv[0]) == "find" and any(
+        a in _FIND_ACTIONS for a in argv[1:])
+
+
+def _vouched(prog: str, argv: list[str]) -> bool:
+    """Can a capture run this allowed part as a side effect? Only a part
+    that reads, prints or sets shell state: the inert table, the bounded
+    table (less the two that create files), the span registry's read-only
+    entries, and a bare assignment."""
+    if prog in _INERT_PARTS or (prog in _BOUNDED_CMDS and prog not in ("mkdir", "touch")):
+        return True
+    if all(_ASSIGN_ONLY_RE.match(w) for w in argv):
+        return True
+    if prog == "ctx":
+        return len(argv) > 1 and argv[1] in _CTX_READ_VERBS
+    try:
+        if classify_command_span(argv) == SPAN_ALLOW:
+            return True
+        return prog == "git" and git_subcommand(argv)[0] in _GIT_READ_SUBCOMMANDS
+    except Exception:
+        return False
+
+
+def _part_program(segment: str) -> tuple[str, list[str]] | None:
+    try:
+        argv = _unwrap(shlex.split(segment))
+    except ValueError:
+        return None
+    if not argv:
+        return "", []
+    return os.path.basename(argv[0]), argv
+
+
+def _compound_verdict(
+    stripped: str, policy: dict[str, Any], _depth: int, *, cwd: str | None
+) -> dict[str, Any] | None:
+    """The whole command's verdict from its parts, or None to classify it
+    as one command (it is one simple command)."""
+    from ctx.shsplit import split_segments
+
+    whole = shlex.quote(stripped)
+    segments = split_segments(stripped)
+    if segments is None:
+        return _force_ask(
+            "CTX_CONTEXT_GUARD: this shell expression cannot be split into its "
+            "commands with confidence, so it is put to you as written. To run "
+            f"it with bounded output: ctx run --shell -- {whole}")
+    if not segments:
+        return dict(DECISION_ALLOW)
+    if len(segments) == 1:
+        return None  # one simple command (a here-document, a comment, a group)
+    hard: list[tuple[str, dict[str, Any]]] = []
+    unvouched: list[str] = []
+    decisions = []
+    # Each distinct part is classified and parsed once (a long compound
+    # repeats its parts: `cat f | grep x && echo stepN` sixty times).
+    seen: dict[str, tuple[dict[str, Any], Any]] = {}
+    for seg in segments:
+        hit = seen.get(seg)
+        if hit is None:
+            hit = (classify_command(seg, policy, _depth + 1, cwd=cwd), _part_program(seg))
+            seen[seg] = hit
+        d, part = hit
+        decisions.append(d)
+        prog, argv = part if part is not None else ("", [])
+        if d.get("_safety"):
+            return d  # a rule the repo committed, a secret, an escape: as is
+        if part is None:
+            hard.append((seg, d))
+        elif d.get("decision") in ("deny", "force_ask") and not d.get("_rewrite"):
+            if prog not in _INERT_PARTS:
+                hard.append((seg, d))
+        elif _find_acts(argv):
+            unvouched.append(seg)
+        elif d.get("decision") == "allow" and prog and not _vouched(prog, argv):
+            unvouched.append(seg)
+    if hard:
+        seg, d = hard[0]
+        reason = str(d.get("reason") or "")
+        if reason and "unknown output bound" not in reason and "ctx run" not in reason:
+            return d  # its own reason (a container escape, an in-place edit) names it
+        return _force_ask(
+            "CTX_CONTEXT_GUARD: part of this command is something ctx cannot "
+            f"vouch for ({seg.splitlines()[0][:80]!r}), so the whole is put to you "
+            f"as written. To run all of it with bounded output: ctx run --shell -- {whole}")
+    if unvouched:
+        # Capture would run these parts under the wrapper's approval: leave
+        # the command untouched for the host to judge; the output gate
+        # bounds what it prints.
+        return dict(DECISION_ALLOW)
+    if all(d.get("decision") == "allow" for d in decisions):
+        return dict(DECISION_ALLOW)
+    # Every part is capturable or inert, and at least one wants capture:
+    # capture the whole, verbatim. Decided here, not by the first program
+    # (`git status\ncat big.log` is not a git command).
+    if any(_inplace_text_edit_in(seg) for seg in seen):
+        return None  # the expression rules below give its own remediation
+    fa = _force_ask(
+        "CTX_CONTEXT_GUARD: compound shell expression with unproven output bound. "
+        f"Prefer: ctx run --shell -- {whole}")
+    if _steering_allows(policy):
+        forever = any(part and part[1] and _follows_forever(part[1])
+                      for _d, part in seen.values())
+        fa["_rewrite"] = {"command": _capture_command(stripped, " --bg" if forever else ""),
+                          "reason": _REWRITE_REASON}
+    return fa
+
+
 def _classify_command_inner(
     command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
 ) -> dict[str, str]:
@@ -1856,44 +2027,22 @@ def _classify_command_inner(
                 if escape is not None:
                     return _container_escape_force_ask(escape)
                 return dict(DECISION_ALLOW)
-        # Bounded chain: `a; b && c` with no other metacharacters. Each
-        # segment is classified independently; the chain is allowed only if
-        # every segment is independently allowed. Any deny/force_ask segment
-        # falls through to the compound-expression handling below.
-        segments = _split_simple_chain(stripped)
-        if segments:
-            segment_decisions = [
-                classify_command(seg, policy, _depth + 1, cwd=cwd)
-                for seg in segments
-            ]
-            if all(d.get("decision") == "allow" for d in segment_decisions):
-                return dict(DECISION_ALLOW)
-            # A compound capture is safe only when every non-allow segment is
-            # itself eligible for transparent capture. Unknown commands,
-            # secrets, interactive tools, and repository-committed denies must
-            # retain their visible permission boundary; wrapping the whole
-            # shell would otherwise execute them as a side effect.
-            boundary = next(
-                (
-                    d
-                    for d in segment_decisions
-                    if d.get("_safety")
-                    or (
-                        d.get("decision") in ("deny", "force_ask")
-                        and not d.get("_rewrite")
-                    )
-                ),
-                None,
-            )
-            if boundary is not None:
-                return boundary
+        # A command is only as permitted as its least permitted part,
+        # whatever joins the parts: newline, `;`, `&&`, `||`, `|`, `&`, a
+        # subshell, a substitution, a here-document fed to a shell. Split
+        # conservatively (ctx.shsplit), classify every part alone, and never
+        # let the whole be captured -- which runs every part -- unless every
+        # part could have been.
+        compound = _compound_verdict(stripped, policy, _depth, cwd=cwd)
+        if compound is not None:
+            return compound
 
     try:
         argv = shlex.split(stripped)
     except ValueError:
         return _force_ask(
             "CTX_CONTEXT_GUARD: unparseable shell expression. "
-            "If output may be large, use: ctx run --shell -- '<command>'"
+            f"If output may be large, use: ctx run --shell -- {shlex.quote(stripped)}"
         )
     if not argv:
         return dict(DECISION_ALLOW)
@@ -1970,9 +2119,24 @@ def _classify_command_inner(
                 if _grants_match(canonical, prefix):
                     return dict(DECISION_ALLOW)
 
+    if _find_acts(argv):
+        # `find -delete` / `-exec`: it changes files, and its output is small
+        # or the gate bounds it. Capture would run it under the wrapper's
+        # approval; the host judges it as typed.
+        return dict(DECISION_ALLOW)
+
     # `bash -c '<inner>'`: classify the inner command, not the shell.
     if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
-        return classify_command(argv[2], policy, _depth + 1, cwd=cwd)
+        inner = classify_command(argv[2], policy, _depth + 1, cwd=cwd)
+        rw = inner.get("_rewrite")
+        if isinstance(rw, dict) and "command" in rw:
+            # The inner command decided the class; the capture still runs the
+            # WHOLE command as typed. Rewriting to the inner string alone
+            # dropped the outer shell, its environment prefix and the rest of
+            # its arguments (`FOO=bar sh -c 'echo $FOO'` printed nothing).
+            bg = " --bg" if " --bg " in rw["command"] else ""
+            rw["command"] = _capture_command(command, bg)
+        return inner
 
     if prog == "xargs":
         return _deny_cmd(
@@ -2005,7 +2169,7 @@ def _classify_command_inner(
         if _steering_allows(policy):
             bg = " --bg" if _follows_forever(argv) else ""  # fix: never-terminating piped command needs --bg too
             fa["_rewrite"] = {
-                "command": "ctx run" + bg + _REWRITE_FLAGS + " --shell -- " + shlex.quote(stripped),
+                "command": _capture_command(command, bg),
                 "reason": _REWRITE_REASON,
             }
         return fa
@@ -3156,6 +3320,18 @@ def classify(
                     _note_collapse(workspace_root, sub.shape, sub.rung)
             except Exception:
                 pass
+        # A recursive search for an identifier runs as itself (captured whole,
+        # so the answer is the search's own); a symbol lookup is offered only
+        # beside it, as the different question it is, never in its place.
+        if isinstance(decision.get("_rewrite"), dict) and "command" in decision["_rewrite"]:
+            try:
+                from ctx.substitute import symbol_hint
+
+                hint = symbol_hint(command)
+                if hint:
+                    decision["_rewrite"]["reason"] += "\n" + hint
+            except Exception:
+                pass
         # Eval teaching surface: a raw python heredoc / -c chain that hits
         # the guard gets the collapse move appended to its remediation (and
         # to the rewrite reason, so wrapped sessions see it too). Every
@@ -3250,6 +3426,9 @@ def classify(
                     else:  # ask: the user reads this; the model gets it post-run
                         decision["reason"] = str(decision.get("reason", "")) + "\n" + hint
                         _hint_state(workspace_root, session, key, "pending")
+                        # Where the ask is not emitted (Claude Code), the
+                        # hint goes to the model as context instead.
+                        decision["_media_hint"] = [hint, key, session]
                     policy["_media_note"] = "media:shell_hint"
             except Exception:
                 pass
@@ -3315,23 +3494,35 @@ _NATIVE_GREP_CAP = 60  # matches returned before the model should narrow
 
 
 def _native_search_redirect(tool_name: str, tool_input: dict[str, Any]) -> str:
-    """Remediation that points a native Grep/Glob call at the collapsed op.
-    Under the replacement surface a host's own search tool is off — it cannot
-    be transparently rewritten into a ``ctx q`` call (unlike a shell command),
-    so it is denied with the equivalent collapsed op named."""
-    pat = tool_input.get("pattern") or tool_input.get("query") or ""
+    """Remediation for a native Grep/Glob call denied under ``guard.collapse``.
+
+    It names a command that gives the SAME answer -- the same search, run in
+    the shell, where ctx captures the complete result bounded and with an
+    address. It used to name ``ctx q 'refs X | group file'`` for an
+    identifier and claim a shell grep was "auto-collapsed to the same op";
+    refs is a code-symbol lookup that never reads prose or config, so that
+    told the agent a different question was the same one. A symbol lookup is
+    still mentioned for an identifier, labelled as the different question it is.
+    """
+    pat = tool_input.get("pattern") or tool_input.get("query") or tool_input.get("Query") or ""
+    pat = pat if isinstance(pat, str) else ""
+    head = ("CTX_CONTEXT_GUARD: native search is off under the replacement "
+            "surface (guard.collapse). ")
     if "grep" not in tool_name.lower():  # Glob / file-name search
-        collapsed = "ctx q 'files --glob <glob>'"
-    elif isinstance(pat, str) and re.match(r"^[A-Za-z_]\w*$", pat):
-        collapsed = f"ctx q 'refs {pat} | group file'"
-    elif pat:
-        collapsed = f"ctx q 'search {pat} | files'"
-    else:
-        collapsed = "ctx q 'refs <Symbol>'  (symbol)  or  ctx q 'search <pattern>'"
-    return ("CTX_CONTEXT_GUARD: native search is off under the replacement "
-            "surface (guard.collapse). Use  " + collapsed + "  for a bounded, "
-            "addressable answer — or run `grep -rn <pattern>` in Bash, which is "
-            "auto-collapsed to the same op.")
+        glob = tool_input.get("pattern") or tool_input.get("Pattern") or "<glob>"
+        return (head + "List the files with the shell instead -- "
+                f"`rg --files -g {shlex.quote(str(glob))}` or "
+                f"`find . -name {shlex.quote(str(glob))}`; ctx captures the full "
+                "listing, bounded and addressable.")
+    shown = shlex.quote(pat) if pat else "'<pattern>'"
+    text = (head + f"Run the same search in the shell instead -- `rg -n {shown} <path>` "
+            f"or `grep -rn {shown} <path>`; ctx captures the complete result, "
+            "bounded and addressable.")
+    if re.match(r"^[A-Za-z_]\w*$", pat):
+        text += (f" (`ctx q 'refs {pat} | group file'` answers a different question: "
+                 "where a code symbol is defined or used. It does not read prose, "
+                 "config or comments.)")
+    return text
 
 
 def _classify_native_search(
@@ -3339,9 +3530,9 @@ def _classify_native_search(
 ) -> dict[str, Any]:
     lowered = tool_name.lower()
     # Replacement surface: with collapse on, the host's native search tool is
-    # removed from the surface — deny and redirect to the collapsed ctx op (or
-    # to Bash grep, which is transparently substituted). One code path, so the
-    # gap closes for every harness whose hook sees a native search tool.
+    # removed from the surface -- deny and redirect to the same search in the
+    # shell, which the guard captures whole (never to a ctx query standing in
+    # for it). One code path for every harness whose hook sees a native search.
     if policy.get("collapse"):
         return _deny(_native_search_redirect(tool_name, tool_input))
     recursive = bool(tool_input.get("Recursive") or tool_input.get("recursive"))
@@ -3383,6 +3574,289 @@ def _classify_native_search(
     return decision
 
 
+def _rewrite_stays_in_workspace(decision, payload, ws_root):
+    """A rewritten command runs in the caller's directory (``ctx run`` takes
+    its working directory from the shell that runs it). From a directory
+    outside the workspace there is nowhere inside it to run: the call is left
+    untouched for the host, and the output gate bounds what it prints."""
+    try:
+        rw = decision.get("_rewrite") if isinstance(decision, dict) else None
+        if not (isinstance(rw, dict) and "command" in rw) or not ws_root:
+            return decision
+        cwd = payload.get("cwd") or (payload.get("tool_input") or {}).get("cwd")
+        if not cwd:
+            return decision
+        here = os.path.realpath(cwd)
+        top = os.path.realpath(ws_root)
+        if here == top or here.startswith(top.rstrip(os.sep) + os.sep):
+            return decision
+        return dict(DECISION_ALLOW)
+    except Exception:
+        return decision
+
+
+def _claude_permission_gate(
+    decision: dict[str, Any] | None, payload: dict[str, Any], ws_root: str | None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The hook never claims the user's rules permit anything (Claude Code).
+
+    Claude Code's own rule engine resolves paths in shell commands, follows
+    links and applies settings ctx cannot read; any ``allow`` sent with a
+    rewritten input replaces that engine with ctx's, and every gap in ctx's
+    is a bypass of the user's settings (review of 9d02cb4, live on 2.1.322).
+    So:
+
+    * R1: never ``allow`` together with a rewritten input.
+    * R2 (``steering = "auto"``, the default): a shell command is not
+      rewritten at all. It leaves exactly as it arrived, no decision, and
+      the host decides as it would without ctx; the PostToolUse gate bounds
+      the output afterwards (from the host's own full copy where it saved
+      one, see :func:`_host_full_output`).
+    * R3 (``steering = "rewrite"``, opt-in): rewritten with no decision; the
+      host judges the ``ctx run`` wrapper. ctx.ccperm is used only to refuse:
+      a visible rule that would deny or ask about the original gives deny or
+      ask, and no rewrite.
+    * R4: a volume ask or deny on a shell command (unknown output bound, a
+      compound ctx cannot vouch for) is not emitted where output can be
+      replaced; safety asks and denies stay (:func:`_is_safety_ask`).
+    * a plain allow is emitted only for ctx's own verbs
+      (:func:`_ctx_self_approved`); a field rewrite (Read ``limit``) and a
+      media redirect carry no decision.
+    """
+    if not isinstance(decision, dict):
+        return decision
+    steering = str((policy or {}).get("steering", "auto"))
+    rewrite = decision.get("rewrite")
+    command = _tool_command(payload)
+    if not isinstance(rewrite, dict) or not isinstance(rewrite.get("updatedInput"), dict):
+        if decision.get("decision") == "allow":
+            out = dict(decision)
+            out["_permission"] = "allow" if _ctx_self_approved(payload, ws_root) else "none"
+            return out
+        if command and _is_volume_refusal(decision, command) and (
+                steering != "deny" or decision.get("decision") == "force_ask"):
+            return _untouched(decision, ws_root)
+        return decision
+    if "command" not in rewrite:
+        out = dict(decision)
+        out["_permission"] = "none"
+        return out
+    if steering != "rewrite":
+        return _untouched(decision, ws_root)  # R2
+    try:
+        from ctx import ccperm
+
+        ti = payload.get("tool_input") or payload.get("toolInput") or {}
+        verdict, _why = ccperm.refusal_verdict(
+            command or "", {**payload, "tool_input": ti if isinstance(ti, dict) else {}}, ws_root)
+    except Exception:
+        verdict = "ask"  # cannot evaluate: do not hand the host a wrapper
+    if verdict == "deny":
+        from ctx.ccperm import DENY_REASON
+
+        return _deny(DENY_REASON)
+    if verdict == "ask":
+        from ctx.ccperm import ASK_REASON
+
+        return _force_ask(ASK_REASON)
+    out = dict(decision)
+    out["_permission"] = "none"  # R1: a rewrite never carries an approval
+    return out
+
+
+def _is_volume_refusal(decision: dict[str, Any], command: str) -> bool:
+    """An ask or deny on a shell command that exists only because its output
+    might be large (unknown output bound, unbounded-output remediation, a
+    compound ctx cannot vouch for): pointless where the output gate can
+    replace output. Safety asks and denies, and the steer of a never-ending
+    command to ``ctx run --bg``, are not volume."""
+    if decision.get("decision") not in ("force_ask", "deny") or _is_safety_ask(decision):
+        return False
+    reason = str(decision.get("reason") or "")
+    if reason.startswith("CTX_CONTEXT_GUARD: in-place text edit"):
+        return False
+    try:
+        argv = _unwrap(shlex.split(command))
+    except ValueError:
+        argv = []
+    if argv and _follows_forever(argv):
+        return False
+    return True
+
+
+def _codex_gate(decision, payload, ws_root, policy):
+    """Codex, the same shape as R2: rewrites are withheld (the emitter drops
+    them) and a volume refusal of a shell command is not sent, because Codex
+    maps an ask to a deny and its PostToolUse block replaces a large output
+    with ctx's digest after the command runs."""
+    if not isinstance(decision, dict):
+        return decision
+    steering = str((policy or {}).get("steering", "auto"))
+    command = _tool_command(payload)
+    rewrite = decision.get("rewrite")
+    if isinstance(rewrite, dict) and "command" in rewrite:
+        return _untouched(decision, ws_root)
+    if command and _is_volume_refusal(decision, command) and (
+                steering != "deny" or decision.get("decision") == "force_ask"):
+        return _untouched(decision, ws_root)
+    return decision
+
+
+def _is_safety_ask(decision: dict[str, Any]) -> bool:
+    """An ask that is a safety boundary, not a volume one: kept."""
+    reason = str(decision.get("reason") or "")
+    return bool(decision.get("_safety")) or reason.startswith((
+        "CTX_CONTEXT_GUARD: secret-bearing path", "CTX_CONTEXT_GUARD: container escape",
+        "CTX_RELAY_INTERRUPT", "CTX_CONTEXT_GUARD: path outside workspace",
+        "CTX_CONTEXT_GUARD: one of your Claude Code"))
+
+
+def _untouched(decision: dict[str, Any], ws_root: str | None = None) -> dict[str, Any]:
+    """No rewrite, no decision; advice for the model (``context``) kept. A
+    media hint that rode an ask (which is not emitted) becomes context."""
+    out: dict[str, Any] = {"decision": "allow", "_permission": "none", "_untouched": "1"}
+    if decision.get("context"):
+        out["context"] = decision["context"]
+    pending = decision.get("_media_hint")
+    if isinstance(pending, list) and len(pending) == 3 and not out.get("context"):
+        hint, key, session = pending
+        out["context"] = hint
+        try:
+            _hint_state(ws_root, session, key, "delivered")
+        except Exception:
+            pass
+    return out
+
+
+#: ctx's own verbs that only read. A product decision, written down (R5):
+#: on Claude Code the hook approves, with no rewrite, a call of one of these
+#: that reads only ctx's store by handle (``ctx get run:...``, ``ctx search
+#: run:... PATTERN``, ``ctx stats run:...``, ``ctx diff run:A run:B``): that
+#: content already came in through a call the host approved. One that reads
+#: workspace paths (a ``repo:`` ref or a file path, a workspace search,
+#: ``map``, ``def``, ``refs``, ``q``) only when no Read deny rule, no Read ask
+#: rule and no ``blockReadsOutsideWorkingDirectories`` is visible in any
+#: settings source, every source ctx knows how to find was readable, and no
+#: argument leaves the workspace (absolute, ``..``, or a link out).
+#: LIMIT: a Read rule in a source ctx cannot read (server-managed settings,
+#: the macOS plist, the Windows registry, a policy helper) does not bind
+#: these verbs; an administrator who relies on one should also deny
+#: ``Bash(ctx:*)`` and ``mcp__ctx__*`` there.
+CTX_SELF_APPROVED_VERBS = frozenset({"get", "search", "stats", "q", "diff", "map", "def", "refs"})
+_STORE_HANDLE_RE = re.compile(r"(?:run|job|span|digest|blob|snapshot):[0-9a-f]{4,64}(?:[#@:][\w.:#@-]*)?")
+_STORE_ONLY_VERBS = frozenset({"get", "stats", "diff", "search"})
+
+
+def _store_only(verb: str, args: list[str]) -> bool:
+    """Does this ctx verb read only from the store, by handle?"""
+    pos = [a for a in args if not a.startswith("-")]
+    if verb not in _STORE_ONLY_VERBS or not pos or any(a.startswith("-") for a in args):
+        return False
+    if verb == "search":
+        return bool(_STORE_HANDLE_RE.fullmatch(pos[0]))
+    return all(_STORE_HANDLE_RE.fullmatch(a) for a in pos)
+
+
+def _leaves_workspace(args: list[str], ws_root: str | None, cwd: str | None) -> bool:
+    base = cwd or ws_root
+    if not base:
+        return True
+    top = os.path.realpath(ws_root or base)
+    for a in args:
+        if a.startswith("-"):
+            continue
+        if a.startswith("ws:"):
+            return True  # another workspace
+        path = a.split(":", 1)[1] if a.startswith("repo:") else a
+        if not path or ":" in path.split("/", 1)[0]:
+            continue
+        if path.startswith(("/", "~")) or ".." in path.replace("\\", "/").split("/"):
+            return True
+        real = os.path.realpath(os.path.join(base, path))
+        if not (real == top or real.startswith(top.rstrip(os.sep) + os.sep)):
+            return True
+    return False
+
+
+def _ctx_self_approved(payload: dict[str, Any], ws_root: str | None = None) -> bool:
+    """See :data:`CTX_SELF_APPROVED_VERBS`. Bash: exactly ``ctx <verb>
+    <plain words>`` (no assignment, wrapper, path, quote, redirection or
+    second command: ``ccperm.strict_segments``), independent of
+    :func:`_is_ctx_invocation`. MCP: the op of ctx's own tool."""
+    try:
+        from ctx import ccperm
+
+        name = str(payload.get("tool_name") or payload.get("toolName") or "")
+        ti = payload.get("tool_input") or payload.get("toolInput") or {}
+        if _is_ctx_mcp_tool(name):
+            if not isinstance(ti, dict):
+                return False
+            verb = str(ti.get("op") or "")
+            args = [str(ti.get("ref") or ("repo:" if verb in ("search", "stats") else ""))]
+            args = [a for a in args if a]
+            command = None
+        elif name == "Bash":
+            command = (_tool_command(payload) or "").strip()
+            strict = ccperm.strict_segments(command) if command else None
+            if not strict or len(strict) != 1:
+                return False
+            argv = strict[0]
+            if len(argv) < 2 or argv[0] != "ctx" or not _is_ctx_invocation(command, payload.get("cwd")):
+                return False
+            verb, args = argv[1], argv[2:]
+        else:
+            return False
+        if verb not in CTX_SELF_APPROVED_VERBS:
+            return False
+        cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ws_root
+        rules = ccperm.cached_rules(ws_root, cwd)
+        if command is not None:
+            verdict, _why = ccperm.refusal_verdict(command, payload, ws_root, rules=rules)
+            if verdict != "none":
+                return False
+        if _store_only(verb, args):
+            return True
+        # Reads workspace paths: only where no visible Read rule could object.
+        if rules.get("unknown") or rules.get("block_outside"):
+            return False
+        for rule in [*rules.get("deny", []), *rules.get("ask", [])]:
+            parsed = ccperm.parse_rule(rule)
+            if parsed is None or ccperm._tool_matches(parsed[0], "Read", glob=True):
+                return False
+        return not _leaves_workspace(args, ws_root, cwd)
+    except Exception:
+        return False
+
+
+def claude_code_pre_tool_use_output(emitted: dict[str, Any], decision: Any) -> dict[str, Any]:
+    """The one place every Claude Code PreToolUse answer passes through.
+
+    On Claude Code an ``allow`` is emitted only for one of ctx's own
+    read-only verbs (:data:`CTX_SELF_APPROVED_VERBS`), never with a
+    rewritten input; the gate records it as ``_permission == "allow"``. Any other ``allow`` --
+    whatever code produced it, now or merged later -- leaves with no
+    decision: rewritten input and added context work without one, and the
+    host then applies the user's rules and prompt exactly as without ctx.
+    Live on 2.1.322, ``allow`` with rewritten input ran a command past the
+    user's deny and ask rules; ``allow`` alone skipped the prompt for a call
+    no rule covered (an MCP tool)."""
+    try:
+        hso = emitted.get("hookSpecificOutput") if isinstance(emitted, dict) else None
+        if not isinstance(hso, dict) or hso.get("permissionDecision") != "allow":
+            return emitted
+        if (isinstance(decision, dict) and decision.get("_permission") == "allow"
+                and "updatedInput" not in hso):  # R1: never allow with a rewrite
+            return emitted
+        hso = {k: v for k, v in hso.items()
+               if k not in ("permissionDecision", "permissionDecisionReason")}
+        if set(hso) <= {"hookEventName"}:
+            return {}
+        return {**emitted, "hookSpecificOutput": hso}
+    except Exception:
+        return {}
+
+
 def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
     """Translate the canonical decision into Claude Code's PreToolUse hook
     schema (hookSpecificOutput.permissionDecision: allow|deny|ask).
@@ -3392,24 +3866,23 @@ def _to_claude_code_schema(decision: dict[str, Any]) -> dict[str, Any]:
     directly under ``hookSpecificOutput``, which replaces the tool's
     arguments before it runs (https://code.claude.com/docs/en/hooks)."""
     rewrite = decision.get("rewrite")
+    permission = decision.get("_permission", "allow")
     if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
-        out = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "updatedInput": rewrite["updatedInput"],
-                "permissionDecisionReason": str(rewrite.get("reason", "")),
-            }
+        hso: dict[str, Any] = {
+            "hookEventName": "PreToolUse",
+            "updatedInput": rewrite["updatedInput"],
         }
-        if decision.get("_no_approve"):
-            # A media redirect never APPROVES the read. Observed on 2.1.322
-            # (liveprobe xB, xF): `allow` with a rewritten input ran a call the
-            # user's deny / ask rule named; without a decision (xC, xE0-xE2)
-            # the host runs its own permission flow on the rewritten input.
-            del out["hookSpecificOutput"]["permissionDecision"]
-            del out["hookSpecificOutput"]["permissionDecisionReason"]
+        # R1: a rewritten input never carries a decision of ctx's.
+        # No decision otherwise: the host applies its own rules and prompt.
+        out = {"hookSpecificOutput": hso}
         _attach_context(out, decision, proceeds=True)
         return out
+    if decision.get("decision", "allow") == "allow" and permission == "none":
+        # No opinion: the host decides exactly as it would without ctx.
+        # Advice for the model still travels, without a decision.
+        out = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+        _attach_context(out, decision)
+        return out if len(out["hookSpecificOutput"]) > 1 else {}
     mapping = {"allow": "allow", "deny": "deny", "force_ask": "ask"}
     out: dict[str, Any] = {
         "hookSpecificOutput": {
@@ -3446,16 +3919,17 @@ def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
     """
     rewrite = decision.get("rewrite")
     if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
-        out = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "updatedInput": rewrite["updatedInput"],
-                "permissionDecisionReason": str(rewrite.get("reason", "")),
-            }
-        }
+        # Withheld. Codex accepts a rewrite only as `permissionDecision:
+        # "allow"` with `updatedInput`, and its documentation does not
+        # establish that its approval policy still applies to a call a hook
+        # allowed (PermissionRequest is a separate event). On Claude Code the
+        # same shape was shown live to skip the user's deny and ask rules.
+        # So the original command runs as the model asked, under Codex's own
+        # approval, and the PostToolUse gate bounds what it prints. Advice
+        # still travels as context, without a decision.
+        out = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
         _attach_context(out, decision, proceeds=True)
-        return out
+        return out if len(out["hookSpecificOutput"]) > 1 else {}
 
     raw = decision.get("decision", "allow")
     if raw in ("deny", "ask", "force_ask"):
@@ -4322,6 +4796,16 @@ def _note_coverage(
             row["note"] = _safe_id(note)
         ledger_dir = session_reads_dir(ws_root)
         os.makedirs(ledger_dir, exist_ok=True)
+        # The ledger directory ignores itself, so git (status, ls-files,
+        # clean) and ripgrep never report ctx's bookkeeping as the user's
+        # files, even in a repository whose own ignore file does not name it.
+        # Nothing under it holds command text (sessiondir.PRIVATE_LEDGERS),
+        # so a content search that does walk it finds none of its own
+        # patterns; a listing that walks it shows it, as it shows .git.
+        self_ignore = os.path.join(ledger_dir, ".gitignore")
+        if not os.path.exists(self_ignore):
+            with open(self_ignore, "w", encoding="utf-8") as fh:
+                fh.write("*\n")
         path = os.path.join(ledger_dir, _COVERAGE_LEDGER)
         # Bounded: past COVERAGE_MAX_BYTES the file becomes the single kept
         # generation (coverage.1.jsonl, replacing the previous one) and a
@@ -4398,6 +4882,48 @@ def _ran_ctx(payload: dict[str, Any]) -> bool:
     return _is_ctx_invocation(_tool_command(payload), cwd or payload.get("cwd"))
 
 
+#: Largest host-saved output the gate takes in from the host's own file.
+_HOST_FULL_MAX = 256 * 1024 * 1024
+
+
+def _host_full_output(payload: dict[str, Any], tr: dict[str, Any]) -> str | None:
+    """The full output Claude Code saved for a large Bash result, or None.
+
+    Observed on 2.1.322: for a 300 KB and a 5 MB output PostToolUse receives
+    ``stdout`` = the LAST 30,000 characters (``stdoutHoldsOutputEnd``) plus
+    ``persistedOutputPath`` / ``persistedOutputSize``, a file under
+    ``<config>/projects/<project>/<session_id>/tool-results/``. Only that
+    location is trusted -- never a path the output merely mentions: the file
+    must resolve inside the host's projects directory, in a ``tool-results``
+    directory of THIS session, be a regular file (not a link) and have
+    exactly the size the host reported."""
+    path = tr.get("persistedOutputPath")
+    size = tr.get("persistedOutputSize")
+    session = str(payload.get("session_id") or "")
+    if not isinstance(path, str) or not isinstance(size, int) or not session:
+        return None
+    if size <= 0 or size > _HOST_FULL_MAX or "/" in session or session in (".", ".."):
+        return None
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    projects = os.path.realpath(os.path.join(config, "projects"))
+    real = os.path.realpath(path)
+    if real != os.path.abspath(path) or not real.startswith(projects + os.sep):
+        return None
+    parts = os.path.relpath(real, projects).split(os.sep)
+    if len(parts) != 4 or parts[1] != session or parts[2] != "tool-results":
+        return None
+    st = os.lstat(real)
+    import stat as _stat
+
+    if not _stat.S_ISREG(st.st_mode) or st.st_size != size:
+        return None
+    with open(real, "rb") as fh:
+        data = fh.read(size + 1)
+    if len(data) != size:
+        return None
+    return data.decode("utf-8", "replace")
+
+
 def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     """The universal output-side gate. When a tool result exceeds the byte
     budget, persist it losslessly and return a bounded digest (with a working
@@ -4457,6 +4983,20 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         # We hold bytes we cannot interpret — coerce rather than pass through.
         _note_guard_failure(ws_root, op="emission_gate", stage="normalize", exc=exc)
         stdout, stderr = _coerce_text(tr), ""
+    host_note = ""
+    if flavor == "claude-code" and isinstance(tr, dict):
+        try:
+            full = _host_full_output(payload, tr)
+            if full is not None:
+                stdout = full
+            elif isinstance(tr.get("persistedOutputSize"), int) and \
+                    tr["persistedOutputSize"] > len(stdout.encode("utf-8", "replace")):
+                host_note = (
+                    f"\n[ctx: stored copy is what Claude Code handed the hook: the last "
+                    f"{len(stdout)} characters of {tr['persistedOutputSize']} bytes. For a "
+                    f"full capture run: ctx run -- {_tool_command(payload) or '<command>'}]")
+        except Exception:
+            pass
 
     # Never digest our own digests or ctx's own tool results (recursion /
     # double-wrap guard). "[ctx " covers every ctx header — run: (digest),
@@ -4576,6 +5116,8 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
                 "Retrieve the captured result below before retrying. If a batch "
                 "stopped here, check which later calls ran before resuming.\n" + text
             )
+        if host_note:
+            text = text.rstrip("\n") + host_note
         _GATE_STATS["decision"] = "replaced" if can_substitute else "captured"
         return text if can_substitute else None
     except Exception as exc:
@@ -4731,7 +5273,7 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     try:
         name = str(payload.get("tool_name") or payload.get("toolName") or "")
         kind = _governed_kind(name, flavor, payload)
-        post_route = _gov.stage_routes(kind, DIALECT_CAPS.get(flavor, {}))[1]
+        post_route = _gov.stage_routes(kind, DIALECT_CAPS.get(flavor, {}), host=flavor)[1]
     except Exception:
         pass
     _GATE_STATS.clear()
@@ -5107,13 +5649,19 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
         # by failing. Leave the classified decision exactly as it stands.
         pass
 
+    decision = _rewrite_stays_in_workspace(decision, payload, ws_root)
+    if flavor == "claude-code":
+        decision = _claude_permission_gate(decision, payload, ws_root, policy)
+    elif flavor == "codex":
+        decision = _codex_gate(decision, payload, ws_root, policy)
+
     if flavor in ("hermes", "omp", "opencode", "dsh"):
         from ctx.native_hooks import decision_for
         emitted = decision_for(flavor, decision)
     elif flavor == "codex":
         emitted = _to_codex_schema(decision)
     elif flavor == "claude-code":
-        emitted = _to_claude_code_schema(decision)
+        emitted = claude_code_pre_tool_use_output(_to_claude_code_schema(decision), decision)
     else:
         try:
             emitted = _to_antigravity_schema(decision, payload, ws_root)
