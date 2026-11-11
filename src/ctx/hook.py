@@ -137,6 +137,11 @@ from ctx.command_spans import CAPTURE as SPAN_CAPTURE
 from ctx.command_spans import classify_command_span, git_subcommand
 from ctx.guard_policy import choose_guard
 
+# The governance table (which route each host's native tools take). Imported,
+# not re-typed, so the classifier below cannot drift from what `ctx coverage`
+# reports and the registration tests pin. It imports nothing.
+from ctx import governance as _gov
+
 # The house ledger directory, named and joined in exactly one place
 # (ctx.sessiondir). That module imports `os` only, for this contract.
 from ctx.proxywindow import read_window_doc
@@ -373,8 +378,8 @@ def _tool_words(tool_name: str) -> list[str]:
     return [w.lower() for w in re.findall(r"[A-Za-z0-9]+", spaced)]
 
 
-def _tool_kind(tool_name: str) -> str | None:
-    """Classify a tool name into edit/command/read/search, or None. Pure."""
+def _word_kind(tool_name: str) -> str | None:
+    """The legacy name rules: exact shared names, then whole-word stems."""
     exact = _TOOL_EXACT_KIND.get(tool_name.lower())
     if exact:
         return exact
@@ -385,6 +390,49 @@ def _tool_kind(tool_name: str) -> str | None:
     if any(w in _TOOL_SEARCH_WORDS or w.endswith(_TOOL_SEARCH_SUFFIXES) for w in words):
         return "search"
     return None
+
+
+def _governed_kind(
+    tool_name: str, flavor: str | None = None, payload: dict[str, Any] | None = None
+) -> str:
+    """The governance-table kind of one tool call. Pure; never None.
+
+    Order is load-bearing:
+
+    1. a tool served by an MCP server is ``mcp`` — never a native file or
+       search tool, whatever words its name contains (``mcp__github__list_issues``
+       is not a directory listing, ``mcp__fs__read_file`` is not a Read);
+    2. the host's exact native table (``ctx.governance.NATIVE``);
+    3. on hosts whose names are fully enumerated, or whose MCP names carry no
+       namespace, anything unlisted is a generic ``tool`` (output gate);
+    4. elsewhere the word rules, else ``tool``.
+    """
+    if _gov.is_mcp(tool_name, payload):
+        return "mcp"
+    if flavor:
+        listed = _gov.table_kind(flavor, tool_name)
+        if listed:
+            return listed
+    if flavor in _gov.EXACT_ONLY_HOSTS:
+        return "tool"
+    word = _word_kind(tool_name)
+    if flavor and word == "edit":
+        # Observe-only is a privilege of tools the table names as edits: an
+        # unlisted `write_stdin` or `TodoWrite`, or an editor tool whose view
+        # action returns a whole file, would otherwise pass ungated.
+        return "tool"
+    return word or "tool"
+
+
+def _tool_kind(
+    tool_name: str, flavor: str | None = None, payload: dict[str, Any] | None = None
+) -> str | None:
+    """Classify a tool name into edit/command/read/search, or None. Pure.
+
+    The guard-branch projection of :func:`_governed_kind`: every kind without
+    an input-side branch reads as None, exactly as before."""
+    kind = _governed_kind(tool_name, flavor, payload)
+    return kind if kind in _gov.GUARD_KINDS else None
 
 # Interactive/stdin-suspect programs: rewriting these into a non-interactive
 # `ctx run` capture would hang or change semantics, so they stay plain deny.
@@ -1242,6 +1290,53 @@ def _grep_single_file_rewrite(argv: list[str], cwd: str | None) -> str | None:
     return " ".join(shlex.quote(a) for a in new_argv)
 
 
+#: Fields a nested ``toolCall`` object carries, and the flat names the rest
+#: of this module reads.
+_TOOL_CALL_FIELDS = (("name", "tool_name"), ("args", "tool_input"), ("id", "tool_use_id"),
+                     ("result", "tool_response"), ("output", "tool_response"),
+                     ("response", "tool_response"))
+
+
+def _normalize_payload(payload: Any) -> dict[str, Any]:
+    """Accept every payload shape a host sends, at the dialect boundary.
+
+    Live Antigravity CLI (``agy`` 1.5.5) nests the call as
+    ``{"hookEventName": ..., "toolCall": {"name", "id", "args"}, "cwd", ...}``
+    rather than the flat ``tool_name``/``tool_input`` (or camelCase
+    ``toolName``/``toolInput``) this module reads. Without lifting it, every
+    real Antigravity call classified as a nameless tool and was allowed:
+    ``cat huge.log`` passed the guard. The nested fields are lifted to their
+    flat names; a flat field already present is never overwritten. Pure; any
+    non-dict becomes ``{}``.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    call = payload.get("toolCall")
+    if not isinstance(call, dict):
+        call = payload.get("tool_call")
+    if not isinstance(call, dict):
+        return payload
+    out = dict(payload)
+    present = {
+        "tool_name": ("tool_name", "toolName"),
+        "tool_input": ("tool_input", "toolInput"),
+        "tool_use_id": ("tool_use_id", "toolUseId"),
+        "tool_response": _RESPONSE_KEYS_FLAT,
+    }
+    for src, dst in _TOOL_CALL_FIELDS:
+        if src in call and not any(k in out for k in present[dst]):
+            out[dst] = call[src]
+    if "hook_event_name" not in out and isinstance(out.get("hookEventName"), str):
+        out["hook_event_name"] = out["hookEventName"]
+    return out
+
+
+# Every top-level key a tool result may arrive under (see _RESPONSE_KEYS,
+# which adds the bare "content"; a nested call's own "content" is not lifted).
+_RESPONSE_KEYS_FLAT = ("tool_response", "toolResponse", "tool_output", "toolOutput",
+                       "output", "result")
+
+
 def _resolve_workspace_root(payload: dict[str, Any]) -> str | None:
     """Longest containing workspacePath match against Cwd/Path/TargetFile
     (SPEC §5.1 rule 2). Never depends on the hook process CWD."""
@@ -1988,7 +2083,8 @@ def _whole_file_read(tool_input: dict[str, Any] | None) -> bool:
     )
 
 
-def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int) -> str | None:
+def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int,
+                          range_hint: str = "Read with offset and limit") -> str | None:
     """The map of a large code file, for a Read that wanted all of it.
 
     Measured on DeepSWE (cattrs, haiku): every whole-file Read of the 64 KB
@@ -2018,11 +2114,132 @@ def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int) 
         return (
             f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte code file "
             f"(~{size // 4:,} tok). Its map is below instead of the first page; "
-            "read what you need by range (Read with offset and limit) or by "
+            f"read what you need by range ({range_hint}) or by "
             f"symbol (ctx get repo:{rel} --symbol <Name>).\n" + outline
         )
     except Exception:
         return None
+
+
+#: Antigravity's view_file takes a line range, not offset/limit (hooks
+#: reference, supported tools: "AbsolutePath, StartLine (optional), EndLine
+#: (optional)"). A read in that style is bounded by its own range, and any
+#: advice to it must name those parameters.
+_RANGE_KEYS = ("StartLine", "EndLine")
+
+
+def _range_style(tool_input: dict[str, Any] | None) -> bool:
+    return isinstance(tool_input, dict) and (
+        "AbsolutePath" in tool_input or any(k in tool_input for k in _RANGE_KEYS))
+
+
+def _range_span(tool_input: dict[str, Any] | None) -> int | None:
+    """Lines a StartLine/EndLine read asks for, or None when unbounded."""
+    if not isinstance(tool_input, dict):
+        return None
+    a, b = tool_input.get("StartLine"), tool_input.get("EndLine")
+    if (isinstance(a, int) and isinstance(b, int) and not isinstance(a, bool)
+            and not isinstance(b, bool) and b >= a >= 0):
+        return b - a + 1
+    return None
+
+
+#: How far into a file the range-read byte check may scan before it gives
+#: up and answers "too large" (the safe side). Only files over the inline
+#: budget are scanned at all.
+_RANGE_SCAN_CAP = 8 * 1024 * 1024
+
+
+def _range_scan(path: str, start0: int, want: int, budget: int) -> tuple[int, int | None]:
+    """Bytes in ``want`` lines starting at 0-based line ``start0``, bounded.
+
+    Returns ``(fit, nbytes)``: ``fit`` is how many whole lines from
+    ``start0`` fit in ``budget`` bytes (at most ``want``); ``nbytes`` is the
+    range's size when all of it fits (end of file counts as fitting), else
+    None. Reads in bounded pieces -- a 4 MB single line is never held whole
+    -- and stops after ``_RANGE_SCAN_CAP`` bytes, answering None (too large).
+    """
+    scanned = 0
+    try:
+        with open(path, "rb") as fh:
+            line = 0
+            while line < start0:  # skip to the range, counting newlines only
+                piece = fh.readline(65536)
+                if not piece:
+                    return 0, 0  # range starts past the end: nothing to read
+                scanned += len(piece)
+                if scanned > _RANGE_SCAN_CAP:
+                    return 0, None
+                if piece.endswith(b"\n"):
+                    line += 1
+            fit, nbytes = 0, 0
+            while fit < want:
+                current = 0
+                while True:  # one line, in pieces no larger than the budget allows
+                    piece = fh.readline(max(1, budget - nbytes - current + 1))
+                    current += len(piece)
+                    if not piece or piece.endswith(b"\n") or nbytes + current > budget:
+                        break
+                if nbytes + current > budget:
+                    return fit, None
+                if current == 0:
+                    return fit, nbytes  # end of file inside the range
+                nbytes += current
+                fit += 1
+                if not piece.endswith(b"\n"):
+                    return fit, nbytes  # last line, no trailing newline
+            return fit, nbytes
+    except OSError:
+        return 0, None
+
+
+def _range_advice(tool_input: dict[str, Any], path_str: str, workspace_root: str | None,
+                  size: int, limit: int, window: int, note: str) -> dict[str, Any]:
+    """Deny an over-budget StartLine/EndLine read with advice that works there.
+
+    The saved Antigravity reference names view_file's parameters
+    (AbsolutePath, StartLine, EndLine, IsSkillFile) but not whether lines
+    start at 0 or 1, so the range is measured as the union of both readings
+    (0-based lines ``StartLine-1 .. EndLine``): a range admitted here is
+    within budget whichever the host means. ``0..0`` is therefore the first
+    line. When even one line is over budget, only a byte-addressed read can
+    help, and the advice names it.
+    """
+    a = tool_input.get("StartLine") if isinstance(tool_input.get("StartLine"), int) else 1
+    a = max(int(a), 0)
+    start0 = max(a - 1, 0)
+    fit, _n = _range_scan(path_str, start0, window, limit)
+    rel = path_str
+    if workspace_root:
+        try:
+            rel = os.path.relpath(path_str, workspace_root).replace(os.sep, "/")
+        except ValueError:
+            pass
+    end = start0 + fit - 1  # the union reading of (a, end) is exactly ``fit`` lines
+    reason = (f"CTX_CONTEXT_GUARD: that line range of this {size}-byte file is over the "
+              f"{limit}-byte inline budget (view_file bounds lines, not bytes).\n"
+              f"Use: ctx get repo:{rel} --bytes 1:{limit}  (1-based byte span)\n"
+              f"or:  ctx search repo:{rel} '<pattern>' --context 3" + note)
+    decision: dict[str, Any] = _deny(reason)
+    if end >= max(a, 1):
+        decision["_rewrite"] = {
+            "fields": {"StartLine": a, "EndLine": end},
+            # Its own first line: lesson decay keys on the first line, and the
+            # deny above must not decay this one within the same call.
+            "reason": (f"CTX_CONTEXT_GUARD: a view_file range that fits is StartLine={a} to "
+                       f"EndLine={end}; the one asked for is over the {limit}-byte inline "
+                       "budget.\n" + reason.split("\n", 1)[1].replace("Use:", "Or use:", 1)),
+        }
+    return decision
+
+
+def _bound_fields(tool_input: dict[str, Any] | None, lines: int) -> dict[str, int]:
+    """The input fields that bound a read to ``lines`` lines, in the tool's own terms."""
+    if _range_style(tool_input):
+        start = tool_input.get("StartLine") if isinstance(tool_input, dict) else None
+        start = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 1
+        return {"StartLine": start, "EndLine": start + lines - 1}
+    return {"limit": lines}
 
 
 def classify_read(
@@ -2063,9 +2280,34 @@ def classify_read(
     # zero is a read of the running total; it stays fail-open (0 on any error,
     # which _pressured_window reads as "no pressure").
     seen = 0 if in_ledger else _ledger_charge(workspace_root, session_id, 0)
+    span = _range_span(tool_input)
+    window = _pressured_window(max_lines, seen, budget)
+    if span is not None and span <= window:
+        # A StartLine/EndLine read is bounded by its own range -- in lines.
+        # That host has no output gate, so the bytes are checked here too.
+        nbytes: int | None = size
+        if size > limit:
+            start0 = max(int(tool_input["StartLine"]) - 1, 0)
+            _fit, nbytes = _range_scan(path_str, start0,
+                                       int(tool_input["EndLine"]) - start0 + 1, limit)
+        if nbytes is not None:
+            if not in_ledger:
+                _ledger_charge(workspace_root, session_id, nbytes)
+            return dict(DECISION_ALLOW)
+        return _range_advice(tool_input, path_str, workspace_root, size, limit, window, note)
+    if size > limit and _range_style(tool_input) and _steering_allows(policy):
+        if not in_ledger and _whole_file_read(tool_input):
+            outline = _skeleton_outline_for(path_str, workspace_root, size,
+                                            "view_file with StartLine and EndLine")
+            if outline:
+                return _deny(outline)
+        return _range_advice(dict(tool_input or {}, StartLine=1), path_str, workspace_root,
+                             size, limit, window, note)
     if size > limit:
         if not in_ledger and _whole_file_read(tool_input):
-            outline = _skeleton_outline_for(path_str, workspace_root, size)
+            outline = _skeleton_outline_for(
+                path_str, workspace_root, size,
+                *(("view_file with StartLine and EndLine",) if _range_style(tool_input) else ()))
             if outline:
                 # A deny whose reason IS the answer: the outline reaches the
                 # model as the tool's text on every host, and no rewrite is
@@ -2081,7 +2323,7 @@ def classify_read(
         if _steering_allows(policy):
             max_lines = _pressured_window(max_lines, seen, budget)
             decision["_rewrite"] = {
-                "fields": {"limit": max_lines},
+                "fields": _bound_fields(tool_input, max_lines),
                 "reason": (
                     f"CTX_CONTEXT_GUARD: file is {size} bytes{price} (> {limit} inline "
                     f"budget); bounded to the first {max_lines} lines. "
@@ -2102,7 +2344,7 @@ def classify_read(
         if _steering_allows(policy):
             pressured: dict[str, Any] = dict(DECISION_ALLOW)
             pressured["_rewrite"] = {
-                "fields": {"limit": _pressured_window(max_lines, total, budget)},
+                "fields": _bound_fields(tool_input, _pressured_window(max_lines, total, budget)),
                 "reason": reason,
             }
             return pressured
@@ -2156,6 +2398,9 @@ def _apply_rewrite(
                 continue
             updated[key] = cap
     decision["rewrite"] = {"updatedInput": updated, "reason": hint["reason"]}
+    if "fields" in hint:
+        # Hosts that cannot substitute input name these in their deny instead.
+        decision["rewrite"]["fields"] = dict(hint["fields"])
     if "command" in hint:
         # Carried for hosts that cannot substitute input and have to name the
         # contained command in a deny reason instead (see _to_antigravity_schema).
@@ -2212,7 +2457,7 @@ def classify(
     except Exception:
         pass
 
-    kind = _tool_kind(tool_name)
+    kind = _tool_kind(tool_name, policy.get("_flavor"), payload)
 
     # Reflex v2 (spec3 round-2 finding): an Edit/Write disarms starvation
     # detection — run → census → edit → re-run is healthy verification, and
@@ -2533,6 +2778,8 @@ def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
 # There is no field for modified arguments, so this host cannot do input
 # substitution at all. Emitting anything else is out of contract.
 _AGY_PRE_DECISIONS = ("allow", "deny", "ask", "force_ask")
+# "...; bounded to the first 240 lines." / "content grep bounded to 60 matches."
+_APPLIED_BOUND_RE = re.compile(r"(;\s*|\s*content grep )?bounded to (the first )?\d+ (lines|matches)\.?")
 _AGY_PRE_KEYS = ("decision", "reason", "permissionOverrides")
 
 
@@ -2557,6 +2804,17 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
         if cmd:
             sep = "" if (not reason or reason[-1] in ".!?;:") else "."
             reason = f"{reason}{sep} Re-run it as: {cmd}".strip()
+        else:
+            # A field rewrite (a Read `limit`, a Grep `head_limit`) words the
+            # bound as already applied ("bounded to the first N lines"). Here
+            # nothing was applied, so that claim is removed and the deny says
+            # what to re-issue instead; the retrieval address stays.
+            fields = rewrite.get("fields") or {}
+            caps = " and ".join(f"{k}={fields[k]}" for k in fields
+                                if isinstance(fields.get(k), int))
+            reason = _APPLIED_BOUND_RE.sub(".", reason).replace("..", ".")
+            reason = (f"{reason} Not applied: this host cannot rewrite tool "
+                      f"arguments; re-issue the call with {caps or 'a bound'}.").strip()
         return {"decision": "deny", "reason": reason or "run this through ctx"}
     raw = decision.get("decision", "allow")
     out: dict[str, Any] = {
@@ -2731,6 +2989,8 @@ def _navigation_nudge(payload: dict[str, Any]) -> str | None:
         ti = payload.get("tool_input") or payload.get("toolInput") or {}
         if not isinstance(ti, dict):
             return None
+        if _gov.is_mcp(tool, payload):
+            return None  # an MCP server's search_* is not hand-tracing code
         symbol = _search_symbol(tool, ti)
         if not symbol:
             return None
@@ -2769,24 +3029,42 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
     which hosts it heard from instead of implying it heard from all of them.
     """
     tool = str(payload.get("tool_name") or payload.get("toolName") or "")
-    if _tool_kind(tool) != "edit":
+    if _tool_kind(tool, flavor, payload) != "edit":
         return
     workspace_root = _resolve_workspace_root(payload)
     if not workspace_root:
         return
     ti = payload.get("tool_input") or payload.get("toolInput") or {}
     ti = ti if isinstance(ti, dict) else {}
+    failure = payload.get("hook_event_name") == "PostToolUseFailure"
     tr = payload.get("tool_response")
     if tr is None:
         tr = payload.get("toolResponse")
-    stdout, stderr = _normalize_tool_response(tr)
-    is_error = None
+    if failure:
+        # PostToolUseFailure carries the failure text as `error`, which is
+        # the same text the model sees for the failed call.
+        stdout, stderr = str(payload.get("error") or ""), ""
+    else:
+        stdout, stderr = _normalize_tool_response(tr)
+    is_error = True if failure else None
     if isinstance(payload.get("is_error"), bool):
         is_error = payload["is_error"]
     if isinstance(tr, dict) and isinstance(tr.get("is_error"), bool):
         is_error = tr["is_error"]
 
     from ctx.edit_outcomes import append_edit_outcome, classify, resolve_model
+
+    # Claude Code fires PostToolUse only for a tool that succeeded (failures
+    # arrive as PostToolUseFailure), and its edit results are structured
+    # objects carrying the whole original file -- whose text must not be
+    # scanned for failure wording. A success-shaped result there is applied.
+    if (
+        flavor == "claude-code" and not failure and is_error is not True
+        and isinstance(tr, dict) and ("filePath" in tr or "notebook_path" in tr)
+    ):
+        outcome = "applied"
+    else:
+        outcome = classify(f"{stdout}\n{stderr}", is_error=is_error)
 
     def _pick(*keys: str) -> str:
         for key in keys:
@@ -2799,7 +3077,7 @@ def _record_edit_outcome(payload: dict[str, Any], flavor: str) -> None:
     append_edit_outcome(
         workspace_root,
         tool=tool,
-        outcome=classify(f"{stdout}\n{stderr}", is_error=is_error),
+        outcome=outcome,
         path=_pick("file_path", "filePath", "path", "target_file") or None,
         # Lengths only. The strings themselves are the edit's content, and a
         # ledger that quotes them stops being safe to attach to a receipt.
@@ -2946,6 +3224,7 @@ def _gate_failure_digest(
         "never reach the context because gate code broke.",
     ]
     if handle:
+        _GATE_STATS["handle"] = handle
         lines.append(f"Full output retained — retrieve on demand with:  {handle}")
     else:
         lines.append(
@@ -2955,6 +3234,402 @@ def _gate_failure_digest(
     lines.append(f"head ({min(nbytes, _GATE_FAILURE_HEAD_BYTES)} of {nbytes} bytes):")
     lines.append(head)
     return "\n".join(lines)
+
+
+# What the emission gate measured and did on this call, for the coverage
+# ledger. A hand-off within one hook invocation (the gate is the only writer
+# and runs once), the same idiom as _APPLY_ROOT.
+_GATE_STATS: dict[str, Any] = {}
+
+#: Kinds whose result the gate never replaces (governance routes observe and
+#: exempt; see ctx.governance.OBSERVE_REASONS / EXEMPT_REASONS).
+_UNGATED_KINDS = frozenset({"edit", "skill", "control", "schema", "media"})
+
+_RESPONSE_KEYS = ("tool_response", "toolResponse", "tool_output", "toolOutput",
+                  "output", "result", "content")
+
+
+def _tool_response(payload: dict[str, Any]) -> Any:
+    for k in _RESPONSE_KEYS:
+        if k in payload:
+            return payload[k]
+    return None
+
+
+_MEDIA_TYPES = frozenset({"image", "pdf", "audio", "document"})
+_MEDIA_SCAN_NODES = 4000  # bound on the walk below; a deeper result is not media-shaped
+_DATA_URI_RE = re.compile(r"data:[\w.+-]+/[\w.+-]+;base64,", re.I)
+_MEDIA_MIME_RE = re.compile(r"^(image|audio|video)/|^application/pdf$", re.I)
+# Only for choosing where a digest may be WRITTEN (never for exempting a
+# result from the gate): a long unbroken base64-alphabet run.
+_ENCODED_RE = re.compile(r"[A-Za-z0-9+/=\r\n]{512,}")
+
+
+def _looks_encoded(value: str) -> bool:
+    return len(value) >= 512 and bool(_ENCODED_RE.fullmatch(value[:4096]))
+
+
+def _media_reason(tr: Any) -> str | None:
+    """Why this tool result is media the gate must not reshape, or None.
+
+    Declared types first; content is never guessed at. The two shapes
+    observed live on Claude Code declare themselves: a Bash result carries
+    ``isImage`` and a Read result carries ``type``, so text is gated however
+    it looks (hex dumps, sequences, base64 a model asked for) and only what
+    the host marks as an image or document is left alone. A shape with no
+    declared type is walked for declarations only: a content block typed
+    image/audio/document, a MIME-keyed image output (a notebook's
+    ``"image/png"``), ``isImage``, or a value that is wholly a base64 data:
+    URI. When unsure, it is text. Bounded walk; pure.
+    """
+    if isinstance(tr, dict) and isinstance(tr.get("stdout"), str) and "interrupted" in tr:
+        return "isImage" if tr.get("isImage") is True else None
+    if isinstance(tr, dict) and isinstance(tr.get("type"), str) and isinstance(tr.get("file"), dict):
+        kind = tr["type"].lower()
+        if kind in _MEDIA_TYPES:
+            return f"type={kind}"
+        if kind == "text":
+            return None
+    stack = [(tr, 0)]
+    seen = 0
+    while stack and seen < _MEDIA_SCAN_NODES:
+        node, depth = stack.pop()
+        seen += 1
+        if isinstance(node, str):
+            if _DATA_URI_RE.match(node[:256]):
+                return "data-uri"
+        elif isinstance(node, dict):
+            if node.get("isImage") is True:
+                return "isImage"
+            kind = node.get("type")
+            if isinstance(kind, str) and kind.lower() in _MEDIA_TYPES:
+                return f"type={kind.lower()}"
+            for key, value in node.items():
+                if isinstance(key, str) and _MEDIA_MIME_RE.match(key) and isinstance(value, str) and value:
+                    return f"mime={key.lower()}"
+            if depth < 12:
+                stack.extend((v, depth + 1) for v in node.values()
+                             if isinstance(v, (str, dict, list)))
+        elif isinstance(node, list) and depth < 12:
+            stack.extend((v, depth + 1) for v in node[:500])
+    return None
+
+
+def _jsize(value: Any) -> int:
+    """Serialized size in UTF-8 bytes: the measure the budget is held to."""
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8", "replace"))
+
+
+_PATHLIKE_RE = re.compile(r"^(?:[a-z][a-z0-9+.-]*://|/|~/|[A-Za-z]:[\\/]|\.{1,2}/)\S*$")
+#: Structural-reduction ladder: (longest string kept, longest list kept).
+_SHRINK_LADDER = ((1024, 20), (256, 8), (64, 3), (32, 1))
+
+
+def _text_blocks(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(
+        isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+        for b in value)
+
+
+def _digest_slot(value: Any) -> bool:
+    """May the digest be written into this value? Text only: never a value
+    that is path-like, URL-like or base64-like."""
+    if isinstance(value, str):
+        return not _PATHLIKE_RE.match(value[:4096]) and not _looks_encoded(value)
+    return _text_blocks(value)
+
+
+def _shrink(value: Any, keep: Any, max_str: int, max_list: int, pointer, log: list) -> Any:
+    """``value`` with every over-long string and list reduced in place.
+
+    Types never change: a string stays a string (a pointer to the stored
+    result), a list stays a list of the same kind of element. ``keep`` is the
+    one object (the digest) that is never reduced.
+    """
+    if value is keep:
+        return value
+    if isinstance(value, str):
+        if len(value) > max_str:
+            log.append(("str", len(value)))
+            return pointer(len(value.encode("utf-8", "replace")))
+        return value
+    if isinstance(value, dict):
+        return {k: _shrink(v, keep, max_str, max_list, pointer, log) for k, v in value.items()}
+    if isinstance(value, list):
+        items = [_shrink(v, keep, max_str, max_list, pointer, log) for v in value[:max_list]]
+        if len(value) > max_list:
+            log.append(("list", len(value)))
+            if all(isinstance(v, str) for v in value):
+                items.append(f"[ctx: {len(value) - max_list} more items elided]")
+        return items
+    return value
+
+
+def _shape_output(tr: Any, text: str, budget: int,
+                  handle: str | None = None) -> tuple[Any, str | None, bool]:
+    """Fit a gate digest to a built-in tool's result, under a checked contract.
+
+    Claude Code validates ``updatedToolOutput`` for built-in tools against the
+    tool's output schema and silently ignores a value that does not match
+    (confirmed live on 2.1.322: a string was dropped for Bash and Read, an
+    object in the tool's own shape replaced what the model saw). The one
+    obligation, checked rather than assumed: what is returned is in the
+    result's own shape AND its serialized size plus any context text is
+    within ``budget`` -- or ``shaped`` is False and nothing is replaced.
+
+    * Shapes observed on a live host use an explicit field map: Bash's
+      ``stdout`` (``stderr`` emptied, the digest covers both) and a text
+      Read's ``file.content``.
+    * Every other shape is reduced structurally, without guessing which field
+      is "the content": over-long strings become a pointer to the stored
+      result, over-long lists are cut (a list of strings gets a marker
+      element), types never change, and the digest -- which states the true
+      totals -- travels in ``additionalContext``. The digest goes into the
+      result itself only when one text field is clearly dominant and is not
+      path-, URL- or base64-like.
+    * Each candidate is measured; over budget, the next stronger reduction is
+      tried; when none fits, ``shaped`` is False.
+
+    Returns ``(value, context, shaped)``. Media never reaches here.
+    """
+    # ``handle`` is the retrieval command the digest producer returned for
+    # this result (``ctx get run:<id>#stdout``). It is passed in, never
+    # recovered from ``text``: the digest quotes the raw tool output, so any
+    # pattern search over it could pick up an address the tool itself wrote.
+
+    def pointer(nbytes: int) -> str:
+        where = handle or "the ctx digest"
+        return f"[ctx: {nbytes} bytes elided; full result: {where}]"
+
+    def fits(value: Any, context: str | None) -> bool:
+        return _jsize(value) + (len(context.encode("utf-8", "replace")) if context else 0) <= budget
+
+    if isinstance(tr, str):
+        return (text, None, True) if fits(text, None) else (None, None, False)
+
+    # Live-observed shapes: explicit field maps.
+    mapped: Any = None
+    if isinstance(tr, dict) and isinstance(tr.get("stdout"), str) and "interrupted" in tr:
+        mapped = dict(tr, stdout=text)
+        if isinstance(tr.get("stderr"), str):
+            mapped["stderr"] = ""
+    elif (isinstance(tr, dict) and tr.get("type") == "text" and isinstance(tr.get("file"), dict)
+          and isinstance(tr["file"].get("content"), str)):
+        mapped = dict(tr, file=dict(tr["file"], content=text))
+    elif _text_blocks(tr):
+        mapped = [{"type": "text", "text": text}]
+    elif isinstance(tr, dict):
+        # One clearly dominant text field (at least half the bytes) may carry
+        # the digest; a path, URL or base64 value never does.
+        total = _jsize(tr)
+        for key, value in tr.items():
+            if _digest_slot(value) and _jsize(value) * 2 >= total:
+                mapped = dict(tr)
+                mapped[key] = text if isinstance(value, str) else [{"type": "text", "text": text}]
+                break
+    if mapped is not None:
+        if fits(mapped, None):
+            return mapped, None, True
+        keep = text if not isinstance(mapped, list) else None
+        for max_str, max_list in _SHRINK_LADDER:
+            log: list = []
+            candidate = _shrink(mapped, keep, max_str, max_list, pointer, log)
+            if fits(candidate, None):
+                return candidate, None, True
+
+    # Structural reduction, digest delivered alongside.
+    for max_str, max_list in _SHRINK_LADDER:
+        log = []
+        candidate = _shrink(tr, None, max_str, max_list, pointer, log)
+        lists = sorted({n for k, n in log if k == "list"}, reverse=True)[:5]
+        strs = sum(1 for k, _ in log if k == "str")
+        header = (
+            "[ctx output-shaped] The tool result was shortened in place to fit the "
+            f"output budget: {strs} long value(s) replaced by a pointer"
+            + (f", {len([1 for k, _ in log if k == 'list'])} list(s) cut to {max_list} item(s) "
+               f"(true lengths: {', '.join(str(n) for n in lists)})" if lists else "")
+            + ". Counts beside them still describe the full result. Digest of the "
+            "full result:\n")
+        context = header + text
+        if fits(candidate, context):
+            return candidate, context, True
+    return None, None, False
+
+
+def _shape_replacement(tr: Any, text: str, budget: int = _MAX_TOOL_OUTPUT_BYTES_DEFAULT,
+                       handle: str | None = None) -> tuple[Any, bool]:
+    """Back-compatible view of :func:`_shape_output`: ``(value, shaped)``."""
+    value, _context, shaped = _shape_output(tr, text, budget, handle)
+    return (value, True) if shaped else (text, False)
+
+
+_COVERAGE_LEDGER = "coverage.jsonl"
+_COVERAGE_LEDGER_OLD = "coverage.1.jsonl"
+COVERAGE_MAX_BYTES = 512 * 1024  # per generation; two generations are kept
+COVERAGE_SCHEMA = "ctx.coverage/v1"
+_SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_.:/@-]")
+
+
+def _safe_id(value: Any, limit: int = 64) -> str:
+    return _SAFE_ID_RE.sub("_", str(value or ""))[:limit]
+
+
+def _rotate_coverage(ledger_dir: str, path: str) -> None:
+    """Rotate ``path`` into the kept generation, once, under concurrency.
+
+    Several hook processes append at once, and each sees the same over-cap
+    size. Unserialized, the second one renamed the *fresh* file the first
+    had just started over the generation the first had just kept -- losing
+    it. So the decision is re-made under an exclusive lock: only a process
+    that still sees the file over the cap rotates. Taken only on this rare
+    path; ``fcntl`` is imported here, never at module scope (hot path).
+    Without ``fcntl`` (Windows) it degrades to the unlocked rotation.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        os.replace(path, os.path.join(ledger_dir, _COVERAGE_LEDGER_OLD))
+        return
+    with open(os.path.join(ledger_dir, _COVERAGE_LEDGER + ".lock"), "a") as lock:
+        try:
+            # Never wait: telemetry must not delay a decision. If another
+            # hook holds the lock (or is stopped holding it), it is rotating;
+            # this call just appends to whichever file is current.
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return
+        try:
+            if os.stat(path).st_size > COVERAGE_MAX_BYTES:
+                os.replace(path, os.path.join(ledger_dir, _COVERAGE_LEDGER_OLD))
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _note_coverage(
+    ws_root: str | None,
+    flavor: str,
+    stage: str,
+    payload: dict[str, Any],
+    kind: str,
+    route: str,
+    decision: str,
+    raw: int | None = None,
+    emitted: int | None = None,
+    note: str | None = None,
+) -> None:
+    """One line per hooked tool call to ``.ctx-session-reads/coverage.jsonl``.
+
+    Identity only, never arguments or content: the tool name; for an MCP tool
+    the server and tool; for a skill the skill's name. Plus the stage, the
+    declared route, what this call's decision was, and raw versus emitted
+    bytes where the hook knows them. Fail-open: telemetry never changes a
+    decision and never raises.
+    """
+    if not ws_root:
+        return
+    try:
+        import time
+
+        name = str(payload.get("tool_name") or payload.get("toolName") or "")
+        row: dict[str, Any] = {
+            "schema": COVERAGE_SCHEMA,
+            "ts": int(time.time()),
+            "host": flavor,
+            "stage": stage,
+            "tool": _safe_id(name),
+            "kind": kind,
+            "route": route,
+            "decision": decision,
+        }
+        session = payload.get("session_id") or payload.get("conversationId") \
+            or payload.get("conversation_id") or payload.get("sessionId")
+        if session:
+            row["session"] = _safe_id(session, 64)
+        if kind == "mcp":
+            server, tool = _gov.mcp_identity(name, payload)
+            row["mcp_server"], row["mcp_tool"] = _safe_id(server), _safe_id(tool)
+        elif kind == "skill":
+            ti = payload.get("tool_input") or payload.get("toolInput") or {}
+            if isinstance(ti, dict):
+                for key in ("skill", "name", "skill_name", "command"):
+                    if isinstance(ti.get(key), str) and ti[key].strip():
+                        row["skill"] = _safe_id(ti[key].strip().split()[0])
+                        break
+        if isinstance(raw, int):
+            row["raw_bytes"] = raw
+        if isinstance(emitted, int):
+            row["emitted_bytes"] = emitted
+        if note:
+            row["note"] = _safe_id(note)
+        ledger_dir = session_reads_dir(ws_root)
+        os.makedirs(ledger_dir, exist_ok=True)
+        path = os.path.join(ledger_dir, _COVERAGE_LEDGER)
+        # Bounded: past COVERAGE_MAX_BYTES the file becomes the single kept
+        # generation (coverage.1.jsonl, replacing the previous one) and a
+        # fresh file starts. One stat per call; the report never reads more
+        # than two generations, whatever the total history.
+        try:
+            if os.stat(path).st_size > COVERAGE_MAX_BYTES:
+                _rotate_coverage(ledger_dir, path)
+        except OSError:
+            pass
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    except Exception:
+        pass
+
+
+def _pre_decision_label(decision: dict[str, Any] | None, flavor: str) -> str:
+    """What the input side did to this call, in one word."""
+    d = decision or {}
+    if isinstance(d.get("rewrite"), dict):
+        return "rewritten" if can_substitute_input(flavor) else "denied"
+    return {"deny": "denied", "force_ask": "asked", "ask": "asked"}.get(
+        str(d.get("decision", "allow")), "allowed")
+
+
+def _note_pre_coverage(
+    payload: dict[str, Any],
+    flavor: str,
+    ws_root: str | None,
+    policy: dict[str, Any] | None,
+    decision: dict[str, Any] | None,
+) -> None:
+    if not ws_root:
+        return
+    try:
+        name = str(payload.get("tool_name") or payload.get("toolName") or "")
+        kind = _governed_kind(name, flavor, payload)
+        pol = policy or {}
+        pre, _post = _gov.stage_routes(
+            kind, DIALECT_CAPS.get(flavor, {}),
+            collapse=bool(pol.get("collapse", True)),
+            steering=_steering_allows(pol) if pol else True,
+        )
+        label = "advisory" if pol.get("mode") == "advisory" else _pre_decision_label(decision, flavor)
+        _note_coverage(ws_root, flavor, "pre", payload, kind, pre or "observe", label)
+    except Exception:
+        pass
+
+
+def _ran_ctx(payload: dict[str, Any]) -> bool:
+    """Was this tool call a ``ctx`` command (``ctx …`` or ``python -m ctx …``)?
+
+    Judged from the call's own input (what was run), parsed, never from its
+    output."""
+    command = _tool_command(payload)
+    if not command:
+        return False
+    try:
+        argv = _unwrap(shlex.split(command))
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    prog = os.path.basename(argv[0])
+    if prog in ("ctx", "ctx.exe"):
+        return True
+    return prog.startswith("python") and argv[1:3] == ["-m", "ctx"]
 
 
 def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
@@ -2986,6 +3661,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     impossible; the alternative is bytes that flood *and* vanish.
     """
     can_substitute = can_substitute_output(flavor)
+    _GATE_STATS.clear()
 
     # -- phase 1: is there anything to gate at all? Pure and cheap; a failure
     # here means we never saw a tool result, so there is nothing to bound.
@@ -3021,7 +3697,13 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     # get / search / stats (retrieval) — so a large `ctx get` slice run via
     # Bash is not itself re-digested. "densified:" is the reflex arc's
     # declared-densification header prepended above the "[ctx run:" line.
-    if stdout.lstrip().startswith(("[ctx ", "densified:")) or tool_name == "ctx" or tool_name.startswith("mcp__ctx"):
+    # The header alone is not trusted: tool output can begin with "[ctx " too,
+    # and a flood that does would pass ungated. It counts only when ctx is
+    # what ran (a ctx MCP tool, or a shell command whose program is ctx).
+    if tool_name == "ctx" or tool_name.startswith("mcp__ctx") or (
+        stdout.lstrip().startswith(("[ctx ", "densified:")) and _ran_ctx(payload)
+    ):
+        _GATE_STATS["decision"] = "ctx_output"
         return None
 
     # -- phase 2: budget. A broken policy read degrades to the built-in
@@ -3030,6 +3712,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     try:
         policy = _apply_window_pressure(_load_guard_policy(ws_root), ws_root)
         if str(policy.get("mode")) == "advisory":
+            _GATE_STATS["decision"] = "advisory"
             return None
         threshold = int(
             policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT)
@@ -3041,6 +3724,9 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         size = len(stdout.encode("utf-8")) + len(stderr.encode("utf-8"))
     except Exception:
         size = threshold + 1  # cannot measure → treat as over budget
+    _GATE_STATS["raw"] = size
+    _GATE_STATS["threshold"] = threshold
+    _GATE_STATS["decision"] = "pass"
     command = _tool_command(payload)
     is_error = bool(
         payload.get("is_error")
@@ -3074,6 +3760,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
 
         ws = resolve_workspace(ws_root or ".")
         store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+        _GATE_STATS.pop("handle", None)
         text, _short = digest_output(
             store,
             ws,
@@ -3090,6 +3777,8 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         )
         if not isinstance(text, str) or not text.strip():
             raise ValueError("digest produced no text")
+        if isinstance(_short, str) and re.fullmatch(r"[0-9a-f]{6,64}", _short):
+            _GATE_STATS["handle"] = f"ctx get run:{_short}#stdout"
         # A speculative-native result that crossed the gate is now a proven
         # flood for this signature. Feed that wire truth back into the reflex
         # state so the next same-signature call is captured at birth.
@@ -3121,9 +3810,11 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
                 "Retrieve the captured result below before retrying. If a batch "
                 "stopped here, check which later calls ran before resuming.\n" + text
             )
+        _GATE_STATS["decision"] = "replaced" if can_substitute else "captured"
         return text if can_substitute else None
     except Exception as exc:
         _note_guard_failure(ws_root, op="emission_gate", stage="digest", exc=exc)
+        _GATE_STATS["decision"] = "gate_failed"
         if not can_substitute:
             # Nothing to fail closed *to*: this host has no substitution field,
             # so the raw result was always going to reach the transcript. The
@@ -3149,9 +3840,7 @@ def main_session_start(flavor: str = "antigravity") -> int:
     payload: dict[str, Any] = {}
     try:
         raw = sys.stdin.read()
-        payload = json.loads(raw) if raw.strip() else {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = _normalize_payload(json.loads(raw) if raw.strip() else {})
         ws = _resolve_workspace_root(payload)
         if ws:
             from ctx.config import load_config
@@ -3213,7 +3902,7 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     try:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
-        payload = parsed if isinstance(parsed, dict) else {}
+        payload = _normalize_payload(parsed)
         if flavor in ("hermes", "omp", "opencode", "dsh"):
             from ctx.native_hooks import normalize
             payload = normalize(flavor, payload)
@@ -3236,16 +3925,107 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         _record_edit_outcome(payload, flavor)
     except Exception:
         pass
+    # The governance table decides whether this result is gated at all:
+    # edits and skills are observed, exempt kinds are left alone, and
+    # everything else -- including any tool name the table has never seen --
+    # goes through the gate. Classification is pure and cannot raise past
+    # this block; if it somehow does, the call is gated (fail closed).
+    kind = "tool"
+    post_route = "output_gate"
     try:
-        # Universal emission gate: replace over-budget output with a digest.
-        replacement = _emission_gate(payload, flavor)
+        name = str(payload.get("tool_name") or payload.get("toolName") or "")
+        kind = _governed_kind(name, flavor, payload)
+        post_route = _gov.stage_routes(kind, DIALECT_CAPS.get(flavor, {}))[1]
     except Exception:
-        # _emission_gate is written not to raise; if it somehow does, the
-        # result is still not released un-gated.
-        replacement = (
-            "[ctx gate-failed]\nCTX_EMISSION_GATE: the output gate raised; the "
-            "raw result was withheld rather than emitted unbounded."
-        )
+        pass
+    _GATE_STATS.clear()
+    gated = kind not in _UNGATED_KINDS
+    # Media (an image or PDF Read, an isImage shell result, any base64
+    # payload) is never substituted into: a text digest there is schema-valid
+    # and the host would take it as the image. Left exactly as produced.
+    media = None
+    # Only where the digest is shaped INTO the tool's own structure could it
+    # land in an image field; hosts that substitute plain text gate as ever.
+    if gated and flavor == "claude-code" and kind != "mcp":
+        try:
+            media = _media_reason(_tool_response(payload))
+        except Exception:
+            media = "unreadable"
+        if media:
+            gated = False
+    if gated:
+        try:
+            # Universal emission gate: replace over-budget output with a digest.
+            replacement = _emission_gate(payload, flavor)
+        except Exception:
+            # _emission_gate is written not to raise; if it somehow does, the
+            # result is still not released un-gated.
+            replacement = (
+                "[ctx gate-failed]\nCTX_EMISSION_GATE: the output gate raised; the "
+                "raw result was withheld rather than emitted unbounded."
+            )
+    # Claude Code ignores a built-in tool's replacement that does not match
+    # the tool's output shape, so the digest is fitted into that shape. MCP
+    # results are not schema-validated and keep the plain string.
+    updated_output: Any = replacement
+    shape_context: str | None = None
+    shaped = True
+    budget = int(_GATE_STATS.get("threshold") or _MAX_TOOL_OUTPUT_BYTES_DEFAULT)
+    # The relay is drained before shaping on Claude Code (it always has a
+    # channel there), so the nudge and relay text that travel in the same
+    # additionalContext are inside the budget the shaped result is held to.
+    relay_text = ""
+    relay_drained = False
+    if flavor == "claude-code":
+        try:
+            relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
+        except Exception:
+            relay_text = ""
+        relay_drained = True
+    extra = sum(len(x.encode("utf-8", "replace")) + 1 for x in (nudge, relay_text) if x)
+    if replacement is not None and flavor == "claude-code" and kind != "mcp":
+        try:
+            updated_output, shape_context, shaped = _shape_output(
+                _tool_response(payload), replacement, budget - extra, _GATE_STATS.get("handle"))
+        except Exception:
+            updated_output, shape_context, shaped = None, None, False
+        if not shaped:
+            # Nothing valid fits: replacing would be ignored or exceed the
+            # budget, so nothing is sent and the ledger says so.
+            updated_output, shape_context = None, None
+    try:
+        raw = _GATE_STATS.get("raw")
+        decision = str(_GATE_STATS.get("decision") or ("observed" if not gated else "no_result"))
+        if not gated and kind in ("control", "schema", "media"):
+            decision = "exempt"
+        if media:
+            decision = "media_untouched"
+            try:  # what reached the context, unbounded: the result as produced
+                raw = _jsize(_tool_response(payload))
+            except Exception:
+                raw = None
+        emitted = raw
+        if replacement is not None:
+            if not shaped:
+                decision = "replace_unshaped"
+            elif flavor == "claude-code" and kind != "mcp":
+                # The measured size of what is actually sent, including any
+                # nudge or relay text that shares the additionalContext.
+                sent_context = "\n".join(x for x in (shape_context, nudge, relay_text) if x)
+                emitted = _jsize(updated_output) + len(sent_context.encode("utf-8", "replace"))
+            else:
+                emitted = len(replacement.encode("utf-8", "replace"))
+        if not gated and kind == "skill":
+            try:
+                out, err = _normalize_tool_response(_tool_response(payload))
+                raw = emitted = len(out.encode("utf-8", "replace")) + len(err.encode("utf-8", "replace"))
+            except Exception:
+                pass
+        _note_coverage(_resolve_workspace_root(payload), flavor, "post", payload,
+                       kind, post_route, decision, raw, emitted,
+                       note=f"media:{media}" if media else None)
+    except Exception:
+        pass
     # The relay's report/advise delivery point, and it is deliberately drained
     # *here* rather than alongside the nudges: a drain marks its signals
     # delivered, so draining on a host that cannot carry the text would
@@ -3257,8 +4037,7 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     # suggestion. They wait for pre-tool-use.
     native = flavor in ("hermes", "omp", "opencode", "dsh")
     can_carry = flavor in ("claude-code", "codex") or (native and replacement is not None)
-    relay_text = ""
-    if can_carry:
+    if can_carry and not relay_drained:
         try:
             relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
         except Exception:
@@ -3270,9 +4049,9 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         emitted = {"output": replacement} if replacement is not None else {}
     elif flavor == "claude-code":
         hso: dict[str, Any] = {"hookEventName": "PostToolUse"}
-        if replacement is not None:
-            hso["updatedToolOutput"] = replacement
-        context = "\n".join(x for x in (nudge, relay_text) if x)
+        if replacement is not None and updated_output is not None:
+            hso["updatedToolOutput"] = updated_output
+        context = "\n".join(x for x in (shape_context, nudge, relay_text) if x)
         if context:
             hso["additionalContext"] = context
         emitted: dict[str, Any] = {"hookSpecificOutput": hso} if len(hso) > 1 else {}
@@ -3300,6 +4079,44 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         emitted = {}
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0
+
+
+def main_post_tool_use_failure(flavor: str = "claude-code") -> int:
+    """Entry point for ``ctx hook <flavor> post-tool-use-failure``.
+
+    Claude Code fires PostToolUse only for tools that succeeded; a failed
+    tool -- an edit whose ``old_string`` matched nothing, a command that
+    exited non-zero -- fires PostToolUseFailure instead, whose contract can
+    add context but cannot replace the result. So this stage only observes:
+    it records the edit outcome (the failure half of the edit ledger, which
+    PostToolUse alone can never see) and one coverage row with the failure
+    text's size, so failure output shows up as the ungoverned bytes it is.
+    Always writes ``{}``; every error is swallowed.
+    """
+    payload: dict[str, Any] = {}
+    try:
+        raw = sys.stdin.read()
+        parsed = json.loads(raw) if raw.strip() else {}
+        payload = _normalize_payload(parsed)
+        payload.setdefault("hook_event_name", "PostToolUseFailure")
+    except Exception:
+        payload = {}
+    try:
+        _record_edit_outcome(payload, flavor)
+    except Exception:
+        pass
+    try:
+        name = str(payload.get("tool_name") or payload.get("toolName") or "")
+        if name:
+            kind = _governed_kind(name, flavor, payload)
+            size = len(str(payload.get("error") or "").encode("utf-8", "replace"))
+            _note_coverage(_resolve_workspace_root(payload), flavor, "post_failure",
+                           payload, kind, "observe", "failed", size, size)
+    except Exception:
+        pass
+    sys.stdout.write("{}\n")
     sys.stdout.flush()
     return 0
 
@@ -3451,7 +4268,7 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
     try:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
-        payload = parsed if isinstance(parsed, dict) else {}
+        payload = _normalize_payload(parsed)
         if flavor in ("hermes", "omp", "opencode", "dsh"):
             from ctx.native_hooks import normalize
             payload = normalize(flavor, payload)
@@ -3470,6 +4287,8 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             # Only hosts that can replace PostToolUse output may take the
             # speculative-native fast path.
             policy["_output_substitution"] = can_substitute_output(flavor)
+            # Which host's native-tool table classifies this call.
+            policy["_flavor"] = flavor
         except Exception as exc:
             decision = _internal_error_decision(ws_root, None, "policy", exc)
 
@@ -3485,6 +4304,9 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
         # An advisory channel must never be able to change a guard decision
         # by failing. Leave the classified decision exactly as it stands.
         pass
+
+    # Coverage ledger: observation only, after the decision is final.
+    _note_pre_coverage(payload, flavor, ws_root, policy, decision)
 
     if flavor in ("hermes", "omp", "opencode", "dsh"):
         from ctx.native_hooks import decision_for

@@ -129,6 +129,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("compress", "select local evidence with an original-content retrieval address"),
             ("debt", "track work you deliberately deferred"),
             ("ladders", "audit where the harness escalates, and what it measured"),
+            ("coverage", "which tool calls ctx governs, by which route, and which escaped"),
             ("surface", "see and trim the tools your agent exposes (they cost tokens too)"),
             ("prune", "defer the tools, skills and agents this repo does not use, at setup"),
         ),

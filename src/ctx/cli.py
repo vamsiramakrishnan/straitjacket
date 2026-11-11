@@ -27,6 +27,10 @@ def main(argv: list[str] | None = None) -> int:
             from ctx.hook import main_post_tool_use
 
             return main_post_tool_use(flavor=args[1])
+        if args[2] == "post-tool-use-failure":
+            from ctx.hook import main_post_tool_use_failure
+
+            return main_post_tool_use_failure(flavor=args[1])
         # Antigravity has no SessionStart event; its pre-invocation hook is the
         # equivalent slot and shares the pre-flight body.
         if args[2] in ("session-start", "pre-invocation"):
@@ -212,6 +216,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "debt": ("admin", "cmd_debt", True),
     "policy": ("admin", "cmd_policy", True),
     "ladders": ("admin", "cmd_ladders", True),
+    "coverage": ("coverage", "cmd_coverage", True),
     "orchestrate": ("hosts", "cmd_orchestrate", True),
     "collab": ("collab", "cmd_collab", True),
     "compress": ("compress", "cmd_compress", True),
@@ -843,6 +848,21 @@ def _build_parser():
                             "ladders -- guard mode, deployment tier -- are one "
                             "value per workspace, so their distribution is only "
                             "visible across a corpus")
+
+    from ctx.governance import HOSTS as _GOV_HOSTS
+
+    p_cov = sub.add_parser(
+        "coverage",
+        help="per host, which tool calls ctx governs and by which route, and "
+             "which recorded calls escaped it",
+    )
+    p_cov.add_argument("--json", action="store_true", dest="coverage_json",
+                       help="machine-readable")
+    p_cov.add_argument("--host", dest="coverage_host", choices=_GOV_HOSTS, default=None,
+                       help="show one host dialect only")
+    p_cov.add_argument("--session", dest="coverage_session", metavar="ID", default=None,
+                       help="observed calls for one session id, or 'last' for the newest "
+                            "(default: every session on record)")
 
     p_map = sub.add_parser("map", help="ranked, budget-fitted codebase map")
     p_map.add_argument("--budget", type=int, default=600, help="token budget")

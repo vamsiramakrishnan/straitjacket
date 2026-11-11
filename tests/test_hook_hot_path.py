@@ -32,7 +32,8 @@ _FORBIDDEN = ("typing", "pathlib", "dataclasses", "inspect", "ast", "dis",
               "tokenize", "linecache", "tempfile", "subprocess", "argparse")
 
 # Every module hook.py imports per call, so the same discipline binds them.
-_HOT_MODULES = ("ctx.hook", "ctx.engagement", "ctx.reflex", "ctx.substitute")
+_HOT_MODULES = ("ctx.hook", "ctx.engagement", "ctx.reflex", "ctx.substitute",
+                "ctx.governance")
 
 _PROBE = f"','.join(m for m in {_FORBIDDEN!r} if m in sys.modules)"
 

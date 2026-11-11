@@ -9,6 +9,7 @@ on the invoking process's CWD or PATH.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import shutil
@@ -204,7 +205,18 @@ def init_workspace(root: Path, *, quiet: bool = False) -> list[str]:
 def claude_hook_settings(ctx_exe: str) -> dict:
     """Claude Code / Codex-compatible hook settings dict (PreToolUse guard +
     PostToolUse emission gate). Single source of truth; `ctx.wrap` reuses it
-    for ephemeral runs and `install_claude` for the persistent install."""
+    for ephemeral runs and `install_claude` for the persistent install.
+
+    The matchers are derived from the governance table (`ctx.governance`),
+    not typed here: PreToolUse names exactly the tools with an input-side
+    route; PostToolUse fires for every tool except the declared exemptions,
+    so a sub-agent, an MCP tool, or a built-in added in a later release is
+    gated rather than skipped; PostToolUseFailure observes failed tools (the
+    edit-outcome ledger's failure half, and failure output, which no hook
+    can replace)."""
+    from ctx.governance import claude_post_matcher, claude_pre_matcher
+
+    post_matcher = claude_post_matcher()
     return {
         "hooks": {
             "UserPromptSubmit": [{"hooks": [{
@@ -214,7 +226,7 @@ def claude_hook_settings(ctx_exe: str) -> dict:
             }]}],
             "PreToolUse": [
                 {
-                    "matcher": "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+                    "matcher": claude_pre_matcher(),
                     "hooks": [
                         {
                             "type": "command",
@@ -226,11 +238,23 @@ def claude_hook_settings(ctx_exe: str) -> dict:
             ],
             "PostToolUse": [
                 {
-                    "matcher": "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*",
+                    "matcher": post_matcher,
                     "hooks": [
                         {
                             "type": "command",
                             "command": f"{ctx_exe} hook claude-code post-tool-use",
+                            "timeout": 10,
+                        }
+                    ],
+                }
+            ],
+            "PostToolUseFailure": [
+                {
+                    "matcher": post_matcher,
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{ctx_exe} hook claude-code post-tool-use-failure",
                             "timeout": 10,
                         }
                     ],
@@ -448,6 +472,139 @@ def _hook_command_present(settings: dict, ctx_exe: str) -> bool:
     return False
 
 
+_CLAUDE_STAGE_SLUG = {
+    "UserPromptSubmit": "user-prompt-submit", "PreToolUse": "pre-tool-use",
+    "PostToolUse": "post-tool-use", "PostToolUseFailure": "post-tool-use-failure",
+    "SessionStart": "session-start",
+}
+
+
+#: Every default matcher an earlier release shipped for a ctx-owned group,
+#: taken from the repository history (src/ctx/wrap.py before the installer
+#: owned it, then src/ctx/installer.py). Only a matcher equal to one of these
+#: is upgraded; any other value is the user's and is reported, not replaced.
+_PREVIOUS_CLAUDE_DEFAULTS: dict[str, frozenset[str]] = {
+    "PreToolUse": frozenset({
+        "Bash|Read",
+        "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+    }),
+    "PostToolUse": frozenset({
+        "Bash|Read|Edit|Write",
+        "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*",
+    }),
+}
+
+
+def _is_ctx_hook_command(command: object, slug: str) -> bool:
+    """Is this exactly the invocation the installer writes, ``<exe> hook
+    claude-code <slug>``, under any executable path?
+
+    Parsed, not suffix-matched: a user's ``echo done; /x/ctx hook claude-code
+    post-tool-use`` ends with the same text and is theirs. Allowed forms are
+    ``<path>/ctx`` or ``<python> -m ctx`` followed by exactly the three
+    arguments; any shell operator, redirection or extra word disqualifies.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if any(t and all(c in "();<>|&" for c in t) for t in tokens):
+        return False
+    if len(tokens) < 4 or tokens[-3:] != ["hook", "claude-code", slug]:
+        return False
+    prefix = tokens[:-3]
+    if len(prefix) == 1:
+        # `ctx-hook-native` is the Rust post-tool-use shim earlier releases
+        # wrote in place of ctx (wrap.py `_post_hook_exe`, removed since).
+        return os.path.basename(prefix[0]) in ("ctx", "ctx.exe", "ctx-hook-native")
+    if len(prefix) == 3 and prefix[1:] == ["-m", "ctx"]:
+        return os.path.basename(prefix[0]).startswith("python")
+    return False
+
+
+def _owned_claude_group(group: object, stage: str) -> bool:
+    """A matcher group ctx owns: every hook in it is exactly a ctx command
+    for ``stage`` (see :func:`_is_ctx_hook_command`)."""
+    if not isinstance(group, dict):
+        return False
+    entries = group.get("hooks")
+    slug = _CLAUDE_STAGE_SLUG.get(stage)
+    if not slug or not isinstance(entries, list) or not entries:
+        return False
+    return all(isinstance(h, dict) and _is_ctx_hook_command(h.get("command"), slug)
+               for h in entries)
+
+
+def _stage_has_ctx_hook(groups: object, stage: str) -> bool:
+    """Does any group of this stage hold an exact ctx hook for it?"""
+    slug = _CLAUDE_STAGE_SLUG.get(stage)
+    if not slug or not isinstance(groups, list):
+        return False
+    return any(
+        isinstance(g, dict) and isinstance(g.get("hooks"), list)
+        and any(isinstance(h, dict) and _is_ctx_hook_command(h.get("command"), slug)
+                for h in g["hooks"])
+        for g in groups)
+
+
+def update_owned_claude_matchers(existing_hooks: object, stages: dict) -> list[str]:
+    """Bring ctx-owned matchers up to date, in place; one line per finding.
+
+    Upgraded: a ctx-owned group whose matcher equals a default an earlier
+    release shipped. Reported and left alone: a ctx-owned group with any
+    other matcher (customized), and a ctx hook sharing a group with a user
+    hook (that group's matcher is not ctx's to change). Foreign groups and
+    malformed shapes are never touched.
+    """
+    notes: list[str] = []
+    if not isinstance(existing_hooks, dict):
+        return notes
+    for stage, entries in stages.items():
+        groups = existing_hooks.get(stage)
+        slug = _CLAUDE_STAGE_SLUG.get(stage)
+        if not isinstance(groups, list) or not entries or not slug:
+            continue
+        want = entries[0].get("matcher")
+        if want is None:
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            current = group.get("matcher")
+            if _owned_claude_group(group, stage):
+                if current == want:
+                    continue
+                if current in _PREVIOUS_CLAUDE_DEFAULTS.get(stage, frozenset()):
+                    group["matcher"] = want
+                    notes.append(f"updated ctx {stage} matcher from a previous default (was {current!r})")
+                else:
+                    notes.append(
+                        f"ctx {stage} matcher is customized ({current!r}); left as is. "
+                        f"Current default: {want!r}. To adopt it, set that matcher on the "
+                        f"ctx {stage} entry in .claude/settings.json")
+            elif isinstance(group.get("hooks"), list) and any(
+                    isinstance(h, dict) and _is_ctx_hook_command(h.get("command"), slug)
+                    for h in group["hooks"]) and current != want:
+                notes.append(
+                    f"ctx {stage} hook shares a group with another hook (matcher {current!r}), "
+                    f"so ctx did not change it. Current default: {want!r}. To adopt it, move "
+                    f"the ctx hook into its own group with that matcher")
+        holding = [g for g in groups if isinstance(g, dict) and isinstance(g.get("hooks"), list)
+                   and any(isinstance(h, dict) and _is_ctx_hook_command(h.get("command"), slug)
+                           for h in g["hooks"])]
+        if len(holding) > 1:
+            notes.append(
+                f"ctx {stage} hook is registered {len(holding)} times (matchers: "
+                + ", ".join(repr(g.get("matcher")) for g in holding)
+                + "); every copy runs. Keep one: delete the extra ctx "
+                f"`hook claude-code {slug}` entries from .claude/settings.json")
+    return notes
+
+
 def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     """Persistent Claude Code install: merge harness hooks into project
     ``.claude/settings.json`` and drop the explorer agent. Idempotent and
@@ -471,12 +628,22 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     missing_stages = {
         stage: entries
         for stage, entries in full_stages.items()
-        if not _hook_command_present(
-            {"hooks": {stage: existing_hooks.get(stage, [])}}, exe
-        )
+        if not _stage_has_ctx_hook(existing_hooks.get(stage, []), stage)
     }
+    # Entries ctx already owns are brought up to date in place: an older
+    # install's matchers (e.g. a PostToolUse that named `Task` and missed
+    # `Agent`) would otherwise survive every re-run, because the stage is
+    # "present". Ownership is the uninstall convention: a group whose hooks
+    # are all ctx `hook claude-code <stage>` commands. Anything else --
+    # including a group mixing ctx and foreign hooks -- is left untouched.
+    updated = update_owned_claude_matchers(existing_hooks, full_stages)
+    for note in updated:
+        lines.append(note)
+    if any(n.startswith("updated ") for n in updated):
+        changed = True
     if not missing_stages:
-        lines.append(".claude/settings.json hooks already harnessed; left unchanged")
+        if not any(n.startswith("updated ") for n in updated):
+            lines.append(".claude/settings.json hooks already harnessed; left unchanged")
     else:
         try:
             merge_hook_stages(merged, missing_stages)
