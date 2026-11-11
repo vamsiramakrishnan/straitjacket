@@ -1,0 +1,20 @@
+{
+  "artifactDirectoryPath": "/home/user/.gemini/antigravity-cli/brain/00000000-0000-4000-8000-000000000000",
+  "conversationId": "00000000-0000-4000-8000-000000000000",
+  "cwd": "/workspace/project",
+  "hookEventName": "PreToolUse",
+  "lastUserInput": "Make these three tool calls in parallel, in one step, in this order: (1) read the file a.txt; (2) run_command 'echo one'; (3) run_command 'uname'. Then quote what each returned in one short line each.",
+  "modelName": "gemini-3.6-flash-medium",
+  "stepIdx": 3,
+  "toolCall": {
+    "args": {
+      "Path": "/workspace/project/a.txt"
+    },
+    "id": "call_0000000000000000001",
+    "name": "read_file"
+  },
+  "transcriptPath": "/home/user/.gemini/antigravity-cli/brain/00000000-0000-4000-8000-000000000000/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/workspace/project"
+  ]
+}

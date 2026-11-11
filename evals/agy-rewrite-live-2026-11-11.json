@@ -1,0 +1,698 @@
+{
+  "a_raw_stdout_bytes": 343557,
+  "agy_version": "1.5.5",
+  "b_expected_request_id": "a6a0845258a4",
+  "cost_usd_list_price": 0.08685,
+  "d_coverage": "ctx coverage: governance table (static) and coverage ledger (observed)\n\nroutes: rewrite | bound | deny_steer | output_gate | observe | exempt; pre=- means the input side has nothing to do\n\nantigravity  (rewrite input: read_file, run_command only, replace output: no)\n  pre=rewrite     post=observe      run_command\n  pre=bound       post=observe      read_file\n  pre=deny_steer  post=observe      view_file, grep_search, find_by_name, list_dir, ListDir, glob_search, codebase_search\n  pre=observe     post=UNHOOKED     write_to_file, replace_file_content, multi_replace_file_content, edit_file\n  pre=-           post=UNHOOKED     <unlisted tool>\n  pre=-           post=observe      search_web, read_url_content, invoke_subagent, manage_task, mcp__<server>__<tool>\n  exempt                           schedule, list_permissions, ask_permission, define_subagent, send_message, manage_subagents, ask_question\n      why: session control or bookkeeping; returns a short status, and some results are the user's own answer or approval\n  exempt                           generate_image\n      why: image or audio content; media is out of scope for the text gate\n  UNGOVERNED (no hooked stage): <unlisted tool>\n  cannot govern:\n    - PreToolUse rewrites arguments (`overwrite`, verified live on agy 1.5.5) only for run_command and read_file; every other tool, and an agy older than 1.5.4 (no hookEventName in the payload), is denied with the ctx command named\n    - agy checks its permission rules against the rewritten command (`ctx run ...`), so where a rule pre-approves ctx but no rule covers the original command, the rewrite is sent as force_ask rather than approved\n    - PostToolUse cannot replace output (its only legal output is {}): the result of a tool that was not rewritten reaches the transcript raw\n    - grep_search, find_by_name and list_dir left agy's default toolset in 1.2.7; the model searches through run_command, which the command route governs\n    - live agy 1.5.5 PostToolUse payloads carry no tool result at all, so the post stage records the call but captures nothing (decision no_result)\n    - only tools named in the plugin's matchers are seen\n\nobserved  (.ctx-session-reads/coverage.jsonl: 9 rows, session all, 1 session(s) on record; history is bounded to the current and one rotated generation)\n  host         tool                               stage        route        calls      raw B emitted B  decisions\n  antigravity  run_command                        pre          rewrite          5          0         0  allowed=2,rewritten=2,rewritten_asked=1\n  antigravity  run_command                        post         observe          4          0         0  no_result=4\n  most ungoverned bytes into context (observed, exempt, captured-not-replaced, failed, or a replacement the host ignores):\n            0 B     4 calls  antigravity run_command  (no_result=4)\n",
+  "e_expected_checksum": 48370,
+  "e_page_bytes": 129354,
+  "model": "gemini-3.6-flash-low",
+  "model_calls_total": 15,
+  "probe_cost_usd_list_price": 0.06884,
+  "probes": {
+    "B": {
+      "denied_actions": [
+        {
+          "action": "command",
+          "display_name": "RunCommand"
+        }
+      ],
+      "hooks": [
+        {
+          "args": null,
+          "event": "SessionStart",
+          "hook_output": {
+            "injectSteps": [
+              {
+                "ephemeralMessage": "SS-CANARY: end your final answer with the word PELICAN."
+              }
+            ]
+          },
+          "tool_call": null
+        },
+        {
+          "args": null,
+          "event": "PreInvocation",
+          "hook_output": {},
+          "tool_call": null
+        },
+        {
+          "args": {
+            "Path": "<probe-B-ws>/a.txt"
+          },
+          "event": "PreToolUse",
+          "hook_output": {
+            "decision": "allow"
+          },
+          "tool_call": "read_file"
+        },
+        {
+          "args": {
+            "Path": "<probe-B-ws>/a.txt"
+          },
+          "event": "PostToolUse",
+          "hook_output": {},
+          "tool_call": "read_file"
+        },
+        {
+          "args": {
+            "CommandLine": "ls -la",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "List workspace directory"
+          },
+          "event": "PreToolUse",
+          "hook_output": {
+            "decision": "allow",
+            "overwrite": {
+              "CommandLine": "echo REWRITE-LS-TO-ECHO"
+            }
+          },
+          "tool_call": "run_command"
+        },
+        {
+          "args": {
+            "CommandLine": "echo REWRITE-LS-TO-ECHO",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "List workspace directory"
+          },
+          "event": "PostToolUse",
+          "hook_output": {},
+          "tool_call": "run_command"
+        },
+        {
+          "args": {
+            "CommandLine": "echo hi",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "Echo hi"
+          },
+          "event": "PreToolUse",
+          "hook_output": {
+            "decision": "allow",
+            "overwrite": {
+              "CommandLine": "pwd"
+            }
+          },
+          "tool_call": "run_command"
+        }
+      ],
+      "model": "gemini-3.6-flash-medium",
+      "model_calls": 1,
+      "purpose": "permission is checked against the rewritten command: `ls -la` rewritten to an allow-listed `echo` ran; `echo hi` rewritten to a non-allow-listed `pwd` was refused",
+      "response": "",
+      "settings_allow": [
+        "command(echo)"
+      ],
+      "stderr": "jetski: no output produced \u2014 a tool required the \"command\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n",
+      "step_types": [
+        "USER_INPUT",
+        "EPHEMERAL_MESSAGE",
+        "PLANNER_RESPONSE",
+        "GENERIC",
+        "GENERIC"
+      ],
+      "tool_results": [
+        "Created At: 2026-11-11T01:06:00Z\nCompleted At: 2026-11-11T01:06:01Z\nCreated At: 2026-11-11T01:06:00Z\nCompleted At: 2026-11-11T01:06:01Z\nShowing lines 1-10 of 10\n1: line 1 of a.txt\n2: line 2 of a.txt\n3: line 3 of a.txt\n4: line 4 of a.txt\n5: line 5 of a.txt\n6: line 6 of a.txt\n7: line 7 of a.txt\n8: line 8 of a.txt\n9: line 9 of a.txt\n10: line 10 of a.txt",
+        "Created At: 2026-11-11T01:06:01Z\nCompleted At: 2026-11-11T01:06:01Z\nA pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.\n\nCreated At: 2026-11-11T01:06:01Z\nCompleted At: 2026-11-11T01:06:01Z\nCommand exited with code 0.\n\nCommand output:\nREWRITE-LS-TO-ECHO\r\n"
+      ],
+      "usage": {
+        "cache_read_tokens": 0,
+        "input_tokens": 7343,
+        "output_tokens": 2825,
+        "thinking_tokens": 2640,
+        "total_tokens": 10168
+      }
+    },
+    "C": {
+      "denied_actions": [
+        {
+          "action": "command",
+          "display_name": "RunCommand"
+        }
+      ],
+      "hooks": [
+        {
+          "args": null,
+          "event": "SessionStart",
+          "hook_output": {
+            "injectSteps": [
+              {
+                "ephemeralMessage": "SS-CANARY: end your final answer with the word PELICAN."
+              }
+            ]
+          },
+          "tool_call": null
+        },
+        {
+          "args": null,
+          "event": "PreInvocation",
+          "hook_output": {},
+          "tool_call": null
+        },
+        {
+          "args": {
+            "Path": "<probe-C-ws>/a.txt"
+          },
+          "event": "PreToolUse",
+          "hook_output": {
+            "decision": "allow",
+            "overwrite": {
+              "EndLine": 3,
+              "StartLine": 2
+            }
+          },
+          "tool_call": "read_file"
+        },
+        {
+          "args": {
+            "EndLine": 3,
+            "Path": "<probe-C-ws>/a.txt",
+            "StartLine": 2
+          },
+          "event": "PostToolUse",
+          "hook_output": {},
+          "tool_call": "read_file"
+        },
+        {
+          "args": {
+            "CommandLine": "echo one",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "Echo text"
+          },
+          "event": "PreToolUse",
+          "hook_output": {
+            "decision": "allow",
+            "overwrite": {
+              "CommandLine": "pwd"
+            },
+            "permissionOverrides": [
+              "command(echo one)"
+            ]
+          },
+          "tool_call": "run_command"
+        }
+      ],
+      "model": "gemini-3.6-flash-medium",
+      "model_calls": 1,
+      "purpose": "read_file StartLine/EndLine overwrite applied; permissionOverrides naming the original command did not make the rewritten `pwd` pass",
+      "response": "",
+      "settings_allow": [
+        "command(echo)"
+      ],
+      "stderr": "jetski: no output produced \u2014 a tool required the \"command\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n",
+      "step_types": [
+        "USER_INPUT",
+        "EPHEMERAL_MESSAGE",
+        "PLANNER_RESPONSE",
+        "GENERIC",
+        "GENERIC",
+        "GENERIC"
+      ],
+      "tool_results": [
+        "Created At: 2026-11-11T01:07:59Z\nCompleted At: 2026-11-11T01:07:59Z\nA pre-tool hook changed the arguments of this tool call before it ran. Changed: EndLine, StartLine.\n\nCreated At: 2026-11-11T01:07:59Z\nCompleted At: 2026-11-11T01:07:59Z\nShowing lines 2-3 of 10\n2: line 2 of a.txt\n3: line 3 of a.txt",
+        "Created At: 2026-11-11T01:07:59Z\nCompleted At: 2026-11-11T01:07:59Z\nEncountered error in step execution: permission check failed for command \"pwd\": user denied permission to run command:\npwd\nDo not attempt to circumvent this denial by rephrasing the command, using alternative tools/scripts (e.g. python, sh, curl), or accessing the same target resource. Proceed without performing this action.",
+        "Created At: 2026-11-11T01:07:59Z\nCompleted At: 2026-11-11T01:07:59Z\nEncountered error in step execution: JSON hook \"jsonhook__probe_PreToolUse_0_0\" failed: command failed: signal: killed, stderr: "
+      ],
+      "usage": {
+        "cache_read_tokens": 0,
+        "input_tokens": 7303,
+        "output_tokens": 695,
+        "thinking_tokens": 547,
+        "total_tokens": 7998
+      }
+    },
+    "D": {
+      "denied_actions": null,
+      "hooks": [
+        {
+          "args": null,
+          "event": "SessionStart",
+          "hook_output": {
+            "injectSteps": [
+              {
+                "systemMessage": {
+                  "systemMessage": "SS-CANARY: end your final answer with the word PELICAN."
+                }
+              }
+            ]
+          },
+          "tool_call": null
+        },
+        {
+          "args": null,
+          "event": "PreInvocation",
+          "hook_output": {},
+          "tool_call": null
+        },
+        {
+          "args": {
+            "CommandLine": "echo hi",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "Run echo command"
+          },
+          "event": "PreToolUse",
+          "hook_output": {
+            "decision": "allow"
+          },
+          "tool_call": "run_command"
+        },
+        {
+          "args": {
+            "CommandLine": "echo hi",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "Run echo command"
+          },
+          "event": "PostToolUse",
+          "hook_output": {},
+          "tool_call": "run_command"
+        },
+        {
+          "args": null,
+          "event": "PreInvocation",
+          "hook_output": {},
+          "tool_call": null
+        },
+        {
+          "args": null,
+          "event": "Stop",
+          "hook_output": {
+            "decision": "stop"
+          },
+          "tool_call": null
+        }
+      ],
+      "model": "gemini-3.6-flash-medium",
+      "model_calls": 2,
+      "purpose": "SessionStart systemMessage canary persists to a later model call",
+      "response": "The shell command printed `hi`. PELICAN\n",
+      "settings_allow": [
+        "command(echo)"
+      ],
+      "stderr": "",
+      "step_types": [
+        "USER_INPUT",
+        "SYSTEM_MESSAGE",
+        "PLANNER_RESPONSE",
+        "GENERIC",
+        "PLANNER_RESPONSE"
+      ],
+      "tool_results": [
+        "Created At: 2026-11-11T01:11:13Z\nCompleted At: 2026-11-11T01:11:13Z\nCreated At: 2026-11-11T01:11:13Z\nCompleted At: 2026-11-11T01:11:13Z\nCommand exited with code 0.\n\nCommand output:\nhi\r\n"
+      ],
+      "usage": {
+        "cache_read_tokens": 0,
+        "input_tokens": 15253,
+        "output_tokens": 676,
+        "thinking_tokens": 631,
+        "total_tokens": 15929
+      }
+    }
+  },
+  "s1_allow_rules": [
+    "command(python3 diagnose.py)",
+    "command(ctx)",
+    "command(grep)",
+    "read_url(127.0.0.1)"
+  ],
+  "s1_coverage_rows": [
+    {
+      "decision": "rewritten",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "rewrite",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "pre",
+      "tool": "run_command",
+      "ts": 1794360134
+    },
+    {
+      "decision": "no_result",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "observe",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "post",
+      "tool": "run_command",
+      "ts": 1794360135
+    },
+    {
+      "decision": "allowed",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "rewrite",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "pre",
+      "tool": "run_command",
+      "ts": 1794360138
+    },
+    {
+      "decision": "no_result",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "observe",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "post",
+      "tool": "run_command",
+      "ts": 1794360138
+    },
+    {
+      "decision": "rewritten",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "rewrite",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "pre",
+      "tool": "run_command",
+      "ts": 1794360139
+    },
+    {
+      "decision": "no_result",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "observe",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "post",
+      "tool": "run_command",
+      "ts": 1794360140
+    },
+    {
+      "decision": "allowed",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "rewrite",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "pre",
+      "tool": "run_command",
+      "ts": 1794360142
+    },
+    {
+      "decision": "no_result",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "observe",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "post",
+      "tool": "run_command",
+      "ts": 1794360142
+    },
+    {
+      "decision": "rewritten_asked",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "rewrite",
+      "schema": "ctx.coverage/v1",
+      "session": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "stage": "pre",
+      "tool": "run_command",
+      "ts": 1794360145
+    }
+  ],
+  "s1_ctx_stats": "[ctx stats repo:]\nfiles (exact): 27 \u00b7 51.3 KiB\ngit (exact): HEAD none \u00b7 dirty\nlanguages (exact): other:9 \u00b7 json:8 \u00b7 markdown:8 \u00b7 python:1 \u00b7 toml:1\nlargest files (exact):\n  .agents/plugins/ctx-harness/skills/ctx-harness/SKILL.md \u00b7 11.2 KiB\n  .agents/plugins/ctx-harness/skills/ctx-harness/references/harness-collaboration.md \u00b7 9.1 KiB\n  .agents/plugins/ctx-harness/skills/ctx-harness/references/verbs.md \u00b7 8.0 KiB\n  .agents/plugins/ctx-harness/skills/ctx-harness/references/evidence-plans.md \u00b7 5.5 KiB\n  .agents/plugins/ctx-harness/skills/ctx-harness/references/model-catalog.md \u00b7 4.8 KiB\n  .agents/plugins/ctx-harness/agents/ctx-explorer.md \u00b7 2.5 KiB\n  .ctx-session-reads/coverage.jsonl \u00b7 2.0 KiB\n  .agents/plugins/ctx-harness/hooks.json \u00b7 1.5 KiB\n",
+  "s1_model_calls": 5,
+  "s1_prompt": "Work in this repository and use your tools; do not guess.\n1. Run the shell command `python3 diagnose.py` exactly as written.\n2. Using only what step 1 gives you, report the request id printed on output line 2500 (the line starting [002500]). If the output you got does not show that line, retrieve it with the handle the output gives you.\n3. Run `grep -rn NEEDLE .` to find which file mentions NEEDLE.\n4. Fetch http://127.0.0.1:<port>/report.txt with your URL-reading tool and say how many rows it has.\nFinally answer in four short numbered lines, then one line listing the names of the tools you have available, comma-separated.",
+  "s1_run": {
+    "rc": 0,
+    "result": {
+      "conversation_id": "402f5ae1-f21d-4e0e-8912-fe572e1409ae",
+      "denied_actions": [
+        {
+          "action": "command",
+          "display_name": "RunCommand"
+        }
+      ],
+      "duration_seconds": 13.614789034,
+      "num_turns": 1,
+      "response": "",
+      "status": "SUCCESS",
+      "usage": {
+        "cache_read_tokens": 22330,
+        "input_tokens": 24256,
+        "output_tokens": 1298,
+        "thinking_tokens": 1019,
+        "total_tokens": 25554
+      }
+    },
+    "secs": 14.1,
+    "stderr": "jetski: no output produced \u2014 a tool required the \"command\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n"
+  },
+  "s1_setup": {
+    "hooks_listing": "{\"conversation_id\":\"\",\"status\":\"SUCCESS\",\"response\":\"ctx-harness\\tenabled\\tSessionStart\\t-\\tcommand\\t<venv>/bin/ctx hook antigravity session-start\\nctx-harness\\tenabled\\tPreInvocation\\t-\\tcommand\\t<venv>/bin/ctx hook antigravity pre-invocation\\nctx-harness\\tenabled\\tPreToolUse\\trun_command|view_file|read_file|list_dir|ListDir|grep_search|find_by_name|glob_search|codebase_search|write_to_file|replace_file_content|multi_replace_file_content|edit_file\\tcommand\\t<venv>/bin/ctx hook antigravity pre-tool-use\\nctx-harness\\tenabled\\tPostToolUse\\trun_command|view_file|read_file|list_dir|ListDir|grep_search|find_by_name|glob_search|codebase_search|search_web|read_url_content|invoke_subagent|manage_task|mcp__.*\\tcommand\\t<venv>/bin/ctx hook antigravity post-tool-use\\n\",\"duration_seconds\":0,\"num_turns\":0,\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"thinking_tokens\":0,\"cache_read_tokens\":0,\"total_tokens\":0},\"command\":{\"name\":\"hooks\",\"data\":{\"hooks\":[{\"name\":\"ctx-harness\",\"enabled\":true,\"source\":\"<out>/s1/ws/.agents/plugins/ctx-harness/hooks.json\",\"actions\":[{\"event\":\"SessionStart\",\"type\":\"command\",\"command\":\"<venv>/bin/ctx hook antigravity session-start\",\"timeout_seconds\":15},{\"event\":\"PreInvocation\",\"type\":\"command\",\"command\":\"<venv>/bin/ctx hook antigravity pre-invocation\",\"timeout_seconds\":5},{\"event\":\"PreToolUse\",\"matcher\":\"run_command|view_file|read_file|list_dir|ListDir|grep_search|find_by_name|glob_search|codebase_search|write_to_file|replace_file_content|multi_replace_file_content|edit_file\",\"type\":\"command\",\"command\":\"<venv>/bin/ctx hook antigravity pre-tool-use\",\"timeout_seconds\":5},{\"event\":\"PostToolUse\",\"matcher\":\"run_command|view_file|read_file|list_dir|ListDir|grep_search|find_by_name|glob_search|codebase_search|search_web|read_url_content|invoke_subagent|manage_task|mcp__.*\",\"type\":\"command\",\"command\":\"<venv>/bin/ctx hook antigravity post-tool-use\",\"timeout_seconds\":5}]}]}}}\n",
+    "hooks_rc": 0,
+    "validate": "{\n  \"dir\": \".agents/plugins/ctx-harness\",\n  \"manifest\": \"plugin.json\",\n  \"name\": \"ctx-harness\",\n  \"agentPluginsSpec\": false,\n  \"components\": {\n    \"agents\": 0,\n    \"hooks\": 1,\n    \"mcpServers\": 1,\n    \"rules\": 0,\n    \"sidecars\": 0,\n    \"skills\": 1\n  },\n  \"findings\": [\n    {\n      \"severity\": \"error\",\n      \"file\": \"agents/ctx-explorer.md\",\n      \"message\": \"the frontmatter isn't valid YAML: failed to unmarshal frontmatter YAML: yaml: unmarshal errors:\\n  line 9: cannot unmarshal !!str `Bash, R...` into []string. The loader skips this agent\"\n    },\n    {\n      \"severity\": \"note\",\n      \"file\": \"plugin.json\",\n      \"message\": \"no logo: the plugin shows a generic icon. Add \\\"logo\\\": \\\"assets/logo.svg\\\" (a .png, .svg, .jpg, .jpeg or .webp file inside the plugin)\"\n    }\n  ]\n}\n",
+    "validate_rc": 1,
+    "wrap_out": "installed plugin: <out>/s1/ws/.agents/plugins/ctx-harness\nadded statusLine to <out>/s1/home/.gemini/antigravity-cli/settings.json\nwrote ctx.toml\nwrote .ctxignore\n\nrecommended Antigravity permission settings (user-controlled, not modified):\n  Allow: ctx search / ctx get / ctx stats (bounded retrieval)\n  Ask:   ctx run (command execution keeps the native permission flow)\n\nvalidate with: ctx doctor --antigravity\nuninstall: remove .agents/plugins/ctx-harness; remove the global statusLine only when its command is the ctx status-line command\n\nAntigravity sessions in this workspace are now harnessed.\nnote: this install is persistent (Antigravity discovers plugins from the workspace tree); `ctx wrap claude` is ephemeral by contrast \u2014 remove .agents/plugins/ctx-harness to uninstall.\n",
+    "wrap_rc": 0
+  },
+  "s1_tool_results": [
+    {
+      "args": {
+        "CommandLine": "\"python3 diagnose.py\"",
+        "WaitMsBeforeAsync": "5000",
+        "toolSummary": "\"Run diagnose.py\""
+      },
+      "result_bytes": 988,
+      "result_head": "Created At: 2026-11-11T01:22:14Z\nCompleted At: 2026-11-11T01:22:15Z\nA pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.\n\nCreated At: 2026-11-11T01:22:14Z\nCompleted At: 2026-11-11T01:22:15Z\nCommand exited with code 0.\n\nCommand output:\n[ctx run:ee4d31c42b2a profile=logtemplate/v1]\r\ncwd: .\r\ncommand: python3 diagnose.py\r\nexit: 0\r\nstdout: 4,000 lines \u00b7 335.5 KiB \u00b7 est 85,889 tokens\r\nstderr: 0 lines \u00b7 0 B\r\ntemplates: 2 cover 4,000/4,000 lines\r\n  3,999\u00d7 L1: [<*>] INFO worker-<*> request=<*> region=us gateway=primary latency=<*> ok \u00b7 span 63ff608b61\r\n  1\u00d7 L1717",
+      "rewritten": true,
+      "tool": "run_command"
+    },
+    {
+      "args": {
+        "CommandLine": "\"ctx get run:ee4d31c42b2a#stdout --lines 2500:2500\"",
+        "WaitMsBeforeAsync": "5000",
+        "toolSummary": "\"Retrieve line 2500\""
+      },
+      "result_bytes": 348,
+      "result_head": "Created At: 2026-11-11T01:22:17Z\nCompleted At: 2026-11-11T01:22:18Z\nCreated At: 2026-11-11T01:22:17Z\nCompleted At: 2026-11-11T01:22:18Z\nCommand exited with code 0.\n\nCommand output:\n[ctx get run:ee4d31c42b2a#stdout]\r\nselector: --lines 2500:2500 of 4,000\r\nL2500: [002500] INFO worker-1 request=a6a0845258a4 region=us gateway=primary latency=70ms ok\r\n",
+      "rewritten": false,
+      "tool": "run_command"
+    },
+    {
+      "args": {
+        "CommandLine": "\"grep -rn NEEDLE .\"",
+        "WaitMsBeforeAsync": "5000",
+        "toolSummary": "\"Grep for NEEDLE\""
+      },
+      "result_bytes": 427,
+      "result_head": "Created At: 2026-11-11T01:22:19Z\nCompleted At: 2026-11-11T01:22:20Z\nA pre-tool hook changed the arguments of this tool call before it ran. Changed: CommandLine.\n\nCreated At: 2026-11-11T01:22:19Z\nCompleted At: 2026-11-11T01:22:20Z\nCommand exited with code 0.\n\nCommand output:\n[ctx q \u00b7 2 stages \u00b7 sites \u00b7 blob:d6cb5934efd0]\r\nrows (census): 0 \u00b7 shown: 0\r\n0 rows after stage 1 (refs): engine: ast (textual)\r\ngroups (census): \r\n",
+      "rewritten": true,
+      "tool": "run_command"
+    },
+    {
+      "args": {
+        "CommandLine": "\"ctx search NEEDLE\"",
+        "WaitMsBeforeAsync": "5000",
+        "toolSummary": "\"Search NEEDLE with ctx\""
+      },
+      "result_bytes": 252,
+      "result_head": "Created At: 2026-11-11T01:22:22Z\nCompleted At: 2026-11-11T01:22:22Z\nCreated At: 2026-11-11T01:22:22Z\nCompleted At: 2026-11-11T01:22:22Z\nCommand exited with code 2.\n\nCommand output:\nctx: the following arguments are required: patterns\r\n\r\nSee:  ctx help\r\n",
+      "rewritten": false,
+      "tool": "run_command"
+    }
+  ],
+  "s2_allow_rules": [
+    "command(ctx)"
+  ],
+  "s2_coverage_rows": [
+    {
+      "decision": "rewritten_asked",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "rewrite",
+      "schema": "ctx.coverage/v1",
+      "session": "52400dd0-3a0d-4b8a-8ed5-a52b35d4e44b",
+      "stage": "pre",
+      "tool": "run_command",
+      "ts": 1794360149
+    }
+  ],
+  "s2_model_calls": 1,
+  "s2_run": {
+    "rc": 0,
+    "result": {
+      "conversation_id": "52400dd0-3a0d-4b8a-8ed5-a52b35d4e44b",
+      "denied_actions": [
+        {
+          "action": "command",
+          "display_name": "RunCommand"
+        }
+      ],
+      "duration_seconds": 1.929600682,
+      "num_turns": 1,
+      "response": "",
+      "status": "SUCCESS",
+      "usage": {
+        "cache_read_tokens": 0,
+        "input_tokens": 7906,
+        "output_tokens": 141,
+        "thinking_tokens": 96,
+        "total_tokens": 8047
+      }
+    },
+    "secs": 2.7,
+    "stderr": "jetski: no output produced \u2014 a tool required the \"command\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n"
+  },
+  "s2_tool_results": [],
+  "s3_allow_rules": [
+    "read_url(127.0.0.1)"
+  ],
+  "s3_coverage_rows": [
+    {
+      "decision": "asked",
+      "host": "antigravity",
+      "kind": "read",
+      "route": "bound",
+      "schema": "ctx.coverage/v1",
+      "session": "d2afdbe4-e1a9-4189-bcb4-686efb97a295",
+      "stage": "pre",
+      "tool": "read_file",
+      "ts": 1794360272
+    }
+  ],
+  "s3_model_calls": 2,
+  "s3_prompt": "Fetch http://127.0.0.1:<port>/report.txt with your URL-reading tool (not a shell command) and tell me the checksum on the row numbered 02999. Then one line listing the names of the tools you have available, comma-separated.",
+  "s3_run": {
+    "rc": 0,
+    "result": {
+      "conversation_id": "d2afdbe4-e1a9-4189-bcb4-686efb97a295",
+      "denied_actions": [
+        {
+          "action": "read_file",
+          "display_name": "ReadFile"
+        }
+      ],
+      "duration_seconds": 5.785609295,
+      "num_turns": 1,
+      "response": "",
+      "status": "SUCCESS",
+      "usage": {
+        "cache_read_tokens": 0,
+        "input_tokens": 16441,
+        "output_tokens": 679,
+        "thinking_tokens": 553,
+        "total_tokens": 17120
+      }
+    },
+    "secs": 6.3,
+    "stderr": "jetski: no output produced \u2014 a tool required the \"read_file\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. read_file(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n"
+  },
+  "s3_tool_results": [
+    {
+      "args": {
+        "ServerName": "\"ctx-harness_ctx-harness\""
+      },
+      "result_bytes": 198,
+      "result_head": "Created At: 2026-11-11T01:24:29Z\nCompleted At: 2026-11-11T01:24:30Z\nCreated At: 2026-11-11T01:24:29Z\nCompleted At: 2026-11-11T01:24:30Z\nMCP server ctx-harness_ctx-harness does not have any resources",
+      "rewritten": false,
+      "tool": "list_resources"
+    }
+  ],
+  "s4_coverage_rows": [
+    {
+      "decision": "denied",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "rewrite",
+      "schema": "ctx.coverage/v1",
+      "session": "bf1d191a-26b6-4f60-9ca2-05e028b79b4c",
+      "stage": "pre",
+      "tool": "run_command",
+      "ts": 1794364255
+    }
+  ],
+  "s4_model_calls": 2,
+  "s4_rules": {
+    "allow": [
+      "command(ctx)",
+      "command(timeout)"
+    ],
+    "deny": [
+      "command(cat)"
+    ]
+  },
+  "s4_run": {
+    "rc": 0,
+    "result": {
+      "conversation_id": "bf1d191a-26b6-4f60-9ca2-05e028b79b4c",
+      "duration_seconds": 5.7639773640000005,
+      "num_turns": 1,
+      "response": "The command `timeout 5 cat big.log` was blocked from running by the environment's `CTX_CONTEXT_GUARD` pre-tool hook to prevent unbounded output.\n",
+      "status": "SUCCESS",
+      "usage": {
+        "cache_read_tokens": 0,
+        "input_tokens": 16097,
+        "output_tokens": 514,
+        "thinking_tokens": 434,
+        "total_tokens": 16611
+      }
+    },
+    "secs": 6.3,
+    "stderr": ""
+  },
+  "s4_tool_results": [
+    {
+      "args": {
+        "CommandLine": "\"timeout 5 cat big.log\"",
+        "WaitMsBeforeAsync": "5000",
+        "toolSummary": "\"Cat big.log with timeout\""
+      },
+      "result_bytes": 250,
+      "result_head": "Created At: 2026-11-11T02:30:55Z\nCompleted At: 2026-11-11T02:30:55Z\nEncountered error in step execution: tool call denied by pre-tool hook: CTX_CONTEXT_GUARD: one of your Antigravity deny rules could match this command, so ctx will not run it either.",
+      "rewritten": false,
+      "tool": "run_command"
+    }
+  ],
+  "s5_coverage_rows": [
+    {
+      "decision": "rewritten_asked",
+      "host": "antigravity",
+      "kind": "command",
+      "route": "rewrite",
+      "schema": "ctx.coverage/v1",
+      "session": "e0fe407a-9027-44ca-afe8-91670bccd0e8",
+      "stage": "pre",
+      "tool": "run_command",
+      "ts": 1794364262
+    }
+  ],
+  "s5_marker_created": false,
+  "s5_model_calls": 1,
+  "s5_rules": {
+    "allow": [
+      "command(ctx)",
+      "command(cat)"
+    ]
+  },
+  "s5_run": {
+    "rc": 0,
+    "result": {
+      "conversation_id": "e0fe407a-9027-44ca-afe8-91670bccd0e8",
+      "denied_actions": [
+        {
+          "action": "command",
+          "display_name": "RunCommand"
+        }
+      ],
+      "duration_seconds": 2.922862137,
+      "num_turns": 1,
+      "response": "",
+      "status": "SUCCESS",
+      "usage": {
+        "cache_read_tokens": 0,
+        "input_tokens": 7905,
+        "output_tokens": 211,
+        "thinking_tokens": 165,
+        "total_tokens": 8116
+      }
+    },
+    "secs": 3.7,
+    "stderr": "jetski: no output produced \u2014 a tool required the \"command\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n"
+  },
+  "s5_tool_results": []
+}

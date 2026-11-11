@@ -63,11 +63,23 @@ def test_capabilities_match_the_registry(spec):
 
 
 def test_antigravity_is_the_one_host_without_an_output_gate():
-    """Pins the consequence of the published contract (ADR 005) rather than
-    leaving it as prose: if a future release gives that host a substitution
-    field, this test is where the claim gets revisited deliberately."""
+    """Pins what agy 1.5.5 was observed to do, rather than leaving it as prose:
+    PostToolUse still accepts only {} (no output gate), while PreToolUse's
+    `overwrite` rewrites arguments, verified for run_command and read_file
+    only. Widening that set is where the claim gets revisited deliberately."""
+    from ctx import governance as gov
+    from ctx.hook import can_rewrite_call
+
     assert can_substitute_output("antigravity") is False
-    assert can_substitute_input("antigravity") is False
+    assert can_substitute_input("antigravity") is True
+    assert gov.REWRITABLE["antigravity"] == {"run_command", "read_file"}
+    live = {"hookEventName": "PreToolUse"}
+    assert can_rewrite_call("antigravity", "run_command", live)
+    assert can_rewrite_call("antigravity", "read_file", live)
+    for name in ("view_file", "grep_search", "list_dir", "find_by_name", "Read"):
+        assert not can_rewrite_call("antigravity", name, live), name
+    # a payload without hookEventName is from agy < 1.5.4: never rewritten
+    assert not can_rewrite_call("antigravity", "run_command", {})
     assert can_substitute_output("claude-code") is True
     assert can_substitute_output("codex") is True
 

@@ -129,7 +129,7 @@ def static_rows(host: str, regs: dict[str, dict[str, Any]] | None = None) -> lis
     unlisted = "<unlisted tool>"
     names.append((unlisted, _governed_kind("x_unlisted_tool_x", host)))
     for name, kind in names:
-        pre, post = gov.stage_routes(kind, caps)
+        pre, post = gov.stage_routes(kind, caps, host=host, name=name)
         probe = "mcp__server__tool" if kind == "mcp" else (
             "x_unlisted_tool_x" if name == unlisted else name)
         pre_hooked = bool(reg["pre"](probe))
@@ -157,7 +157,10 @@ def render_static(host: str, regs: dict[str, dict[str, Any]] | None = None) -> l
     rows = static_rows(host, regs)
     caps = _caps(host)
     yn = {True: "yes", False: "no"}
-    out = [f"{host}  (rewrite input: {yn[bool(caps.get('input_substitution'))]}, "
+    rewrite = yn[bool(caps.get('input_substitution'))]
+    if caps.get("input_substitution") and host in gov.REWRITABLE:
+        rewrite = ", ".join(sorted(gov.REWRITABLE[host])) + " only"
+    out = [f"{host}  (rewrite input: {rewrite}, "
            f"replace output: {yn[bool(caps.get('output_substitution'))]})"]
     groups: dict[tuple[str, str, str], list[str]] = {}
     for r in rows:
@@ -366,6 +369,7 @@ def report(root, *, host: str | None = None, session: str | None = None) -> dict
         rows = static_rows(h, regs)
         data["hosts"][h] = {
             "caps": _caps(h),
+            "rewrite_only": sorted(gov.REWRITABLE.get(h, ())),
             "pre_matcher": regs[h]["pre_matcher"],
             "post_matcher": regs[h]["post_matcher"],
             "tools": rows,

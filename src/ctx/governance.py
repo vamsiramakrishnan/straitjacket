@@ -122,12 +122,13 @@ NATIVE: dict[str, dict[str, str]] = {
     },
     "antigravity": {
         "run_command": "command",
-        "view_file": "read", "Read": "read", "read_file": "read",
+        # Read/Edit/MultiEdit are not listed: `agy plugin validate` (1.5.5)
+        # flags them as Claude Code names that never match on this host.
+        "view_file": "read", "read_file": "read",
         "grep_search": "search", "find_by_name": "search", "list_dir": "search",
         "ListDir": "search", "glob_search": "search", "codebase_search": "search",
         "write_to_file": "edit", "replace_file_content": "edit",
-        "multi_replace_file_content": "edit",
-        "Edit": "edit", "edit_file": "edit", "MultiEdit": "edit",
+        "multi_replace_file_content": "edit", "edit_file": "edit",
         "search_web": "tool", "read_url_content": "tool",
         "invoke_subagent": "tool", "manage_task": "tool",
         "schedule": "control", "list_permissions": "control",
@@ -213,12 +214,34 @@ def table_kind(host: str, name: str) -> str | None:
     return NATIVE.get(host, {}).get(name)
 
 
+#: Hosts whose argument rewriting is verified per tool rather than for the
+#: whole PreToolUse contract: only the tools named here are rewritten there;
+#: every other tool on that host stays deny-and-steer. Antigravity's
+#: ``overwrite`` response field was observed live on agy 1.5.5 for
+#: run_command (CommandLine) and read_file (StartLine/EndLine) and nothing
+#: else: its search and listing tools left the default toolset in 1.2.7, so
+#: their overwrite could not be observed, and view_file was not offered.
+REWRITABLE: dict[str, frozenset[str]] = {
+    "antigravity": frozenset({"run_command", "read_file"}),
+}
+
+
+def can_rewrite(host: str, name: str | None, caps: dict[str, bool]) -> bool:
+    """Can ``host``'s PreToolUse rewrite the arguments of tool ``name``?"""
+    if not caps.get("input_substitution"):
+        return False
+    only = REWRITABLE.get(host)
+    return only is None or (name or "") in only
+
+
 def stage_routes(
     kind: str | None,
     caps: dict[str, bool],
     *,
     collapse: bool = True,
     steering: bool = True,
+    host: str | None = None,
+    name: str | None = None,
 ) -> tuple[str | None, str]:
     """``(pre_route, post_route)`` for a tool kind on a host with ``caps``.
 
@@ -226,9 +249,13 @@ def stage_routes(
     call is allowed untouched if a pre hook fires at all). ``kind`` None is a
     name the table has never seen: it falls to the output gate wherever the
     host can replace output, and is observed (captured, not replaced)
-    elsewhere — never ungoverned.
+    elsewhere — never ungoverned. On a host listed in ``REWRITABLE`` the
+    rewrite routes apply only to the tools named there, so callers pass
+    ``host`` and ``name``.
     """
     can_in = bool(caps.get("input_substitution")) and steering
+    if host is not None:
+        can_in = can_in and can_rewrite(host, name, caps)
     gate = "output_gate" if caps.get("output_substitution") else "observe"
     if kind in ("control", "schema", "media"):
         return "exempt", "exempt"
@@ -272,12 +299,18 @@ LIMITS: dict[str, tuple[str, ...]] = {
         "PreToolUse 'ask' is unsupported, so a confirmation degrades to a deny",
     ),
     "antigravity": (
-        "PENDING follow-up: this row is the published contract (deny-and-steer). "
-        "Current agy can also rewrite arguments (an `overwrite` response field) "
-        "and has SessionStart; adopting those is a separate change",
-        "PreToolUse cannot rewrite input: a rewrite becomes a deny naming the command",
-        "PostToolUse cannot replace output (its only legal output is {}): "
-        "results reach the transcript raw",
+        "PreToolUse rewrites arguments (`overwrite`, verified live on agy 1.5.5) "
+        "only for run_command and read_file; every other tool, and an agy older "
+        "than 1.5.4 (no hookEventName in the payload), is denied with the ctx "
+        "command named",
+        "agy checks its permission rules against the rewritten command (`ctx run "
+        "...`), so where a rule pre-approves ctx but no rule covers the original "
+        "command, the rewrite is sent as force_ask rather than approved",
+        "PostToolUse cannot replace output (its only legal output is {}): the "
+        "result of a tool that was not rewritten reaches the transcript raw",
+        "grep_search, find_by_name and list_dir left agy's default toolset in "
+        "1.2.7; the model searches through run_command, which the command route "
+        "governs",
         "live agy 1.5.5 PostToolUse payloads carry no tool result at all, so the "
         "post stage records the call but captures nothing (decision no_result)",
         "only tools named in the plugin's matchers are seen",

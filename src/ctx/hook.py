@@ -167,12 +167,17 @@ from ctx.sessiondir import session_reads_dir
 # Antigravity contract that hosts.py and hook.py each described differently)
 # is exactly what that test exists to catch.
 #
-#   input_substitution  — PreToolUse can rewrite the tool's arguments
+#   input_substitution  — PreToolUse can rewrite the tool's arguments (on a
+#                         host in ctx.governance.REWRITABLE, only for the
+#                         tools named there)
 #   output_substitution — PostToolUse can replace the tool's result
 DIALECT_CAPS: dict[str, dict[str, bool]] = {
     "claude-code": {"input_substitution": True, "output_substitution": True},
     "codex": {"input_substitution": True, "output_substitution": True},
-    "antigravity": {"input_substitution": False, "output_substitution": False},
+    # agy 1.5.5, observed live: a PreToolUse `overwrite` is merged into the
+    # tool's args before it runs (run_command, read_file); PostToolUse still
+    # accepts only {} and its payload carries no result.
+    "antigravity": {"input_substitution": True, "output_substitution": False},
     "hermes": {"input_substitution": True, "output_substitution": True},
     "omp": {"input_substitution": True, "output_substitution": True},
     "opencode": {"input_substitution": True, "output_substitution": True},
@@ -186,8 +191,23 @@ def can_substitute_output(flavor: str) -> bool:
 
 
 def can_substitute_input(flavor: str) -> bool:
-    """True when this dialect's PreToolUse can rewrite tool arguments."""
+    """True when this dialect's PreToolUse can rewrite tool arguments
+    (for at least some tools; see :func:`can_rewrite_call`)."""
     return DIALECT_CAPS.get(flavor, {}).get("input_substitution", False)
+
+
+def _agy_legacy(payload: dict[str, Any] | None) -> bool:
+    """An Antigravity payload from before agy 1.5.4, which added
+    ``hookEventName`` (agy changelog, 1.5.4). Rewriting was observed on 1.5.5
+    only, so such a host keeps the deny-and-steer contract."""
+    return not isinstance((payload or {}).get("hookEventName"), str)
+
+
+def can_rewrite_call(flavor: str, name: str | None, payload: dict[str, Any] | None = None) -> bool:
+    """Will this host apply a rewrite of this particular call's arguments?"""
+    if not _gov.can_rewrite(flavor, name, DIALECT_CAPS.get(flavor, {})):
+        return False
+    return not (flavor == "antigravity" and _agy_legacy(payload))
 
 
 TYPE_CHECKING = False
@@ -1518,6 +1538,44 @@ def _resolve_workspace_root(payload: dict[str, Any]) -> str | None:
     return os.path.abspath(str(ws_paths[0])) if len(ws_paths) == 1 else None
 
 
+_AGY_SCHEMA_PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+#: Names a tool schema has no reason to carry. Such a file is asked about
+#: even under the schema directory (the outside-root rule's answer).
+_AGY_SCHEMA_SECRETISH = re.compile(
+    r"(?i)(token|secret|credential|passw|private|cookie|session|auth|"
+    r"id_(rsa|dsa|ecdsa|ed25519)|(^|[._-])keys?([._-]|$)|\.pem)")
+
+
+def _agy_mcp_schema_read(payload: dict[str, Any], path_str: str) -> bool:
+    """Is this read_file agy loading an MCP tool's schema?
+
+    agy 1.5.5 loads MCP tools lazily: the model reads
+    ``<appDataDir>/mcp/<server>/<tool>.json`` with read_file before calling
+    the tool (observed live: the ctx server's own ``ctx.json``). That path is
+    outside the workspace, so the outside-root rule asked for it, and a
+    headless run refused it, which made every MCP tool unusable. It is the
+    host's tool-definition file (the "schema" kind, exempt everywhere), so
+    it passes. ``appDataDir`` is taken from the payload's
+    ``artifactDirectoryPath`` (``<appDataDir>/brain/<conversationId>``).
+    """
+    art = payload.get("artifactDirectoryPath")
+    if not isinstance(art, str) or not art or not path_str.endswith(".json"):
+        return False
+    app = os.path.dirname(os.path.dirname(os.path.normpath(art)))
+    if os.path.basename(os.path.dirname(os.path.normpath(art))) != "brain":
+        return False
+    mcp = os.path.realpath(os.path.join(app, "mcp"))
+    target = os.path.realpath(path_str)
+    if not target.startswith(mcp + os.sep):
+        return False
+    # Exactly <server>/<tool>.json, the shape agy writes (live listing:
+    # mcp/ctx-harness_ctx-harness/ctx.json); no hidden or nested parts.
+    parts = os.path.relpath(target, mcp).split(os.sep)
+    return (len(parts) == 2 and all(_AGY_SCHEMA_PART.match(x) for x in parts)
+            and not any(_AGY_SCHEMA_SECRETISH.search(x) for x in parts)
+            and not _is_secret_path(target, None))
+
+
 def _path_outside(path_str: str, workspace_root: str | None) -> bool:
     if not workspace_root:
         return False
@@ -2280,8 +2338,13 @@ _RANGE_KEYS = ("StartLine", "EndLine")
 
 
 def _range_style(tool_input: dict[str, Any] | None) -> bool:
+    # ``AbsolutePath``: view_file. ``Path``: read_file, which replaced it in
+    # agy's default toolset and takes the same StartLine/EndLine (1-based,
+    # inclusive: live 1.5.5 answered StartLine=2 EndLine=3 with "Showing
+    # lines 2-3 of 10").
     return isinstance(tool_input, dict) and (
-        "AbsolutePath" in tool_input or any(k in tool_input for k in _RANGE_KEYS))
+        "AbsolutePath" in tool_input or "Path" in tool_input
+        or any(k in tool_input for k in _RANGE_KEYS))
 
 
 def _range_span(tool_input: dict[str, Any] | None) -> int | None:
@@ -2359,6 +2422,7 @@ def _range_advice(tool_input: dict[str, Any], path_str: str, workspace_root: str
     a = tool_input.get("StartLine") if isinstance(tool_input.get("StartLine"), int) else 1
     a = max(int(a), 0)
     start0 = max(a - 1, 0)
+    asked = _requested_range(tool_input)
     fit, _n = _range_scan(path_str, start0, window, limit)
     b = tool_input.get("EndLine") if isinstance(tool_input.get("EndLine"), int) else a + window - 1
     rel = path_str
@@ -2368,6 +2432,8 @@ def _range_advice(tool_input: dict[str, Any], path_str: str, workspace_root: str
         except ValueError:
             pass
     end = start0 + fit - 1  # the union reading of (a, end) is exactly ``fit`` lines
+    if asked is not None and asked[1] is not None:
+        end = min(end, asked[1])  # never past the end that was asked for
     if fit < 0 or start0 > 0:
         # Byte offsets of a later range are not known (and past the scan cap
         # not even its start), so the advice addresses the requested lines;
@@ -2380,7 +2446,11 @@ def _range_advice(tool_input: dict[str, Any], path_str: str, workspace_root: str
               f"Use: ctx get repo:{rel} {addr}\n"
               f"or:  ctx search repo:{rel} '<pattern>' --context 3" + note)
     decision: dict[str, Any] = _deny(reason)
-    if end >= max(a, 1):
+    # A bound only ever narrows the request: same start, an earlier end. A
+    # request that cannot be honoured that way (a bad start, an end before
+    # the start, a first line already over budget) is denied with the advice
+    # above rather than served a different region.
+    if asked is not None and asked[0] == a and end >= max(a, 1):
         decision["_rewrite"] = {
             "fields": {"StartLine": a, "EndLine": end},
             # Its own first line: lesson decay keys on the first line, and the
@@ -2392,12 +2462,35 @@ def _range_advice(tool_input: dict[str, Any], path_str: str, workspace_root: str
     return decision
 
 
+def _requested_range(tool_input: dict[str, Any] | None) -> tuple[int, int | None] | None:
+    """``(start, end)`` of a StartLine/EndLine read, 1-based; ``start`` is 1
+    when absent and ``end`` None when absent. None when the request is not a
+    valid range (a start below 1, an end before the start, a non-integer)."""
+    ti = tool_input if isinstance(tool_input, dict) else {}
+    a, b = ti.get("StartLine"), ti.get("EndLine")
+    if a is None:
+        a = 1
+    if not isinstance(a, int) or isinstance(a, bool) or a < 1:
+        return None
+    if b is None:
+        return a, None
+    if not isinstance(b, int) or isinstance(b, bool) or b < a:
+        return None
+    return a, b
+
+
 def _bound_fields(tool_input: dict[str, Any] | None, lines: int) -> dict[str, int]:
-    """The input fields that bound a read to ``lines`` lines, in the tool's own terms."""
+    """The input fields that bound a read to ``lines`` lines, in the tool's own
+    terms. For a StartLine/EndLine read the bound stays inside the request:
+    the same start, an end no later than the one asked for; an invalid
+    request gets no fields (nothing to narrow)."""
     if _range_style(tool_input):
-        start = tool_input.get("StartLine") if isinstance(tool_input, dict) else None
-        start = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 1
-        return {"StartLine": start, "EndLine": start + lines - 1}
+        asked = _requested_range(tool_input)
+        if asked is None:
+            return {}
+        start, end = asked
+        last = start + lines - 1
+        return {"StartLine": start, "EndLine": last if end is None else min(last, end)}
     return {"limit": lines}
 
 
@@ -2460,7 +2553,10 @@ def classify_read(
                                             "view_file with StartLine and EndLine")
             if outline:
                 return _deny(outline)
-        return _range_advice(dict(tool_input or {}, StartLine=1), path_str, workspace_root,
+        # The requested start is kept (1 for a whole-file read): serving a
+        # different region than asked would be silent, since the host shows
+        # the model only "Showing lines A-B of N", never the hook's reason.
+        return _range_advice(dict(tool_input or {}), path_str, workspace_root,
                              size, limit, window, note)
     if size > limit:
         if not in_ledger and _whole_file_read(tool_input):
@@ -2766,11 +2862,18 @@ def classify(
 
     if kind == "read":
         session_id = str(
-            payload.get("session_id") or payload.get("conversation_id") or "unknown"
+            payload.get("session_id") or payload.get("conversation_id")
+            or payload.get("conversationId") or "unknown"
         )
         for key in ("AbsolutePath", "TargetFile", "file_path", "filePath", "path", "Path"):
             v = tool_input.get(key)
             if isinstance(v, str) and v:
+                # After the secret-path check, never instead of it.
+                if (policy.get("_flavor") == "antigravity"
+                        and not _is_secret_path(v, workspace_root)
+                        and _path_outside(v, workspace_root)
+                        and _agy_mcp_schema_read(payload, v)):
+                    return dict(DECISION_ALLOW)
                 return _apply_rewrite(
                     classify_read(v, workspace_root, policy, session_id, tool_input=tool_input),
                     tool_input,
@@ -2930,34 +3033,82 @@ def _to_codex_schema(decision: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-# The published Antigravity PreToolUse output contract
-# (https://antigravity.google/docs/hooks) is exactly:
-#     {"decision": "allow"|"deny"|"ask"|"force_ask",
-#      "reason": str?, "permissionOverrides": [str]?}
-# There is no field for modified arguments, so this host cannot do input
-# substitution at all. Emitting anything else is out of contract.
+# The Antigravity PreToolUse output contract (https://antigravity.google/docs/hooks,
+# and observed live on agy 1.5.5):
+#     {"decision": "allow"|"auto_approve"|"deny"|"ask"|"force_ask"|
+#                  "deny_unless_prior_grant",
+#      "reason": str?, "overwrite": {...}?, "permissionOverrides": [str]?}
+# ``overwrite`` is merged (shallow, top level) into ``toolCall.args`` before
+# the tool runs, and the result is prefixed "A pre-tool hook changed the
+# arguments of this tool call before it ran. Changed: <keys>." A bare {} is
+# read as a deny, so every path names a decision. This emitter sends only
+# allow, deny and force_ask.
 _AGY_PRE_DECISIONS = ("allow", "deny", "ask", "force_ask")
 # "...; bounded to the first 240 lines." / "content grep bounded to 60 matches."
 _APPLIED_BOUND_RE = re.compile(r"(;\s*|\s*content grep )?bounded to (the first )?\d+ (lines|matches)\.?")
-_AGY_PRE_KEYS = ("decision", "reason", "permissionOverrides")
+_AGY_PRE_KEYS = ("decision", "reason", "overwrite", "permissionOverrides")
 
 
-def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
-    """Layer 2 for the antigravity dialect, per the published hook contract.
+def _agy_overwrite(decision: dict[str, Any], payload: dict[str, Any] | None,
+                   ws_root: str | None) -> dict[str, Any] | None:
+    """The overwrite response for a rewrite this host will apply, else None.
 
-    Unlike Claude Code and Codex, Antigravity's PreToolUse schema carries no
-    ``updatedInput``: a hook can gate a call but cannot rewrite its arguments.
-    So a decision carrying a ``rewrite`` cannot be applied transparently here.
-    It degrades to a **deny whose reason names the contained command**, which
-    keeps the birth gate intact — the flood never happens — at the cost of one
-    extra turn, because the agent has to re-issue the command itself.
+    Only the changed arguments are sent (the host merges them). A shell
+    command rewrite is checked against the user's own permission rules
+    (ctx.agyperm): the host evaluates its rules on the rewritten ``ctx run``
+    line, so without this a rule that pre-approves ctx would approve
+    commands the user's rules ask about or deny.
+    """
+    rewrite = decision["rewrite"]
+    p = payload or {}
+    name = str(p.get("tool_name") or p.get("toolName") or "")
+    if not can_rewrite_call("antigravity", name, p):
+        return None
+    original = p.get("tool_input") or p.get("toolInput") or {}
+    if not isinstance(original, dict):
+        original = {}
+    overwrite = {k: v for k, v in rewrite["updatedInput"].items()
+                 if k not in original or original[k] != v}
+    if not overwrite:
+        return None
+    verdict, why = "allow", ""
+    if "command" in rewrite:
+        from ctx.agyperm import rewrite_verdict
 
-    This is the whole containment story on this host: with no output
-    substitution either (PostToolUse's only legal output is ``{}``), the
-    pre-gate is the only enforcement point.
+        old_cmd = next((str(original[k]) for k in ("CommandLine", "command", "cmd")
+                        if isinstance(original.get(k), str)), "")
+        verdict, why = rewrite_verdict(old_cmd, str(rewrite["command"]))
+        if verdict == "deny":
+            decision["_agy_sent"] = "deny"
+            return {"decision": "deny", "reason": why}
+    decision["_agy_sent"] = verdict
+    reason = str(rewrite.get("reason", "")).strip()
+    if why:
+        reason = f"{why}\n{reason}".strip()
+    out: dict[str, Any] = {"decision": verdict, "overwrite": overwrite}
+    if reason:
+        out["reason"] = reason
+    return out
+
+
+def _to_antigravity_schema(decision: dict[str, Any], payload: dict[str, Any] | None = None,
+                           ws_root: str | None = None) -> dict[str, Any]:
+    """Layer 2 for the antigravity dialect.
+
+    A decision carrying a ``rewrite`` becomes an argument ``overwrite`` where
+    the host applies one (agy 1.5.4+, for the tools in
+    ``ctx.governance.REWRITABLE``): the call runs once, bounded, with no
+    extra turn. Anywhere else it degrades to a **deny whose reason names the
+    contained command**, which keeps the birth gate intact at the cost of a
+    turn. With no output substitution on this host (PostToolUse's only legal
+    output is ``{}``), the pre-gate is the only enforcement point.
     """
     rewrite = decision.get("rewrite")
     if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
+        sent = _agy_overwrite(decision, payload, ws_root)
+        if sent is not None:
+            return sent
+        decision["_agy_sent"] = "deny"
         reason = str(rewrite.get("reason", "")).strip()
         cmd = str(rewrite.get("command", "")).strip()
         if cmd:
@@ -2972,7 +3123,7 @@ def _to_antigravity_schema(decision: dict[str, Any]) -> dict[str, Any]:
             caps = " and ".join(f"{k}={fields[k]}" for k in fields
                                 if isinstance(fields.get(k), int))
             reason = _APPLIED_BOUND_RE.sub(".", reason).replace("..", ".")
-            reason = (f"{reason} Not applied: this host cannot rewrite tool "
+            reason = (f"{reason} Not applied: this host cannot rewrite this tool's "
                       f"arguments; re-issue the call with {caps or 'a bound'}.").strip()
         return {"decision": "deny", "reason": reason or "run this through ctx"}
     raw = decision.get("decision", "allow")
@@ -3738,11 +3889,17 @@ def _note_coverage(
         pass
 
 
-def _pre_decision_label(decision: dict[str, Any] | None, flavor: str) -> str:
+def _pre_decision_label(decision: dict[str, Any] | None, flavor: str,
+                        payload: dict[str, Any] | None = None) -> str:
     """What the input side did to this call, in one word."""
     d = decision or {}
     if isinstance(d.get("rewrite"), dict):
-        return "rewritten" if can_substitute_input(flavor) else "denied"
+        if flavor == "antigravity":
+            # What the emitter actually sent (_to_antigravity_schema notes it).
+            return {"allow": "rewritten", "force_ask": "rewritten_asked"}.get(
+                str(d.get("_agy_sent", "")), "denied")
+        name = str((payload or {}).get("tool_name") or (payload or {}).get("toolName") or "")
+        return "rewritten" if can_rewrite_call(flavor, name or None, payload) else "denied"
     return {"deny": "denied", "force_ask": "asked", "ask": "asked"}.get(
         str(d.get("decision", "allow")), "allowed")
 
@@ -3764,8 +3921,12 @@ def _note_pre_coverage(
             kind, DIALECT_CAPS.get(flavor, {}),
             collapse=bool(pol.get("collapse", True)),
             steering=_steering_allows(pol) if pol else True,
+            host=flavor, name=name,
         )
-        label = "advisory" if pol.get("mode") == "advisory" else _pre_decision_label(decision, flavor)
+        if pre in ("rewrite", "bound") and flavor == "antigravity" and _agy_legacy(payload):
+            pre = "deny_steer"
+        label = ("advisory" if pol.get("mode") == "advisory"
+                 else _pre_decision_label(decision, flavor, payload))
         _note_coverage(ws_root, flavor, "pre", payload, kind, pre or "observe", label)
     except Exception:
         pass
@@ -3980,18 +4141,39 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
             )
 
 
+def _agy_event(payload: dict[str, Any]) -> str:
+    """``SessionStart`` / ``PreInvocation`` from an agy 1.5.4+ payload, else ""."""
+    ev = payload.get("hookEventName") if isinstance(payload, dict) else None
+    return ev if isinstance(ev, str) else ""
+
+
 def main_session_start(flavor: str = "antigravity") -> int:
-    """Entry point for ``ctx hook <flavor> session-start``. Runs the capability
-    surface pre-flight ('bound before bloat') once, before the first turn, and
-    injects a bounded advisory when the discretionary surface exceeds budget.
-    Fires once per session (not the hot path), so the surface import is fine.
-    Fail-open: any error emits a no-op, never a blocked session."""
+    """Entry point for ``ctx hook <flavor> session-start`` (and, on
+    Antigravity, ``pre-invocation``). Runs the capability surface pre-flight
+    ('bound before bloat') once, before the first turn, and injects a bounded
+    advisory when the discretionary surface exceeds budget; then drains the
+    relay. Fail-open: any error emits a no-op, never a blocked session.
+
+    Antigravity (agy 1.5.5, observed live) has both events. SessionStart
+    fires once, before the first model call, and a ``systemMessage`` step
+    injected there stays in the conversation: a canary injected that way was
+    obeyed in the answer of a later model call. So the once-per-session
+    advisory rides SessionStart and is paid for once, and PreInvocation
+    (before *every* model call) carries only what the relay has pending, as
+    an ephemeral message. A payload without ``hookEventName`` comes from an
+    agy older than 1.5.4, which may have no SessionStart; there PreInvocation
+    keeps doing both, as before."""
     advisory = ""
     payload: dict[str, Any] = {}
     try:
         raw = sys.stdin.read()
         payload = _normalize_payload(json.loads(raw) if raw.strip() else {})
-        ws = _resolve_workspace_root(payload)
+    except Exception:
+        payload = {}
+    event = _agy_event(payload) if flavor == "antigravity" else ""
+    stage = "pre-invocation" if event == "PreInvocation" else "session-start"
+    try:
+        ws = _resolve_workspace_root(payload) if event != "PreInvocation" else None
         if ws:
             from ctx.config import load_config
             from ctx.surface import preflight
@@ -4009,12 +4191,12 @@ def main_session_start(flavor: str = "antigravity") -> int:
     try:
         # A fresh session drains everything, interrupts included: there is no
         # turn in flight to stop, so the backlog is simply what this harness
-        # missed while it was not running. On Antigravity this stage is
-        # PreInvocation and fires before every model call, which makes it
-        # that host's only relay delivery point — its PostToolUse contract
-        # has exactly one legal output and cannot carry advisory text.
+        # missed while it was not running. On Antigravity, PreInvocation fires
+        # before every model call, which makes it that host's relay delivery
+        # point mid-session: its PostToolUse contract has exactly one legal
+        # output and cannot carry advisory text.
         relay_text, _ = _relay_drain(payload if isinstance(payload, dict) else {},
-                                     flavor, "session-start")
+                                     flavor, stage)
         if relay_text:
             advisory = f"{advisory}\n{relay_text}" if advisory else relay_text
     except Exception:
@@ -4025,13 +4207,16 @@ def main_session_start(flavor: str = "antigravity") -> int:
                                     "additionalContext": advisory}}
             if advisory else {"continue": True}
         )
+    elif event == "SessionStart":
+        # Persistent, once: {"systemMessage": {"systemMessage": text}} is the
+        # documented SessionStart step shape, verified live on agy 1.5.5.
+        emitted = (
+            {"injectSteps": [{"systemMessage": {"systemMessage": advisory}}]}
+            if advisory else {}
+        )
     else:
-        # Antigravity has no SessionStart event. The nearest published hook is
-        # PreInvocation ("fires before the model is called"), whose output
-        # injects steps rather than attaching context:
-        #   {"injectSteps": [{"ephemeralMessage": "..."}]}
-        # ephemeral, so the advisory does not accumulate in the transcript on
-        # every invocation (https://antigravity.google/docs/hooks).
+        # PreInvocation: ephemeral, so per-call text does not accumulate in
+        # the transcript (https://antigravity.google/docs/hooks).
         emitted = (
             {"injectSteps": [{"ephemeralMessage": advisory}]} if advisory else {}
         )
@@ -4461,9 +4646,6 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
         # by failing. Leave the classified decision exactly as it stands.
         pass
 
-    # Coverage ledger: observation only, after the decision is final.
-    _note_pre_coverage(payload, flavor, ws_root, policy, decision)
-
     if flavor in ("hermes", "omp", "opencode", "dsh"):
         from ctx.native_hooks import decision_for
         emitted = decision_for(flavor, decision)
@@ -4472,7 +4654,21 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
     elif flavor == "claude-code":
         emitted = _to_claude_code_schema(decision)
     else:
-        emitted = _to_antigravity_schema(decision)
+        try:
+            emitted = _to_antigravity_schema(decision, payload, ws_root)
+        except Exception as exc:
+            # This host reads a bare {} as a deny, so even a failed emitter
+            # answers with an explicit decision, per the internal-error policy.
+            try:
+                emitted = _to_antigravity_schema(
+                    _internal_error_decision(ws_root, policy, "emit", exc))
+            except Exception:
+                emitted = dict(DECISION_ALLOW)
+
+    # Coverage ledger: observation only, after the decision is final (the
+    # Antigravity emitter records on the decision what it actually sent).
+    _note_pre_coverage(payload, flavor, ws_root, policy, decision)
+
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
     sys.stdout.flush()

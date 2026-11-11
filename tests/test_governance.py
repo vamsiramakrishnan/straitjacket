@@ -434,7 +434,8 @@ def test_coverage_report_static_and_observed(ws):
     assert data["schema"] == "ctx.coverage-report/v1"
     assert set(data["hosts"]) == set(gov.HOSTS)
     agy = data["hosts"]["antigravity"]
-    assert agy["caps"] == {"input_substitution": False, "output_substitution": False}
+    assert agy["caps"] == {"input_substitution": True, "output_substitution": False}
+    assert agy["rewrite_only"] == ["read_file", "run_command"]
     assert any("@-referenced" in x for x in data["hosts"]["claude-code"]["cannot_govern"])
     obs = data["observed"]
     assert obs["sessions"] == 2
@@ -489,20 +490,25 @@ def _agy_payload(ws, event: str, name: str, args: dict, **extra) -> dict:
     return payload
 
 
-def test_antigravity_nested_tool_call_is_guarded(ws):
+def test_antigravity_nested_tool_call_is_guarded(ws, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # no agy permission rules
     (ws / "huge.log").write_text("log line\n" * 20000, encoding="utf-8")
     payload = _agy_payload(ws, "PreToolUse", "run_command",
                            {"CommandLine": "cat huge.log", "WaitMsBeforeAsync": 5000})
     out = _run("pre", payload, "antigravity")
-    assert out["decision"] == "deny", out  # was {"decision": "allow"}
-    assert "ctx" in out["reason"]
+    # was {"decision": "allow"}; agy 1.5.4+ takes the bounded form in place
+    assert out["decision"] == "allow" and out["overwrite"]["CommandLine"].startswith("ctx run"), out
     row = _ledger(ws)[-1]
     assert (row["tool"], row["kind"], row["session"]) == ("run_command", "command", "conv-0000")
+    assert (row["route"], row["decision"]) == ("rewrite", "rewritten")
 
 
 def test_antigravity_nested_view_file_is_bounded(ws):
+    # view_file's overwrite was never observed (it is not in agy 1.5.5's
+    # default toolset), so it stays deny-and-steer.
     payload = _agy_payload(ws, "PreToolUse", "view_file", {"AbsolutePath": str(ws / "big.txt")})
-    assert _run("pre", payload, "antigravity")["decision"] == "deny"
+    out = _run("pre", payload, "antigravity")
+    assert out["decision"] == "deny" and "overwrite" not in out
 
 
 def test_antigravity_nested_post_is_recorded_without_a_result(ws):
