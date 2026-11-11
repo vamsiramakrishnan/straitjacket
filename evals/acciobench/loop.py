@@ -26,8 +26,15 @@ from ctx.deliverables import (  # noqa: E402
 from ctx.residence import WatermarkResidence  # noqa: E402
 
 from .browser import BrowserPool, BrowserSession  # noqa: E402
-from .config import BenchConfig, RunMetrics, config_fingerprint, load_cab_task  # noqa: E402
-from .host import ToolHost  # noqa: E402
+from .config import (  # noqa: E402
+    BenchConfig,
+    RunMetrics,
+    config_fingerprint,
+    ctx_version,
+    load_cab_task,
+    task_inputs_digest,
+)
+from .host import ToolHost, bwrap_sandbox_executable  # noqa: E402
 from .providers import ModelProvider  # noqa: E402
 from .sandbox import TaskSandbox  # noqa: E402
 from .schemas import (  # noqa: E402
@@ -421,7 +428,15 @@ def run_trial(
     meta_dir = config.runs_dir / f"{slug}_meta"
     result_file = meta_dir / "result.json"
 
-    fingerprint = config_fingerprint(config, _HARNESS_BEHAVIOUR)
+    fingerprint = config_fingerprint(
+        config,
+        _HARNESS_BEHAVIOUR,
+        {
+            "task_inputs": task_inputs_digest(Path(spec.case_dir)),
+            "bwrap_sandbox": bwrap_sandbox_executable() is not None,
+            "ctx_version": ctx_version(config.ctx_bin) if is_sj else None,
+        },
+    )
     if config.resume and result_file.is_file():
         try:
             saved = json.loads(result_file.read_text(encoding="utf-8"))

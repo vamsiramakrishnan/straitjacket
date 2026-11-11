@@ -232,13 +232,98 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
 )
 
 
-def config_fingerprint(config: BenchConfig, harness: dict[str, Any] | None = None) -> str:
-    """A short stable hash of the configuration a trial ran under (FINGERPRINT_FIELDS plus
-    the harness's own behaviour constants passed as ``harness``)."""
+def config_fingerprint(
+    config: BenchConfig,
+    harness: dict[str, Any] | None = None,
+    trial: dict[str, Any] | None = None,
+) -> str:
+    """A short stable hash of what a trial measured: FINGERPRINT_FIELDS, the harness's own
+    behaviour constants (``harness``) and per-trial inputs (``trial``: the task's own
+    files, the ctx version, whether the bwrap sandbox is active)."""
     doc = {name: getattr(config, name) for name in FINGERPRINT_FIELDS}
     doc["harness"] = dict(sorted((harness or {}).items()))
+    if trial:
+        doc["trial"] = dict(sorted(trial.items()))
     blob = json.dumps(doc, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:16]
+
+
+_SMALL_FILE_BYTES = 1 << 20
+_EDGE_BYTES = 64 << 10
+_FILE_DIGEST_CACHE: dict[tuple[str, int, int], str] = {}
+_DIGEST_SKIP_DIRS = frozenset({"node_modules", ".git", "__pycache__"})
+_DIGEST_SKIP_FILES = frozenset({".DS_Store"})
+
+
+def _file_digest(path: Path, st: os.stat_result) -> str:
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    hit = _FILE_DIGEST_CACHE.get(key)
+    if hit is not None:
+        return hit
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        if st.st_size <= _SMALL_FILE_BYTES:
+            h.update(fh.read())
+        else:  # large binary assets: size + both ends (cheap, and catches any re-export)
+            h.update(str(st.st_size).encode())
+            h.update(fh.read(_EDGE_BYTES))
+            fh.seek(-_EDGE_BYTES, os.SEEK_END)
+            h.update(fh.read(_EDGE_BYTES))
+    digest = h.hexdigest()
+    _FILE_DIGEST_CACHE[key] = digest
+    return digest
+
+
+def task_inputs_digest(case_dir: Path) -> str:
+    """Hash of a task's own directory: the prompt (task.md), task.toml, the workspace the
+    agent is given, its services, and the grader, rubric and private answer files (a
+    changed grader changes the recorded score, so its results must not be reused).
+    Content-hashed, not path-hashed, so moving the dataset does not change it; files over
+    1 MiB are hashed by size and both ends; per-file digests are memoized per process."""
+    root = Path(case_dir).resolve()
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _DIGEST_SKIP_DIRS)
+        for name in sorted(filenames):
+            if name in _DIGEST_SKIP_FILES or name.endswith(".pyc"):
+                continue
+            p = Path(dirpath) / name
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            rel = p.relative_to(root).as_posix()
+            h.update(rel.encode("utf-8") + b"\0" + _file_digest(p, st).encode() + b"\n")
+    return h.hexdigest()[:16]
+
+
+_CTX_VERSION_CACHE: dict[str, str] = {}
+_CTX_VERSION_LOCK = threading.Lock()
+
+
+def ctx_version(ctx_bin: Path | None = None) -> str:
+    """The version the benchmarked ctx reports (``ctx --version``), asked once per process
+    per executable. "unknown" when it cannot be asked."""
+    try:
+        exe = resolve_ctx_bin(ctx_bin)
+    except FileNotFoundError:
+        return "unavailable"
+    key = str(exe)
+    with _CTX_VERSION_LOCK:
+        cached = _CTX_VERSION_CACHE.get(key)
+        if cached is not None:
+            return cached
+        argv = [key, "-P", "-m", "ctx", "--version"] if "python" in exe.name.lower() else [key, "--version"]
+        try:
+            import subprocess
+
+            cp = subprocess.run(argv, capture_output=True, text=True, timeout=30, cwd="/")
+            out = (cp.stdout or cp.stderr).strip().splitlines()
+            ver = out[0].strip() if (cp.returncode == 0 and out) else f"unknown (exit {cp.returncode})"
+        except Exception as exc:
+            ver = f"unknown ({type(exc).__name__})"
+        _CTX_VERSION_CACHE[key] = ver
+        return ver
 
 
 def resolve_ctx_bin(explicit: Path | None = None) -> Path:

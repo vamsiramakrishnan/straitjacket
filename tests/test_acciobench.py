@@ -1507,8 +1507,50 @@ def test_resume_accepts_cached_results_only_for_the_same_configuration(
         assert len(load_run_results(base.workdir)) == 1
         fp_a = new_fp
 
-    # Legacy results (no fingerprint): accepted only for the same model, with a notice.
+    import evals.acciobench.loop as loop_mod
+
+    def reruns(cfg: BenchConfig) -> bool:
+        prov = _SolvingProvider()
+        run(cfg, prov)
+        return prov.calls > 0
+
+    # The task itself: same id, changed prompt, under another dataset root.
     last_cfg = _dc.replace(base, entry_gate_bytes=1_000)
+    assert not reruns(last_cfg)
+    ds2 = tmp_path / "cab2"
+    import shutil as _shutil
+
+    _shutil.copytree(ds_root, ds2)
+    task_md = ds2 / "datasets_domain_v1" / "file" / "file-fp" / "task.md"
+    task_md.write_text(task_md.read_text(encoding="utf-8") + "\nAlso report the median.\n", encoding="utf-8")
+    cfg_ds2 = _dc.replace(last_cfg, dataset_root=ds2)
+    assert reruns(cfg_ds2)
+    assert not reruns(cfg_ds2)
+    # A grader-only change also re-runs (the recorded score must come from the current grader).
+    grader = ds2 / "datasets_domain_v1" / "file" / "file-fp" / "grader" / "run.sh"
+    grader.write_text(grader.read_text(encoding="utf-8") + "\n# v2\n", encoding="utf-8")
+    assert reruns(cfg_ds2)
+    # The ctx being benchmarked: a ctx that reports another version (same behaviour otherwise).
+    real_ctx = resolve_ctx_bin(None)
+    other_ctx = _write_executable(
+        tmp_path / "otherctx" / "ctx",
+        f'#!/usr/bin/env bash\nif [ "$1" = --version ]; then echo "ctx 99.0.0"; exit 0; fi\nexec "{real_ctx}" "$@"\n',
+    )
+    assert reruns(_dc.replace(cfg_ds2, ctx_bin=other_ctx))
+    assert not reruns(_dc.replace(cfg_ds2, ctx_bin=other_ctx))
+    # Whether the bwrap sandbox is active.
+    real_probe = loop_mod.bwrap_sandbox_executable
+    try:
+        loop_mod.bwrap_sandbox_executable = lambda: None  # type: ignore[assignment]
+        assert reruns(cfg_ds2)
+        loop_mod.bwrap_sandbox_executable = lambda: "/usr/bin/bwrap"  # type: ignore[assignment]
+        assert reruns(cfg_ds2)
+        assert not reruns(cfg_ds2)
+    finally:
+        loop_mod.bwrap_sandbox_executable = real_probe  # type: ignore[assignment]
+    capsys.readouterr()
+
+    # Legacy results (no fingerprint): accepted only for the same model, with a notice.
     doc = json.loads(result_file.read_text(encoding="utf-8"))
     doc.pop("config_fingerprint")
     result_file.write_text(json.dumps(doc), encoding="utf-8")

@@ -118,10 +118,15 @@ python evals/acciobench_run.py run \
 - **Resume is per configuration**: every `result.json` carries `config_fingerprint`, a
   hash of the settings that change what a trial measures (`model`, `provider`,
   `thinking_level`, `max_output_tokens`, `max_steps`, `entry_gate_bytes`,
-  `baseline_raw_cap`, `judge_provider`, `judge_model`, and the loop's own gate and
-  compaction constants). A cached result is reused only when its fingerprint matches;
-  worker counts, slot offsets, output paths, credentials and host paths are not part
-  of it. A result written before fingerprints existed is reused only if its
+  `baseline_raw_cap`, `judge_provider`, `judge_model`, the loop's own gate and
+  compaction constants, a content hash of the task's own directory (prompt,
+  `task.toml`, workspace, services, and the grader, rubric and private answers, since
+  a changed grader changes the recorded score), the version the benchmarked ctx
+  reports (`ctx --version`, asked once per process; `sj` arm only), and whether the
+  bwrap sandbox is active). A cached result is reused only when its fingerprint
+  matches; worker counts, slot offsets, output paths, credentials and host paths are
+  not part of it (moving the dataset does not invalidate a workdir; changing its
+  content does). A result written before fingerprints existed is reused only if its
   `model_id` equals `--model` (one `[legacy]` line says so); never across models.
   When a result does not match, one `[rerun]` line says why and the previous trial
   (its run directory and `_meta` directory) is moved to
