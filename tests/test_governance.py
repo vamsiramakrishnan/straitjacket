@@ -1086,3 +1086,125 @@ def test_nudge_text_is_inside_the_budget(ws, monkeypatch, nudge_bytes):
         assert sent <= 16384 and row["emitted_bytes"] == sent
     else:
         assert row["decision"] == "replace_unshaped" and nudge_bytes > 15000
+
+
+# ------------------------------------------- follow-up: "starts with ctx" escapes
+_SHELL_NAME = {"claude-code": "Bash", "codex": "Bash", "opencode": "bash"}
+_FLOOD = "[ctx stats run:abcdef012345]\n" + "secret-free log line\n" * 65000  # ~1.3 MB
+
+
+def _model_bytes(flavor: str, out: dict, raw_tr) -> int:
+    """Bytes of tool result that reach the model after the post hook."""
+    if flavor == "claude-code":
+        hso = out.get("hookSpecificOutput", {})
+        if "updatedToolOutput" in hso:
+            return (len(json.dumps(hso["updatedToolOutput"], ensure_ascii=False).encode())
+                    + len(hso.get("additionalContext", "").encode()))
+        return len(json.dumps(raw_tr, ensure_ascii=False).encode())
+    if flavor == "codex":
+        return len(out["reason"].encode()) if out.get("decision") == "block" else len(_FLOOD.encode())
+    return len(out["output"].encode()) if "output" in out else len(_FLOOD.encode())
+
+
+def _post_shell(ws, flavor, command, stdout=_FLOOD):
+    tr = dict(LIVE_BASH, stdout=stdout) if flavor == "claude-code" else stdout
+    out = _run("post", {"tool_name": _SHELL_NAME[flavor], "cwd": str(ws),
+                        "tool_input": {"command": command}, "tool_response": tr}, flavor)
+    return out, _model_bytes(flavor, out, tr)
+
+
+def _pre_shell(ws, flavor, command) -> dict:
+    return _run("pre", {"tool_name": _SHELL_NAME[flavor], "cwd": str(ws),
+                        "tool_input": {"command": command}}, flavor)
+
+
+def _runs_unchanged(flavor: str, out: dict, command: str) -> bool:
+    """Would the host run exactly ``command`` with no confirmation?"""
+    if flavor == "claude-code":
+        hso = out["hookSpecificOutput"]
+        return hso["permissionDecision"] == "allow" and "updatedInput" not in hso
+    if flavor == "codex":
+        return out == {}
+    return out.get("action") == "allow"
+
+
+@pytest.mark.parametrize("flavor", ["claude-code", "codex", "opencode"])
+@pytest.mark.parametrize("command", [
+    "ctx stats && cat big.log",
+    "ctx get run:abc; cat big.log",
+    "ctx stats | cat big.log",
+    "ctx stats $(cat big.log)",
+    'ctx stats "$(cat big.log)"',
+    "ctx stats\ncat big.log",
+    "./fake/ctx dump",
+    "PATH=./fake:$PATH ctx dump",
+    # Mirror image on the pre side: a line break separates commands like `;`,
+    # and every first-program allow (ls, pwd, git status --short) ignored it.
+    "ls\ncat big.log",
+    "pwd\r\ncat big.log",
+    "git status --short\ncat big.log",
+])
+def test_commands_that_merely_start_with_ctx_are_gated_both_sides(ws, flavor, command):
+    (ws / "fake").mkdir(exist_ok=True)
+    assert not _runs_unchanged(flavor, _pre_shell(ws, flavor, command), command)
+    _out, nbytes = _post_shell(ws, flavor, command)
+    assert nbytes <= 16384 + 2048, (flavor, command, nbytes)  # bounded, not 1.3 MB
+
+
+@pytest.mark.parametrize("flavor", ["claude-code", "codex", "opencode"])
+@pytest.mark.parametrize("command", [
+    "ctx run -- sh -c 'make lint && make test'",
+    "ctx search repo: 'foo|bar' --context 3",
+    "ctx q 'refs Foo | group file'",
+    "ctx run --shell -- 'a; b'",
+])
+def test_single_ctx_invocations_keep_their_exemption(ws, flavor, command):
+    assert _runs_unchanged(flavor, _pre_shell(ws, flavor, command), command)
+    out, _n = _post_shell(ws, flavor, command)
+    assert out == {} or "updatedToolOutput" not in out.get("hookSpecificOutput", {"x": 1})
+
+
+def test_real_ctx_by_absolute_path_is_recognised(ws):
+    real = os.path.join(os.path.dirname(sys.executable), "ctx")
+    if not os.path.exists(real):
+        pytest.skip("no ctx script beside this interpreter")
+    assert hook._is_ctx_invocation(f"{real} stats", str(ws))
+    assert hook._is_ctx_invocation(f"{sys.executable} -m ctx stats", str(ws))
+    assert not hook._is_ctx_invocation("/tmp/elsewhere/ctx stats", str(ws))
+    assert not hook._is_ctx_invocation("python9 -m ctx stats", str(ws))
+
+
+def test_range_past_the_scan_cap_advises_the_requested_lines(ws, monkeypatch):
+    monkeypatch.setattr(hook, "_RANGE_SCAN_CAP", 50_000)
+    big = ws / "tall.log"
+    big.write_text("row\n" * 100_000, encoding="utf-8")  # 400 KB, start beyond the cap
+    out = _view(ws, big, StartLine=90_000, EndLine=90_100)
+    assert out["decision"] == "deny"
+    assert "ctx get repo:tall.log --lines 90000:90100" in out["reason"]
+    assert "--bytes 1:" not in out["reason"]
+
+
+@pytest.mark.parametrize("flavor", ["claude-code", "codex"])
+def test_under_budget_ledger_counts_the_nudge_that_rides_along(ws, monkeypatch, flavor):
+    monkeypatch.setattr(hook, "_emission_nudge", lambda payload: "N" * 700)
+    out = _run("post", {"tool_name": "Bash", "cwd": str(ws), "tool_input": {"command": "ls"},
+                        "tool_response": dict(LIVE_BASH, stdout="a\nb\n")}, flavor)
+    assert out["hookSpecificOutput"]["additionalContext"] == "N" * 700
+    row = _ledger(ws)[-1]
+    assert row["decision"] == "pass" and row["emitted_bytes"] == row["raw_bytes"] + 700
+
+
+@pytest.mark.parametrize("flavor", ["claude-code", "codex", "opencode"])
+@pytest.mark.parametrize("name,exempt", [
+    ("mcp__ctx__search", True),
+    ("mcp__ctx-harness__search", True),
+    ("mcp__plugin_ctx-harness_ctx__search", True),
+    ("mcp__ctxfoo__dump", False),
+    ("mcp__ctx-harness-evil__dump", False),
+    ("mcp__ctx-surface-gateway__call", False),  # proxies other servers' content
+])
+def test_ctx_mcp_exemption_is_exact(ws, flavor, name, exempt):
+    flood = [{"type": "text", "text": _FLOOD}]
+    out = _run("post", {"tool_name": name, "cwd": str(ws), "tool_input": {},
+                        "tool_response": flood}, flavor)
+    assert (out == {}) is exempt, (flavor, name, str(out)[:200])

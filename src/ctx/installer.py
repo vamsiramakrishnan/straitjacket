@@ -540,7 +540,15 @@ def _owned_claude_group(group: object, stage: str) -> bool:
 
 
 def _stage_has_ctx_hook(groups: object, stage: str) -> bool:
-    """Does any group of this stage hold an exact ctx hook for it?"""
+    """Does any group of this stage hold an exact ctx hook for it?
+
+    KNOWN LIMITATION (documented): a ctx hook written in a command form the
+    installer does not recognize (anything but ``<…/ctx>``, ``<…/ctx-hook-
+    native>`` or ``<python> -m ctx`` followed by ``hook claude-code <stage>``,
+    e.g. a hand-written ``uvx ctx-harness …``) is not counted, so setup adds
+    a second ctx group beside it and both run. Recognizing arbitrary
+    launchers would let any user command that ends the same way be treated
+    as ctx's, which is the worse failure."""
     slug = _CLAUDE_STAGE_SLUG.get(stage)
     if not slug or not isinstance(groups, list):
         return False

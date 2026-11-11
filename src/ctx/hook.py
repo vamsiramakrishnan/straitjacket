@@ -229,8 +229,10 @@ _BOUNDED_CMDS = {
     "mkdir", "touch", "cd", "test", "sleep", "wc", "md5sum", "sha256sum",
 }
 
-# Shell metacharacters that make static reasoning unreliable.
-_SHELL_META_RE = re.compile(r"[|;&<>`$(){}\\]|\|\||&&|\$\(")
+# Shell metacharacters that make static reasoning unreliable. A line break
+# separates commands exactly like `;` (`ls\ncat big.log` runs both), so it is
+# one too; without it every first-program allow below was a bypass.
+_SHELL_META_RE = re.compile(r"[|;&<>`$(){}\\\n\r]|\|\||&&|\$\(")
 
 # The token used to have to be a WHOLE path component, so `secrets.json`,
 # `my-secrets.yaml` and `app-credentials.env` all walked past the guard --
@@ -722,7 +724,7 @@ _WRAPPERS = {"env", "sudo", "doas", "nice", "nohup", "time", "stdbuf", "timeout"
 # processes redirections left to right, so the dup targets the console and
 # stderr still floods the transcript (SJ-EvidenceBench scenario F).
 _REDIR_ALL_RE = re.compile(
-    r"^(?P<cmd>[^|;&<>`$(){}]+?)\s*(?:>>?\s*(?P<t1>\S+)\s*2>&1|&>>?\s*(?P<t2>\S+))\s*$"
+    r"^(?P<cmd>[^|;&<>`$(){}\n\r]+?)\s*(?:>>?\s*(?P<t1>\S+)\s*2>&1|&>>?\s*(?P<t2>\S+))\s*$"
 )
 
 
@@ -1229,13 +1231,15 @@ def _text_tool_inplace(prog: str, argv: list[str]) -> bool:
     return False
 
 
-def _split_simple_chain(stripped: str) -> list[str] | None:
-    """Split ``a; b && c`` into segments when the only metacharacters present
-    are the separators ``;``, ``&&``, ``||``. Returns None when any other
-    metacharacter (``| > < ` $ ( ) { } \\`` or a lone ``&``) remains in a
-    segment, so pipelines and substitutions never take this path."""
-    parts = []
-    start = index = 0
+def _shell_chars(stripped: str):
+    """The characters the shell itself interprets, quote-aware.
+
+    Yields ``(index, char)`` for every character outside quotes, and for a
+    ``$`` or backtick inside double quotes (substitutions still execute
+    there). Raises ValueError on an unterminated quote. The one scanner both
+    the chain splitter and :func:`_single_invocation` use.
+    """
+    index = 0
     quote = None
     while index < len(stripped):
         char = stripped[index]
@@ -1245,21 +1249,165 @@ def _split_simple_chain(stripped: str) -> list[str] | None:
             elif char == "\\" and quote == '"':
                 index += 1
             elif quote == '"' and char in '$`':
-                return None  # Double-quoted substitutions still execute in the shell.
+                yield index, char
         elif char in "\"'":
             quote = char
-        elif char == ";" or stripped[index:index + 2] in {"&&", "||"}:
-            parts.append(stripped[start:index].strip())
-            index += 1 if char == ";" else 2
-            start = index
-            continue
-        elif _SHELL_META_RE.search(char):
-            return None
+        else:
+            yield index, char
         index += 1
-    if quote or not parts:
+    if quote:
+        raise ValueError("unterminated quote")
+
+
+#: Shell characters that can start a second program, redirect into one, or
+#: open a subshell: sequencing, pipes, background, redirection, grouping,
+#: substitution, line breaks, and escapes (conservatively).
+_SECOND_PROGRAM_CHARS = frozenset(";&|<>(){}`\n\r\\")
+
+
+def _single_invocation(command: str) -> bool:
+    """Is the WHOLE command one program invocation?
+
+    Quoted operators are arguments (``ctx run -- sh -c 'a && b'``,
+    ``ctx search 'a|b'``); unquoted ones, and ``$(``/backticks even inside
+    double quotes, make a second program possible, so the answer is no.
+    Unparseable quoting is also no (the safe side).
+    """
+    try:
+        for index, char in _shell_chars(command.strip()):
+            if char in _SECOND_PROGRAM_CHARS:
+                return False
+            if char == "$" and command.strip()[index + 1:index + 2] in ("(", "{"):
+                return False
+    except ValueError:
+        return False
+    return True
+
+
+def _split_simple_chain(stripped: str) -> list[str] | None:
+    """Split ``a; b && c`` into segments when the only metacharacters present
+    are the separators ``;``, ``&&``, ``||``. Returns None when any other
+    metacharacter (``| > < ` $ ( ) { } \\`` or a lone ``&``) remains in a
+    segment, so pipelines and substitutions never take this path."""
+    parts = []
+    start = 0
+    skip_to = -1
+    try:
+        for index, char in _shell_chars(stripped):
+            if index < skip_to:
+                continue
+            quoted_subst = char in "$`" and _in_double_quotes(stripped, index)
+            if quoted_subst:
+                return None  # Double-quoted substitutions still execute in the shell.
+            if char == ";" or stripped[index:index + 2] in {"&&", "||"}:
+                parts.append(stripped[start:index].strip())
+                start = index + (1 if char == ";" else 2)
+                skip_to = start
+                continue
+            if _SHELL_META_RE.search(char):
+                return None
+    except ValueError:
+        return None
+    if not parts:
         return None
     parts.append(stripped[start:].strip())
     return [part for part in parts if part]
+
+
+def _in_double_quotes(stripped: str, at: int) -> bool:
+    """Is position ``at`` inside a double-quoted span? (quote-aware, bounded)"""
+    quote = None
+    index = 0
+    while index < at:
+        char = stripped[index]
+        if quote:
+            if char == quote:
+                quote = None
+            elif char == "\\" and quote == '"':
+                index += 1
+        elif char in "\"'":
+            quote = char
+        index += 1
+    return quote == '"'
+
+
+#: ctx's own MCP server, exactly as each host names it. Registered as
+#: ``ctx-harness`` by the Codex/Antigravity plugin manifests and
+#: ``ctx.mcp_hosts.SERVER`` (Hermes sanitizes the hyphen to ``ctx_harness``),
+#: as ``ctx`` by ``ctx agent`` (``ctx.agent.MCP_SERVER``), and by Claude
+#: Code's plugin scoping as ``plugin_ctx-harness_ctx``. Not a prefix: an
+#: MCP server named ``ctxfoo`` is somebody else's.
+_CTX_MCP_SERVERS = frozenset({"ctx", "ctx-harness", "ctx_harness",
+                              "plugin_ctx-harness_ctx", "plugin_ctx_harness_ctx",
+                              "plugin_ctx-harness_ctx-harness"})
+
+
+def _is_ctx_mcp_tool(name: str) -> bool:
+    if name == "ctx":  # the ctx-owned Antigravity SDK host's own tool
+        return True
+    if not name.startswith("mcp__"):
+        return False
+    server, sep, tool = name[5:].partition("__")
+    return bool(sep and tool) and server in _CTX_MCP_SERVERS
+
+
+def _which(name: str) -> str | None:
+    """PATH lookup with ``os`` only (``shutil`` is off the hot path)."""
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        cand = os.path.join(d or ".", name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _self_ctx_paths() -> set[str]:
+    """Real paths of the ctx executable this hook is running as."""
+    out: set[str] = set()
+    try:
+        if os.path.basename(sys.argv[0]) in ("ctx", "ctx.exe"):
+            out.add(os.path.realpath(sys.argv[0]))
+        out.add(os.path.realpath(os.path.join(os.path.dirname(sys.executable), "ctx")))
+        found = _which("ctx")
+        if found:
+            out.add(os.path.realpath(found))
+    except Exception:
+        pass
+    return out
+
+
+def _is_ctx_invocation(command: str | None, cwd: str | None = None) -> bool:
+    """Is this whole command exactly one invocation of the real ctx?
+
+    One invocation: no shell construct that could run a second program
+    (:func:`_single_invocation`). The real ctx: the bare name ``ctx`` (what
+    the rewrites emit and the host resolves on its PATH), or a path or
+    ``<python> -m ctx`` that resolves to the ctx/interpreter this hook is
+    running as. A file merely named ``ctx`` elsewhere (``./fake/ctx``) is
+    not, and neither is a command that re-points PATH first.
+    """
+    if not command or not _single_invocation(command):
+        return False
+    try:
+        raw = shlex.split(command)
+    except ValueError:
+        return False
+    if any(t.startswith("PATH=") for t in raw):
+        return False
+    argv = _unwrap(raw)
+    if not argv:
+        return False
+    tok = argv[0]
+    if tok == "ctx":
+        return True
+    base = os.path.basename(tok)
+    if base in ("ctx", "ctx.exe"):
+        path = tok if os.path.isabs(tok) else os.path.join(cwd or os.getcwd(), tok)
+        return os.path.realpath(path) in _self_ctx_paths()
+    if base.startswith("python") and argv[1:3] == ["-m", "ctx"]:
+        path = tok if os.sep in tok else (_which(tok) or "")
+        return bool(path) and os.path.realpath(path) == os.path.realpath(sys.executable)
+    return False
+
 
 
 def _grep_single_file_rewrite(argv: list[str], cwd: str | None) -> str | None:
@@ -1659,7 +1807,10 @@ def _classify_command_inner(
     # look at what ``ctx run -- <argv>`` will actually execute. Capture is
     # a volume answer; it never makes a secret read or a container escape
     # acceptable, and the deny remediation itself points here.
-    if prog == "ctx":
+    # Only when the WHOLE command is one invocation of the real ctx: a
+    # compound that merely starts with ctx (`ctx stats && cat big.log`) or a
+    # look-alike named ctx (`./fake/ctx dump`) is classified like any other.
+    if prog == "ctx" and _is_ctx_invocation(stripped, cwd):
         inner = _ctx_run_inner(argv)
         if _names_secret_path(inner, cwd):
             return _secret_path_force_ask()
@@ -2169,7 +2320,7 @@ def _range_scan(path: str, start0: int, want: int, budget: int) -> tuple[int, in
                     return 0, 0  # range starts past the end: nothing to read
                 scanned += len(piece)
                 if scanned > _RANGE_SCAN_CAP:
-                    return 0, None
+                    return -1, None  # start not located within the cap
                 if piece.endswith(b"\n"):
                     line += 1
             fit, nbytes = 0, 0
@@ -2209,6 +2360,7 @@ def _range_advice(tool_input: dict[str, Any], path_str: str, workspace_root: str
     a = max(int(a), 0)
     start0 = max(a - 1, 0)
     fit, _n = _range_scan(path_str, start0, window, limit)
+    b = tool_input.get("EndLine") if isinstance(tool_input.get("EndLine"), int) else a + window - 1
     rel = path_str
     if workspace_root:
         try:
@@ -2216,9 +2368,16 @@ def _range_advice(tool_input: dict[str, Any], path_str: str, workspace_root: str
         except ValueError:
             pass
     end = start0 + fit - 1  # the union reading of (a, end) is exactly ``fit`` lines
+    if fit < 0 or start0 > 0:
+        # Byte offsets of a later range are not known (and past the scan cap
+        # not even its start), so the advice addresses the requested lines;
+        # `ctx get --lines` bounds its own output with a continuation.
+        addr = f"--lines {max(a, 1)}:{max(b, a, 1)}  (ctx bounds it and names the continuation)"
+    else:
+        addr = f"--bytes 1:{limit}  (1-based byte span)"
     reason = (f"CTX_CONTEXT_GUARD: that line range of this {size}-byte file is over the "
               f"{limit}-byte inline budget (view_file bounds lines, not bytes).\n"
-              f"Use: ctx get repo:{rel} --bytes 1:{limit}  (1-based byte span)\n"
+              f"Use: ctx get repo:{rel} {addr}\n"
               f"or:  ctx search repo:{rel} '<pattern>' --context 3" + note)
     decision: dict[str, Any] = _deny(reason)
     if end >= max(a, 1):
@@ -3613,23 +3772,14 @@ def _note_pre_coverage(
 
 
 def _ran_ctx(payload: dict[str, Any]) -> bool:
-    """Was this tool call a ``ctx`` command (``ctx …`` or ``python -m ctx …``)?
-
-    Judged from the call's own input (what was run), parsed, never from its
-    output."""
-    command = _tool_command(payload)
-    if not command:
-        return False
-    try:
-        argv = _unwrap(shlex.split(command))
-    except ValueError:
-        return False
-    if not argv:
-        return False
-    prog = os.path.basename(argv[0])
-    if prog in ("ctx", "ctx.exe"):
-        return True
-    return prog.startswith("python") and argv[1:3] == ["-m", "ctx"]
+    """Was this tool call exactly one ctx command? Judged from the call's
+    own input (what was run), never from its output; see
+    :func:`_is_ctx_invocation`."""
+    cwd = None
+    ti = payload.get("tool_input") or payload.get("toolInput") or {}
+    if isinstance(ti, dict):
+        cwd = ti.get("cwd") or ti.get("Cwd")
+    return _is_ctx_invocation(_tool_command(payload), cwd or payload.get("cwd"))
 
 
 def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
@@ -3700,7 +3850,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     # The header alone is not trusted: tool output can begin with "[ctx " too,
     # and a flood that does would pass ungated. It counts only when ctx is
     # what ran (a ctx MCP tool, or a shell command whose program is ctx).
-    if tool_name == "ctx" or tool_name.startswith("mcp__ctx") or (
+    if _is_ctx_mcp_tool(tool_name) or (
         stdout.lstrip().startswith(("[ctx ", "densified:")) and _ran_ctx(payload)
     ):
         _GATE_STATS["decision"] = "ctx_output"
@@ -3946,6 +4096,11 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     media = None
     # Only where the digest is shaped INTO the tool's own structure could it
     # land in an image field; hosts that substitute plain text gate as ever.
+    # KNOWN LIMITATION (documented, unchanged from before this package): an
+    # MCP tool returning image content blocks over the budget is replaced by
+    # a text digest, so the model does not see the image; the bytes stay
+    # retrievable through the digest's address. Media handling is its own
+    # follow-up.
     if gated and flavor == "claude-code" and kind != "mcp":
         try:
             media = _media_reason(_tool_response(payload))
@@ -3976,7 +4131,7 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     # additionalContext are inside the budget the shaped result is held to.
     relay_text = ""
     relay_drained = False
-    if flavor == "claude-code":
+    if flavor in ("claude-code", "codex"):
         try:
             relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
         except Exception:
@@ -4015,6 +4170,11 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
                 emitted = _jsize(updated_output) + len(sent_context.encode("utf-8", "replace"))
             else:
                 emitted = len(replacement.encode("utf-8", "replace"))
+        elif isinstance(emitted, int) and flavor in ("claude-code", "codex"):
+            # Under budget the result passes as is, but any nudge or relay
+            # text travels with it in additionalContext: count what was sent.
+            rider = "\n".join(x for x in (nudge, relay_text) if x)
+            emitted += len(rider.encode("utf-8", "replace"))
         if not gated and kind == "skill":
             try:
                 out, err = _normalize_tool_response(_tool_response(payload))
@@ -4195,13 +4355,9 @@ def _is_ctx_call(payload: dict[str, Any]) -> bool:
     does not block the one action it is asking for.
     """
     name = str(payload.get("tool_name") or payload.get("toolName") or "")
-    if name.startswith("mcp__ctx") or name == "ctx":
+    if _is_ctx_mcp_tool(name):
         return True
-    raw = payload.get("tool_input") or payload.get("toolInput") or {}
-    if not isinstance(raw, dict):
-        return False
-    command = str(raw.get("command") or raw.get("cmd") or "").lstrip()
-    return command.startswith("ctx ") or command == "ctx"
+    return _ran_ctx(payload)
 
 
 def _apply_relay_interrupt(
