@@ -373,6 +373,12 @@ class Gateway:
         self.family_of = {n: _server_family(n, a) for n, a in self.commands.items()}
         self.excluded = {n: {str(t) for t in (s.raw.get("exclude_tools") or [])}
                          for n, s in self.specs.items()}
+        # allow_tools: when a profile restricts a server per tool, ONLY these
+        # are ever listed or callable — a tool the server adds later, or one
+        # absent from the catalogue the selection was made from, stays hidden.
+        self.allowed = {n: {str(t) for t in s.raw["allow_tools"]}
+                        for n, s in self.specs.items()
+                        if isinstance(s.raw.get("allow_tools"), list)}
         doc = _state_doc(ws_root) if persist else {}
         self.revealed = load_state(ws_root) if persist else set(KERNEL_FAMILIES)
         self.revealed_servers = {str(x) for x in doc.get("servers", []) or []}
@@ -397,12 +403,18 @@ class Gateway:
             self._backends[name] = MCPBackend(name, argv, env=env, cwd=cwd)
         return self._backends[name]
 
+    def _permitted(self, server: str, tool: str) -> bool:
+        if tool in self.excluded.get(server, set()):
+            return False
+        allowed = self.allowed.get(server)
+        return allowed is None or tool in allowed
+
     def _tools_of(self, server: str) -> list[dict[str, Any]]:
         return [t for t in self._backend(server).list_tools()
-                if str(t.get("name", "")) not in self.excluded.get(server, set())]
+                if self._permitted(server, str(t.get("name", "")))]
 
     def _visible(self, server: str, tool: str) -> bool:
-        if tool in self.excluded.get(server, set()):
+        if not self._permitted(server, tool):
             return False
         return (self.family_of.get(server) in self.revealed
                 or server in self.revealed_servers
@@ -496,7 +508,7 @@ class Gateway:
             if reveal:
                 if key in pool:
                     return self._text(f"{kind} {label} already revealed"), False
-                if kind == "tool" and key[1] in self.excluded.get(server, set()):
+                if kind == "tool" and not self._permitted(server, key[1]):
                     return self._text(f"{label} is excluded by this session's profile"), False
                 pool.add(key)
             else:
@@ -513,6 +525,9 @@ class Gateway:
             if pair is None:
                 return self._text(f"no backend for {name!r}"), False
             server, tool = pair
+            if not self._permitted(server, tool):
+                return self._text(f"mcp__{server}__{tool} is excluded by this session's "
+                                  "profile and cannot be called"), False
             if not self._visible(server, tool):
                 return self._text(f"{server} is hidden; surface_reveal "
                                   f"'{self.family_of.get(server)}' first"), False
@@ -568,7 +583,7 @@ class Gateway:
         if (isinstance(entry, dict) and entry.get("tools")
                 and entry.get("key") == surface._probe_cache_key(self.commands[server])):
             return [t for t in entry["tools"] if isinstance(t, dict)
-                    and str(t.get("name", "")) not in self.excluded.get(server, set())]
+                    and self._permitted(server, str(t.get("name", "")))]
         return self._tools_of(server)
 
     @staticmethod

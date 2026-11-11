@@ -1242,7 +1242,7 @@ def recommended_level(cap: Capability) -> str:
 
 
 def audit(ws_root: Path | str, *, probe_mcp: bool = False, timeout: float = 8.0,
-          automatic: bool = False) -> dict[str, Any]:
+          automatic: bool = False, cached_tools: bool = False) -> dict[str, Any]:
     """Full structured surface audit. Deterministic; fail-open per collector.
     ``probe_mcp`` spawns each configured MCP server to measure its real
     per-tool schema tokens (the static inventory sees only the registration
@@ -1250,8 +1250,11 @@ def audit(ws_root: Path | str, *, probe_mcp: bool = False, timeout: float = 8.0,
     workspace servers launched as before; a person's ``--probe-mcp`` also
     probes user/local-scope servers."""
     base = collect_surface(ws_root)
-    if probe_mcp:
-        probed = probe_surface(ws_root, timeout=timeout, explicit=not automatic)
+    if probe_mcp or cached_tools:
+        # cached_tools: per-tool records from the probe cache, never spawning
+        # (what a launch-time selection may know without starting servers).
+        probed = probe_surface(ws_root, timeout=timeout, explicit=not automatic,
+                               cache_only=not probe_mcp)
         if probed:
             # Drop the coarse mcp_server placeholders whose tools we measured;
             # keep servers that failed to probe so they are still visible.
@@ -1606,7 +1609,8 @@ def probe_failures(ws_root: Path | str) -> dict[str, str]:
 
 
 def probe_surface(ws_root: Path | str, *, timeout: float = 8.0,
-                  use_cache: bool = True, explicit: bool = False) -> list[Capability]:
+                  use_cache: bool = True, explicit: bool = False,
+                  cache_only: bool = False) -> list[Capability]:
     """Expand each MCP server into per-tool records with measured schema
     tokens. Spawns each server, but caches the result under
     ``.ctx-surface/probe-cache.json`` keyed by the server's argv, so only the
@@ -1650,7 +1654,7 @@ def probe_surface(ws_root: Path | str, *, timeout: float = 8.0,
         elif (isinstance(entry, dict) and entry.get("key") == key and not explicit
               and now - float(entry.get("failed_at") or 0) < PROBE_FAILURE_TTL_S):
             tools_by_name[name] = []  # failed recently: do not respawn from a hook
-        else:
+        elif not cache_only:  # cache_only: never spawn; uncached stays unknown
             to_probe[name] = argv
     if to_probe:
         # spawn uncached servers concurrently so N servers cost ~timeout, not N * timeout

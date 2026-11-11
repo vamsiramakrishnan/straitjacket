@@ -562,6 +562,13 @@ def test_profile_launch_uses_temp_mcp_config_and_gateway(ws, launcher, tmp_path,
         "pytest-runner": {"command": "pytest-mcp", "env": {"RUNNER_KEY": SECRET}},
         "docs": {"type": "http", "url": "https://docs.example/mcp"}}}))
     _approve(ws)
+    # local-dev's authority ceiling judges each tool, so the runner's tool
+    # catalogue must be known (a warm probe cache) for it to be launched.
+    (ws / ".ctx-surface").mkdir()
+    (ws / ".ctx-surface" / "probe-cache.json").write_text(json.dumps({"pytest-runner": {
+        "key": surface._probe_cache_key(["pytest-mcp"]),
+        "tools": [{"name": "list_tests", "tokens": 30, "authority": "read",
+                   "description_tokens": 3, "schema_tokens": 20, "summary": "List tests"}]}}))
     rc = wrap_claude(ws, ["-p", "x"], "/opt/bin/ctx", surface="local-dev")
     assert rc == 0
     argv = (launcher / "argv.txt").read_text().splitlines()

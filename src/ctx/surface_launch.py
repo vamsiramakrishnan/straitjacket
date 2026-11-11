@@ -61,6 +61,7 @@ class LaunchPlan:
     env: dict[str, str] = field(default_factory=dict)
     receipt: dict[str, Any] = field(default_factory=dict)
     line: str = ""
+    enforcement: dict[str, Any] = field(default_factory=dict)
 
 
 # ------------------------------------------------------------------ caller
@@ -385,8 +386,14 @@ def plan_claude_launch(ws_root: Path, agent_args: list[str], *, mode: str,
     }
     if profile_note:
         plan.receipt["profile"] = profile_note
+    if plan.enforcement:
+        plan.receipt["profile_enforcement"] = plan.enforcement
     n_name_only = len(overrides)
     parts = [f"ctx wrap: surface {mode}"]
+    dropped_unenf = [d["server"] for d in plan.enforcement.get("dropped_unenforceable", [])]
+    if dropped_unenf:
+        parts.append(f"DROPPED {', '.join(dropped_unenf)}: per-tool restriction not "
+                     "enforceable here (see receipt for the remedy)")
     if skills:
         parts.append(f"skills {n_name_only}/{len(skills)} name-only"
                      + (f" (est. ~{sk_before:,}→{sk_after:,} tok)" if n_name_only else
@@ -441,7 +448,10 @@ def _apply_profile(root: Path, name: str, plan: LaunchPlan, specs: list[surface.
     if tmpdir is None:
         left.append({"dimension": "mcp", "item": "servers", "reason": "no private temp dir"})
         return f"{name}: not applied"
-    rep = surface_profiles.compile_profile(root, name, host="claude", profile=profile)
+    # Tool-level selection from the probe CACHE (never spawning): without it
+    # a per-tool exclusion matches nothing and the whole server stays callable.
+    rep = surface_profiles.compile_profile(root, name, host="claude", profile=profile,
+                                           cached_tools=True)
     if rep.get("error"):
         left.append({"dimension": "mcp", "item": "servers", "reason": rep["error"]})
         return f"{name}: not applied ({rep['error']})"
@@ -453,11 +463,12 @@ def _apply_profile(root: Path, name: str, plan: LaunchPlan, specs: list[surface.
     try:
         from ctx.config import load_config
 
-        want_gateway = bool(deferred_tools) or bool(load_config(root).surface.gateway)
+        policy_gateway = bool(load_config(root).surface.gateway)
     except Exception:
-        want_gateway = bool(deferred_tools)
+        policy_gateway = False
     mcp: dict[str, Any] = {}
     backends: dict[str, Any] = {}
+    unenforceable: list[dict[str, str]] = []
     by_name = {s["name"]: s for s in servers_out}
     for spec in specs:
         row = by_name[spec.name]
@@ -470,9 +481,21 @@ def _apply_profile(root: Path, name: str, plan: LaunchPlan, specs: list[surface.
         # ctx's own server is kernel: passed through directly, so the bytes
         # and tool name the model sees for it never change.
         own = spec.name in ("ctx", "ctx-harness") or spec.args[:1] == ("mcp",)
-        if want_gateway and spec.transport == "stdio" and not own:
+        why_not = None if own else _per_tool_unenforceable(spec, profile, cache)
+        if why_not:
+            # Fail closed: a per-tool restriction that cannot be enforced must
+            # not leave the restricted tools reachable while the profile is
+            # reported as applied. The whole server stays out of the session.
+            row["mechanism"] = "dropped-unenforceable"
+            row["reason"] = why_not
+            unenforceable.append({"server": spec.name, "reason": why_not})
+            continue
+        restricted = bool(deferred_tools.get(spec.name)) or _per_tool_applies(spec, profile)
+        if (policy_gateway or restricted) and spec.transport == "stdio" and not own:
             row["mechanism"] = "behind-gateway"
-            row["reason"] = "revealed on demand through ctx surface gateway"
+            row["reason"] = ("per-tool restriction enforced by ctx surface gateway "
+                             "(Claude Code config has no per-tool filter)" if restricted
+                             else "revealed on demand through ctx surface gateway")
             entry: dict[str, Any] = {"command": spec.command, "args": list(spec.args),
                                      "scope": spec.scope}
             if spec.cwd:
@@ -481,8 +504,13 @@ def _apply_profile(root: Path, name: str, plan: LaunchPlan, specs: list[surface.
                 # Names only. The gateway re-reads the values from the user's
                 # own config file when it spawns the backend.
                 entry["env_keys"] = sorted(spec.env)
-            if deferred_tools.get(spec.name):
-                entry["exclude_tools"] = list(deferred_tools[spec.name])
+            if restricted:
+                entry["exclude_tools"] = list(deferred_tools.get(spec.name, []))
+                # Allow-list too: only the tools the selection actually saw
+                # and kept; anything else the live server lists stays hidden.
+                entry["allow_tools"] = sorted(
+                    c.split(".", 2)[2] for c in selected
+                    if c.startswith(f"mcp.{spec.name}.") and c.count(".") >= 2)
             backends[spec.name] = entry
         else:
             if spec.transport != "stdio":
@@ -508,8 +536,49 @@ def _apply_profile(root: Path, name: str, plan: LaunchPlan, specs: list[surface.
     left.append({"dimension": "mcp", "item": "plugins/connectors",
                  "reason": "--strict-mcp-config also drops plugin and connector servers "
                            "ctx does not enumerate"})
-    return (f"{name}: kept {len(kept)} of {len(specs)} servers"
-            + (f", {len(backends)} behind the gateway" if backends else ""))
+    plan.enforcement = {
+        "per_tool_enforced_by_gateway": sorted(deferred_tools),
+        "dropped_unenforceable": unenforceable,
+        "remedy": UNENFORCEABLE_REMEDY if unenforceable else "",
+    }
+    kept_n = len(kept) - len(unenforceable)
+    return (f"{name}: kept {kept_n} of {len(specs)} servers"
+            + (f", {len(backends)} behind the gateway" if backends else "")
+            + (f"; {len(unenforceable)} dropped because a per-tool restriction could not "
+               "be enforced" if unenforceable else ""))
+
+
+UNENFORCEABLE_REMEDY = ("catalogue the server's tools with `ctx surface audit --probe-mcp` "
+                        "(stdio servers) so the gateway can enforce the restriction, relax the "
+                        "profile, or launch with --surface auto")
+
+
+def _per_tool_applies(spec: surface.ServerSpec, profile) -> bool:
+    """Does the profile restrict this server per TOOL? It does when it names
+    one of its tools in include/exclude, or has an authority ceiling below
+    destructive (which judges each tool)."""
+    return (any(i.startswith(f"mcp.{spec.name}.") for i in (*profile.include, *profile.exclude))
+            or profile.authority_ceiling != "destructive")
+
+
+def _per_tool_unenforceable(spec: surface.ServerSpec, profile, cache: dict[str, Any]
+                            ) -> str | None:
+    """Why the profile restricts this server per TOOL but the launch cannot
+    enforce that, or None. Enforcement needs the gateway (stdio only) and the
+    server's tool catalogue (probe cache; never spawned to find out)."""
+    if not _per_tool_applies(spec, profile):
+        return None
+    names_tools = any(i.startswith(f"mcp.{spec.name}.")
+                      for i in (*profile.include, *profile.exclude))
+    what = ("names individual tools of this server" if names_tools
+            else f"has an authority ceiling ({profile.authority_ceiling}) that applies per tool")
+    if spec.transport != "stdio":
+        return (f"profile {profile.name} {what}, but {spec.transport} servers are not proxied "
+                "by the gateway and Claude Code's config has no per-tool filter")
+    if _server_cost(spec, cache) is None:
+        return (f"profile {profile.name} {what}, but this server's tool catalogue is unknown "
+                "(not in the probe cache; the launch does not start servers to find out)")
+    return None
 
 
 def write_receipt(ws_root: Path, receipt: dict[str, Any]) -> str | None:

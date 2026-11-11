@@ -270,7 +270,8 @@ _EMITTERS = {"claude": emit_claude, "codex": emit_codex, "antigravity": emit_ant
 
 def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
                     apply: bool = False, probe_mcp: bool = False,
-                    profile: Profile | None = None) -> dict[str, Any]:
+                    profile: Profile | None = None,
+                    cached_tools: bool = False) -> dict[str, Any]:
     """Compile ``name`` for ``host``. Returns a structured report; with
     ``apply`` also writes the emitted files under ``.ctx-surface/``. A
     caller that already decided the selection (``ctx prune``) passes the
@@ -282,7 +283,7 @@ def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
     if host not in _EMITTERS:
         return {"error": f"unknown host {host!r}; one of {', '.join(HOSTS)}"}
 
-    a = surface.audit(ws_root, probe_mcp=probe_mcp)
+    a = surface.audit(ws_root, probe_mcp=probe_mcp, cached_tools=cached_tools)
     records = [surface.Capability(**{k: (tuple(v) if isinstance(v, list) else v)
                                      for k, v in r.items() if k != "recommended_level"})
                for r in a["records"]]
