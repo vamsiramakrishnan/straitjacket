@@ -3167,3 +3167,486 @@ def test_wave3_schemas_protocol_and_loop_service_delta_gates(
     assert res_txt.termination == "completed_text"
     assert res_txt.emission_gate_hits == 1
     assert txt_prov.saw_ui_gate is True
+
+
+def test_wave4_loop_collect_service_and_ui_gate_check_exit() -> None:
+    """Wave 4 loop wiring: _collect_service_and_ui_gate passes check_exit=True with fallback & handles str/list returns."""
+    from evals.acciobench.loop import _collect_service_and_ui_gate
+
+    class _BrowserWithCheckExitStr:
+        def __init__(self) -> None:
+            self.calls: list[bool] = []
+
+        def check_uncommitted_ui_state(self, *, check_exit: bool = False) -> str | None:
+            self.calls.append(check_exit)
+            return "[uncommitted-ui-state: missing label on shp-001-brief]"
+
+    class _BrowserWithEmptyStr:
+        def __init__(self) -> None:
+            self.calls: list[bool] = []
+
+        def check_uncommitted_ui_state(self, *, check_exit: bool = False) -> str | None:
+            self.calls.append(check_exit)
+            return None
+
+    class _LegacyMockBrowser:
+        def __init__(self) -> None:
+            self.called = False
+
+        def check_uncommitted_ui_state(self) -> list[str]:
+            self.called = True
+            return ["Open Draft editor has unclicked Save"]
+
+    class _Host:
+        def __init__(self, browser: Any, delta: tuple[bool, list[str], str] = (False, [], "")) -> None:
+            self.browser = browser
+            self._delta = delta
+
+        def audit_service_state_delta(self) -> tuple[bool, list[str], str]:
+            return self._delta
+
+    b_str = _BrowserWithCheckExitStr()
+    blocking, issues, receipt = _collect_service_and_ui_gate(_Host(b_str))
+    assert b_str.calls == [True]
+    assert blocking is True
+    assert issues == ["[uncommitted-ui-state: missing label on shp-001-brief]"]
+    assert receipt == "[uncommitted-ui-state: missing label on shp-001-brief]"
+
+    b_none = _BrowserWithEmptyStr()
+    blocking_ok, issues_ok, receipt_ok = _collect_service_and_ui_gate(_Host(b_none))
+    assert b_none.calls == [True]
+    assert blocking_ok is False
+    assert issues_ok == []
+    assert receipt_ok == ""
+
+    b_legacy = _LegacyMockBrowser()
+    blocking_leg, issues_leg, receipt_leg = _collect_service_and_ui_gate(
+        _Host(b_legacy, (False, [], "[service-delta: gmail=1]"))
+    )
+    assert b_legacy.called is True
+    assert blocking_leg is True
+    assert issues_leg == ["Open Draft editor has unclicked Save"]
+    assert "[service-delta: gmail=1]" in receipt_leg
+    assert "[uncommitted-ui-state: Open Draft editor has unclicked Save]" in receipt_leg
+
+
+def test_wave4_host_cross_fk_stripe_dws_todoist_jira_gdocs(tmp_path: Path) -> None:
+    ds_root = tmp_path / "cab"
+    ds_root.mkdir(parents=True, exist_ok=True)
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "work")
+
+    def _build_host(
+        name: str,
+        *,
+        arm: str = "sj",
+        task_md: str = "",
+        setup_fn: Any = None,
+    ) -> tuple[ToolHost, Path, Path]:
+        run_dir = cfg.runs_dir / f"{name}__{arm}"
+        meta_dir = cfg.runs_dir / f"{name}__{arm}_meta"
+        (run_dir / "workspace").mkdir(parents=True, exist_ok=True)
+        (run_dir / "outputs").mkdir(parents=True, exist_ok=True)
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        if setup_fn is not None:
+            setup_fn(run_dir, meta_dir)
+        metrics = RunMetrics(
+            task_id=f"cli-{name}",
+            task_rel=f"cli/{name}",
+            category="cli",
+            arm=arm,
+            model_id="test-model",
+        )
+        host = ToolHost(
+            cfg,
+            run_dir,
+            meta_dir,
+            {3000: 20100},
+            dict(os.environ),
+            metrics,
+            None,
+            arm=arm,
+            task_markdown=task_md,
+            use_bwrap=False,
+        )
+        return host, run_dir, meta_dir
+
+    # (a)+(e)+(f) Setup helper for Jira, Box, Google Docs, Stripe, DWS, Todoist states
+    def _seed_dirty(run_dir: Path, meta_dir: Path) -> None:
+        mstate = meta_dir / "mock_state"
+        # Jira DB with active PROJ-1 (High, Open, SupplierAlpha), PROJ-2 (High, Open, SupplierBeta), deleted PROJ-99
+        jdb = mstate / "jira_cli" / "jira_mock.db"
+        jdb.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(jdb) as conn:
+            conn.execute(
+                "CREATE TABLE issues (key TEXT PRIMARY KEY, summary TEXT, status_id INTEGER, priority TEXT, labels TEXT, is_deleted INTEGER DEFAULT 0)"
+            )
+            conn.execute(
+                "CREATE TABLE issue_statuses (id INTEGER PRIMARY KEY, name TEXT, category TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE issue_links (inward_key TEXT, outward_key TEXT, link_type TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO issue_statuses (id, name, category) VALUES (?, ?, ?)",
+                [(1, "Open", "open"), (2, "Done", "done")],
+            )
+            conn.executemany(
+                "INSERT INTO issues (key, summary, status_id, priority, labels, is_deleted) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    ("PROJ-1", "SupplierAlpha defect", 1, "High", "SupplierAlpha", 0),
+                    ("PROJ-2", "SupplierBeta defect", 1, "High", "SupplierBeta", 0),
+                    ("PROJ-99", "Deleted defect", 1, "High", "SupplierAlpha", 1),
+                ],
+            )
+            conn.commit()
+
+        # Box DB with active folder/file and missing stale 179439999999 referenced in output
+        bdb = mstate / "box_cli" / ".box" / "box_mock.db"
+        bdb.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(bdb) as conn:
+            conn.execute("CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE files (id TEXT PRIMARY KEY, name TEXT, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE shared_links (id TEXT PRIMARY KEY, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE collaborations (id TEXT PRIMARY KEY, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("INSERT INTO folders (id, name, is_deleted) VALUES ('179430000001', 'SupplierDocs', 0)")
+            conn.commit()
+
+        # Stripe DB with forbidden synthetic 'myproduct' and <=1 webhook enabled_events
+        sdb = mstate / "stripe_cli" / "stripe_mock.sqlite"
+        sdb.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(sdb) as conn:
+            conn.execute("CREATE TABLE objects (id TEXT PRIMARY KEY, resource TEXT, data_json TEXT, deleted INTEGER DEFAULT 0)")
+            conn.execute(
+                "INSERT INTO objects (id, resource, data_json, deleted) VALUES (?, ?, ?, 0)",
+                ("prod_1", "products", json.dumps({"id": "prod_1", "name": "myproduct"})),
+            )
+            conn.execute(
+                "INSERT INTO objects (id, resource, data_json, deleted) VALUES (?, ?, ?, 0)",
+                ("we_1", "webhook_endpoints", json.dumps({"id": "we_1", "url": "https://example.com/wh", "enabled_events": ["invoice.paid"]})),
+            )
+            conn.commit()
+
+        # DWS JSON with files=0 while workspace has CSVs requiring upload
+        dws_state = mstate / "dws_doc_cli" / "state.json"
+        dws_state.parent.mkdir(parents=True, exist_ok=True)
+        dws_state.write_text(json.dumps({"files": 0}), encoding="utf-8")
+        (run_dir / "workspace" / "supplier_metrics.csv").write_text("sku,score\nA,1\n", encoding="utf-8")
+
+        # Todoist JSON missing handoff label and Re-source process-gap / spec-gap labels
+        td_state = mstate / "todoist_cli" / "state.json"
+        td_state.parent.mkdir(parents=True, exist_ok=True)
+        td_state.write_text(
+            json.dumps(
+                {
+                    "sections": [{"id": "s1", "name": "Handoff"}, {"id": "s2", "name": "Re-source"}],
+                    "items": [
+                        {"content": "Weekly Handoff Note", "description": "", "section_id": "s1", "labels": ["general"]},
+                        {
+                            "content": "Silicone Boot",
+                            "description": "Compression-mould quote vs LSR; Class 2A thread tolerance unverified.",
+                            "section_id": "s2",
+                            "labels": ["capability-gap"],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Google Docs rollup state under mock_workdir/tmp/runtime_mock_state/google_docs_mock/state.json
+        gdocs_state = meta_dir / "mock_workdir" / "tmp" / "runtime_mock_state" / "google_docs_mock" / "state.json"
+        gdocs_state.parent.mkdir(parents=True, exist_ok=True)
+        gdocs_state.write_text(
+            json.dumps(
+                {
+                    "files": [
+                        {
+                            "id": "doc_a",
+                            "name": "SupplierAlpha — Q4 Audit",
+                            "type": "document",
+                            "content": {
+                                "blocks": [
+                                    {"type": "paragraph", "text": "Finding 1: Severity: High | Fire suppression system is non-operational | Status: Open"}
+                                ]
+                            },
+                        },
+                        {
+                            "id": "doc_b",
+                            "name": "SupplierBeta — Q4 Audit",
+                            "type": "document",
+                            "content": {
+                                "blocks": [
+                                    {"type": "paragraph", "text": "Finding 1: Severity: High | EU RoHS regulatory violation | Status: Open"}
+                                ]
+                            },
+                        },
+                        {
+                            "id": "doc1",
+                            "name": "Supplier Risk Rollup",
+                            "type": "document",
+                            "content": {
+                                "blocks": [
+                                    {"type": "paragraph", "text": "SupplierAlpha | High+Open: 0"}
+                                ]
+                            },
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Output artifact referencing active PROJ-1, deleted PROJ-99, nonexistent PROJ-404, stale Box 179439999999
+        (run_dir / "outputs" / "triage.md").write_text(
+            "Valid PROJ-1, deleted PROJ-99, missing PROJ-404, stale box 179439999999, valid box 179430000001.\n",
+            encoding="utf-8",
+        )
+
+    dirty_task_md = (
+        "# Combined External Hygiene Audit\n"
+        "Audit Stripe lifecycle trial invoice subscription webhooks without synthetic products.\n"
+        "Upload supplier_metrics.csv to DWS dossier (上传 DWS 档案).\n"
+        "Create Todoist handoff follow-up tasks tagged process-gap and spec-gap.\n"
+        "Link duplicate Jira defects using Duplicates link type.\n"
+        "Roll up High+Open Jira issues per supplier into Google Docs.\n"
+    )
+
+    host_sj, run_sj, _ = _build_host("dirty", arm="sj", task_md=dirty_task_md, setup_fn=_seed_dirty)
+    host_raw, _, _ = _build_host("dirty_raw", arm="raw", task_md=dirty_task_md, setup_fn=_seed_dirty)
+
+    # (b) Entry gate blocks unrequested `stripe trigger` on sj, allows on raw or when explicitly requested
+    gate_msg = host_sj._check_bash_entry_gate("stripe trigger invoice.created")
+    assert gate_msg is not None and "myproduct" in gate_msg
+    assert host_raw._check_bash_entry_gate("stripe trigger invoice.created") is None
+
+    explicit_host, _, _ = _build_host("explicit_trigger", arm="sj", task_md="Run `stripe trigger invoice.created`.")
+    assert explicit_host._check_bash_entry_gate("stripe trigger invoice.created") is None
+
+    # Mock clean service activity baseline check? Run audit_service_state_delta directly
+    blocking, issues, receipt = host_sj.audit_service_state_delta()
+    joined = "\n".join(issues)
+    assert blocking is True
+    assert "PROJ-99" in joined
+    assert "PROJ-404" in joined
+    assert "179439999999" in joined
+    box_fk_line = next(ln for ln in issues if "179439999999" in ln)
+    assert "179430000001" not in box_fk_line.split("box_mock.db:")[0]
+    assert "myproduct" in joined.lower()
+    assert "enabled_events" in joined or "webhook" in joined.lower()
+    assert "dws" in joined.lower()
+    assert "process-gap" in joined and "spec-gap" in joined
+    assert "duplicate" in joined.lower()
+    assert "SupplierBeta" in joined or "High+Open" in joined
+
+    # Clean state produces zero false-positive Wave 4 findings.
+    def _seed_clean(run_dir: Path, meta_dir: Path) -> None:
+        mstate = meta_dir / "mock_state"
+        jdb = mstate / "jira_cli" / "jira_mock.db"
+        jdb.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(jdb) as conn:
+            conn.execute(
+                "CREATE TABLE issues (key TEXT PRIMARY KEY, summary TEXT, status_id INTEGER, priority TEXT, labels TEXT, is_deleted INTEGER DEFAULT 0)"
+            )
+            conn.execute(
+                "CREATE TABLE issue_statuses (id INTEGER PRIMARY KEY, name TEXT, category TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE issue_links (inward_key TEXT, outward_key TEXT, link_type TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO issue_statuses (id, name, category) VALUES (?, ?, ?)",
+                [(1, "Open", "open"), (2, "Done", "done")],
+            )
+            conn.executemany(
+                "INSERT INTO issues (key, summary, status_id, priority, labels, is_deleted) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    ("PROJ-1", "SupplierAlpha defect", 1, "High", "SupplierAlpha", 0),
+                    ("PROJ-2", "SupplierBeta defect", 1, "High", "SupplierBeta", 0),
+                ],
+            )
+            conn.execute(
+                "INSERT INTO issue_links (inward_key, outward_key, link_type) VALUES ('PROJ-1', 'PROJ-2', 'Duplicates')"
+            )
+            conn.commit()
+
+        bdb = mstate / "box_cli" / ".box" / "box_mock.db"
+        bdb.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(bdb) as conn:
+            conn.execute("CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE files (id TEXT PRIMARY KEY, name TEXT, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE shared_links (id TEXT PRIMARY KEY, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE collaborations (id TEXT PRIMARY KEY, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, is_deleted INTEGER DEFAULT 0)")
+            conn.execute("INSERT INTO folders (id, name, is_deleted) VALUES ('179430000001', 'SupplierDocs', 0)")
+            conn.commit()
+
+        sdb = mstate / "stripe_cli" / "stripe_mock.sqlite"
+        sdb.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(sdb) as conn:
+            conn.execute("CREATE TABLE objects (id TEXT PRIMARY KEY, resource TEXT, data_json TEXT, deleted INTEGER DEFAULT 0)")
+            conn.execute(
+                "INSERT INTO objects (id, resource, data_json, deleted) VALUES (?, ?, ?, 0)",
+                ("prod_1", "products", json.dumps({"id": "prod_1", "name": "Acme Hardware"})),
+            )
+            conn.execute(
+                "INSERT INTO objects (id, resource, data_json, deleted) VALUES (?, ?, ?, 0)",
+                ("we_1", "webhook_endpoints", json.dumps({"id": "we_1", "url": "https://example.com/wh", "enabled_events": ["invoice.paid", "customer.subscription.updated"]})),
+            )
+            conn.commit()
+
+        dws_state = mstate / "dws_doc_cli" / "state.json"
+        dws_state.parent.mkdir(parents=True, exist_ok=True)
+        dws_state.write_text(json.dumps({"files": 1}), encoding="utf-8")
+        (run_dir / "workspace" / "supplier_metrics.csv").write_text("sku,score\nA,1\n", encoding="utf-8")
+
+        td_state = mstate / "todoist_cli" / "state.json"
+        td_state.parent.mkdir(parents=True, exist_ok=True)
+        td_state.write_text(
+            json.dumps(
+                {
+                    "sections": [{"id": "s1", "name": "Handoff"}, {"id": "s2", "name": "Re-source"}],
+                    "items": [
+                        {"content": "Weekly Handoff Note", "description": "", "section_id": "s1", "labels": ["handoff"]},
+                        {
+                            "content": "Silicone Boot",
+                            "description": "Compression-mould quote vs LSR; Class 2A thread tolerance.",
+                            "section_id": "s2",
+                            "labels": ["capability-gap", "process-gap", "spec-gap"],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        gdocs_state = meta_dir / "mock_workdir" / "tmp" / "runtime_mock_state" / "google_docs_mock" / "state.json"
+        gdocs_state.parent.mkdir(parents=True, exist_ok=True)
+        gdocs_state.write_text(
+            json.dumps(
+                {
+                    "files": [
+                        {
+                            "id": "doc_a",
+                            "name": "SupplierAlpha — Q4 Audit",
+                            "type": "document",
+                            "content": {
+                                "blocks": [
+                                    {"type": "paragraph", "text": "Finding 1: Severity: High | Fire suppression system is non-operational | Status: Open"}
+                                ]
+                            },
+                        },
+                        {
+                            "id": "doc_b",
+                            "name": "SupplierBeta — Q4 Audit",
+                            "type": "document",
+                            "content": {
+                                "blocks": [
+                                    {"type": "paragraph", "text": "Finding 1: Severity: High | EU RoHS regulatory violation | Status: Open"}
+                                ]
+                            },
+                        },
+                        {
+                            "id": "doc1",
+                            "name": "Supplier Risk Rollup",
+                            "type": "document",
+                            "content": {
+                                "blocks": [
+                                    {"type": "paragraph", "text": "SupplierAlpha | High+Open: 1"},
+                                    {"type": "paragraph", "text": "SupplierBeta | High+Open: 1"},
+                                ]
+                            },
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        (run_dir / "outputs" / "triage.md").write_text(
+            "Verified PROJ-1 and box 179430000001.\n",
+            encoding="utf-8",
+        )
+
+    host_clean, _, _ = _build_host("clean", arm="sj", task_md=dirty_task_md, setup_fn=_seed_clean)
+    clean_blocking, clean_issues, _ = host_clean.audit_service_state_delta()
+    assert clean_blocking is False, f"Unexpected clean issues: {clean_issues}"
+    assert clean_issues == []
+
+    # Raw arm never gates or audits service state delta
+    assert host_raw.audit_service_state_delta() == (False, [], "")
+
+
+def test_wave4_browser_snapshot_attrs_and_exit_checks() -> None:
+    from evals.acciobench.browser import _SNAPSHOT_JS, _UNCOMMITTED_UI_JS, _parse_snapshot_state
+
+    controls_txt = "\n".join(
+        [
+            '[e1] <button data-task-due="今天"> 安排在今天',
+            '[e2] <button data-panel="tasks"> Tasks',
+            '[e3] <button data-filter-action="create"> 创建过滤器',
+            '[e4] <button data-compose-action="draft-save"> 保存草稿',
+        ]
+    )
+    _, fallbacks = _parse_snapshot_state({"controls": controls_txt})
+    assert fallbacks["e1"] == 'button[data-task-due="今天"]'
+    assert fallbacks["e2"] == 'button[data-panel="tasks"]'
+    assert fallbacks["e3"] == 'button[data-filter-action="create"]'
+    assert fallbacks["e4"] == 'button[data-compose-action="draft-save"]'
+
+    assert "data-task-due" in _SNAPSHOT_JS
+    assert "[Row State Summary]" in _SNAPSHOT_JS
+    assert "body=${JSON.stringify(bodyStr)}" in _SNAPSHOT_JS
+    assert "(checkExit = false)" in _UNCOMMITTED_UI_JS
+
+    # BrowserSession.check_uncommitted_ui_state forwards check_exit=True to 2-arg evaluate and falls back on 1-arg mocks.
+    calls_2arg: list[Any] = []
+
+    class FakePage2:
+        url = "http://127.0.0.1:20611/#inbox"
+
+        def on(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def evaluate(self, script: str, *args: Any) -> Any:
+            calls_2arg.append((script, args))
+            if args == (True,):
+                return ["Gmail task '' has empty due date"]
+            return []
+
+        def close(self) -> None:
+            pass
+
+    class FakeCtx2:
+        def new_page(self) -> FakePage2:
+            return FakePage2()
+
+        def close(self) -> None:
+            pass
+
+    sess = BrowserSession(FakeCtx2(), {}, enable_dom_diff=False)
+    p2 = FakePage2()
+    sess._register_page("vtab-1", p2)
+    sess.active_tab_id = "vtab-1"
+
+    assert sess.check_uncommitted_ui_state(check_exit=False) == []
+    exit_warnings = sess.check_uncommitted_ui_state(check_exit=True)
+    assert exit_warnings == ["Gmail task '' has empty due date"]
+    assert calls_2arg[-1][1] == (True,)
+
+    class FakePage1:
+        url = "http://127.0.0.1:20612/#inbox"
+
+        def on(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def evaluate(self, script: str) -> Any:
+            return ["Filter modal open"]
+
+        def close(self) -> None:
+            pass
+
+    sess._register_page("vtab-2", FakePage1())
+    sess.active_tab_id = "vtab-2"
+    assert sess.check_uncommitted_ui_state(check_exit=True) == ["Filter modal open"]
+

@@ -243,6 +243,10 @@ _SCRATCH_PROBE_CLI_CREATES_RE = re.compile(
     r"(?:files:(?:upload|create)|folders:create|\b(?:create|upload|add|mkdir|new|copy)\b)",
     re.I,
 )
+_PROJ_KEY_RE = re.compile(r"\bPROJ-\d+\b")
+_BOX_17943_ID_RE = re.compile(r"\b17943(?:\d{7}|\d{9,12})\b")
+_STRIPE_TRIGGER_REST_RE = re.compile(r"^(?:--\S+(?:=\S+|\s+\S+)?\s+)*trigger(?:\s|$)", re.I)
+_GDOCS_ROLLUP_LINE_RE = re.compile(r"^\s*([^|\n]+?)\s*\|\s*High\+Open\s*:\s*(\d+)\b", re.I | re.M)
 _FLAG_CLUSTER_CMDS: dict[str, frozenset[str]] = {
     "ls": frozenset("aAdFhHilLnrRSt1"),
     "grep": frozenset("cEFhHilLnqrRvwx"),
@@ -1237,8 +1241,22 @@ class ToolHost:
                     return True
         return False
 
+    def _stripe_trigger_requested(self) -> bool:
+        """Return True if ``stripe trigger`` is mentioned in task_markdown or workspace docs."""
+        if "stripe trigger" in (self.task_markdown or "").lower():
+            return True
+        ws_dir = self.run_dir / "workspace"
+        if ws_dir.is_dir():
+            for md_file in ws_dir.rglob("*.md"):
+                try:
+                    if "stripe trigger" in md_file.read_text(encoding="utf-8", errors="ignore").lower():
+                        return True
+                except OSError:
+                    continue
+        return False
+
     def _check_bash_entry_gate(self, cmd_rw: str) -> str | None:
-        """Block synthetic scratch-probe creations and duplicate ``jira issue link`` calls before execution."""
+        """Block synthetic scratch probes, unrequested ``stripe trigger``, and duplicate Jira links."""
         if not self.is_sj or not cmd_rw:
             return None
         invocations = _extract_cli_invocations(cmd_rw)
@@ -1246,6 +1264,16 @@ class ToolHost:
             if not rest or "--help" in rest or re.search(r"(?:^|\s)-h(?:\s|$)", rest) or "--dry-run" in rest:
                 continue
             rest_l = rest.lower()
+            if (
+                cli_bin == "stripe"
+                and _STRIPE_TRIGGER_REST_RE.match(rest)
+                and not self._stripe_trigger_requested()
+            ):
+                return (
+                    "[ctx-entry-gate] Blocked: 'stripe trigger' creates synthetic 'myproduct' fixture "
+                    "pollution in stripe_mock.sqlite that fails clean-account graders. Inspect or mutate "
+                    "the specific Stripe resources directly via stripe CLI or curl instead."
+                )
             is_persistent_probe_target = (
                 (cli_bin == "ntn" and rest_l.startswith("files "))
                 or cli_bin in ("box", "dws")
@@ -1540,6 +1568,12 @@ class ToolHost:
                 "todoist_cli",
                 (".cache/todoist/mock.db", "mock.db"),
             ),
+            (
+                "stripe",
+                ("STRIPE_MOCK_DB", "STRIPE_MOCK_STATE_DIR", "STRIPE_MOCK_HOME"),
+                "stripe_cli",
+                ("stripe_mock.sqlite",),
+            ),
         )
         found: dict[str, Path] = {}
         state_roots = [self.meta_dir / "mock_state", self.run_dir / "mock_state"]
@@ -1548,7 +1582,13 @@ class ToolHost:
             for ek in env_keys:
                 ev = self.mock_env.get(ek) or ""
                 if ev:
-                    cand_dirs.append(Path(ev))
+                    ep = Path(ev)
+                    if ep.is_file():
+                        found[svc] = ep
+                        break
+                    cand_dirs.append(ep)
+            if svc in found:
+                continue
             for sr in state_roots:
                 cand_dirs.append(sr / subdir)
             for base in cand_dirs:
@@ -1562,7 +1602,7 @@ class ToolHost:
         return found
 
     def _load_json_service_states(self) -> dict[str, Any]:
-        """Load optional JSON mock-state snapshots under ``mock_state`` or service dirs for tests."""
+        """Load optional JSON mock-state snapshots under ``mock_state``, ``runtime_mock_state``, or service dirs."""
         out: dict[str, Any] = {}
         svc_aliases = {
             "jira": ("jira", "jira_cli"),
@@ -1571,19 +1611,37 @@ class ToolHost:
             "dws": ("dws", "dws_doc_cli"),
             "gws": ("gws", "google_workspace_cli"),
             "todoist": ("todoist", "todoist_cli"),
+            "google_docs": ("google_docs_mock", "google_docs", "gdocs"),
         }
+        skip_names = frozenset({"credentials.json", "package.json", "package-lock.json", "tsconfig.json"})
         cand_files: list[tuple[Path, str]] = []
-        for root in (self.meta_dir / "mock_state", self.run_dir / "mock_state"):
+        scan_roots = (
+            self.meta_dir / "mock_state",
+            self.run_dir / "mock_state",
+            self.meta_dir / "mock_workdir" / "tmp" / "runtime_mock_state",
+            self.meta_dir / "mock_workdir" / "tmp" / "mock_state",
+            self.run_dir / "mock_workdir" / "tmp" / "runtime_mock_state",
+            self.run_dir / "mock_workdir" / "tmp" / "mock_state",
+        )
+        for root in scan_roots:
             if root.is_dir():
-                for p in sorted(root.rglob("*.json")):
-                    cand_files.append((p, str(p.relative_to(root)).lower()))
+                for p in sorted(
+                    root.rglob("*.json"),
+                    key=lambda item: (0 if item.name.lower() == "state.json" else 1, str(item)),
+                ):
+                    if p.name.lower() not in skip_names:
+                        cand_files.append((p, str(p.relative_to(root)).lower()))
         if self.run_dir.is_dir():
             for p in sorted(self.run_dir.iterdir()):
-                if p.is_file() and p.suffix.lower() == ".json":
+                if p.is_file() and p.suffix.lower() == ".json" and p.name.lower() not in skip_names:
                     cand_files.append((p, p.name.lower()))
                 elif p.is_dir() and p.name.lower() in {a for aliases in svc_aliases.values() for a in aliases}:
-                    for sp in sorted(p.rglob("*.json")):
-                        cand_files.append((sp, str(sp.relative_to(self.run_dir)).lower()))
+                    for sp in sorted(
+                        p.rglob("*.json"),
+                        key=lambda item: (0 if item.name.lower() == "state.json" else 1, str(item)),
+                    ):
+                        if sp.name.lower() not in skip_names:
+                            cand_files.append((sp, str(sp.relative_to(self.run_dir)).lower()))
 
         for p, rel_l in cand_files:
             try:
@@ -1761,6 +1819,804 @@ class ToolHost:
 
         return snap
 
+    @staticmethod
+    def _extract_nested_text(
+        obj: Any,
+        *,
+        skip_keys: frozenset[str] = frozenset(
+            {
+                "id",
+                "nodeId",
+                "blockId",
+                "parentId",
+                "createTime",
+                "lastEditTime",
+                "commentKey",
+                "spreadsheetId",
+                "sheetId",
+                "timestamp",
+                "created_at",
+                "updated_at",
+                "created",
+            }
+        ),
+    ) -> list[str]:
+        """Collect human-readable string leaf values from nested JSON payloads while skipping ID/timestamp keys."""
+        parts: list[str] = []
+        if isinstance(obj, str):
+            if obj.strip():
+                parts.append(obj)
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                if str(k) in skip_keys:
+                    continue
+                parts.extend(ToolHost._extract_nested_text(v, skip_keys=skip_keys))
+        elif isinstance(obj, list):
+            for item in obj:
+                parts.extend(ToolHost._extract_nested_text(item, skip_keys=skip_keys))
+        return parts
+
+    def _workspace_csv_files(self) -> list[Path]:
+        """Return non-internal workspace ``.csv`` files under ``run_dir/workspace`` or ``run_dir``."""
+        ws = self.run_dir / "workspace"
+        if ws.is_dir():
+            return sorted(p for p in ws.rglob("*.csv") if p.is_file())
+        if not self.run_dir.is_dir():
+            return []
+        skip_dirs = frozenset(
+            {"outputs", "mock_case", "mock_services", "mock_state", "mock_workdir", "ctxws", "sandbox_tmp", "tmp", ".git"}
+        )
+        out: list[Path] = []
+        for p in sorted(self.run_dir.rglob("*.csv")):
+            if p.is_file() and not (skip_dirs & set(p.relative_to(self.run_dir).parts)):
+                out.append(p)
+        return out
+
+    def _collect_fk_sources(self, dbs: dict[str, Path], json_states: dict[str, Any]) -> list[tuple[str, str]]:
+        """Collect ``(source_label, text)`` across outputs, GWS, DWS, Jira, and Todoist for FK checks."""
+        sources: list[tuple[str, str]] = []
+        text_exts = frozenset({".txt", ".md", ".json", ".csv", ".tsv", ".yaml", ".yml", ".html"})
+
+        outputs_dir = self.run_dir / "outputs"
+        if outputs_dir.is_dir():
+            for p in sorted(outputs_dir.rglob("*")):
+                if (
+                    not p.is_file()
+                    or p.suffix.lower() not in text_exts
+                    or p.name.lower().endswith("_final_state.json")
+                ):
+                    continue
+                try:
+                    if p.stat().st_size <= 2_000_000:
+                        sources.append((f"outputs/{p.relative_to(outputs_dir).as_posix()}", p.read_text("utf-8", "ignore")))
+                except OSError:
+                    pass
+
+        if "gws" in dbs:
+            con = self._open_ro_sqlite(dbs["gws"])
+            if con is not None:
+                try:
+                    for sid, raw in con.execute("SELECT id, data FROM spreadsheets").fetchall():
+                        try:
+                            pd = json.loads(str(raw))
+                        except json.JSONDecodeError:
+                            sources.append((f"gws:{sid}", str(raw)))
+                        else:
+                            txt = "\n".join(self._extract_nested_text(pd))
+                            if txt:
+                                sources.append((f"gws:{sid}", txt))
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+        elif "gws" in json_states:
+            txt = "\n".join(self._extract_nested_text(json_states["gws"].get("spreadsheets") or json_states["gws"]))
+            if txt:
+                sources.append(("gws:state.json", txt))
+
+        if "dws" in dbs:
+            con = self._open_ro_sqlite(dbs["dws"])
+            if con is not None:
+                try:
+                    for nid, dname, content in con.execute(
+                        "SELECT nodeId, COALESCE(name,''), COALESCE(content,'') FROM documents"
+                    ).fetchall():
+                        blob = f"{dname}\n{content}".strip()
+                        if blob:
+                            sources.append((f"dws:{dname or nid}", blob))
+                    for nid, cj in con.execute("SELECT nodeId, COALESCE(contentJson,'') FROM blocks").fetchall():
+                        try:
+                            txt = "\n".join(self._extract_nested_text(json.loads(str(cj))))
+                        except json.JSONDecodeError:
+                            txt = str(cj)
+                        if txt:
+                            sources.append((f"dws_block:{nid}", txt))
+                    for nid, body in con.execute("SELECT nodeId, COALESCE(content,'') FROM comments").fetchall():
+                        if str(body).strip():
+                            sources.append((f"dws_comment:{nid}", str(body)))
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+        elif "dws" in json_states:
+            txt = "\n".join(self._extract_nested_text(json_states["dws"]))
+            if txt:
+                sources.append(("dws:state.json", txt))
+
+        if "jira" in dbs:
+            con = self._open_ro_sqlite(dbs["jira"])
+            if con is not None:
+                try:
+                    cols = {str(r[1]) for r in con.execute("PRAGMA table_info(issues)").fetchall()}
+                    del_keys: set[str] = set()
+                    if "is_deleted" in cols:
+                        for (dk,) in con.execute("SELECT UPPER(key) FROM issues WHERE COALESCE(is_deleted, 0) != 0").fetchall():
+                            del_keys.add(str(dk))
+                        issue_q = "SELECT key, COALESCE(summary,''), COALESCE(description,'') FROM issues WHERE COALESCE(is_deleted, 0) = 0"
+                    else:
+                        issue_q = "SELECT key, COALESCE(summary,''), COALESCE(description,'') FROM issues"
+                    for ikey, summ, desc in con.execute(issue_q).fetchall():
+                        blob = f"{summ}\n{desc}".strip()
+                        if blob:
+                            sources.append((f"jira:{ikey}", blob))
+                    for ikey, body in con.execute("SELECT UPPER(issue_key), COALESCE(body,'') FROM comments").fetchall():
+                        if str(ikey) not in del_keys and str(body).strip():
+                            sources.append((f"jira_comment:{ikey}", str(body)))
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+        elif "jira" in json_states:
+            for it in json_states["jira"].get("issues") or []:
+                if isinstance(it, dict) and not it.get("is_deleted") and not it.get("deleted"):
+                    k = str(it.get("key") or it.get("id") or "")
+                    blob = f"{it.get('summary') or ''}\n{it.get('description') or ''}".strip()
+                    if blob:
+                        sources.append((f"jira:{k}", blob))
+            for cm in json_states["jira"].get("comments") or []:
+                if isinstance(cm, dict) and str(cm.get("body") or "").strip():
+                    sources.append((f"jira_comment:{cm.get('issue_key') or ''}", str(cm.get("body"))))
+
+        if "todoist" in dbs:
+            con = self._open_ro_sqlite(dbs["todoist"])
+            if con is not None:
+                try:
+                    cols = {str(r[1]) for r in con.execute("PRAGMA table_info(items)").fetchall()}
+                    where_act = " WHERE COALESCE(is_deleted, 0) = 0" if "is_deleted" in cols else ""
+                    for tid, cont, desc in con.execute(
+                        f"SELECT id, COALESCE(content,''), COALESCE(description,'') FROM items{where_act}"
+                    ).fetchall():
+                        blob = f"{cont}\n{desc}".strip()
+                        if blob:
+                            sources.append((f"todoist:{tid}", blob))
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+        elif "todoist" in json_states:
+            for it in (json_states["todoist"].get("items") or json_states["todoist"].get("tasks") or []):
+                if isinstance(it, dict) and not it.get("is_deleted") and not it.get("deleted"):
+                    blob = f"{it.get('content') or ''}\n{it.get('description') or ''}".strip()
+                    if blob:
+                        sources.append((f"todoist:{it.get('id') or ''}", blob))
+
+        return sources
+
+    def _audit_cross_service_foreign_keys(
+        self,
+        dbs: dict[str, Path],
+        json_states: dict[str, Any],
+        issues: list[str],
+    ) -> None:
+        """Check referenced ``PROJ-\\d+`` keys and ``17943*`` Box IDs against active Jira/Box records."""
+        active_jira: set[str] | None = None
+        deleted_jira: set[str] = set()
+        if "jira" in dbs:
+            con = self._open_ro_sqlite(dbs["jira"])
+            if con is not None:
+                try:
+                    cols = {str(r[1]) for r in con.execute("PRAGMA table_info(issues)").fetchall()}
+                    if "is_deleted" in cols:
+                        active_jira = {
+                            str(r[0]).upper()
+                            for r in con.execute(
+                                "SELECT key FROM issues WHERE COALESCE(is_deleted, 0) = 0"
+                            ).fetchall()
+                        }
+                        deleted_jira = {
+                            str(r[0]).upper()
+                            for r in con.execute(
+                                "SELECT key FROM issues WHERE COALESCE(is_deleted, 0) != 0"
+                            ).fetchall()
+                        }
+                    else:
+                        active_jira = {str(r[0]).upper() for r in con.execute("SELECT key FROM issues").fetchall()}
+                except sqlite3.Error:
+                    active_jira = None
+                finally:
+                    con.close()
+        elif "jira" in json_states:
+            active_jira = set()
+            for it in json_states["jira"].get("issues") or []:
+                if isinstance(it, dict) and (it.get("key") or it.get("id")):
+                    k = str(it.get("key") or it.get("id")).upper()
+                    if it.get("is_deleted") or it.get("deleted"):
+                        deleted_jira.add(k)
+                    else:
+                        active_jira.add(k)
+
+        active_box: dict[str, str] | None = None
+        deleted_box: set[str] = set()
+        if "box" in dbs:
+            con = self._open_ro_sqlite(dbs["box"])
+            if con is not None:
+                try:
+                    active_box = {}
+                    for tbl in ("folders", "files"):
+                        cols = {str(r[1]) for r in con.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                        if not cols:
+                            continue
+                        if "is_deleted" in cols:
+                            for bid, bname in con.execute(
+                                f"SELECT id, name FROM {tbl} WHERE COALESCE(is_deleted, 0) = 0"
+                            ).fetchall():
+                                active_box[str(bid)] = str(bname or "")
+                            for (bid,) in con.execute(
+                                f"SELECT id FROM {tbl} WHERE COALESCE(is_deleted, 0) != 0"
+                            ).fetchall():
+                                deleted_box.add(str(bid))
+                        else:
+                            for bid, bname in con.execute(f"SELECT id, name FROM {tbl}").fetchall():
+                                active_box[str(bid)] = str(bname or "")
+                    for extra_tbl in ("shared_links", "collaborations", "tasks"):
+                        cols = {str(r[1]) for r in con.execute(f"PRAGMA table_info({extra_tbl})").fetchall()}
+                        if not cols or "id" not in cols:
+                            continue
+                        where_ex = " WHERE COALESCE(is_deleted, 0) = 0" if "is_deleted" in cols else ""
+                        for (bid,) in con.execute(f"SELECT id FROM {extra_tbl}{where_ex}").fetchall():
+                            active_box.setdefault(str(bid), extra_tbl)
+                except sqlite3.Error:
+                    active_box = None
+                finally:
+                    con.close()
+        elif "box" in json_states:
+            active_box = {}
+            for tbl in ("folders", "files"):
+                for item in json_states["box"].get(tbl) or []:
+                    if isinstance(item, dict) and item.get("id") is not None:
+                        bid = str(item["id"])
+                        if item.get("is_deleted") or item.get("deleted"):
+                            deleted_box.add(bid)
+                        else:
+                            active_box[bid] = str(item.get("name") or "")
+            for extra_tbl in ("shared_links", "collaborations", "tasks"):
+                for item in json_states["box"].get(extra_tbl) or []:
+                    if isinstance(item, dict) and item.get("id") is not None:
+                        if not item.get("is_deleted") and not item.get("deleted"):
+                            active_box.setdefault(str(item["id"]), extra_tbl)
+
+        if active_jira is None and active_box is None:
+            return
+
+        sources = self._collect_fk_sources(dbs, json_states)
+        bad_jira: dict[str, list[str]] = {}
+        bad_box: dict[str, list[str]] = {}
+        deleted_17943_ids = sorted(bid for bid in deleted_box if bid.startswith("17943") and len(bid) >= 8)
+        del_box_re = (
+            re.compile(r"\b(?:" + "|".join(re.escape(b) for b in deleted_17943_ids) + r")\b")
+            if deleted_17943_ids
+            else None
+        )
+
+        for src_label, txt in sources:
+            if active_jira is not None:
+                for key in set(_PROJ_KEY_RE.findall(txt)):
+                    ukey = key.upper()
+                    if ukey not in active_jira:
+                        bad_jira.setdefault(ukey, [])
+                        if src_label not in bad_jira[ukey]:
+                            bad_jira[ukey].append(src_label)
+            if active_box is not None:
+                found_box = set(_BOX_17943_ID_RE.findall(txt))
+                if del_box_re is not None:
+                    found_box.update(del_box_re.findall(txt))
+                for bid in found_box:
+                    if bid not in active_box:
+                        bad_box.setdefault(bid, [])
+                        if src_label not in bad_box[bid]:
+                            bad_box[bid].append(src_label)
+
+        if bad_jira and active_jira is not None:
+            detail = "; ".join(
+                f"{k} ({'deleted' if k in deleted_jira else 'nonexistent'}, found in {', '.join(locs[:3])})"
+                for k, locs in sorted(bad_jira.items())[:5]
+            )
+            proj_keys = sorted(
+                (k for k in active_jira if k.startswith("PROJ-")),
+                key=lambda s: int(s.split("-", 1)[1]) if s.split("-", 1)[1].isdigit() else 0,
+            )
+            active_s = ", ".join(proj_keys[-20:]) if proj_keys else "(none)"
+            issues.append(
+                f"Cross-service Jira foreign-key mismatch: referenced stale/nonexistent key(s) [{detail}]. "
+                f"Active PROJ-* keys in jira_mock.db: {active_s}. Update all outputs/GWS/DWS/Jira/Todoist references to active keys."
+            )
+
+        if bad_box and active_box is not None:
+            detail = "; ".join(
+                f"{bid} ({'deleted' if bid in deleted_box else 'nonexistent'}, found in {', '.join(locs[:3])})"
+                for bid, locs in sorted(bad_box.items())[:5]
+            )
+            ordered_box = sorted(
+                active_box.items(),
+                key=lambda kv: (0 if kv[0].startswith("17943") else 1, kv[0]),
+            )
+            active_s = ", ".join(f"{bid} ({bname!r})" for bid, bname in ordered_box[:18]) or "(none)"
+            issues.append(
+                f"Cross-service Box foreign-key mismatch: referenced stale/deleted Box ID(s) [{detail}]. "
+                f"Active Box folders/files in box_mock.db: {active_s}. Replace stale Box IDs across outputs/GWS/DWS/Jira."
+            )
+
+    def _audit_stripe_state(
+        self,
+        db_path: Path,
+        issues: list[str],
+        delta_parts: list[str],
+    ) -> None:
+        """Audit ``stripe_mock.sqlite`` for ``myproduct`` pollution and under-configured webhook endpoints."""
+        con = self._open_ro_sqlite(db_path)
+        if con is None:
+            return
+        try:
+            tables = {str(r[0]) for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            prod_rows: list[tuple[str, dict[str, Any]]] = []
+            wh_rows: list[tuple[str, dict[str, Any]]] = []
+
+            if "objects" in tables:
+                for rid, resource, raw in con.execute(
+                    "SELECT id, resource, data_json FROM objects "
+                    "WHERE COALESCE(deleted, 0) = 0 AND resource IN ('products', 'webhook_endpoints')"
+                ).fetchall():
+                    try:
+                        data = json.loads(str(raw))
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(data, dict):
+                        if resource == "products":
+                            prod_rows.append((str(rid), data))
+                        elif resource == "webhook_endpoints":
+                            wh_rows.append((str(rid), data))
+            else:
+                for tbl, bucket in (("products", prod_rows), ("webhook_endpoints", wh_rows)):
+                    if tbl not in tables:
+                        continue
+                    cols = {str(r[1]) for r in con.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                    col = "data" if "data" in cols else ("data_json" if "data_json" in cols else "")
+                    if not col:
+                        continue
+                    where = " WHERE COALESCE(deleted, 0) = 0" if "deleted" in cols else ""
+                    for rid, raw in con.execute(f"SELECT id, {col} FROM {tbl}{where}").fetchall():
+                        try:
+                            data = json.loads(str(raw))
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(data, dict):
+                            bucket.append((str(rid), data))
+
+            myprods = [
+                pid
+                for pid, pd in prod_rows
+                if str(pd.get("name") or "").strip().lower() == "myproduct"
+            ]
+            if myprods:
+                issues.append(
+                    f"Stripe contains synthetic 'myproduct' fixture pollution ({', '.join(myprods[:4])}) "
+                    "created by `stripe trigger`; delete the synthetic 'myproduct' product(s) and any "
+                    "associated triggered price/customer records from Stripe."
+                )
+
+            task_l = (self.task_markdown or "").lower()
+            wants_lifecycle = any(
+                k in task_l
+                for k in (
+                    "lifecycle",
+                    "trial",
+                    "invoice",
+                    "subscription",
+                    "生命周期",
+                    "试用",
+                    "发票",
+                    "账单",
+                    "订阅",
+                )
+            )
+            if wants_lifecycle and wh_rows:
+                thin_wh: list[str] = []
+                for wid, wd in wh_rows:
+                    evs = wd.get("enabled_events")
+                    ev_list = evs if isinstance(evs, list) else []
+                    if len(ev_list) <= 1:
+                        url = str(wd.get("url") or "")
+                        thin_wh.append(f"{wid} ({url or 'no-url'}, enabled_events={ev_list!r})")
+                if thin_wh:
+                    issues.append(
+                        f"Stripe webhook endpoint only enables <= 1 event: {'; '.join(thin_wh[:3])}. "
+                        "Include all relevant lifecycle events (e.g. customer.subscription.trial_will_end, "
+                        "customer.subscription.updated, invoice.paid, invoice.payment_failed)."
+                    )
+
+            if myprods or wh_rows or "stripe" in self.mutated_services:
+                delta_parts.append(f"stripe: products={len(prod_rows)} webhooks={len(wh_rows)}")
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
+
+    def _audit_dws_csv_uploads(
+        self,
+        cur_files: int,
+        doc_rows: list[tuple[str, str]],
+        has_json_dws: bool,
+        issues: list[str],
+    ) -> None:
+        """Check that workspace CSV files are uploaded into DWS when requested."""
+        csv_files = self._workspace_csv_files()
+        if not csv_files:
+            return
+        task_l = (self.task_markdown or "").lower()
+        has_file0 = any(
+            str(dname or "").strip().lower() == "file_0"
+            for dname, _ in (doc_rows or [])
+        )
+        wants_upload = has_file0 or (
+            ("upload" in task_l or "上传" in task_l)
+            and any(k in task_l for k in ("dws", "dossier", "档案"))
+        )
+        if not wants_upload:
+            return
+        csv_names = [p.name for p in csv_files]
+        if cur_files == 0 and (has_json_dws or doc_rows is not None):
+            issues.append(
+                f"DWS has files=0 (no CSV/attachment files uploaded to DWS); upload the required workspace CSV files "
+                f"({', '.join(csv_names[:6])}) via `dws`."
+            )
+            return
+
+        if has_json_dws:
+            return
+        uploaded_names: set[str] = set()
+        has_placeholder = False
+        for dname, dext in doc_rows:
+            nm = str(dname or "").strip().lower()
+            ext = str(dext or "").strip().lower()
+            if nm == "file_0" or (nm.startswith("file_") and ext == "file"):
+                has_placeholder = True
+            uploaded_names.add(nm)
+            if ext and ext not in ("file", "folder", "adoc") and not nm.endswith("." + ext):
+                uploaded_names.add(f"{nm}.{ext}")
+        missing = [p.name for p in csv_files if p.name.lower() not in uploaded_names]
+        if missing:
+            extra = (
+                " (`file_0` placeholder found — pass `--name <filename.csv>` to `dws doc upload`)"
+                if has_placeholder
+                else ""
+            )
+            issues.append(
+                f"DWS uploaded file(s) missing required workspace CSVs: {', '.join(missing[:6])}{extra}; "
+                "upload each required CSV via `dws doc upload` with `--name <filename.csv>`."
+            )
+
+    def _audit_todoist_state(
+        self,
+        dbs: dict[str, Path],
+        json_states: dict[str, Any],
+        issues: list[str],
+        delta_parts: list[str],
+    ) -> None:
+        """Audit Todoist handoff labels and ``Re-source``/``capability-gap`` label completeness."""
+        items: list[tuple[str, str, str, list[str]]] = []
+        completed_count = 0
+
+        if "todoist" in dbs:
+            con = self._open_ro_sqlite(dbs["todoist"])
+            if con is not None:
+                try:
+                    cols = {str(r[1]) for r in con.execute("PRAGMA table_info(items)").fetchall()}
+                    if not cols:
+                        return
+                    base_t = self._service_baseline.get("todoist") or {}
+                    cur_i = self._sqlite_table_count(con, "items", active_only=True)
+                    checked_col = "checked" if "checked" in cols else ("is_completed" if "is_completed" in cols else "")
+                    if checked_col:
+                        r = con.execute(f"SELECT COUNT(*) FROM items WHERE {checked_col} != 0").fetchone()
+                        completed_count = int(r[0]) if r else 0
+                    di = cur_i - int(base_t.get("items", cur_i))
+                    dc = completed_count - int(base_t.get("completed", completed_count))
+                    if di or dc or "todoist" in self.mutated_services:
+                        delta_parts.append(f"todoist: items={cur_i}({di:+d}) completed={completed_count}({dc:+d})")
+
+                    sec_map: dict[str, str] = {}
+                    try:
+                        sec_cols = {str(r[1]) for r in con.execute("PRAGMA table_info(sections)").fetchall()}
+                        if sec_cols:
+                            w_sec = " WHERE COALESCE(is_deleted, 0) = 0" if "is_deleted" in sec_cols else ""
+                            for sid, sname in con.execute(f"SELECT id, name FROM sections{w_sec}").fetchall():
+                                sec_map[str(sid)] = str(sname or "")
+                    except sqlite3.Error:
+                        pass
+
+                    l_col = "labels_json" if "labels_json" in cols else ("labels" if "labels" in cols else "")
+                    w_item = " WHERE COALESCE(is_deleted, 0) = 0" if "is_deleted" in cols else ""
+                    s_col = "section_id" if "section_id" in cols else "''"
+                    d_col = "description" if "description" in cols else "''"
+                    l_expr = l_col or "'[]'"
+                    for cont, desc, sec_id, raw_lbls in con.execute(
+                        f"SELECT COALESCE(content,''), COALESCE({d_col},''), COALESCE({s_col},''), COALESCE({l_expr},'[]') FROM items{w_item}"
+                    ).fetchall():
+                        lbls: list[str] = []
+                        if isinstance(raw_lbls, str) and raw_lbls.strip().startswith("["):
+                            try:
+                                parsed = json.loads(raw_lbls)
+                                if isinstance(parsed, list):
+                                    lbls = [str(x) for x in parsed if x]
+                            except json.JSONDecodeError:
+                                pass
+                        elif raw_lbls:
+                            lbls = [s.strip() for s in str(raw_lbls).split(",") if s.strip()]
+                        items.append((str(cont), str(desc), sec_map.get(str(sec_id), ""), lbls))
+                except sqlite3.Error:
+                    return
+                finally:
+                    con.close()
+        elif "todoist" in json_states:
+            tdata = json_states["todoist"]
+            sec_map_j: dict[str, str] = {}
+            for s in tdata.get("sections") or []:
+                if isinstance(s, dict) and s.get("id") is not None:
+                    sec_map_j[str(s["id"])] = str(s.get("name") or "")
+            raw_items = tdata.get("items") or tdata.get("tasks") or []
+            for it in raw_items:
+                if not isinstance(it, dict) or it.get("is_deleted") or it.get("deleted"):
+                    continue
+                if it.get("checked") or it.get("is_completed"):
+                    completed_count += 1
+                lbls_raw = it.get("labels") or []
+                lbls = [str(x) for x in lbls_raw if x] if isinstance(lbls_raw, list) else []
+                sec_nm = str(it.get("section_name") or it.get("section") or sec_map_j.get(str(it.get("section_id") or ""), ""))
+                items.append((str(it.get("content") or ""), str(it.get("description") or ""), sec_nm, lbls))
+            if items:
+                delta_parts.append(f"todoist: items={len(items)} completed={completed_count}")
+        else:
+            return
+
+        handoff_missing: list[str] = []
+        proc_missing: list[str] = []
+        spec_missing: list[str] = []
+
+        for cont, desc, sec_nm, lbls in items:
+            cont_l = cont.lower()
+            lbls_l = {l.lower() for l in lbls}
+            if any(k in cont_l for k in ("handoff", "standup", "summary")) and lbls:
+                if not any(any(k in l for k in ("handoff", "summary", "meta")) for l in lbls_l):
+                    handoff_missing.append(f"{cont[:45]!r} (labels={lbls})")
+
+            in_resource = "re-source" in sec_nm.lower() or "capability-gap" in lbls_l
+            if not in_resource:
+                continue
+            blob = f"{cont}\n{desc}"
+            blob_l = blob.lower()
+            has_process_contrast = any(
+                re.search(p1, blob, re.I) and re.search(p2, blob, re.I)
+                for p1, p2 in (
+                    (r"\bcompression[- ]mould\w*", r"(?:\binjection[- ]mould\w*|\bliquid silicone rubber\b|\bLSR\b)"),
+                    (r"(?:\bflexible printed circuit\b|\bFPC\b)", r"\brigid FR-?4\b"),
+                    (r"\bdiamond[- ]polish\w*", r"\btumble finish\w*"),
+                    (r"(?:\bmetal[- ]injection[- ]mould\w*|\bMIM\b)", r"\binvestment casting\b"),
+                    (r"\bUSB-C cable assembly\b", r"\bcrimped wire harness\w*"),
+                )
+            )
+            if has_process_contrast and "process-gap" not in lbls_l:
+                proc_missing.append(cont[:60])
+
+            has_spec_gap = (
+                bool(re.search(r"\bClass\s+2A\b", blob, re.I))
+                or bool(
+                    re.search(r"\boptical[- ]grade\b", blob, re.I)
+                    and re.search(r"(?:\bopaque\b|\btumble finish\w*|\bdiamond[- ]polish\w*|\blight[- ]pipe\b)", blob, re.I)
+                )
+                or ("e-marker" in blob_l and bool(re.search(r"\b5\s*A\b", blob)))
+                or bool(re.search(r"(?:\bEMI gaskets?\b|conductive-fabric-over-foam)", blob, re.I))
+            )
+            if has_spec_gap and "spec-gap" not in lbls_l:
+                spec_missing.append(cont[:60])
+
+        if handoff_missing:
+            issues.append(
+                f"Todoist handoff/summary task(s) missing a handoff/summary label: {'; '.join(handoff_missing[:3])} "
+                "— add label 'handoff' (or 'summary'/'meta')."
+            )
+        if proc_missing:
+            issues.append(
+                f"Todoist Re-source card(s) with process contrast missing label 'process-gap': "
+                f"{'; '.join(proc_missing[:4])} — add 'process-gap'."
+            )
+        if spec_missing:
+            issues.append(
+                f"Todoist Re-source card(s) with missing/unverified spec or rating missing label 'spec-gap': "
+                f"{'; '.join(spec_missing[:4])} — add 'spec-gap'."
+            )
+
+    @staticmethod
+    def _doc_full_text(doc: dict[str, Any]) -> str:
+        """Extract plain text lines from a ``google_docs_mock`` document record."""
+        content = doc.get("content")
+        if isinstance(content, dict) and isinstance(content.get("blocks"), list):
+            lines = [str(b.get("text") or "").strip() for b in content["blocks"] if isinstance(b, dict)]
+            return "\n".join(ln for ln in lines if ln)
+        for key in ("body", "text", "content"):
+            val = doc.get(key)
+            if isinstance(val, str) and val.strip():
+                return val
+        return ""
+
+    @staticmethod
+    def _extract_high_open_findings(doc: dict[str, Any]) -> list[str]:
+        """Return High-severity Open finding descriptions from a Google Docs audit document."""
+        blocks = ((doc.get("content") or {}).get("blocks")) if isinstance(doc.get("content"), dict) else None
+        entries: list[tuple[str, str]] = []
+        if isinstance(blocks, list) and blocks:
+            for b in blocks:
+                if isinstance(b, dict):
+                    t = str(b.get("text") or "").strip()
+                    if t:
+                        entries.append((str(b.get("type") or "").lower(), t))
+        else:
+            for ln in ToolHost._doc_full_text(doc).splitlines():
+                if ln.strip():
+                    entries.append(("paragraph", ln.strip()))
+
+        findings: dict[str, str] = {}
+        order: list[str] = []
+        in_reassess = False
+        for btype, txt in entries:
+            if txt.lower().startswith("re-assessment"):
+                in_reassess = True
+                continue
+            if in_reassess:
+                if btype.startswith("heading"):
+                    in_reassess = False
+                else:
+                    m_f = re.search(r"\bFinding\s+(\d+)\b", txt, re.I)
+                    fid = f"Finding {m_f.group(1)}" if m_f else f"Re-assessment Finding ({len(order) + 1})"
+                    if fid not in findings:
+                        order.append(fid)
+                    findings[fid] = txt
+                    continue
+            m = re.match(r"^(?:[-*]\s*)?(Finding\s+\d+|F-\d+)\b[.:|\s-]*(.*)$", txt, re.I)
+            if m:
+                fid = m.group(1)
+                if fid not in findings:
+                    order.append(fid)
+                findings[fid] = txt
+
+        def _is_resolved(t: str) -> bool:
+            tl = t.lower()
+            if re.search(
+                r"\b(?:status:\s*open|finding\s+remains?\s+open|finding\s+is\s+open|"
+                r"no\s+remediation\b.*?\b(?:agreed|approved|verified)|not\s+yet\s+(?:issued|approved|been\s+received)|"
+                r"no\s+verified\s+(?:correction|completion|record)|promises?\s+to\s+complete|remain\s+scheduled|"
+                r"pending\s+a?\s*certified)\b",
+                tl,
+            ):
+                return False
+            return bool(
+                re.search(
+                    r"(?:\b(?:confirmed\s+resolved|status:\s*(?:resolved|closed)|no\s+residual\s+issue\s+remains|"
+                    r"issued\s+a?\s*(?:written\s+)?clearance|quarantined\s+and\s+destroyed|"
+                    r"replaced\s+it\b.*\bconfirmed|repaired\s+it\b.*\bconfirmed|"
+                    r"completed\s+installation\b.*\bverified|upgraded\b.*\bcompleted\s+and\s+verified|"
+                    r"auditor\s+confirmed\b.*\bcomplete|reviewed\s+and\s+accepted|"
+                    r"formal\s+acknowledgement\b.*\bno\s+recurrence|"
+                    r"documented\b.*\breviewed\b.*\bconfirmed\s+it\s+was\s+captured)\b|"
+                    r"\b(?:closed|resolved)\b(?=\s*(?:$|[|)\],;])))",
+                    tl,
+                )
+            )
+
+        def _is_high(t: str) -> bool:
+            tl = t.lower()
+            if re.search(
+                r"\b(?:severity:\s*high|with\s+high\s+severity|classified\s+(?:the\s+issue|this)\s+as\s+high|\[\s*high\s*\])\b",
+                tl,
+            ):
+                return True
+            if re.search(
+                r"\b(?:severity:\s*(?:medium|low)|classified\s+this\s+as\s+a\s+documentation|\bmedium\b|\blow\b)\b",
+                tl,
+            ) and "high" not in tl:
+                return False
+            if re.search(
+                r"\b(?:regulatory\s+(?:violation|threshold|permit\s+violation)|permit\s+violation|"
+                r"environmental\s+contamination\s+risk|exceeding\s+the\s+regulatory\s+threshold|"
+                r"eu\s+rohs|eu\s+reach|green\s+claims\s+directive|statutory\b.*\bcap)\b",
+                tl,
+            ):
+                return True
+            if re.search(
+                r"\b(?:worker-safety\s+hazard|direct\s+product-safety\s+risk|catastrophic\s+press\s+failure|"
+                r"fire\s+suppression\s+system\b.*\bnon-operational|respiratory\s+ppe|osha-aligned)\b",
+                tl,
+            ):
+                return True
+            for m_usd in re.finditer(r"(?:USD|\$)\s*([\d,\s]+)", t, re.I):
+                num_s = re.sub(r"[\s,]", "", m_usd.group(1))
+                if num_s.isdigit() and int(num_s) > 50_000:
+                    return True
+            return False
+
+        return [f"{fid} ({findings[fid][:85]})" for fid in order if _is_high(findings[fid]) and not _is_resolved(findings[fid])]
+
+    def _audit_google_docs_rollup(
+        self,
+        gdocs_state: dict[str, Any],
+        issues: list[str],
+        delta_parts: list[str],
+    ) -> None:
+        """Cross-check ``<Supplier Name> | High+Open: <N>`` rollup lines against audit docs in ``state.json``."""
+        docs = [
+            f
+            for f in (gdocs_state.get("files") or gdocs_state.get("documents") or [])
+            if isinstance(f, dict) and not f.get("trashed") and str(f.get("type") or "document") in ("document", "doc", "")
+        ]
+        if not docs:
+            return
+
+        audit_docs: list[tuple[str, str, list[str]]] = []
+        rollup_docs: list[tuple[str, list[tuple[str, int]]]] = []
+        for doc in docs:
+            title = str(doc.get("name") or doc.get("title") or doc.get("id") or "").strip()
+            txt = self._doc_full_text(doc)
+            matches = _GDOCS_ROLLUP_LINE_RE.findall(txt)
+            if matches:
+                rollup_docs.append((title, [(m[0].strip(), int(m[1])) for m in matches]))
+                continue
+            high_open = self._extract_high_open_findings(doc)
+            supplier_key = re.sub(r"\s*[—–-]\s*(?:Q\d.*|Audit.*)$", "", title, flags=re.I).strip()
+            if supplier_key and ("audit" in title.lower() or "finding" in txt.lower() or high_open):
+                audit_docs.append((supplier_key, supplier_key.lower(), high_open))
+
+        if not rollup_docs or not audit_docs:
+            return
+
+        for rtitle, entries in rollup_docs:
+            reported_names: set[str] = set()
+            for sup_name, claimed_n in entries:
+                sup_l = sup_name.lower()
+                matched = next(
+                    (ad for ad in audit_docs if ad[1] == sup_l or sup_l in ad[1] or ad[1] in sup_l),
+                    None,
+                )
+                if matched is None:
+                    continue
+                canon_name, canon_l, high_open = matched
+                reported_names.add(canon_l)
+                if claimed_n != len(high_open):
+                    f_list = "; ".join(high_open[:5]) or "(none)"
+                    issues.append(
+                        f"Google Docs roll-up {rtitle!r} reports `{sup_name} | High+Open: {claimed_n}` "
+                        f"but {canon_name!r} audit doc has {len(high_open)} High+Open finding(s): {f_list}."
+                    )
+            missing_qualifying = [
+                f"{canon_name} (High+Open: {len(high_open)}: {'; '.join(high_open[:3])})"
+                for canon_name, canon_l, high_open in audit_docs
+                if high_open and canon_l not in reported_names
+            ]
+            if missing_qualifying:
+                issues.append(
+                    f"Google Docs roll-up {rtitle!r} omits qualifying High+Open supplier(s): "
+                    f"{'; '.join(missing_qualifying[:5])}."
+                )
+        delta_parts.append(f"google_docs: docs={len(docs)} rollups={len(rollup_docs)}")
+
     def audit_service_state_delta(self) -> tuple[bool, list[str], str]:
         """Audit live mock service state deltas before exit and emit ``(blocking, issues, [service-delta])``."""
         if not self.is_sj:
@@ -1824,6 +2680,25 @@ class ToolHost:
                     ).fetchone()
                     cur_done = int(done_row[0]) if done_row else 0
                     cur_links = len(links)
+                    dup_link_cnt = sum(1 for _, _, lt in links if "duplicate" in str(lt).lower())
+                    task_l = (self.task_markdown or "").lower()
+                    wants_dups = any(k in task_l for k in ("duplicate", "duplicates", "查重"))
+                    wants_triage_only = (
+                        not wants_dups
+                        and "triage" in task_l
+                        and "jira" in task_l
+                        and "jira 里原有的 issue 也别碰" not in task_l
+                    )
+                    if wants_dups and dup_link_cnt == 0:
+                        issues.append(
+                            f"Jira issue_links has 0 'Duplicates' links (total issue_links={cur_links}); "
+                            "identify duplicate defects and link them using the 'Duplicates' link type."
+                        )
+                    elif wants_triage_only and cur_links == 0:
+                        issues.append(
+                            "Jira issue_links table has 0 links; link related/duplicate defects using "
+                            "`issue_links` (e.g. 'Duplicates')."
+                        )
                     d_links = cur_links - int(base_j.get("total_links", cur_links))
                     d_done = cur_done - int(base_j.get("done", cur_done))
                     if d_links or d_done or dup_msgs or todo_dups or "jira" in self.mutated_services:
@@ -1857,6 +2732,24 @@ class ToolHost:
                 issues.append(f"Jira duplicate issue link(s) found: {', '.join(dup_j[:4])}.")
             if todo_dups_j:
                 issues.append(f"Jira 'Duplicates' issue(s) still not 'Done': {', '.join(todo_dups_j[:6])}.")
+            dup_link_cnt_j = sum(c for k, c in lc.items() if "duplicate" in k[2])
+            task_l = (self.task_markdown or "").lower()
+            wants_dups = any(k in task_l for k in ("duplicate", "duplicates", "查重"))
+            wants_triage_only = (
+                not wants_dups
+                and "triage" in task_l
+                and "jira" in task_l
+                and "jira 里原有的 issue 也别碰" not in task_l
+            )
+            if wants_dups and dup_link_cnt_j == 0:
+                issues.append(
+                    f"Jira issue_links has 0 'Duplicates' links (total issue_links={len(jlinks)}); "
+                    "identify duplicate defects and link them using the 'Duplicates' link type."
+                )
+            elif wants_triage_only and not jlinks:
+                issues.append(
+                    "Jira issue_links has 0 links; link related/duplicate defects using 'Duplicates'."
+                )
             if jlinks or jissues:
                 done_j = sum(1 for st in jissues.values() if st.strip().lower() == "done")
                 delta_parts.append(f"jira: links={len(jlinks)} done={done_j}")
@@ -2014,6 +2907,22 @@ class ToolHost:
                         "comments": self._sqlite_table_count(con, "comments"),
                         "exports": self._sqlite_table_count(con, "exports"),
                     }
+                    try:
+                        doc_rows = [
+                            (str(r[0] or ""), str(r[1] or ""))
+                            for r in con.execute(
+                                "SELECT COALESCE(name, ''), COALESCE(extension, '') "
+                                "FROM documents WHERE type = 'file'"
+                            ).fetchall()
+                        ]
+                    except sqlite3.Error:
+                        doc_rows = [
+                            (str(r[0] or ""), "")
+                            for r in con.execute(
+                                "SELECT COALESCE(name, '') FROM documents WHERE type = 'file'"
+                            ).fetchall()
+                        ]
+                    self._audit_dws_csv_uploads(cur_d["files"], doc_rows, False, issues)
                     deltas = {k: cur_d[k] - int(base_d.get(k, cur_d[k])) for k in cur_d}
                     if any(deltas.values()) or "dws" in self.mutated_services:
                         delta_parts.append(
@@ -2025,6 +2934,13 @@ class ToolHost:
                     pass
                 finally:
                     con.close()
+        elif "dws" in json_states:
+            dws_j = json_states["dws"]
+            fval = dws_j.get("files")
+            cur_f = len(fval) if isinstance(fval, list) else int(fval or 0)
+            self._audit_dws_csv_uploads(cur_f, [], True, issues)
+            if cur_f or "dws" in self.mutated_services:
+                delta_parts.append(f"dws: files={cur_f}")
 
         # --- GWS ---
         if "gws" in dbs:
@@ -2066,27 +2982,18 @@ class ToolHost:
                     con.close()
 
         # --- Todoist ---
-        if "todoist" in dbs:
-            con = self._open_ro_sqlite(dbs["todoist"])
-            if con is not None:
-                try:
-                    base_t = self._service_baseline.get("todoist") or {}
-                    cols = {str(r[1]) for r in con.execute("PRAGMA table_info(items)").fetchall()}
-                    if cols:
-                        cur_i = self._sqlite_table_count(con, "items", active_only=True)
-                        checked_col = "checked" if "checked" in cols else ("is_completed" if "is_completed" in cols else "")
-                        cur_c = 0
-                        if checked_col:
-                            r = con.execute(f"SELECT COUNT(*) FROM items WHERE {checked_col} != 0").fetchone()
-                            cur_c = int(r[0]) if r else 0
-                        di = cur_i - int(base_t.get("items", cur_i))
-                        dc = cur_c - int(base_t.get("completed", cur_c))
-                        if di or dc or "todoist" in self.mutated_services:
-                            delta_parts.append(f"todoist: items={cur_i}({di:+d}) completed={cur_c}({dc:+d})")
-                except sqlite3.Error:
-                    pass
-                finally:
-                    con.close()
+        self._audit_todoist_state(dbs, json_states, issues, delta_parts)
+
+        # --- Stripe ---
+        if "stripe" in dbs:
+            self._audit_stripe_state(dbs["stripe"], issues, delta_parts)
+
+        # --- Google Docs Rollup ---
+        if "google_docs" in json_states:
+            self._audit_google_docs_rollup(json_states["google_docs"], issues, delta_parts)
+
+        # --- Cross-Service Foreign Keys (Jira PROJ-* & Box 17943*) ---
+        self._audit_cross_service_foreign_keys(dbs, json_states, issues)
 
         receipt = f"[service-delta: {' | '.join(delta_parts)}]" if delta_parts else ""
         if len(receipt) > 650:

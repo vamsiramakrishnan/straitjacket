@@ -158,12 +158,23 @@ def _collect_service_and_ui_gate(host: Any) -> tuple[bool, list[str], str]:
     browser = getattr(host, "browser", None)
     ui_fn = getattr(browser, "check_uncommitted_ui_state", None) if browser is not None else None
     if callable(ui_fn):
-        ui_res = ui_fn()
-        if isinstance(ui_res, (list, tuple, set)):
+        try:
+            ui_res = ui_fn(check_exit=True)
+        except TypeError:
+            ui_res = ui_fn()
+        ui_issues: list[str] = []
+        if isinstance(ui_res, str):
+            raw_ui = ui_res.strip()
+            if raw_ui:
+                ui_issues = [raw_ui]
+        elif isinstance(ui_res, (list, tuple, set)):
             ui_issues = [str(item).strip() for item in ui_res if str(item).strip()]
-            if ui_issues:
-                blocking = True
-                issues.extend(ui_issues)
+        if ui_issues:
+            blocking = True
+            issues.extend(ui_issues)
+            if len(ui_issues) == 1 and ui_issues[0].startswith("[uncommitted-ui-state:"):
+                receipts.append(ui_issues[0])
+            else:
                 receipts.append(f"[uncommitted-ui-state: {'; '.join(ui_issues)}]")
 
     return blocking, issues, "\n".join(receipts)

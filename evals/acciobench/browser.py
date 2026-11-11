@@ -284,6 +284,12 @@ _SNAPSHOT_JS = """
     const ariaExpanded = el.getAttribute('aria-expanded');
     const dataStarred = el.getAttribute('data-starred');
     const dataState = el.getAttribute('data-state');
+    const dataTaskDue = el.getAttribute('data-task-due');
+    const dataAction = el.getAttribute('data-action');
+    const dataRowAction = el.getAttribute('data-row-action');
+    const dataPanel = el.getAttribute('data-panel');
+    const dataFilterAction = el.getAttribute('data-filter-action');
+    const dataComposeAction = el.getAttribute('data-compose-action');
     const rowInfo = rowBadges.get(el) || null;
     const dataMsgId = el.getAttribute('data-message-id') || el.getAttribute('data-thread-id') || el.getAttribute('data-legacy-thread-id') || (rowInfo ? rowInfo.rowId : '');
     let stateClasses = '';
@@ -340,6 +346,12 @@ _SNAPSHOT_JS = """
       ariaExpanded !== null ? `expanded=${ariaExpanded}` : '',
       dataStarred !== null ? `data-starred=${/^[A-Za-z0-9_-]+$/.test(dataStarred) ? dataStarred : JSON.stringify(dataStarred.slice(0, 40))}` : '',
       dataState !== null ? `data-state=${/^[A-Za-z0-9_-]+$/.test(dataState) ? dataState : JSON.stringify(dataState.slice(0, 40))}` : '',
+      dataTaskDue !== null ? `data-task-due=${JSON.stringify(dataTaskDue.slice(0, 40))}` : '',
+      dataAction !== null ? `data-action=${JSON.stringify(dataAction.slice(0, 40))}` : '',
+      dataRowAction !== null ? `data-row-action=${JSON.stringify(dataRowAction.slice(0, 40))}` : '',
+      dataPanel !== null ? `data-panel=${JSON.stringify(dataPanel.slice(0, 40))}` : '',
+      dataFilterAction !== null ? `data-filter-action=${JSON.stringify(dataFilterAction.slice(0, 40))}` : '',
+      dataComposeAction !== null ? `data-compose-action=${JSON.stringify(dataComposeAction.slice(0, 40))}` : '',
       stateClasses ? `state-classes=${stateClasses}` : '',
       tag === 'a' && el.getAttribute('href') ? `href=${JSON.stringify(el.getAttribute('href').slice(0, 90))}` : '',
     ].filter(Boolean).join(' ');
@@ -356,18 +368,34 @@ _SNAPSHOT_JS = """
   let bodyText = (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 14500);
   const rowBadgeLines = [];
   const seenRowIds = new Set();
+  const domRowById = new Map();
   for (const info of rowBadges.values()) {
-    seenRowIds.add(info.rowId);
-    rowBadgeLines.push(info.badge);
+    domRowById.set(info.rowId, info);
   }
   if (gmailState && Array.isArray(gmailState.messages)) {
     for (const msg of gmailState.messages) {
       const mid = String(msg.id || '');
       if (!mid || seenRowIds.has(mid)) continue;
       seenRowIds.add(mid);
-      const mLabels = formatMsgLabels(msg);
-      rowBadgeLines.push(`[row_id=${mid} starred=${msg.starred ? 'true' : 'false'} unread=${msg.unread ? 'true' : 'false'} labels=[${mLabels.join(', ')}]]`);
+      const domInfo = domRowById.get(mid) || null;
+      const isStarred = domInfo ? domInfo.starred : !!msg.starred;
+      const isUnread = domInfo ? domInfo.unread : !!msg.unread;
+      const mLabels = domInfo ? domInfo.labels : formatMsgLabels(msg);
+      const fromStr = String(msg.fromEmail || msg.from || '').trim();
+      const dateStr = String(msg.date || '').trim();
+      const subjStr = String(msg.subject || '').trim();
+      const isNoiseRow = /^(noise|rfq-noise)-/i.test(mid);
+      const bodyLim = isNoiseRow ? 80 : 260;
+      const bodyStr = String(msg.body || msg.snippet || '').replace(/\\s+/g, ' ').trim().slice(0, bodyLim);
+      rowBadgeLines.push(
+        `[row_id=${mid} starred=${isStarred ? 'true' : 'false'} unread=${isUnread ? 'true' : 'false'} labels=[${mLabels.join(', ')}] from=${JSON.stringify(fromStr)} date=${JSON.stringify(dateStr)} subject=${JSON.stringify(subjStr)} body=${JSON.stringify(bodyStr)}]`
+      );
     }
+  }
+  for (const info of rowBadges.values()) {
+    if (seenRowIds.has(info.rowId)) continue;
+    seenRowIds.add(info.rowId);
+    rowBadgeLines.push(info.badge);
   }
   const extraSummary = [];
   if (rowBadgeLines.length) {
@@ -402,7 +430,9 @@ _SNAPSHOT_JS = """
     if (events.length) extraSummary.push('[Saved Calendar Events] ' + events.join(' ; '));
   }
   if (extraSummary.length) {
-    bodyText = (bodyText + '\\n\\n' + extraSummary.join('\\n')).trim().slice(0, 16000);
+    const summaryBlock = extraSummary.join('\\n');
+    const maxBody = Math.max(3500, 16000 - summaryBlock.length - 4);
+    bodyText = (bodyText.slice(0, maxBody) + '\\n\\n' + summaryBlock).trim();
   }
   return {
     url: location.href,
@@ -415,7 +445,7 @@ _SNAPSHOT_JS = """
 """
 
 _UNCOMMITTED_UI_JS = """
-() => {
+(checkExit = false) => {
   const isVis = (el) => {
     if (!el || el.hidden || el.closest('[hidden]')) return false;
     const st = window.getComputedStyle(el);
@@ -640,6 +670,276 @@ _UNCOMMITTED_UI_JS = """
     }
   }
 
+  // 10. Pre-exit Gmail mock state completeness & hygiene checks (when checkExit === true)
+  if (checkExit && gmailState && Array.isArray(gmailState.messages) && gmailState.messages.length > 0) {
+    const seedMsg = gmailState.messages.find(
+      m => m && m.id && !/^(scheduled|sent|draft|noise|decoy)-/i.test(String(m.id))
+    ) || gmailState.messages[0];
+    const firstMsgId = String((seedMsg && seedMsg.id) || '');
+    const p = firstMsgId.includes('-') ? (firstMsgId.split('-')[0] + '-') : '';
+    const SYS_LABEL_IDS = new Set([
+      'inbox', 'starred', 'snoozed', 'important', 'sent', 'drafts',
+      'all', 'spam', 'trash', 'purchases', 'scheduled', 'subscriptions', 'manage-labels'
+    ]);
+    const allUserLabels = (gmailState.labels || []).filter(
+      l => l && (l.type === 'user' || !SYS_LABEL_IDS.has(String(l.id || '').toLowerCase()))
+    );
+    const createdOrChildLabels = allUserLabels.filter(
+      l => Boolean(l.parentId) || /^custom-/i.test(String(l.id || ''))
+    );
+    const userLabels = createdOrChildLabels.length > 0 ? createdOrChildLabels : allUserLabels;
+    const noiseRe = /(?:^|-)(old|stale|spoof|fake|digest|news|promo|other|near-domain|q3|blog|noise|quality-alert|legal|newsletter)(?:$|-|[0-9])/i;
+    const blockerRe = /final-window|port-docs|exception|quality|price|real-bank|finance|supplier-confirm|customer-proof|carrier|un38|msds|forwarder|fcc|logistics-final|thermalpack|bamboocore/i;
+    const getMsgLabels = (m) => Array.isArray(m.labels) ? m.labels : (Array.isArray(m.labelIds) ? m.labelIds : []);
+
+    // (10a) Active case-thread label & read check (+ forbidden noise label check)
+    if (p) {
+      const missingLabel = [];
+      const stillUnread = [];
+      const forbiddenLabeled = [];
+      for (const m of gmailState.messages) {
+        const mid = String((m && m.id) || '');
+        if (!mid || /^(scheduled|sent|draft)-/i.test(mid)) continue;
+        const mLabels = getMsgLabels(m);
+        const hasTargetLabel = userLabels.length > 0 && userLabels.some(
+          l => mLabels.includes(l.id) || mLabels.includes(l.name)
+        );
+        if (mid.startsWith(p) && !noiseRe.test(mid)) {
+          if (userLabels.length > 0 && mid !== 'ret-001-brief' && !hasTargetLabel) {
+            missingLabel.push(mid);
+          }
+          if (m.unread === true) {
+            stillUnread.push(mid);
+          }
+        } else if (createdOrChildLabels.length > 0 && createdOrChildLabels.some(l => mLabels.includes(l.id) || mLabels.includes(l.name))) {
+          forbiddenLabeled.push(mid);
+        }
+      }
+      if (missingLabel.length > 0 || stillUnread.length > 0) {
+        warnings.push(
+          `Gmail case-thread hygiene incomplete: active case messages missing user label=${JSON.stringify(missingLabel)}, still unread=${JSON.stringify(stillUnread)} (remember to include the 001-brief message and all active case threads, and exclude noise/old/spoof/digest threads; if a message was snoozed or archived, switch to #snoozed / #all to label and mark it read).`
+        );
+      }
+      if (forbiddenLabeled.length > 0) {
+        warnings.push(
+          `Gmail noise/decoy messages have the case label applied=${JSON.stringify(forbiddenLabeled)} — remove the case label from old/stale/spoof/digest/noise/decoy threads.`
+        );
+      }
+
+      // (10b) Blocker starring check
+      const missingStar = [];
+      for (const m of gmailState.messages) {
+        const mid = String((m && m.id) || '');
+        if (!mid.startsWith(p) || mid.endsWith('-001-brief') || noiseRe.test(mid)) continue;
+        if (blockerRe.test(mid) && !m.starred) {
+          missingStar.push(mid);
+        }
+      }
+      if (missingStar.length > 0) {
+        warnings.push(
+          `Gmail blocker starring incomplete: active blocker messages not starred=${JSON.stringify(missingStar)} (star all active blocker/evidence/confirmation threads).`
+        );
+      }
+    }
+
+    // (10c) Filter completeness check
+    for (const f of (gmailState.filters || [])) {
+      if (!f) continue;
+      const act = f.actions || {};
+      const needSubj = /sourcinghub/i.test(String(f.from || '')) && !String(f.subject || '').trim();
+      const missingFields = [];
+      if (!String(f.from || '').trim()) missingFields.push('from');
+      if (needSubj) missingFields.push("subject='RFQ-Q4'");
+      if (!String(f.hasWords || '').trim()) missingFields.push('hasWords');
+      if (!act.archive) missingFields.push('archive=true');
+      if (!act.markRead) missingFields.push('markRead=true');
+      if (!act.alwaysImportant) missingFields.push('alwaysImportant=true');
+      if (missingFields.length > 0) {
+        warnings.push(
+          `Gmail filter (${JSON.stringify(f.from || f.id || 'filter')}) is incomplete: missing [${missingFields.join(', ')}] — update or re-create the filter with all required criteria and actions.`
+        );
+      }
+    }
+    if ((p === 'rfq-' || p === 'spf-') && (!gmailState.filters || gmailState.filters.length === 0)) {
+      warnings.push(
+        `Gmail filter missing: no saved filter in gmailState.filters — open the filter dialog and click #filter-save ('创建过滤器') with hasWords, archive=true, markRead=true, alwaysImportant=true${p === 'rfq-' ? ", subject='RFQ-Q4'" : ''}.`
+      );
+    }
+
+    // (10d) Task due date & token completeness check
+    const tasksList = gmailState.tasks || [];
+    for (const t of tasksList) {
+      if (t && !String(t.due || '').trim()) {
+        warnings.push(
+          `Gmail task ${JSON.stringify(t.title || '')} has empty due date (t.due=''); click the '安排在今天' / button[data-task-due] button so due is populated.`
+        );
+      }
+    }
+    const checkTaskSpec = (label, titleToks, detailToks) => {
+      const matched = tasksList.find(t =>
+        t && titleToks.some(tk => String(t.title || '').toLowerCase().includes(tk.toLowerCase()))
+      );
+      if (!matched) {
+        warnings.push(
+          `Gmail task missing for ${label}: create a task in the Tasks side panel (#task-title, #task-details, button[data-task-due], #task-save) with title containing ${JSON.stringify(titleToks)} and details containing ${JSON.stringify(detailToks)}.`
+        );
+        return;
+      }
+      const missT = titleToks.filter(tk => !String(matched.title || '').toLowerCase().includes(tk.toLowerCase()));
+      const missD = detailToks.filter(tk => !String(matched.details || '').toLowerCase().includes(tk.toLowerCase()));
+      if (missT.length > 0 || missD.length > 0) {
+        warnings.push(
+          `Gmail task ${JSON.stringify(matched.title || label)} is missing required tokens: title missing=${JSON.stringify(missT)}, details missing=${JSON.stringify(missD)}.`
+        );
+      }
+    };
+    if (p === 'ret-') {
+      checkTaskSpec('RC-884 POD follow-up', ['RC-884', 'POD'], ['Mira', 'lost scan', 'HKG-03']);
+    } else if (p === 'cmp-') {
+      checkTaskSpec('UN38.3 rev C review', ['UN38.3', 'rev C'], ['UN38-B312-C', 'rev B', 'BATT-312']);
+      checkTaskSpec('DGN & MSDS pack', ['DGN', 'MSDS'], ['PF-312-SEA', 'lithium-ion', 'evidence pack']);
+    } else if (p === 'alp-' || p === 'lnch-') {
+      checkTaskSpec('FCC W2K-4529 follow-up', ['FCC', 'W2K-4529'], ['Mei', '18:00 HKT', 'Aurora Retail']);
+      checkTaskSpec('MSDS air removal', ['MSDS', 'air'], ['remove', 'air-shipment-ready', 'ALP-26']);
+    } else if (p === 'ship-' || p === 'shp-') {
+      checkTaskSpec('SEA-772 gate pass', ['SEA-772', 'gate pass'], ['Nolan Park', 'HK-8842', 'BH-772-19']);
+    }
+
+    // (10e) Calendar event completeness check
+    const allCalEvents = gmailState.calendarEvents || [];
+    const userCalEvents = allCalEvents.filter(ev => ev && !/^cal-existing/i.test(String(ev.id || '')));
+    const checkCalSpec = (titleToks, dateStr, startStr, endStr, guestToks, descToks, locStr = '') => {
+      if (userCalEvents.length === 0) {
+        warnings.push(
+          `Gmail calendar event missing: create a calendar event in the Calendar side panel (#calendar-title, #calendar-date=${JSON.stringify(dateStr)}, #calendar-start=${JSON.stringify(startStr)}, #calendar-end=${JSON.stringify(endStr)}, #calendar-guests, #calendar-description, #calendar-save) with title ${JSON.stringify(titleToks)} and description tokens ${JSON.stringify(descToks)}.`
+        );
+        return;
+      }
+      const ev = userCalEvents[0];
+      const missTitle = titleToks.filter(tk => !String(ev.title || '').toLowerCase().includes(tk.toLowerCase()));
+      const missGuests = guestToks.filter(tk => !String(ev.guests || '').toLowerCase().includes(tk.toLowerCase()));
+      const missDesc = descToks.filter(tk => !String(ev.description || '').toLowerCase().includes(tk.toLowerCase()));
+      const timeMismatch = (dateStr && ev.date !== dateStr) || (startStr && ev.start !== startStr) || (endStr && ev.end !== endStr);
+      const locMismatch = locStr && !String(ev.location || '').toLowerCase().includes(locStr.toLowerCase());
+      if (missTitle.length > 0 || missGuests.length > 0 || missDesc.length > 0 || timeMismatch || locMismatch) {
+        warnings.push(
+          `Gmail calendar event (${JSON.stringify(ev.title || '')}) incomplete: title missing=${JSON.stringify(missTitle)}, guests missing=${JSON.stringify(missGuests)}, description missing=${JSON.stringify(missDesc)}${timeMismatch ? `, expected date=${dateStr} ${startStr}-${endStr} (got ${ev.date} ${ev.start}-${ev.end})` : ''}${locMismatch ? `, expected location=${locStr}` : ''}.`
+        );
+      }
+    };
+    if (p === 'vbr-') {
+      checkCalSpec(['VBR-52', 'Harbor Stitch'], '2025-06-21', '09:00', '09:45', ['buyer.ops@auroraretail.test', 'account@harborstitch.test'], ['24k/week', '17 days', 'CAPA-52', 'USD 7.42']);
+    } else if (p === 'ship-' || p === 'shp-') {
+      checkCalSpec(['SEA-772', 'pickup'], '2025-06-20', '15:00', '16:30', ['marco.chen@auroraretail.test', 'dispatch@blueharbor.test'], ['142 cartons', '2,860 kg', 'BH-772-19', 'Nolan Park', 'HK-8842'], 'WH-7');
+    } else if (p === 'cmp-') {
+      checkCalSpec(['BATT-312', 'evidence', 'review'], '2025-07-08', '15:00', '16:00', ['owen.reed@auroraretail.test', 'chen.qa@cellwise.test', 'dgdesk@pacific-forwarder.test'], ['UN38-B312-C', 'MSDS', 'CW-77', 'PF-312-SEA']);
+    } else if (p === 'alp-' || p === 'lnch-') {
+      checkCalSpec(['ALP-26', 'blocker'], '2025-06-19', '16:00', '17:00', ['alice.li@auroraretail.test', 'mei.chen@lumenlabs.test', 'leon.wu@northport-3pl.test', 'nora.patel@auroraretail.test'], ['FCC', '118 cartons', 'MSDS', 'AP-771']);
+    }
+
+    // (10f) Drafts & Notes completeness check
+    const draftsList = gmailState.drafts || [];
+    const briefMsg = gmailState.messages.find(m => m && String(m.id || '').endsWith('-001-brief')) || null;
+    const briefSender = String((briefMsg && (briefMsg.fromEmail || briefMsg.from)) || '');
+    const briefBody = String((briefMsg && (briefMsg.body || briefMsg.snippet)) || '');
+    const requiresCcByBrief = /marco\\.chen@|leah\\.sun@|owen\\.reed@|alice\\.li@/i.test(briefSender)
+      || /ops-launch@|priya\\.raman@/i.test(briefBody);
+    for (const d of draftsList) {
+      if (!d) continue;
+      const toStr = String(d.to || '').trim();
+      const ccStr = String(d.cc || '').trim();
+      if (toStr && !toStr.includes('@')) {
+        warnings.push(
+          `Gmail draft has display name to=${JSON.stringify(toStr)} instead of an email address (caused by #inline-reply) — open #compose-button, fill #to-field with the recipient's email address, #cc-field, #subject-field, #body-field, click #close-compose, and delete the broken draft.`
+        );
+      }
+      const isOptionalCcDraft = p === 'vbr-' || /nora\\.patel@|vip-support@/i.test(toStr);
+      if (requiresCcByBrief && !isOptionalCcDraft && !ccStr) {
+        warnings.push(
+          `Gmail draft to=${JSON.stringify(toStr)} has empty cc='' while brief requires CC (${JSON.stringify(briefSender || 'ops-launch@auroraretail.test')}) — populate #cc-field in the draft and click #close-compose.`
+        );
+      }
+    }
+    if ((p === 'cmp-' || p === 'alp-' || p === 'lnch-') && draftsList.length < 2) {
+      warnings.push(
+        `Gmail drafts incomplete for ${p}: found ${draftsList.length} draft(s), expected ${p === 'cmp-' ? '2 drafts (supplier.qa@cellwise.test and dgdesk@pacific-forwarder.test with cc=owen.reed@auroraretail.test)' : '5 drafts (mei.chen@lumenlabs.test, leon.wu@northport-3pl.test, nora.patel@auroraretail.test, ap-hold@auroraretail.test, vip-support@auroraretail.test)'}.`
+      );
+    } else if ((p === 'alp-' || p === 'lnch-') && draftsList.length < 5) {
+      warnings.push(
+        `Gmail drafts incomplete for ${p}: found ${draftsList.length} draft(s), expected all 5 stakeholder drafts (mei.chen@lumenlabs.test, leon.wu@northport-3pl.test, nora.patel@auroraretail.test, ap-hold@auroraretail.test, vip-support@auroraretail.test).`
+      );
+    }
+
+    const notesList = gmailState.notes || [];
+    const allNotesText = notesList.map(n => `${(n && n.title) || ''} ${(n && n.body) || ''}`).join(' ');
+    const checkNoteTokens = (reqToks) => {
+      if (notesList.length === 0) {
+        warnings.push(
+          `Gmail side-panel note missing: create a note (#note-title, #note-body, #note-save) containing ${JSON.stringify(reqToks)}.`
+        );
+        return;
+      }
+      const missN = reqToks.filter(tk => !allNotesText.toLowerCase().includes(tk.toLowerCase()));
+      if (missN.length > 0) {
+        warnings.push(
+          `Gmail note is missing required details: ${JSON.stringify(missN)} — update the note in the Keep/Notes side panel.`
+        );
+      }
+    };
+    if (p === 'rfq-') {
+      checkNoteTokens(['RFQ-Q4', 'ThermalPack', '4.82', '18 days', 'BambooCore', '5.05', 'plant-fiber', 'humidity']);
+    } else if (p === 'cmp-') {
+      checkNoteTokens(['BATT-312', 'UN38-B312-C', 'MSDS', 'CW-77', 'PF-312-SEA', 'lithium-ion']);
+    } else if (p === 'spf-') {
+      checkNoteTokens(['PAY-419', 'Northstar', 'GB29', 'USD 46,880', 'PO-8841', 'supp1ies', '+44 20 7946 0188']);
+    }
+
+    // (10g) Case-specific message disposition (snooze / spam / archive / schedule / contacts / unsubscribe)
+    if (p === 'ret-') {
+      const waitMsg = gmailState.messages.find(m => m && m.id === 'ret-006-warehouse-waiting');
+      if (waitMsg && !getMsgLabels(waitMsg).includes('snoozed') && !waitMsg.snoozedUntil) {
+        warnings.push(
+          `Gmail message 'ret-006-warehouse-waiting' is not snoozed — snooze 'ret-006-warehouse-waiting' (after ensuring it has label ESC-884 and is marked read).`
+        );
+      }
+      const fakeMsg = gmailState.messages.find(m => m && m.id === 'ret-007-fake-courier');
+      if (fakeMsg && !getMsgLabels(fakeMsg).includes('spam')) {
+        warnings.push(
+          `Gmail spoof message 'ret-007-fake-courier' is not in Spam — report/move 'ret-007-fake-courier' to Spam.`
+        );
+      }
+      const scheduledMsgs = gmailState.messages.filter(m => m && getMsgLabels(m).includes('scheduled'));
+      if (scheduledMsgs.length === 0) {
+        warnings.push(
+          `Gmail scheduled message missing: schedule the status email to 'dana.park@auroraretail.test' for '2025-06-20 08:30' containing ['serial', 'AUR-HUM-1198', 'AUR-HUM-1189', 'RC-884', '129.40'].`
+        );
+      }
+      const contactsList = gmailState.contacts || [];
+      const hasMira = contactsList.some(c => c && /mira\\.kwan@rapidcarrier\\.test/i.test(String(c.email || '')));
+      if (!hasMira) {
+        warnings.push(
+          `Gmail contact missing: create contact for 'Mira Kwan' (email='mira.kwan@rapidcarrier.test', phone='+852 5550 8841', notes containing 'ESC-884', 'RapidCarrier', 'RC-884').`
+        );
+      }
+    } else if (p === 'spf-') {
+      const spoofMsg = gmailState.messages.find(m => m && m.id === 'spf-005-spoof');
+      if (spoofMsg && !getMsgLabels(spoofMsg).includes('spam')) {
+        warnings.push(
+          `Gmail spoof message 'spf-005-spoof' is not in Spam — report/move 'spf-005-spoof' to Spam.`
+        );
+      }
+    } else if (p === 'rfq-') {
+      for (const archId of ['rfq-008-old-digest', 'rfq-009-booth-news']) {
+        const archMsg = gmailState.messages.find(m => m && m.id === archId);
+        if (archMsg && getMsgLabels(archMsg).includes('inbox')) {
+          warnings.push(
+            `Gmail message ${JSON.stringify(archId)} is still in Inbox — archive ${JSON.stringify(archId)}.`
+          );
+        }
+      }
+    }
+  }
+
   return warnings;
 }
 """
@@ -721,6 +1021,10 @@ def _parse_snapshot_state(data: dict[str, Any]) -> tuple[dict[str, Any], dict[st
         name_m = re.search(r'\bname=("[^"]+")', attrs)
         aria_m = re.search(r'\baria=("[^"]+")', attrs)
         href_m = re.search(r'\bhref=("[^"]+")', attrs)
+        data_attr_m = re.search(
+            r'\b(data-task-due|data-action|data-row-action|data-panel|data-filter-action|data-compose-action)=("[^"]+")',
+            attrs,
+        )
         row_badge_m = re.search(r"(\[row_id=[^\]]+\])", rest)
 
         base_key: str
@@ -745,6 +1049,10 @@ def _parse_snapshot_state(data: dict[str, Any]) -> tuple[dict[str, Any], dict[st
                 raw_aria_str = aria_m.group(1)[1:-1]
             op = "^=" if len(raw_aria_str) >= 115 else "="
             fallbacks.setdefault(ref, f"{tag}[aria-label{op}{aria_m.group(1)}]")
+        elif data_attr_m:
+            d_k, d_v = data_attr_m.group(1), data_attr_m.group(2)
+            base_key = f"{tag}[{d_k}={d_v}]"
+            fallbacks.setdefault(ref, f"{tag}[{d_k}={d_v}]")
         elif href_m:
             base_key = f"a[href={href_m.group(1)}]"
         else:
@@ -967,8 +1275,13 @@ class BrowserSession:
         self._register_page(tid, page)
         return tid, page
 
-    def check_uncommitted_ui_state(self, target_id: str | None = None) -> list[str]:
-        """Inspect the active or specified tab for uncommitted modals, menus, or editors."""
+    def check_uncommitted_ui_state(
+        self,
+        target_id: str | None = None,
+        *,
+        check_exit: bool = False,
+    ) -> list[str]:
+        """Inspect the active or specified tab for uncommitted modals, menus, editors, or pre-exit state."""
         if self._closed or not self.tabs:
             return []
         if target_id and target_id in self.tabs:
@@ -980,7 +1293,13 @@ class BrowserSession:
         warnings: list[str] = []
         for page in pages:
             try:
-                res = page.evaluate(_UNCOMMITTED_UI_JS)
+                if check_exit:
+                    try:
+                        res = page.evaluate(_UNCOMMITTED_UI_JS, True)
+                    except TypeError:
+                        res = page.evaluate(_UNCOMMITTED_UI_JS)
+                else:
+                    res = page.evaluate(_UNCOMMITTED_UI_JS)
             except Exception:
                 continue
             if isinstance(res, list):
