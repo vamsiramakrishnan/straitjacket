@@ -1337,24 +1337,30 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     # A self-test that pins a proxy fails when the implementation finds a
     # better way to keep the promise.
     try:
-        from ctx.hook import classify
+        # What the Claude Code hook answers for an unbounded command, through
+        # the same gate and choke point as a live call.
+        from ctx import hook as _hook
 
-        d = classify(
-            {
-                "tool_name": "run_command",
-                "tool_input": {"CommandLine": "pytest -q", "Cwd": str(ws.root)},
-                "workspacePaths": [str(ws.root)],
-            }
-        )
-        verdict = str(d.get("decision"))
-        # classify() returns the public decision contract. Internal steering
-        # starts as ``_rewrite`` but is normalised to ``rewrite`` before the
-        # result leaves ctx.hook; checking the private key made doctor report a
-        # healthy collapsed rewrite as a failure after the first captured run.
-        rewritten = isinstance(d.get("rewrite"), dict)
-        contained = verdict in ("deny", "force_ask") or rewritten
-        how = f"pytest → {verdict}" + (" + collapsed rewrite" if rewritten else "")
-        check("hook classifier", contained, how)
+        payload = {"tool_name": "Bash", "cwd": str(ws.root),
+                   "tool_input": {"command": "pytest -q"}}
+        policy = _hook._load_guard_policy(str(ws.root))
+        policy["_flavor"] = "claude-code"
+        policy["_output_substitution"] = True
+        d = _hook.classify(payload, policy)
+        d = _hook._claude_permission_gate(d, payload, str(ws.root), policy)
+        emitted = _hook.claude_code_pre_tool_use_output(_hook._to_claude_code_schema(d), d)
+        hso = emitted.get("hookSpecificOutput", {})
+        steering = str(policy.get("steering", "auto"))
+        if "updatedInput" in hso:
+            how = ("pytest -q on Claude Code: rewritten to `ctx run`, no decision "
+                   f"(steering = {steering!r}; prompts concern the wrapper)")
+        elif hso.get("permissionDecision") in ("deny", "ask"):
+            how = f"pytest -q on Claude Code: {hso['permissionDecision']} (steering = {steering!r})"
+        else:
+            how = ("pytest -q on Claude Code: runs as written, no decision; the output "
+                   "gate bounds what it prints (steering = " + repr(steering) + ")")
+        ok = not (hso.get("permissionDecision") == "allow" and "updatedInput" in hso)
+        check("hook classifier", ok, how)
     except Exception as e:
         check("hook classifier", False, str(e))
 

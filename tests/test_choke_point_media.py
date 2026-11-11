@@ -66,7 +66,7 @@ def test_video_hint_on_bash_keeps_the_hint_and_has_no_decision(ws, monkeypatch, 
 # ------------------------------------------------- a. Read rules bind ctx verbs
 @pytest.mark.parametrize("kind", ["deny", "ask"])
 @pytest.mark.parametrize("command", [
-    "ctx get secrets/key.txt", "ctx search token", "ctx refs Token", "ctx diff run:a run:b",
+    "ctx get secrets/key.txt", "ctx search token", "ctx refs Token", "ctx map",
 ])
 def test_read_rules_withdraw_self_approval(tmp_path, monkeypatch, kind, command):
     home = tmp_path / "home"
@@ -84,7 +84,7 @@ def test_read_rules_withdraw_self_approval(tmp_path, monkeypatch, kind, command)
 @pytest.mark.parametrize("command", [
     "PYTHONPATH=. ctx get x", "env LD_PRELOAD=./x.so ctx stats", "ctx get x > ~/.bashrc",
     "./ctx get x", "/usr/local/bin/ctx get x", "ctx get x; ls", "ctx get x\nls",
-    "ctx get $(rm -rf y)", "ctx get 'x'", "command ctx get x", "ctx run -- ls",
+    "ctx get $(rm -rf y)", 'ctx get "x"', "command ctx get x", "ctx run -- ls",
 ])
 def test_no_prefixed_redirected_or_path_qualified_call_is_self_approved(tmp_path, monkeypatch, command):
     home = tmp_path / "home"

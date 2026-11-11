@@ -162,6 +162,8 @@ def render_static(host: str, regs: dict[str, dict[str, Any]] | None = None) -> l
         rewrite = ", ".join(sorted(gov.REWRITABLE[host])) + " only"
     if host in gov.REWRITE_WITHHELD:
         rewrite = "withheld"
+    if host == "claude-code":
+        rewrite = "Read limits yes; shell commands no (steering = \"rewrite\" opts in)"
     out = [f"{host}  (rewrite input: {rewrite}, "
            f"replace output: {yn[bool(caps.get('output_substitution'))]})"]
     groups: dict[tuple[str, str, str], list[str]] = {}

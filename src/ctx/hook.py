@@ -3763,33 +3763,159 @@ def _untouched(decision: dict[str, Any], ws_root: str | None = None) -> dict[str
     return out
 
 
-#: ctx's own verbs that only read. A product decision, written down (R5):
-#: on Claude Code the hook approves, with no rewrite, a call of one of these
-#: that reads only ctx's store by handle (``ctx get run:...``, ``ctx search
-#: run:... PATTERN``, ``ctx stats run:...``, ``ctx diff run:A run:B``): that
-#: content already came in through a call the host approved. One that reads
-#: workspace paths (a ``repo:`` ref or a file path, a workspace search,
-#: ``map``, ``def``, ``refs``, ``q``) only when no Read deny rule, no Read ask
-#: rule and no ``blockReadsOutsideWorkingDirectories`` is visible in any
-#: settings source, every source ctx knows how to find was readable, and no
-#: argument leaves the workspace (absolute, ``..``, or a link out).
+#: ctx's own verbs that only read. A product decision, written down (R5,
+#: extended to every command ctx prints for the model to run next): on
+#: Claude Code the hook approves, with no rewrite, a call of one of these
+#: TEN verbs that reads only ctx's store by a ``run:`` handle -- ``ctx get
+#: run:ID[#stdout|#stderr] [--lines|--bytes|--records|--json-pointer|--span
+#: V] [--hashlines]``, ``ctx search run:ID PATTERN...``, ``ctx stats
+#: run:ID``, ``ctx diff run:A run:B``, ``ctx intake --chunks run:ID [--from
+#: N]``, ``ctx view run:ID ...``: that content entered through a call the host
+#: approved (a command run, a tool result the output gate captured, an
+#: intake). Every other form is a path read -- a ``repo:`` ref or a file
+#: path, a ``blob:``/``snapshot:``/``search:``/``checkpoint:`` handle (those
+#: can hold content ctx captured on its own, e.g. a snapshot taken by
+#: ``ctx get repo:``, and a short id is a prefix any later call can guess),
+#: a workspace search, ``map``, ``def``, ``refs``, ``q``, ``view <file>`` --
+#: approved only when no Read deny rule, no Read ask rule and no
+#: ``blockReadsOutsideWorkingDirectories`` is visible in any settings source,
+#: every source ctx knows how to find was readable, and no argument leaves
+#: the workspace (absolute, ``..``, a link out, ``ws:``). ``view`` writes only
+#: into ctx's store, a private temporary directory and
+#: ``.ctx-session-reads/media/`` (ctx.media.materialize). Nothing else of
+#: ``intake`` is approved: not a path, not stdin, not the clipboard.
 #: LIMIT: a Read rule in a source ctx cannot read (server-managed settings,
 #: the macOS plist, the Windows registry, a policy helper) does not bind
 #: these verbs; an administrator who relies on one should also deny
 #: ``Bash(ctx:*)`` and ``mcp__ctx__*`` there.
-CTX_SELF_APPROVED_VERBS = frozenset({"get", "search", "stats", "q", "diff", "map", "def", "refs"})
-_STORE_HANDLE_RE = re.compile(r"(?:run|job|span|digest|blob|snapshot):[0-9a-f]{4,64}(?:[#@:][\w.:#@-]*)?")
-_STORE_ONLY_VERBS = frozenset({"get", "stats", "diff", "search"})
+CTX_SELF_APPROVED_VERBS = frozenset({"get", "search", "stats", "q", "diff", "map", "def", "refs",
+                                     "intake", "view"})
+#: Handle grammar: the one definition ctx.refs.parse_ref also uses.
+from ctx.refgrammar import ANY_HANDLE_RE as _ANY_HANDLE_RE  # noqa: E402
+from ctx.refgrammar import HANDLE_PREFIX_RE as _HANDLE_PREFIX_RE  # noqa: E402
+from ctx.refgrammar import RUN_HANDLE_RE as _RUN_HANDLE_RE  # noqa: E402
+from ctx.refgrammar import SPAN_ID_RE as _SPAN_ID_RE  # noqa: E402
+_PLAIN_TOKEN_RE = re.compile(r"[A-Za-z0-9_./:@%+,=-]+")
+_QUOTED_TOKEN_RE = re.compile(r"'[^'\\\n]*'")
+#: One word: a whole single-quoted string or a run of non-blank, non-quote
+#: characters, followed by blanks or the end.
+_WORD_RE = re.compile(r"('[^'\\\n]*'|[^\s']+)(?:[ \t]+|$)")
+#: Flags each verb may carry in an approved call, and whether they take a value.
+_VERB_FLAGS: dict[str, dict[str, bool]] = {
+    "get": {"--lines": True, "--bytes": True, "--records": True, "--json-pointer": True,
+            "--span": True, "--hashlines": False, "--symbol": True},
+    "search": {"--fixed": False, "--all": False, "--context": True, "--max-matches": True,
+               "--glob": True, "--scope": True},
+    "stats": {"--scope": True},
+    "diff": {},
+    "intake": {"--chunks": True, "--from": True},
+    "view": {"--fit": True, "--grid": True, "--cell": True, "--region": True, "--at": True,
+             "--range": True, "--every": True, "--count": True, "--sheet": False,
+             "--scenes": False, "--subs": False, "--json": False},
+}
+#: Flags that make a run-handle read touch the workspace instead.
+_PATH_FLAGS = frozenset({"--symbol", "--glob", "--scope"})
 
 
-def _store_only(verb: str, args: list[str]) -> bool:
-    """Does this ctx verb read only from the store, by handle?"""
-    pos = [a for a in args if not a.startswith("-")]
-    if verb not in _STORE_ONLY_VERBS or not pos or any(a.startswith("-") for a in args):
-        return False
-    if verb == "search":
-        return bool(_STORE_HANDLE_RE.fullmatch(pos[0]))
-    return all(_STORE_HANDLE_RE.fullmatch(a) for a in pos)
+def _ctx_words(command: str) -> list[str] | None:
+    """``ctx`` and its arguments, or None unless the command is exactly one
+    plain ctx call: words of ``[A-Za-z0-9_./:@%+,=-]``, single-quoted
+    strings, and store handles -- the only place a ``#`` may appear, and
+    only as ``#stdout``/``#stderr`` at the end of a handle. A ``#`` that
+    starts a comment, a redirection, an assignment prefix, a second command,
+    a variable or a double quote all fail."""
+    if not command or "\n" in command or "\r" in command:
+        return None
+    text = command.strip()
+    # Words are separated by blanks; a single-quoted string is ONE word and
+    # may hold blanks (`ctx q 'refs X | group file'`) but must stand alone:
+    # a quote glued to other characters is not a plain word.
+    tokens = []
+    pos = 0
+    for m in _WORD_RE.finditer(text):
+        if m.start() != pos:
+            return None
+        tokens.append(m.group(1))
+        pos = m.end()
+    if pos != len(text) or not tokens or tokens[0] != "ctx":
+        return None
+    out = []
+    for t in tokens[1:]:
+        if _QUOTED_TOKEN_RE.fullmatch(t):
+            out.append(t[1:-1])
+        elif _ANY_HANDLE_RE.fullmatch(t) or ("#" not in t and _PLAIN_TOKEN_RE.fullmatch(t)):
+            out.append(t)
+        else:
+            return None
+    return ["ctx", *out]
+
+
+def _printed_read_kind(verb: str, args: list[str]) -> str | None:
+    """``"store"`` (reads only ctx's store by run handle), ``"path"`` (reads
+    workspace paths or a handle that can hold ctx-captured content), or None
+    (not one of the approvable shapes)."""
+    return _printed_read(verb, args)[0]
+
+
+def _printed_read(verb: str, args: list[str]) -> tuple[str | None, list[str]]:
+    """``(kind, targets)``. Arguments are classified by POSITION, from each
+    verb's own parser (cli.py): a flag's value is never a target, whatever it
+    looks like (``--lines 1:40``, ``--json-pointer /a/b``). ``targets`` are
+    the arguments that name what is read (the ref, a ``--glob``), which the
+    caller checks for leaving the workspace."""
+    flags = _VERB_FLAGS.get(verb)
+    if flags is None:
+        return ("path" if verb in ("q", "map", "def", "refs") else None), []
+    pos: list[str] = []
+    used: set[str] = set()
+    values: dict[str, str] = {}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("--"):
+            name, eq, value = a.partition("=")
+            if name not in flags:
+                return None, []
+            used.add(name)
+            if flags[name] and not eq:
+                i += 1
+                if i >= len(args) or args[i].startswith("-"):
+                    return None, []
+                value = args[i]
+            elif not flags[name] and eq:
+                return None, []
+            values[name] = value
+            if name == "--span" and not _SPAN_ID_RE.fullmatch(value):
+                return None, []
+            if name == "--chunks" and not _ANY_HANDLE_RE.fullmatch(value):
+                return None, []
+        elif a.startswith("-"):
+            return None, []
+        else:
+            if _HANDLE_PREFIX_RE.match(a) and not _ANY_HANDLE_RE.fullmatch(a):
+                return None, []  # looks like a handle and is not one
+            pos.append(a)
+        i += 1
+    if verb == "intake":
+        if pos or "--chunks" not in used:
+            return None, []  # nothing but a chunk listing of a stored handle
+        handle = values["--chunks"]
+        return ("store" if _RUN_HANDLE_RE.fullmatch(handle) else (
+            "path" if _ANY_HANDLE_RE.fullmatch(handle) else None)), []
+    if verb == "diff":
+        return ("store" if len(pos) == 2 and all(_RUN_HANDLE_RE.fullmatch(a) for a in pos)
+                else None), []
+    if verb == "stats" and not pos:
+        return "path", []  # the default is the whole repo
+    if not pos or (verb in ("get", "view", "stats") and len(pos) != 1):
+        return None, []
+    ref = pos[0]
+    if ref.startswith("ws:"):
+        return None, []
+    if _RUN_HANDLE_RE.fullmatch(ref) and not (used & _PATH_FLAGS):
+        return "store", []
+    targets = [ref] + ([values["--glob"]] if "--glob" in values else [])
+    return "path", targets
 
 
 def _leaves_workspace(args: list[str], ws_root: str | None, cwd: str | None) -> bool:
@@ -3798,13 +3924,17 @@ def _leaves_workspace(args: list[str], ws_root: str | None, cwd: str | None) -> 
         return True
     top = os.path.realpath(ws_root or base)
     for a in args:
-        if a.startswith("-"):
+        if a.startswith("-") or _ANY_HANDLE_RE.fullmatch(a):
             continue
+        if _HANDLE_PREFIX_RE.match(a):
+            return True  # a malformed handle: not a handle, and no path either
         if a.startswith("ws:"):
             return True  # another workspace
         path = a.split(":", 1)[1] if a.startswith("repo:") else a
-        if not path or ":" in path.split("/", 1)[0]:
+        if not path:
             continue
+        if ":" in path.split("/", 1)[0]:
+            return True  # an unknown scheme: refuse rather than guess
         if path.startswith(("/", "~")) or ".." in path.replace("\\", "/").split("/"):
             return True
         real = os.path.realpath(os.path.join(base, path))
@@ -3814,10 +3944,9 @@ def _leaves_workspace(args: list[str], ws_root: str | None, cwd: str | None) -> 
 
 
 def _ctx_self_approved(payload: dict[str, Any], ws_root: str | None = None) -> bool:
-    """See :data:`CTX_SELF_APPROVED_VERBS`. Bash: exactly ``ctx <verb>
-    <plain words>`` (no assignment, wrapper, path, quote, redirection or
-    second command: ``ccperm.strict_segments``), independent of
-    :func:`_is_ctx_invocation`. MCP: the op of ctx's own tool."""
+    """See :data:`CTX_SELF_APPROVED_VERBS`. Bash: exactly one plain ctx call
+    (:func:`_ctx_words`) that :func:`_is_ctx_invocation` also accepts (one
+    place rejects assignment prefixes). MCP: the op of ctx's own tool."""
     try:
         from ctx import ccperm
 
@@ -3827,21 +3956,23 @@ def _ctx_self_approved(payload: dict[str, Any], ws_root: str | None = None) -> b
             if not isinstance(ti, dict):
                 return False
             verb = str(ti.get("op") or "")
-            args = [str(ti.get("ref") or ("repo:" if verb in ("search", "stats") else ""))]
-            args = [a for a in args if a]
+            if verb not in ("get", "search", "stats", "map", "def", "refs", "q"):
+                return False
+            ref = str(ti.get("ref") or ("repo:" if verb in ("search", "stats") else ""))
+            args = [ref] if ref else []
+            kind = "store" if (verb in ("get", "search", "stats")
+                               and _RUN_HANDLE_RE.fullmatch(ref)) else "path"
             command = None
         elif name == "Bash":
             command = (_tool_command(payload) or "").strip()
-            strict = ccperm.strict_segments(command) if command else None
-            if not strict or len(strict) != 1:
-                return False
-            argv = strict[0]
-            if len(argv) < 2 or argv[0] != "ctx" or not _is_ctx_invocation(command, payload.get("cwd")):
+            argv = _ctx_words(command)
+            if not argv or len(argv) < 2 or not _is_ctx_invocation(command, payload.get("cwd")):
                 return False
             verb, args = argv[1], argv[2:]
+            kind, args = _printed_read(verb, args)
+            if kind is None:
+                return False
         else:
-            return False
-        if verb not in CTX_SELF_APPROVED_VERBS:
             return False
         cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ws_root
         rules = ccperm.cached_rules(ws_root, cwd)
@@ -3849,7 +3980,7 @@ def _ctx_self_approved(payload: dict[str, Any], ws_root: str | None = None) -> b
             verdict, _why = ccperm.refusal_verdict(command, payload, ws_root, rules=rules)
             if verdict != "none":
                 return False
-        if _store_only(verb, args):
+        if kind == "store":
             return True
         # Reads workspace paths: only where no visible Read rule could object.
         if rules.get("unknown") or rules.get("block_outside"):
@@ -4889,6 +5020,7 @@ def _note_pre_coverage(
             collapse=bool(pol.get("collapse", True)),
             steering=_steering_allows(pol) if pol else True,
             host=flavor, name=name,
+            shell_rewrite=str((pol or {}).get("steering", "auto")) == "rewrite",
         )
         if pre in ("rewrite", "bound") and flavor == "antigravity" and _agy_legacy(payload):
             pre = "deny_steer"

@@ -242,6 +242,7 @@ def stage_routes(
     steering: bool = True,
     host: str | None = None,
     name: str | None = None,
+    shell_rewrite: bool = False,
 ) -> tuple[str | None, str]:
     """``(pre_route, post_route)`` for a tool kind on a host with ``caps``.
 
@@ -259,6 +260,8 @@ def stage_routes(
     gate = "output_gate" if caps.get("output_substitution") else "observe"
     if kind in ("control", "schema", "media"):
         return "exempt", "exempt"
+    if host == "claude-code" and kind == "command" and not shell_rewrite:
+        return None, gate  # R2: runs as written unless steering = "rewrite"
     if host in REWRITE_WITHHELD and kind in ("command", "read"):
         return None, gate  # runs as itself under the host's approval; gated after
     if kind == "command":
@@ -294,10 +297,13 @@ APPROVAL: dict[str, str] = {
         "no decision, so Claude Code's prompts and rules see the `ctx run` wrapper, and a "
         "rule from a source ctx cannot read never sees the original; ctx only refuses "
         "(deny/ask) where a visible rule would refuse the original. The only allow ctx "
-        "sends is for its own read-only verbs (get, search, stats, q, diff, map, def, "
-        "refs): by store handle always; over workspace paths only when no Read deny/ask "
-        "rule or outside-directory block is visible and every settings source was "
-        "readable. A Read rule in a source ctx cannot read does not bind these verbs"),
+        "sends is for its own read-only verbs, the commands it prints for the model to run next (get, search, "
+        "stats, q, diff, map, def, refs, intake --chunks, view): by run: handle always; "
+        "over workspace paths or other handles only when no Read deny/ask rule or "
+        "outside-directory block is visible and every settings source was readable. "
+        "view writes only into ctx's store, a private temporary directory and "
+        ".ctx-session-reads/media/. A Read rule in a source ctx cannot read does not bind "
+        "these verbs"),
     "codex": (
         "rewrites withheld and no ask or deny for volume: commands run as written under "
         "Codex's own approval; its PostToolUse block replaces a large output with ctx's "

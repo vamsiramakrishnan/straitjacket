@@ -380,7 +380,7 @@ def test_ledger_records_identity_never_arguments(ws):
     rows = _ledger(ws)
     assert "TOPSECRET" not in json.dumps(rows)
     pre, post = rows
-    assert (pre["stage"], pre["tool"], pre["kind"], pre["route"]) == ("pre", "Bash", "command", "rewrite")
+    assert (pre["stage"], pre["tool"], pre["kind"], pre["route"]) == ("pre", "Bash", "command", "observe")  # R2: runs as written
     assert pre["decision"] in ("rewritten", "allowed")
     assert (post["mcp_server"], post["mcp_tool"]) == ("github", "list_commits")
     assert post["route"] == "output_gate" and post["decision"] == "replaced"
@@ -444,7 +444,7 @@ def test_coverage_report_static_and_observed(ws):
     last = subprocess.run([sys.executable, "-m", "ctx", "coverage", "--host", "claude-code",
                            "--session", "b"], cwd=ws, capture_output=True, text=True, timeout=60)
     assert last.returncode == 0, last.stderr
-    assert "claude-code  (rewrite input: yes, replace output: yes)" in last.stdout
+    assert "claude-code  (rewrite input: Read limits yes; shell commands no" in last.stdout
     assert "codex  (" not in last.stdout
     assert "WebFetch" not in last.stdout.split("\nobserved  (")[1]  # filtered to session b
 

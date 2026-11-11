@@ -438,6 +438,23 @@ def _get(
         )
 
     if selector.span is not None:
+        # A span names a region of ONE artifact; it is honoured only on the
+        # artifact the reference names, so `ctx get run:A --span S` can never
+        # read a span minted over some other blob (a snapshot, say).
+        span_blob = str(store.get_span(selector.span)["blob"]).removeprefix("sha256:")
+        if ref.kind == "run":
+            owned = {str(m.get("blob", "")).removeprefix("sha256:")
+                     for m in (manifest.get("streams") or {}).values()}
+        elif ref.kind == "blob":
+            owned = {blob_id}
+        elif ref.kind == "snapshot":
+            owned = {str(manifest["blob"]).removeprefix("sha256:")}
+        else:
+            owned = {str(snap["blob"]).removeprefix("sha256:")}
+        if span_blob not in owned:
+            raise RetrievalError(
+                f"span {selector.span} does not belong to {label}; use the reference "
+                "the digest printed with it")
         result = _resolve_span(store, ws, ref_text, label, selector.span)
         record_telemetry(store, "get", len(data) if data else 0, len(encode_exact(result)))
         return result

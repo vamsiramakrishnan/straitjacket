@@ -105,8 +105,15 @@ def _load(ws, target: str) -> tuple:
     if head in ("blob", "run", "sha256") and not Path(target).exists():
         store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
         try:
+            # The same grammar every other verb parses handles with.
+            from ctx.refs import RefError, parse_ref
+
+            try:
+                parsed = parse_ref("blob:" + target[7:] if head == "sha256" else target)
+            except RefError as exc:
+                raise _Load(str(exc)) from None
             if head == "run":
-                ident, _, stream = target[4:].partition("#")
+                ident, stream = parsed.id or "", parsed.stream or ""
                 manifest = store.get_manifest(ident)
                 name = stream or "stdout"
                 meta = (manifest.get("streams") or {}).get(name)
@@ -117,7 +124,7 @@ def _load(ws, target: str) -> tuple:
                 full = str(meta["blob"]).removeprefix("sha256:")
                 label = f"run:{short_id(manifest['id'])}#{name}"
             else:
-                full = store.resolve_id(target.split(":", 1)[1], kinds=("blob",))
+                full = store.resolve_id(parsed.id or "", kinds=("blob",))
                 label = f"blob:{full[:12]}"
         except StoreError as exc:
             raise _Load(str(exc)) from None
