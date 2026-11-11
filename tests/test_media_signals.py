@@ -42,7 +42,9 @@ def wait_for(path, seconds=30.0):
 
 
 def walk_files(root):
-    return [os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs]
+    """Every file under root except the 20-byte ownership markers."""
+    return [os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs
+            if f != media._MARKER]
 
 
 @pytest.fixture()
@@ -76,11 +78,15 @@ def harness(tmp_path, state_home, workspace_dir):
     scratch = tmp_path / "tmp"
     scratch.mkdir()
 
-    def start(mode: str) -> subprocess.Popen:
+    def start(mode: str, ignore_sigint: bool = False) -> subprocess.Popen:
         env = {**os.environ, "TMPDIR": str(scratch), "CTX_STATE_HOME": str(state_home),
                "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
         return subprocess.Popen([sys.executable, str(runner), str(workspace_dir), "v.mp4", mode],
-                                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                # the disposition is set explicitly: a suite launched in the
+                                # background inherits SIGINT=ignored, and so would the child
+                                preexec_fn=lambda: signal.signal(
+                                    signal.SIGINT, signal.SIG_IGN if ignore_sigint else signal.SIG_DFL))
 
     return start, scratch, marks
 
@@ -161,11 +167,13 @@ def test_in_process_handlers_are_installed_only_while_busy_and_restored(tmp_path
 def test_stale_private_directories_are_reaped_but_nothing_else(tmp_path):
     old = time.time() - 10 * 3600
 
-    def make(name, mode=0o700, files=("in",), age=old):
+    def make(name, mode=0o700, files=("in",), age=old, marker=True, body=None):
         d = tmp_path / name
         d.mkdir()
         for f in files:
             (d / f).write_bytes(b"x" * 100)
+        if marker:
+            (d / media._MARKER).write_bytes(media._MARKER_BODY if body is None else body)
         os.chmod(d, mode)
         os.utime(d, (age, age))
         return d
@@ -176,13 +184,77 @@ def test_stale_private_directories_are_reaped_but_nothing_else(tmp_path):
     wrong_mode = make("ctx-media-open", mode=0o755)
     foreign_name = make("other-dir")
     unknown_content = make("ctx-media-extra", files=("in", "mine.txt"))
+    no_marker = make("ctx-media-nomark", marker=False)          # only `in`: nothing proves it is ours
+    forged_marker = make("ctx-media-forged", body=b"not ours\n")
     with_subdir = make("ctx-media-sub", files=())
     (with_subdir / "d").mkdir()
     os.utime(with_subdir, (old, old))
+    victim = tmp_path / "victim"                                   # a symlink swapped in for a candidate
+    victim.mkdir()
+    (victim / "in").write_bytes(b"precious")
+    (victim / "scenes.txt").write_bytes(b"precious")
+    (victim / media._MARKER).write_bytes(media._MARKER_BODY)
+    os.chmod(victim, 0o700)
+    os.utime(victim, (old, old))
+    (tmp_path / "ctx-media-link").symlink_to(victim, target_is_directory=True)
     assert media._reap_stale(max_age_s=3600, base=str(tmp_path)) == 2
     assert not stale.exists() and not stale_scenes.exists()
-    for keep in (young, wrong_mode, foreign_name, unknown_content, with_subdir):
+    for keep in (young, wrong_mode, foreign_name, unknown_content, no_marker, forged_marker, with_subdir):
         assert keep.exists(), keep.name
+    assert sorted(os.listdir(victim)) == sorted(["in", "scenes.txt", media._MARKER])   # untouched
+    assert (tmp_path / "ctx-media-link").is_symlink()
+
+
+def test_the_inherited_descriptor_is_read_only(tmp_path):
+    import fcntl
+
+    (tmp_path / "f.bin").write_bytes(b"data" * 100)
+    with media.snapshot_confined(tmp_path, "f.bin") as snap:
+        if snap.fd is None:
+            pytest.skip("named-file mode on this platform")
+        assert fcntl.fcntl(snap.fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY
+        code = ("import os,sys,fcntl\nfd=int(sys.argv[-1].rsplit('/',1)[1])\n"
+                "print(fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE)\n"
+                "try:\n os.write(fd,b'x')\nexcept OSError as e:\n print('write refused')\n"
+                "print(len(os.pread(fd,1000,0)))")
+        cp = media._run([sys.executable, "-c", code, "-i", "placeholder"], 20, src=snap)
+        out = cp.stdout.decode().split()
+        assert out[:3] == [str(os.O_RDONLY), "write", "refused"] and out[-1] == "400"
+        if os.geteuid() != 0:                                      # root ignores file modes
+            with pytest.raises(PermissionError):
+                os.open(f"/dev/fd/{snap.fd}", os.O_WRONLY)
+
+
+def test_an_inherited_ignore_disposition_is_respected(harness):
+    """Started with SIGINT ignored (a background job, a test runner), the run
+    keeps ignoring it: no handler replaces the ignore, ffmpeg is not killed,
+    and SIGTERM still works."""
+    start, scratch, marks = harness
+    proc = start("fd", ignore_sigint=True)
+    try:
+        ffprobe_pid = int(wait_for(marks / "ffprobe"))
+        proc.send_signal(signal.SIGINT)
+        time.sleep(1.0)
+        assert proc.poll() is None and alive(ffprobe_pid)          # still running, child intact
+        proc.send_signal(signal.SIGTERM)                           # not ignored: handled as usual
+        proc.wait(timeout=20)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == -signal.SIGTERM and os.listdir(scratch) == []
+
+
+def test_ignored_signals_stay_ignored_in_process(tmp_path):
+    old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        (tmp_path / "f.bin").write_bytes(b"x")
+        snap = media.snapshot_confined(tmp_path, "f.bin")
+        assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+        assert signal.getsignal(signal.SIGTERM) is media._on_signal
+        snap.close()
+        assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGINT, old)
 
 
 # ---------------------------------------- the cap follows the kind of file

@@ -106,7 +106,7 @@ def test_snapshot_is_private_and_later_changes_do_not_reach_it(ws, monkeypatch, 
         assert snap.path is None and list(scratch.rglob("*")) == []
     else:                                         # named mode: a 0700 directory holding only `in`
         folder = snap.path.parent
-        assert (os.stat(folder).st_mode & 0o777) == 0o700 and os.listdir(folder) == ["in"]
+        assert (os.stat(folder).st_mode & 0o777) == 0o700 and sorted(os.listdir(folder)) == sorted(["in", media._MARKER])
     snap.close()
     assert list(scratch.iterdir()) == []
 

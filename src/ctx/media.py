@@ -641,7 +641,11 @@ def _acquire() -> None:
         if (not _PREVIOUS and threading.current_thread() is threading.main_thread()):
             for sig in _SIGNALS:
                 try:
-                    _PREVIOUS[sig] = signal.getsignal(sig)
+                    current = signal.getsignal(sig)
+                    if current == signal.SIG_IGN:
+                        continue           # an inherited ignore (background job, test
+                                           # runner) stays an ignore: no handler for it
+                    _PREVIOUS[sig] = current
                     signal.signal(sig, _on_signal)
                 except (ValueError, OSError):
                     _PREVIOUS.pop(sig, None)
@@ -660,41 +664,96 @@ def _release() -> None:
             _PREVIOUS.clear()
 
 
+# Only directories this tool made carry this marker file; the reaper removes
+# nothing without it, so a look-alike name, or a directory holding just a file
+# called `in`, is never touched.
+_MARKER = ".ctx-media-owner"
+_MARKER_BODY = b"ctx-media-private/1\n"
+
+
+def _make_private_dir() -> str:
+    """mkdtemp (0700) plus the ownership marker."""
+    tmp = tempfile.mkdtemp(prefix=PRIVATE_PREFIX)
+    try:
+        fd = os.open(os.path.join(tmp, _MARKER), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, _MARKER_BODY)
+        finally:
+            os.close(fd)
+    except OSError:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    return tmp
+
+
+# Known limits (for the documentation owner): after SIGKILL the named-file
+# fallback mode leaves its private copy until the NEXT start reaps it
+# (descriptor mode leaves no copy at all); and a scene-detection run killed
+# with SIGKILL leaves its working directory behind and an ffmpeg that is still
+# running with nobody left to enforce its timeout.
 def _reap_stale(max_age_s: float = STALE_AFTER_S, base: str | None = None) -> int:
     """Remove private directories THIS tool left behind (a process killed with
-    SIGKILL, say): named ``ctx-media-*``, owned by this user, mode 0700, older
-    than ``max_age_s``, and holding only the regular files this tool writes.
-    Anything else in the temp directory is never touched."""
+    SIGKILL, say) and nothing else. Each candidate is opened ONCE with
+    ``O_NOFOLLOW``; ownership, mode and age are checked on that open
+    descriptor, its contents are listed and unlinked relative to it, and the
+    directory entry is removed only if it is still the same directory
+    (device and inode). It must be named ``ctx-media-*``, owned by this user,
+    mode 0700, carry this tool's marker file with the exact marker content,
+    and hold nothing but the files this tool writes. Platforms without
+    directory-relative operations skip reaping."""
     import stat as _stat
 
+    if not (os.unlink in os.supports_dir_fd and os.rmdir in os.supports_dir_fd
+            and os.open in os.supports_dir_fd and os.listdir in os.supports_fd):
+        return 0
     removed = 0
     root = base or tempfile.gettempdir()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     try:
-        names = os.listdir(root)
+        root_fd = os.open(root, flags | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return 0
     now = time.time()
-    for name in names:
-        if not name.startswith(PRIVATE_PREFIX):
-            continue
-        path = os.path.join(root, name)
-        try:
-            st = os.lstat(path)
-            if (not _stat.S_ISDIR(st.st_mode) or _stat.S_IMODE(st.st_mode) != 0o700
-                    or (hasattr(os, "getuid") and st.st_uid != os.getuid())
-                    or now - st.st_mtime < max_age_s or path in _LIVE_DIRS):
+    allowed = {_MARKER, _IN_NAME, "scenes.txt"}
+    try:
+        for name in os.listdir(root_fd):
+            if not name.startswith(PRIVATE_PREFIX):
                 continue
-            entries = os.listdir(path)
-            if not set(entries) <= {_IN_NAME, "scenes.txt"}:
+            try:
+                dfd = os.open(name, flags | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                              dir_fd=root_fd)
+            except OSError:
+                continue                                   # a symlink, vanished, not ours
+            try:
+                st = os.fstat(dfd)
+                if (_stat.S_IMODE(st.st_mode) != 0o700
+                        or (hasattr(os, "getuid") and st.st_uid != os.getuid())
+                        or now - st.st_mtime < max_age_s):
+                    continue
+                entries = os.listdir(dfd)
+                if _MARKER not in entries or not set(entries) <= allowed:
+                    continue
+                if any(not _stat.S_ISREG(os.stat(e, dir_fd=dfd, follow_symlinks=False).st_mode)
+                       for e in entries):
+                    continue
+                mfd = os.open(_MARKER, flags | getattr(os, "O_NOFOLLOW", 0), dir_fd=dfd)
+                try:
+                    if os.read(mfd, 64) != _MARKER_BODY:
+                        continue
+                finally:
+                    os.close(mfd)
+                for e in entries:
+                    os.unlink(e, dir_fd=dfd)
+                now_st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                if (now_st.st_dev, now_st.st_ino) == (st.st_dev, st.st_ino):
+                    os.rmdir(name, dir_fd=root_fd)
+                    removed += 1
+            except OSError:
                 continue
-            if any(not _stat.S_ISREG(os.lstat(os.path.join(path, e)).st_mode) for e in entries):
-                continue
-            for e in entries:
-                os.unlink(os.path.join(path, e))
-            os.rmdir(path)
-            removed += 1
-        except OSError:
-            continue
+            finally:
+                os.close(dfd)
+    finally:
+        os.close(root_fd)
     return removed
 
 
@@ -702,7 +761,7 @@ def _reap_stale(max_age_s: float = STALE_AFTER_S, base: str | None = None) -> in
 def _private_dir() -> Iterator[str]:
     """A fresh 0700 directory, removed on exit and on termination signals."""
     _acquire()
-    tmp = tempfile.mkdtemp(prefix=PRIVATE_PREFIX)
+    tmp = _make_private_dir()
     with _LOCK:
         _LIVE_DIRS.add(tmp)
     try:
@@ -919,10 +978,23 @@ class _Src:
         self.size = total
         self._sha = h.hexdigest()
         if _FD_MODE:
-            self.fd = out
+            self.fd = self._read_only(out)
         else:
             os.close(out)
         return self
+
+    @staticmethod
+    def _read_only(rw: int) -> int:
+        """Replace the writable descriptor by a read-only one on the same file
+        (and drop the file's own write permission): ffmpeg and ffprobe inherit
+        THIS one, so they can read the copy but never modify it."""
+        try:
+            os.fchmod(rw, 0o400)
+            ro = os.open(f"/dev/fd/{rw}", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        except OSError:
+            return rw                      # cannot reopen: keep the original rather than fail
+        os.close(rw)
+        return ro
 
     def _create_copy(self) -> int:
         """A writable descriptor on a fresh private copy (see class doc)."""
@@ -932,7 +1004,7 @@ class _Src:
                     return os.open(tempfile.gettempdir(), os.O_TMPFILE | os.O_RDWR, 0o600)
                 except OSError:
                     pass
-            tmp = tempfile.mkdtemp(prefix=PRIVATE_PREFIX)
+            tmp = _make_private_dir()
             try:
                 path = os.path.join(tmp, _IN_NAME)
                 fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
@@ -940,7 +1012,7 @@ class _Src:
                 return fd
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
-        tmp = tempfile.mkdtemp(prefix=PRIVATE_PREFIX)
+        tmp = _make_private_dir()
         with _LOCK:
             _LIVE_DIRS.add(tmp)
         self._tmp_dir = tmp

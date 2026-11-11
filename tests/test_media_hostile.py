@@ -170,7 +170,7 @@ def test_every_ffmpeg_call_pins_the_demuxer_and_runs_in_a_private_dir(clip, monk
         assert argv[argv.index("-format_whitelist") + 1] == "mov"
         assert argv[argv.index("-protocol_whitelist") + 1] == "file"
         assert argv[argv.index("-enable_drefs") + 1] == "0"
-        assert listing[0] == "in" and set(listing) <= {"in", "scenes.txt"}
+        assert "in" in listing and set(listing) <= {"in", "scenes.txt", media._MARKER}
         assert new_session is True
         assert not any(a.startswith(("concat:", "http", "file:", "subfile")) for a in argv)
     decoders = [a for a in calls if "-codec_whitelist" in a[0]]
@@ -198,7 +198,7 @@ def test_reference_movie_with_external_rawvideo_data_is_refused(tmp_path):
             op()
     # even if rawvideo were allowed, the movie finds no sibling to read
     with media._Src(movie).sandbox() as wd:
-        assert os.listdir(wd) == ["in"]
+        assert sorted(os.listdir(wd)) == sorted(["in", media._MARKER])
 
 
 # ======================================================= 2. filename patterns
@@ -589,7 +589,7 @@ def test_every_subprocess_call_carries_every_pinning_flag(which, hostile_mkv, cl
             assert "-nostdin" in argv
             if "-frames:v" in argv or "-progress" in argv:                # decoding calls
                 assert int(val("-max_pixels")) < 4 * 320 * 240 + 65536    # declared size, not the cap
-        assert set(listing) <= {"in", "scenes.txt"} and "in" in listing
+        assert set(listing) <= {"in", "scenes.txt", media._MARKER} and "in" in listing
         assert not any(a.startswith(("concat:", "http", "file:", "subfile")) for a in argv)
 
 
