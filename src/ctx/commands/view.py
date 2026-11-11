@@ -231,6 +231,11 @@ def _view(ws, ns, media, sel, label, src) -> int:
         "source": _source_facts(probe), "derived": None, "omitted": [],
         "notes": list(probe.notes), "next": [],
     }
+    if getattr(src, "nlink", 1) > 1:
+        # A hard link is the same file under another name (a link to a file
+        # outside the workspace is viewed: same inode, same access needed).
+        facts["notes"].append(f"this file has {src.nlink} hard links (other names for the "
+                              "same bytes)")
 
     if probe.failed and probe.kind in ("video", "audio"):
         # The container could not be read: say so with what IS known (stream

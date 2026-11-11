@@ -50,9 +50,11 @@ import math
 import os
 import re
 import shutil
+import atexit
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -568,34 +570,195 @@ def _kill_group(proc: subprocess.Popen) -> None:
             pass
 
 
-def _run(argv: list[str], timeout: float, cwd: str | None = None
-         ) -> subprocess.CompletedProcess:
-    """One subprocess: argument list, no shell, no stdin, hard timeout, its
-    own process group (killed whole on timeout), in a private working dir."""
-    name = Path(argv[0]).name
+# ------------------------------------------------------- lifetime and signals
+# What must not outlive this process: private directories (and, where the
+# platform has no unnamed files, the named copy inside one) and ffmpeg/ffprobe
+# process groups. Normal exit, exceptions and timeouts clean up through the
+# context managers; for SIGTERM, SIGHUP and SIGINT a handler is installed only
+# while something is live, kills the children's groups, removes the
+# directories, puts the previous handlers back, and then lets the signal take
+# its conventional effect (death by that signal, so the exit status is 128+n).
+# SIGKILL cannot be handled; the design makes it harmless instead: where
+# /dev/fd and O_TMPFILE exist the copy is an UNNAMED file reachable only by
+# descriptor, so there is nothing on disk to leave behind.
+_LOCK = threading.RLock()
+_LIVE_DIRS: set[str] = set()
+_CHILDREN: set[subprocess.Popen] = set()
+_PREVIOUS: dict[int, Any] = {}
+_USERS = 0
+_REAPED = False
+PRIVATE_PREFIX = "ctx-media-"
+STALE_AFTER_S = 6 * 3600
+_SIGNALS = tuple(getattr(signal, n) for n in ("SIGTERM", "SIGHUP", "SIGINT") if hasattr(signal, n))
+# Descriptor mode: hand ffmpeg an inherited descriptor (`/dev/fd/N`) instead of a
+# path, so no directory entry for the copy ever has to exist. It works with the
+# demuxers pinned here, including the seeking ones (mov/matroska/avi/flac):
+# opening /dev/fd/N re-opens the same inode as an ordinary seekable file.
+_FD_MODE = os.path.isdir("/dev/fd") and hasattr(os, "pread")
+
+
+def _purge() -> None:
+    """Kill live children and remove live private directories (idempotent)."""
+    with _LOCK:
+        for proc in list(_CHILDREN):
+            _kill_group(proc)
+        _CHILDREN.clear()
+        for d in list(_LIVE_DIRS):
+            shutil.rmtree(d, ignore_errors=True)
+        _LIVE_DIRS.clear()
+
+
+atexit.register(_purge)
+
+
+def _on_signal(signum: int, frame: Any) -> None:
+    _purge()
+    with _LOCK:
+        previous = dict(_PREVIOUS)
+        for sig, handler in previous.items():
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass
+        _PREVIOUS.clear()
+    handler = previous.get(signum, signal.SIG_DFL)
+    if callable(handler) and handler is not signal.default_int_handler:
+        handler(signum, frame)            # somebody else's handler: let it decide
+        return
+    if handler == signal.SIG_IGN:
+        return
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)          # die BY the signal: conventional status
+
+
+def _acquire() -> None:
+    global _USERS, _REAPED
+    with _LOCK:
+        _USERS += 1
+        if not _REAPED:
+            _REAPED = True
+            _reap_stale()
+        if (not _PREVIOUS and threading.current_thread() is threading.main_thread()):
+            for sig in _SIGNALS:
+                try:
+                    _PREVIOUS[sig] = signal.getsignal(sig)
+                    signal.signal(sig, _on_signal)
+                except (ValueError, OSError):
+                    _PREVIOUS.pop(sig, None)
+
+
+def _release() -> None:
+    global _USERS
+    with _LOCK:
+        _USERS = max(0, _USERS - 1)
+        if _USERS == 0 and _PREVIOUS:
+            for sig, handler in _PREVIOUS.items():
+                try:
+                    signal.signal(sig, handler)
+                except (ValueError, OSError):
+                    pass
+            _PREVIOUS.clear()
+
+
+def _reap_stale(max_age_s: float = STALE_AFTER_S, base: str | None = None) -> int:
+    """Remove private directories THIS tool left behind (a process killed with
+    SIGKILL, say): named ``ctx-media-*``, owned by this user, mode 0700, older
+    than ``max_age_s``, and holding only the regular files this tool writes.
+    Anything else in the temp directory is never touched."""
+    import stat as _stat
+
+    removed = 0
+    root = base or tempfile.gettempdir()
     try:
-        proc = subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, cwd=cwd, start_new_session=(os.name == "posix"))
-    except FileNotFoundError:
-        raise MediaUnavailable(f"{name} was not found on PATH", needs=name,
-                               hint=_FFMPEG_HINT) from None
-    except OSError as exc:
-        raise MediaUnavailable(f"{name} could not be started: {exc.strerror or 'error'}",
-                               needs=name, hint=_FFMPEG_HINT) from None
-    limit = max(float(timeout), 1.0)
-    try:
-        out, err = proc.communicate(timeout=limit)
-    except subprocess.TimeoutExpired:
-        _kill_group(proc)
+        names = os.listdir(root)
+    except OSError:
+        return 0
+    now = time.time()
+    for name in names:
+        if not name.startswith(PRIVATE_PREFIX):
+            continue
+        path = os.path.join(root, name)
         try:
-            proc.communicate(timeout=5)
-        except Exception:
-            pass
-        raise MediaUnavailable(
-            f"{name} did not finish within {int(limit)}s; the media is too "
-            "large or complex for an inline view", needs="timeout") from None
-    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+            st = os.lstat(path)
+            if (not _stat.S_ISDIR(st.st_mode) or _stat.S_IMODE(st.st_mode) != 0o700
+                    or (hasattr(os, "getuid") and st.st_uid != os.getuid())
+                    or now - st.st_mtime < max_age_s or path in _LIVE_DIRS):
+                continue
+            entries = os.listdir(path)
+            if not set(entries) <= {_IN_NAME, "scenes.txt"}:
+                continue
+            if any(not _stat.S_ISREG(os.lstat(os.path.join(path, e)).st_mode) for e in entries):
+                continue
+            for e in entries:
+                os.unlink(os.path.join(path, e))
+            os.rmdir(path)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+@contextlib.contextmanager
+def _private_dir() -> Iterator[str]:
+    """A fresh 0700 directory, removed on exit and on termination signals."""
+    _acquire()
+    tmp = tempfile.mkdtemp(prefix=PRIVATE_PREFIX)
+    with _LOCK:
+        _LIVE_DIRS.add(tmp)
+    try:
+        yield tmp
+    finally:
+        with _LOCK:
+            _LIVE_DIRS.discard(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
+        _release()
+
+
+def _run(argv: list[str], timeout: float, cwd: str | None = None,
+         src: "_Src | None" = None) -> subprocess.CompletedProcess:
+    """One subprocess: argument list, no shell, no stdin, hard timeout, its
+    own process group (killed whole on timeout or when this process is told to
+    terminate), in a private working dir. With ``src`` in descriptor mode the
+    ``-i`` argument becomes ``/dev/fd/N`` and N is inherited by the child."""
+    name = Path(argv[0]).name
+    pass_fds: tuple[int, ...] = ()
+    if src is not None and src.fd is not None and "-i" in argv:
+        i = argv.index("-i")
+        argv = argv[:i + 1] + [f"/dev/fd/{src.fd}"] + argv[i + 2:]
+        pass_fds = (src.fd,)
+    _acquire()
+    try:
+        try:
+            proc = subprocess.Popen(
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, cwd=cwd, pass_fds=pass_fds,
+                start_new_session=(os.name == "posix"))
+        except FileNotFoundError:
+            raise MediaUnavailable(f"{name} was not found on PATH", needs=name,
+                                   hint=_FFMPEG_HINT) from None
+        except OSError as exc:
+            raise MediaUnavailable(f"{name} could not be started: {exc.strerror or 'error'}",
+                                   needs=name, hint=_FFMPEG_HINT) from None
+        with _LOCK:
+            _CHILDREN.add(proc)
+        limit = max(float(timeout), 1.0)
+        try:
+            out, err = proc.communicate(timeout=limit)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)
+            try:
+                proc.communicate(timeout=5)
+            except Exception:
+                pass
+            raise MediaUnavailable(
+                f"{name} did not finish within {int(limit)}s; the media is too "
+                "large or complex for an inline view", needs="timeout") from None
+        finally:
+            with _LOCK:
+                _CHILDREN.discard(proc)
+        return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+    finally:
+        _release()
 
 
 def _failure(cp: subprocess.CompletedProcess, tool: str = "ffmpeg") -> str:
@@ -663,18 +826,38 @@ class _Deadline:
 
 
 # ------------------------------------------------------------------ sources
+HEAD_CHUNK = 64 * 1024
+
+
+def _cap_for_head(head: bytes) -> int:
+    """The size cap that fits what the first chunk says the file is: only
+    video and audio are allowed to be large; everything else is read at most
+    to the image limit (it is never decoded beyond that)."""
+    kind = _kind_of(binfmt.sniff_format(head))
+    return MAX_VIDEO_BYTES if kind in ("video", "audio") else MAX_IMAGE_BYTES
+
+
 class _Src:
     """The one thing every operation reads: bytes in memory, a plain file, or -
     for anything that came from the filesystem or the store - an owned
-    **snapshot**: the target is opened exactly once, copied into a private 0700
-    directory while being hashed, and from then on sniffing, hashing, Pillow,
-    ffprobe and ffmpeg all see that same private copy. The sha256 recorded in a
-    derivation is therefore, by construction, the hash of what was decoded."""
+    **snapshot**: the target is opened exactly once and copied (hashing as it
+    goes) into a private copy; from then on sniffing, hashing, Pillow, ffprobe
+    and ffmpeg all see that same copy. The sha256 recorded in a derivation is
+    therefore, by construction, the hash of what was decoded.
+
+    Where the platform allows (``_FD_MODE``) the copy is an unnamed file held
+    only by a descriptor: nothing on disk to find, nothing to leave behind
+    after SIGKILL, and ffmpeg is handed the inherited descriptor
+    (``/dev/fd/N``). Elsewhere it is a named file in a 0700 directory that is
+    removed on exit and on termination signals."""
 
     def __init__(self, source: Any):
         self._sha: str | None = None
-        self._tmp: tempfile.TemporaryDirectory | None = None
+        self._tmp_dir: str | None = None
+        self._tmp_ctx: Any = None
         self.owned = False
+        self.fd: int | None = None
+        self.nlink = 1
         if isinstance(source, (bytes, bytearray, memoryview)):
             self.data: bytes | None = bytes(source)
             self.path: Path | None = None
@@ -688,48 +871,97 @@ class _Src:
                 raise MediaError(f"cannot read source: {exc.strerror or exc}") from None
 
     @classmethod
-    def from_fd(cls, fd: int, *, limit: int) -> "_Src":
-        """Copy an already-open, already-validated descriptor into a private
-        directory (closing it), hashing as it goes. Growth past ``limit`` while
-        copying is refused."""
+    def from_fd(cls, fd: int, *, limit: int, st_size: int | None = None,
+                nlink: int = 1) -> "_Src":
+        """Copy an already-open, already-validated descriptor (closing it).
+        The first chunk is read and classified BEFORE anything else, so the cap
+        that fits the kind applies: a declared size over it is refused with
+        nothing more read, and growth past it while copying stops the copy."""
         self = cls.__new__(cls)
         self._sha = None
+        self._tmp_dir = None
+        self._tmp_ctx = None
         self.data = None
         self.owned = True
-        self._tmp = tempfile.TemporaryDirectory(prefix="ctx-media-")   # mkdtemp: 0700
-        self.path = Path(self._tmp.name) / _IN_NAME
-        h = hashlib.sha256()
-        total = 0
+        self.fd = None
+        self.path = None
+        self.nlink = nlink
+        _acquire()
+        self._acquired = True
+        out = None
         try:
-            out = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            try:
-                while True:
-                    chunk = os.read(fd, 1 << 20)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > limit:
-                        raise MediaLimitError(
-                            f"input is over the {limit:,}-byte limit for this operation")
-                    h.update(chunk)
-                    view = memoryview(chunk)
-                    while view:
-                        view = view[os.write(out, view):]
-            finally:
-                os.close(out)
+            head = os.read(fd, HEAD_CHUNK)
+            cap = min(limit, _cap_for_head(head))
+            if st_size is not None and st_size > cap:
+                raise MediaLimitError(f"input is {st_size:,} bytes; the limit for this "
+                                      f"kind of file is {cap:,}")
+            out = self._create_copy()
+            h = hashlib.sha256()
+            total = 0
+            chunk = head
+            while chunk:
+                total += len(chunk)
+                if total > cap:
+                    raise MediaLimitError(
+                        f"input is over the {cap:,}-byte limit for this kind of file")
+                h.update(chunk)
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(out, view):]
+                chunk = os.read(fd, 1 << 20)
         except BaseException:
+            if out is not None:
+                os.close(out)
             self.close()
             raise
         finally:
             os.close(fd)
         self.size = total
         self._sha = h.hexdigest()
+        if _FD_MODE:
+            self.fd = out
+        else:
+            os.close(out)
         return self
 
+    def _create_copy(self) -> int:
+        """A writable descriptor on a fresh private copy (see class doc)."""
+        if _FD_MODE:
+            if hasattr(os, "O_TMPFILE"):
+                try:
+                    return os.open(tempfile.gettempdir(), os.O_TMPFILE | os.O_RDWR, 0o600)
+                except OSError:
+                    pass
+            tmp = tempfile.mkdtemp(prefix=PRIVATE_PREFIX)
+            try:
+                path = os.path.join(tmp, _IN_NAME)
+                fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+                os.unlink(path)                      # unreachable by path from here on
+                return fd
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+        tmp = tempfile.mkdtemp(prefix=PRIVATE_PREFIX)
+        with _LOCK:
+            _LIVE_DIRS.add(tmp)
+        self._tmp_dir = tmp
+        self.path = Path(tmp) / _IN_NAME
+        return os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
     def close(self) -> None:
-        if self._tmp is not None:
-            self._tmp.cleanup()
-            self._tmp = None
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        if self._tmp_dir is not None:
+            with _LOCK:
+                _LIVE_DIRS.discard(self._tmp_dir)
+            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            self._tmp_dir = None
+        if getattr(self, "_acquired", False):
+            self._acquired = False
+            _release()
 
     def __enter__(self) -> "_Src":
         return self
@@ -737,9 +969,22 @@ class _Src:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
+    def _pread(self, n: int, offset: int = 0) -> bytes:
+        out = []
+        while n > 0:
+            chunk = os.pread(self.fd, min(n, 1 << 20), offset)  # type: ignore[arg-type]
+            if not chunk:
+                break
+            out.append(chunk)
+            n -= len(chunk)
+            offset += len(chunk)
+        return b"".join(out)
+
     def head(self, n: int = 4096) -> bytes:
         if self.data is not None:
             return self.data[:n]
+        if self.fd is not None:
+            return self._pread(n)
         try:
             with self.path.open("rb") as fh:  # type: ignore[union-attr]
                 return fh.read(n)
@@ -768,6 +1013,8 @@ class _Src:
                 f"{limit:,}")
         if self.data is not None:
             return self.data
+        if self.fd is not None:
+            return self._pread(self.size)
         try:
             return self.path.read_bytes()  # type: ignore[union-attr]
         except OSError as exc:
@@ -775,24 +1022,25 @@ class _Src:
 
     @contextlib.contextmanager
     def sandbox(self) -> Iterator[str]:
-        """A private directory holding ONLY the media, under the fixed name
-        ``in``. ffmpeg runs with this as its cwd and is given that bare name,
-        so no user-controlled path component is ever parsed (no ``%d``
-        patterns, ``-`` options, ``concat:`` protocols) and a relative
-        reference inside the container finds nothing else to read. A snapshot
-        already lives in such a directory; other sources get a fresh one."""
-        if self.owned and self._tmp is not None:
-            yield self._tmp.name
+        """A private directory to run ffmpeg in, as its cwd. ffmpeg is given
+        either the inherited descriptor (descriptor mode: the directory is then
+        EMPTY apart from output files) or the bare fixed name ``in``, so no
+        user-controlled path component is ever parsed (no ``%d`` patterns,
+        ``-`` options, ``concat:`` protocols) and a relative reference inside
+        the container finds nothing else to read."""
+        if self.owned and self._tmp_dir is not None:
+            yield self._tmp_dir
             return
-        with tempfile.TemporaryDirectory(prefix="ctx-media-") as tmp:
-            target = Path(tmp) / _IN_NAME
-            if self.path is not None:
-                try:
-                    os.symlink(self.path.resolve(), target)
-                except OSError:
-                    shutil.copyfile(self.path, target)
-            else:
-                target.write_bytes(self.data or b"")
+        with _private_dir() as tmp:
+            if self.fd is None:
+                target = Path(tmp) / _IN_NAME
+                if self.path is not None:
+                    try:
+                        os.symlink(self.path.resolve(), target)
+                    except OSError:
+                        shutil.copyfile(self.path, target)
+                else:
+                    target.write_bytes(self.data or b"")
             yield tmp
 
 
@@ -807,7 +1055,7 @@ _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIR_FD_OK = os.open in getattr(os, "supports_dir_fd", set()) and bool(_NOFOLLOW)
 
 
-def _validate_open(fd: int, limit: int) -> None:
+def _validate_open(fd: int, limit: int):
     """Decide from the OPEN descriptor, never from the path: a regular file
     within the size cap. (A FIFO or device opened with O_NONBLOCK never blocks
     here and is refused.)"""
@@ -817,11 +1065,19 @@ def _validate_open(fd: int, limit: int) -> None:
     if not _stat.S_ISREG(st.st_mode):
         os.close(fd)
         raise MediaError("not a regular file")
-    if st.st_size > limit:
-        os.close(fd)
-        raise MediaLimitError(f"file is {st.st_size:,} bytes; the limit is {limit:,}")
+    return st
 
 
+# Known, deliberate edges (also listed for the documentation owner):
+#  * A HARD LINK inside the workspace to a file outside it is viewed. It is the
+#    same inode, and creating the link needed the same access as copying the
+#    file; `Snapshot.nlink` (> 1) lets the caller print a one-line note.
+#  * A SYMLINK inside the workspace to another file inside it is followed (the
+#    path is resolved and confined first, then opened once without following).
+#  * Without directory-relative no-follow opens (no `dir_fd`/`O_NOFOLLOW`, i.e.
+#    Windows) only the FINAL path component is protected against a swap.
+#  * An MP3 with no ID3 tag is reported as generic binary by the sniff: a bare
+#    frame sync is too weak a signature to reclassify arbitrary output.
 def snapshot_confined(root: Any, rel: str, *, limit: int = MAX_VIDEO_BYTES) -> _Src:
     """Snapshot the file at workspace-relative ``rel`` with ONE open, race-free.
 
@@ -859,8 +1115,8 @@ def snapshot_confined(root: Any, rel: str, *, limit: int = MAX_VIDEO_BYTES) -> _
             raise MediaError("a symbolic link (or non-directory) is on the path; "
                              "`ctx view` does not follow links") from None
         raise MediaError(f"cannot read source: {exc.strerror or 'error'}") from None
-    _validate_open(fd, limit)
-    return _Src.from_fd(fd, limit=limit)
+    st = _validate_open(fd, limit)
+    return _Src.from_fd(fd, limit=limit, st_size=st.st_size, nlink=st.st_nlink)
 
 
 def snapshot_path(path: Any, *, limit: int = MAX_VIDEO_BYTES) -> _Src:
@@ -873,8 +1129,8 @@ def snapshot_path(path: Any, *, limit: int = MAX_VIDEO_BYTES) -> _Src:
         fd = os.open(str(path), flags)
     except OSError as exc:
         raise MediaError(f"cannot read source: {exc.strerror or 'error'}") from None
-    _validate_open(fd, limit)
-    return _Src.from_fd(fd, limit=limit)
+    st = _validate_open(fd, limit)
+    return _Src.from_fd(fd, limit=limit, st_size=st.st_size, nlink=st.st_nlink)
 
 
 def _kind_of(fmt: str) -> str:
@@ -1068,7 +1324,7 @@ def _probe_av(src: _Src, p: MediaProbe) -> None:
         with src.sandbox() as wd:
             cp = _run([ffprobe, "-v", "error", *_input_args(p.format),
                        "-print_format", "json", "-show_format", "-show_streams",
-                       "-i", _IN_NAME], PROBE_TIMEOUT_S, cwd=wd)
+                       "-i", _IN_NAME], PROBE_TIMEOUT_S, cwd=wd, src=src)
     except MediaUnavailable as exc:
         p.unavailable = exc
         p.notes.append(f"{exc.reason}; container facts only")
@@ -1596,7 +1852,7 @@ def _scale_filter(edge: int) -> str:
             "force_original_aspect_ratio=decrease:flags=lanczos")
 
 
-def _ff_frame(wd: str, fmt: str, t: float, edge: int, *, codec: str,
+def _ff_frame(src: "_Src", wd: str, fmt: str, t: float, edge: int, *, codec: str,
               timeout: float, px: int = MAX_VIDEO_PIXELS) -> bytes:
     ffmpeg = _which("ffmpeg")
     argv = [ffmpeg, "-nostdin", "-hide_banner", "-v", "error",
@@ -1613,7 +1869,7 @@ def _ff_frame(wd: str, fmt: str, t: float, edge: int, *, codec: str,
     for back in (0.0, 0.2, 0.6, 1.5):
         at = max(0.0, t - back)
         argv[argv.index("-ss") + 1] = f"{at:.3f}"
-        cp = _run(argv, timeout, cwd=wd)
+        cp = _run(argv, timeout, cwd=wd, src=src)
         if cp.returncode == 0 and cp.stdout:
             return cp.stdout
         if cp.returncode != 0 or at == 0.0:
@@ -1703,7 +1959,7 @@ def frame_at(source: Any, t: float | str, *, max_edge: int = DEFAULT_FRAME_EDGE,
     else:
         with_pillow = pillow_version() is not None
         with src.sandbox() as wd:
-            raw = _ff_frame(wd, p.format, when, edge,
+            raw = _ff_frame(src, wd, p.format, when, edge,
                             codec="png" if with_pillow else "mjpeg",
                             timeout=FRAME_TIMEOUT_S, px=_pixel_cap(p))
         if with_pillow:
@@ -1847,7 +2103,7 @@ def contact_sheet(source: Any, *, count: int | None = None,
             if anim:
                 tile = anim_imgs[i].convert("RGB")
             else:
-                raw = _ff_frame(wd, p.format, _clamp_time(t, p.duration_s)[0],
+                raw = _ff_frame(src, wd, p.format, _clamp_time(t, p.duration_s)[0],
                                 max(tile_w, tile_h), codec="png",
                                 timeout=min(FRAME_TIMEOUT_S, deadline.left()),
                                 px=_pixel_cap(p))
@@ -1942,7 +2198,7 @@ def scene_changes(source: Any, *, threshold: float = DEFAULT_SCENE_THRESHOLD,
     with src.sandbox() as wd:
         report = Path(wd) / "scenes.txt"
         report.unlink(missing_ok=True)
-        cp = _run(argv, SCENE_TIMEOUT_S, cwd=wd)
+        cp = _run(argv, SCENE_TIMEOUT_S, cwd=wd, src=src)
         try:
             lines = report.read_text(encoding="utf-8", errors="replace").splitlines() \
                 if report.is_file() else None
@@ -2011,7 +2267,7 @@ def extract_subtitles(source: Any, *, stream: int = 0,
     with src.sandbox() as wd:
         cp = _run([ffmpeg, "-nostdin", "-hide_banner", "-v", "error",
                    *_input_args(p.format, max_pixels=_pixel_cap(p)), "-i", _IN_NAME, "-map",
-                   f"0:s:{stream}", "-f", "srt", "-"], SUBTITLE_TIMEOUT_S, cwd=wd)
+                   f"0:s:{stream}", "-f", "srt", "-"], SUBTITLE_TIMEOUT_S, cwd=wd, src=src)
     if cp.returncode != 0:
         raise MediaError("subtitle extraction failed: " + _failure(cp))
     full = cp.stdout

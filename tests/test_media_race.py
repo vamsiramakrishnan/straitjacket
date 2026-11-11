@@ -92,16 +92,23 @@ def test_size_cap_is_enforced_from_the_descriptor(ws):
         media.snapshot_confined(ws, "big.bin", limit=50)
 
 
-def test_snapshot_is_private_and_later_changes_do_not_reach_it(ws):
+@pytest.mark.parametrize("fd_mode", [True, False])
+def test_snapshot_is_private_and_later_changes_do_not_reach_it(ws, monkeypatch, tmp_path, fd_mode):
+    monkeypatch.setattr(media, "_FD_MODE", fd_mode and media._FD_MODE)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(media.tempfile, "tempdir", str(scratch))
     (ws / "f.bin").write_bytes(b"first")
     snap = media.snapshot_confined(ws, "f.bin")
     (ws / "f.bin").write_bytes(b"SECOND-and-longer")
     assert snap.read(100) == b"first" and snap.sha256() == hashlib.sha256(b"first").hexdigest()
-    assert (os.stat(snap.path.parent).st_mode & 0o777) == 0o700
-    assert os.listdir(snap.path.parent) == ["in"]
-    folder = snap.path.parent
+    if snap.fd is not None:                       # descriptor mode: nothing on disk at all
+        assert snap.path is None and list(scratch.rglob("*")) == []
+    else:                                         # named mode: a 0700 directory holding only `in`
+        folder = snap.path.parent
+        assert (os.stat(folder).st_mode & 0o777) == 0o700 and os.listdir(folder) == ["in"]
     snap.close()
-    assert not folder.exists()
+    assert list(scratch.iterdir()) == []
 
 
 # --------------------------------------- the record is the hash of what was decoded
