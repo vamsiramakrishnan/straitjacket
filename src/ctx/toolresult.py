@@ -8,13 +8,265 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from ctx.textutil import clip_redacting  # redaction-aware clips
+import csv
 import hashlib
+import io
 import json
+import re
+from typing import Any
 
 from ctx._proc import native_exit_status
 from ctx.execution import update_manifest_digest, focus_hash
 from ctx.textutil import sanitize_for_model
 from ctx import POLICY_VERSION
+
+_DATA_SHAPE_MIN_CHARS = 1500
+_DATA_SHAPE_MIN_JSON_ROWS = 3
+_DATA_SHAPE_MIN_CSV_ROWS = 5
+_DATA_SHAPE_MAX_FIELDS = 16
+_ERROR_TAIL_LINES = 25
+_DEFAULT_COMPRESS_CHARS = 4000
+_NUMBERED_LINE_PREFIX_RE = re.compile(r"^\d{5}\|\s?")
+_NUMBERED_TOTAL_FOOTER_RE = re.compile(r"\n*\(Total:\s*\d+\s*lines[^)]*\)\s*$")
+_PLAIN_NUMERIC_CELL_RE = re.compile(
+    r"^[+-]?\$?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$"
+)
+_ERROR_SIGNAL_RE = re.compile(
+    r"(?:Traceback \(most recent call last\):|\b[A-Za-z_]*Error:|\b[A-Za-z_]*Exception:|"
+    r"\[exit_code:\s*(?!0\b)-?\d+\]|\[exit\s+(?!0\b)-?\d+\]|\bexit=(?!0\b)-?\d+\b)",
+    re.I,
+)
+_OMISSION_MARKER_RE = re.compile(
+    r"(?:\[ctx:omitted|\blines omitted\b|\brecords omitted\b|\[truncated|"
+    r"\.\.\.\s*(?:middle-truncated|omitted|truncated)|\[ctx-retrieve\]|\bnext:\s*ctx\s+get\b)",
+    re.I,
+)
+
+
+def _strip_numbered_line_decorations(text: str) -> str:
+    cleaned = _NUMBERED_TOTAL_FOOTER_RE.sub("", text)
+    lines = cleaned.splitlines()
+    if lines and _NUMBERED_LINE_PREFIX_RE.match(lines[0]):
+        lines = [_NUMBERED_LINE_PREFIX_RE.sub("", ln) for ln in lines]
+    return "\n".join(lines).strip()
+
+
+def _is_numeric_scalar(val: Any) -> bool:
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return True
+    if isinstance(val, str):
+        s = val.strip()
+        if s and _PLAIN_NUMERIC_CELL_RE.match(s):
+            return True
+    return False
+
+
+def _extract_json_dict_rows(parsed: Any) -> list[dict[str, Any]] | None:
+    if isinstance(parsed, list):
+        if len(parsed) >= _DATA_SHAPE_MIN_JSON_ROWS and all(isinstance(x, dict) for x in parsed):
+            return parsed
+        return None
+    if isinstance(parsed, dict):
+        best: list[dict[str, Any]] | None = None
+        for v in parsed.values():
+            if isinstance(v, list) and len(v) >= _DATA_SHAPE_MIN_JSON_ROWS and all(isinstance(x, dict) for x in v):
+                if best is None or len(v) > len(best):
+                    best = v
+        return best
+    return None
+
+
+def summarize_data_shape_header(text: str) -> str:
+    """Return a 2-line ``[data-shape]`` + ``[compute-hint]`` header for structured JSON/CSV outputs >= 1,500 chars."""
+    if not text or len(text) < _DATA_SHAPE_MIN_CHARS:
+        return ""
+    raw = text.strip()
+    if raw.startswith("[data-shape:"):
+        parts = raw.split("\n", 2)
+        raw = parts[-1].strip() if len(parts) >= 3 else ""
+        if len(raw) < _DATA_SHAPE_MIN_CHARS:
+            return ""
+
+    candidate = _strip_numbered_line_decorations(raw)
+    if not candidate:
+        return ""
+
+    # 1. Try JSON array / wrapped object array / JSONL.
+    records: list[dict[str, Any]] | None = None
+    if candidate.startswith(("[", "{")):
+        try:
+            parsed = json.loads(candidate)
+            records = _extract_json_dict_rows(parsed)
+        except Exception:
+            records = None
+        if records is None and candidate.startswith("{"):
+            non_empty_lns = [ln.strip() for ln in candidate.splitlines() if ln.strip()]
+            if len(non_empty_lns) >= _DATA_SHAPE_MIN_JSON_ROWS and all(
+                ln.startswith("{") and ln.endswith("}") for ln in non_empty_lns
+            ):
+                jsonl_rows: list[dict[str, Any]] = []
+                ok_jsonl = True
+                for ln in non_empty_lns:
+                    try:
+                        obj = json.loads(ln)
+                    except Exception:
+                        ok_jsonl = False
+                        break
+                    if not isinstance(obj, dict):
+                        ok_jsonl = False
+                        break
+                    jsonl_rows.append(obj)
+                if ok_jsonl and len(jsonl_rows) >= _DATA_SHAPE_MIN_JSON_ROWS:
+                    records = jsonl_rows
+
+    if records is not None and len(records) >= _DATA_SHAPE_MIN_JSON_ROWS:
+        rows_cnt = len(records)
+        fields: list[str] = []
+        seen_f: set[str] = set()
+        for r in records:
+            for k in r:
+                ks = str(k)
+                if ks not in seen_f:
+                    seen_f.add(ks)
+                    fields.append(ks)
+        shown_fields = fields[:_DATA_SHAPE_MAX_FIELDS]
+        numeric_fields: list[str] = []
+        for k in shown_fields:
+            vals = [
+                r.get(k)
+                for r in records
+                if r.get(k) is not None and not (isinstance(r.get(k), str) and not str(r.get(k)).strip())
+            ]
+            if vals and sum(1 for v in vals if _is_numeric_scalar(v)) * 5 >= len(vals) * 3:
+                numeric_fields.append(k)
+        fields_s = ", ".join(shown_fields)
+        num_s = ", ".join(numeric_fields)
+        return (
+            f"[data-shape: format=json, rows={rows_cnt}, fields=[{fields_s}], numeric_fields=[{num_s}]]\n"
+            f"[compute-hint: process all {rows_cnt} rows in one python3 script with [section: name] markers; "
+            "avoid mental math or multi-turn 1-liners]"
+        )
+
+    # 2. Try CSV / TSV (>= 5 rows).
+    non_empty = [ln for ln in candidate.splitlines() if ln.strip()]
+    if len(non_empty) < _DATA_SHAPE_MIN_CSV_ROWS:
+        return ""
+    first_ln = non_empty[0]
+    delim = "\t" if ("\t" in first_ln and first_ln.count("\t") >= first_ln.count(",")) else ","
+    if delim not in first_ln:
+        return ""
+    try:
+        csv_rows = [r for r in csv.reader(io.StringIO("\n".join(non_empty)), delimiter=delim) if any(c.strip() for c in r)]
+    except Exception:
+        return ""
+    if len(csv_rows) < _DATA_SHAPE_MIN_CSV_ROWS:
+        return ""
+    header = [c.strip() for c in csv_rows[0]]
+    ncols = len(header)
+    if ncols < 2 or any(len(h) > 64 or "\n" in h for h in header if h):
+        return ""
+    consistent = sum(1 for r in csv_rows[1:] if len(r) == ncols)
+    data_rows = csv_rows[1:]
+    if not data_rows or consistent * 5 < len(data_rows) * 4:
+        return ""
+
+    shown_cols = [h for h in header[:_DATA_SHAPE_MAX_FIELDS] if h]
+    if len(shown_cols) < 2:
+        return ""
+    numeric_cols: list[str] = []
+    for ci, col_name in enumerate(header[:_DATA_SHAPE_MAX_FIELDS]):
+        if not col_name:
+            continue
+        cells = [r[ci].strip() for r in data_rows if ci < len(r) and r[ci].strip()]
+        if cells and sum(1 for c in cells if _PLAIN_NUMERIC_CELL_RE.match(c)) * 5 >= len(cells) * 3:
+            numeric_cols.append(col_name)
+
+    rows_cnt = len(data_rows)
+    fields_s = ", ".join(shown_cols)
+    num_s = ", ".join(numeric_cols)
+    return (
+        f"[data-shape: format=csv, rows={rows_cnt}, fields=[{fields_s}], numeric_fields=[{num_s}]]\n"
+        f"[compute-hint: process all {rows_cnt} rows in one python3 script with [section: name] markers; "
+        "avoid mental math or multi-turn 1-liners]"
+    )
+
+
+def prepend_structured_data_shape(text: str) -> str:
+    """Prepend the 2-line ``[data-shape]`` + ``[compute-hint]`` header to ``text`` with 0 character loss."""
+    if not text or text.lstrip().startswith("[data-shape:"):
+        return text
+    header = summarize_data_shape_header(text)
+    if not header:
+        return text
+    return f"{header}\n{text}"
+
+
+def extract_error_tail_block(text: str, *, exit_code: int | None = None) -> str:
+    """Return ``[error-tail-first]`` with the final 25 lines when ``text`` contains an error/traceback."""
+    if not text:
+        return ""
+    has_err = (exit_code is not None and exit_code != 0) or bool(_ERROR_SIGNAL_RE.search(text))
+    if not has_err:
+        return ""
+    lines = [ln for ln in text.splitlines() if not ln.startswith(("[ctx-retrieve]", "next: ctx get"))]
+    if not lines:
+        return ""
+    tail_slice = lines[-_ERROR_TAIL_LINES:]
+    return "[error-tail-first]\n" + "\n".join(tail_slice)
+
+
+def compress_tool_result(
+    first: str = "",
+    second: str | None = None,
+    *,
+    output: str | None = None,
+    text: str | None = None,
+    tool_name: str = "Bash",
+    max_chars: int = _DEFAULT_COMPRESS_CHARS,
+    exit_code: int | None = None,
+    ref: str = "",
+) -> str:
+    """Bound tool output while prepending ``[error-tail-first]`` (final 25 lines) when a Bash error is truncated."""
+    if second is not None:
+        eff_tool = str(first or tool_name)
+        raw_text = str(second)
+    elif output is not None:
+        eff_tool = tool_name
+        raw_text = str(output)
+    elif text is not None:
+        eff_tool = tool_name
+        raw_text = str(text)
+    else:
+        eff_tool = tool_name
+        raw_text = str(first or "")
+
+    if not raw_text or raw_text.lstrip().startswith("[error-tail-first]"):
+        return raw_text
+
+    is_bash_like = eff_tool.strip().lower() in ("bash", "shell", "run", "cmd", "command", "")
+    has_err = (exit_code is not None and exit_code != 0) or bool(_ERROR_SIGNAL_RE.search(raw_text))
+    already_truncated = bool(_OMISSION_MARKER_RE.search(raw_text))
+    needs_truncation = len(raw_text) > max_chars
+
+    if not needs_truncation and not already_truncated:
+        return raw_text
+
+    err_header = extract_error_tail_block(raw_text, exit_code=exit_code) if (is_bash_like and has_err) else ""
+
+    if needs_truncation and not already_truncated:
+        half = max(256, max_chars // 2)
+        head_part = raw_text[:half]
+        tail_start = max(half, len(raw_text) - half)
+        tail_part = raw_text[tail_start:]
+        omitted = len(raw_text) - len(head_part) - len(tail_part)
+        ref_suffix = f" (full output in {ref})" if ref else ""
+        body = f"{head_part}\n[... {omitted} chars middle-truncated{ref_suffix} ...]\n{tail_part}"
+    else:
+        body = raw_text
+
+    if err_header:
+        return f"{err_header}\n{body}"
+    return body
 
 
 @dataclass(frozen=True)
@@ -110,7 +362,7 @@ _DEFAULT_INLINE_LINES = 240
 _DEFAULT_RESULT_TOKENS = 1200
 
 
-def _command_intent(cmd_str: str) -> str:
+def _command_intent(cmd_str: str, _depth: int = 0) -> str:
     """Classify shell command intent: ``'projection'``, ``'flood'``, or ``'standard'``.
 
     Explicit data projections (``python -c``, ``jq``, ``awk``, ``pdftotext``)
@@ -123,9 +375,32 @@ def _command_intent(cmd_str: str) -> str:
         import os
         import shlex
 
+        if _depth > 4:
+            return "standard"
         s = (cmd_str or "").strip()
         if not s:
             return "standard"
+        try:
+            lead_argv = shlex.split(s)
+        except ValueError:
+            lead_argv = None
+        if lead_argv:
+            try:
+                from ctx.hook import _unwrap
+
+                unwrapped = _unwrap(lead_argv)
+            except Exception:
+                unwrapped = lead_argv
+            if unwrapped:
+                uprog = os.path.basename(unwrapped[0])
+                if (
+                    uprog in ("bash", "sh", "zsh", "dash")
+                    and len(unwrapped) >= 3
+                    and unwrapped[1] in ("-c", "-lc")
+                ):
+                    return _command_intent(unwrapped[2], _depth + 1)
+                if unwrapped != lead_argv:
+                    s = shlex.join(unwrapped)
         for sep in ("&&", ";"):
             if s.startswith("cd ") and sep in s:
                 head_seg, rest_seg = s.split(sep, 1)
@@ -149,8 +424,8 @@ def _command_intent(cmd_str: str) -> str:
         if not argv:
             return "standard"
         prog = os.path.basename(argv[0])
-        if prog in ("bash", "sh", "zsh") and len(argv) >= 3 and argv[1] in ("-c", "-lc"):
-            return _command_intent(argv[2])
+        if prog in ("bash", "sh", "zsh", "dash") and len(argv) >= 3 and argv[1] in ("-c", "-lc"):
+            return _command_intent(argv[2], _depth + 1)
         if prog in _PROJECTION_PROGS:
             return "projection"
         if prog in _FLOOD_PROGS:

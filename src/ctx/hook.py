@@ -787,7 +787,22 @@ def _apply_window_pressure(
 
 
 # Wrappers that prefix another command; unwrap to classify the real program.
-_WRAPPERS = {"env", "sudo", "doas", "nice", "nohup", "time", "stdbuf", "timeout", "command", "xvfb-run"}
+_WRAPPERS = {
+    "env", "sudo", "doas", "nice", "nohup", "time", "stdbuf", "timeout",
+    "command", "xvfb-run", "bwrap",
+}
+_BWRAP_TWO_ARG_FLAGS = {
+    "--bind", "--ro-bind", "--dev-bind", "--bind-try", "--ro-bind-try",
+    "--dev-bind-try", "--symlink", "--setenv", "--chmod", "--file",
+    "--bind-data", "--ro-bind-data", "--userns-block-fd", "--info-fd",
+    "--json-status-fd",
+}
+_BWRAP_ONE_ARG_FLAGS = {
+    "--proc", "--dev", "--tmpfs", "--mqueue", "--dir", "--remount-ro",
+    "--chdir", "--hostname", "--unsetenv", "--lock-file", "--sync-fd",
+    "--seccomp", "--add-seccomp-fd", "--block-fd", "--uid", "--gid",
+    "--perms", "--size", "--cap-add", "--cap-drop", "--args",
+}
 
 # Redirection-only tail: `cmd ... > file 2>&1` — console output proven small.
 # Only `> file 2>&1` (dup AFTER the stdout redirect) and `&> file` prove
@@ -811,7 +826,19 @@ def _unwrap(argv: list[str]) -> list[str]:
             continue
         if prog in _WRAPPERS:
             i += 1
-            if prog == "timeout":  # skip duration (and -k/-s options)
+            if prog == "bwrap":
+                if "--" in argv[i:]:
+                    i = argv.index("--", i) + 1
+                else:
+                    while i < len(argv) and argv[i].startswith("-"):
+                        flag = argv[i]
+                        if flag in _BWRAP_TWO_ARG_FLAGS:
+                            i += 3
+                        elif flag in _BWRAP_ONE_ARG_FLAGS:
+                            i += 2
+                        else:
+                            i += 1
+            elif prog == "timeout":  # skip duration (and -k/-s options)
                 while i < len(argv) and argv[i].startswith("-"):
                     i += 2 if argv[i] in ("-k", "-s", "--signal", "--kill-after") else 1
                 if i < len(argv):

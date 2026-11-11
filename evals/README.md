@@ -51,6 +51,8 @@ python evals/verb_coverage.py --repo /path/to/checkout  # do map's advertised ad
 python evals/refs_precision.py --repo /path/to/checkout  # what the textual refs floor costs
 python evals/edit_format_by_model.py   # anchored vs native edit success, per model, from field rows
 python evals/improve_route.py --dry-run  # the hunt/verify/harvest/prove route, priced (live without --dry-run)
+python evals/acciobench_run.py doctor --dataset-root /path/to/CommerceAgentBench
+python evals/acciobench_run.py validate --dataset-root /path/to/CommerceAgentBench --limit 4
 ```
 
 Others in this class: `evalset_collapse.py`, `corpus_scoped_scan.py`,
@@ -146,6 +148,14 @@ already built, and grades each phase against the earlier behaviours that must
 survive. Its arms are the routing comparison — one frontier model doing
 everything, against the orchestrator splitting plan from build across models and
 vendors.
+
+`acciobench_run.py` drives the 107-task
+[CommerceAgentBench](https://github.com/Accio-org/CommerceAgentBench) suite
+(`cli`, `browser`, `file`, and `api` workflows) as a paired `--arm raw,sj` A/B
+harness over either `GEMINI_API_KEY` (`--provider gemini`) or Vertex AI ADC
+(`--provider vertex`), with isolated port-mapped mock services, a worker-scoped
+headless Chromium pool, and model-free `doctor` / `validate` referee checks —
+see [`acciobench/README.md`](acciobench/README.md).
 
 ## The four instruments
 
