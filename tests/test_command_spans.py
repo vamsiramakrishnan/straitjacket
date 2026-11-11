@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shlex
+
 from ctx.hook import classify_command
 
 
@@ -41,7 +43,8 @@ def test_transparent_capture_preserves_env_and_launcher_wrappers():
     )
     decision = classify_command(command, _policy())
     assert decision["decision"] == "deny"
-    assert decision["_rewrite"]["command"] == f"ctx run --passthrough -- {command}"
+    assert decision["_rewrite"]["command"] == (
+        f"ctx run --passthrough --shell -- {shlex.quote(command)}")
 
 
 def test_github_mutations_keep_permission_boundary():

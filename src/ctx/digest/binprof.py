@@ -12,11 +12,12 @@ behind a `ctx get run:…#stdout` address.
 from __future__ import annotations
 
 from ctx import binfmt
-from ctx.digest.base import DigestContext, Profile
+from ctx.digest.base import DigestContext, Profile, from_intake
+from ctx.textutil import one_line
 
 # Formats worth a typed binary digest. Plain "text" declines (falls through to
 # the text/log/table profiles); a NUL-bearing unknown blob is still bounded.
-_BINARY_FORMATS = binfmt.IMAGE_FORMATS | {"pdf", "binary", "gzip", "zip", "elf", "ogg"}
+_BINARY_FORMATS = binfmt.IMAGE_FORMATS | binfmt.MEDIA_FORMATS | {"pdf", "binary", "gzip", "zip", "elf", "ogg"}
 
 
 class BinaryProfile(Profile):
@@ -24,6 +25,14 @@ class BinaryProfile(Profile):
 
     def detect(self, ctx: DigestContext) -> str | None:
         fmt = binfmt.sniff_format(ctx.stdout.head)
+        if (
+            from_intake(ctx)
+            and not ctx.stdout.media_type.startswith("application/octet-stream")
+        ):
+            # Intake already sent every binary payload to its own seam; a
+            # text payload that merely starts with a magic prefix ("BM…",
+            # "%PDF-" quoted in prose) is text.
+            return None
         if fmt in _BINARY_FORMATS:
             return f"binary output ({fmt}) by magic bytes"
         return None
@@ -39,6 +48,12 @@ class BinaryProfile(Profile):
         if not data:  # store-free rendering (tests) — degrade to the head
             data = ctx.stdout.head
         info = binfmt.inspect(data)
-        header = [f"cwd: {ctx.manifest['cwd']}", f"command: {ctx.command_line()}"]
+        if "pdf_version" in info.extra:
+            # Three header bytes decoded as latin-1: payload text, one line.
+            info.extra["pdf_version"] = one_line(str(info.extra["pdf_version"]))
+        header = (
+            [ctx.intake_line(sizes=False)] if from_intake(ctx)
+            else [f"cwd: {ctx.manifest['cwd']}", f"command: {ctx.command_line()}"]
+        )
         body = binfmt.render_digest(info, address="ctx get run:PENDING#stdout")
         return "\n".join(header) + "\n" + body

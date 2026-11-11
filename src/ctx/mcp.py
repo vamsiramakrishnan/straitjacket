@@ -321,9 +321,14 @@ def dispatch_bounded(ws, store, args: dict[str, Any], *, runtime=None) -> str:
             raise RetrievalError(text)
         return text
     elif op in ("relay_watch", "relay_publish", "relay_pending"):
-        result = _relay_ops(ws, op, args.get("options") or {})
+        from ctx.textutil import model_visible
+
+        # Notes stored by other agents are model-visible content.
+        result = model_visible(_relay_ops(ws, op, args.get("options") or {}), ws.config.redaction)
     elif op in ("task", "inbox", "send"):
-        result = _task_ops(ws, op, args.get("options") or {})
+        from ctx.textutil import model_visible
+
+        result = model_visible(_task_ops(ws, op, args.get("options") or {}), ws.config.redaction)
     elif op == "repo":
         result = stats(store, ws, "repo:")
     elif op == "doctor":

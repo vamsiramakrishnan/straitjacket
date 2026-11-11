@@ -32,6 +32,7 @@ import io
 import json
 import sys
 from pathlib import Path
+from ctx.sessiondir import session_reads_path
 
 LEDGER = ".ctx-session-reads"
 
@@ -43,7 +44,7 @@ OUTCOME_KEYS = {"schema", "event", "interventionId", "outcome", "evidence", "ts"
 
 
 def _lines(root: Path, name: str) -> list[dict]:
-    path = Path(root) / LEDGER / name
+    path = session_reads_path(Path(root), name)
     if not path.is_file():
         return []
     return [
@@ -87,7 +88,7 @@ def test_emission_line_matches_frozen_schema_exactly(tmp_path):
         hints=2,
     )
     assert isinstance(iid, str) and len(iid) == 12
-    raw = (tmp_path / LEDGER / "interventions.jsonl").read_text(encoding="utf-8")
+    raw = (session_reads_path(tmp_path, "interventions.jsonl")).read_text(encoding="utf-8")
     (line,) = [ln for ln in raw.splitlines() if ln.strip()]
     obj = json.loads(line)
     assert set(obj) == EMISSION_KEYS
@@ -151,8 +152,8 @@ def test_same_command_sequence_same_ids_and_ledger(tmp_path):
     drive(b)
     strip = lambda evs: [{k: v for k, v in e.items() if k != "ts"} for e in evs]
     assert strip(_v2(a)) == strip(_v2(b))
-    state_a = (a / LEDGER / "reflex.json").read_text(encoding="utf-8")
-    state_b = (b / LEDGER / "reflex.json").read_text(encoding="utf-8")
+    state_a = (session_reads_path(a, "reflex.json")).read_text(encoding="utf-8")
+    state_b = (session_reads_path(b, "reflex.json")).read_text(encoding="utf-8")
     assert state_a == state_b
 
 
@@ -542,9 +543,9 @@ def test_hook_records_steer_shadow_on_rewrite_path(tmp_path):
     finally:
         sys.stdin, sys.stdout = old_in, old_out
     (line,) = [ln for ln in out.splitlines() if ln.strip()]
-    hso = json.loads(line)["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"  # steered substitution
-    assert "ctx run" in hso["updatedInput"]["command"]
+    # On Claude Code a rewrite comes only with a proven allow; pytest is not
+    # proven, so the call leaves untouched. The steering shadow is still kept.
+    assert json.loads(line) == {}
     rows = _lines(tmp_path, "steering-shadow.jsonl")
     assert len(rows) == 1
     assert rows[0]["would_bypass"] is True  # passive + no prior flood
@@ -571,18 +572,23 @@ def test_hook_no_steer_shadow_under_deny_steering(tmp_path):
         sys.stdin, sys.stdout = old_in, old_out
     hso = json.loads(out)["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"  # no rewrite, byte-identical
-    assert not (tmp_path / LEDGER / "steering-shadow.jsonl").exists()
+    assert not (session_reads_path(tmp_path, "steering-shadow.jsonl")).exists()
 
 
 # ------------------------------------------------------------ fail-open
 
 
-def test_all_new_apis_fail_open_when_ledger_unwritable(tmp_path):
+def test_all_new_apis_fail_open_when_ledger_unwritable(tmp_path, monkeypatch):
     from ctx import reflex
 
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / LEDGER).write_text("a file, not a directory", encoding="utf-8")
+    # The ledgers that carry command text live in the state directory:
+    # make that unwritable too.
+    blocker = tmp_path / "state-is-a-file"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("CTX_STATE_HOME", str(blocker))
 
     assert reflex.emit_intervention(ws, signature="pytest tests/x.py") is None
     reflex.note_intervention(ws, "pytest tests/x.py", "a" * 12, generation="g")

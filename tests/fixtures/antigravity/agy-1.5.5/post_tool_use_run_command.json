@@ -1,0 +1,23 @@
+{
+  "artifactDirectoryPath": "/home/user/.gemini/antigravity-cli/brain/00000000-0000-4000-8000-000000000000",
+  "conversationId": "00000000-0000-4000-8000-000000000000",
+  "cwd": "/workspace/project",
+  "error": "",
+  "hookEventName": "PostToolUse",
+  "lastUserInput": "Run the shell command: echo hello . Then reply with the single word OK",
+  "modelName": "gemini-3.6-flash-medium",
+  "stepIdx": 3,
+  "toolCall": {
+    "args": {
+      "CommandLine": "echo REWRITTEN-BY-HOOK",
+      "WaitMsBeforeAsync": 5000,
+      "toolSummary": "Run echo hello"
+    },
+    "id": "call_0000000000000000001",
+    "name": "run_command"
+  },
+  "transcriptPath": "/home/user/.gemini/antigravity-cli/brain/00000000-0000-4000-8000-000000000000/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/workspace/project"
+  ]
+}

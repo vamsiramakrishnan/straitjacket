@@ -58,6 +58,7 @@ is unchanged and byte-identical. See :func:`_auto_capture_fails` and
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 from ctx import bounds
 
 import contextlib
@@ -467,7 +468,10 @@ def derive_run(
         # blind spot.
         profile, _reason = detect_profile(dctx)
         try:
-            graph = profile.extract(dctx)
+            from ctx.textutil import redaction_scope
+
+            with redaction_scope(dctx.ws.config.redaction):
+                graph = profile.extract(dctx)
         except Exception as e:
             # Never let a broken extractor read as "this run had no
             # failures" -- that is the same silence this whole fix is about.
@@ -1092,7 +1096,7 @@ def render_census(
             if isinstance(v, (list, tuple)):
                 v = ",".join(str(x) for x in v)
             parts.append(f"{k}={v}")
-        lines.append(("  " + " · ".join(parts))[:_LINE_CAP])
+        lines.append(clip_redacting("  " + " · ".join(parts), _LINE_CAP))
     if not shown:
         lines.append("  (no rows)")
     omitted = total - len(shown)

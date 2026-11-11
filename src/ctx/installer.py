@@ -9,6 +9,7 @@ on the invoking process's CWD or PATH.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import shutil
@@ -20,6 +21,12 @@ from ctx.config import CONFIG_FILENAME, IGNORE_FILENAME
 from ctx.workspace import Workspace
 
 PLUGIN_DIRNAME = "ctx-harness"
+#: Files `render_plugin` writes (commands live in hooks.json and mcp_config.json).
+_PLUGIN_FILES = ("plugin.json", "hooks.json", "mcp_config.json")
+#: Files `install_gateway` writes per host (each carries a ctx launch).
+_GATEWAY_FILES = {"claude": ".ctx-surface/gateway.claude.json",
+                  "codex": ".ctx-surface/config.codex.gateway.toml",
+                  "antigravity": ".ctx-surface/mcp_config.gateway.json"}
 
 _CTX_TOML_TEMPLATE = """\
 version = 1
@@ -89,12 +96,13 @@ def _template_dir(name: str = "antigravity", *, sentinel: str = "plugin.json") -
 
 
 def _ctx_executable() -> str:
-    """Return a shell-safe command string for hook command fields."""
-    exe = shutil.which("ctx")
-    if exe:
-        return shlex.join([exe])
-    # Fall back to `python -m ctx` semantics via the current interpreter.
-    return shlex.join([sys.executable, "-m", "ctx"])
+    """Return a shell-safe command string for hook command fields: the
+    installed entry point by absolute path, else ``<python> -P -m ctx`` —
+    never a form that imports ``ctx`` from the host's working directory
+    (see :mod:`ctx.selfcmd`)."""
+    from ctx.selfcmd import ctx_command
+
+    return ctx_command()
 
 
 def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
@@ -109,21 +117,43 @@ def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
             "remove it first — the plugin contains the skill (SPEC §4.3)"
         )
 
+    from ctx.launchform import UnsafeWrite, _dir_refusal, copy_tree_safely, write_safely
+
     dest = workspace_root / ".agents" / "plugins" / PLUGIN_DIRNAME
+    if dest.is_symlink():
+        raise UnsafeWrite(f"{dest}: it is a symlink")
+    why = _dir_refusal(dest, workspace_root)
+    if why:
+        raise UnsafeWrite(f"{dest}: {why}")
     dest.mkdir(parents=True, exist_ok=True)
 
-    for name in ("plugin.json", "hooks.json", "mcp_config.json"):
-        content = (template / name).read_text(encoding="utf-8")
-        content = content.replace("{{CTX_EXECUTABLE}}", exe)
-        json.loads(content)  # rendered manifests must stay valid JSON
-        (dest / name).write_text(content, encoding="utf-8")
+    exe_argv = shlex.split(exe)
+
+    def substitute(value):
+        # Decoded string values, then JSON-encoded: a path with quotes or
+        # backslashes cannot break the manifest.
+        if isinstance(value, str):
+            return value.replace("{{CTX_EXECUTABLE}}", exe)
+        if isinstance(value, list):
+            return [substitute(v) for v in value]
+        if isinstance(value, dict):
+            out = {k: substitute(v) for k, v in value.items()}
+            # An MCP stdio entry is ONE executable plus args, so the fallback
+            # `<python> -P -m ctx` is split rather than written as "command".
+            if value.get("command") == "{{CTX_EXECUTABLE}}" and isinstance(value.get("args"), list):
+                out["command"] = exe_argv[0]
+                out["args"] = [*exe_argv[1:], *substitute(value["args"])]
+            return out
+        return value
+
+    for name in _PLUGIN_FILES:
+        doc = json.loads((template / name).read_text(encoding="utf-8"))
+        write_safely(dest / name, json.dumps(substitute(doc), indent=2) + "\n",
+                     root=workspace_root)
 
     for subdir in ("skills", "agents"):
-        src = template / subdir
-        dst = dest / subdir
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(src, dst)
+        # No link followed in the template or in the workspace copy.
+        copy_tree_safely(template / subdir, dest / subdir, root=workspace_root)
     return dest
 
 
@@ -157,16 +187,34 @@ def install_antigravity_statusline(exe: str, *, settings_path: Path | None = Non
             "command": f"{exe} statusline antigravity",
             "enabled": True,
         }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        import os as _os
+
+        from ctx.launchform import UnsafeWrite, write_safely
+
+        home = Path(_os.environ.get("HOME") or Path.home())
+        try:
+            write_safely(path, json.dumps(merged, indent=2) + "\n", root=home)
+        except UnsafeWrite as e:
+            return f"statusLine not installed: {e}; ctx never writes through a link"
         return f"added statusLine to {path}"
     except Exception as e:  # never let statusline setup break wrap
         return f"statusLine not installed ({type(e).__name__}); set it manually"
 
 
 def install_antigravity(ws: Workspace, *, init_policy: bool = True) -> str:
-    dest = render_plugin(ws.root)
-    lines = [f"installed plugin: {dest}"]
+    from ctx.launchform import upgrade as upgrade_launch_forms
+
+    # Before anything that might refuse: a ctx status line still in the
+    # unsafe `python -m ctx` form is rewritten in place.
+    from ctx.launchform import UnsafeWrite
+
+    upgraded = upgrade_launch_forms(ws.root, ["antigravity"])
+    try:
+        dest = render_plugin(ws.root)
+    except UnsafeWrite as e:
+        return "\n".join([*upgraded, f"cannot install the Antigravity plugin: {e}; "
+                           "ctx never writes through a link"])
+    lines = [*upgraded, f"installed plugin: {dest}"]
     exe = _ctx_executable()
     lines.append(install_antigravity_statusline(exe))
     if init_policy:
@@ -188,14 +236,22 @@ def init_workspace(root: Path, *, quiet: bool = False) -> list[str]:
     lines: list[str] = []
     cfg = root / CONFIG_FILENAME
     ign = root / IGNORE_FILENAME
-    if not cfg.exists():
-        cfg.write_text(_CTX_TOML_TEMPLATE, encoding="utf-8")
-        lines.append(f"wrote {cfg.name}")
+    from ctx.launchform import UnsafeWrite, write_safely
+
+    if not cfg.exists() and not cfg.is_symlink():
+        try:
+            write_safely(cfg, _CTX_TOML_TEMPLATE, root=root)
+            lines.append(f"wrote {cfg.name}")
+        except UnsafeWrite as e:
+            lines.append(f"did not write {cfg.name}: {e}")
     elif not quiet:
         lines.append(f"{cfg.name} already exists; left unchanged")
-    if not ign.exists():
-        ign.write_text(_CTXIGNORE_TEMPLATE, encoding="utf-8")
-        lines.append(f"wrote {ign.name}")
+    if not ign.exists() and not ign.is_symlink():
+        try:
+            write_safely(ign, _CTXIGNORE_TEMPLATE, root=root)
+            lines.append(f"wrote {ign.name}")
+        except UnsafeWrite as e:
+            lines.append(f"did not write {ign.name}: {e}")
     elif not quiet:
         lines.append(f"{ign.name} already exists; left unchanged")
     return lines
@@ -204,7 +260,18 @@ def init_workspace(root: Path, *, quiet: bool = False) -> list[str]:
 def claude_hook_settings(ctx_exe: str) -> dict:
     """Claude Code / Codex-compatible hook settings dict (PreToolUse guard +
     PostToolUse emission gate). Single source of truth; `ctx.wrap` reuses it
-    for ephemeral runs and `install_claude` for the persistent install."""
+    for ephemeral runs and `install_claude` for the persistent install.
+
+    The matchers are derived from the governance table (`ctx.governance`),
+    not typed here: PreToolUse names exactly the tools with an input-side
+    route; PostToolUse fires for every tool except the declared exemptions,
+    so a sub-agent, an MCP tool, or a built-in added in a later release is
+    gated rather than skipped; PostToolUseFailure observes failed tools (the
+    edit-outcome ledger's failure half, and failure output, which no hook
+    can replace)."""
+    from ctx.governance import claude_post_matcher, claude_pre_matcher
+
+    post_matcher = claude_post_matcher()
     return {
         "hooks": {
             "UserPromptSubmit": [{"hooks": [{
@@ -214,7 +281,7 @@ def claude_hook_settings(ctx_exe: str) -> dict:
             }]}],
             "PreToolUse": [
                 {
-                    "matcher": "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+                    "matcher": claude_pre_matcher(),
                     "hooks": [
                         {
                             "type": "command",
@@ -226,11 +293,23 @@ def claude_hook_settings(ctx_exe: str) -> dict:
             ],
             "PostToolUse": [
                 {
-                    "matcher": "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*",
+                    "matcher": post_matcher,
                     "hooks": [
                         {
                             "type": "command",
                             "command": f"{ctx_exe} hook claude-code post-tool-use",
+                            "timeout": 10,
+                        }
+                    ],
+                }
+            ],
+            "PostToolUseFailure": [
+                {
+                    "matcher": post_matcher,
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{ctx_exe} hook claude-code post-tool-use-failure",
                             "timeout": 10,
                         }
                     ],
@@ -275,26 +354,30 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
     backends = {n: {"command": a[0], "args": a[1:]}
                 for n, a in surface._mcp_server_commands(root).items()
                 if not _is_gateway_argv(a)}
-    gw_args = ["surface", "gateway", "--workspace", str(root)]
+    # An MCP stdio entry is one executable plus args: the fallback
+    # `<python> -P -m ctx` must be split, never written as one "command".
+    exe_argv = shlex.split(exe)
+    gw_cmd = exe_argv[0]
+    gw_args = [*exe_argv[1:], "surface", "gateway", "--workspace", str(root)]
 
     files: dict[str, str] = {
         ".ctx-surface/backends.json": json.dumps({"mcpServers": backends}, indent=2) + "\n",
     }
     if host == "claude":
-        files[".ctx-surface/gateway.claude.json"] = json.dumps(
-            {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args}}}, indent=2) + "\n"
+        files[_GATEWAY_FILES["claude"]] = json.dumps(
+            {"mcpServers": {_GATEWAY_NAME: {"command": gw_cmd, "args": gw_args}}}, indent=2) + "\n"
         launch = "claude --strict-mcp-config --mcp-config .ctx-surface/gateway.claude.json"
     elif host == "codex":
         args_toml = ", ".join(json.dumps(a) for a in gw_args)
-        files[".ctx-surface/config.codex.gateway.toml"] = (
+        files[_GATEWAY_FILES["codex"]] = (
             "# ctx surface gateway — load ONLY the gateway; it fronts the\n"
             "# backends recorded in .ctx-surface/backends.json.\n"
             f"[mcp_servers.{_GATEWAY_NAME}]\n"
-            f'command = "{exe}"\nargs = [{args_toml}]\n')
+            f'command = {json.dumps(gw_cmd)}\nargs = [{args_toml}]\n')
         launch = "codex --config .ctx-surface/config.codex.gateway.toml"
     elif host == "antigravity":
-        files[".ctx-surface/mcp_config.gateway.json"] = json.dumps(
-            {"mcpServers": {_GATEWAY_NAME: {"command": exe, "args": gw_args, "disabled": False}}},
+        files[_GATEWAY_FILES["antigravity"]] = json.dumps(
+            {"mcpServers": {_GATEWAY_NAME: {"command": gw_cmd, "args": gw_args, "disabled": False}}},
             indent=2) + "\n"
         launch = ("point ~/.gemini/antigravity-cli at "
                   ".ctx-surface/mcp_config.gateway.json, then Refresh MCP servers")
@@ -304,11 +387,17 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
     lines.append(f"gateway wiring for {host}: fronts {len(backends)} backend(s) "
                  f"[{', '.join(sorted(backends)) or 'none'}]")
     if apply:
+        from ctx.launchform import UnsafeWrite
+        from ctx.surface_profiles import write_private
+
+        written = []
         for rel, content in files.items():
-            path = root / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
-        lines.append("  wrote: " + ", ".join(files))
+            try:
+                write_private(root / rel, content, root=root)  # 0600: full server commands
+                written.append(rel)
+            except UnsafeWrite as e:
+                lines.append(f"  refused {rel}: {e}; ctx never writes through a link")
+        lines.append("  wrote: " + (", ".join(written) or "nothing"))
         lines.append("  tip: set [surface] gateway = true in ctx.toml so the "
                      "SessionStart gate knows disclosure is progressive")
     else:
@@ -448,6 +537,183 @@ def _hook_command_present(settings: dict, ctx_exe: str) -> bool:
     return False
 
 
+_CLAUDE_STAGE_SLUG = {
+    "UserPromptSubmit": "user-prompt-submit", "PreToolUse": "pre-tool-use",
+    "PostToolUse": "post-tool-use", "PostToolUseFailure": "post-tool-use-failure",
+    "SessionStart": "session-start",
+}
+
+
+#: Every default matcher an earlier release shipped for a ctx-owned group,
+#: taken from the repository history (src/ctx/wrap.py before the installer
+#: owned it, then src/ctx/installer.py). Only a matcher equal to one of these
+#: is upgraded; any other value is the user's and is reported, not replaced.
+_PREVIOUS_CLAUDE_DEFAULTS: dict[str, frozenset[str]] = {
+    "PreToolUse": frozenset({
+        "Bash|Read",
+        "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+    }),
+    "PostToolUse": frozenset({
+        "Bash|Read|Edit|Write",
+        "Bash|Read|Grep|Glob|WebFetch|WebSearch|Task|mcp__.*",
+    }),
+}
+
+
+def _is_ctx_hook_command(command: object, slug: str) -> bool:
+    """Is this exactly the invocation the installer writes, ``<exe> hook
+    claude-code <slug>``, under any executable path?
+
+    Parsed, not suffix-matched: a user's ``echo done; /x/ctx hook claude-code
+    post-tool-use`` ends with the same text and is theirs. Allowed forms are
+    ``<path>/ctx`` or ``<python> -m ctx`` followed by exactly the three
+    arguments; any shell operator, redirection or extra word disqualifies.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if any(t and all(c in "();<>|&" for c in t) for t in tokens):
+        return False
+    if len(tokens) < 4 or tokens[-3:] != ["hook", "claude-code", slug]:
+        return False
+    prefix = tokens[:-3]
+    if len(prefix) == 1:
+        # `ctx-hook-native` is the Rust post-tool-use shim earlier releases
+        # wrote in place of ctx (wrap.py `_post_hook_exe`, removed since).
+        return os.path.basename(prefix[0]) in ("ctx", "ctx.exe", "ctx-hook-native")
+    if prefix[1:] in (["-m", "ctx"], ["-P", "-m", "ctx"]):
+        # Both the pre-fix unsafe form and the safe ``-P`` form are ctx's.
+        return os.path.basename(prefix[0]).startswith("python")
+    return False
+
+
+def upgrade_unsafe_ctx_commands(existing_hooks: object, settings: object = None) -> list[str]:
+    """Rewrite ctx-owned commands still in the unsafe ``<python> -m ctx``
+    form (it imports ``ctx`` from the host's working directory, so a
+    repository could replace the guard) to ``<python> -P -m ctx``, in place.
+    Each command that is exactly a ctx hook command (or a ctx status line) is
+    rewritten wherever it sits, INCLUDING inside a hook group that also holds
+    a user's own command — the user's command is left as it is. Returns one
+    line, counting the ctx commands rewritten, when anything changed."""
+    from ctx.selfcmd import is_unsafe_ctx_command, make_safe
+
+    n = 0
+    if isinstance(existing_hooks, dict):
+        for stage, groups in existing_hooks.items():
+            slug = _CLAUDE_STAGE_SLUG.get(stage)
+            if not slug or not isinstance(groups, list):
+                continue
+            for group in groups:
+                for h in (group.get("hooks") if isinstance(group, dict) else None) or []:
+                    cmd = h.get("command") if isinstance(h, dict) else None
+                    if (isinstance(cmd, str) and _is_ctx_hook_command(cmd, slug)
+                            and is_unsafe_ctx_command(cmd)):
+                        h["command"] = shlex.join(make_safe(shlex.split(cmd)))
+                        n += 1
+    if isinstance(settings, dict) and isinstance(settings.get("statusLine"), dict):
+        cmd = settings["statusLine"].get("command")
+        if isinstance(cmd, str) and is_unsafe_ctx_command(cmd) \
+                and cmd.split()[-2:] == ["statusline", "claude-code"]:
+            settings["statusLine"]["command"] = shlex.join(make_safe(shlex.split(cmd)))
+            n += 1
+    if not n:
+        return []
+    return [f"updated {n} ctx command(s) in .claude/settings.json from the unsafe `python -m ctx` form to "
+            "`python -P -m ctx` (the old form could run a `ctx` package from the workspace)"]
+
+
+def _owned_claude_group(group: object, stage: str) -> bool:
+    """A matcher group ctx owns: every hook in it is exactly a ctx command
+    for ``stage`` (see :func:`_is_ctx_hook_command`)."""
+    if not isinstance(group, dict):
+        return False
+    entries = group.get("hooks")
+    slug = _CLAUDE_STAGE_SLUG.get(stage)
+    if not slug or not isinstance(entries, list) or not entries:
+        return False
+    return all(isinstance(h, dict) and _is_ctx_hook_command(h.get("command"), slug)
+               for h in entries)
+
+
+def _stage_has_ctx_hook(groups: object, stage: str) -> bool:
+    """Does any group of this stage hold an exact ctx hook for it?
+
+    KNOWN LIMITATION (documented): a ctx hook written in a command form the
+    installer does not recognize (anything but ``<…/ctx>``, ``<…/ctx-hook-
+    native>`` or ``<python> -m ctx`` followed by ``hook claude-code <stage>``,
+    e.g. a hand-written ``uvx ctx-harness …``) is not counted, so setup adds
+    a second ctx group beside it and both run. Recognizing arbitrary
+    launchers would let any user command that ends the same way be treated
+    as ctx's, which is the worse failure."""
+    slug = _CLAUDE_STAGE_SLUG.get(stage)
+    if not slug or not isinstance(groups, list):
+        return False
+    return any(
+        isinstance(g, dict) and isinstance(g.get("hooks"), list)
+        and any(isinstance(h, dict) and _is_ctx_hook_command(h.get("command"), slug)
+                for h in g["hooks"])
+        for g in groups)
+
+
+def update_owned_claude_matchers(existing_hooks: object, stages: dict) -> list[str]:
+    """Bring ctx-owned matchers up to date, in place; one line per finding.
+
+    Upgraded: a ctx-owned group whose matcher equals a default an earlier
+    release shipped. Reported and left alone: a ctx-owned group with any
+    other matcher (customized), and a ctx hook sharing a group with a user
+    hook (that group's matcher is not ctx's to change). Foreign groups and
+    malformed shapes are never touched.
+    """
+    notes: list[str] = []
+    if not isinstance(existing_hooks, dict):
+        return notes
+    for stage, entries in stages.items():
+        groups = existing_hooks.get(stage)
+        slug = _CLAUDE_STAGE_SLUG.get(stage)
+        if not isinstance(groups, list) or not entries or not slug:
+            continue
+        want = entries[0].get("matcher")
+        if want is None:
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            current = group.get("matcher")
+            if _owned_claude_group(group, stage):
+                if current == want:
+                    continue
+                if current in _PREVIOUS_CLAUDE_DEFAULTS.get(stage, frozenset()):
+                    group["matcher"] = want
+                    notes.append(f"updated ctx {stage} matcher from a previous default (was {current!r})")
+                else:
+                    notes.append(
+                        f"ctx {stage} matcher is customized ({current!r}); left as is. "
+                        f"Current default: {want!r}. To adopt it, set that matcher on the "
+                        f"ctx {stage} entry in .claude/settings.json")
+            elif isinstance(group.get("hooks"), list) and any(
+                    isinstance(h, dict) and _is_ctx_hook_command(h.get("command"), slug)
+                    for h in group["hooks"]) and current != want:
+                notes.append(
+                    f"ctx {stage} hook shares a group with another hook (matcher {current!r}), "
+                    f"so ctx did not change it. Current default: {want!r}. To adopt it, move "
+                    f"the ctx hook into its own group with that matcher")
+        holding = [g for g in groups if isinstance(g, dict) and isinstance(g.get("hooks"), list)
+                   and any(isinstance(h, dict) and _is_ctx_hook_command(h.get("command"), slug)
+                           for h in g["hooks"])]
+        if len(holding) > 1:
+            notes.append(
+                f"ctx {stage} hook is registered {len(holding)} times (matchers: "
+                + ", ".join(repr(g.get("matcher")) for g in holding)
+                + "); every copy runs. Keep one: delete the extra ctx "
+                f"`hook claude-code {slug}` entries from .claude/settings.json")
+    return notes
+
+
 def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     """Persistent Claude Code install: merge harness hooks into project
     ``.claude/settings.json`` and drop the explorer agent. Idempotent and
@@ -471,12 +737,23 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     missing_stages = {
         stage: entries
         for stage, entries in full_stages.items()
-        if not _hook_command_present(
-            {"hooks": {stage: existing_hooks.get(stage, [])}}, exe
-        )
+        if not _stage_has_ctx_hook(existing_hooks.get(stage, []), stage)
     }
+    # Entries ctx already owns are brought up to date in place: an older
+    # install's matchers (e.g. a PostToolUse that named `Task` and missed
+    # `Agent`) would otherwise survive every re-run, because the stage is
+    # "present". Ownership is the uninstall convention: a group whose hooks
+    # are all ctx `hook claude-code <stage>` commands. Anything else --
+    # including a group mixing ctx and foreign hooks -- is left untouched.
+    updated = update_owned_claude_matchers(existing_hooks, full_stages)
+    updated += upgrade_unsafe_ctx_commands(existing_hooks, merged)
+    for note in updated:
+        lines.append(note)
+    if any(n.startswith("updated ") for n in updated):
+        changed = True
     if not missing_stages:
-        lines.append(".claude/settings.json hooks already harnessed; left unchanged")
+        if not any(n.startswith("updated ") for n in updated):
+            lines.append(".claude/settings.json hooks already harnessed; left unchanged")
     else:
         try:
             merge_hook_stages(merged, missing_stages)
@@ -497,18 +774,27 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
     else:
         lines.append("statusLine already set; left unchanged")
     if changed:
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        from ctx.launchform import UnsafeWrite, write_safely
+
+        try:
+            # Never through a symlink or a .claude/ symlinked out of the repo.
+            write_safely(settings_path, json.dumps(merged, indent=2) + "\n", root=root)
+        except UnsafeWrite as e:
+            return (f"cannot set up Claude Code: {settings_path.relative_to(root)} was not "
+                    f"written ({e}); ctx never writes through a link. Make it a regular "
+                    "file inside the workspace and re-run: ctx setup")
         lines.append(f"wrote {settings_path.relative_to(root)}")
 
     agent_src = _template_dir() / "agents" / "ctx-explorer.md"
     agent_dst = root / ".claude" / "agents" / "ctx-explorer.md"
-    if agent_dst.exists():
+    if agent_dst.exists() or agent_dst.is_symlink():
         lines.append(".claude/agents/ctx-explorer.md exists; left unchanged")
     elif agent_src.is_file():
-        agent_dst.parent.mkdir(parents=True, exist_ok=True)
-        agent_dst.write_bytes(agent_src.read_bytes())
-        lines.append(f"wrote {agent_dst.relative_to(root)}")
+        try:
+            write_safely(agent_dst, agent_src.read_bytes(), root=root)
+            lines.append(f"wrote {agent_dst.relative_to(root)}")
+        except UnsafeWrite as e:
+            lines.append(f"did not write the explorer agent: {e}")
 
     # The teaching surface Claude Code otherwise lacks (measured in
     # evals/ask-diagnose-3arm-2026-07-20.md: agents adopt ctx ask/q only
@@ -653,19 +939,27 @@ captured at the source and returned as a bounded, addressable digest — work
 def _upsert_agents_block(path: Path, block: str) -> str:
     """Insert or replace the ctx-harness block in AGENTS.md, preserving the
     rest of the file. Returns a one-line status."""
+    from ctx.launchform import UnsafeWrite, write_safely
+
     block = block.strip() + "\n"
-    if not path.is_file():
-        path.write_text(block, encoding="utf-8")
-        return f"wrote {path.name}"
-    text = path.read_text(encoding="utf-8")
-    if _CODEX_MARK_START in text and _CODEX_MARK_END in text:
-        pre = text[: text.index(_CODEX_MARK_START)]
-        post = text[text.index(_CODEX_MARK_END) + len(_CODEX_MARK_END) :]
-        path.write_text(pre + block + post.lstrip("\n"), encoding="utf-8")
-        return f"refreshed ctx-harness block in {path.name}"
-    sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-    path.write_text(text + sep + block, encoding="utf-8")
-    return f"appended ctx-harness block to {path.name}"
+    root = path.parent
+    try:
+        if path.is_symlink():
+            raise UnsafeWrite(f"{path}: it is a symlink")
+        if not path.is_file():
+            write_safely(path, block, root=root)
+            return f"wrote {path.name}"
+        text = path.read_text(encoding="utf-8")
+        if _CODEX_MARK_START in text and _CODEX_MARK_END in text:
+            pre = text[: text.index(_CODEX_MARK_START)]
+            post = text[text.index(_CODEX_MARK_END) + len(_CODEX_MARK_END) :]
+            write_safely(path, pre + block + post.lstrip("\n"), root=root)
+            return f"refreshed ctx-harness block in {path.name}"
+        sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+        write_safely(path, text + sep + block, root=root)
+        return f"appended ctx-harness block to {path.name}"
+    except UnsafeWrite as e:
+        return f"did not update {path.name}: {e}; ctx never writes through a link"
 
 
 def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:
@@ -1043,26 +1337,63 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     # A self-test that pins a proxy fails when the implementation finds a
     # better way to keep the promise.
     try:
-        from ctx.hook import classify
+        # What the Claude Code hook answers for an unbounded command, through
+        # the same gate and choke point as a live call.
+        from ctx import hook as _hook
 
-        d = classify(
-            {
-                "tool_name": "run_command",
-                "tool_input": {"CommandLine": "pytest -q", "Cwd": str(ws.root)},
-                "workspacePaths": [str(ws.root)],
-            }
-        )
-        verdict = str(d.get("decision"))
-        # classify() returns the public decision contract. Internal steering
-        # starts as ``_rewrite`` but is normalised to ``rewrite`` before the
-        # result leaves ctx.hook; checking the private key made doctor report a
-        # healthy collapsed rewrite as a failure after the first captured run.
-        rewritten = isinstance(d.get("rewrite"), dict)
-        contained = verdict in ("deny", "force_ask") or rewritten
-        how = f"pytest → {verdict}" + (" + collapsed rewrite" if rewritten else "")
-        check("hook classifier", contained, how)
+        payload = {"tool_name": "Bash", "cwd": str(ws.root),
+                   "tool_input": {"command": "pytest -q"}}
+        policy = _hook._load_guard_policy(str(ws.root))
+        policy["_flavor"] = "claude-code"
+        policy["_output_substitution"] = True
+        d = _hook.classify(payload, policy)
+        d = _hook._claude_permission_gate(d, payload, str(ws.root), policy)
+        emitted = _hook.claude_code_pre_tool_use_output(_hook._to_claude_code_schema(d), d)
+        hso = emitted.get("hookSpecificOutput", {})
+        steering = str(policy.get("steering", "auto"))
+        if "updatedInput" in hso:
+            how = ("pytest -q on Claude Code: rewritten to `ctx run`, no decision "
+                   f"(steering = {steering!r}; prompts concern the wrapper)")
+        elif hso.get("permissionDecision") in ("deny", "ask"):
+            how = f"pytest -q on Claude Code: {hso['permissionDecision']} (steering = {steering!r})"
+        else:
+            how = ("pytest -q on Claude Code: runs as written, no decision; the output "
+                   "gate bounds what it prints (steering = " + repr(steering) + ")")
+        ok = not (hso.get("permissionDecision") == "allow" and "updatedInput" in hso)
+        check("hook classifier", ok, how)
     except Exception as e:
         check("hook classifier", False, str(e))
+
+    # Claude Code approval: a rewrite never carries an approval the user's own
+    # rules do not give the original, so prompts follow those rules. A
+    # wholesale allow rule for the wrapper defeats that: every wrapped command
+    # then runs without a prompt, whatever it wraps.
+    try:
+        from ctx.ccperm import wholesale_wrapper_allows
+
+        home = os.path.expanduser("~")
+        wide = [w.replace(home, "~", 1) if home and home != "/" else w
+                for w in wholesale_wrapper_allows(str(ws.root))]
+        if wide:
+            check(
+                "claude code approval",
+                False,
+                "allow rule(s) approve every wrapped command: " + "; ".join(wide)
+                + ". ctx rewrites commands into `ctx run ... -- '<original>'`, so with"
+                " this rule Claude Code runs ANY command (rm, curl, git push) without"
+                " asking. Narrow or remove it to keep your prompts",
+            )
+        else:
+            check(
+                "claude code approval",
+                True,
+                "shell commands reach Claude Code exactly as written (steering ="
+                " \"auto\"); you are asked about them exactly as without ctx and the"
+                " output is bounded afterwards. ctx approves only its own read-only"
+                " verbs, and never a rewritten call",
+            )
+    except Exception as e:
+        check("claude code approval", False, f"could not read Claude Code settings: {e}")
 
     # Cumulative savings from the telemetry ledger (operational, not identity).
     try:
@@ -1083,7 +1414,32 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
     except Exception:
         pass
 
+    try:
+        from ctx.launchform import scan as _scan_launch_forms
+
+        findings = _scan_launch_forms(ws.root)
+        if findings:
+            # One row per finding, each naming its file and saying something
+            # true: setup rewrites it, or here is the exact replacement.
+            for f in findings:
+                check("ctx launch form", False,
+                      "`python -m ctx` without -P imports a `ctx` package from the "
+                      "workspace: " + f.message(ws.root))
+        else:
+            check("ctx launch form", True, "no installed command imports ctx from the working directory")
+    except Exception as e:  # noqa: BLE001 — a probe that cannot run is a finding
+        check("ctx launch form", False, f"{type(e).__name__}: {e}")
+
     return checks
+
+
+def unsafe_installed_commands(root: Path) -> list[str]:
+    """``<file> (<where>)`` for every installed command, in every file any
+    ctx installer writes and the hosts' own settings, that launches ctx as
+    ``python -m ctx`` without ``-P`` (see :mod:`ctx.launchform`)."""
+    from ctx.launchform import scan
+
+    return [f.message(Path(root)) for f in scan(root)]
 
 
 def install_hermes(ws, *, init_policy=True):

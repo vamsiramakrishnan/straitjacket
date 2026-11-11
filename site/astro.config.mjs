@@ -41,6 +41,7 @@ export default defineConfig({
             { label: 'Use cases', slug: 'guides/use-cases' },
             { label: 'Edit and verify', slug: 'guides/edit-loop' },
             { label: 'Host capabilities', slug: 'guides/host-capabilities' },
+            { label: 'Pastes and media', slug: 'guides/pastes-and-media' },
             { label: 'Agent integrations', slug: 'guides/agent-integrations' },
             { label: 'Tool SDK', slug: 'guides/tool-sdk' },
             { label: 'ACP orchestration', slug: 'guides/acp' },

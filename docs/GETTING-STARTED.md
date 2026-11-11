@@ -111,16 +111,18 @@ Retrieval remains bounded. If the requested region is too large, `ctx get` retur
 
 | Host | Birth-time containment | Oversized result substitution |
 |---|---|---|
-| Claude Code | Transparent rewrite | Yes |
-| Codex | Implemented and contract-tested | Implemented and contract-tested; live CLI receipt pending |
-| Antigravity | Deny with a bounded replacement command | No |
+| Claude Code | Output bounded after the command runs; command not rewritten by default (`steering = "rewrite"` captures at birth) | Yes |
+| Codex | Commands run as written under Codex's own approval; rewrites withheld | Implemented and contract-tested; live CLI receipt pending |
+| Antigravity | Rewrite by default (it cannot replace output): `run_command` and `read_file` in place when the payload carries `hookEventName` (added in `agy` 1.5.4; observed on 1.5.5 only); deny and name the bounded command for other tools | No |
 | Hermes, OMP, OpenCode | Native plugin argument rewrite | Text-output replacement; contract-tested |
 | DSH | Deny with a bounded replacement command | Native text-output replacement; contract-tested |
 
-Antigravity's published PreToolUse contract cannot modify arguments. Its
-PostToolUse contract cannot replace tool output. straitjacket can prevent a
-known command flood before execution, but a verbose connector result can still
-enter the transcript unchanged.
+On Antigravity (observed on `agy` 1.5.5) a PreToolUse hook can rewrite a call's
+arguments, and ctx does so for `run_command` and `read_file`; every other read or
+search tool is denied with the bounded command named. Its PostToolUse hook accepts
+only an empty reply and is not given the tool's output, so it cannot replace
+output. straitjacket can prevent a known command flood before execution, but a
+verbose connector result can still enter the transcript unchanged.
 
 See [Host capabilities](HOST-CAPABILITIES.md) for the full matrix.
 
@@ -193,6 +195,11 @@ A conflict prints a unified diff naming the exact key and proposed value.
 using the diff, then rerun preview. Duplicate keys, invalid syntax, symlinks
 and ambiguous config files refuse with a diagnostic. A parse error must be
 fixed before a trustworthy structural diff can be generated.
+
+Setup never writes through a symlink: for any host, a target that is a link, or that
+sits behind a linked directory leaving the workspace, is not written, and the message
+names the file (for example "did not update CLAUDE.md: …: it is a symlink; ctx never
+writes through a link").
 
 Setup records individual contributions in `.ctx/host-config.json`; the
 readiness receipt remains content-free. Repair updates a previously owned

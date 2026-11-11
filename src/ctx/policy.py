@@ -33,7 +33,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ctx.sessiondir import session_reads_path
+from ctx.sessiondir import ledger_file, session_reads_path
 from ctx.store import Store, canonical_json
 from ctx.workspace import Workspace
 
@@ -100,7 +100,7 @@ def _reflex_tallies(ledger_dir: Path) -> dict[str, dict[str, int]]:
     tallies: dict[str, dict[str, int]] = {}
     try:
         lines = (
-            (Path(ledger_dir) / "reflex-outcomes.jsonl")
+            ledger_file(ledger_dir, "reflex-outcomes.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
         )

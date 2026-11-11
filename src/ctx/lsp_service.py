@@ -180,7 +180,7 @@ def request(root: Path, argv: list[str], payload: dict, timeout: float) -> dict:
             sock = connect()
         except (FileNotFoundError, ConnectionRefusedError):
             address.unlink(missing_ok=True)
-            proc = subprocess.Popen([sys.executable, '-m', 'ctx.lsp_service', str(address),
+            proc = subprocess.Popen([sys.executable, '-P', '-m', 'ctx.lsp_service', str(address),
                                      str(root.resolve()), json.dumps(argv)],
                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, start_new_session=True)

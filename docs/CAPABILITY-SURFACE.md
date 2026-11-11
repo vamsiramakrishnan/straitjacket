@@ -37,9 +37,11 @@ entering. Two mechanisms make the audit preventive, mirroring the output side's
 "capture before flood":
 
 - **Pre-flight gate.** A hook on all three hosts (Claude `SessionStart`, Codex
-  `SessionStart`, Antigravity `PreInvocation` — that host has no SessionStart
-  event, so the advisory rides `injectSteps` as an `ephemeralMessage` and does
-  not accumulate across invocations) runs the audit *before the first turn*,
+  `SessionStart`, Antigravity `SessionStart` when the payload carries `hookEventName` (added in
+  `agy` 1.5.4; observed on 1.5.5 only), where the advisory is injected once as a `systemMessage` step that stays
+  in the conversation; an older `agy` may have no SessionStart, and there the
+  advisory rides `PreInvocation` as an `ephemeralMessage` so it does not
+  accumulate across invocations) runs the audit *before the first turn*,
   with a cached MCP probe so it sees the real tool-
   schema cost. If the discretionary surface exceeds `[surface]
   max_static_tokens` in `ctx.toml`, it injects a bounded advisory naming the
@@ -57,7 +59,70 @@ entering. Two mechanisms make the audit preventive, mirroring the output side's
   structurally impossible for unrevealed capability schemas to reach context.
 
 `[surface]` in `ctx.toml`: `max_static_tokens` (8000), `gate` (off|warn),
-`default_profile`, `gateway` (bool), `probe` (bool).
+`default_profile`, `gateway` (bool), `probe` (bool), `wrap` (auto|off) and
+`wrap_min_sessions` (5). See [Configuration](CONFIGURATION.md).
+
+## Applied at launch: `ctx wrap claude --surface`
+
+The gate warns and the gateway has to be wired. A third mechanism applies a plan
+when `ctx wrap claude` launches a session, so the up-front cost of MCP servers and
+skills falls without anyone running an audit first. The flags and the receipt are
+in the [CLI guide](CLI.md#shrink-the-launch-surface---surface); the rules it keeps
+are these.
+
+- **Host first.** Claude Code already defers MCP tool schemas (tool search) and lists
+  skills by name and description only. Where those mechanisms hold, `--surface auto`
+  interposes nothing: it never routes MCP through the gateway. Whether deferral
+  holds is read from the environment the session will run in, and the receipt names
+  the reason.
+- **Evidence, never a guess.** A skill is narrowed to `name-only` (name listed,
+  description dropped, set through `skillOverrides`) only when this project's own
+  Claude Code transcripts show zero invocations of it, and only once the transcripts
+  hold `wrap_min_sessions` complete sessions. No transcripts is no evidence and
+  changes nothing. Nothing is turned off in `auto`, ctx's own skill is never touched,
+  and a skill the user already overrode is left alone. Claude Code merges
+  `skillOverrides` from `--settings` key by key with the user's own settings
+  (observed on 2.1.322).
+- **The caller wins.** `--mcp-config`, `--strict-mcp-config`, a caller `--settings`,
+  or the deferral and skill-budget environment variables leave that dimension alone;
+  a managed MCP configuration is detected and `--mcp-config` is never passed.
+- **Ephemeral.** Everything rides the temporary settings file, extra flags and
+  private temporary files, removed after the session. The only file written to the
+  workspace is `.ctx-surface/wrap-receipt.json` (`ctx.surface.wrap/v1`), and one line
+  on stderr says what was done and what was left alone. Every figure in it is an
+  estimate, labelled as one.
+- **A profile is chosen on the command line only.** A profile launch passes
+  `--mcp-config`, and servers loaded that way skip Claude Code's project trust
+  prompt, so a `ctx.toml` that names a profile is ignored: a cloned repository
+  cannot choose one for you. A profile never starts a project server Claude Code
+  would not have started.
+- **Never starts servers by itself.** Measurement for the plan reads the probe cache
+  that `ctx surface inventory --probe-mcp` fills; the launch does not spawn a server
+  to find out what it costs. A server that was never probed is named as unmeasured,
+  not priced at a guess.
+- **A per-tool restriction is enforced or the server is left out.** A profile that
+  excludes one tool of a server, names single tools in `include`, or sets an authority
+  ceiling that drops some tools of a kept server, is enforced by routing that server
+  through `ctx surface gateway` with an allow-list built from the probe cache. When
+  that cannot be done (no cached tool catalogue, or a remote server the gateway does
+  not proxy) the whole server is left out of the session, and the stderr line, the
+  receipt and the profile note say so and name the remedies. Before this rule, such a
+  profile left the excluded tool listed and callable while the receipt reported the
+  profile as applied.
+
+Discovery for the plan, and for the audit, now also lists user-scope and local-scope
+Claude Code servers, user skills and agents, Codex user configuration, and remote
+servers by transport. Listing never spawns or copies a server, and workspace files
+never receive a user-scope server definition. Pricing uses the basis that applies to
+the host and names it: a skill costs its listing entry, not its whole file
+(`ctx.surface/v2`). A server command is rendered as program, argument count and flag
+names only; no argument value reaches the output, and launch files are `0600`.
+
+The gateway exposes three tools: `surface_index` (with an optional `query` that
+finds matching tools without revealing them), `surface_reveal` and `surface_hide`,
+each taking a family, or a server or tool `target`. Backend environment values are
+rehydrated from the user's own configuration when the backend starts, and are not
+stored in the snapshot.
 
 ## Commands
 
@@ -97,9 +162,9 @@ The unit is any **persistent context-bearing capability**, not just a tool:
 
 | Kind | Source it reads |
 |---|---|
-| `mcp_server` / `mcp_tool` | `.mcp.json`, `.claude/settings.json`, `.codex/config.toml`, `.agents/plugins/*/mcp_config.json` |
-| `skill` | `.claude/skills/**`, `.agents/**/skills/**`, `.cursor/rules/**` |
-| `agent` | `.claude/agents/*.md`, `.agents/**/agents/*.md` |
+| `mcp_server` / `mcp_tool` | `.mcp.json`, `.claude/settings.json`, `.codex/config.toml`, `.agents/plugins/*/mcp_config.json`, plus user-scope and local-scope Claude Code servers and Codex user configuration |
+| `skill` | `.claude/skills/**`, `.agents/**/skills/**`, `.cursor/rules/**`, plus user skills |
+| `agent` | `.claude/agents/*.md`, `.agents/**/agents/*.md`, plus user agents |
 | `repo_instructions` | `CLAUDE.md`, `AGENTS.md`, `.cursorrules`, `GEMINI.md`, copilot-instructions |
 | `policy` | `ctx.toml`, `ctx-policy.toml` |
 

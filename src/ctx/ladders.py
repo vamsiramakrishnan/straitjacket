@@ -295,7 +295,9 @@ def validate(raw: dict[str, Any] | None) -> list[str]:
 
 # ------------------------------------------------------------- measurement
 def _read_records(root: Path, ledger: str) -> list[dict]:
-    path = Path(root) / LEDGER_DIR_NAME / ledger
+    from ctx.sessiondir import ledger_file
+
+    path = ledger_file(Path(root) / LEDGER_DIR_NAME, ledger)
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:

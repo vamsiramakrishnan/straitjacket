@@ -37,6 +37,7 @@ tree state — re-run it after a large change, it costs the same.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import math
 import re
 from dataclasses import dataclass, field
@@ -122,7 +123,7 @@ class PackRow:
             parts.append("path " + ", ".join(self.path_terms[:2]))
         if self.commits:
             sha, subject = self.commits[0]
-            parts.append(f"commit {sha} \"{subject[:48]}\"")
+            parts.append(f"commit {sha} \"{clip_redacting(subject, 48)}\"")
         return " · ".join(parts)
 
     def payload(self) -> dict[str, Any]:
@@ -151,7 +152,7 @@ class Pack:
     def payload(self) -> dict[str, Any]:
         return {
             "schema": "ctx.pack/v1",
-            "task": self.task[:400],
+            "task": clip_redacting(self.task, 400),
             "terms": [{"text": t.text, "weight": round(t.weight, 2), "df": t.df, "idf": round(t.idf, 3)}
                       for t in self.terms],
             "files": [r.payload() for r in self.rows],
@@ -463,7 +464,7 @@ def render_pack(pack: Pack) -> str:
     from ctx.textutil import fmt_int
 
     limit = max(0, pack.budget_tokens) * 4
-    title = " ".join(pack.task.split())[:72]
+    title = clip_redacting(" ".join(pack.task.split()), 72)
     out: list[str] = [f"[ctx pack · {len(pack.rows)} of {fmt_int(pack.considered)} candidate files · {pack.index_note}]"]
     out.append(f"task: {title}{'…' if len(pack.task) > 72 else ''}")
     shown_terms = [t for t in pack.terms if t.idf > 0.05][:10]
@@ -512,7 +513,7 @@ def render_pack(pack: Pack) -> str:
         if fits(out + [note], reserve=False):
             out.append(note)
     for sha, date, subject in pack.history[:3]:
-        line = f"history: {sha} {date} · {subject[:80]}"
+        line = f"history: {sha} {date} · {clip_redacting(subject, 80)}"
         if fits(out + [line], reserve=False):
             out.append(line)
     result = "\n".join(out + footer)

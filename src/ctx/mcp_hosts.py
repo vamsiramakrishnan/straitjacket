@@ -33,8 +33,10 @@ def ctx_argv(exe: str | None = None) -> list[str]:
     if exe is not None:
         argv = shlex.split(exe)
     else:
-        binary = shutil.which("ctx")
-        argv = [binary] if binary else [sys.executable, "-m", "ctx"]
+        # Never a form that imports `ctx` from the host's working directory.
+        from ctx.selfcmd import ctx_argv as _safe_ctx_argv
+
+        argv = _safe_ctx_argv()
     if not argv:
         raise IntegrationError("ctx executable command is empty")
     return argv
@@ -147,43 +149,52 @@ def conflicts(host: str, root: Path) -> list[str]:
     return []
 
 
-def _write(path: Path, value: dict | list) -> None:
-    text = json.dumps(value, indent=2) + "\n"
-    if path.exists() and path.read_text(encoding="utf-8") == text:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Exclusive temp file; do not leave a truncated user configuration on failure.
-    import tempfile
+def _write(path: Path, value: dict | list, *, root: Path | None = None) -> None:
+    """Exclusive temp file + rename; never through a symlink or a directory
+    symlinked outside ``root`` (safe by construction, not by the callers'
+    earlier checks)."""
+    from ctx.launchform import UnsafeWrite, write_safely
 
-    fd, temporary = tempfile.mkstemp(prefix=".ctx-", dir=path.parent)
+    text = json.dumps(value, indent=2) + "\n"
+    if path.exists() and not path.is_symlink() and path.read_text(encoding="utf-8") == text:
+        return
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(text)
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+        write_safely(path, text, root=root if root is not None else path.parent)
+    except UnsafeWrite as exc:
+        raise IntegrationError(f"Refusing to write {_display_rel(path, root or path.parent)}: {exc}") from None
+
+
+def _display_rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def install(host: str, ws, *, init_policy: bool = True) -> str:
     from ctx.installer import init_workspace
+    from ctx.launchform import upgrade as upgrade_launch_forms
 
+    # ctx-owned commands still in the unsafe `python -m ctx` form are
+    # rewritten in place FIRST, even if setup then refuses the rest.
+    upgraded = upgrade_launch_forms(ws.root, [host])
     if host == "opencode":
         from ctx.config_edit import ConfigError
         from ctx.host_config import plan_configuration
         plan = plan_configuration(ws.root, [host])
         if plan.blockers:
-            raise IntegrationError(plan.render())
+            raise IntegrationError("\n".join([*upgraded, plan.render()]))
         try:
             plan.apply()
         except ConfigError as exc:
             raise IntegrationError(str(exc)) from exc
         if init_policy:
             init_workspace(ws.root, quiet=True)
-        return plan.render() + "\n" + next_step(host, ws.root)
+        return "\n".join([*upgraded, plan.render(), next_step(host, ws.root)])
 
     problems = conflicts(host, ws.root)
     if problems:
-        raise IntegrationError("\n".join(problems))
+        raise IntegrationError("\n".join([*upgraded, *problems]))
     expected = configuration(host, ws.root)
     merged = _merged(host, ws.root, expected)
     if host == "hermes" and shutil.which("hermes"):
@@ -192,12 +203,13 @@ def install(host: str, ws, *, init_policy: bool = True) -> str:
             result = _hermes("set", f"mcp_servers.{SERVER}", json.dumps(wanted))
             if result.returncode or _hermes_servers().get(SERVER) != wanted:
                 raise IntegrationError("Hermes did not activate ctx-harness; inspect its active profile with `hermes config path`.")
-    _write(ws.root / FILES[host], merged)
+    _write(ws.root / FILES[host], merged, root=ws.root)
     if init_policy:
         init_workspace(ws.root, quiet=True)
     from ctx.native_hooks import install as install_hooks
     hook_note = install_hooks(host, ws.root)
-    return (f"{host}: wrote {FILES[host]}\n"
+    return ("".join(line + "\n" for line in upgraded)
+            + f"{host}: wrote {FILES[host]}\n"
             + hook_note + "\n"
             + next_step(host, ws.root))
 

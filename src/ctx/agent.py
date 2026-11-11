@@ -386,7 +386,9 @@ def run_agent(ws, task: str, *, model: str | None = None, max_turns: int | None 
     except AgentUnavailable as e:
         print(f"ctx agent: {e}", file=sys.stderr)
         return 2
-    ctx_exe = shutil.which("ctx") or sys.executable + " -m ctx"
+    from ctx.selfcmd import ctx_command
+
+    ctx_exe = ctx_command()  # never imports `ctx` from the working directory
     claude_path = shutil.which("claude")
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
 

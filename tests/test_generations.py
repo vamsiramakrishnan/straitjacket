@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from ctx.sessiondir import session_reads_path
 
 LEDGER = ".ctx-session-reads"
 
@@ -33,7 +34,7 @@ def _git(ws: Path, *args: str) -> None:
 
 
 def _v2_events(root: Path) -> list[dict]:
-    path = Path(root) / LEDGER / "interventions.jsonl"
+    path = session_reads_path(Path(root), "interventions.jsonl")
     if not path.is_file():
         return []
     return [
@@ -48,7 +49,7 @@ def _v2_outcomes(root: Path) -> list[dict]:
 
 
 def _v1_events(root: Path) -> list[dict]:
-    path = Path(root) / LEDGER / "reflex-outcomes.jsonl"
+    path = session_reads_path(Path(root), "reflex-outcomes.jsonl")
     if not path.is_file():
         return []
     return [
@@ -263,12 +264,17 @@ def test_lazy_confirmation_against_a_real_worktree(git_workspace):
     assert outcomes[1]["evidence"]["generation"] == "changed"
 
 
-def test_generation_shadow_fail_open_when_ledger_unwritable(tmp_path):
+def test_generation_shadow_fail_open_when_ledger_unwritable(tmp_path, monkeypatch):
     from ctx import reflex
 
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / LEDGER).write_text("a file, not a directory", encoding="utf-8")
+    # The ledgers that carry command text live in the state directory:
+    # make that unwritable too.
+    blocker = tmp_path / "state-is-a-file"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("CTX_STATE_HOME", str(blocker))
     reflex.note_intervention(ws, "pytest tests/x.py", "d" * 12, generation="g")
     assert reflex.check_command(ws, "pytest tests/x.py", generation="g") is None
     assert (ws / LEDGER).read_text(encoding="utf-8") == "a file, not a directory"

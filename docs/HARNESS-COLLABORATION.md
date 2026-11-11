@@ -15,7 +15,7 @@ Six distinct integration mechanisms, and they are not interchangeable.
 
 | mechanism | hosts | what it can do |
 |---|---|---|
-| Hook interception | claude, codex, antigravity, hermes, omp, opencode, dsh | deny / rewrite a tool call; substitute a tool result |
+| Hook interception | claude, codex, antigravity, hermes, omp, opencode, dsh | deny / rewrite a tool call; substitute a tool result (not on antigravity, which cannot replace a result) |
 | MCP server | hermes, omp, opencode, dsh (+ any MCP client) | bounded retrieval and edit tools |
 | CLI wrapper | claude, codex, antigravity, … | ephemeral per-session config, then hand back |
 | ACP worker | all seven | ctx-owned subprocess with a model endpoint |
@@ -76,8 +76,9 @@ tool results are never substituted, so volume discipline has to be voluntary.
 Today nothing tells it. The `DIALECT_CAPS` table in `hook.py` and the
 `HostSpec` flags in `hosts.py` are read by ctx and never surfaced to the model.
 
-The mechanism already exists: SessionStart / PreInvocation returns
-`additionalContext`. A three-line capability statement there — what this host
+The mechanism already exists: SessionStart returns
+`additionalContext` on Claude Code and Codex; on Antigravity the hook returns
+`injectSteps` instead. A three-line capability statement there — what this host
 can substitute, what it cannot, and what that means for how much output to
 produce — costs a handful of tokens once per session and is strictly better
 than the agent guessing. This is the cheapest remaining item on the list.

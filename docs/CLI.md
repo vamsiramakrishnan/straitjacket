@@ -26,6 +26,9 @@ different safety contracts. The mental model can stay small.
 | Answer a question | `ctx ask "…" --intent <i>` | Typed intent preset (locate/impact/diagnose) → one evidence view |
 | Compare two runs | `ctx diff run:A run:B` | Behavioral delta instead of two complete outputs |
 | Inspect or compare binary evidence | `ctx image digest …` / `ctx image diff …` | Typed structure and identity without inlining pixels or PDF bytes |
+| A large paste, file or clipboard | `ctx intake [PATH\|-]` | Stores the text once; returns a digest, a chunk map and a handle |
+| An image, screen recording or video | `ctx view <target>` | Cheap overview first, then crops or frames from the original |
+| Which tool calls ctx governs | `ctx coverage` | The routing table per host, and what the hooks observed |
 | Session scorecard | `ctx stats --session` | Wire residency, rounds, behavior and interventions |
 | Cumulative savings | `ctx gain` | Containment savings by command family/verb |
 | Replay histories | `ctx replay …` | Read-only counterfactual analysis over recorded sessions |
@@ -70,6 +73,7 @@ See the [edit loop](EDIT-LOOP.md) for command examples, recovery, and proof limi
 | Set up a workspace | `ctx init` | Write `ctx.toml` + `.ctxignore` |
 | Verify the install | `ctx doctor` | Validate hooks, manifests, store, and classifier |
 | Harness / unharness a host | `ctx wrap …` | Install or inject host integration (see [Getting started](GETTING-STARTED.md)) |
+| Shrink what a wrapped Claude Code session loads | `ctx wrap claude --surface …` | Launch-time capability plan with a receipt |
 | Freeze a cache epoch | `ctx checkpoint` | Mark a task boundary for lossless rescue |
 | Protect / reclaim storage | `ctx pin` / `ctx gc` | Retention leases and mark-and-sweep |
 | Track deferred decisions | `ctx debt …` | Declared-omission ledger (`add`/`list`/`resolve`) |
@@ -221,8 +225,10 @@ ctx get 0f44195122
 Small requests select exact stored coordinates. Model-visible bytes remain
 subject to the current redaction policy; an exact-byte request declares when
 redaction changed it. A region too large for the retrieval budget returns a
-bounded zoom digest with further spans. Retrieval cannot recursively re-flood
-the transcript.
+bounded zoom digest with further spans. A span id printed in a digest is honoured
+only on the artifact the reference names: `ctx get run:A#stdout --span <id from run B>`
+is refused with "span … does not belong to …; use the reference the digest printed with
+it". Retrieval cannot recursively re-flood the transcript.
 
 A handle is an address today. It becomes an authorization capability only in the
 broker-era design; do not present current content identifiers as a sandbox boundary.
@@ -646,6 +652,193 @@ Paths are confined to the workspace and respect `.ctxignore`. Binary output
 captured by `ctx run` selects `binary/v1` automatically and keeps the complete
 artifact behind its run handle.
 
+## Store a paste, file or clipboard: `ctx intake`
+
+A command's output reaches the store because `ctx run` or a hook captured it. Text
+that nothing ran, such as a 3 MB log pasted into the chat, a document or the
+clipboard, has no such door. `ctx intake` is that door: it stores the bytes once
+and prints a bounded digest with a handle.
+
+```bash
+ctx intake build.log --label build-log     # a file inside the workspace
+ctx intake - < ../downloads/trace.txt      # a file outside it, or any stdin
+pbpaste | ctx intake --label paste         # stdin is the default when piped
+ctx intake --clip --copy                   # read the clipboard, put the digest back on it
+```
+
+```text
+[ctx run:690d46e45560 profile=logtemplate/v1]
+intake: build-log · build.log · 9,000 lines · 393.5 KiB · est 100,744 tokens if inlined
+templates: 2 cover 9,000/9,000 lines
+  8,999× L1: <*> step <*> ok compiled module_<*>.c · span 2ca7ca477f
+  1× L6001: ERROR: linker failed: undefined reference to `parse_config'
+exceptional:
+  L6001: ERROR: linker failed: undefined reference to `parse_config'
+coverage:
+  parsed: 9,000/9,000 lines
+  shown: 3 spans · omitted: 8,997 lines
+next:
+  ctx search run:690d46e45560 'ERROR:' --context 3
+  ctx get run:690d46e45560#stdout --lines 6001:6004
+```
+
+The digest is the same kind of digest a captured command gets: the profile is chosen
+from the shape of the text, and every omission has a `ctx get` or `ctx search`
+address. An intake digest describes an intake, never a working directory, command
+or exit status. The same bytes under the same label and name produce the same
+handle and the same digest bytes; the session's task query never changes them.
+
+| Flag | Meaning |
+|---|---|
+| `PATH` | A file inside the workspace. It must pass the same path and ignore policy as `ctx image`. A file elsewhere is refused with the way to pipe it. `-` reads stdin, which is also the default when stdin is piped. |
+| `--label LABEL` | What this is (`paste`, `log`, `spec`). Part of the identity. Default `file` for a path, `paste` for stdin, `clipboard` for `--clip`. |
+| `--name NAME` | Display name, such as the original file name. Part of the identity. Default: the file's base name. |
+| `--focus FOCUS` | Terms the digest should favour. Default: none; the digest never borrows the session's task query. |
+| `--json` | Print the `ctx.intake/v1` receipt instead of the digest. |
+| `--clip` | Read the system clipboard (`pbpaste`, `wl-paste`, `xclip`, `xsel` or PowerShell). Takes no PATH. |
+| `--copy` | Put the digest on the clipboard, to paste it in place of the payload. A missing clipboard tool is reported on stderr and the digest still prints. |
+| `--chunks HANDLE` | List every chunk of a stored `run:` or `blob:` text handle, one page at a time, instead of storing anything. Takes no PATH or `--clip`. |
+| `--from N` | With `--chunks`: the first chunk number to list. |
+
+Labels and names are reduced to letters, digits and `._+-` (48 characters at most)
+because they travel in model-visible text.
+
+**What is stored.** Text is stored as UTF-8. Invalid UTF-8 is replaced and the
+receipt says `lossy: true`. A UTF-16 payload with a byte-order mark is transcoded
+and the receipt names the source encoding. A payload with a NUL in its first 8 KiB,
+or in a recognised binary format, is stored as a blob and described by the
+`binary/v1` digest (format, size, image dimensions, hash); `ctx view blob:<id>`
+then looks at it if it is an image or video. Everything is stored under a retention
+lease for `[store] retention_days`, so an explicit `ctx gc --retention-days` does
+not collect it earlier. An empty payload is refused. A payload smaller than the
+digest that would wrap it is printed as it is, redacted, with the handle on stderr
+(`passthrough: true` in the receipt). Stored bytes are not redacted; the digest and
+every retrieval are.
+
+**The chunk map.** Text that is large and that no shape profile claims (not JSON,
+a log, a trace, a table or a diff) gets `chunkmap/v1`: ordered chunks of about
+one retrieval's worth, cut at Markdown headings and blank lines where possible,
+each with a line range, a size, a heading or first line and a span id. A chunk
+that holds an error-like line is marked `!`, and the strongest such line is named
+as the decisive signal.
+
+```text
+chunks: 59 (~2.2 KiB each) · shown 16 · error-like 1 (! rows show their signal line)
+  #1 L1-L11 · 2.6 KiB · Section 1: beta planning · span 619e1b995d
+  #41 ! L441-L453 · 2.7 KiB · ValueError: bad input in section forty · span b68d86de06
+  … +43 chunks omitted · list them: ctx intake --chunks run:f3f3063f27b0#stdout --from 2
+```
+
+`ctx intake --chunks run:f3f3063f27b0#stdout --from 55` lists more, within the
+result budget, and ends with the `--from` that continues. A single line too large for
+a chunk, such as minified JSON or base64, is cut into byte-range chunks.
+
+**The 32 MiB limit.** Intake parses at most 32 MiB of a payload. The whole payload
+is stored, but only the first 32 MiB is mapped or profiled, cut back to its last
+whole line. The digest names the unmapped tail by byte range and prints the
+`ctx get --bytes` command that reaches it, so the rest is addressed, not lost:
+
+```text
+coverage: 11/11,148 chunks listed · mapped: bytes 1-33,554,426 = L1-L526,024 (parse cap 32.0 MiB) · NOT mapped: bytes 33,554,427-44,688,890 (10.6 MiB, L526,025-L700,000)
+next:
+  ctx get run:4f4108b8127c#stdout --bytes 33554427:33558970
+```
+
+**Pasted traces, tables and diffs.** When a large payload is mostly a stack trace, a
+delimited table or a plain unified diff, intake renders a purpose-built view
+instead of a chunk map: `trace/v1`, `delimited/v1` or `udiff/v1`. These profiles
+apply to intake only, so no command-output digest changes. See
+[Pastes and media](PASTES-AND-MEDIA.md#pasted-traces-tables-and-diffs) for what each
+view shows and what it guarantees.
+
+Exit status: `0` stored; `1` declined with a reason (empty payload, a file outside
+the workspace, an unreadable file, no clipboard tool, a `--from` outside the map,
+a binary handle given to `--chunks`); `2` a flag combination that cannot mean
+anything. The `ctx.intake/v1` receipt has `kind`, `address`, `label`, `name`,
+`bytes`, `lines`, `tokens` (`raw` and `delivered` estimates), `profile`,
+`passthrough`, `lossy`, `encoding` and `digest`, plus `copied` with `--copy`.
+[Pastes and media](PASTES-AND-MEDIA.md) covers how the agent hosts call intake for
+an oversized prompt without being asked.
+
+## Look at an image or video: `ctx view`
+
+Pixels are expensive and a model usually needs one region of them. `ctx view`
+gives an overview first, keeps the original addressable, and crops or extracts
+from the original when asked.
+
+```bash
+ctx view screenshot.png                       # downscaled overview with a labelled grid
+ctx view screenshot.png --grid 3x5 --cell B2  # crop one cell from the ORIGINAL pixels
+ctx view screenshot.png --region 160,90,320,180
+ctx view demo.mp4                             # metadata census and a contact sheet
+ctx view demo.mp4 --at 1:30                   # one frame
+ctx view demo.mp4 --range 2-9 --every 1       # frames across a stretch
+ctx view demo.mp4 --scenes                    # where the picture changes sharply
+```
+
+```text
+[ctx view shot.png]
+view: overview
+source: image png 640×360 · 48.3 KiB · sha256 afbd016dee1b…
+raw cost: ~299 tok (image-patch, same on either tier)
+derived: overview 640×360 image/jpeg · 26.8 KiB · ~299 tok (same on either tier; no saving against the source) · pillow 13.0.0
+grid: 3 rows (1-3, top to bottom) × 5 columns (A-E, left to right); cell = column letter + row number, e.g. B2
+omitted: metadata (EXIF/ICC) stripped
+omitted: grid lines and cell labels are drawn on the overview only
+open: .ctx-session-reads/media/overview-d03674112eb5.jpg
+stored: blob:d03674112eb5 (this derived file); original shot.png untouched
+next: ctx view shot.png --grid 3x5 --cell C2
+next: ctx view shot.png --region 160,90,320,180
+```
+
+The result is a bounded digest, a workspace-relative file to open (under
+`.ctx-session-reads/media/`) and exact `next:` commands. Zoom always reads the
+original pixels or frames, never an earlier derivative. Every derived file records
+its source hash, the operation, the engine and its version, and the bytes and
+estimated tokens before and after.
+
+`TARGET` is a file inside the workspace, or a `blob:<id>` or `run:<id>[#stream]`
+address. A file outside the workspace is refused with two ways forward: copy it
+in, or capture it with `ctx run -- cat <file>` and view the `run:` address. Audio
+and PDF files get a typed census only (audio is never transcribed). SVG is
+markup and is not rasterized. Other bytes get a typed digest and no pixels.
+
+| Flag | Meaning |
+|---|---|
+| `--fit N` | Longest edge in pixels for an image or frame, or the width of a contact sheet. Clamped to 16-8192. Defaults: 1024 for an overview or frame, 1280 for a crop, 1600 for a sheet. |
+| `--grid RxC` | Rows by columns of the labelled grid, each 1-26 (columns are letters). A cell under 24 px cannot be labelled, and an explicit grid that fine is refused. |
+| `--cell C` | Crop a grid cell (`B2`) or range (`A1:B2`) from the original. An alternative to `--region`. |
+| `--region R` | Crop `x,y,w,h` in pixels, or `x%,y%,w%,h%`, from the original. |
+| `--at T` | One video frame (or animated-image frame) at `T`: seconds (`90`) or clock (`1:30` is 90 s). |
+| `--range A-B` | A stretch, each side seconds or clock: `2-9` or `1:23-1:30`. `A:B` is refused as ambiguous. |
+| `--every S` | A frame every `S` seconds, over the clip or over `--range`. |
+| `--count N` | `N` evenly spaced frames, over `--range` or `--sheet`. An alternative to `--every`. |
+| `--sheet` | Contact sheet of timestamped frames. The default for video: 12 frames, at most 36. |
+| `--scenes` | Timestamps where the picture changes sharply (score threshold 0.30; at most 48 found, 16 listed). Takes only an optional `--range`. |
+| `--subs` | Extract an embedded text subtitle track (256 KiB at most, 12 lines shown). Takes no other timeline flag. A bitmap subtitle track is declined. |
+| `--json` | The same facts as JSON, schema `ctx.view/v1`: `status`, `target`, `view`, `source`, `derived`, `omitted`, `notes`, `next`, and `read` when a time was given. `derived` carries `tokens` with its `tokens_basis` and `tokens_before` with its `tokens_before_basis`, plus `op`, `mime`, `path`, `address`, `width`, `height`, `bytes`, `engine`, `engine_version`, `source_sha256`, `output_sha256`, `params` and `meta`. An error is also a JSON object. |
+
+`--grid`, `--cell` and `--region` apply to still images. `--at` and the other time
+flags apply to video and animated images. `--at` cannot be combined with another
+timeline flag.
+
+**Engines.** Pillow (the `image` extra) and ffmpeg are optional. A missing engine
+is declared in the output with an install hint and exit status `1`, never a
+traceback. With neither, an image still gets its census (format, dimensions, size,
+hash, raw token estimate) and a video gets container facts only. Pillow alone
+covers every image operation and animated images. ffmpeg without Pillow covers
+`--at`, `--scenes` and `--subs` on video; the contact sheet and `--range` need
+Pillow to tile and label. The matrix is in
+[Pastes and media](PASTES-AND-MEDIA.md#optional-engines-and-what-works-without-each).
+
+Token figures are estimates, not measurements of any model. The image tier comes
+from `CTX_MODEL` when it names a known model, otherwise a range across both tiers
+is shown and labelled `model unknown`; see
+[Pastes and media](PASTES-AND-MEDIA.md#token-figures-are-estimates).
+
+Exit status: `0` a view; `1` declined with a reason (missing engine, an unreadable
+or refused file, a limit); `2` a selector combination that cannot mean anything.
+
 ## Measure a session
 
 ```bash
@@ -719,6 +912,60 @@ upstream is Anthropic itself (a value you set yourself is left alone, and a
 third-party upstream is never forced). Without that, every request carried the
 full tool catalogue — measured at ~15k extra cached tokens per call.
 
+#### Shrink the launch surface: `--surface`
+
+```bash
+ctx wrap claude -- -p "fix the failing tests"                # --surface auto is the default
+ctx wrap claude --surface off -- -p "…"                      # change nothing
+ctx wrap claude --surface read-only -- -p "review this repo" # a named profile
+```
+
+Before launch, `ctx wrap claude` computes a capability plan for the session and
+applies it only through the channels the wrapper already uses for one session:
+the temporary settings file, extra launch flags, and private temporary files.
+Nothing is written under your home directory and nothing is left after the
+session. The one file written to the workspace is the receipt,
+`.ctx-surface/wrap-receipt.json`, schema `ctx.surface.wrap/v1`, and one line on
+stderr summarises it:
+
+```text
+ctx wrap: surface auto · skills 2/3 name-only (est. ~51→22 tok) · receipt .ctx-surface/wrap-receipt.json
+```
+
+| Value | What the launch does |
+|---|---|
+| `auto` | The default. MCP: relies on Claude Code's own tool deferral and interposes nothing. Skills: a skill with zero invocations in this project's transcripts is set to `name-only` through `skillOverrides`, which keeps its name listed and drops its description. Nothing is turned off, ctx's own skill is never touched, and a skill the user already set in `skillOverrides` is left alone. |
+| `off` | Compute and apply nothing; no receipt. |
+| `<profile>` | Launch only the MCP servers the profile keeps (`read-only`, `local-dev`, `review`, `full`, or one defined in `ctx.toml` under `[surface.profiles.<name>]`). Passes `--mcp-config` and `--strict-mcp-config`. A profile can only be chosen on this flag: a `ctx.toml` that names one is ignored with a note, because a cloned repository must not choose it for you. |
+
+The default comes from `[surface] wrap` in `ctx.toml`, which may be `auto` or
+`off` ([Configuration](CONFIGURATION.md)).
+The flag may be given once and takes exactly one value; anything else exits `2`.
+It applies when `ctx wrap claude` launches Claude Code, that is, with agent
+arguments after `--`; without them the command runs guided setup and plans
+nothing. On another host the flag prints a note and is ignored.
+
+`auto` trims a skill only when the evidence covers at least `[surface]
+wrap_min_sessions` complete sessions (default 5); one session says nothing about
+"never used". A skill newer than the newest transcript, or a project with no
+Claude Code transcripts, is left unchanged and the receipt says why. Evidence
+comes from the project's own session transcripts under Claude Code's config
+directory; `ctx` does not start any MCP server to measure it.
+
+The caller wins. `--mcp-config`, `--strict-mcp-config`, `--settings`, or the
+environment variables that control tool deferral and the skill budget
+(`ENABLE_TOOL_SEARCH`, `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`,
+`SLASH_COMMAND_TOOL_CHAR_BUDGET`) leave that dimension alone, and a managed MCP
+configuration stops a profile from being applied. The receipt lists each item
+left alone with its reason. A profile that restricts individual tools of a server
+is enforced through `ctx surface gateway`; when that cannot be enforced (no cached
+tool catalogue for the server, or a remote server the gateway does not proxy),
+the whole server is left out of the session and the stderr line, the receipt and
+the profile note say so and name the remedy. A project server Claude Code would
+not start itself is never started. Every token figure in the receipt is an
+estimate (about 4 bytes per token). If planning fails, the session launches
+unchanged with a one-line note.
+
 ### Antigravity
 
 ```bash
@@ -726,7 +973,76 @@ ctx antigravity install
 ```
 
 The plugin is persistent. Both hosts use the same artifact store, digest contracts, and
-retrieval vocabulary.
+retrieval vocabulary. On `agy` 1.5.5 the plugin rewrites a flooding command in place
+instead of refusing it; see [Host capabilities](HOST-CAPABILITIES.md#antigravity-agy-155).
+
+## See what ctx governs: `ctx coverage`
+
+```bash
+ctx coverage                       # the table for every host, then what the hooks observed
+ctx coverage --host antigravity    # one host dialect
+ctx coverage --session last        # observed calls for the newest session only
+ctx coverage --json                # machine-readable (schema ctx.coverage-report/v1)
+```
+
+Every native tool call an agent makes takes one of a few routes, and ctx declares
+which in one table (`src/ctx/governance.py`) that the hook, the installed
+registrations and this command all read:
+
+| Route | What happens |
+|---|---|
+| `rewrite` | PreToolUse replaces the call's input in place; the call runs, as its bounded `ctx` form. For shell commands on Claude Code and Codex this route is not taken by default (`steering = "auto"`): the command runs as written. |
+| `bound` | PreToolUse narrows the input (a `limit`), or past the inline budget denies with a map of the file. |
+| `deny_steer` | PreToolUse denies and names the `ctx` command to run instead. |
+| `output_gate` | PostToolUse replaces an over-budget result with a digest and a retrieval address. Under budget it passes unchanged. |
+| `observe` | The hook sees and records the call and never changes it (edits, skills, and every result on a host that cannot replace output). |
+| `exempt` | Deliberately not hooked, with a stated reason. |
+
+A tool the table has never seen falls to the output gate where the host can
+replace output, and is observed elsewhere. An MCP tool is recognised before any
+native name and is governed by the output gate; it is not classified as a native
+search or read. `ctx coverage` also prints, per host, what no hook can govern, and
+what the prompt gate does for an oversized paste. A route whose stage the installed
+registration does not hook is printed as `UNHOOKED`. Excerpt:
+
+```text
+antigravity  (rewrite input: read_file, run_command only, replace output: no)
+  pre=rewrite     post=observe      run_command
+  pre=bound       post=observe      read_file
+  pre=deny_steer  post=observe      view_file, grep_search, find_by_name, list_dir, ListDir, glob_search, codebase_search
+  pre=observe     post=UNHOOKED     write_to_file, replace_file_content, multi_replace_file_content, edit_file
+  …
+  prompt (oversized paste): no ctx prompt gate: an oversized prompt reaches the model unmodified
+  cannot govern:
+    - PostToolUse cannot replace output (its only legal output is {}): the result of a tool that was not rewritten reaches the transcript raw
+```
+
+The second half is the coverage ledger, `.ctx-session-reads/coverage.jsonl`
+(`ctx.coverage/v1`). The hooks append one row per hooked call: the tool name (for
+MCP the server and tool, for a skill its name), the stage, the route, the decision
+and the raw and emitted byte counts. It never records arguments or content. It
+rotates at 512 KiB and keeps one older generation, so history is bounded.
+
+```text
+observed  (.ctx-session-reads/coverage.jsonl: 1 rows, session all, 1 session(s) on record; …)
+  host         tool                               stage        route        calls      raw B emitted B  decisions
+  claude-code  Bash                               post         output_gate      1      88889       982  replaced=1
+  most ungoverned bytes into context (observed, exempt, captured-not-replaced, failed, or a replacement the host ignores):
+    none recorded
+```
+
+The "most ungoverned bytes" list ranks the tools whose results reached the model
+without a bound: observed, exempt, captured without replacement, failed, or a
+replacement the host would ignore. It is the place to look when a session was
+larger than expected. When `[guard] mode = "advisory"` the report says every
+route is switched off in this workspace. When `mode = "strict"` it says strict has
+no code path of its own and behaves as `guarded`. When the workspace's Claude Code
+settings carry a ctx matcher older than the table, it says so; `ctx setup`
+updates ctx-owned entries in place and leaves customised ones alone.
+
+Flags: `--json`; `--host` with one of `claude-code`, `codex`, `antigravity`,
+`hermes`, `omp`, `opencode`, `dsh`; `--session ID` or `last`. The command always
+exits `0`: it reports, it does not judge.
 
 ## Score a trajectory against gold context: `ctx replay --gold`
 
@@ -785,7 +1101,7 @@ used, and they answer three different questions.
 | `0` | Success | Continue |
 | `1` | **ctx** failed | Not your invocation's fault: an internal error, an unreadable store, an engine that would not start. Retry or run `ctx doctor` |
 | `2` | ctx **rejected the invocation** | Fix the arguments. Unknown command or flag, a malformed selector (`--lines nope`), an ungrammatical reference (`zzz:xyz`), a missing required argument, a workspace that will not resolve, or a handle that no longer resolves because `ctx gc` or the retention window collected it |
-| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output. Exception: `ctx run --passthrough` (the form the hooks rewrite tool calls into) exits with the child's own status, and prints small, complete output verbatim with the `run:` handle on one trailing line, so a rewritten tool call looks to the host exactly like the native one |
+| `3` | **The thing you asked about** failed | ctx worked; the child command, script, sequence step, or job exited nonzero. The digest is the evidence — read it, do not re-run the command to see the output. Exception: `ctx run --passthrough` (hook mode, the form the hooks rewrite a tool call into where a rewrite happens: Antigravity, and Claude Code with `steering = "rewrite"`) exits with the child's own status, and prints small, complete output verbatim with the `run:` handle on one trailing line, so a rewritten tool call looks to the host like the native one. Hooks pass the original command verbatim as `ctx run --passthrough --shell -- '<original>'` |
 | `124` | Timed out | The child exceeded `--timeout` (or `ctx job --wait` gave up). Matches `timeout(1)` |
 | `127` | Not found | The program ctx was asked to launch or wrap is not on `PATH`. Matches the shell's convention |
 

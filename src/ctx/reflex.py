@@ -631,7 +631,7 @@ def _write_state(ws_root: Path | str, state: dict[str, Any]) -> None:
     caller (every caller is fail-open)."""
     path = _state_path(ws_root)
     parent = os.path.dirname(path)
-    os.makedirs(parent, exist_ok=True)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
     payload = json.dumps(state, sort_keys=True)
     # Hand-rolled unique temp name instead of tempfile.mkstemp: importing
     # tempfile pulls shutil (~4ms) into every hook call for one mkstemp.
@@ -685,7 +685,7 @@ def _append_outcome(
     """Append one FROZEN-schema line to the outcome ledger. Raises to the
     caller (every caller is fail-open). ``ts`` is operational only."""
     path = session_reads_dir(ws_root, _OUTCOMES_NAME)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     line = json.dumps(
         {
             "ts": time.time(),
@@ -707,7 +707,7 @@ def _append_jsonl(ws_root: Path | str, name: str, doc: dict[str, Any]) -> None:
     """Append one sorted-keys JSON line to a session ledger. Raises to the
     caller (every caller is fail-open)."""
     path = session_reads_dir(ws_root, name)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(doc, sort_keys=True) + "\n")
 
@@ -1676,9 +1676,8 @@ def sync_query_outcomes(ws_root: Path | str | None) -> None:
     if ws_root is None:
         return
     try:
-        led = session_reads_dir(ws_root)
-        ops_path = os.path.join(led, _Q_DRY_OPS_NAME)
-        json_path = os.path.join(led, _Q_DRY_STATE_NAME)
+        ops_path = session_reads_dir(ws_root, _Q_DRY_OPS_NAME)
+        json_path = session_reads_dir(ws_root, _Q_DRY_STATE_NAME)
         has_ops, has_json = os.path.isfile(ops_path), os.path.isfile(json_path)
         if not has_ops and not has_json:
             return

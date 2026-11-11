@@ -20,7 +20,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int, short_path
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int, short_path
 
 _COLON_RE = re.compile(
     r"^\s*(?P<file>[^\s:][^:]*\.\w{1,12}):(?P<line>\d+):(?:\d+:?)?\s*"
@@ -31,6 +31,12 @@ _ESLINT_LINE_RE = re.compile(
     r"^\s+(?P<line>\d+):(?P<col>\d+)\s+(?P<sev>error|warning)\s+(?P<msg>.*?)\s\s+(?P<rule>[\w@./-]+)$"
 )
 _ESLINT_FILE_RE = re.compile(r"^\S*[/\\][^\s:]+\.\w{1,12}$|^[^\s:]+\.\w{1,12}$")
+# A necessary condition for _ESLINT_FILE_RE, checked first. Both of its
+# alternatives end in ``\.\w{1,12}$``, and its first alternative backtracks
+# over every slash on a line (quadratic on a whitespace-free line full of
+# them: base64, minified JSON -- 3.3 s for one 200 KB line). This suffix test
+# is linear and rejects those lines without changing which lines match.
+_ESLINT_FILE_SUFFIX_RE = re.compile(r"\.\w{1,12}$")
 _TSC_RE = re.compile(
     r"^(?P<file>[^\s(]+)\((?P<line>\d+),\d+\):\s+(?P<sev>error|warning)\s+(?P<rule>TS\d+)"
 )
@@ -82,8 +88,13 @@ def _parse(lines: list[str]):
             diags.append((pending_rust[0], m.group("file"), pending_rust[1], pending_rust[2]))
             pending_rust = None
             continue
-        if _ESLINT_FILE_RE.match(ln.strip()) and not ln.startswith(" "):
-            current_file = ln.strip()
+        stripped = ln.strip()
+        if (
+            _ESLINT_FILE_SUFFIX_RE.search(stripped)
+            and _ESLINT_FILE_RE.match(stripped)
+            and not ln.startswith(" ")
+        ):
+            current_file = stripped
     return diags
 
 
@@ -159,7 +170,7 @@ class LintProfile(Profile):
         tag = f" · span {sid}" if sid else ""
         body.append(f"  first diagnostic {first_stream}:L{first_line}-L{end}:{tag}")
         for raw in first_view.text_lines[first_line - 1 : end]:
-            body.append(f"    | {raw[:EVIDENCE_LINE_CHARS]}")
+            body.append(f"    | {clip_redacting(raw, EVIDENCE_LINE_CHARS)}")
 
         rid = "run:PENDING"
         top_rule = by_rule.most_common(1)[0][0] if by_rule else "error"

@@ -71,7 +71,12 @@ class Guard:
     mode: str = "guarded"  # advisory | guarded | strict
     unknown_command: str = "force_ask"  # allow | deny | ask | force_ask
     internal_error: str = "allow"  # availability-safe default (SPEC §10.2)
-    steering: str = "auto"  # auto | rewrite | deny — deny keeps pure deny-with-remediation
+    # auto (default): on Claude Code and Codex shell commands run as written and
+    # the output gate bounds them afterwards. rewrite: also capture at birth on
+    # Claude Code -- its prompts and rules then concern the `ctx run` wrapper,
+    # and a rule from a source ctx cannot read does not see the original.
+    # deny: deny with remediation instead of either.
+    steering: str = "auto"  # auto | rewrite | deny
     # Replacement surface (default posture): substitute loop-shapes with
     # collapsed ctx ops; set collapse=false to break-glass off.
     collapse: bool = True
@@ -217,6 +222,111 @@ class SurfacePolicy:
     default_profile: str = ""       # profile to suggest when over budget
     gateway: bool = False           # gateway is the MCP delivery (progressive disclosure)
     probe: bool = True              # measure real MCP tool schemas (cached) in the gate
+    # Surface plan applied when `ctx wrap claude` launches a session:
+    # auto (host-native disclosure, usage-evidenced skill trimming) | off |
+    # <profile name>. The `--surface` flag overrides it per launch.
+    wrap: str = "auto"
+    # Sessions of transcript evidence required before `auto` narrows any
+    # skill to name-only (one session says nothing about "never used").
+    wrap_min_sessions: int = 5
+
+
+@dataclass(frozen=True)
+class MediaPolicy:
+    """Media reads (ctx.mediaread, read on the guard hot path by ctx.hook).
+
+    ``image_read``: what a native read of a large image does. ``advise``
+    (default) lets it proceed unchanged with a short note naming the exact
+    ``ctx view`` crop command; ``redirect`` opts into replacing the read with
+    a gridded overview (falls back to the note without Pillow, on error, or
+    past ``redirect_budget_ms``); ``off`` leaves image reads alone.
+    ``video_read``: ``steer`` (default) denies a read of video or audio with
+    the exact ``ctx view`` command; ``off`` leaves it alone.
+    ``file_mentions`` (OFF by default): under ``ctx wrap claude``, route
+    ``@file`` prompt mentions through the Read tool (and so through this
+    guard) by setting CLAUDE_CODE_DISABLE_FILE_MENTIONS=1 in the child; never
+    outside the wrapper, never over the user's own value. Observed on Claude
+    Code 2.1.322 (haiku, -p): the host already does not inline a large
+    mention (a 352 KB log became a ``too_large`` reference, a 58 KB one got no
+    attachment) and the model searched and answered correctly; routed through
+    Read, the same 58 KB log was bounded to 240 lines and the model, not then
+    told of the bound, answered wrongly. Worth enabling when mentions of
+    images (so the media note applies) or of files the host does inline
+    should pass the guard; the bound is now stated to the model."""
+
+    image_read: str = "advise"          # advise | redirect | off
+    video_read: str = "steer"           # steer | off
+    file_mentions: bool = False
+    redirect_budget_ms: int = 6000      # clamped to 500..8000 (hook timeout is 10 s)
+
+
+_IMAGE_READ_MODES = ("advise", "redirect", "off")
+_VIDEO_READ_MODES = ("steer", "off")
+
+
+def _media_policy(raw: Any) -> MediaPolicy:
+    """``[media]`` with unknown values falling back to the default, never to
+    a different behavior (mirrors the hot-path reader in ctx.hook)."""
+    md = MediaPolicy()
+    if not isinstance(raw, dict):
+        return md
+    image_read = raw.get("image_read")
+    video_read = raw.get("video_read")
+    budget = raw.get("redirect_budget_ms")
+    return MediaPolicy(
+        image_read=image_read if image_read in _IMAGE_READ_MODES else md.image_read,
+        video_read=video_read if video_read in _VIDEO_READ_MODES else md.video_read,
+        file_mentions=_coerce_like(md.file_mentions, raw.get("file_mentions", md.file_mentions)),
+        redirect_budget_ms=(max(500, min(budget, 8000))
+                            if isinstance(budget, int) and not isinstance(budget, bool)
+                            else md.redirect_budget_ms),
+    )
+
+
+@dataclass(frozen=True)
+class IntakePolicy:
+    """The prompt gate: what happens to an oversized pasted prompt.
+
+    ``mode``
+      ``advise`` (default): oversized content is stored once and a bounded
+      digest with its retrieval handle is ADDED as context. A prompt hook
+      cannot shorten or replace the prompt on Claude Code or Codex, so the
+      paste still reaches the model this turn; the value is that it becomes
+      addressable (cite and re-read regions) and survives compaction.
+      ``block``: the content is stored and the prompt is stopped before any
+      model call; the user is told the handle and how to resend their message
+      without the paste (one resubmission). The only hook-level way to keep a
+      paste out of context entirely.
+      ``off``: the gate does nothing and stores nothing.
+
+      ``mode`` is a privacy control, so it fails toward ``off``: it is
+      trimmed and case-folded, and anything that is not exactly one of the
+      three (a typo, a non-string, an ``[intake]`` that is not a table) means
+      ``off``; and a ``ctx.toml`` that cannot be parsed at all means ``off``
+      for the gate, never the default.
+
+    ``threshold_bytes``
+      A pasted region, or a prompt with no separable paste, larger than this
+      many UTF-8 bytes is stored. 0 (default) means ``[budgets]
+      max_inline_bytes``. Values below 4096 are raised to 4096, which keeps
+      the common short prompt free of any work.
+
+    Privacy: stored prompt content is user content, kept VERBATIM and
+    UNREDACTED (redaction applies to what the model is shown, never to the
+    stored bytes) in this machine's ctx state directory for this workspace
+    (``$CTX_STATE_HOME`` or ``$XDG_STATE_HOME/ctx/workspaces/<id>/``; that
+    directory is mode 0700 and files are 0600) for ``[store] retention_days``
+    (30 by default), and is then eligible for ``ctx gc``. Nothing leaves the
+    machine. The gate never stores a prompt inside the repository on its own:
+    when the state directory is unusable (the automatic in-project
+    fallback) the prompt goes through unstored; only an explicit ``[store]
+    backend = "local"`` keeps it in the project's ``.ctx-session-reads/store``.
+    With mode ``off`` nothing is stored. The gate books no "tokens avoided":
+    its telemetry event records bytes stored with raw equal to emitted.
+    """
+
+    mode: str = "advise"          # advise | block | off
+    threshold_bytes: int = 0      # 0 = [budgets] max_inline_bytes
 
 
 @dataclass(frozen=True)
@@ -232,6 +342,8 @@ class Config:
     plan: PlanPolicy = field(default_factory=PlanPolicy)
     redaction: Redaction = field(default_factory=Redaction)
     surface: SurfacePolicy = field(default_factory=SurfacePolicy)
+    media: MediaPolicy = field(default_factory=MediaPolicy)
+    intake: IntakePolicy = field(default_factory=IntakePolicy)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # ws:<alias> routing targets: alias -> workspace path (absolute, or
     # relative to this workspace root). Committed in ctx.toml [aliases].
@@ -353,6 +465,16 @@ def load_config(workspace_root: Path | None) -> Config:
     plan = _pick(raw.get("plan") or {}, PlanPolicy)
     ws = _pick(raw.get("workspace") or {}, WorkspacePolicy)
     surface = _pick(raw.get("surface") or {}, SurfacePolicy)
+    intake_raw = raw.get("intake")
+    intake = _pick(intake_raw if isinstance(intake_raw, dict) else {}, IntakePolicy)
+    # The mode is a privacy control: trimmed and case-folded, and anything
+    # that is not exactly advise/block/off (a typo, a wrong type, a section
+    # that is not a table) means off. See IntakePolicy.
+    raw_mode = intake_raw.get("mode", "advise") if isinstance(intake_raw, dict) else (
+        "advise" if intake_raw is None else None)
+    mode = raw_mode.strip().casefold() if isinstance(raw_mode, str) else "off"
+    intake = IntakePolicy(mode=mode if mode in ("advise", "block", "off") else "off",
+                          threshold_bytes=intake.threshold_bytes)
 
     eng_raw = raw.get("engagement") or {}
     ed = Engagement()
@@ -411,6 +533,8 @@ def load_config(workspace_root: Path | None) -> Config:
         plan=plan,
         redaction=redaction,
         surface=surface,
+        media=_media_policy(raw.get("media")),
+        intake=intake,
         scopes=scopes,
         aliases=aliases,
     )

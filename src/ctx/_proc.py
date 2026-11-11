@@ -40,7 +40,122 @@ import signal as signal_mod
 import subprocess
 import time
 
-__all__ = ["exit_status", "native_exit_status", "kill_and_reap", "wait_or_kill"]
+__all__ = ["exit_status", "native_exit_status", "kill_and_reap", "wait_or_kill",
+           "shell_popen_args", "capture_shell", "capture_shell_choice", "SH_FALLBACK_NOTE"]
+
+#: Where a shell may be installed besides $PATH (Claude Code's own search).
+_STANDARD_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+_VERIFIED: dict[str, bool] = {}
+_CHOICE: dict[tuple, tuple[str, str | None]] = {}
+
+#: The one line said when no bash or zsh could be found.
+SH_FALLBACK_NOTE = ("[ctx: no working bash or zsh found; the command ran under /bin/sh, "
+                    "which may not accept bash syntax]")
+
+
+def _known_shells() -> frozenset[str]:
+    """Resolved paths of the system's own shells: every entry of
+    /etc/shells, and the bash/zsh installed beside the system's /bin/sh."""
+    out = set()
+    try:
+        with open("/etc/shells", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("/"):
+                    out.add(os.path.realpath(line))
+    except OSError:
+        pass
+    for d in ("/bin", "/usr/bin", os.path.dirname(os.path.realpath("/bin/sh"))):
+        for name in ("bash", "zsh"):
+            p = os.path.join(d, name)
+            if os.path.exists(p):
+                out.add(os.path.realpath(p))
+    return frozenset(out)
+
+
+def _working_shell(path: str | None) -> bool:
+    """Is ``path`` a bash or zsh that runs? Asked of the binary itself (it
+    must report BASH_VERSION or ZSH_VERSION), never read off its name: a
+    file named ``bash`` can be anything."""
+    if not path or not os.path.isabs(path) or os.path.isdir(path) or not os.access(path, os.X_OK):
+        return False
+    if os.path.realpath(path) not in _known_shells():
+        return False
+    hit = _VERIFIED.get(path)
+    if hit is not None:
+        return hit
+    env = {k: v for k, v in os.environ.items() if k not in ("BASH_ENV", "ENV")}
+    try:
+        out = subprocess.run(
+            [path, "-c", 'printf %s "${BASH_VERSION:-}${ZSH_VERSION:-}"'],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=5, env=env)
+        ok = out.returncode == 0 and bool(out.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    _VERIFIED[path] = ok
+    return ok
+
+
+def _search(names: tuple[str, ...]) -> str | None:
+    import shutil
+
+    for name in names:
+        found = shutil.which(name)
+        cands = ([found] if found else []) + [os.path.join(d, name) for d in _STANDARD_DIRS]
+        for cand in cands:
+            if _working_shell(cand):
+                return cand
+    return None
+
+
+def capture_shell_choice() -> tuple[str, str | None]:
+    """``(shell, note)``: the shell that runs a ``--shell`` command string,
+    and the one line to say when it is not a shell the host would use.
+
+    The shell the agent's own shell tool uses, so a string written for it --
+    brace expansion, ``[[ ]]``, arrays, here-strings, ``set -o pipefail`` --
+    runs the same. Claude Code documents its choice (env-vars,
+    ``CLAUDE_CODE_SHELL``): that variable when it names a working bash or
+    zsh, else ``$SHELL`` when that is bash or zsh, else the first working
+    zsh, then bash, on PATH and the standard locations; never another shell.
+    Under Claude Code (``CLAUDECODE=1`` in its Bash tool's environment) ctx
+    follows exactly that. Elsewhere the same, but preferring bash when
+    ``$SHELL`` is not bash or zsh (fish, unset, a wrapper). ``CTX_SHELL``
+    overrides when it is a working bash or zsh. Only when no bash or zsh
+    exists at all does the string go to /bin/sh, and ``note`` says so.
+    """
+    key = tuple(os.environ.get(k) for k in
+                ("CTX_SHELL", "CLAUDECODE", "CLAUDE_CODE_SHELL", "SHELL", "PATH"))
+    hit = _CHOICE.get(key)
+    if hit is not None:
+        return hit
+    in_claude = os.environ.get("CLAUDECODE") == "1"
+    explicit = [os.environ.get("CTX_SHELL")]
+    if in_claude:
+        explicit.append(os.environ.get("CLAUDE_CODE_SHELL"))
+    explicit.append(os.environ.get("SHELL"))
+    choice: tuple[str, str | None] | None = None
+    for cand in explicit:
+        if _working_shell(cand):
+            choice = (str(cand), None)
+            break
+    if choice is None:
+        found = _search(("zsh", "bash") if in_claude else ("bash", "zsh"))
+        choice = (found, None) if found else ("/bin/sh", SH_FALLBACK_NOTE)
+    _CHOICE[key] = choice
+    return choice
+
+
+def capture_shell() -> str:
+    """The shell :func:`capture_shell_choice` picks."""
+    return capture_shell_choice()[0]
+
+
+def shell_popen_args(command: str) -> tuple[object, bool]:
+    """``(popen_args, shell)`` that run ``command`` VERBATIM in that shell."""
+    if os.name == "nt":  # pragma: no cover - POSIX shells only
+        return command, True
+    return [capture_shell(), "-c", command], False
 
 
 def kill_and_reap(proc: subprocess.Popen) -> None:

@@ -227,9 +227,11 @@ def run_capture(
     if shell:
         if len(argv) != 1:
             raise ExecutionError("--shell mode takes exactly one command string")
-        popen_args: Any = argv[0]
+        from ctx._proc import shell_popen_args
+
+        popen_args, popen_shell = shell_popen_args(argv[0])
     else:
-        popen_args = argv
+        popen_args, popen_shell = argv, False
 
     tmpdir = Path(tempfile.mkdtemp(prefix="ctx-cap-"))
     out_path = tmpdir / "stdout"
@@ -254,7 +256,7 @@ def run_capture(
                     proc = subprocess.Popen(
                         popen_args,
                         cwd=workdir,
-                        shell=shell,
+                        shell=popen_shell,
                         stdout=out_fh,
                         stderr=err_fh,
                         stdin=in_fh if in_fh is not None else subprocess.DEVNULL,

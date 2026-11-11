@@ -29,7 +29,7 @@ change must satisfy to merge.
 | [002](adr/002-store-outside-repository.md) | Store payloads outside the repository. |
 | [003](adr/003-pretool-routing.md) | Route before execution; do not repair after execution. |
 | [004](adr/004-plugin-contains-skill.md) | The plugin contains the skill (they must not both be installed). |
-| [005](adr/005-antigravity-hook-contract.md) | Match Antigravity's published hook contract; deny and redirect because its hooks cannot substitute input or output. |
+| [005](adr/005-antigravity-hook-contract.md) | Match Antigravity's published hook contract; as published 2026-07-25 it could deny and redirect but not substitute input or output; on `agy` 1.5.5 `PreToolUse` can rewrite arguments for `run_command` and `read_file` (see the 2026-11-11 update). |
 
 ## The wire schemas
 

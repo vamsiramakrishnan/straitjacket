@@ -34,6 +34,10 @@ def ws(tmp_path):
         "github": {"command": "gh-mcp", "args": ["serve"]},
         "off": {"command": "x", "disabled": True},
     }}), encoding="utf-8")
+    # approved, as after the trust prompt (an unapproved project server is
+    # not started by Claude Code and costs nothing up front)
+    (root / ".claude" / "settings.local.json").write_text(
+        json.dumps({"enableAllProjectMcpServers": True}), encoding="utf-8")
     # repo instructions with an env-var name (secret-adjacent) but a plain acronym too
     (root / "AGENTS.md").write_text(
         "Set GITHUB_TOKEN before running. See the SPEC and the README.\n",
@@ -103,6 +107,11 @@ def test_utilization_from_wire_log(ws):
 def test_audit_structure_and_blind_spot(ws):
     a = surface.audit(ws)
     assert a["schema"] == surface.SCHEMA
+    # v2: a Claude skill's `tokens` is its listing entry, its body is
+    # `deferred_tokens` (v1 priced the whole file up front).
+    assert surface.SCHEMA == "ctx.surface/v2"
+    skill = next(r for r in a["records"] if r["id"] == "skill.deployer")
+    assert skill["pricing"] == "skill-listing" and "deferred_tokens" in skill
     assert a["totals"]["static_tokens"] > 0
     assert "host system prompt" in a["blind_spot"]
     # every record carries a recommended disclosure level

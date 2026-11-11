@@ -22,6 +22,7 @@ blob degrades to what could be parsed, never an exception.
 from __future__ import annotations
 
 import hashlib
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Any
@@ -42,7 +43,18 @@ _MAGIC = [
     (b"PK\x03\x04", "zip"),
     (b"\x7fELF", "elf"),
 ]
-IMAGE_FORMATS = frozenset({"png", "jpeg", "gif", "bmp", "webp", "tiff", "ico"})
+IMAGE_FORMATS = frozenset({"png", "jpeg", "gif", "bmp", "webp", "tiff", "ico", "heic", "avif"})
+# Containers that carry time-based media. Never decoded here; `ctx.media` owns
+# the (optional) ffprobe-backed census. Kept separate from IMAGE_FORMATS so
+# `BlobInfo.is_image` and the pixel paths never see them.
+MEDIA_FORMATS = frozenset({"mp4", "mov", "m4a", "mkv", "webm", "wav", "avi", "mp3", "flac"})
+
+# ISO base media `ftyp` major brand -> format id. Unknown brands are "mp4":
+# the container is the same family and ffprobe names the real codecs.
+_FTYP_HEIC = frozenset({b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis",
+                        b"mif1", b"msf1"})
+_FTYP_AVIF = frozenset({b"avif", b"avis"})
+_FTYP_M4A = frozenset({b"M4A ", b"M4B ", b"M4P "})
 
 
 @dataclass
@@ -63,16 +75,225 @@ class BlobInfo:
         return self.format in IMAGE_FORMATS or self.format == "webp"
 
 
+def _printable4(b: bytes) -> bool:
+    return len(b) == 4 and all(0x20 <= c < 0x7F for c in b)
+
+
+def _syncsafe(b: bytes) -> int | None:
+    if len(b) != 4 or any(c & 0x80 for c in b):
+        return None
+    return (b[0] << 21) | (b[1] << 14) | (b[2] << 7) | b[3]
+
+
+def _mpeg_frame_header(h: bytes) -> bool:
+    """A plausible MPEG audio frame header (sync, version, layer, bitrate, rate)."""
+    if len(h) < 4 or h[0] != 0xFF or (h[1] & 0xE0) != 0xE0:
+        return False
+    return (((h[1] >> 3) & 3) != 1 and ((h[1] >> 1) & 3) != 0
+            and (h[2] >> 4) not in (0, 15) and ((h[2] >> 2) & 3) != 3)
+
+
+def _is_mp3(head: bytes) -> bool:
+    """An ID3v2-tagged MPEG audio file, validated past the magic bytes.
+
+    Header fields must be in range (version 2-4, revision 0, undefined flag
+    bits clear, syncsafe size) AND the tag must end inside the head, where a
+    real frame sync has to follow it. A tag that runs past the head cannot be
+    verified and is not claimed. A bare frame sync without a tag is also not
+    claimed: four bytes are too weak to reclassify arbitrary output."""
+    if len(head) < 10 or head[:3] != b"ID3":
+        return False
+    if head[3] not in (2, 3, 4) or head[4] != 0 or head[5] & 0x0F:
+        return False
+    size = _syncsafe(head[6:10])
+    if size is None:
+        return False
+    end = 10 + size + (10 if head[5] & 0x10 else 0)
+    return end + 4 <= len(head) and _mpeg_frame_header(head[end:end + 4])
+
+
+_KNOWN_BRANDS = frozenset(
+    [b"isom", b"iso2", b"iso3", b"iso4", b"iso5", b"iso6", b"iso7", b"iso8", b"iso9",
+     b"mp41", b"mp42", b"mp71", b"avc1", b"M4A ", b"M4B ", b"M4P ", b"M4V ", b"M4VH",
+     b"M4VP", b"qt  ", b"3gp4", b"3gp5", b"3gp6", b"3gp7", b"3g2a", b"3g2b", b"3g2c",
+     b"mmp4", b"f4v ", b"f4a ", b"dash", b"msdh", b"msix", b"MSNV", b"XAVC", b"heic",
+     b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1", b"avif", b"avis",
+     b"crx ", b"jp2 ", b"mjp2", b"mj2s"])
+_KNOWN_BOXES = frozenset(
+    [b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot", b"uuid", b"meta", b"moof",
+     b"styp", b"sidx", b"ftyp", b"jP  ", b"prft", b"emsg"])
+
+
+def _is_isobmff(head: bytes) -> bool:
+    """`ftyp` box with a sane size, a major or compatible brand ffmpeg-family
+    tools know, and - when visible - a recognised box after it."""
+    if len(head) < 16 or head[4:8] != b"ftyp":
+        return False
+    size = int.from_bytes(head[:4], "big")
+    if size < 16 or size > 4096 or not _printable4(head[8:12]):
+        return False
+    brands = [head[8:12]]
+    if size <= len(head):
+        if (size - 16) % 4:
+            return False
+        compat = [head[o:o + 4] for o in range(16, size, 4)]
+        if not all(_printable4(b) for b in compat):
+            return False
+        brands += compat
+        if size + 8 <= len(head):
+            nxt = int.from_bytes(head[size:size + 4], "big")
+            if (nxt not in (0, 1) and nxt < 8) or head[size + 4:size + 8] not in _KNOWN_BOXES:
+                return False
+    return any(b in _KNOWN_BRANDS for b in brands)
+
+
+def _ebml_doctype(head: bytes) -> str | None:
+    """`matroska` / `webm` when a well-formed EBML header declares it."""
+    if len(head) < 8 or head[:4] != b"\x1a\x45\xdf\xa3" or not head[4]:
+        return None
+    width = 9 - head[4].bit_length()
+    if width > 8 or len(head) < 4 + width:
+        return None
+    body = int.from_bytes(head[4:4 + width], "big") & ((1 << (7 * width)) - 1)
+    if body < 4 or body > 1024:
+        return None
+    region = head[4 + width:4 + width + body]
+    at = region.find(b"\x42\x82")
+    if at < 0 or at + 3 > len(region):
+        return None
+    n = region[at + 2]
+    if n & 0x80 == 0:
+        return None
+    value = region[at + 3:at + 3 + (n & 0x7F)]
+    return value.decode("ascii") if value in (b"matroska", b"webm") else None
+
+
+def _riff_media(head: bytes) -> str | None:
+    """`wav` / `avi` when the first chunk is what the container requires."""
+    if len(head) < 28 or head[:4] != b"RIFF":
+        return None
+    total = int.from_bytes(head[4:8], "little")
+    if total < 36:
+        return None
+    if head[8:12] == b"WAVE":
+        if head[12:16] == b"fmt " and 16 <= int.from_bytes(head[16:20], "little") <= 64:
+            return "wav"
+    elif head[8:12] == b"AVI ":
+        if head[12:16] == b"LIST" and head[20:24] == b"hdrl" and head[24:28] == b"avih":
+            return "avi"
+    return None
+
+
+def _is_flac(head: bytes) -> bool:
+    """`fLaC`, a STREAMINFO block header (type 0, length 34), plausible
+    STREAMINFO fields, and then either a valid next metadata block header or,
+    when STREAMINFO is the last block, an audio frame sync."""
+    if len(head) < 43 or head[:4] != b"fLaC" or head[4] & 0x7F or head[5:8] != b"\x00\x00\x22":
+        return False
+    body = head[8:42]
+    min_block = int.from_bytes(body[0:2], "big")
+    max_block = int.from_bytes(body[2:4], "big")
+    rate = (body[10] << 12) | (body[11] << 4) | (body[12] >> 4)
+    bits = (((body[12] & 1) << 4) | (body[13] >> 4)) + 1
+    if not (16 <= min_block <= max_block <= 65535) or not (1 <= rate <= 655350) or bits < 4:
+        return False
+    nxt = head[42]
+    if head[4] & 0x80:                          # STREAMINFO was the last block
+        return nxt == 0xFF and len(head) > 43 and head[43] & 0xFC == 0xF8
+    return (nxt & 0x7F) in (1, 2, 3, 4, 5, 6)
+
+
+_SVG_DOCTYPE = re.compile(rb"<!DOCTYPE\s+svg\b", re.I)
+_SVG_ROOT = re.compile(
+    rb"<svg(?:\s+[A-Za-z_:][\w:.\-]*\s*=\s*(?:\"[^\"]*\"|'[^']*'))*\s*(/?)>")
+
+
+def _is_svg(head: bytes) -> bool:
+    """A document whose ROOT element is `<svg>` with well-formed attributes:
+    after any BOM, XML declaration, comments and an `svg` doctype - never the
+    substring in prose, markdown or an HTML page."""
+    window = head[:1024]
+    if b"\x00" in window:
+        return False
+    text = window[3:] if window.startswith(b"\xef\xbb\xbf") else window
+    while True:
+        text = text.lstrip(b" \t\r\n")
+        if text.startswith(b"<?"):
+            end = text.find(b"?>")
+            if end < 0:
+                return False
+            text = text[end + 2:]
+        elif text.startswith(b"<!--"):
+            end = text.find(b"-->")
+            if end < 0:
+                return False
+            text = text[end + 3:]
+        elif text.startswith(b"<!"):
+            if not _SVG_DOCTYPE.match(text):
+                return False
+            end = text.find(b"]>") + 2 if text.find(b"[", 0, text.find(b">") + 1) >= 0 \
+                else text.find(b">") + 1
+            if end <= 1:
+                return False
+            text = text[end:]
+        else:
+            break
+    m = _SVG_ROOT.match(text)
+    if not m:
+        return False
+    rest = text[m.end():]
+    if m.group(1):                                   # <svg .../>
+        return not rest.strip()
+    close = rest.rfind(b"</svg>")
+    if close >= 0:
+        return not rest[close + 6:].strip()
+    # no closing tag yet: only a head cut off mid-document, which must declare xmlns
+    return len(head) >= 1024 and b"xmlns" in m.group(0)
+
+
 def sniff_format(head: bytes) -> str:
     for magic, fmt in _MAGIC:
         if head.startswith(magic):
             return fmt
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
         return "webp"
-    # heuristic: NUL byte in the first KiB ⇒ binary of unknown format
+    # A container is only ever named when the payload is also demonstrably not
+    # text: the bytes the pre-existing heuristic called "binary" (a NUL in the
+    # first KiB). Anything it called "text" keeps its text digest, whatever it
+    # starts with.
     if b"\x00" in head[:1024]:
+        named = _named_container(head)
+        if named:
+            return named
         return "binary"
+    if _is_svg(head):
+        return "svg"
     return "text"
+
+
+def _named_container(head: bytes) -> str | None:
+    riff = _riff_media(head)
+    if riff:
+        return riff
+    if _is_isobmff(head):
+        brand = head[8:12]
+        if brand in _FTYP_AVIF:
+            return "avif"
+        if brand in _FTYP_HEIC:
+            return "heic"
+        if brand in _FTYP_M4A:
+            return "m4a"
+        if brand == b"qt  ":
+            return "mov"
+        return "mp4"
+    doctype = _ebml_doctype(head)
+    if doctype:
+        return "webm" if doctype == "webm" else "mkv"
+    if _is_flac(head):
+        return "flac"
+    if _is_mp3(head):
+        return "mp3"
+    return None
 
 
 # ------------------------------------------------------------- dimensions
@@ -278,6 +499,6 @@ def render_digest(info: BlobInfo, *, address: str | None = None) -> str:
 
 
 __all__ = [
-    "BlobInfo", "IMAGE_FORMATS", "sniff_format", "inspect", "render_digest",
+    "BlobInfo", "IMAGE_FORMATS", "MEDIA_FORMATS", "sniff_format", "inspect", "render_digest",
     "perceptual_hash", "phash_distance",
 ]

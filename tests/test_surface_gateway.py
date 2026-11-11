@@ -237,7 +237,9 @@ def test_serve_loop_over_stdio(ws):
         [sys.executable, "-m", "ctx", "surface", "gateway", "--workspace", str(ws)],
         input=payload.encode(),
         env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
-             "PATH": __import__("os").environ.get("PATH", "")},
+             "PATH": __import__("os").environ.get("PATH", ""),
+             # the isolated test HOME: discovery must never see the real one
+             "HOME": __import__("os").environ["HOME"]},
         capture_output=True, timeout=40,
     )
     msgs = [json.loads(l) for l in proc.stdout.decode().splitlines() if l.strip()]

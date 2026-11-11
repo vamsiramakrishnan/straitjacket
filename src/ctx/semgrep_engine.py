@@ -17,6 +17,7 @@ participates in node cache keys.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 from ctx import bounds
 
 import json
@@ -151,7 +152,7 @@ def scan(
             "rule": str(res.get("check_id") or ""),
             "file": path,
             "line": int(start.get("line", 0) or 0),
-            "message": str(extra.get("message") or "").strip()[:EVIDENCE_LINE_CHARS],
+            "message": clip_redacting(str(extra.get("message") or "").strip(), EVIDENCE_LINE_CHARS),
         }
         frames = _trace_frames(extra) if isinstance(extra, dict) else []
         if frames:

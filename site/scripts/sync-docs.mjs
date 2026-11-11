@@ -48,6 +48,7 @@ const PAGES = [
   ['CONCEPTS.md', 'start/concepts', 'Core concepts', 'The vocabulary: artifact, handle, span, digest, profile, contract, plan, and the four gates.'],
   // Guides
   ['USE-CASES.md', 'guides/use-cases', 'Use cases', 'Choose the shortest path through the harness by task and failure mode.'],
+  ['PASTES-AND-MEDIA.md', 'guides/pastes-and-media', 'Pastes and media', 'What happens to a large paste, a large file, an image or a video on each host, and the limits.'],
   ['HOST-CAPABILITIES.md', 'guides/host-capabilities', 'Host capabilities', 'What Claude Code, Codex, and Antigravity can enforce before and after tool execution.'],
   ['ANCHORS.md', 'guides/anchors', 'Anchored addresses', 'How repository addresses verify, relocate, or refuse after content moves.'],
   ['CLI.md', 'guides/cli', 'CLI guide', 'Choose a verb, retrieve evidence, and interpret the session scorecard.'],

@@ -23,6 +23,7 @@ only repo-relative POSIX paths are stored.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import ast
 import hashlib
 import json
@@ -332,7 +333,7 @@ def _sym(
     return {
         "name": name,
         "kind": kind,
-        "signature": signature[:_SIG_MAX],
+        "signature": clip_redacting(signature, _SIG_MAX),
         "range": [a, b],
         "scope": scope,
         "span": None,

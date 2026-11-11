@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ctx.digest.logprof import mine_templates
+from ctx.digest.logprof import display_template, mine_templates
 from ctx.refs import RefError, parse_ref
 from ctx.retrieval import RetrievalError, _emit, record_telemetry
 from ctx.store import Store, StoreError
@@ -252,8 +252,15 @@ def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> s
                 out.append(f"    … +{fmt_int(len(resolved) - _TOP)} more")
 
     # ---- template delta (bounded mining over both stdouts)
-    tpl_a = mine_templates(text_a.splitlines()[:_MINE_CAP])[0] if text_a else {}
-    tpl_b = mine_templates(text_b.splitlines()[:_MINE_CAP])[0] if text_b else {}
+    lines_a = text_a.splitlines()[:_MINE_CAP] if text_a else []
+    lines_b = text_b.splitlines()[:_MINE_CAP] if text_b else []
+    # Multi-line secrets are located by block BEFORE lines are templated.
+    from ctx.textutil import in_line_ranges, private_key_line_ranges
+
+    keys_a = private_key_line_ranges(text_a or "")
+    keys_b = private_key_line_ranges(text_b or "")
+    tpl_a = mine_templates(lines_a)[0] if text_a else {}
+    tpl_b = mine_templates(lines_b)[0] if text_b else {}
     only_b = sorted(
         ((t, rec) for t, rec in tpl_b.items() if t not in tpl_a),
         key=lambda kv: (-kv[1][0], kv[1][1], kv[0]),
@@ -283,19 +290,21 @@ def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> s
                 tag = f" · span {sid}"
                 if next_span is None:
                     next_span = sid
-            out.append(f"    {fmt_int(count)}× L{first}: {t[:140]}{tag}")
+            out.append(f"    {fmt_int(count)}× L{first}: {display_template(lines_b[first - 1], 140, in_key_block=in_line_ranges(first, keys_b))}{tag}")
         if len(only_b) > _TOP:
             out.append(f"    … +{fmt_int(len(only_b) - _TOP)} more")
     if only_a:
         out.append(f"  only in A: {fmt_int(len(only_a))}")
-        for t, (count, _first) in only_a[:_TOP]:
-            out.append(f"    {fmt_int(count)}× {t[:140]}")
+        for t, (count, first_a) in only_a[:_TOP]:
+            out.append(f"    {fmt_int(count)}× {display_template(lines_a[first_a - 1], 140, in_key_block=in_line_ranges(first_a, keys_a))}")
         if len(only_a) > _TOP:
             out.append(f"    … +{fmt_int(len(only_a) - _TOP)} more")
     if shifts:
         out.append(f"  count shifts (>2x): {fmt_int(len(shifts))}")
         for _ratio, ca, cb, t in shifts[:_TOP]:
-            out.append(f"    {fmt_int(ca)}× → {fmt_int(cb)}×: {t[:130]}")
+            shown = display_template(lines_b[tpl_b[t][1] - 1], 130,
+                                     in_key_block=in_line_ranges(tpl_b[t][1], keys_b))
+            out.append(f"    {fmt_int(ca)}× → {fmt_int(cb)}×: {shown}")
         if len(shifts) > _TOP:
             out.append(f"    … +{fmt_int(len(shifts) - _TOP)} more")
 

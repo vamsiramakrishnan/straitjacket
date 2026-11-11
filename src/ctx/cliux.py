@@ -80,6 +80,10 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("capsule", "pack the evidence behind cited handles into one file "
                         "that still resolves on someone else's machine"),
             ("image", "inspect image/PDF structure or compare two image renders"),
+            ("intake", "store a paste, file or clipboard once; the agent sees a short "
+                       "digest and a handle"),
+            ("view", "look at an image or video cheaply: an overview first, "
+                     "then zoom into one cell or moment"),
         ),
     ),
     (
@@ -127,6 +131,7 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("compress", "select local evidence with an original-content retrieval address"),
             ("debt", "track work you deliberately deferred"),
             ("ladders", "audit where the harness escalates, and what it measured"),
+            ("coverage", "which tool calls ctx governs, by which route, and which escaped"),
             ("surface", "see and trim the tools your agent exposes (they cost tokens too)"),
             ("prune", "defer the tools, skills and agents this repo does not use, at setup"),
         ),

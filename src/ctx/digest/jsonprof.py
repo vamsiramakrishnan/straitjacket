@@ -7,7 +7,7 @@ from collections import Counter
 from typing import Any
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int, loads_fast
+from ctx.textutil import clip_redacting, fmt_int, loads_fast, one_line, redact_before_transform
 
 
 HEAD_RECORDS = 5  # records inlined verbatim before a span to the rest
@@ -28,7 +28,7 @@ def _project(rec: Any) -> str:
         s = "[…]"
     else:
         s = json.dumps(rec, ensure_ascii=False)
-    return s if len(s) <= HEAD_WIDTH else s[: HEAD_WIDTH - 1] + "…"
+    return s if len(s) <= HEAD_WIDTH else clip_redacting(s, HEAD_WIDTH - 1) + "…"
 
 
 def _dominant_array(doc: Any) -> tuple[list[Any], str] | None:
@@ -42,7 +42,8 @@ def _dominant_array(doc: Any) -> tuple[list[Any], str] | None:
             v = doc[k]
             if isinstance(v, list) and v:
                 escaped = k.replace("~", "~0").replace("/", "~1")  # RFC 6901: escape ~ and / in the pointer segment
-                return v, f"/{escaped}"
+                # A key is payload text: one line, never a line break.
+                return v, f"/{one_line(escaped)}"
     return None
 
 
@@ -51,7 +52,8 @@ def _shape(value: Any, depth: int = 0) -> str:
         if depth >= 2:
             return "object"
         keys = sorted(value.keys())[:8]
-        inner = ", ".join(f"{k}: {_shape(value[k], depth + 1)}" for k in keys)
+        # Keys are payload text (and may hold any character): one line each.
+        inner = ", ".join(f"{one_line(str(k))}: {_shape(value[k], depth + 1)}" for k in keys)
         more = "" if len(value) <= 8 else f", …+{len(value) - 8}"
         return "{" + inner + more + "}"
     if isinstance(value, list):
@@ -151,7 +153,9 @@ class JsonLinesProfile(Profile):
                 key_counter.update(obj.keys())
                 lvl = obj.get("level") or obj.get("severity")
                 if isinstance(lvl, str):
-                    levels[lvl.lower()] += 1
+                    # Redact before case-folding: a lowercased token no longer
+                    # matches its pattern (AKIA... -> akia...).
+                    levels[redact_before_transform(lvl).lower()] += 1
         exact = ctx.stdout.parsed_fully
         label = "exact" if exact else "approximate"
         summary = [
@@ -160,11 +164,12 @@ class JsonLinesProfile(Profile):
             "  fields ("
             + label
             + "): "
-            + ", ".join(f"{k}×{v}" for k, v in sorted(key_counter.most_common(8))),
+            + ", ".join(f"{one_line(k)}×{v}" for k, v in sorted(key_counter.most_common(8))),
         ]
         if levels:
             summary.append(
-                f"  levels ({label}): " + " · ".join(f"{k}:{v}" for k, v in sorted(levels.items()))
+                f"  levels ({label}): "
+                + " · ".join(f"{one_line(k)}:{v}" for k, v in sorted(levels.items()))
             )
         spans = ctx.focus_spans()
         shown = 0

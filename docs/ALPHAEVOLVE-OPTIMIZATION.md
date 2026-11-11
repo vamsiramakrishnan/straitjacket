@@ -115,6 +115,12 @@ bypass; the production integration now requires every segment to be
 capture-eligible before rewriting the whole shell expression. See the
 [command-span receipt](../evals/alphaevolve/2026-08-19-command-spans.md).
 
+> **Superseded 2026-11-11.** The capture half of that decision no longer applies by
+> default on Claude Code and Codex: shell commands are not rewritten, and the output is
+> bounded after the command runs. Capture at birth is `[guard] steering = "rewrite"`;
+> see [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command). The
+> measurements above describe the earlier behaviour.
+
 In the frozen guard evaluator, the reviewed policy reduces modeled dollars by
 33.33%, model turns by 66.67%, and visible tokens by 41.75% versus its naive
 baseline. It also adds capture latency and tool work, so this is not a claim of

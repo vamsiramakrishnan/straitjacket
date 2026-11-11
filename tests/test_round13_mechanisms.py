@@ -116,15 +116,13 @@ def test_semantic_grep_flags_are_never_collapsed(cmd):
     assert collapse(cmd, failure_available=False, symbols_resolvable=False) is None
 
 
-def test_word_match_is_still_collapsed():
-    """`-w` is the one semantic flag the substitution PRESERVES: word-boundary
-    matching is exactly what `ctx q refs` does."""
+def test_word_match_is_not_collapsed_either():
+    """`-w` was kept on the theory that word matching is what `ctx q refs`
+    does. It is not: refs reads the symbol index, not prose or config."""
     from ctx.substitute import collapse
 
-    sub = collapse(
-        "grep -rnw handle_request src/", failure_available=False, symbols_resolvable=True
-    )
-    assert sub is not None and "refs" in sub.command
+    assert collapse("grep -rnw handle_request src/",
+                    failure_available=False, symbols_resolvable=True) is None
 
 
 # ------------------------------------------ zero is an answer, five more sites

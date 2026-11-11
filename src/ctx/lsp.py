@@ -28,6 +28,7 @@ Design rules, all measured elsewhere in this repo:
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import json
 import hashlib
 import signal
@@ -558,7 +559,7 @@ def diagnostic_provider(root: Path, *, timeout: float = 5):
         report = semantic_request(root, path.relative_to(root).as_posix(), 'diagnostics', timeout=timeout)
         answer = report['answer']
         diagnostics = tuple(Diagnostic(
-            message=str(item.get('message', ''))[:500],
+            message=clip_redacting(str(item.get('message', '')), 500),
             severity={1: 'error', 2: 'warning', 3: 'information', 4: 'hint'}.get(item.get('severity', 1), 'error'),
             line=item.get('range', {}).get('start', {}).get('line', 0) + 1,
             column=item.get('range', {}).get('start', {}).get('character', 0) + 1,

@@ -7,6 +7,21 @@ def _split(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def _clip_external(text: str, limit: int) -> str:
+    """External text (a spawned reviewer's output) cut redaction-aware: it
+    is stored in the ledger, which the model reads back."""
+    from ctx.textutil import clip_redacting
+
+    return clip_redacting(text, limit)
+
+
+def _shown(text: str, ws) -> str:
+    """Stored or spawned-agent text through the model-visible pipeline."""
+    from ctx.textutil import model_visible
+
+    return model_visible(text, ws.config.redaction)
+
+
 def cmd_collab(ws, ns) -> int:
     import json
 
@@ -44,18 +59,20 @@ def cmd_collab(ws, ns) -> int:
             reviews = "".join(
                 f" review={r['reviewer']}:{r['verdict']}" for r in row.get("reviews", [])
             )
-            print(
+            print(_shown(
                 f"{task_id} [{row.get('status', '?')}]"
                 f" holder={row.get('holder') or '-'}"
-                f"{reviews} :: {row.get('goal', '')}"
-            )
+                f"{reviews} :: {row.get('goal', '')}", ws))
         return 0
 
     if action == "show":
         events = [e for e in ledger.load() if e.get("task_id") == ns.task_id]
         if not events:
             return _die(f"no events for {ns.task_id}")
-        print(json.dumps(events, indent=2))
+        from ctx.textutil import redact_strings
+
+        # Goals, notes and review evidence stored earlier: model-visible now.
+        print(json.dumps(redact_strings(events, ws.config.redaction), indent=2))
         return 0
 
     try:
@@ -152,7 +169,7 @@ def cmd_collab(ws, ns) -> int:
             task = _require_task(ledger, ns.task_id)
             packet = handoff_packet(task, ns.to)
             if not ns.run:
-                print(packet)
+                print(_shown(packet, ws))
                 return 0
             ledger.claim(ns.task_id, ns.to)
             if ns.to == 'agy' and (ns.mode == 'accept-edits' or ns.conversation):
@@ -160,7 +177,7 @@ def cmd_collab(ws, ns) -> int:
             proc = spawn(ns.to, packet + "\n\nWork in this repository.", timeout=ns.timeout,
                          model=ns.model, mode=ns.mode or ("plan" if ns.to == "agy" else ""), cwd=ws.root,
                          conversation=ns.conversation, structured=ns.json)
-            print(proc.stdout or "(no stdout)")
+            print(_shown(proc.stdout, ws) if proc.stdout else "(no stdout)")
             if proc.stderr:
                 import sys
                 print(proc.stderr, file=sys.stderr)
@@ -180,7 +197,8 @@ def cmd_collab(ws, ns) -> int:
                 text = (proc.stdout or proc.stderr or "").strip()
                 evidence = text.strip().splitlines()[-1] if text else ""
                 verdict = "approve" if not proc.returncode and evidence.startswith("VERDICT: approve ") else "reject"
-                ledger.review(ns.task_id, ns.by, verdict=verdict, evidence=evidence[:300])
+                ledger.review(ns.task_id, ns.by, verdict=verdict,
+                              evidence=_clip_external(evidence, 300))
                 print(f"{ns.task_id} reviewed by {ns.by}: {verdict}")
                 return proc.returncode or 0
             if not ns.verdict:

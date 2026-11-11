@@ -15,7 +15,11 @@ def _write_ctx_toml(ws: Path, allow: str = "mytool status") -> None:
 
 
 def _cache_path(ws: Path) -> Path:
-    return ws / _LEDGER_DIR_NAME / _POLICY_CACHE_NAME
+    # Private: it holds the workspace's absolute path and learned signatures.
+    from ctx.sessiondir import session_reads_path
+
+    assert _LEDGER_DIR_NAME
+    return session_reads_path(ws, _POLICY_CACHE_NAME)
 
 
 def test_cache_hit_returns_identical_policy(tmp_path):

@@ -443,6 +443,15 @@ A security-oriented installation MAY choose fail-closed, but that is a separate 
 
 `PostToolUse` MAY record telemetry, but it MUST NOT be represented as preventing transcript pollution. The raw result has already been created. The default plugin omits `PostToolUse` to avoid per-tool latency and false confidence.
 
+> **Implementation note (2026-11-11).** The shipped plugin registers `PostToolUse`
+> (observation only: `agy` 1.5.5 gives it no tool result and accepts only `{}`) and
+> `SessionStart`. Its `PreToolUse` hook rewrites `run_command` and `read_file`
+> arguments in place through the host's `overwrite` field instead of only denying.
+> See `spec/adr/005-antigravity-hook-contract.md`. The requirements in this section
+> are unchanged. A later note (2026-11-11): on Claude Code and Codex, by default,
+> shell commands are not rewritten or approved by the hook; output is bounded after the
+> command runs (`spec/adr/003-pretool-routing.md`, second update).
+
 ### 10.4 MCP server
 
 The plugin registers:
@@ -458,6 +467,10 @@ A future Antigravity SDK harness MAY expose `run` directly if it preserves equiv
 ### 10.5 No per-invocation prompt injection
 
 The default plugin does not use `PreInvocation` to inject repository status, clocks, or reminders. This avoids volatile prompt bytes and repeated context. Repo state is returned only when a CTX operation is requested.
+
+> **Implementation note (2026-11-11).** `PreInvocation` is registered, but carries only
+> pending relay text, as an ephemeral message. The once-per-session capability advisory
+> rides `SessionStart` when the payload carries `hookEventName` (added in `agy` 1.5.4; observed on 1.5.5 only).
 
 ## 11. Hook classifier policy
 

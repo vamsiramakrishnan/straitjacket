@@ -449,7 +449,8 @@ def test_codex_preserves_toml_nan_dates_and_multiline_strings(workspace_dir):
 def test_installed_executable_paths_are_quoted_for_shell_and_stdio(workspace_dir, monkeypatch, binary):
     import ctx.installer as installer
     path = workspace_dir / binary
-    monkeypatch.setattr(installer.shutil, 'which', lambda _name: str(path))
+    import ctx.selfcmd as selfcmd
+    monkeypatch.setattr(selfcmd, 'which_absolute', lambda _name, path_=None: str(path))
     plan = plan_configuration(workspace_dir, ['codex'])
     assert not plan.blockers, plan.render()
     plan.apply()

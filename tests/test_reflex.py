@@ -38,6 +38,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from ctx.sessiondir import session_reads_path
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 EVALS = Path(__file__).resolve().parent.parent / "evals"
@@ -47,7 +48,7 @@ OUTCOMES = "reflex-outcomes.jsonl"
 
 
 def _events(root: Path) -> list[dict]:
-    path = Path(root) / LEDGER / OUTCOMES
+    path = session_reads_path(Path(root), OUTCOMES)
     if not path.is_file():
         return []
     return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
@@ -233,7 +234,7 @@ def test_ledger_lines_match_frozen_schema_exactly(tmp_path):
     reflex.check_command(tmp_path, "pytest tests/x.py | head -20")
     reflex.note_landing(tmp_path, "run:abc123def456")
 
-    raw = (tmp_path / LEDGER / OUTCOMES).read_text(encoding="utf-8")
+    raw = (session_reads_path(tmp_path, OUTCOMES)).read_text(encoding="utf-8")
     lines = [ln for ln in raw.splitlines() if ln.strip()]
     assert len(lines) == 2
     for ln in lines:
@@ -268,8 +269,8 @@ def test_state_and_ledger_pure_function_of_command_sequence(tmp_path):
     a, b = tmp_path / "a", tmp_path / "b"
     drive(a)
     drive(b)
-    state_a = (a / LEDGER / "reflex.json").read_text(encoding="utf-8")
-    state_b = (b / LEDGER / "reflex.json").read_text(encoding="utf-8")
+    state_a = (session_reads_path(a, "reflex.json")).read_text(encoding="utf-8")
+    state_b = (session_reads_path(b, "reflex.json")).read_text(encoding="utf-8")
     assert state_a == state_b  # byte-identical state
     strip = lambda evs: [{k: v for k, v in e.items() if k != "ts"} for e in evs]
     assert strip(_events(a)) == strip(_events(b))  # ledger identical minus ts
@@ -278,12 +279,17 @@ def test_state_and_ledger_pure_function_of_command_sequence(tmp_path):
 # ------------------------------------------------------------ (g) fail-open
 
 
-def test_all_io_fail_open_when_ledger_dir_unwritable(tmp_path):
+def test_all_io_fail_open_when_ledger_dir_unwritable(tmp_path, monkeypatch):
     from ctx import reflex
 
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / LEDGER).write_text("a file, not a directory", encoding="utf-8")
+    # The ledgers that carry command text live in the state directory:
+    # make that unwritable too.
+    blocker = tmp_path / "state-is-a-file"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("CTX_STATE_HOME", str(blocker))
 
     reflex.note_intervention(ws, "pytest tests/x.py", "abc123def456")  # no crash
     assert reflex.check_command(ws, "pytest tests/x.py") is None
@@ -351,9 +357,11 @@ def test_hook_claude_code_flavor_valid_with_reflex_active(tmp_path):
         }
     )
     out = _invoke_hook(payload, flavor="claude-code")
-    hso = out["hookSpecificOutput"]
+    # A volume decision on an unproven command leaves it untouched on Claude
+    # Code; a deny with advice still carries its decision.
+    hso = out.get("hookSpecificOutput", {"hookEventName": "PreToolUse"})
     assert hso["hookEventName"] == "PreToolUse"
-    assert hso["permissionDecision"] in ("allow", "deny", "ask")
+    assert hso.get("permissionDecision") in (None, "deny")
     assert [e["event"] for e in _events(tmp_path)] == ["starvation"]
 
 
@@ -442,7 +450,7 @@ def test_edit_disarms_starvation(tmp_path):
     reflex.note_intervention(ws, "pytest tests/x.py", "abc123def456")
     reflex.note_edit(ws)  # the model edited code
     assert reflex.check_command(ws, "python -m pytest tests/x.py -v") is None
-    ledger = ws / ".ctx-session-reads" / "reflex-outcomes.jsonl"
+    ledger = session_reads_path(ws, "reflex-outcomes.jsonl")
     assert not ledger.exists()  # no starvation event, no densify action
 
 
@@ -502,7 +510,7 @@ def test_cli_run_dual_writes_v2_intervention_ledger(
     main(argv)
     capsys.readouterr()
 
-    path = workspace_dir / LEDGER / "interventions.jsonl"
+    path = session_reads_path(workspace_dir, "interventions.jsonl")
     events = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     emissions = [e for e in events if e.get("event") == "intervention_emitted"]
     outcomes = [e for e in events if e.get("event") == "intervention_outcome"]
@@ -546,7 +554,7 @@ def test_hook_edit_tool_disarms_and_allows(tmp_path):
     finally:
         _sys.stdin, _sys.stdout = old_in, old_out
     decision = _json.loads(out)
-    assert decision  # exactly one valid JSON decision
+    assert isinstance(decision, dict)  # exactly one valid JSON object ({} = no opinion)
     assert reflex.check_command(ws, "pytest tests/x.py") is None  # disarmed
 
 
@@ -611,7 +619,7 @@ Q_SIG = "q fails last | in-changed"
 
 
 def _q_events(root: Path) -> list[dict]:
-    path = Path(root) / LEDGER / "interventions.jsonl"
+    path = session_reads_path(Path(root), "interventions.jsonl")
     if not path.is_file():
         return []
     return [
@@ -698,7 +706,7 @@ def test_q_engine_ledger_contract_end_to_end(tmp_path):
     ]
     # The engine drops the pipeline from the dry census on its first
     # non-empty result: recovered (row count unknown → null).
-    (led / "q-dry.json").write_text(json.dumps({"dry": []}), encoding="utf-8")
+    session_reads_path(tmp_path, "q-dry.json").write_text(json.dumps({"dry": []}), encoding="utf-8")
     reflex.sync_query_outcomes(tmp_path)
     evs = _q_events(tmp_path)
     assert [(e["event"], e["rows"]) for e in evs] == [
@@ -758,7 +766,7 @@ def test_q_provisional_mapping_shape_tolerated(tmp_path):
     )
     reflex.check_command(tmp_path, "ctx q 'fails last | in-changed'")
     assert _q_events(tmp_path) == []  # dryness recorded, no event yet
-    (led / "q-dry.json").write_text(
+    session_reads_path(tmp_path, "q-dry.json").write_text(
         json.dumps({"pipelines": {Q_SIG: {"rows": 5}}}), encoding="utf-8"
     )
     reflex.check_command(tmp_path, "ctx q 'decls'")
@@ -792,8 +800,8 @@ def test_q_ledger_fail_open_on_garbage(tmp_path):
     import shutil
 
     shutil.rmtree(led / "q-dry.jsonl")
-    (led / "q-dry.json").unlink()
-    (led / "q-dry.jsonl").write_text(
+    session_reads_path(tmp_path, "q-dry.json").unlink()
+    session_reads_path(tmp_path, "q-dry.jsonl").write_text(
         "not json at all\n"
         + json.dumps({"op": "q_dry_rerun", "signature": Q_SIG, "rows": 0}) + "\n",
         encoding="utf-8",
@@ -838,8 +846,8 @@ def test_q_state_and_events_deterministic(tmp_path):
     a, b = tmp_path / "a", tmp_path / "b"
     drive(a)
     drive(b)
-    state_a = (a / LEDGER / "reflex.json").read_text(encoding="utf-8")
-    state_b = (b / LEDGER / "reflex.json").read_text(encoding="utf-8")
+    state_a = (session_reads_path(a, "reflex.json")).read_text(encoding="utf-8")
+    state_b = (session_reads_path(b, "reflex.json")).read_text(encoding="utf-8")
     assert state_a == state_b
     strip = lambda evs: [{k: v for k, v in e.items() if k != "ts"} for e in evs]
     assert strip(_q_events(a)) == strip(_q_events(b))

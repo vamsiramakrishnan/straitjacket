@@ -6,6 +6,7 @@ as Claude/Codex instead of copying policy into Python/JavaScript plugins.
 """
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import json
 from pathlib import Path
 
@@ -35,7 +36,7 @@ def decision_for(host: str, decision: dict) -> dict:
             return {"action": "rewrite", "input": rewrite["updatedInput"]}
         return {"action": "block", "reason": str(rewrite.get("reason", "Use a bounded ctx operation"))
                 + "\nDSH cannot rewrite sealed tool arguments. Retry with: "
-                + json.dumps(rewrite["updatedInput"], ensure_ascii=False)[:2000]}
+                + clip_redacting(json.dumps(rewrite["updatedInput"], ensure_ascii=False), 2000)}
     action = {"allow": "allow", "deny": "block", "force_ask": "ask"}.get(decision.get("decision"), "block")
     return {"action": action, "reason": decision.get("reason", "")}
 
