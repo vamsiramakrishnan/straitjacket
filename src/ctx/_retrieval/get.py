@@ -15,7 +15,16 @@ from ctx.store import Store
 from ctx.textutil import index_lines, decode_exact, encode_exact, fmt_int, short_id
 from ctx.workspace import Workspace
 
-from .common import RetrievalError, _emit, _parse, _peek_blob, _read_bytes_range, _route_workspace
+from .common import (
+    RetrievalError,
+    _emit,
+    _parse,
+    _peek_blob,
+    _read_bytes_range,
+    _route_workspace,
+    blob_reader,
+    edge_masked_bytes,
+)
 from .spans import _resolve_span
 from .telemetry import record_telemetry
 
@@ -265,7 +274,36 @@ def _fit_window(
     return new_b, f"ctx get {ref_text} {flag} {value}"
 
 
-def get(
+def _edge_masked_lines(data: bytes, all_lines: list[str], a: int, b: int, policy) -> list[str]:
+    """Lines ``a..b`` of in-memory ``data`` for display, with a secret that
+    crosses the window's edges blanked at the same width (``all_lines``
+    itself, which anchors are minted from, is left untouched). Identity --
+    the same list slice -- when nothing crosses."""
+    start = 0
+    for _ in range(a - 1):
+        start = data.find(b"\n", start) + 1
+    end = start
+    for _ in range(b - a + 1):
+        nl = data.find(b"\n", end)
+        end = len(data) if nl < 0 else nl + 1
+    masked = edge_masked_bytes(lambda x, y: data[x:y], start, end, len(data), policy)
+    shown = all_lines[a - 1: b]
+    if masked == data[start:end].decode("utf-8", "replace"):
+        return shown
+    out = index_lines(masked)
+    return out if len(out) == len(shown) else shown
+
+
+def get(store: Store, ws: Workspace, ref_text: str, selector: "Selector") -> str:
+    """Exact bounded slice; see :func:`_get`. Range edges and clips honour
+    the workspace's redaction policy."""
+    from ctx.textutil import redaction_scope
+
+    with redaction_scope(ws.config.redaction):
+        return _get(store, ws, ref_text, selector)
+
+
+def _get(
     store: Store,
     ws: Workspace,
     ref_text: str,
@@ -488,22 +526,24 @@ def get(
             a, b, continuation = _byte_window(
                 ref_text, a, b, total_b, budget, result_tokens=eff_rtok
             )
-            chunk = _read_bytes_range(store, blob_hash_b, a, b)
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(total_b)}")
             # decode_exact, not errors="replace": --bytes is THE exact-bytes
             # escape hatch (it is what this module tells callers to use for
             # binary content), and "replace" turned every undecodable byte
             # into a 3-byte U+FFFD -- neither the same bytes nor even the same
-            # LENGTH, through the tool's own exactness interface.
-            body = decode_exact(chunk)
+            # LENGTH, through the tool's own exactness interface. A secret
+            # crossing either edge is blanked at the same width.
+            body = edge_masked_bytes(blob_reader(store, blob_hash_b), a - 1, b, total_b,
+                                     ws.config.redaction, exact=True)
         else:
             a, b = _window("bytes", a, b, len(data), "bytes")
             a, b, continuation = _byte_window(
                 ref_text, a, b, len(data), budget, result_tokens=eff_rtok
             )
-            chunk = data[a - 1 : b]
             header.append(f"selector: --bytes {a}:{b} of {fmt_int(len(data))}")
-            body = decode_exact(chunk)  # second door onto the same contract
+            # second door onto the same contract
+            body = edge_masked_bytes(lambda x, y: data[x:y], a - 1, b, len(data),
+                                     ws.config.redaction, exact=True)
     else:
         if fast_lines is not None:
             blob_hash, total = fast_lines
@@ -526,8 +566,12 @@ def get(
                 if b - a + 1 > budget.max_inline_lines:
                     b = a + budget.max_inline_lines - 1
                     continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
-                chunk = store.read_blob_lines(blob_hash, a, b)
-                all_lines = index_lines(chunk.decode("utf-8", "replace"))
+                idx = store.line_index(blob_hash)
+                # Edge-aware: a secret crossing the window's first or last
+                # line boundary (a private-key block) is blanked, same width.
+                all_lines = index_lines(edge_masked_bytes(
+                    blob_reader(store, blob_hash), int(idx[a - 1]), int(idx[b]),
+                    int(idx[-1]) if len(idx) else 0, ws.config.redaction))
                 rendered = anchors.render_window(all_lines, a, tagged=selector.hashlines)
                 b, fit_next = _fit_window(
                     "--lines", ref_text, a, b, total, rendered, budget, result_tokens=eff_rtok
@@ -583,7 +627,8 @@ def get(
                     nxt_b = min(len(all_lines), b + budget.max_inline_lines)
                     continuation = f"ctx get {ref_text} --lines {_addr(b + 1, nxt_b)}"
                 rendered = anchors.render_window(
-                    all_lines[a - 1 : b], a, tagged=selector.hashlines
+                    _edge_masked_lines(data, all_lines, a, b, ws.config.redaction),
+                    a, tagged=selector.hashlines,
                 )
                 b, fit_next = _fit_window(
                     "--lines", ref_text, a, b, len(all_lines), rendered, budget,

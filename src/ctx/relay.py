@@ -72,6 +72,7 @@ pays for exactly the bytes it chooses to read.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import json
 import os
 import re
@@ -271,7 +272,7 @@ def _sanitize_note(note: str | None) -> str:
         return ""
     flat = " ".join(str(note).split())
     flat = "".join(c for c in flat if ord(c) >= 32 and ord(c) != 127)
-    return flat[:INBOX_NOTE_CHARS]
+    return clip_redacting(flat, INBOX_NOTE_CHARS)
 
 
 def append(workspace_root: Path | str, row: dict[str, Any]) -> dict[str, Any]:
@@ -586,7 +587,7 @@ def render(signals: list[dict[str, Any]], *, max_chars: int = MAX_RENDER_CHARS) 
             lines.append(f"    note: {s['note']}")
     text = "\n".join(lines)
     if len(text) > max_chars:
-        text = text[: max_chars - 20].rstrip() + "\n    … truncated"
+        text = clip_redacting(text, max_chars - 20).rstrip() + "\n    … truncated"
     return text
 
 

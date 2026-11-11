@@ -641,6 +641,14 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
                 budget_ms = media.get("redirect_budget_ms")
                 if isinstance(budget_ms, int) and not isinstance(budget_ms, bool):
                     policy["media_redirect_budget_ms"] = max(500, min(budget_ms, 8000))
+            red = raw.get("redaction")
+            if isinstance(red, dict):
+                # Only what the guard's own messages need: whether redaction
+                # is on, and which patterns (clip_redacting honours both).
+                policy["redaction_enabled"] = bool(red.get("enabled", True))
+                pats = red.get("patterns")
+                if isinstance(pats, list):
+                    policy["redaction_patterns"] = [str(x) for x in pats]
             guard = raw.get("guard") or {}
             budgets = raw.get("budgets") or {}
             policy["mode"] = str(guard.get("mode", policy["mode"]))
@@ -1902,6 +1910,27 @@ def _part_program(segment: str) -> tuple[str, list[str]] | None:
     return os.path.basename(argv[0]), argv
 
 
+class _RedactionPolicy:
+    """The [redaction] section as ``clip_redacting`` reads it (``enabled``,
+    ``patterns``), built from the guard's policy dict."""
+
+    __slots__ = ("enabled", "patterns")
+
+    def __init__(self, enabled: bool, patterns) -> None:
+        self.enabled, self.patterns = enabled, patterns
+
+
+def _redaction_policy(policy: dict[str, Any]):
+    """None (every pattern) unless ctx.toml narrows or disables redaction."""
+    if "redaction_enabled" not in policy and "redaction_patterns" not in policy:
+        return None
+    from ctx.textutil import REDACTION_PATTERNS
+
+    pats = policy.get("redaction_patterns")
+    return _RedactionPolicy(bool(policy.get("redaction_enabled", True)),
+                            tuple(pats) if isinstance(pats, list) else tuple(REDACTION_PATTERNS))
+
+
 def _compound_verdict(
     stripped: str, policy: dict[str, Any], _depth: int, *, cwd: str | None
 ) -> dict[str, Any] | None:
@@ -1950,9 +1979,14 @@ def _compound_verdict(
         reason = str(d.get("reason") or "")
         if reason and "unknown output bound" not in reason and "ctx run" not in reason:
             return d  # its own reason (a container escape, an in-place edit) names it
+        # A command line can carry a credential; the quoted piece is cut
+        # redaction-aware under the workspace policy (lazy import: rare path).
+        from ctx.textutil import clip_redacting
+
+        quoted = clip_redacting(seg.splitlines()[0], 80, _redaction_policy(policy))
         return _force_ask(
             "CTX_CONTEXT_GUARD: part of this command is something ctx cannot "
-            f"vouch for ({seg.splitlines()[0][:80]!r}), so the whole is put to you "
+            f"vouch for ({quoted!r}), so the whole is put to you "
             f"as written. To run all of it with bounded output: ctx run --shell -- {whole}")
     if unvouched:
         # Capture would run these parts under the wrapper's approval: leave

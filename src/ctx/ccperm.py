@@ -438,7 +438,11 @@ def load_rules(root: str | None, cwd: str | None, argvs=None) -> dict:
                 if parse_rule(v) is None:
                     # Not understood: it could be anything, so nothing is proven.
                     rules["unknown"] = True
-                    rules["reasons"].append(f"rule not understood: {str(v)[:60]!r}")
+                    # A settings rule can quote a credential (a Bash(...) rule
+                    # with a header in it); the message reaches the model.
+                    from ctx.textutil import clip_redacting
+
+                    rules["reasons"].append(f"rule not understood: {clip_redacting(str(v), 60)!r}")
                 else:
                     good.append(v)
             if kind == "allow":

@@ -337,7 +337,7 @@ def _ctx(args, cwd, stdin: bytes | None = None, env_extra=None):
     import os
 
     env = {**os.environ, **(env_extra or {})}
-    return subprocess.run([sys.executable, "-m", "ctx", *args], cwd=cwd, input=stdin,
+    return subprocess.run([sys.executable, "-P", "-m", "ctx", *args], cwd=cwd, input=stdin,
                           capture_output=True, env=env, timeout=120)
 
 
@@ -368,7 +368,7 @@ def test_cli_help_parity():
 
     assert "intake" in cli._COMMANDS
     assert cliux.help_line("intake")
-    p = subprocess.run([sys.executable, "-m", "ctx", "intake", "--help"],
+    p = subprocess.run([sys.executable, "-P", "-m", "ctx", "intake", "--help"],
                        capture_output=True, text=True, timeout=60)
     assert p.returncode == 0
     for flag in ("--label", "--name", "--focus", "--json", "--clip", "--copy", "--chunks", "--from"):

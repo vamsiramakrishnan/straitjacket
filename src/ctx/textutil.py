@@ -1,5 +1,54 @@
 """Deterministic text handling: token estimation, ANSI/control stripping,
-secret redaction, and bounded emission (SPEC §8, §12.4, §16)."""
+secret redaction, and bounded emission (SPEC §8, §12.4, §16).
+
+Redaction markers -- the one place this is stated. A redacted secret is shown
+as ``[ctx:redacted:<pattern>:<hash of the whole match>]`` (:func:`redact`,
+:func:`secret_marker`) wherever the surrounding contract lets the text change
+width: digests, chunk-map labels and rows, log templates, search hits'
+wholly-contained secrets. Where the contract fixes the width -- a clip that a
+budget or window fit has already measured (:func:`clip_redacting`,
+:func:`tail_redacting`) and a range answer whose header declares its bytes
+and whose continuations must tile the artifact (``ctx get --bytes/--lines/
+--span``, :func:`edge_masked`) -- only the visible part of a secret that
+CROSSES the cut is blanked, with one ``*`` per byte. A ``redaction: applied
+[...]`` note names only patterns whose marker reached the text shown.
+
+Redaction limits -- as measured, and the one place they are stated:
+
+* An unbounded token (JWT, ``sk-``, ``ghp_`` ... :data:`LONG_TOKEN_PREFIXES`)
+  is fully masked in digests, chunk rows and range answers up to 60 KiB
+  long. Its run is followed at most :data:`TOKEN_RUN_SCAN_CHARS` (64 KiB)
+  from a cut, so a longer run is not judged: a byte-range piece span inside
+  a token over 64 KiB shows raw token characters.
+* A window inside a private-key block is masked when the BEGIN line lies at
+  most :data:`PEM_LOOKBEHIND_CHARS` (16 KiB) behind it, and not beyond.
+* Fixed-shape secrets are judged on :data:`REDACTION_CONTEXT_CHARS` (1,024)
+  characters around a cut: a sendgrid key's second half or an
+  ``aws_secret_access_key=`` value further than that from the shown text is
+  not recognized.
+* A token directly adjacent to a non-ASCII letter is not matched: the shared
+  patterns are word-boundary anchored and Python's ``\\b`` treats that letter
+  as a word character.
+
+What is redacted, and the stated non-goal:
+
+* Workspace files, stored artifacts, and text STORED by one call and shown
+  by a later one (debt notes, collab goals/notes/evidence, task-ledger and
+  relay messages, spawned-agent output) are model-visible content like any
+  other: the verbs that print them pass it through the pipeline once
+  (:func:`model_visible`, :func:`redact_strings`).
+* A multi-line secret (a private-key block) is masked as a block before any
+  line-by-line view or transform takes the text apart: digests, diffs and
+  templates replace each body line with :data:`PRIVATE_KEY_LINE`, never a
+  digit-masked copy of it (:func:`private_key_line_ranges`).
+* NON-GOAL: an argument echoed back within the same call to the caller who
+  supplied it is not redacted -- the caller already holds it, and a
+  suggested command must be the exact command to be of any use (hook
+  ask/deny reasons, ``ask``'s subject, ``plan``'s objective,
+  ``checkpoint``'s bad evidence). Where such an echo is clipped, the clip
+  helper only keeps a cut from leaving a misleading fragment; it promises
+  nothing more.
+"""
 
 from __future__ import annotations
 
@@ -83,6 +132,10 @@ def short_path(path: str) -> str:
     a name that in ``ctx.facts`` means "shorten a content HASH". Same name,
     unrelated jobs, and neither is substitutable for the other.
     """
+    # Redact BEFORE dropping components: a secret with "/" in it (an AWS
+    # secret key, a slack hook URL) would otherwise be cut at a separator
+    # and its tail shown without the part its pattern needs.
+    path = redact_before_transform(path)
     parts = path.replace("\\", "/").split("/")
     return "/".join(parts[-2:]) if len(parts) > 2 else path
 
@@ -398,6 +451,494 @@ def redact(text: str, pattern_names: tuple[str, ...]) -> tuple[str, list[str]]:
 
         text = rx.sub(_sub, text)
     return text, sorted(fired)
+
+
+# ------------------------------------------- redaction around a cut or slice
+#: How far around a cut (or a displayed slice) the redaction patterns look.
+#: A secret is recognized at a cut when the whole of it lies within this many
+#: characters of the visible part; patterns are only ever run on windows of
+#: this bounded size, never on a whole payload, because several of them are
+#: quadratic on adversarial runs (``eyJ`` + 20 class characters + ``-``,
+#: repeated: every ``-`` is a word boundary that starts a new attempt which
+#: scans to the end of the run). Bounded windows keep the cost per call
+#: constant and the cost per digest linear in what it displays.
+REDACTION_CONTEXT_CHARS = 1024
+#: How far back a private-key BEGIN line is searched (plain ``str.find``,
+#: linear) when a displayed slice may sit inside a PEM block.
+PEM_LOOKBEHIND_CHARS = 16384
+
+_PEM_BEGIN = "-----BEGIN "
+_PEM_END = "-----END "
+_PEM_TAIL = "PRIVATE KEY-----"
+_PEM_LABEL_MAX = 64
+_PEM_LABEL_OK = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ ")
+
+try:
+    from contextvars import ContextVar as _ContextVar
+except ImportError:  # pragma: no cover - stdlib since 3.7
+    _ContextVar = None  # type: ignore[assignment]
+
+#: The redaction policy in force while a digest is rendered. Set by
+#: ``ctx.digest.render_run_digest`` (and the fact-tier extraction) for the
+#: duration of a profile's render, so the clip helpers below honour the
+#: workspace's ``[redaction]`` section without threading it through every
+#: profile. ``None`` (outside a render) means the default: every pattern.
+_ACTIVE_POLICY = _ContextVar("ctx_redaction_policy", default=None) if _ContextVar else None
+
+
+class redaction_scope:
+    """``with redaction_scope(ws.config.redaction): ...`` -- the policy the
+    clip helpers use inside the block."""
+
+    def __init__(self, policy) -> None:
+        self._policy = policy
+        self._token = None
+
+    def __enter__(self):
+        if _ACTIVE_POLICY is not None:
+            self._token = _ACTIVE_POLICY.set(self._policy)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if _ACTIVE_POLICY is not None and self._token is not None:
+            _ACTIVE_POLICY.reset(self._token)
+
+
+def active_patterns(policy=None) -> list[tuple[str, "re.Pattern[str]"]]:
+    """(name, regex) of the patterns a policy enables; [] when redaction is
+    off. ``policy=None`` reads the active scope, else the default (all)."""
+    if policy is None and _ACTIVE_POLICY is not None:
+        policy = _ACTIVE_POLICY.get()
+    if policy is None:
+        return list(REDACTION_PATTERNS.items())
+    enabled, names = _redaction_of(policy)
+    if not enabled:
+        return []
+    return [(n, REDACTION_PATTERNS[n]) for n in names if n in REDACTION_PATTERNS]
+
+
+def pem_spans(text: str, start: int = 0, end: int | None = None) -> list[tuple[int, int]]:
+    """Private-key blocks in ``text[start:end]`` found with ``str.find`` only
+    (linear): what ``REDACTION_PATTERNS["private-key"]`` matches -- a BEGIN
+    line through the next matching END line, or to the end when there is
+    none -- without handing a regex an unbounded run."""
+    end = len(text) if end is None else end
+    out: list[tuple[int, int]] = []
+    pos = start
+    while True:
+        i = text.find(_PEM_BEGIN, pos, end)
+        if i < 0:
+            return out
+        j = text.find(_PEM_TAIL, i + len(_PEM_BEGIN), min(end, i + len(_PEM_BEGIN) + _PEM_LABEL_MAX + len(_PEM_TAIL)))
+        if j < 0 or not set(text[i + len(_PEM_BEGIN):j]) <= _PEM_LABEL_OK:
+            pos = i + len(_PEM_BEGIN)
+            continue
+        k = j + len(_PEM_TAIL)
+        stop = end
+        while True:
+            e = text.find(_PEM_END, k, end)
+            if e < 0:
+                break
+            t = text.find(_PEM_TAIL, e + len(_PEM_END), min(end, e + len(_PEM_END) + _PEM_LABEL_MAX + len(_PEM_TAIL)))
+            if t >= 0 and set(text[e + len(_PEM_END):t]) <= _PEM_LABEL_OK:
+                stop = t + len(_PEM_TAIL)
+                break
+            k = e + len(_PEM_END)
+        out.append((i, stop))
+        pos = stop
+
+
+#: Patterns whose tokens have no length bound, by the literal they start
+#: with. A token of one of these longer than the regex context (a 5 KB JWT,
+#: a 9 KB ``sk-`` run) is recognized by a linear scan of its whole run of
+#: token characters instead: a run that starts with one of these literals
+#: and is too long for the bounded regex window is treated as the secret.
+LONG_TOKEN_PREFIXES: dict[str, tuple[str, ...]] = {
+    "github-token": ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"),
+    "gitlab-token": ("glpat-",),
+    "slack-token": ("xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-"),
+    "stripe-key": ("sk_live_", "sk_test_", "rk_live_", "rk_test_"),
+    "sendgrid-key": ("SG.",),
+    "pypi-token": ("pypi-AgEIcHlwaS5vcmc",),
+    "huggingface-token": ("hf_",),
+    "anthropic-key": ("sk-ant-",),
+    "jwt": ("eyJ",),
+    "generic-api-token": ("sk-",),
+}
+#: How far a run of token characters is followed from a slice's edge to find
+#: its start and end. A run longer than this is not judged (declared limit).
+TOKEN_RUN_SCAN_CHARS = 65536
+_TOKEN_RUN_BREAK = re.compile(r"[^A-Za-z0-9_.+/=-]")
+
+
+class SecretHit:
+    """One redaction match seen around a slice: ``start``/``end`` clipped to
+    the slice, ``whole_start``/``whole_end`` the match itself. A plain slotted
+    class, not a dataclass: hook-path modules import this module lazily and
+    ``dataclasses`` is on the hot path's forbidden list (it drags in
+    ``inspect``)."""
+
+    __slots__ = ("start", "end", "name", "whole_start", "whole_end")
+
+    def __init__(self, start: int, end: int, name: str, whole_start: int, whole_end: int) -> None:
+        self.start, self.end, self.name = start, end, name
+        self.whole_start, self.whole_end = whole_start, whole_end
+
+    def __repr__(self) -> str:
+        return (f"SecretHit({self.start}, {self.end}, {self.name!r}, "
+                f"{self.whole_start}, {self.whole_end})")
+
+    def crosses(self, start: int, end: int) -> bool:
+        return self.whole_start < start or self.whole_end > end
+
+
+_MARKER_NAME_RE = re.compile(r"\[ctx:redacted:([a-z0-9-]*)")
+
+
+def shown_marker_names(text: str, candidates) -> list[str]:
+    """Pattern names whose marker is VISIBLE in ``text``: a whole name, or
+    the start of one where a clip cut the marker (a cut name names every
+    candidate that starts so). A ``redaction: applied`` note built from this
+    claims only what the reader can see was redacted."""
+    out: set[str] = set()
+    cands = set(candidates)
+    for m in _MARKER_NAME_RE.finditer(text):
+        g = m.group(1)
+        if g in cands:
+            out.add(g)
+        elif g:
+            out.update(c for c in cands if c.startswith(g))
+    return sorted(out)
+
+
+def secret_marker(name: str, matched: str) -> str:
+    """The marker :func:`redact` writes for ``matched``."""
+    tag = hashlib.sha256(matched.encode("utf-8", "replace")).hexdigest()[:8]
+    return f"[ctx:redacted:{name}:{tag}]"
+
+
+def _token_run(text: str, pos: int, scan: int) -> tuple[int, int] | None:
+    """The run of token characters containing ``pos`` -- found with one
+    reversed and one forward search, both linear -- or None when ``pos`` is
+    not in a run or the run is longer than ``scan`` in either direction."""
+    if not (0 <= pos < len(text)) or _TOKEN_RUN_BREAK.match(text, pos):
+        return None
+    lo = max(0, pos - scan)
+    back = _TOKEN_RUN_BREAK.search(text[lo:pos][::-1])
+    if back is None and lo > 0:
+        return None
+    a = pos - back.start() if back else lo
+    fwd = _TOKEN_RUN_BREAK.search(text, pos, min(len(text), pos + scan))
+    if fwd is None and pos + scan < len(text):
+        return None
+    b = fwd.start() if fwd else min(len(text), pos + scan)
+    return a, b
+
+
+def private_key_line_ranges(text: str, prefix: str = "", policy=None) -> list[tuple[int, int]]:
+    """1-based inclusive line ranges of ``text`` that lie inside a private-key
+    block (plain search, linear). ``prefix`` is text immediately before
+    ``text`` (bounded by the caller) so a block whose BEGIN line precedes the
+    view is still found. [] when the policy excludes the pattern.
+
+    A key's body lines match no pattern alone, so any view that takes the
+    stream apart line by line -- templates, line listings, zoom -- must ask
+    this BEFORE it transforms or shows a line."""
+    if "private-key" not in {n for n, _ in active_patterns(policy)}:
+        return []
+    joined = prefix + text
+    if "PRIVATE KEY-----" not in joined:
+        return []
+    base = len(prefix)
+    out = []
+    for a, b in pem_spans(joined):
+        if b <= base:
+            continue
+        a = max(a, base) - base
+        b = b - base
+        out.append((text.count("\n", 0, a) + 1, text.count("\n", 0, max(a, b - 1)) + 1))
+    return out
+
+
+def in_line_ranges(n: int, ranges) -> bool:
+    return any(a <= n <= b for a, b in ranges)
+
+
+#: What a line inside a private-key block shows as in a line-by-line view.
+PRIVATE_KEY_LINE = "[ctx:redacted:private-key]"
+
+
+def secret_hits(
+    text: str, start: int, end: int, *, policy=None, context: int = REDACTION_CONTEXT_CHARS,
+    pem_lookbehind: int = PEM_LOOKBEHIND_CHARS, scan: int = TOKEN_RUN_SCAN_CHARS,
+) -> list[SecretHit]:
+    """Every redaction match that overlaps ``text[start:end]``, judged on
+    the text AROUND the slice -- never on the whole text:
+
+    * the patterns run on ``[start - context, end + context]`` only (cost
+      bounded per call: several patterns are quadratic on adversarial runs);
+    * private-key blocks are found with plain ``str.find`` from up to
+      ``pem_lookbehind`` before the slice;
+    * a run of token characters crossing an edge and too long for that
+      window is followed (linear scans, up to ``scan`` either way) and
+      treated as a secret when it starts with an unbounded pattern's literal
+      (:data:`LONG_TOKEN_PREFIXES`).
+
+    Sorted by start; not merged (each keeps its name and whole extent).
+    """
+    pats = active_patterns(policy)
+    if not pats or start >= end:
+        return []
+    found: list[SecretHit] = []
+    w0 = max(0, start - context)
+    w1 = min(len(text), end + context)
+    window = text[w0:w1]
+    names = {n for n, _ in pats}
+    for name, rx in pats:
+        if name == "private-key":
+            for a, b in pem_spans(text, max(0, start - pem_lookbehind), w1):
+                if b > start and a < end:
+                    found.append(SecretHit(max(a, start), min(b, end), name, a, b))
+            continue
+        for m in rx.finditer(window):
+            a, b = m.start() + w0, m.end() + w0
+            if a >= end:
+                break
+            if b > start and b > a:
+                found.append(SecretHit(max(a, start), min(b, end), name, a, b))
+    seen: set[tuple[int, int]] = set()
+    for pos in (start, end - 1):
+        run = _token_run(text, pos, scan)
+        if run is None or run in seen or run[1] - run[0] <= context:
+            continue
+        seen.add(run)
+        head = text[run[0]: run[0] + 32]
+        for name, prefixes in LONG_TOKEN_PREFIXES.items():
+            if name in names and head.startswith(prefixes):
+                found.append(SecretHit(max(run[0], start), min(run[1], end), name, run[0], run[1]))
+                break
+    found.sort(key=lambda h: (h.start, -h.end))
+    return found
+
+
+def merge_hits(hits) -> list[tuple[int, int, "SecretHit"]]:
+    """Disjoint (start, end, first hit) intervals over sorted hits."""
+    merged: list[list] = []
+    for h in hits:
+        if merged and h.start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], h.end)
+        else:
+            merged.append([h.start, h.end, h])
+    return [(a, b, h) for a, b, h in merged]
+
+
+def secret_intervals(text: str, start: int, end: int, *, policy=None, **kw) -> list[tuple[int, int]]:
+    """Merged (start, end) intervals of :func:`secret_hits`."""
+    return [(a, b) for a, b, _ in merge_hits(secret_hits(text, start, end, policy=policy, **kw))]
+
+
+def mask_hits(text: str, start: int, end: int, hits) -> str:
+    """``text[start:end]`` with each secret replaced by its standard marker
+    (:func:`secret_marker`, tagged from the WHOLE match) -- one marker per
+    line segment, so a masked multi-line block keeps its line structure."""
+    merged = merge_hits(hits)
+    if not merged:
+        return text[start:end]
+    out: list[str] = []
+    pos = start
+    for a, b, h in merged:
+        out.append(text[pos:a])
+        marker = secret_marker(h.name, text[h.whole_start:h.whole_end])
+        out.append("\n".join(marker if seg else "" for seg in text[a:b].split("\n")))
+        pos = b
+    out.append(text[pos:end])
+    return "".join(out)
+
+
+def blank_hits(text: str, start: int, end: int, hits) -> str:
+    """``text[start:end]`` with each secret's characters blanked to ``*`` --
+    one per UTF-8 byte, newlines kept -- so the answer has exactly the width
+    (and byte count, line count) it declares. Used where a range answer's
+    accounting must not move; see the module note on markers."""
+    merged = merge_hits(hits)
+    if not merged:
+        return text[start:end]
+    out: list[str] = []
+    pos = start
+    for a, b, _ in merged:
+        out.append(text[pos:a])
+        out.append("".join(
+            ch if ch == "\n" else "*" * len(ch.encode("utf-8", "surrogateescape"))
+            for ch in text[a:b]))
+        pos = b
+    out.append(text[pos:end])
+    return "".join(out)
+
+
+def edge_masked(pre: str, mid: str, post: str, policy=None) -> str:
+    """``mid`` -- a range ctx is about to return -- with every secret that
+    CROSSES its edges blanked at the same width, judged with ``pre`` and
+    ``post`` (the text around it, already bounded by the caller). A secret
+    wholly inside is left to the emission pass, which redacts it with its
+    marker. Identity whenever nothing crosses an edge."""
+    if not mid:
+        return mid
+    text = pre + mid + post
+    s, e = len(pre), len(pre) + len(mid)
+    hits = [h for h in secret_hits(text, s, e, policy=policy) if h.crosses(s, e)]
+    return blank_hits(text, s, e, hits) if hits else mid
+
+
+def mask_intervals(text: str, start: int, end: int, intervals, marker: str = "[ctx:redacted]") -> str:
+    """``text[start:end]`` with each interval replaced by ``marker`` (kept
+    for callers that hold bare intervals; prefer :func:`mask_hits`)."""
+    if not intervals:
+        return text[start:end]
+    out: list[str] = []
+    pos = start
+    for a, b in intervals:
+        out.append(text[pos:a])
+        segs = text[a:b].split("\n")
+        out.append("\n".join(marker if seg else "" for seg in segs))
+        pos = b
+    out.append(text[pos:end])
+    return "".join(out)
+
+
+def clip_redacting(text: str, limit: int, policy=None) -> str:
+    """``text[:limit]``, except that when a secret STRADDLES the cut, its
+    visible part is blanked to ``*`` (same width).
+
+    Clipping a line to a display width and redacting the digest afterwards
+    leaves a straddling credential as a prefix too short for its pattern to
+    match (``ghp_`` plus 19 characters), so that prefix reached the model.
+    Here the line is matched around the cut first, and the result keeps the
+    width of ``text[:limit]`` exactly, so widths and budgets downstream hold.
+
+    It is byte for byte ``text[:limit]`` whenever no match crosses the cut
+    (ordinary content, and secrets wholly inside the window -- still
+    redacted by the emission pass -- or wholly outside it), and always when
+    the policy disables redaction; a pattern the policy excludes blanks
+    nothing. The policy is ``policy``, else the active
+    :class:`redaction_scope`, else every pattern.
+
+    Limits (declared): patterns run on ``text[:limit + 1024]`` only
+    (:data:`REDACTION_CONTEXT_CHARS`), so the cost is constant per call. A
+    straddling token is caught when its pattern matches within that window
+    (any length for the ``{20,}``-style patterns: the run is simply
+    truncated), or -- for the unbounded tokens of
+    :data:`LONG_TOKEN_PREFIXES` (JWT, ``sk-``, ``ghp_``, ...) -- when its
+    whole run of token characters is at most 64 KiB
+    (:data:`TOKEN_RUN_SCAN_CHARS`). Not caught: a fixed-shape secret whose
+    required later part lies more than 1,024 characters past the cut (a
+    sendgrid key's second half, an ``aws_secret_access_key=`` value) and a
+    token run longer than 64 KiB; their first ``limit - start`` characters
+    can show.
+    """
+    if len(text) <= limit:
+        return text
+    if limit <= 0:
+        return ""
+    pats = active_patterns(policy)
+    if not pats:
+        return text[:limit]
+    window = text[: limit + REDACTION_CONTEXT_CHARS]
+    start = limit
+    for name, rx in pats:
+        if name == "private-key":
+            for a, b in pem_spans(window):
+                if a < limit < b:
+                    start = min(start, a)
+            continue
+        for m in rx.finditer(window):
+            if m.start() >= limit:
+                break
+            if m.end() > limit:
+                start = min(start, m.start())
+                break
+    # An unbounded token too long for the window (a 5 KB JWT): followed to
+    # its start by a linear scan and judged by its literal prefix.
+    run = _token_run(text, limit - 1, TOKEN_RUN_SCAN_CHARS)
+    if run and run[1] > limit and run[1] - run[0] > REDACTION_CONTEXT_CHARS:
+        active = {n for n, _ in pats}
+        head = text[run[0]: run[0] + 32]
+        if any(n in active and head.startswith(p) for n, p in LONG_TOKEN_PREFIXES.items()):
+            start = min(start, run[0])
+    # Same width: the visible part of the secret is blanked character for
+    # character, so every downstream width, window fit and budget cut lands
+    # exactly where it did before -- the prefix is the only thing that moves.
+    return text[:start] + "*" * (limit - start)
+
+
+def redact_before_transform(text: str, policy=None, cap: int = 4096) -> str:
+    """``text`` with each secret in its first ``cap`` characters replaced by
+    its standard marker -- for text that is about to be TRANSFORMED (split,
+    shortened, case-folded, masked) before it is shown, which would leave a
+    secret unmatchable by the emission pass. Identity -- the same object --
+    when nothing matches; bounded cost (``cap`` plus the regex context)."""
+    if not text:
+        return text
+    end = min(len(text), cap)
+    hits = secret_hits(text, 0, end, policy=policy)
+    return mask_hits(text, 0, end, hits) + text[end:] if hits else text
+
+
+def redact_strings(value, policy=None):
+    """Every string inside ``value`` (dicts, lists, tuples) through the
+    model-visible pipeline once -- for structured output (JSON) whose
+    strings quote stored or workspace text. ``policy=None`` reads the
+    active scope, else every pattern."""
+    if policy is None and _ACTIVE_POLICY is not None:
+        policy = _ACTIVE_POLICY.get()
+    if isinstance(value, str):
+        if policy is None:
+            return redact(strip_control(value), tuple(REDACTION_PATTERNS))[0]
+        return sanitize_for_model(value, policy)[0]
+    if isinstance(value, dict):
+        return {k: redact_strings(v, policy) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_strings(v, policy) for v in value]
+    return value
+
+
+def model_visible(text: str, policy=None) -> str:
+    """``text`` through the model-visible pipeline once, with the
+    ``redaction: applied`` note when anything fired -- for verbs that print
+    text stored by an earlier call (notes, goals, messages)."""
+    if policy is None and _ACTIVE_POLICY is not None:
+        policy = _ACTIVE_POLICY.get()
+    if policy is None:
+        out, fired = redact(strip_control(text), tuple(REDACTION_PATTERNS))
+    else:
+        out, fired = sanitize_for_model(text, policy)
+    return out + ("\nredaction: applied [" + ", ".join(fired) + "]" if fired else "")
+
+
+def tail_redacting(text: str, limit: int, policy=None) -> str:
+    """``text[-limit:]`` (the last ``limit`` characters), except that a
+    secret straddling the cut has its visible part blanked to ``*`` at the
+    same width -- the mirror of :func:`clip_redacting` for tail views."""
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    cut = len(text) - limit
+    pats = active_patterns(policy)
+    if not pats:
+        return text[cut:]
+    hits = [h for h in secret_hits(text, cut, min(len(text), cut + REDACTION_CONTEXT_CHARS),
+                                   policy=policy) if h.whole_start < cut]
+    end = min(len(text), max([h.whole_end for h in hits] + [cut]))
+    return "*" * (end - cut) + text[end:]
+
+
+def elide_redacting(text: str, head: int, tail: int, sep: str, policy=None) -> str:
+    """``text[:head] + sep + text[-tail:]`` with both cuts redaction-aware
+    (:func:`clip_redacting`, :func:`tail_redacting`); ``text`` itself when it
+    fits."""
+    if len(text) <= head + tail:
+        return text
+    return clip_redacting(text, head, policy) + sep + tail_redacting(text, tail, policy)
 
 
 def sanitize_for_model(text: str, policy) -> tuple[str, list[str]]:

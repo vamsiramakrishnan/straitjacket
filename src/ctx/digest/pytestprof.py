@@ -26,7 +26,7 @@ from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
 from ctx.evidence import EvidenceGraph, EvidenceItem, EvidenceRef
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int
 
 # Word-anchored pytest invocation: the name as a program basename or a
 # module target, never as an interior path component. A raw substring
@@ -92,7 +92,9 @@ def _short_nodeid(nid: str) -> str:
     style); the ::-qualified test name always rides in full."""
     if "::" not in nid:
         return nid
-    path, rest = nid.split("::", 1)
+    from ctx.textutil import redact_before_transform
+
+    path, rest = redact_before_transform(nid).split("::", 1)
     parts = path.replace("\\", "/").split("/")
     if len(parts) > 2:
         path = "/".join(parts[-2:])
@@ -293,13 +295,13 @@ def _entry_semantics(
         if rest:
             summary = rest
     if summary:
-        summary = summary[:120]
+        summary = clip_redacting(summary, 120)
 
-    evidence = tuple(el[:EVIDENCE_LINE_CHARS] for el in e_lines[:4])
+    evidence = tuple(clip_redacting(el, EVIDENCE_LINE_CHARS) for el in e_lines[:4])
     if not evidence:
         fallback = msg or summary
         if fallback:
-            evidence = (fallback[:EVIDENCE_LINE_CHARS],)
+            evidence = (clip_redacting(fallback, EVIDENCE_LINE_CHARS),)
     return failure_class, location, summary, evidence
 
 
@@ -342,7 +344,7 @@ def extract_pytest(ctx: DigestContext) -> EvidenceGraph:
                 for raw in out_lines[ent["a"] - 1 : min(ent["b"], ent["a"] + 12)]:
                     if _is_banner(raw):
                         break
-                    head.append(raw[:EVIDENCE_LINE_CHARS])
+                    head.append(clip_redacting(raw, EVIDENCE_LINE_CHARS))
                 attributes["detail_head"] = tuple(head)
                 root_seen = True
         else:
@@ -466,7 +468,7 @@ class PytestProfile(Profile):
         contract = contract_for_family("pytest")
         stderr_head = None
         if ctx.stderr.lines and ctx.stderr.text_lines:
-            stderr_head = ctx.stderr.text_lines[0].strip()[:140]
+            stderr_head = clip_redacting(ctx.stderr.text_lines[0].strip(), 140)
         focus_lines = tuple(
             f"  focus {stream}:L{a}-L{b}: {sample}"
             for stream, a, b, sample in ctx.focus_spans(max_spans=2)
@@ -534,7 +536,7 @@ class PytestProfile(Profile):
             spent = 0
             shown_entries = 0
             for ent in entries:
-                row = "    " + _short_nodeid(ent["id"])[:EVIDENCE_LINE_CHARS]
+                row = "    " + clip_redacting(_short_nodeid(ent["id"]), EVIDENCE_LINE_CHARS)
                 if ent["b"] is not None:
                     sid = ctx.mint_span(ctx.stdout, "region", a=ent["a"], b=ent["b"])
                     row += f"  stdout:L{ent['a']}-L{ent['b']}"
@@ -546,7 +548,7 @@ class PytestProfile(Profile):
                 if dense:
                     err = self._error_line(ent, out_lines)
                     if err:
-                        chunk.append("      " + err[:EVIDENCE_LINE_CHARS])
+                        chunk.append("      " + clip_redacting(err, EVIDENCE_LINE_CHARS))
                 cost = sum(len(c.encode("utf-8")) + 1 for c in chunk)
                 if shown_entries and spent + cost > census_budget:
                     break
@@ -589,9 +591,9 @@ class PytestProfile(Profile):
                     # elapsed-time noise and belong to other regions.
                     if _is_banner(raw):
                         break
-                    summary.append(f"    | {raw[:EVIDENCE_LINE_CHARS]}")
+                    summary.append(f"    | {clip_redacting(raw, EVIDENCE_LINE_CHARS)}")
         elif failed_tests:
-            summary.append(f"  first failure: {failed_tests[0][1]} - {failed_tests[0][2][:120]}")
+            summary.append(f"  first failure: {failed_tests[0][1]} - {clip_redacting(failed_tests[0][2], 120)}")
             shown += 1
 
         # Modal failure signature: exception class frequencies.
@@ -606,7 +608,7 @@ class PytestProfile(Profile):
                 summary.append(f"    {name}  {n}")
 
         if ctx.stderr.lines:
-            err_first = ctx.stderr.text_lines[0].strip()[:140] if ctx.stderr.text_lines else ""
+            err_first = clip_redacting(ctx.stderr.text_lines[0].strip(), 140) if ctx.stderr.text_lines else ""
             summary.append(f"  stderr head stderr:L1: {err_first}")
             shown += 1
 

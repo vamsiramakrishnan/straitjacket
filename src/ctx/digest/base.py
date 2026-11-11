@@ -13,7 +13,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ctx.store import Store
-from ctx.textutil import EVIDENCE_LINE_CHARS, estimate_tokens, fmt_bytes, fmt_int, index_lines
+from ctx.textutil import (
+    EVIDENCE_LINE_CHARS,
+    clip_redacting,
+    estimate_tokens,
+    fmt_bytes,
+    fmt_int,
+    index_lines,
+)
 from ctx.workspace import Workspace
 
 # Cap how much of a stream a profile parses in memory. Coverage reporting
@@ -248,7 +255,7 @@ class DigestContext:
                 low = line.lower()
                 if any(t in low for t in self.focus_terms):
                     spans.append(
-                        (view.name, max(1, i - context), i + context, line.strip()[:EVIDENCE_LINE_CHARS])
+                        (view.name, max(1, i - context), i + context, clip_redacting(line.strip(), EVIDENCE_LINE_CHARS))
                     )
                     if len(spans) >= max_spans:
                         return spans

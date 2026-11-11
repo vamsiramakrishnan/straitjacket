@@ -3,6 +3,7 @@ and explicit coverage reporting (SPEC §6.3)."""
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting, REDACTION_CONTEXT_CHARS  # redaction-aware clips
 import re
 from dataclasses import dataclass
 
@@ -46,7 +47,7 @@ class SearchHit:
 _LINE_CHARS = 200  # rendered width cap for one matched/context line
 
 
-def _line_snippet(text: str, line_start: int, limit: int = _LINE_CHARS) -> str:
+def _line_snippet(text: str, line_start: int, limit: int = _LINE_CHARS, policy=None) -> str:
     """The line at ``line_start``, truncated to ``limit`` characters.
 
     Equivalent to ``target.line_text_at(line_start)[:limit]`` but it never
@@ -54,8 +55,12 @@ def _line_snippet(text: str, line_start: int, limit: int = _LINE_CHARS) -> str:
     "line", and slicing 3.2 MB out just to keep 200 characters costs a
     megabyte-scale copy per rendered hit. Bounded by construction instead.
     """
-    end = text.find("\n", line_start, line_start + limit)
-    return text[line_start : end if end != -1 else min(len(text), line_start + limit)]
+    # Read a bounded window past the cut so a secret straddling it is judged
+    # whole (clip_redacting blanks its visible part, same width).
+    reach = limit + REDACTION_CONTEXT_CHARS
+    end = text.find("\n", line_start, line_start + reach)
+    line = text[line_start : end if end != -1 else min(len(text), line_start + reach)]
+    return clip_redacting(line, limit, policy)
 
 
 def _line_numbers(shown: list[SearchHit], by_label: dict[str, SearchTarget]) -> dict[
@@ -153,33 +158,64 @@ class RenderRow:
 
 
 def _hit_window(
-    target: SearchTarget, line_start: int, context: int
+    target: SearchTarget, line_start: int, context: int, policy=None
 ) -> tuple[tuple[str, ...], str, tuple[str, ...]]:
     """(before, matched, after) for one hit, every line bounded on extraction.
 
     One definition, both engines. ``context`` lines are walked outward with
     ``SearchTarget``'s offset primitives and read with :func:`_line_snippet`,
-    so no line is ever materialized in full just to be truncated.
+    so no line is ever materialized in full just to be truncated. A line
+    inside a private-key block (its BEGIN found by plain search up to 16 KiB
+    back) is blanked at the same width: a key's body lines match no pattern
+    on their own.
     """
-    hit = _line_snippet(target.text, line_start)
-    if not context:
-        return (), hit, ()
+    starts = [line_start]
     back: list[str] = []
     ls: int | None = line_start
     for _ in range(context):
         ls = target.prev_line_start(ls)  # type: ignore[arg-type]
         if ls is None:
             break
-        back.append(_line_snippet(target.text, ls))
+        back.append(_line_snippet(target.text, ls, policy=policy))
+        starts.insert(0, ls)
     back.reverse()
+    hit = _line_snippet(target.text, line_start, policy=policy)
     fwd: list[str] = []
     ls = line_start
     for _ in range(context):
         ls = target.next_line_start(ls)  # type: ignore[arg-type]
         if ls is None:
             break
-        fwd.append(_line_snippet(target.text, ls))
-    return tuple(back), hit, tuple(fwd)
+        fwd.append(_line_snippet(target.text, ls, policy=policy))
+        starts.append(ls)
+    shown = _blank_private_key_lines(target.text, starts, back + [hit] + fwd, policy)
+    nb = len(back)
+    return tuple(shown[:nb]), shown[nb], tuple(shown[nb + 1:])
+
+
+def _blank_private_key_lines(text: str, starts: list[int], shown: list[str], policy) -> list[str]:
+    """``shown`` (lines starting at ``starts``) with any part inside a
+    private-key block blanked at the same width. Identity without one."""
+    from ctx.textutil import PEM_LOOKBEHIND_CHARS, active_patterns, pem_spans
+
+    lo = max(0, starts[0] - PEM_LOOKBEHIND_CHARS)
+    hi = min(len(text), starts[-1] + len(shown[-1]) + 64)
+    if "PRIVATE KEY-----" not in text[lo:hi]:
+        return shown
+    if "private-key" not in {n for n, _ in active_patterns(policy)}:
+        return shown
+    spans = pem_spans(text, lo, hi)
+    if not spans:
+        return shown
+    out = []
+    for ls, line in zip(starts, shown):
+        le = ls + len(line)
+        chars = list(line)
+        for a, b in spans:
+            for i in range(max(a, ls), min(b, le)):
+                chars[i - ls] = "*"
+        out.append("".join(chars))
+    return out
 
 
 def _render_search(
@@ -450,7 +486,7 @@ def search(
     rows: list[RenderRow] = []
     for hit in shown:
         t = by_label[hit.target]
-        before, text_line, after = _hit_window(t, hit.line_start, context)
+        before, text_line, after = _hit_window(t, hit.line_start, context, ws.config.redaction)
         rows.append(
             RenderRow(
                 target=hit.target,
@@ -597,7 +633,8 @@ def _render_symbol_sites(
         sites.sort()
         for rel, kind, line, name in sites[:cap]:
             lines = by_label[rel].text.split("\n")
-            text = lines[line - 1].strip()[:_LINE_CHARS] if 0 < line <= len(lines) else ""
+            text = (clip_redacting(lines[line - 1].strip(), _LINE_CHARS, ws.config.redaction)
+                    if 0 < line <= len(lines) else "")
             col = text.find(name) + 1 if name in text else 0
             rows.append(RenderRow(target=rel, line_no=line, col_a=col, col_b=col + len(name) if col else 0,
                                   text=text, before=[], after=[], contextual=False))
@@ -691,12 +728,13 @@ def _render_rg_search(
     for m in shown:
         t = by_label.get(m.target)
         if context and t is not None and t.text:
-            before, text_line, after = _hit_window(t, starts[m.target][m.line_no], context)
+            before, text_line, after = _hit_window(t, starts[m.target][m.line_no], context,
+                                                   ws.config.redaction)
             contextual = True
         else:
             # No context asked for, or the file could not be re-read (or is
             # empty): fall back to rg's own copy of the matched line, unmarked.
-            before, text_line, after = (), m.line[:_LINE_CHARS], ()
+            before, text_line, after = (), clip_redacting(m.line, _LINE_CHARS, ws.config.redaction), ()
             contextual = False
         rows.append(
             RenderRow(

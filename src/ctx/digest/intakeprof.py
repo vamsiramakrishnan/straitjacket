@@ -38,10 +38,31 @@ back to its last whole line; every figure then names its scope (``total``,
 
 from __future__ import annotations
 
+import re
+
 from ctx import bounds
 from ctx.digest.base import MAX_PARSE_BYTES, DigestContext, Profile, from_intake
-from ctx.digest.chunkmap import Chunk, chunk_map, clip_label, flavor
-from ctx.textutil import EVIDENCE_LINE_CHARS, encode_exact, fmt_bytes, fmt_int, sanitize_for_model
+from ctx.digest.chunkmap import (
+    LABEL_CHARS,
+    Chunk,
+    chunk_map,
+    clip_label,
+    flavor,
+    heading_path,
+)
+from ctx.textutil import (
+    EVIDENCE_LINE_CHARS,
+    active_patterns,
+    encode_exact,
+    fmt_bytes,
+    fmt_int,
+    SecretHit,
+    mask_hits,
+    sanitize_for_model,
+    secret_hits,
+    secret_marker,
+    shown_marker_names,
+)
 
 # Room kept free in a span resolution for its own header lines
 # (``[ctx get … span:…]`` and ``region: …``) so a chunk's cost bounds the
@@ -125,6 +146,108 @@ def unmapped_tail(
     return description, f"ctx get {handle} --bytes {first}:{last}"
 
 
+# A token straddling the parse cap is cut by the cap itself; its visible
+# prefix is the trailing run of token characters, never longer than this.
+_CAP_TAIL_TOKEN_CHARS = 256
+_TRAILING_TOKEN_RE = re.compile(r"[A-Za-z0-9_+/=.:-]{1,%d}\Z" % _CAP_TAIL_TOKEN_CHARS)
+
+
+class SecretView:
+    """Displays slices of the mapped text with secrets judged in context.
+
+    Every string the chunk map shows -- a label, a heading title, a signal
+    line, the start of a byte piece -- is a slice of the payload. Redacting
+    the slice after cutting it lets a secret through whenever the cut falls
+    inside it (``ghp_`` plus 19 characters no longer matches). So each slice
+    is redacted from its SOURCE with :func:`ctx.textutil.secret_hits`: the
+    patterns run on the slice plus 1,024 characters either side, private-key
+    blocks are found by plain search up to 16 KiB back, and a run of token
+    characters too long for that window is followed to its start (up to
+    64 KiB) and treated as a secret when it begins with an unbounded
+    pattern's literal. Each secret is replaced by its standard marker
+    ``[ctx:redacted:<name>:<hash of the whole match>]`` BEFORE the slice is
+    clipped. Patterns never see more than one bounded window, so the cost is
+    constant per displayed slice and linear per render.
+
+    Declared limits: see the "Redaction limits" paragraph of
+    :mod:`ctx.textutil` (unbounded tokens fully masked up to 60 KiB, raw
+    characters in pieces inside a token over 64 KiB; private-key windows
+    masked with BEGIN at most 16 KiB behind; fixed-shape secrets judged on
+    1,024 characters around the cut; no match next to a non-ASCII letter).
+    When the parse cap ends inside a line (``cut_mid_line``) the trailing
+    run of up to 256 token characters is treated as a secret, since what
+    follows it was never read. Redaction disabled by policy: shown as is.
+
+    ``fired`` lists only patterns whose marker reached a displayed string.
+    """
+
+    def __init__(self, text: str, policy, *, cut_mid_line: bool = False) -> None:
+        self.text = text
+        self.policy = policy
+        self.fired: set[str] = set()
+        self._enabled = bool(active_patterns(policy))
+        self._cap_tail: tuple[int, int] | None = None
+        if self._enabled and cut_mid_line and text:
+            base = max(0, len(text) - (_CAP_TAIL_TOKEN_CHARS + 1))
+            m = _TRAILING_TOKEN_RE.search(text, base)
+            if m:
+                self._cap_tail = (m.start(), len(text))
+
+    def _hits(self, start: int, end: int) -> list:
+        hits = secret_hits(self.text, start, end, policy=self.policy)
+        if self._cap_tail and self._cap_tail[0] < end and self._cap_tail[1] > start:
+            a, b = self._cap_tail
+            hits.append(SecretHit(max(start, a), min(end, b), "parse-cap-tail", a, b))
+            hits.sort(key=lambda h: (h.start, -h.end))
+        return hits
+
+    def _shown(self, out: str, hits) -> str:
+        """Record the patterns whose marker (or the start of it, where the
+        clip cut it) is in ``out``."""
+        for h in hits:
+            marker = secret_marker(h.name, self.text[h.whole_start:h.whole_end])
+            if marker in out or (
+                "[ctx:" in out and marker.startswith(out.rstrip("\u2026")[out.rfind("[ctx:"):])
+            ):
+                self.fired.add(h.name)
+        return out
+
+    def raw(self, start: int, end: int) -> str:
+        """The slice with every secret replaced by its marker."""
+        if not self._enabled or start >= end:
+            return self.text[start:end]
+        hits = self._hits(start, end)
+        return mask_hits(self.text, start, end, hits) if hits else self.text[start:end]
+
+    def label(self, span, width: int = LABEL_CHARS) -> str:
+        """A collapsed, clipped label from one source span. The slice read is
+        bounded (whitespace collapse needs a little more than ``width``)."""
+        start, end = span
+        end = min(end, start + 4 * width + 16)
+        if not self._enabled:
+            return clip_label(self.text[start:end], width)
+        hits = self._hits(start, end)
+        return self._shown(clip_label(mask_hits(self.text, start, end, hits), width), hits)
+
+    def line(self, span, width: int = EVIDENCE_LINE_CHARS) -> str:
+        """A stripped line clipped to ``width``, for the signal head lines."""
+        start, end = span
+        end = min(end, start + 4 * width + 16)
+        if not self._enabled:
+            return self.text[start:end].strip()[:width]
+        hits = self._hits(start, end)
+        return self._shown(mask_hits(self.text, start, end, hits).strip()[:width], hits)
+
+
+def display_label(chunk: Chunk, view: SecretView) -> str:
+    """The chunk's label as displayed: re-derived from its source spans."""
+    if not chunk.label_spans:
+        return chunk.label  # "(blank)": no payload text in it
+    if chunk.label_path:
+        return heading_path([view.label(sp) for sp in chunk.label_spans])
+    return view.label(chunk.label_spans[0]) or "(blank)"
+
+
 def build_map(text: str, total_lines: int, budgets) -> tuple[Chunk, ...]:
     return chunk_map(text, **chunk_params(budgets, total_lines))
 
@@ -139,7 +262,7 @@ def mint_chunk_span(register, chunk: Chunk) -> str | None:
     return register("region", a=chunk.start_line, b=chunk.end_line)
 
 
-def chunk_row(chunk: Chunk, sid: str | None, *, focus_hit: bool = False) -> str:
+def chunk_row(chunk: Chunk, sid: str | None, *, view: SecretView, focus_hit: bool = False) -> str:
     """One table row. A flagged chunk is labelled with its strongest signal
     line, not its heading or first line: that line is why it is flagged."""
     marks = ("!" if chunk.signal > 0 else "") + ("*" if focus_hit else "")
@@ -148,9 +271,9 @@ def chunk_row(chunk: Chunk, sid: str | None, *, focus_hit: bool = False) -> str:
         if chunk.split == "bytes"
         else f"L{chunk.start_line}-L{chunk.end_line}"
     )
-    label = chunk.label
-    if chunk.signal > 0 and chunk.signal_text:
-        label = clip_label(chunk.signal_text, SIGNAL_ROW_CHARS)
+    label = display_label(chunk, view)
+    if chunk.signal > 0 and chunk.signal_span[1] > chunk.signal_span[0]:
+        label = view.label(chunk.signal_span, SIGNAL_ROW_CHARS)
         if chunk.split == "lines" and chunk.signal_line != chunk.start_line:
             label = f"L{chunk.signal_line}: {label}"
     row = f"  #{chunk.index}{' ' + marks if marks else ''} {where} · {fmt_bytes(chunk.bytes)} · {label}"
@@ -207,6 +330,10 @@ class ChunkMapProfile(Profile):
         budgets = ctx.ws.config.budgets
         policy = ctx.ws.config.redaction
         text = mappable_text(view.text, view.parsed_fully)
+        # Every label, signal line and piece start below is displayed through
+        # this view, which redacts it from its source in context.
+        secrets = SecretView(text, policy,
+                             cut_mid_line=not view.parsed_fully and not text.endswith("\n"))
         chunks = build_map(text, view.lines, budgets)
         n = len(chunks)
         rid = "run:PENDING"
@@ -224,11 +351,11 @@ class ChunkMapProfile(Profile):
             # signal: the most decisive line (highest rank, latest among
             # equals) and, when it is a different line, the last one.
             head.append(f"decisive signal L{decisive.signal_line}: "
-                        f"{decisive.signal_text[:EVIDENCE_LINE_CHARS]}")
+                        f"{secrets.line(decisive.signal_span)}")
             last = flagged[-1]
             if last.last_signal_line != decisive.signal_line:
                 head.append(f"terminal signal L{last.last_signal_line}: "
-                            f"{last.last_signal_text[:EVIDENCE_LINE_CHARS]}")
+                            f"{secrets.line(last.last_signal_span)}")
 
         focus_hits: set[int] = set()
         if ctx.focus_terms:
@@ -286,7 +413,7 @@ class ChunkMapProfile(Profile):
                 f"chunks{scope}: {fmt_int(n)} (~{target} each) · shown {len(shown)} · "
                 f"error-like {fmt_int(len(flagged))} ({legend})",
             ]
-            lines += [chunk_row(chunks[i - 1], sid_for(i), focus_hit=i in focus_hits)
+            lines += [chunk_row(chunks[i - 1], sid_for(i), view=secrets, focus_hit=i in focus_hits)
                       for i in shown]
             if omitted:
                 lines.append(
@@ -304,7 +431,11 @@ class ChunkMapProfile(Profile):
             if decisive is None and shown and sid_for(shown[0]):
                 suggestions.append(f"ctx get {handle} --span {sid_for(shown[0])}")
             suggestions.append(f"ctx search {rid} '<pattern>' --context 3")
-            return "\n".join(lines + self.next_lines(ctx, suggestions))
+            # Only patterns whose marker is visible in what is emitted:
+            # rows tried and dropped while fitting do not count.
+            names = shown_marker_names("\n".join(lines), secrets.fired)
+            note = ["redaction: applied [" + ", ".join(names) + "]"] if names else []
+            return "\n".join(lines + self.next_lines(ctx, suggestions) + note)
 
         def size(body: str) -> int:
             # The run id replaces PENDING (12 hex chars for 7) on emission.
@@ -321,5 +452,5 @@ class ChunkMapProfile(Profile):
 
 __all__ = [
     "ChunkMapProfile", "build_map", "chunk_params", "chunk_row", "decisive_chunk",
-    "emitted", "mappable_text", "mint_chunk_span", "unmapped_tail",
+    "SecretView", "display_label", "emitted", "mappable_text", "mint_chunk_span", "unmapped_tail",
 ]

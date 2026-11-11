@@ -28,6 +28,7 @@ nothing, never an error.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import hashlib
 import json
 import re
@@ -642,7 +643,7 @@ def _add_mcp_server(records: list[Capability], spec: ServerSpec) -> None:
         id=cid, kind="mcp_server", provider=spec.name,
         source=spec.source, tokens=tokens,
         authority=infer_authority(spec.name, private), activation=activation, invocations=-1,
-        detail=f"{prefix}: {detail}"[:200],
+        detail=clip_redacting(f"{prefix}: {detail}", 200),
         scope=spec.scope, transport=spec.transport, pricing=pricing,
         upfront_deferred=upfront, family=family,
     ))
@@ -714,7 +715,7 @@ def skill_listing(path: Path, text: str, *, cap: int | None = SKILL_LISTING_CAP_
         desc = " ".join(para)
     entry = f"- {name}: {desc}"
     if cap is not None:
-        entry = entry[:cap]
+        entry = clip_redacting(entry, cap)
     hidden = str(meta.get("disable-model-invocation", "")).lower() == "true"
     return {"name": name, "entry": entry, "tokens": 0 if hidden else _tokens_of(entry),
             "body_tokens": _tokens_of(body), "model_invocable": not hidden}
@@ -781,7 +782,7 @@ def _collect_files(root: Path, globs, kind: str, provider_of, records: list[Capa
                 source=rel if scope == "workspace" else str(path),
                 tokens=tokens, authority="n/a", activation="always",
                 invocations=-1, sensitive_terms=terms, leakage=leakage,
-                detail=(text.strip().splitlines() or [""])[0][:EVIDENCE_LINE_CHARS],
+                detail=clip_redacting((text.strip().splitlines() or [""])[0], EVIDENCE_LINE_CHARS),
                 scope=scope, deferred_tokens=deferred, pricing=pricing,
             ))
 
@@ -797,7 +798,7 @@ def _collect_repo_instructions(root: Path, records: list[Capability]) -> None:
             id=f"repo.{name}", kind="repo_instructions", provider="repo",
             source=name, tokens=_tokens_of(text), authority="n/a",
             activation="always", invocations=-1, sensitive_terms=terms, leakage=leakage,
-            detail=(text.strip().splitlines() or [""])[0][:EVIDENCE_LINE_CHARS],
+            detail=clip_redacting((text.strip().splitlines() or [""])[0], EVIDENCE_LINE_CHARS),
             pricing="whole-file",
         ))
 
@@ -1567,7 +1568,7 @@ def probe_mcp_server(argv: list[str], *, timeout: float = 8.0,
                     "description_tokens": _tokens_of(desc),
                     "schema_tokens": _tokens_of(schema),
                     "authority": infer_authority(name, desc),
-                    "summary": " ".join(desc.split())[:120],
+                    "summary": clip_redacting(" ".join(desc.split()), 120),
                 })
     return out
 

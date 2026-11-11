@@ -21,6 +21,7 @@ a sliding window on every turn invalidates prefix caching on every step.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting, elide_redacting, tail_redacting  # redaction-aware clips
 import json
 from typing import Any
 
@@ -38,7 +39,7 @@ def _summarize_call(fc: dict[str, Any]) -> tuple[str, str]:
     if name == "bash":
         cmd = str(args.get("command") or "")
         if len(cmd) > 2400:
-            cmd = cmd[:2000] + " ... " + cmd[-300:]
+            cmd = elide_redacting(cmd, 2000, 300, " ... ")
         return f"bash({cmd!r})", state_note
     if name == "write":
         fp = str(args.get("file_path") or args.get("path") or "")
@@ -47,11 +48,11 @@ def _summarize_call(fc: dict[str, Any]) -> tuple[str, str]:
             return f"write(file_path={fp!r}, content={body!r})", state_note
         return (
             f"write(file_path={fp!r}, chars={len(body)}, "
-            f"head={body[:600]!r}, tail={body[-400:]!r})"
+            f"head={clip_redacting(body, 600)!r}, tail={tail_redacting(body, 400)!r})"
         ), state_note
     raw = json.dumps(args, ensure_ascii=False, sort_keys=True)
     if len(raw) > 1200:
-        raw = raw[:900] + "..." + raw[-200:]
+        raw = elide_redacting(raw, 900, 200, "...")
     return f"{name}({raw})", state_note
 
 
@@ -158,7 +159,7 @@ class WatermarkResidence:
                     c_sum, s_note = _summarize_call(p["functionCall"])
                     call_lines.append("[called] " + c_sum)
                     if s_note:
-                        cleaned_note = " ".join(s_note.splitlines())[:280]
+                        cleaned_note = clip_redacting(" ".join(s_note.splitlines()), 280)
                         if cleaned_note not in state_lines:
                             state_lines.append(cleaned_note)
                             self.state_notes_preserved += 1
@@ -167,7 +168,7 @@ class WatermarkResidence:
                 if state_lines
                 else ""
             )
-            prefix = ("\n".join(visible_texts)[:800] + "\n") if visible_texts else ""
+            prefix = (clip_redacting("\n".join(visible_texts), 800) + "\n") if visible_texts else ""
             m_summary = (state_prefix + prefix + "\n".join(call_lines)).strip() or "[called]"
 
             out_chunks: list[str] = []

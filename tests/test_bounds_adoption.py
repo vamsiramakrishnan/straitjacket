@@ -66,6 +66,7 @@ ALLOWED: dict[str, str] = {
     "orchestrator.py": "internal token split; denominator guard",
     "hook.py": "internal scaling and percentage display",
     "skeleton.py": "1-indexed line clamp",
+    "_retrieval/spans.py": "1-indexed byte-offset clamp for the private-key lookbehind read",
     "commands/admin.py": "divide-by-zero denominator guards",
     "plan_ops.py": "1-indexed line arithmetic for context windows",
     "digest/chunkmap.py": (

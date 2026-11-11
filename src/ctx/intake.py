@@ -322,8 +322,14 @@ def intake_bytes(
     claim the bytes were kept out of the context and books its own event."""
     if not data:
         raise IntakeError("nothing to intake: the payload is empty")
-    label = _safe_token(label, "paste") or "paste"
-    name = _safe_token(Path(name).name if name else None, None)
+    # Redact BEFORE the token is clipped to its display width, so a clip can
+    # never leave a fragment of a credential that only matches whole.
+    policy = ws.config.redaction
+    # Bounded first (the token keeps 48 characters; 4 KiB of context is
+    # plenty to recognize a secret straddling that cut) so a hostile argument
+    # cannot make the patterns run long.
+    label = _safe_token(sanitize_for_model(label[:4096], policy)[0] if label else label, "paste") or "paste"
+    name = _safe_token(sanitize_for_model(Path(name).name[:4096], policy)[0] if name else None, None)
 
     kind = binary_kind(data)
     if kind is not None:
@@ -445,7 +451,7 @@ def render_chunk_page(store: Store, ws: Workspace, ref_text: str, start: int = 1
     from ctx import bounds
     from ctx.digest.base import MAX_PARSE_BYTES
     from ctx.digest.intakeprof import (
-        build_map, chunk_row, mappable_text, mint_chunk_span, unmapped_tail,
+        SecretView, build_map, chunk_row, mappable_text, mint_chunk_span, unmapped_tail,
     )
     from ctx.refs import RefError, parse_ref
 
@@ -483,6 +489,9 @@ def render_chunk_page(store: Store, ws: Workspace, ref_text: str, start: int = 1
     policy = ws.config.redaction
     partial = size > MAX_PARSE_BYTES
     text = mappable_text(data.decode("utf-8", "replace"), not partial)
+    # Redaction sees the whole mapped text before any row is cut from it.
+    # Rows are displayed through a view that redacts each slice in context.
+    secrets = SecretView(text, policy, cut_mid_line=partial and not text.endswith("\n"))
     chunks = build_map(text, total_lines, budgets)
     n = len(chunks)
     if n == 0:
@@ -522,7 +531,11 @@ def render_chunk_page(store: Store, ws: Workspace, ref_text: str, start: int = 1
         return "\n".join(lines)
 
     for chunk in chunks[start - 1:]:
-        row, names = sanitize_for_model(chunk_row(chunk, mint_chunk_span(register, chunk)), policy)
+        row, names = sanitize_for_model(
+            chunk_row(chunk, mint_chunk_span(register, chunk), view=secrets), policy)
+        from ctx.textutil import shown_marker_names
+
+        names = list(names) + shown_marker_names(row, secrets.fired)
         trial_fired = fired | set(names)
         if rows and len(encode_exact(render(rows + [row], trial_fired))) > limit:
             break

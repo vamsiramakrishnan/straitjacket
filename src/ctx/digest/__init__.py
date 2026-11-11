@@ -36,7 +36,13 @@ from ctx.digest.udiffprof import UnifiedDiffProfile
 from ctx.digest.text import TextProfile
 from ctx.execution import focus_hash, update_manifest_digest
 from ctx.store import Store
-from ctx.textutil import decode_stream, neutralize_line_breaks, sanitize_for_model, short_id
+from ctx.textutil import (
+    decode_stream,
+    neutralize_line_breaks,
+    redaction_scope,
+    sanitize_for_model,
+    short_id,
+)
 from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
@@ -186,6 +192,49 @@ def _pass_through_if_digest_earned_nothing(ctx: Any, body: str, ws: Workspace) -
         return body
 
 
+_PEM_GRAM = 6
+
+
+def _blank_private_key_fragments(ctx: Any, body: str) -> str:
+    """Blank, at the same width, any text in ``body`` copied from inside a
+    private-key block of the captured streams.
+
+    A profile shows single lines -- a log template, an exceptional line, a
+    table cell, a diagnostic -- and a key's body lines carry nothing a
+    pattern can match without the BEGIN line, which is usually not among
+    them. So the blocks are located in the stream (plain ``str.find``,
+    linear; :func:`ctx.textutil.pem_spans`) and every run of the body that
+    is covered by a 6-character window of a block's content is blanked --
+    which also catches a line the profile transformed (digits masked to
+    ``<*>``) or clipped. Identity when the streams hold no private key or
+    the policy excludes the pattern.
+    """
+    from ctx.textutil import active_patterns, pem_spans
+
+    if "private-key" not in {n for n, _ in active_patterns()}:
+        return body
+    grams: set[str] = set()
+    for view in (ctx.stdout, ctx.stderr):
+        text = view.text
+        if "PRIVATE KEY-----" not in text:
+            continue
+        for a, b in pem_spans(text):
+            for ln in text[a:b].split("\n"):
+                ln = ln.strip()
+                if ln.startswith("-----") or len(ln) < _PEM_GRAM:
+                    continue
+                grams.update(ln[i:i + _PEM_GRAM] for i in range(len(ln) - _PEM_GRAM + 1))
+    if not grams:
+        return body
+    cover = bytearray(len(body))
+    for i in range(len(body) - _PEM_GRAM + 1):
+        if body[i:i + _PEM_GRAM] in grams:
+            cover[i:i + _PEM_GRAM] = b"\x01" * _PEM_GRAM
+    if not any(cover):
+        return body
+    return "".join("*" if c and ch != "\n" else ch for ch, c in zip(body, cover))
+
+
 def render_run_digest(
     store: Store,
     ws: Workspace,
@@ -235,12 +284,17 @@ def render_run_digest(
             focused.dense, focused.plan = ctx.dense, ctx.plan
             ctx = focused
 
-    body = profile.render(ctx)
+    # Clip helpers (textutil.clip_redacting) honour the workspace policy:
+    # redaction off means no clip is ever blanked.
+    with redaction_scope(ws.config.redaction):
+        body = profile.render(ctx)
     body = _pass_through_if_digest_earned_nothing(ctx, body, ws)
     # Payload text inside the body may carry a line break other than \n
     # (a lone \r, U+0085, U+2028, U+2029); render it visibly so content can
     # never start a digest line. Identity for bodies without one.
     body = neutralize_line_breaks(body)
+    with redaction_scope(ws.config.redaction):
+        body = _blank_private_key_fragments(ctx, body)
     body, redactions = sanitize_for_model(body, ws.config.redaction)
     if redactions:
         body += "\nredaction: applied [" + ", ".join(redactions) + "]"

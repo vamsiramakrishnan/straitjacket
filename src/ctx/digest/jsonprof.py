@@ -7,7 +7,7 @@ from collections import Counter
 from typing import Any
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int, loads_fast, one_line
+from ctx.textutil import clip_redacting, fmt_int, loads_fast, one_line, redact_before_transform
 
 
 HEAD_RECORDS = 5  # records inlined verbatim before a span to the rest
@@ -28,7 +28,7 @@ def _project(rec: Any) -> str:
         s = "[…]"
     else:
         s = json.dumps(rec, ensure_ascii=False)
-    return s if len(s) <= HEAD_WIDTH else s[: HEAD_WIDTH - 1] + "…"
+    return s if len(s) <= HEAD_WIDTH else clip_redacting(s, HEAD_WIDTH - 1) + "…"
 
 
 def _dominant_array(doc: Any) -> tuple[list[Any], str] | None:
@@ -153,7 +153,9 @@ class JsonLinesProfile(Profile):
                 key_counter.update(obj.keys())
                 lvl = obj.get("level") or obj.get("severity")
                 if isinstance(lvl, str):
-                    levels[lvl.lower()] += 1
+                    # Redact before case-folding: a lowercased token no longer
+                    # matches its pattern (AKIA... -> akia...).
+                    levels[redact_before_transform(lvl).lower()] += 1
         exact = ctx.stdout.parsed_fully
         label = "exact" if exact else "approximate"
         summary = [

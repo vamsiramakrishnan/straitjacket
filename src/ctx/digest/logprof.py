@@ -13,7 +13,7 @@ import functools
 import re
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int
 
 _LEVEL_RE = re.compile(r"\b(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|FATAL)\b")
 _TS_PREFIX_RE = re.compile(r"^\[?(?:\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}:\d{2})")
@@ -55,6 +55,68 @@ def mask_line(raw: str) -> str:
     return " ".join(_mask_token(t) for t in raw.split())
 
 
+_TEMPLATE_SOURCE_CAP = 8192
+
+
+def display_template(raw: str, width: int = EVIDENCE_LINE_CHARS, policy=None, *,
+                     in_key_block: bool = False) -> str:
+    """The template of ``raw`` as displayed, built from the REDACTED line.
+
+    Templates mask digit runs (``<*>``); masking first and redacting the
+    template afterwards shows a token mangled and unmatched
+    (``ghp_bA<*>J<*>PglOU…``). So the line is redacted first -- secrets
+    judged in bounded context on its first 8 KiB -- each secret becomes its
+    standard marker, and the template is built from that. Byte for byte the
+    old rendering (``mask_line`` clipped redaction-aware) for a line without
+    a secret. Only DISPLAY uses this; the grouping key stays ``mask_line``.
+    """
+    from ctx.textutil import (
+        PRIVATE_KEY_LINE,
+        active_patterns,
+        merge_hits,
+        secret_hits,
+        secret_marker,
+    )
+
+    if in_key_block:
+        # A private-key body line is a secret only with its BEGIN line, which
+        # a single line does not carry: the caller located the block first.
+        return clip_redacting(PRIVATE_KEY_LINE, width, policy)
+    hits = []
+    if active_patterns(policy):
+        src = raw[:_TEMPLATE_SOURCE_CAP]
+        hits = secret_hits(src, 0, len(src), policy=policy)
+    if not hits:
+        return clip_redacting(mask_line(raw), width, policy)
+    merged = merge_hits(hits)
+    pieces: list[str] = []
+    markers: dict[str, str] = {}
+    pos = 0
+    for k, (a, b, h) in enumerate(merged):
+        ph = chr(0xE000 + k)
+        markers[ph] = secret_marker(h.name, src[h.whole_start:h.whole_end])
+        pieces.append(src[pos:a])
+        pieces.append(ph)
+        pos = b
+    pieces.append(raw[pos:])
+    tpl = mask_line("".join(pieces))
+    for ph, marker in markers.items():
+        tpl = tpl.replace(ph, marker)
+    return clip_redacting(tpl, width, policy)
+
+
+def _private_key_line_ranges(text: str) -> list[tuple[int, int]]:
+    from ctx.textutil import private_key_line_ranges
+
+    return private_key_line_ranges(text)
+
+
+def _in_ranges(n: int, ranges) -> bool:
+    from ctx.textutil import in_line_ranges
+
+    return in_line_ranges(n, ranges)
+
+
 def mine_templates(
     lines: list[str], first_line_no: int = 1
 ) -> tuple[dict[str, list[int]], list[tuple[int, str, str]]]:
@@ -93,7 +155,9 @@ class LogTemplateProfile(Profile):
         )
 
     def render(self, ctx: DigestContext) -> str:
-        templates, mined = mine_templates(ctx.stdout.text_lines)
+        all_lines = ctx.stdout.text_lines
+        templates, mined = mine_templates(all_lines)
+        pem_lines = _private_key_line_ranges(ctx.stdout.text)
 
         ranked = sorted(templates.items(), key=lambda kv: (-kv[1][0], kv[1][1], kv[0]))
         top = ranked[:10]
@@ -114,7 +178,9 @@ class LogTemplateProfile(Profile):
             )
         ]
         for tpl, (count, first) in top:
-            line = f"  {fmt_int(count)}× L{first}: {tpl[:EVIDENCE_LINE_CHARS]}"
+            shown_tpl = display_template(all_lines[first - 1], EVIDENCE_LINE_CHARS,
+                                         in_key_block=_in_ranges(first, pem_lines))
+            line = f"  {fmt_int(count)}× L{first}: {shown_tpl}"
             if count > 1:
                 # Point-attached retrieval affordance: a deterministic span
                 # token minted exactly at the omission site (SPEC §6.4).
@@ -132,7 +198,7 @@ class LogTemplateProfile(Profile):
         if ordered:
             body.append("exceptional:")
             for i, raw in shown_exc:
-                body.append(f"  L{i}: {raw[:180]}")
+                body.append(f"  L{i}: {clip_redacting(raw, 180)}")
             if len(ordered) > len(shown_exc):
                 body.append(f"  … +{fmt_int(len(ordered) - len(shown_exc))} more exceptional lines")
             shown += len(shown_exc)

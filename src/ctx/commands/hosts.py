@@ -300,7 +300,10 @@ def cmd_orchestrate(ws, ns) -> int:
     code, text = orchestrate(
         ws, ns.task, dry_run=ns.dry_run, force_run=ns.force_run, **extra
     )
-    print(text)
+    from ctx.textutil import model_visible
+
+    # Phase details quote agent stderr and ledger notes: model-visible text.
+    print(model_visible(text, ws.config.redaction))
     return code
 
 

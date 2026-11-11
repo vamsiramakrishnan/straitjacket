@@ -18,7 +18,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import fmt_int, short_path
+from ctx.textutil import fmt_int, short_path, clip_redacting
 
 # grep -n / rg: "path:line:content"  (also "path:line:col:content" from some
 # tools — the col is folded into content, harmless for the census).
@@ -104,7 +104,7 @@ class SearchProfile(Profile):
         shown = 0
         body.append("top matches:")
         for f, line, content, _stdout_line in matches[:8]:
-            body.append(f"  {short_path(f)}:{line}: {content.strip()[:120]}")
+            body.append(f"  {short_path(f)}:{line}: {clip_redacting(content.strip(), 120)}")
             shown += 1
         if len(matches) > 8:
             # Real stdout coordinates, covering EVERY remaining match. The

@@ -25,6 +25,7 @@ generation changed since preview.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 from ctx import bounds
 
 import difflib
@@ -187,7 +188,7 @@ def _match_row(doc: dict[str, Any]) -> dict[str, Any] | None:
     line = int(start.get("line", 0)) + 1  # ast-grep lines are 0-based
     col = int(start.get("column", 0))
     text = str(doc.get("lines") or doc.get("text") or "").splitlines()
-    first = text[0].strip()[:EVIDENCE_LINE_CHARS] if text else ""
+    first = clip_redacting(text[0].strip(), EVIDENCE_LINE_CHARS) if text else ""
     return {"file": rel.replace("\\", "/"), "line": line, "col": col, "text": first}
 
 
@@ -278,7 +279,8 @@ def ast_search(
             continue
         for i, ln in enumerate(t.text.splitlines(), start=1):
             if rx.search(ln):
-                rows.append({"file": rel, "line": i, "col": 0, "text": ln.strip()[:EVIDENCE_LINE_CHARS]})
+                rows.append({"file": rel, "line": i, "col": 0,
+                             "text": clip_redacting(ln.strip(), EVIDENCE_LINE_CHARS)})
     rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
     meta = {
         "engine": "regex-fallback",
@@ -341,7 +343,7 @@ def _lib_search(
             line = int(start.line) + 1  # ast_grep_py ranges are 0-based lines
             col = int(start.column)
             text = node.text().splitlines()
-            first = text[0].strip()[:EVIDENCE_LINE_CHARS] if text else ""
+            first = clip_redacting(text[0].strip(), EVIDENCE_LINE_CHARS) if text else ""
             rows.append({"file": rel, "line": line, "col": col, "text": first})
     rows.sort(key=lambda r: (r["file"], r["line"], r["col"]))
     meta = {"engine": engine_id(), "precision": "structural", "matched": len(rows)}

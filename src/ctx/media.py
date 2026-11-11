@@ -41,6 +41,7 @@ absolute path.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import contextlib
 import dataclasses
 import hashlib
@@ -841,7 +842,7 @@ def clean_text(value: object, limit: int = TEXT_FIELD_CHARS) -> str:
     digest but cannot start one or add one."""
     text = " ".join(_CTRL.sub(" ", str(value)).split())
     limit = bounds.count(limit, default=TEXT_FIELD_CHARS)
-    return text if len(text) <= limit else text[:max(limit - 1, 0)] + "…"
+    return text if len(text) <= limit else clip_redacting(text, max(limit - 1, 0)) + "…"
 
 
 def has_control_chars(text: object) -> bool:

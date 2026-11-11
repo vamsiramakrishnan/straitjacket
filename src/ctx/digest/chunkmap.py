@@ -111,6 +111,15 @@ class Chunk:
     signal_text: str = ""
     last_signal_line: int = 0
     last_signal_text: str = ""
+    # Where the label and signal text come from: character spans into the
+    # mapped text. ``label`` / ``signal_text`` above are the RAW strings; a
+    # renderer never shows them. It re-derives what it displays from these
+    # spans, redacted in context (ctx.digest.intakeprof.SecretView), so a
+    # secret is judged whole -- never on a clipped or piece-split fragment.
+    label_spans: tuple = ()          # ((start, end), ...) heading titles or one line
+    label_path: bool = False         # True: label_spans are a heading path
+    signal_span: tuple = (0, 0)
+    last_signal_span: tuple = (0, 0)
 
     @property
     def bytes(self) -> int:
@@ -121,15 +130,22 @@ class Chunk:
         return self.end_line - self.start_line + 1
 
 
+#: What a redacted span shows as in a chunk-map rendering.
+REDACTED_MARK = "[ctx:redacted]"
+
+
 def clip_label(text: str, limit: int = LABEL_CHARS) -> str:
-    """Collapse whitespace, drop control characters, clip with an ellipsis."""
+    """Collapse whitespace, drop control characters, clip with an ellipsis.
+    Pure formatting: callers that display payload text pass text already
+    redacted in context (``SecretView``), never a raw slice."""
     text = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _heading_label(stack: list[tuple[int, str]]) -> str:
-    """Heading path, deepest last; leading components fall off first."""
-    parts = [title for _, title in stack if title]
+def heading_path(titles: list[str]) -> str:
+    """Heading path from component titles, deepest last; leading components
+    fall off first."""
+    parts = [t for t in titles if t]
     if not parts:
         return ""
     label = " > ".join(parts)
@@ -137,6 +153,10 @@ def _heading_label(stack: list[tuple[int, str]]) -> str:
         parts = parts[1:]
         label = "… > " + " > ".join(parts)
     return clip_label(label)
+
+
+def _heading_label(stack) -> str:
+    return heading_path([t for _, t, _ in stack])
 
 
 def _rank_lines(lines: list[str], first_line: int) -> tuple[int, int, str, int, str]:
@@ -221,7 +241,7 @@ def chunk_map(
     ascii_only = text.isascii()
 
     chunks: list[Chunk] = []
-    heads: list[tuple[int, str]] = []   # (level, title) stack
+    heads: list[tuple[int, str, tuple[int, int]]] = []   # (level, title, span) stack
     fence: str | None = None
 
     # The open chunk.
@@ -230,24 +250,39 @@ def chunk_map(
     c_cost = 0
     c_bytes = 0
     c_label = ""
+    c_label_spans: tuple = ()
     c_texts: list[str] = []
+    c_chars: list[int] = []   # char offset of each open line in ``text``
     byte_pos = 1  # 1-based offset of the next line's first byte
+    char_pos = 0  # 0-based char offset of the current line in ``text``
     prev_blank = False
 
     def close(end_line: int) -> None:
-        nonlocal c_cost, c_bytes, c_texts, c_label
+        nonlocal c_cost, c_bytes, c_texts, c_label, c_chars, c_label_spans
         if not c_texts:
             return
-        label = c_label or next(
-            (clip_label(t) for t in c_texts if t.strip()), "(blank)"
-        )
+        label, spans, path = c_label, c_label_spans, bool(c_label)
+        if not label:
+            first = next((k for k, t in enumerate(c_texts) if t.strip()), None)
+            label = clip_label(c_texts[first]) if first is not None else "(blank)"
+            spans = ((c_chars[first], c_chars[first] + len(c_texts[first])),) if first is not None else ()
         rank, s_line, s_text, l_line, l_text = _rank_lines(c_texts, c_start)
+
+        def line_span(n: int) -> tuple[int, int]:
+            if not n:
+                return (0, 0)
+            k = n - c_start
+            return (c_chars[k], c_chars[k] + len(c_texts[k]))
+
         chunks.append(Chunk(len(chunks) + 1, c_start, end_line, c_byte,
                             c_byte + c_bytes - 1, label, rank, "lines",
-                            s_line, s_text, l_line, l_text))
+                            s_line, s_text, l_line, l_text,
+                            spans, path, line_span(s_line), line_span(l_line)))
         c_cost = c_bytes = 0
         c_texts = []
+        c_chars = []
         c_label = ""
+        c_label_spans = ()
 
     for i, raw in enumerate(parts):
         lineno = i + 1
@@ -278,7 +313,8 @@ def chunk_map(
             level = len(heading.group(1))
             while heads and heads[-1][0] >= level:
                 heads.pop()
-            heads.append((level, clip_label(heading.group(2))))
+            heads.append((level, clip_label(heading.group(2)),
+                          (char_pos + heading.start(2), char_pos + heading.end(2))))
 
         if cost > cap:
             # One line too large for any chunk: byte-range pieces of it.
@@ -287,16 +323,22 @@ def chunk_map(
             if i < last or trailing_nl:
                 data += b"\n"
             prefix = _heading_label(heads)
+            head_spans = tuple(sp for _, t, sp in heads if t)
             pos = 0
+            piece_char = char_pos
             for end in _byte_cuts(data, max(1, target - line_overhead),
                                   max(1, cap - line_overhead)):
                 piece = data[pos:end].decode("utf-8", "replace")
                 label = prefix or clip_label(piece) or "(blank)"
+                span = (piece_char, piece_char + len(piece.rstrip("\n")))
                 rank, _, s_text, _, l_text = _rank_lines([piece], lineno)
                 chunks.append(Chunk(len(chunks) + 1, lineno, lineno, byte_pos + pos,
                                     byte_pos + end - 1, label, rank, "bytes",
                                     lineno if rank else 0, s_text[:_RANK_WINDOW],
-                                    lineno if rank else 0, l_text[:_RANK_WINDOW]))
+                                    lineno if rank else 0, l_text[:_RANK_WINDOW],
+                                    head_spans if prefix else (span,), bool(prefix),
+                                    span if rank else (0, 0), span if rank else (0, 0)))
+                piece_char += len(piece)
                 pos = end
             byte_pos += size
             c_start, c_byte = lineno + 1, byte_pos
@@ -305,11 +347,15 @@ def chunk_map(
             if not c_texts:
                 c_start, c_byte = lineno, byte_pos
                 c_label = _heading_label(heads)
+                c_label_spans = tuple(sp for _, t, sp in heads if t)
             c_texts.append(line)
+            c_chars.append(char_pos)
             c_cost += cost
             c_bytes += size
             byte_pos += size
             prev_blank = blank and fence is None
+
+        char_pos += len(raw) + 1
 
         if marker is not None:
             token = marker.group(1)

@@ -20,7 +20,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int, short_path
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int, short_path
 
 _COLON_RE = re.compile(
     r"^\s*(?P<file>[^\s:][^:]*\.\w{1,12}):(?P<line>\d+):(?:\d+:?)?\s*"
@@ -170,7 +170,7 @@ class LintProfile(Profile):
         tag = f" · span {sid}" if sid else ""
         body.append(f"  first diagnostic {first_stream}:L{first_line}-L{end}:{tag}")
         for raw in first_view.text_lines[first_line - 1 : end]:
-            body.append(f"    | {raw[:EVIDENCE_LINE_CHARS]}")
+            body.append(f"    | {clip_redacting(raw, EVIDENCE_LINE_CHARS)}")
 
         rid = "run:PENDING"
         top_rule = by_rule.most_common(1)[0][0] if by_rule else "error"

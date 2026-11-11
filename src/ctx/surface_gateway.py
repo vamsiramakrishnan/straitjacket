@@ -23,6 +23,7 @@ tool error, never a gateway crash.
 
 from __future__ import annotations
 
+from ctx.textutil import clip_redacting  # redaction-aware clips
 import json
 import subprocess
 import sys
@@ -60,7 +61,8 @@ def _bound_result(result: dict[str, Any], max_bytes: int = _MAX_BACKEND_RESULT_B
                     f"{len(raw):,} bytes — the gateway caps proxied floods]"
                 )
                 room = max(0, max_bytes - len(note.encode("utf-8")))
-                head = raw[:room].decode("utf-8", "ignore")
+                shown = len(raw[:room].decode("utf-8", "ignore"))
+                head = clip_redacting(raw[: room + 4096].decode("utf-8", "ignore"), shown)
                 block = {**block, "text": head + note}
         out_blocks.append(block)
     return {**result, "content": out_blocks}
@@ -566,7 +568,7 @@ class Gateway:
             return self._text(f"no tool matches {query!r}; surface_index lists families")
         lines = [f"Tools matching {query!r} (surface_reveal target=<name> to enable one):"]
         for _, name, desc, shown in hits[:_MAX_INDEX_MATCHES]:
-            d = desc[:_MAX_DESC_CHARS] + ("…" if len(desc) > _MAX_DESC_CHARS else "")
+            d = clip_redacting(desc, _MAX_DESC_CHARS) + ("…" if len(desc) > _MAX_DESC_CHARS else "")
             lines.append(f"  {'●' if shown else '○'} {name} — {d}".rstrip(" —"))
         if len(hits) > _MAX_INDEX_MATCHES:
             lines.append(f"  … {len(hits) - _MAX_INDEX_MATCHES} more matches omitted; "

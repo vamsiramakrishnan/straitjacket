@@ -6,7 +6,7 @@ import hashlib
 import re
 
 from ctx.digest.base import DigestContext, Profile, StreamView, from_intake
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int
 
 # Deterministic salience: error-ish lines first, then head/tail anchors.
 _ERROR_RE = re.compile(
@@ -215,7 +215,7 @@ class TextProfile(Profile):
                     return "\n".join(lines + summary + self.coverage_lines(ctx, shown_lines)
                                      + self.next_lines(ctx, suggestions))
                 for stream, number, sample in selected:
-                    summary.append(f"  evidence {stream}:L{number}: {sample[:EVIDENCE_LINE_CHARS]}")
+                    summary.append(f"  evidence {stream}:L{number}: {clip_redacting(sample, EVIDENCE_LINE_CHARS)}")
                 suggestions = [
                     f"ctx get run:PENDING#{stream} --lines {max(1, number - 1)}:{number}"
                     for stream, number, _ in selected
@@ -241,11 +241,11 @@ class TextProfile(Profile):
                 hits = [h for h in hits if h[2] > 0]
                 if hits:
                     i, ln, rank = max(hits, key=lambda h: (h[2], -h[0]))
-                    summary.append(f"  first signal {view.name}:L{i}: {ln[:EVIDENCE_LINE_CHARS]}")
+                    summary.append(f"  first signal {view.name}:L{i}: {clip_redacting(ln, EVIDENCE_LINE_CHARS)}")
                     shown += 1
                     j, lj, _ = hits[-1]
                     if j != i:
-                        summary.append(f"  terminal signal {view.name}:L{j}: {lj[:EVIDENCE_LINE_CHARS]}")
+                        summary.append(f"  terminal signal {view.name}:L{j}: {clip_redacting(lj, EVIDENCE_LINE_CHARS)}")
                         shown += 1
                     break
         rid = "run:PENDING"
@@ -317,7 +317,7 @@ class TextProfile(Profile):
         h = min(head_n, n)
         t_start = max(h + 1, n - tail_n + 1) if tail_n > 0 else end_total + 1
         out = [
-            f"  head {view.name}:L{i}: {text_lines[i - 1].strip()[:EVIDENCE_LINE_CHARS]}"
+            f"  head {view.name}:L{i}: {clip_redacting(text_lines[i - 1].strip(), EVIDENCE_LINE_CHARS)}"
             for i in range(1, h + 1)
         ]
         shown = h
@@ -331,6 +331,6 @@ class TextProfile(Profile):
                 marker += f" · span {sid}"
             out.append(marker)
         for i in range(t_start, n + 1):
-            out.append(f"  tail {view.name}:L{i}: {text_lines[i - 1].strip()[:EVIDENCE_LINE_CHARS]}")
+            out.append(f"  tail {view.name}:L{i}: {clip_redacting(text_lines[i - 1].strip(), EVIDENCE_LINE_CHARS)}")
             shown += 1
         return out, shown, mid

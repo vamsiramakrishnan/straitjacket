@@ -233,6 +233,31 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
 
 
 # --------------------------------------------------------------- full CLI
+#: Verbs that print text stored by an EARLIER call (ledger notes and goals,
+#: relay messages): their whole stdout passes the model-visible pipeline
+#: once before it is printed (textutil's "what is redacted" statement).
+_STORED_TEXT_VERBS = frozenset({"task", "relay"})
+
+
+def _run_redacting_stdout(handler, ws, ns) -> int:
+    import io
+
+    from ctx.textutil import model_visible
+
+    buf = io.StringIO()
+    real = sys.stdout
+    sys.stdout = buf
+    try:
+        code = handler(ws, ns)
+    finally:
+        sys.stdout = real
+    out = buf.getvalue()
+    if out:
+        text = model_visible(out.rstrip("\n"), ws.config.redaction)
+        sys.stdout.write(text + "\n")
+    return code
+
+
 def _main_slow(args: list[str]) -> int:
     """The front door, then parse, then one handler. Every command is a row
     in _COMMANDS; nothing is special-cased here."""
@@ -252,7 +277,15 @@ def _main_slow(args: list[str]) -> int:
             return 2  # pragma: no cover
         if not wants_workspace:
             return handler(ns)
-        return handler(resolve_workspace(ns.workspace), ns)
+        ws = resolve_workspace(ns.workspace)
+        # Every clip of model-visible text honours this workspace's
+        # [redaction] policy (textutil.clip_redacting reads the scope).
+        from ctx.textutil import redaction_scope
+
+        with redaction_scope(ws.config.redaction):
+            if ns.cmd in _STORED_TEXT_VERBS:
+                return _run_redacting_stdout(handler, ws, ns)
+            return handler(ws, ns)
     except WorkspaceError as e:
         print(f"ctx: workspace error: {e}", file=sys.stderr)
         return 2

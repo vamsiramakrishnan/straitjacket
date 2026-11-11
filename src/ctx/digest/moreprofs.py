@@ -7,7 +7,7 @@ import re
 from collections import Counter
 
 from ctx.digest.base import DigestContext, Profile
-from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int
 
 _GO_FAIL_RE = re.compile(r"^--- FAIL: (\S+)", re.MULTILINE)
 _GO_PKG_RE = re.compile(r"^(ok|FAIL|---)\s", re.MULTILINE)
@@ -137,7 +137,7 @@ class GoTestProfile(Profile):
             for j in range(first_fail_i, min(first_fail_i + 8, len(lines))):
                 if re.match(r"^\s+\S", lines[j]):
                     summary.append(
-                        f"  first failure stdout:L{j + 1}: {lines[j].strip()[:EVIDENCE_LINE_CHARS]}"
+                        f"  first failure stdout:L{j + 1}: {clip_redacting(lines[j].strip(), EVIDENCE_LINE_CHARS)}"
                     )
                     shown += 1
                     break
@@ -272,7 +272,7 @@ class CargoTestProfile(Profile):
                     nxt = view.text_lines[i] if i < len(view.text_lines) else ""
                     msg = rest or nxt.strip()
                     summary.append(
-                        f"  first panic {view.name}:L{i}: {pm.group('loc')}: {msg[:140]}"
+                        f"  first panic {view.name}:L{i}: {pm.group('loc')}: {clip_redacting(msg, 140)}"
                     )
                     shown += 1
                     done = True
@@ -443,12 +443,12 @@ class UnittestProfile(Profile):
                             break
                     if frame_j is not None:
                         summary.append(
-                            f"  innermost frame {view.name}:L{frame_j + 1}: {lines[frame_j].strip()[:EVIDENCE_LINE_CHARS]}"
+                            f"  innermost frame {view.name}:L{frame_j + 1}: {clip_redacting(lines[frame_j].strip(), EVIDENCE_LINE_CHARS)}"
                         )
                         shown += 1
                     if exc_j is not None:
                         summary.append(
-                            f"  first failure {view.name}:L{exc_j + 1}: {lines[exc_j].strip()[:EVIDENCE_LINE_CHARS]}"
+                            f"  first failure {view.name}:L{exc_j + 1}: {clip_redacting(lines[exc_j].strip(), EVIDENCE_LINE_CHARS)}"
                         )
                         shown += 1
                     break
@@ -521,7 +521,7 @@ class JestProfile(Profile):
         for name in list(dict.fromkeys(n.strip() for n in fail_names))[:3]:
             # Strip elapsed-time suffixes like "(12 ms)" — no timing noise.
             name = re.sub(r"\s*\(\d+\s*m?s\)\s*$", "", name)
-            summary.append(f"  failing: {name[:140]}")
+            summary.append(f"  failing: {clip_redacting(name, 140)}")
             shown += 1
         rid = "run:PENDING"
         return "\n".join(
@@ -576,7 +576,7 @@ class BuildProfile(Profile):
             for i, ln in enumerate(view.text_lines, start=1):
                 dm = _DIAG_RE.match(ln)
                 if dm and dm.group("sev").lower() == "error":
-                    summary.append(f"  first error {view.name}:L{i}: {ln.strip()[:EVIDENCE_LINE_CHARS]}")
+                    summary.append(f"  first error {view.name}:L{i}: {clip_redacting(ln.strip(), EVIDENCE_LINE_CHARS)}")
                     shown += 1
                     break
             else:
