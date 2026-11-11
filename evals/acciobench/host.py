@@ -31,6 +31,7 @@ for _p in (_REPO_ROOT, _REPO_SRC):
         sys.path.insert(0, str(_p))
 
 from ctx.deliverables import audit_deliverables  # noqa: E402
+from ctx.hook import ctx_command_words, ctx_read_kind  # noqa: E402
 from ctx.residence import extract_mutation_receipts  # noqa: E402
 from ctx.sessiondir import session_reads_path  # noqa: E402
 from ctx.toolresult import prepend_structured_data_shape  # noqa: E402
@@ -720,6 +721,24 @@ class ToolHost:
             if pseg.is_dir():
                 support_dirs.append(pseg.resolve())
         self._support_ro_dirs: tuple[Path, ...] = tuple(dict.fromkeys(support_dirs))
+        watch: list[Path] = [
+            config.dataset_root,
+            config.workdir,
+            _REPO_ROOT / "evals",
+            _REPO_ROOT / "tests",
+            config.dataset_root / "real_replica_bench" / "mock_services",
+            self.meta_dir / "mock_services",
+            self.meta_dir / "mock_state",
+            self.ctx_extract_dir,
+            *self._support_ro_dirs,
+        ]
+        if config.runtime_dir is not None:
+            watch.append(config.runtime_dir)
+        self._bwrap_watch_dirs: tuple[Path, ...] = tuple(watch)
+        self._bwrap_args_cache: dict[tuple[str, tuple[bool, ...]], list[str]] = {}
+        # Which path served each ctx call the model made (see _route_ctx_command).
+        self.ctx_host_fastpath_calls: int = 0
+        self.ctx_sandboxed_calls: int = 0
         self._service_baseline: dict[str, Any] = self._snapshot_service_baseline() if self.is_sj else {}
 
     @property
@@ -828,6 +847,19 @@ class ToolHost:
         return "/task"
 
     def _bwrap_mount_args(self, guest_wd: str) -> list[str]:
+        """Mount arguments for one sandboxed call, computed once per working directory.
+
+        Path resolution and the containment checks below cost milliseconds and never
+        change for a host; only whether a few directories exist can (mock state, staged
+        services, extracts), so their existence is part of the cache key."""
+        key = (guest_wd, tuple(p.is_dir() for p in self._bwrap_watch_dirs))
+        cached = self._bwrap_args_cache.get(key)
+        if cached is None:
+            cached = self._compute_bwrap_mount_args(guest_wd)
+            self._bwrap_args_cache[key] = cached
+        return list(cached)
+
+    def _compute_bwrap_mount_args(self, guest_wd: str) -> list[str]:
         args: list[str] = [
             "--die-with-parent",
             "--unshare-pid",
@@ -1091,34 +1123,64 @@ class ToolHost:
             text = f"[exit {code}]\n" + text
         return text.strip() or "(command executed with no output)"
 
-    def ctx_direct(self, args_str: str) -> str:
+    def _ctx_in_sandbox(self, inner_argv: list[str], wd: Path) -> subprocess.CompletedProcess[str]:
+        """Run a ctx invocation (or ``bash -c`` of one) inside the trial sandbox."""
+        self.ctx_sandboxed_calls += 1
+        return self._run_in_sandbox(wd, inner_argv, timeout=120.0)
+
+    def _ctx_store_or_sandbox(self, args: list[str], wd: Path) -> subprocess.CompletedProcess[str]:
+        """Run ctx with ``args`` (``[verb, ...]``) on the host fast path ONLY when the
+        product's own grammar (``ctx.hook.ctx_read_kind``) says it reads nothing but
+        ctx's store by ``run:`` handle; every other form runs inside the sandbox."""
+        if ctx_read_kind(args) == "store":
+            self.ctx_host_fastpath_calls += 1
+            return self.ctx(args)
+        guest_args = [self.rewrite_guest(a) for a in args]
+        return self._ctx_in_sandbox(
+            [*self._ctx_cmd_prefix, "--workspace", str(self.ctx_ws), *guest_args], wd
+        )
+
+    def _route_ctx_command(self, command: str, wd: Path | None = None) -> str:
+        """A bash command that starts with ``ctx`` on the sj arm.
+
+        Host fast path: exactly one plain ctx call (``ctx.hook.ctx_command_words``:
+        no comment, substitution, redirection, assignment prefix, double quote or
+        second command) whose arguments read only ctx's store by ``run:`` handle
+        (``ctx get``/``search``/``stats``/``view`` of a run handle, ``diff`` of two,
+        ``intake --chunks``). Any other plain ctx call runs inside the sandbox with
+        the same argv; anything the grammar cannot read as one plain call runs in
+        the sandbox under ``bash -c``, so the shell, not the harness, interprets it."""
+        wd_path = wd or self.run_dir
+        argv = ctx_command_words(command.strip())
+        if argv is not None:
+            args = argv[1:]
+            verb = args[0] if args else ""
+        else:
+            args = []
+            try:
+                toks = shlex.split(command)
+            except ValueError:
+                toks = []
+            verb = toks[1] if len(toks) > 1 else ""
+        if verb and not verb.startswith("-"):
+            self.metrics.ctx_retrievals[verb] = self.metrics.ctx_retrievals.get(verb, 0) + 1
         try:
-            argv = shlex.split(args_str)
-        except ValueError as e:
-            return f"ERROR: could not parse ctx arguments: {e}"
-        if not argv:
-            return "ERROR: empty ctx arguments"
-        cleaned: list[str] = []
-        i = 0
-        while i < len(argv):
-            if argv[i] == "--workspace" and i + 1 < len(argv):
-                i += 2
-                continue
-            if argv[i].startswith("--workspace="):
-                i += 1
-                continue
-            cleaned.append(self.rewrite(argv[i]))
-            i += 1
-        if not cleaned:
-            return "ERROR: empty ctx subcommand"
-        verb = cleaned[0]
-        self.metrics.ctx_retrievals[verb] = self.metrics.ctx_retrievals.get(verb, 0) + 1
-        try:
-            cp = self.ctx(cleaned)
+            if argv is not None:
+                if not args:
+                    return "ERROR: empty ctx subcommand"
+                cp = self._ctx_store_or_sandbox(args, wd_path)
+            else:
+                if _SHELL_HISTORY_RE.search(command):
+                    return "[ctx-guard: host shell history outside /task is unavailable]"
+                cp = self._ctx_in_sandbox(["bash", "-c", self.rewrite_guest(command)], wd_path)
         except subprocess.TimeoutExpired:
             return "ERROR: ctx command timed out."
-        text = (cp.stdout + (("\n" + cp.stderr) if cp.stderr.strip() else "")).strip()
+        text = ((cp.stdout or "") + (("\n" + cp.stderr) if (cp.stderr or "").strip() else "")).strip()
         return text[:20000] or f"(ctx {verb}: no output, exit {cp.returncode})"
+
+    def ctx_direct(self, args_str: str) -> str:
+        """``ctx <args_str>`` as the model typed it; see :meth:`_route_ctx_command`."""
+        return self._route_ctx_command(f"ctx {args_str}".strip())
 
     def _maybe_enrich_cli_help(self, cmd_rw: str, out: str) -> str:
         if not self.is_sj:
@@ -3052,7 +3114,7 @@ class ToolHost:
         raw_handle = str(args.get("handle") or "").strip()
         if not raw_handle:
             return "ERROR: ctx_retrieve requires a non-empty 'handle' (e.g. 'run:8d8335db6848')"
-        handle = self.rewrite(raw_handle)
+        handle = raw_handle  # guest paths are rewritten only on the sandboxed route
         stream = str(args.get("stream") or "stdout").strip().lower()
         if stream not in ("stdout", "stderr"):
             stream = "stdout"
@@ -3116,8 +3178,12 @@ class ToolHost:
             )
 
         self.metrics.ctx_retrievals[metric_verb] = self.metrics.ctx_retrievals.get(metric_verb, 0) + 1
+        # The handle, pattern, query and flag values are model-supplied: only a call the
+        # product classifies as a run-handle store read may run on the host; a path, a
+        # non-run handle, a pattern that parses as a flag, or a `q` expression (which can
+        # name files) runs inside the sandbox like any other command.
         try:
-            cp = self.ctx(cmd_args)
+            cp = self._ctx_store_or_sandbox(cmd_args, self.run_dir)
         except subprocess.TimeoutExpired:
             return "ERROR: ctx_retrieve timed out."
         text = (cp.stdout + (("\n" + cp.stderr) if cp.stderr.strip() else "")).strip()
@@ -3363,16 +3429,16 @@ class ToolHost:
         if name == "bash":
             cmd = str(args.get("command") or "")
             stripped = cmd.strip()
+            wd = self.norm(str(args["workdir"])) if args.get("workdir") else self.run_dir
+            if self._is_blocked_host_path(wd) or not wd.is_dir():
+                wd = self.run_dir
             if (
                 self.is_sj
                 and (stripped.startswith("ctx ") or stripped == "ctx")
                 and not any(op in stripped for op in ("&&", "||", ";", "\n", "|", ">"))
             ):
-                return self.ctx_direct(stripped[3:].strip())
+                return self._route_ctx_command(stripped, wd)
             cmd_rw = self.rewrite_guest(cmd)
-            wd = self.norm(str(args["workdir"])) if args.get("workdir") else self.run_dir
-            if self._is_blocked_host_path(wd) or not wd.is_dir():
-                wd = self.run_dir
             if not self.is_sj:
                 return self._raw_shell_run(cmd_rw, cwd_override=wd)
 

@@ -3877,6 +3877,23 @@ def _ctx_words(command: str) -> list[str] | None:
     return ["ctx", *out]
 
 
+def ctx_command_words(command: str) -> list[str] | None:
+    """Public form of :func:`_ctx_words` for callers outside the hook (the
+    AccioBench harness decides with it which ctx calls may skip its sandbox)."""
+    return _ctx_words(command)
+
+
+def ctx_read_kind(argv: list[str]) -> str | None:
+    """``"store"``, ``"path"`` or None for ctx's arguments ``[verb, *args]``
+    (no leading ``ctx``), classified exactly as the hook's self-approval
+    classifies them (:func:`_printed_read`). Only ``"store"`` reads nothing
+    but ctx's own store by a ``run:`` handle: no path, no execution, no
+    write outside ctx's store and private directories."""
+    if not argv:
+        return None
+    return _printed_read(argv[0], list(argv[1:]))[0]
+
+
 def _printed_read_kind(verb: str, args: list[str]) -> str | None:
     """``"store"`` (reads only ctx's store by run handle), ``"path"`` (reads
     workspace paths or a handle that can hold ctx-captured content), or None
@@ -3992,7 +4009,7 @@ def _ctx_self_approved(payload: dict[str, Any], ws_root: str | None = None) -> b
             command = None
         elif name == "Bash":
             command = (_tool_command(payload) or "").strip()
-            argv = _ctx_words(command)
+            argv = ctx_command_words(command)
             if not argv or len(argv) < 2 or not _is_ctx_invocation(command, payload.get("cwd")):
                 return False
             verb, args = argv[1], argv[2:]

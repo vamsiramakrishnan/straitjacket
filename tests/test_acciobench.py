@@ -2269,6 +2269,169 @@ def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
     assert "bwrap sandbox:" in doc_report
 
 
+_DS_SENTINEL = "DS_SENTINEL_7731"
+_MC_SENTINEL = "MC_SENTINEL_4412"
+
+# Every ctx form a model could use to read a file, run a program or reach the host
+# through the bash tool. {p} is the absolute path of a grader-side sentinel, {h} a
+# real run: handle (so a store read is attached to an escape).
+_CTX_ESCAPE_BASH_FORMS = (
+    'ctx run --shell "cat {p}"',
+    "ctx run --shell 'cat {p}'",
+    "ctx run -- cat {p}",
+    "ctx run --json -- cat {p}",
+    "ctx py \"print(open('{p}').read())\"",
+    "ctx py 'print(open(\"{p}\").read())'",
+    "ctx seq 'cat {p}'",
+    "ctx get {p}",
+    "ctx get {p} --lines 1:5",
+    "ctx get repo:{p}",
+    "ctx search SENTINEL {p}",
+    "ctx search {p} SENTINEL",
+    "ctx search {h} SENTINEL --glob {p}",
+    "ctx stats {p}",
+    "ctx diff {p} {p}",
+    "ctx diff {h} {p}",
+    "ctx intake {p}",
+    "ctx intake --chunks {p}",
+    "ctx view {p}",
+    "ctx q 'lines {p}'",
+    "ctx --workspace /tmp get {p}",
+    "ctx get {h} --lines 1:5 # {p}",
+    "ctx get $(cat {p})",
+    "ctx get `cat {p}`",
+    "ctx get {h} --lines 1:5 < {p}",
+    "ctx get {h} & cat {p}",
+    "ctx get {h} <<< $(cat {p})",
+    "FOO=1 ctx get {p}",
+    "ctx get \"{p}\"",
+)
+
+
+def _ctx_retrieve_escape_forms(p: str, h: str) -> list[dict[str, Any]]:
+    return [
+        {"handle": p},
+        {"handle": p, "lines": "1:5"},
+        {"handle": p, "mode": "search", "pattern": "SENTINEL"},
+        {"handle": p, "mode": "stats"},
+        {"handle": h, "mode": "query", "query": f"lines {p}"},
+        {"handle": p, "mode": "query", "query": "count"},
+        {"handle": h, "mode": "search", "pattern": f"--glob={p}"},
+        {"handle": f"repo:{p}"},
+        {"handle": f"blob:{'a' * 12}"},
+    ]
+
+
+@pytest.mark.parametrize("use_bwrap", [None, False], ids=["bwrap_if_available", "fallback"])
+def test_ctx_host_fast_path_serves_only_store_handle_reads(
+    tmp_path: Path, use_bwrap: bool | None
+) -> None:
+    from evals.acciobench.host import bwrap_sandbox_executable
+
+    ds_root = tmp_path / "cab"
+    (ds_root / "secret").mkdir(parents=True)
+    ds_secret = ds_root / "secret" / "expected.json"
+    ds_secret.write_text(f'{{"answer": "{_DS_SENTINEL}"}}\n', encoding="utf-8")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "work", arms=("sj",), entry_gate_bytes=2_048)
+    run_dir = cfg.runs_dir / "t__sj__t1"
+    meta_dir = cfg.runs_dir / "t__sj__t1_meta"
+    (run_dir / "workspace").mkdir(parents=True)
+    (run_dir / "outputs").mkdir(parents=True)
+    mc_secret = meta_dir / "mock_case" / "grader" / "expected.json"
+    mc_secret.parent.mkdir(parents=True)
+    mc_secret.write_text(f"{_MC_SENTINEL}\n", encoding="utf-8")
+    metrics = RunMetrics(task_id="t", task_rel="file/t", category="file", arm="sj", model_id="m")
+    host = ToolHost(cfg, run_dir, meta_dir, {}, dict(os.environ), metrics, None, arm="sj", use_bwrap=use_bwrap)
+    isolated = host._use_bwrap
+    assert isolated == (use_bwrap is None and bwrap_sandbox_executable() is not None)
+
+    sandbox_calls: list[list[str]] = []
+    real_run_in_sandbox = host._run_in_sandbox
+
+    def counting_run_in_sandbox(wd: Path, inner_argv: list[str], **kw: Any) -> Any:
+        sandbox_calls.append(list(inner_argv))
+        return real_run_in_sandbox(wd, inner_argv, **kw)
+
+    host_ctx_calls: list[list[str]] = []
+    real_ctx = host.ctx
+
+    def counting_ctx(args: list[str], timeout: int = 120) -> Any:
+        host_ctx_calls.append(list(args))
+        return real_ctx(args, timeout=timeout)
+
+    host._run_in_sandbox = counting_run_in_sandbox  # type: ignore[method-assign]
+    host.ctx = counting_ctx  # type: ignore[method-assign]
+
+    step = [0]
+
+    # Each call gets a fresh mutation epoch so the readonly dedup never answers in place of routing.
+    def bash(cmd: str) -> str:
+        step[0] += 1
+        host.step = step[0]
+        host.mutation_epoch += 1
+        fr, _, _ = host.execute_part("bash", {"command": cmd})
+        return fr["functionResponse"]["response"]["output"]
+
+    def retrieve(args: dict[str, Any]) -> str:
+        step[0] += 1
+        host.step = step[0]
+        host.mutation_epoch += 1
+        fr, _, _ = host.execute_part("ctx_retrieve", args)
+        return fr["functionResponse"]["response"]["output"]
+
+    flood = bash("seq 1 3000 | sed 's/^/LEDGER_ROW_/'")
+    m = re.search(r"\brun:([0-9a-f]{6,64})\b", flood)
+    assert m is not None, flood[:400]
+    h = f"run:{m.group(1)}"
+
+    # Store-handle reads: answered correctly, by the host fast path, never the sandbox.
+    store_reads: list[tuple[str, str]] = [
+        (f"ctx get {h} --lines 1:3", "LEDGER_ROW_1"),
+        (f"ctx get {h}#stdout --lines 2:4", "LEDGER_ROW_3"),
+        (f"ctx search {h} LEDGER_ROW_2999", "LEDGER_ROW_2999"),
+        (f"ctx stats {h}", ""),
+    ]
+    for cmd, expect in store_reads:
+        n_sb, n_host = len(sandbox_calls), len(host_ctx_calls)
+        out = bash(cmd)
+        assert expect in out, (cmd, out[:300])
+        assert len(sandbox_calls) == n_sb, f"store read went to the sandbox: {cmd}"
+        assert len(host_ctx_calls) == n_host + 1, f"store read not served by the host path: {cmd}"
+    for args, expect in (
+        ({"handle": h, "lines": "5:7"}, "LEDGER_ROW_6"),
+        ({"handle": h, "mode": "search", "pattern": "LEDGER_ROW_2998"}, "LEDGER_ROW_2998"),
+        ({"handle": h, "mode": "stats"}, ""),
+    ):
+        n_sb, n_host = len(sandbox_calls), len(host_ctx_calls)
+        out = retrieve(args)
+        assert expect in out, (args, out[:300])
+        assert len(sandbox_calls) == n_sb and len(host_ctx_calls) == n_host + 1, args
+
+    # Every escape form: never the host path, always the sandbox; with bwrap it cannot see either sentinel.
+    for secret, sentinel in ((ds_secret, _DS_SENTINEL), (mc_secret, _MC_SENTINEL)):
+        for tmpl in _CTX_ESCAPE_BASH_FORMS:
+            cmd = tmpl.format(p=secret, h=h)
+            n_sb, n_host = len(sandbox_calls), len(host_ctx_calls)
+            out = bash(cmd)
+            assert len(host_ctx_calls) == n_host, f"host fast path served: {cmd}"
+            assert len(sandbox_calls) > n_sb, f"not sandboxed: {cmd}"
+            if isolated:
+                assert sentinel not in out, f"sandbox escape through: {cmd}\n{out[:400]}"
+        for args in _ctx_retrieve_escape_forms(str(secret), h):
+            n_sb, n_host = len(sandbox_calls), len(host_ctx_calls)
+            out = retrieve(args)
+            assert len(host_ctx_calls) == n_host, f"host fast path served ctx_retrieve {args}"
+            assert len(sandbox_calls) > n_sb, f"ctx_retrieve not sandboxed: {args}"
+            if isolated:
+                assert sentinel not in out, f"ctx_retrieve escape through {args}\n{out[:400]}"
+
+    # The sandboxed ctx calls still work: a run inside the sandbox sees /task.
+    (run_dir / "workspace" / "note.txt").write_text("INSIDE_OK\n", encoding="utf-8")
+    assert "INSIDE_OK" in bash("ctx run -- cat /task/workspace/note.txt")
+    assert "INSIDE_OK" in bash('ctx run --shell "cat /task/workspace/note.txt"')
+    assert host.ctx_host_fastpath_calls == len(host_ctx_calls)
+
+
 def test_deliverable_contract_and_q4_cross_row_outlier_detection(tmp_path: Path) -> None:
     from ctx.deliverables import (
         CLOSED_WORLD_CONTRACT_RULE,

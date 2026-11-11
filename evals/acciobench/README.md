@@ -164,6 +164,25 @@ python evals/acciobench_run.py report \
 | Finalization check | Direct `present_files` | Structural **Emission Gate** catching missing/0-byte/malformed-JSON deliverables and stray scratch scripts in `/task/outputs` |
 | System instruction | None | Concise 4-rule domain-agnostic `SJ_EXECUTION_PROTOCOL` |
 
+### Which `ctx` calls run on the host (`sj` arm)
+
+Every command the model issues runs inside the sandbox, with one exception kept for
+speed: a `bash` call that is exactly one plain `ctx` call reading only ctx's own store
+by a `run:` handle is answered by the harness directly, without starting the sandbox
+(about 70 ms cheaper per call). That is `ctx get run:ID[#stdout|#stderr] [--lines|--bytes|--records|--json-pointer|--span V] [--hashlines]`,
+`ctx search run:ID PATTERN...`, `ctx stats run:ID`, `ctx diff run:A run:B`,
+`ctx intake --chunks run:ID` and `ctx view run:ID ...`. The classification is the
+product's own (`ctx.hook.ctx_command_words` / `ctx.hook.ctx_read_kind`, the same
+grammar the PreToolUse hook uses to self-approve store reads), not a harness regex:
+a comment, `$(...)`, backticks, a redirection, `&`, a here-string, a double-quoted
+word, an assignment prefix, `--workspace`, a path, a `repo:`/`blob:`/other handle,
+`--glob`/`--scope`/`--symbol`, `q`, `run`, `py`, `seq`, `job` or any verb the grammar
+does not know all run inside the sandbox (a plain call with the same argv, anything
+else under `bash -c`). `ctx_retrieve` follows the same rule on the argv it builds
+from the model's `handle`, `pattern`, `query` and flag values; its `mode='query'`
+(`ctx q`, which can name files) always runs in the sandbox. The sandbox's mount
+arguments are computed once per working directory and reused.
+
 ### Harness Performance Optimizations (Both Arms Benefit Equally)
 
 1. **Thread-Local `BrowserPool` (`browser.py`)**: Cold-starting Chromium per task adds ~2s of overhead. `BrowserPool` launches one headless browser per worker thread and creates an isolated `BrowserContext` (`1440x900`, clean cookies/storage) per trial in `<30ms`, closing only the context between tasks.
