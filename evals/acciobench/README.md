@@ -180,7 +180,7 @@ python evals/acciobench_run.py report \
 | Tool schemas | `bash`, `read`, `write`, `edit`, `list`, `glob`, `grep`, `present_files` + `browser_*` (no `state_note`) | Identical tool roster + optional 1-line `state_note` checkpoint parameter |
 | Turn-0 prompt | Official `task.md` + workspace/anti-tamper contract | Same + **Birth Gate** compact workspace file manifest (`<=80` files) |
 | Output containment | Raw subprocess / file output truncated at `400,000` chars | **Entry Gate** (`24,576` B): large outputs stored via `ctx run --json`, returning structured digests + `ctx get`/`ctx search` handles |
-| Redundant call & file guards | None | Readonly call dedup per `mutation_epoch` + content-addressed `sha256` file re-read dedup |
+| Redundant call & file guards | None | Readonly call dedup per `mutation_epoch` (a bash signature normalizes only blanks, a trailing `#` comment as the shell reads it and short-flag clusters; `#` inside a word such as `run:ID#stdout` is text, so each `--lines` page is its own call) + content-addressed `sha256` file re-read dedup |
 |CLI discovery | Raw `--help` stdout | Concurrent subcommand `--help` signature enrichment (`[cli-lsp subcommand signatures]`) |
 | Process & filesystem sandbox | Linux `bubblewrap` (`bwrap`) mount + PID namespace isolation (`/task` mount, isolated `/tmp`, `dataset_root`/sibling `runs`/`mock_case` masked via `--tmpfs`, graceful fallback on macOS) | Identical `bwrap` mount + PID namespace isolation |
 | Context residence | Append-only full transcript | `WatermarkResidence` preserving mutating turns & `state_note` checkpoints while compacting stale thoughts, read-only floods, and old UI control listings |

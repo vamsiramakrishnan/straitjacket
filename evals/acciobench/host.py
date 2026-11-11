@@ -272,50 +272,88 @@ _EMBEDDED_CLI_ERR_RE = re.compile(
 _SECTION_HEADER_RE = re.compile(r"^\s*\[section:\s*([^\]]+?)\s*\]\s*$")
 
 
+# Shell tokens for the dedup signature: blanks, control/redirection operators, and words
+# (quoted strings and backslash escapes kept verbatim). `#` is ordinary inside a word.
+_DEDUP_TOKEN_RE = re.compile(
+    r"(?P<ws>[ \t]+)"
+    r"|(?P<op>&&|\|\||;;|>>|>&|<&|>\||&>|\|&|<>|[;|&()<>])"
+    r"|(?P<word>(?:'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.|[^\s'\"\\;|&()<>])+)"
+    r"|(?P<bad>.)",
+    re.S,
+)
+_DEDUP_CONTROL_OPS = frozenset({";", "&&", "||", "|", "&", "|&", ";;", "(", ")"})
+_DEDUP_BLANK_FREE_OPS = frozenset({";", "&&", "||", "|", "&", "|&", ";;"})
+_SHORT_FLAGS_RE = re.compile(r"^-[A-Za-z0-9]+$")
+
+
 def _normalize_bash_cmd_for_dedup(cmd: str) -> str:
-    """Normalize whitespace and POSIX short-flag clusters on simple shell commands for bash dedup."""
+    """Signature of a simple shell command for the readonly bash dedup.
+
+    Only differences a shell ignores are normalized: runs of blanks, a trailing comment
+    (``#`` at the START of a word outside quotes, as the shell reads it; inside a word
+    such as ``run:ID#stdout`` or ``a#b`` it is text), and the order/clustering of
+    known no-argument short flags (``ls -la`` == ``ls -a -l``). Tokens the shell reads
+    as one word stay one word, and tokens written without blanks between them are
+    joined without blanks, so two commands that differ in any word -- a handle, a
+    ``--lines`` range -- never share a signature."""
     s = (cmd or "").strip()
     if not s:
         return ""
     if "<<" in s or "\n" in s:
         return "\n".join(ln.rstrip() for ln in s.splitlines() if ln.strip())
-    try:
-        tokens = list(shlex.shlex(s, posix=False, punctuation_chars=";|&"))
-    except ValueError:
-        return " ".join(s.split())
-    out: list[str] = []
+    tokens: list[tuple[str, bool]] = []  # (text, preceded by blanks)
+    spaced = False
+    for m in _DEDUP_TOKEN_RE.finditer(s):
+        kind = m.lastgroup
+        if kind == "ws":
+            spaced = True
+            continue
+        if kind == "bad":  # an unterminated quote or a trailing backslash
+            return " ".join(s.split())
+        text = m.group()
+        if kind == "word" and text.startswith("#"):
+            break  # a comment runs to the end of the line
+        if kind == "op" and text in _DEDUP_BLANK_FREE_OPS:
+            # Blanks around these never change meaning (`a|b` == `a | b`).
+            tokens.append((text, True))
+            spaced = True
+            continue
+        tokens.append((text, spaced or not tokens))
+        spaced = kind == "op" and text not in ("(", ")")  # `> out` == `>out`
+
+    out: list[tuple[str, bool]] = []
     cmd_word: str | None = None
     i = 0
     while i < len(tokens):
-        tok = tokens[i]
-        if tok in (";", "&&", "||", "|", "&"):
-            out.append(tok)
+        tok, sp = tokens[i]
+        if tok in _DEDUP_CONTROL_OPS:
+            out.append((tok, sp))
             cmd_word = None
             i += 1
             continue
-        if cmd_word is None and not tok.startswith(("-", "'", '"')) and "=" not in tok:
+        if cmd_word is None and not tok.startswith(("-", "'", '"', "<", ">")) and "=" not in tok:
             cmd_word = Path(tok).name.lower()
-            out.append(tok)
+            out.append((tok, sp))
             i += 1
             continue
         allowed = _FLAG_CLUSTER_CMDS.get(cmd_word or "")
-        if allowed and re.match(r"^-[A-Za-z0-9]+$", tok):
+        if allowed and sp and _SHORT_FLAGS_RE.match(tok):
             flags: list[str] = []
             j = i
             while j < len(tokens):
-                t = tokens[j]
-                if re.match(r"^-[A-Za-z0-9]+$", t) and all(ch in allowed for ch in t[1:]):
+                t, tsp = tokens[j]
+                if tsp and _SHORT_FLAGS_RE.match(t) and all(ch in allowed for ch in t[1:]):
                     flags.extend(f"-{ch}" for ch in t[1:])
                     j += 1
                 else:
                     break
             if flags:
-                out.extend(sorted(set(flags)))
+                out.extend((f, True) for f in sorted(set(flags)))
                 i = j
                 continue
-        out.append(tok)
+        out.append((tok, sp))
         i += 1
-    return " ".join(out)
+    return "".join((" " + t if (sp and k) else t) for k, (t, sp) in enumerate(out))
 
 
 def _extract_cli_invocations(cmd: str) -> list[tuple[str, str, int]]:

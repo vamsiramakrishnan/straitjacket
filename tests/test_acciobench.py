@@ -979,6 +979,52 @@ def test_tool_host_readonly_dedup_and_sha256_file_dedup(tmp_path: Path) -> None:
     assert "22.0%" in r3["functionResponse"]["response"]["output"]
 
 
+def test_bash_dedup_signature_keeps_paging_and_words_with_hash_distinct(tmp_path: Path) -> None:
+    from evals.acciobench.host import _normalize_bash_cmd_for_dedup as sig
+
+    # `#` inside a word is text; `:` never splits a word.
+    a = sig("ctx get run:4088c70a0973#stdout --lines 1:5")
+    b = sig("ctx get run:4088c70a0973#stdout --lines 121:240")
+    assert a != b and "run:4088c70a0973#stdout" in a and "1:5" in a
+    assert sig("ctx get run:4088c70a0973#stdout --lines 1:5") != sig("ctx get run:4088c70a0974#stdout --lines 1:5")
+    assert sig("ctx get run:aaaaaa#stdout --lines 1:5") != sig("ctx get run:aaaaaa#stderr --lines 1:5")
+    assert sig("echo a#b c") != sig("echo a#b d")
+    assert sig("echo a:b") != sig("echo a : b")
+    assert sig("curl http://x/y#one") != sig("curl http://x/y#two")
+    assert sig("grep 'a#b' f") != sig("grep 'a#c' f")
+    # A real trailing comment, blanks and flag clusters still normalize.
+    assert sig("ls -la # list") == sig("ls -la") == sig("ls   -al")
+    assert sig("cat x|wc -l") == sig("cat x | wc  -l")
+    assert sig("echo '#' x") == "echo '#' x" and sig('echo "#" x') == 'echo "#" x'
+    assert sig("echo '#' x") != sig("echo")
+
+    host, metrics, _, _ = _make_host(tmp_path, arm="sj", entry_gate_bytes=2_048)
+    host.step = 1
+    fr, _, _ = host.execute_part("bash", {"command": "seq 1 3000 | sed 's/^/PAGE_ROW_/'"})
+    m = re.search(r"\brun:([0-9a-f]{6,64})\b", fr["functionResponse"]["response"]["output"])
+    assert m is not None
+    h = f"run:{m.group(1)}"
+
+    def bash(step: int, cmd: str) -> str:
+        host.step = step
+        out, _, _ = host.execute_part("bash", {"command": cmd})
+        return out["functionResponse"]["response"]["output"]
+
+    p1 = bash(2, f"ctx get {h}#stdout --lines 1:5")
+    assert "PAGE_ROW_1" in p1 and host.last_call_was_dup is False
+    p2 = bash(3, f"ctx get {h}#stdout --lines 121:240")
+    assert host.last_call_was_dup is False and "PAGE_ROW_121" in p2 and "Identical call" not in p2
+    p3 = bash(4, f"ctx get {h}#stdout --lines 2:6")
+    assert host.last_call_was_dup is False and "PAGE_ROW_6" in p3
+    dup_before = metrics.dup_blocked
+    p4 = bash(5, f"ctx get {h}#stdout --lines 1:5")
+    assert host.last_call_was_dup is True and metrics.dup_blocked == dup_before + 1
+    assert "Identical call already ran" in p4
+    bash(6, "ls -la")
+    bash(7, "ls -la # list again")
+    assert host.last_call_was_dup is True
+
+
 def test_tool_host_parallel_cli_help_enrichment(tmp_path: Path) -> None:
     cli_dir = tmp_path / "cli_bin"
     _write_executable(
