@@ -22,7 +22,7 @@ import time
 from typing import Any
 
 from .config import BenchConfig, RunMetrics, discover_all_tasks, load_cab_task, resolve_ctx_bin
-from .host import ToolHost, bwrap_sandbox_executable
+from .host import ToolHost, bwrap_sandbox_executable, bwrap_unavailable_reason
 from .sandbox import TaskSandbox, _resolve_runtime_paths, kill_by_slot_tag
 
 __all__ = ["run_doctor", "validate_task_referee"]
@@ -213,8 +213,10 @@ def run_doctor(config: BenchConfig) -> tuple[bool, list[str]]:
         lines.append(f"[OK] bwrap sandbox: {bwrap_bin} (mount + PID namespace isolation active)")
     else:
         lines.append(
-            "[WARN] bwrap sandbox: unavailable (falling back to path/env confinement; "
-            "install bubblewrap on Linux for mount + PID namespace isolation)"
+            f"[WARN] bwrap sandbox: unavailable ({bwrap_unavailable_reason()}). doctor and "
+            "validate still work, but a scored 'run' will be REFUSED: without bubblewrap there "
+            "is no filesystem isolation. Install bubblewrap (e.g. sudo apt-get install -y "
+            "bubblewrap) or pass --allow-unsandboxed to 'run' to override."
         )
 
     # 6. Headless browser executable

@@ -108,6 +108,25 @@ python evals/acciobench_run.py run \
   --workers 8
 ```
 
+### Bubblewrap Is Required for Scored Runs
+
+`run` refuses to start when the bwrap sandbox is unavailable (bwrap missing, unable to
+create mount + PID namespaces, a non-Linux host, or `ACCIOBENCH_NO_BWRAP=1`): it exits
+non-zero before any model call or trial setup and prints why, how to install
+bubblewrap (`sudo apt-get install -y bubblewrap` on Debian/Ubuntu) and the override.
+Without bubblewrap neither arm has filesystem isolation (see
+[`/tmp` without bubblewrap](#tmp-without-bubblewrap)), so a score cannot be trusted.
+The only override is the explicit `--allow-unsandboxed` flag on `run`
+(`BenchConfig(allow_unsandboxed=True)`); `ACCIOBENCH_NO_BWRAP` alone is not one. The
+check sits in `run_trial` itself, so every caller (`run`, `run_suite`, a script) is
+covered. With the override, `run` prints one prominent warning at start, every
+`result.json` records `sandbox: "none"` (`"bwrap"` when sandboxed; `""` for results
+written before this field existed, which reports do not count), and every report
+states how many trials ran without filesystem isolation (table and markdown: a
+`NO FILESYSTEM ISOLATION` line at the top; JSON: `unsandboxed_runs`, total and per arm,
+always present; HTML: a header entry). `doctor` and `validate` cost nothing and still
+run without bwrap, but say that a scored run will be refused.
+
 ### Task Selection & Resume Controls
 
 - `--tasks id1,id2,...`: run explicit task IDs.
@@ -216,7 +235,7 @@ results are already on disk, so `run` names the report that failed, prints the
 | Output containment | Raw subprocess / file output truncated at `400,000` chars | **Entry Gate** (`24,576` B): large outputs stored via `ctx run --json`, returning structured digests + `ctx get`/`ctx search` handles |
 | Redundant call & file guards | None | Readonly call dedup per `mutation_epoch` (a bash signature normalizes only blanks, a trailing `#` comment as the shell reads it and short-flag clusters; `#` inside a word such as `run:ID#stdout` is text, so each `--lines` page is its own call) + content-addressed `sha256` file re-read dedup |
 |CLI discovery | Raw `--help` stdout | Concurrent subcommand `--help` signature enrichment (`[cli-lsp subcommand signatures]`) |
-| Process & filesystem sandbox | Linux `bubblewrap` (`bwrap`) mount + PID namespace isolation (`/task` mount, isolated `/tmp`, `dataset_root`/sibling `runs`/`mock_case` masked via `--tmpfs`, graceful fallback on macOS) | Identical `bwrap` mount + PID namespace isolation |
+| Process & filesystem sandbox | Linux `bubblewrap` (`bwrap`) mount + PID namespace isolation (`/task` mount, isolated `/tmp`, `dataset_root`/sibling `runs`/`mock_case` masked via `--tmpfs`; required for scored runs, see above) | Identical `bwrap` mount + PID namespace isolation |
 | Context residence | Append-only full transcript | `WatermarkResidence` preserving mutating turns & `state_note` checkpoints while compacting stale thoughts, read-only floods, and old UI control listings |
 | Finalization check | Direct `present_files` | Structural **Emission Gate** catching missing/0-byte/malformed-JSON deliverables and stray scratch scripts in `/task/outputs` |
 | System instruction | None | Concise 4-rule domain-agnostic `SJ_EXECUTION_PROTOCOL` |
@@ -241,7 +260,8 @@ What the fallback cannot do, by design: it has **no filesystem isolation** (bash
 read and write anything the harness user can, the dataset and grader files included);
 a path built at run time (`T=/t; T=${T}mp`, `$(echo /tm)p`) is not seen by the rewrite;
 and a name that already exists only in the host's `/tmp` is left to the host, so bash
-can read and write it. Run with bubblewrap for any result you intend to publish.
+can read and write it. This is why a scored `run` refuses to start without bubblewrap
+unless `--allow-unsandboxed` is passed, and why reports count every trial that ran so.
 
 ### Which `ctx` calls run on the host (`sj` arm)
 

@@ -1307,6 +1307,7 @@ def test_run_trial_and_run_suite_paired_arms_with_residence_and_resume(tmp_path:
 
     provider = ScriptedProvider()
     cfg = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root,
         workdir=tmp_path / "ab_work",
         provider="gemini",
@@ -1405,6 +1406,7 @@ def test_grading_error_is_ungraded_reported_apart_and_regraded_on_resume(tmp_pat
     flag = tmp_path / "grader_has_run_once"
     _flaky_grader_task(ds_root, "file-flaky-grader", flag)
     cfg = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root, workdir=tmp_path / "work", provider="gemini", api_key="dummy",
         judge_provider="mock", arms=("sj",), slot_offset=70,
     )
@@ -1470,6 +1472,7 @@ def test_resume_accepts_cached_results_only_for_the_same_configuration(
     ds_root = tmp_path / "cab"
     _create_synthetic_task(ds_root, category="file", task_id="file-fp")
     base = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root, workdir=tmp_path / "work", model="model-a", provider="gemini",
         api_key="dummy", judge_provider="mock", arms=("sj",), slot_offset=60,
     )
@@ -1578,6 +1581,7 @@ def test_supersede_never_deletes_a_previous_configurations_trial(
     ds_root = tmp_path / "cab"
     _create_synthetic_task(ds_root, category="file", task_id="file-sup")
     cfg_a = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root, workdir=tmp_path / "work", model="model-a", provider="gemini",
         api_key="dummy", judge_provider="mock", arms=("sj",),
     )
@@ -1700,7 +1704,7 @@ def test_run_command_survives_a_report_that_fails_to_render(
 
     monkeypatch.setattr(ab_cli, "render_summary_report", boom)
     args = ab_cli.build_parser().parse_args(
-        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-rep",
+        ["run", "--allow-unsandboxed", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-rep",
          "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock"]
     )
     assert ab_cli._cmd_run(args) == 0
@@ -1738,7 +1742,8 @@ def test_run_reports_leave_out_an_earlier_result_for_a_trial_that_raised(
     monkeypatch.setattr(ab_cli, "run_suite", fake_suite)
     out_json = tmp_path / "report.json"
     args = ab_cli.build_parser().parse_args(
-        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-a,file-b",
+        ["run", "--allow-unsandboxed", "--dataset-root", str(ds_root), "--workdir", str(workdir),
+         "--tasks", "file-a,file-b",
          "--arms", "raw,sj", "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock",
          "--format", "json", "--output", str(out_json), "--no-html-report"]
     )
@@ -1778,7 +1783,8 @@ def test_run_reports_show_no_completed_run_when_every_trial_raised(
     monkeypatch.setattr(ab_cli, "run_suite", all_raise)
     out_json = tmp_path / "report.json"
     args = ab_cli.build_parser().parse_args(
-        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-a,file-b",
+        ["run", "--allow-unsandboxed", "--dataset-root", str(ds_root), "--workdir", str(workdir),
+         "--tasks", "file-a,file-b",
          "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock",
          "--format", "json", "--output", str(out_json), "--no-html-report"]
     )
@@ -1997,7 +2003,8 @@ def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Pat
         f'if [ ! -e "{flag}" ]; then cp "$(dirname "$0")/bad.json" "$REWARD_JSON"; exit 0; fi\n'
         'exec bash "$(dirname "$0")/real.sh"\n',
     )
-    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+    cfg = BenchConfig(allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
+                      dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
                       judge_provider="mock", arms=("sj",))
     first = run_trial(cfg, "file-badreward", "sj", 21, _SolvingProvider())  # type: ignore[arg-type]
     assert first.termination == "present_files"
@@ -2014,6 +2021,99 @@ def test_legacy_verifier_error_note_loads_as_grading_error() -> None:
     assert m.grading_error.startswith("Traceback")
     ok = RunMetrics.from_dict({"task_id": "t", "arm": "sj", "model_id": "m", "passed": True})
     assert ok.grading_error == ""
+
+
+def test_scored_run_refuses_to_start_without_the_bwrap_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No bwrap and no explicit override: nothing is staged, graded or sent to a model,
+    whoever calls (CLI, run_suite, run_trial), and ACCIOBENCH_NO_BWRAP alone is no override."""
+    import evals.acciobench.orchestrator as orch_mod
+    from evals.acciobench.loop import UnsandboxedRunRefused
+
+    monkeypatch.setenv("ACCIOBENCH_NO_BWRAP", "1")
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-nobwrap")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("raw", "sj"))
+    assert cfg.allow_unsandboxed is False
+
+    with pytest.raises(UnsandboxedRunRefused, match="ACCIOBENCH_NO_BWRAP is set"):
+        run_trial(cfg, "file-nobwrap", "raw", 31, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    monkeypatch.setattr(orch_mod, "create_provider", lambda *_a: pytest.fail("provider created"))
+    with pytest.raises(UnsandboxedRunRefused):
+        run_suite(cfg, ["file-nobwrap"])
+    assert not cfg.workdir.exists()
+
+    monkeypatch.setattr(ab_cli, "run_suite", lambda *a, **k: pytest.fail("run_suite called"))
+    args = ab_cli.build_parser().parse_args(
+        ["run", "--dataset-root", str(ds_root), "--workdir", str(cfg.workdir), "--tasks", "file-nobwrap",
+         "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock"]
+    )
+    assert ab_cli._cmd_run(args) != 0
+    err = capsys.readouterr().err
+    assert "Refusing a scored run" in err and "ACCIOBENCH_NO_BWRAP is set" in err
+    assert "apt-get install -y bubblewrap" in err and "--allow-unsandboxed" in err
+    assert not cfg.workdir.exists()
+
+    # doctor still runs, and says a scored run would be refused.
+    _ok, lines = run_doctor(cfg)
+    assert any("bwrap sandbox: unavailable" in ln and "REFUSED" in ln for ln in lines)
+
+
+def test_allow_unsandboxed_runs_warns_and_every_report_counts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import evals.acciobench.orchestrator as orch_mod
+    from evals.acciobench.html_report import build_html_report_payload
+    from evals.acciobench.report import compute_summary_payload
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-unsandboxed")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("sj",), allow_unsandboxed=True)
+    monkeypatch.setenv("ACCIOBENCH_NO_BWRAP", "1")
+    monkeypatch.setattr(orch_mod, "create_provider", lambda *_a: _SolvingProvider())
+    capsys.readouterr()
+    (res,) = run_suite(cfg, ["file-unsandboxed"])
+    assert "WARNING: --allow-unsandboxed" in capsys.readouterr().err
+    assert res.sandbox == "none" and res.passed
+    saved = json.loads((cfg.runs_dir / "file-unsandboxed__sj__t1_meta" / "result.json").read_text(encoding="utf-8"))
+    assert saved["sandbox"] == "none"
+
+    # One sandboxed result next to it, and one written before sandboxing was recorded.
+    for arm, extra in (("raw", {"sandbox": "bwrap"}), ("raw", {})):
+        meta = cfg.runs_dir / f"file-old-{len(extra)}__{arm}__t1_meta"
+        meta.mkdir(parents=True)
+        (meta / "result.json").write_text(json.dumps(dict(
+            task_id=f"file-old-{len(extra)}", task_rel="file/x", category="file", arm=arm, model_id="m",
+            steps=3, termination="present_files", passed=True, capacity_score=1.0, **extra)), encoding="utf-8")
+    loaded = load_run_results(cfg.workdir)
+    assert sorted(r.sandbox for r in loaded) == ["", "bwrap", "none"]
+    payload = compute_summary_payload(loaded)
+    assert payload["unsandboxed_runs"] == 1 and payload["arms"]["sj"]["unsandboxed_runs"] == 1
+    assert payload["arms"]["raw"]["unsandboxed_runs"] == 0
+    for fmt in ("table", "markdown"):
+        assert "NO FILESYSTEM ISOLATION: 1 trial(s)" in render_summary_report(loaded, format=fmt), fmt
+    assert json.loads(render_summary_report(loaded, format="json"))["unsandboxed_runs"] == 1
+    html_meta = build_html_report_payload(loaded, workdir=cfg.workdir)["meta"]
+    assert html_meta["unsandboxed_total"] == 1 and html_meta["unsandboxed"] == {"sj": 1, "raw": 0}
+    assert 'id="unsandboxed-runs"' in render_summary_report(loaded, format="html", workdir=cfg.workdir)
+    # Sandboxed results alone: no warning, and the JSON still states the count (0).
+    sandboxed = [r for r in loaded if r.sandbox != "none"]
+    assert "NO FILESYSTEM ISOLATION" not in render_summary_report(sandboxed, format="table")
+    assert json.loads(render_summary_report(sandboxed, format="json"))["unsandboxed_runs"] == 0
+
+    # With the real sandbox available, the same trial records "bwrap".
+    from evals.acciobench.host import bwrap_sandbox_executable
+
+    monkeypatch.delenv("ACCIOBENCH_NO_BWRAP")
+    if bwrap_sandbox_executable() is not None:
+        import dataclasses as _dc
+
+        again = run_trial(_dc.replace(cfg, allow_unsandboxed=False), "file-unsandboxed", "sj", 32,
+                          _SolvingProvider())  # type: ignore[arg-type]
+        assert again.sandbox == "bwrap" and again.passed
 
 
 # ---------------------------------------------------------------------------
@@ -2615,6 +2715,7 @@ def test_host_empirical_fs_mutation_untitled_hygiene_and_loop_exit_guards(tmp_pa
             pass
 
     cfg = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root,
         workdir=tmp_path / "guard_work",
         provider="gemini",
@@ -3734,6 +3835,7 @@ def test_loop_turn0_contract_q3_per_service_gates_and_residence_wiring(
             pass
 
     cfg = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root,
         workdir=tmp_path / "q3_work",
         provider="gemini",
@@ -3811,6 +3913,7 @@ def test_loop_turn0_contract_q3_per_service_gates_and_residence_wiring(
             pass
 
     cfg_pf = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_pf,
         workdir=tmp_path / "q3_pf_work",
         provider="gemini",
@@ -4120,6 +4223,7 @@ def test_wave3_schemas_protocol_and_loop_service_delta_gates(
             pass
 
     cfg_pf = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_pf,
         workdir=tmp_path / "w3_pf_work",
         provider="gemini",
@@ -4197,6 +4301,7 @@ def test_wave3_schemas_protocol_and_loop_service_delta_gates(
             pass
 
     cfg_txt = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_txt,
         workdir=tmp_path / "w3_txt_work",
         provider="gemini",

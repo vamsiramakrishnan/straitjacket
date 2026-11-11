@@ -18,11 +18,13 @@ Activate the virtual environment:
 source .venv-acciobench/bin/activate
 ```
 
-Optional system packages (Ubuntu/Debian) for full Linux namespace isolation and PDF CLI utilities:
+System packages (Ubuntu/Debian): `bubblewrap` is **required** for scored runs (Linux mount + PID namespace isolation); `poppler-utils` provides the PDF CLI utilities:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y bubblewrap poppler-utils
 ```
+
+Without a working `bwrap` (missing, user namespaces disabled, non-Linux host, or `ACCIOBENCH_NO_BWRAP=1`), `run` refuses to start and exits non-zero: the fallback has no filesystem isolation, so the agent could read grader and answer files. The only override is `run --allow-unsandboxed`; it prints a warning, records `sandbox: "none"` in each `result.json`, and every report (table, markdown, JSON `unsandboxed_runs`, HTML header) states how many trials ran without isolation. `doctor` and `validate` still run without bwrap and say that a scored run would be refused.
 
 ---
 
@@ -159,6 +161,6 @@ Pricing is Vertex AI GA list (`$1.50 / 1M` uncached input, `$0.15 / 1M` cached i
 ## 6. Operational Guardrails for Agents
 
 1. **Keep model sampling/thinking parameters untouched**: Do not pass `--thinking-level` or `--max-output-tokens` when reproducing main results; both arms run at native model defaults.
-2. **Use `bwrap` on Linux**: Keep `bubblewrap` installed so every trial runs with `/task` mounted at root, isolated `/tmp`, and masked sibling trial directories.
+2. **`bwrap` is required on Linux**: Keep `bubblewrap` installed so every trial runs with `/task` mounted at root, isolated `/tmp`, and masked sibling trial directories. A scored run without it is refused; never publish numbers from a run that needed `--allow-unsandboxed` as sandboxed results (its reports say how many trials ran without isolation).
 3. **Disk space during 107-task runs**: Each trial stages mock service state under `<workdir>/runs/<task>__<arm>_meta/mock_services`. Ensure at least `15 GB` of free disk space before launching a full 214-trial paired run.
 4. **Per-configuration resume**: Completed trials in `--workdir` are automatically reused if their `config_fingerprint` matches (`result.json`). If a trial had a transient grader timeout (`grading_error`), re-running the same command re-grades the existing outputs in place without making new model calls.

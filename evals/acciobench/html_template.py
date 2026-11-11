@@ -363,6 +363,12 @@ _JS_PART_1 = r"""<script>
       '<span class="sep">•</span><span>' + m.total_tasks + ' tasks (' + esc(catParts) + ')</span>' +
       '<span class="sep">•</span><span>Untouched model defaults</span>' +
       '<span class="sep">•</span><span>Judge: <strong style="color:var(--ink)">' + esc(m.judge) + '</strong></span>' +
+      (m.unsandboxed_total
+        ? '<span class="sep">•</span><span id="unsandboxed-runs" style="color:#b42318;font-weight:600">' +
+          'NO FILESYSTEM ISOLATION: <strong>' + m.unsandboxed_total + '</strong> trial(s) ran without the bwrap sandbox (' +
+          esc(Object.entries(m.unsandboxed || {}).filter(([, v]) => v).map(([k, v]) => k + '=' + v).join(', ')) +
+          '; --allow-unsandboxed), not comparable to sandboxed results</span>'
+        : '') +
       (m.grading_errors_total
         ? '<span class="sep">•</span><span id="grading-errors">Grading errors: <strong style="color:var(--ink)">' +
           m.grading_errors_total + '</strong> ungraded (' +

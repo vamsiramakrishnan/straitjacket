@@ -51,10 +51,12 @@ __all__ = [
     "IMAGE_EXTS",
     "ToolHost",
     "bwrap_sandbox_executable",
+    "bwrap_unavailable_reason",
     "extract_pdf_text",
     "format_numbered_lines",
     "has_user_deliverables",
     "parse_pdf_pages",
+    "unsandboxed_refusal_message",
 ]
 
 IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
@@ -140,6 +142,40 @@ def bwrap_sandbox_executable() -> str | None:
         ok_bin = None
     _BWRAP_PROBE_CACHE = (True, ok_bin)
     return ok_bin
+
+
+def bwrap_unavailable_reason() -> str:
+    """Why :func:`bwrap_sandbox_executable` found no usable sandbox (call it only then)."""
+    if os.environ.get("ACCIOBENCH_NO_BWRAP", "").strip().lower() in ("1", "true", "yes"):
+        return "ACCIOBENCH_NO_BWRAP is set"
+    if sys.platform != "linux":
+        return f"bubblewrap needs Linux; this host is {sys.platform}"
+    if not shutil.which("bwrap"):
+        return "bwrap is not on PATH"
+    return (
+        "bwrap is installed but cannot create mount + PID namespaces here "
+        "(unprivileged user namespaces may be disabled)"
+    )
+
+
+def unsandboxed_refusal_message() -> str:
+    """What a refused scored run prints: why, how to install bubblewrap, the override."""
+    return (
+        "Refusing a scored run: the bubblewrap (bwrap) sandbox is not available "
+        f"({bwrap_unavailable_reason()}).\n"
+        "Without it both arms run under path/env confinement only, which has NO filesystem "
+        "isolation: the agent can read the dataset, grader and private answer files, so its "
+        "score cannot be trusted.\n"
+        "Install bubblewrap on Linux (Debian/Ubuntu: sudo apt-get install -y bubblewrap; "
+        "Fedora: sudo dnf install -y bubblewrap; Arch: sudo pacman -S bubblewrap), allow "
+        "unprivileged user namespaces, leave ACCIOBENCH_NO_BWRAP unset, and check with "
+        "'python evals/acciobench_run.py doctor'.\n"
+        "To run anyway without filesystem isolation, pass --allow-unsandboxed to 'run' "
+        "(BenchConfig(allow_unsandboxed=True)): each result is then recorded with "
+        "sandbox=\"none\" and every report counts those trials."
+    )
+
+
 _UNTITLED_CREATE_RE = re.compile(
     r'(?:Created|Added)\s+(?:page|doc|document|database|sheet)\s+"Untitled"\s*\(([A-Za-z0-9_-]{4,64})\)',
     re.I,

@@ -34,7 +34,7 @@ from .config import (  # noqa: E402
     load_cab_task,
     task_inputs_digest,
 )
-from .host import ToolHost, bwrap_sandbox_executable  # noqa: E402
+from .host import ToolHost, bwrap_sandbox_executable, unsandboxed_refusal_message  # noqa: E402
 from .providers import ModelProvider  # noqa: E402
 from .sandbox import TaskSandbox  # noqa: E402
 from .schemas import (  # noqa: E402
@@ -47,7 +47,7 @@ from .schemas import (  # noqa: E402
     is_mutating_tool_call,
 )
 
-__all__ = ["run_trial"]
+__all__ = ["UnsandboxedRunRefused", "run_trial", "scored_run_sandbox"]
 
 _VALID_ARMS = frozenset({"raw", "sj"})
 _RESUMABLE_ERROR_TERMINATIONS = frozenset({"", "api_error", "setup_error", "error"})
@@ -77,6 +77,22 @@ _MAX_VERIFIER_ERR_CHARS = 240
 _MAX_NOTE_ERR_CHARS = 300
 
 _PRINT_LOCK = threading.Lock()
+
+
+class UnsandboxedRunRefused(RuntimeError):
+    """A scored run was asked for without the bwrap sandbox and without the override."""
+
+
+def scored_run_sandbox(config: BenchConfig) -> str:
+    """How a scored trial under ``config`` is sandboxed: ``"bwrap"`` when the sandbox is
+    usable, ``"none"`` when it is not and ``config.allow_unsandboxed`` says to run anyway.
+    Otherwise raises :class:`UnsandboxedRunRefused` with the reason, how to install
+    bubblewrap and the override. ``ACCIOBENCH_NO_BWRAP`` alone is never enough."""
+    if bwrap_sandbox_executable() is not None:
+        return "bwrap"
+    if config.allow_unsandboxed:
+        return "none"
+    raise UnsandboxedRunRefused(unsandboxed_refusal_message())
 
 
 def _resolve_task_metadata(config: BenchConfig, spec: Any, fallback_task_id: str) -> tuple[str, str, str]:
@@ -466,6 +482,8 @@ def run_trial(
     if arm_norm not in _VALID_ARMS:
         raise ValueError(f"Unsupported arm {arm!r}. Expected one of {sorted(_VALID_ARMS)}.")
     is_sj = arm_norm == "sj"
+    # Before anything is staged, graded or sent to a model: every caller is covered.
+    sandbox_kind = scored_run_sandbox(config)
 
     spec = load_cab_task(config.dataset_root, task_id)
     resolved_id, task_rel, category = _resolve_task_metadata(config, spec, task_id)
@@ -484,7 +502,7 @@ def run_trial(
         _HARNESS_BEHAVIOUR,
         {
             "task_inputs": task_inputs_digest(Path(spec.case_dir)),
-            "bwrap_sandbox": bwrap_sandbox_executable() is not None,
+            "bwrap_sandbox": sandbox_kind == "bwrap",
             "ctx_version": ctx_version(config.ctx_bin) if is_sj else None,
         },
     )
@@ -537,6 +555,7 @@ def run_trial(
         wave=wave,
         bucket=bucket,
         config_fingerprint=fingerprint,
+        sandbox=sandbox_kind,
     )
 
     sandbox = TaskSandbox(config, spec, run_dir, meta_dir, slot)

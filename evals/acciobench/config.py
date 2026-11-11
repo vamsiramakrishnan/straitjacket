@@ -49,6 +49,9 @@ class BenchConfig:
     chrome_bin: Path | None = None  # Optional browser binary override
     thinking_level: str | None = None  # None = untouched model defaults!
     max_output_tokens: int | None = None  # None = untouched model defaults!
+    # A scored run refuses to start without the bwrap sandbox unless this is set
+    # (`run --allow-unsandboxed`); results then record sandbox="none".
+    allow_unsandboxed: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dataset_root", Path(self.dataset_root).expanduser().resolve())
@@ -154,6 +157,10 @@ class RunMetrics:
     # config_fingerprint(config) of the configuration that produced this result; resume
     # accepts a cached result only for the same fingerprint ("" = written before it).
     config_fingerprint: str = ""
+    # How the trial was sandboxed: "bwrap" (mount + PID namespaces), "none" (path/env
+    # confinement only, no filesystem isolation; allowed only by --allow-unsandboxed),
+    # "" for results written before this was recorded.
+    sandbox: str = ""
 
     @property
     def is_grading_error(self) -> bool:

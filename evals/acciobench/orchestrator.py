@@ -4,17 +4,27 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import queue
+import sys
 from typing import Any
 
 from .browser import BrowserPool
 from .config import BenchConfig, RunMetrics
-from .loop import run_trial
+from .loop import run_trial, scored_run_sandbox
 from .providers import create_provider
 
 __all__ = ["run_suite"]
 
 _VALID_ARMS = frozenset({"raw", "sj"})
 _BASE_SLOT_INDEX = 1
+
+UNSANDBOXED_WARNING = (
+    "!" * 88 + "\n"
+    "!! WARNING: --allow-unsandboxed: bubblewrap is not active, so this run has NO\n"
+    "!! filesystem isolation on either arm. The agent can read the dataset, the grader and\n"
+    "!! its private answers. Every result is recorded with sandbox=\"none\" and every report\n"
+    "!! states how many trials ran this way. Do not publish these numbers as sandboxed.\n"
+    + "!" * 88
+)
 
 
 def _normalize_arms(arms: tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -50,6 +60,9 @@ def run_suite(
     cleaned_tasks = [t.strip() for t in task_ids if t and t.strip()]
     if not cleaned_tasks or not arms:
         return []
+    # Refuses (UnsandboxedRunRefused) before any provider, browser or trial is set up.
+    if scored_run_sandbox(config) == "none":
+        print(UNSANDBOXED_WARNING, file=sys.stderr, flush=True)
 
     work_items: list[tuple[int, str, str]] = []
     idx = 0

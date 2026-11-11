@@ -10,8 +10,10 @@ import sys
 from typing import Any
 
 from .config import BenchConfig, select_tasks
+from .loop import UnsandboxedRunRefused, scored_run_sandbox
 from .orchestrator import run_suite
 from .report import load_baseline_records, load_run_results, render_summary_report
+from .host import bwrap_sandbox_executable, bwrap_unavailable_reason
 from .validate import run_doctor, validate_task_referee
 
 __all__ = ["build_parser", "main"]
@@ -140,6 +142,7 @@ def _build_bench_config(args: argparse.Namespace) -> BenchConfig:
         chrome_bin=getattr(args, "chrome_bin", None),
         thinking_level=getattr(args, "thinking_level", None),
         max_output_tokens=getattr(args, "max_output_tokens", None),
+        allow_unsandboxed=bool(getattr(args, "allow_unsandboxed", False)),
     )
 
 
@@ -283,6 +286,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-run tasks from scratch instead of resuming from completed result.json files",
     )
     p_run.add_argument(
+        "--allow-unsandboxed",
+        action="store_true",
+        help=(
+            "Run even though the bubblewrap (bwrap) sandbox is unavailable. Without it the "
+            "agent has NO filesystem isolation (it can read grader and answer files); results "
+            "are recorded with sandbox=none and every report counts them. Without this flag "
+            "such a run is refused."
+        ),
+    )
+    p_run.add_argument(
         "--thinking-level",
         default=None,
         help="Optional ablation override for generationConfig.thinkingConfig (unset = model default)",
@@ -409,6 +422,14 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 def _cmd_validate(args: argparse.Namespace) -> int:
     config = _build_bench_config(args)
     explicit = bool(args.tasks)
+    if bwrap_sandbox_executable() is None:
+        print(
+            f"[note] bwrap sandbox unavailable ({bwrap_unavailable_reason()}): this validation "
+            "runs without filesystem isolation, and a scored 'run' will be refused unless "
+            "--allow-unsandboxed is passed.",
+            file=sys.stderr,
+            flush=True,
+        )
     # When no explicit --task or --category is supplied, prefer pure 'file' smoke tasks if mock_services aren't staged.
     categories = args.categories
     if not explicit and not categories:
@@ -495,6 +516,11 @@ def _extract_bucket_map(wave_file: Path | None, baseline_json: Path | None) -> d
 
 def _cmd_run(args: argparse.Namespace) -> int:
     config = _build_bench_config(args)
+    try:
+        scored_run_sandbox(config)
+    except UnsandboxedRunRefused as exc:
+        print(f"ERROR: {exc}", file=sys.stderr, flush=True)
+        return 2
     task_ids, wave_map = select_tasks(
         config.dataset_root,
         tasks=args.tasks,
