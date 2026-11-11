@@ -24,7 +24,7 @@ System packages (Ubuntu/Debian): `bubblewrap` is **required** for scored runs (L
 sudo apt-get update && sudo apt-get install -y bubblewrap poppler-utils
 ```
 
-Without a working `bwrap` (missing, user namespaces disabled, non-Linux host, or `ACCIOBENCH_NO_BWRAP=1`), `run` refuses to start and exits non-zero: the fallback has no filesystem isolation, so the agent could read grader and answer files. The only override is `run --allow-unsandboxed`; it prints a warning, records `sandbox: "none"` in each `result.json`, and every report (table, markdown, JSON `unsandboxed_runs`, HTML header) states how many trials ran without isolation. `doctor` and `validate` still run without bwrap and say that a scored run would be refused.
+Without a working `bwrap` (missing, user namespaces disabled, non-Linux host, or `ACCIOBENCH_NO_BWRAP=1`), `run` refuses to start and exits non-zero: the fallback has no filesystem isolation, so the agent could read grader and answer files. The only override is `run --allow-unsandboxed`; it prints a warning, records `sandbox: "none"` in each `result.json`, and every report (table, markdown, JSON `unsandboxed_runs` and `isolation_unknown_runs`, HTML header) states how many trials ran without isolation and how many (results written before this was recorded) have unknown isolation. `doctor` and `validate` still run without bwrap and say that a scored run would be refused.
 
 ---
 

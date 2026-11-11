@@ -531,6 +531,14 @@ def run_trial(
                 pass
             elif str(saved.get("termination", "")) not in _RESUMABLE_ERROR_TERMINATIONS:
                 cached = RunMetrics.from_dict(saved)
+                if not cached.sandbox and str(saved.get("config_fingerprint") or "") == fingerprint:
+                    # The fingerprint records whether bwrap was active, so a matching
+                    # result ran in the current mode; record it (a legacy result accepted
+                    # on model_id alone stays "" = unknown).
+                    cached.sandbox = sandbox_kind
+                    result_file.write_text(
+                        json.dumps(cached.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+                    )
                 if cached.grading_error:
                     # The agent finished; only the grader failed. Grade its outputs again.
                     regraded = _regrade_cached(

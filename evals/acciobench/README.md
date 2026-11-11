@@ -120,11 +120,15 @@ The only override is the explicit `--allow-unsandboxed` flag on `run`
 (`BenchConfig(allow_unsandboxed=True)`); `ACCIOBENCH_NO_BWRAP` alone is not one. The
 check sits in `run_trial` itself, so every caller (`run`, `run_suite`, a script) is
 covered. With the override, `run` prints one prominent warning at start, every
-`result.json` records `sandbox: "none"` (`"bwrap"` when sandboxed; `""` for results
-written before this field existed, which reports do not count), and every report
-states how many trials ran without filesystem isolation (table and markdown: a
-`NO FILESYSTEM ISOLATION` line at the top; JSON: `unsandboxed_runs`, total and per arm,
-always present; HTML: a header entry). `doctor` and `validate` cost nothing and still
+`result.json` records `sandbox: "none"` (`"bwrap"` when sandboxed). Every result is
+`bwrap`, `none`, or unknown (`""`: written before this field existed), and reports
+show the last two: table and markdown put a `NO FILESYSTEM ISOLATION` and an
+`ISOLATION UNKNOWN` line at the top when either count is non-zero; JSON always carries
+`unsandboxed_runs` and `isolation_unknown_runs` (total and per arm); the HTML header
+shows both. A cached result without the field whose fingerprint matches the current
+run is recorded with the current mode when it is reused (the fingerprint includes
+whether bwrap is active, so it ran in that mode); a legacy result reused on `model_id`
+alone stays unknown. `doctor` and `validate` cost nothing and still
 run without bwrap, but say that a scored run will be refused.
 
 ### Task Selection & Resume Controls

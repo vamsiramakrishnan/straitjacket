@@ -369,6 +369,12 @@ _JS_PART_1 = r"""<script>
           esc(Object.entries(m.unsandboxed || {}).filter(([, v]) => v).map(([k, v]) => k + '=' + v).join(', ')) +
           '; --allow-unsandboxed), not comparable to sandboxed results</span>'
         : '') +
+      (m.isolation_unknown_total
+        ? '<span class="sep">•</span><span id="isolation-unknown-runs" style="color:#b54708;font-weight:600">' +
+          'Isolation unknown: <strong>' + m.isolation_unknown_total + '</strong> trial(s) predate sandbox recording (' +
+          esc(Object.entries(m.isolation_unknown || {}).filter(([, v]) => v).map(([k, v]) => k + '=' + v).join(', ')) +
+          '), may have run without the bwrap sandbox</span>'
+        : '') +
       (m.grading_errors_total
         ? '<span class="sep">•</span><span id="grading-errors">Grading errors: <strong style="color:var(--ink)">' +
           m.grading_errors_total + '</strong> ungraded (' +

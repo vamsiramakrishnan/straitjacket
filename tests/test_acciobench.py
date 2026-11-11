@@ -2106,6 +2106,41 @@ def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Pat
     assert second.grading_error == "" and second.passed is True
 
 
+def test_a_reused_result_without_a_sandbox_field_is_recorded_or_reported_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cached result written before ``sandbox`` existed: with a matching fingerprint it
+    ran in the current mode, so that mode is recorded on reuse; a legacy result accepted on
+    model_id alone stays unknown and reports count it as such."""
+    from evals.acciobench.report import compute_summary_payload
+
+    monkeypatch.setenv("ACCIOBENCH_NO_BWRAP", "1")
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-oldbox")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("raw",), allow_unsandboxed=True)
+    result_file = cfg.runs_dir / "file-oldbox__raw__t1_meta" / "result.json"
+    assert run_trial(cfg, "file-oldbox", "raw", 51, _SolvingProvider()).sandbox == "none"  # type: ignore[arg-type]
+
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    doc.pop("sandbox")
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    assert load_run_results(cfg.workdir)[0].sandbox == ""
+    reused = run_trial(cfg, "file-oldbox", "raw", 51, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert reused.sandbox == "none"
+    assert json.loads(result_file.read_text(encoding="utf-8"))["sandbox"] == "none"
+    assert compute_summary_payload(load_run_results(cfg.workdir))["unsandboxed_runs"] == 1
+
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    doc.pop("sandbox")
+    doc.pop("config_fingerprint")
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    legacy = run_trial(cfg, "file-oldbox", "raw", 51, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert legacy.sandbox == ""
+    payload = compute_summary_payload(load_run_results(cfg.workdir))
+    assert payload["unsandboxed_runs"] == 0 and payload["isolation_unknown_runs"] == 1
+
+
 def test_reward_score_above_one_is_a_grading_error_not_a_pass(tmp_path: Path) -> None:
     """Scores are on a 0..1 scale: anything above 1 (beyond float noise) is not
     interpretable, with or without checks; float noise just above 1 is a full score."""
@@ -2221,10 +2256,19 @@ def test_allow_unsandboxed_runs_warns_and_every_report_counts_it(
     html_meta = build_html_report_payload(loaded, workdir=cfg.workdir)["meta"]
     assert html_meta["unsandboxed_total"] == 1 and html_meta["unsandboxed"] == {"sj": 1, "raw": 0}
     assert 'id="unsandboxed-runs"' in render_summary_report(loaded, format="html", workdir=cfg.workdir)
-    # Sandboxed results alone: no warning, and the JSON still states the count (0).
-    sandboxed = [r for r in loaded if r.sandbox != "none"]
-    assert "NO FILESYSTEM ISOLATION" not in render_summary_report(sandboxed, format="table")
-    assert json.loads(render_summary_report(sandboxed, format="json"))["unsandboxed_runs"] == 0
+    # The result written before sandboxing was recorded is counted as unknown, everywhere.
+    assert payload["isolation_unknown_runs"] == 1 and payload["arms"]["raw"]["isolation_unknown_runs"] == 1
+    for fmt in ("table", "markdown"):
+        assert "ISOLATION UNKNOWN: 1 trial(s)" in render_summary_report(loaded, format=fmt), fmt
+    assert json.loads(render_summary_report(loaded, format="json"))["isolation_unknown_runs"] == 1
+    assert html_meta["isolation_unknown_total"] == 1 and html_meta["isolation_unknown"] == {"sj": 0, "raw": 1}
+    assert 'id="isolation-unknown-runs"' in render_summary_report(loaded, format="html", workdir=cfg.workdir)
+    # Sandboxed results alone: no warning, and the JSON still states both counts (0).
+    sandboxed = [r for r in loaded if r.sandbox == "bwrap"]
+    for fmt in ("table", "markdown"):
+        assert "ISOLATION" not in render_summary_report(sandboxed, format=fmt), fmt
+    doc = json.loads(render_summary_report(sandboxed, format="json"))
+    assert doc["unsandboxed_runs"] == 0 and doc["isolation_unknown_runs"] == 0
 
     # With the real sandbox available, the same trial records "bwrap".
     from evals.acciobench.host import bwrap_sandbox_executable
