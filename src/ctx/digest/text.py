@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from ctx.digest.base import DigestContext, Profile, StreamView
+from ctx.digest.base import DigestContext, Profile, StreamView, from_intake
 from ctx.textutil import EVIDENCE_LINE_CHARS, fmt_int
 
 # Deterministic salience: error-ish lines first, then head/tail anchors.
@@ -32,6 +32,14 @@ _COORDINATE_RE = re.compile(
     r"|\bat \S+\(\w+\.java:\d+\)"
     r"|\b\S+\.(?:go|py|rs|ts|js|java):\d+",
 )
+# A necessary condition for _COORDINATE_RE, tested first. Every alternative
+# above contains either the literal ``file "`` or a colon followed by a digit.
+# The pattern itself restarts its unanchored ``[\w.\-/\\]+`` / ``\S+`` scan at
+# every word boundary, which is quadratic on a long whitespace-free line full
+# of boundaries (minified or encoded output: 200 KB of ``ab/ab/…`` took 140 s
+# in this one search). The hint is linear and changes no rank: a line it
+# rejects could not have matched.
+_COORDINATE_HINT_RE = re.compile(r':\d|file "')
 _HTTP_STATUS_RE = re.compile(r"HTTP/[12]\.\d+\s+[45]\d\d|\bstatus(?:_code)?\s*[:=]\s*[45]\d\d\b")
 _EXIT_CODE_RE = re.compile(
     r"\b(?:exit(?:ed)?(?: with)?(?: code| status)?\s*[:=]?\s*[1-9]\d*|code\s+[1-9]\d*\s*\((?:OOMKilled|Error)\))\b",
@@ -62,7 +70,7 @@ def _signal_rank(line: str) -> int:
     rank = 0
     if _WEAK_ERR_RE.search(line):
         rank = 1
-    if _COORDINATE_RE.search(line):
+    if _COORDINATE_HINT_RE.search(line) and _COORDINATE_RE.search(line):
         rank = max(rank, 2)
     if (
         _REAL_FAILURES_RE.search(line)
@@ -118,6 +126,13 @@ class TextProfile(Profile):
             # than the output). Provenance keeps command + exit; the content
             # rides unindented. rtk lesson inverted: our tax was overhead,
             # not under-compression.
+            if from_intake(ctx):
+                # Handed-over content: name it, no command or exit status.
+                slim = [f"{ctx.intake_line(sizes=False)} · output (complete):"]
+                for view in (ctx.stdout, ctx.stderr):
+                    if view.bytes:
+                        slim.extend(view.text_lines)
+                return "\n".join(slim)
             r = ctx.manifest["result"]
             status = (
                 f"exit {r['exitCode']}" if r["exitCode"] is not None else f"signal {r['signal']}"

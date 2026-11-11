@@ -80,6 +80,8 @@ AGENT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("capsule", "pack the evidence behind cited handles into one file "
                         "that still resolves on someone else's machine"),
             ("image", "inspect image/PDF structure or compare two image renders"),
+            ("intake", "store a paste, file or clipboard once; the agent sees a short "
+                       "digest and a handle"),
         ),
     ),
     (

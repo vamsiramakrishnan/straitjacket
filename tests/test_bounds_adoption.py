@@ -68,6 +68,15 @@ ALLOWED: dict[str, str] = {
     "skeleton.py": "1-indexed line clamp",
     "commands/admin.py": "divide-by-zero denominator guards",
     "plan_ops.py": "1-indexed line arithmetic for context windows",
+    "digest/chunkmap.py": (
+        "partition sizes, not emission bounds: a chunk of zero bytes or "
+        "lines would never advance, so sizes floor at one; what any chunk "
+        "emits is bounded by the digest and retrieval budgets"
+    ),
+    "digest/intakeprof.py": (
+        "chunk-partition line cap and the width of an `L<n>: ` prefix; the "
+        "digest it renders is fitted to digest_tokens separately"
+    ),
     "snapcompact.py": (
         "pixel-geometry floors, not caller bounds: a font's own metrics "
         "clamped to a positive cell size, and post-downscale dimensions "

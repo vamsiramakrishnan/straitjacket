@@ -56,7 +56,18 @@ def _resolve_span(store: Store, ws: Workspace, ref_text: str, label: str, span_i
                 f"… +{fmt_int(len(occurrences) - cap)} more · "
                 f"next: ctx get {ref_text} --lines {first_hidden}:{min(first_hidden + budget.max_inline_lines - 1, len(all_lines))}"
             )
-    else:  # pragma: no cover - registry only writes the two kinds
+    elif span["kind"] == "bytes":
+        # A byte-range span: a piece of a line too long to address by line
+        # number (minified JSON, base64), minted by the intake chunk map.
+        # The mint bounds the range to one retrieval's worth; the emission
+        # budget below still backstops it.
+        from .common import _read_bytes_range
+
+        a, b = int(span["a"]), int(span["b"])
+        chunk = _read_bytes_range(store, blob, a, b)
+        out.append(f"bytes: {a}:{b} ({fmt_int(len(chunk))} bytes, complete)")
+        out.append(chunk.decode("utf-8", "replace"))
+    else:  # pragma: no cover - registry only writes these kinds
         raise RetrievalError(f"unknown span kind {span['kind']!r}")
 
     return _emit(ws, "\n".join(out), budget.result_tokens)

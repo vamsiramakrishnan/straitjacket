@@ -175,6 +175,7 @@ _COMMANDS: dict[str, tuple[str, str, bool]] = {
     "stats": ("retrieve", "cmd_stats", True),
     "diff": ("retrieve", "cmd_diff", True),
     "image": ("binary", "cmd_image", True),
+    "intake": ("intake", "cmd_intake", True),
     "map": ("retrieve", "cmd_map", True),
     "def": ("retrieve", "cmd_def", True),
     "refs": ("retrieve", "cmd_refs", True),
@@ -481,6 +482,32 @@ def _build_parser():
         help="digest <file>... or diff <before> <after>",
     )
     p_image.add_argument("files", nargs="+", help="workspace-relative file path(s)")
+
+    p_intake = sub.add_parser(
+        "intake",
+        help="store pasted text, a file, stdin or the clipboard; print a short digest and a handle",
+    )
+    p_intake.add_argument(
+        "path", nargs="?", metavar="PATH",
+        help="workspace file to store, or - for stdin (default when stdin is piped)",
+    )
+    p_intake.add_argument("--label", help="what this is (paste, log, spec…); part of its identity")
+    p_intake.add_argument("--name", help="display name, e.g. the original file name")
+    p_intake.add_argument("--focus", help="terms the digest should favour")
+    p_intake.add_argument("--json", action="store_true", help="print the ctx.intake/v1 receipt")
+    p_intake.add_argument("--clip", action="store_true", help="read the system clipboard")
+    p_intake.add_argument(
+        "--copy", action="store_true",
+        help="put the digest on the clipboard, to paste instead of the payload",
+    )
+    p_intake.add_argument(
+        "--chunks", metavar="handle",
+        help="list every chunk of a stored text handle (paged), instead of storing anything",
+    )
+    p_intake.add_argument(
+        "--from", dest="start", type=int, default=1, metavar="N",
+        help="with --chunks: first chunk number to list",
+    )
 
     p_edit = sub.add_parser(
         "edit", help="plan, preview, and safely apply anchored line edits"

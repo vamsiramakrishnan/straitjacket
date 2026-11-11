@@ -12,7 +12,7 @@ behind a `ctx get run:…#stdout` address.
 from __future__ import annotations
 
 from ctx import binfmt
-from ctx.digest.base import DigestContext, Profile
+from ctx.digest.base import DigestContext, Profile, from_intake
 
 # Formats worth a typed binary digest. Plain "text" declines (falls through to
 # the text/log/table profiles); a NUL-bearing unknown blob is still bounded.
@@ -24,6 +24,14 @@ class BinaryProfile(Profile):
 
     def detect(self, ctx: DigestContext) -> str | None:
         fmt = binfmt.sniff_format(ctx.stdout.head)
+        if (
+            from_intake(ctx)
+            and not ctx.stdout.media_type.startswith("application/octet-stream")
+        ):
+            # Intake already sent every binary payload to its own seam; a
+            # text payload that merely starts with a magic prefix ("BM…",
+            # "%PDF-" quoted in prose) is text.
+            return None
         if fmt in _BINARY_FORMATS:
             return f"binary output ({fmt}) by magic bytes"
         return None
@@ -39,6 +47,9 @@ class BinaryProfile(Profile):
         if not data:  # store-free rendering (tests) — degrade to the head
             data = ctx.stdout.head
         info = binfmt.inspect(data)
-        header = [f"cwd: {ctx.manifest['cwd']}", f"command: {ctx.command_line()}"]
+        header = (
+            [ctx.intake_line(sizes=False)] if from_intake(ctx)
+            else [f"cwd: {ctx.manifest['cwd']}", f"command: {ctx.command_line()}"]
+        )
         body = binfmt.render_digest(info, address="ctx get run:PENDING#stdout")
         return "\n".join(header) + "\n" + body

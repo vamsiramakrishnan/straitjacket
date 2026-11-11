@@ -13,8 +13,9 @@ import hashlib
 from typing import Any
 
 from ctx import POLICY_VERSION
-from ctx.digest.base import DigestContext, Profile
+from ctx.digest.base import DigestContext, Profile, from_intake
 from ctx.digest.binprof import BinaryProfile
+from ctx.digest.intakeprof import ChunkMapProfile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
 from ctx.digest.searchprof import SearchProfile
@@ -55,6 +56,9 @@ _PROFILES: tuple[Profile, ...] = (
     TableProfile(),  # caps-header aligned tables (docker/kubectl family);
     #                  strict header rule keeps logs and prose out
     LogTemplateProfile(),
+    ChunkMapProfile(),  # intake-only (from_intake): large pasted/attached
+    #                     text that text/v1 cannot inline gets a chunk table;
+    #                     never matches command output
     TextProfile(),
 )
 
@@ -137,15 +141,26 @@ def _pass_through_if_digest_earned_nothing(ctx: Any, body: str, ws: Workspace) -
         content = sum(v.bytes for v in (ctx.stdout, ctx.stderr) if v.bytes)
         if not content or content > ws.config.budgets.max_inline_bytes:
             return body  # large enough that the digest is doing real work
-        if not _only_accounting(body):
+        intake = from_intake(ctx)
+        checked = body
+        if intake:
+            # The intake provenance line is bookkeeping too (intake digests
+            # carry it instead of cwd/command/exit).
+            checked = "\n".join(
+                ln for ln in body.splitlines() if not ln.startswith("intake: ")
+            )
+        if not _only_accounting(checked):
             return body  # the profile found something; keep it
-        r = ctx.manifest["result"]
-        status = (
-            f"exit {r['exitCode']}" if r.get("exitCode") is not None
-            else f"signal {r.get('signal')}"
-        )
-        if r.get("timedOut"):
-            status += " · timed out"
+        if intake:
+            status = ctx.intake_line(sizes=False)
+        else:
+            r = ctx.manifest["result"]
+            status = (
+                f"exit {r['exitCode']}" if r.get("exitCode") is not None
+                else f"signal {r.get('signal')}"
+            )
+            if r.get("timedOut"):
+                status += " · timed out"
         out = [f"{status} · output (complete):"]
         for view in (ctx.stdout, ctx.stderr):
             if view.bytes:
@@ -312,7 +327,7 @@ def _announce_expensive_capture(
         pass
 
 
-def digest_output(
+def synthesize_manifest(
     store: Store,
     ws: Workspace,
     tool_name: str,
@@ -321,32 +336,14 @@ def digest_output(
     *,
     is_error: bool = False,
     argv: list[str] | None = None,
-    contained: bool = True,
-    producer: str | None = None,
-) -> tuple[str, str]:
-    """Digest an already-produced tool result (not a shell capture).
+) -> dict[str, Any]:
+    """Store ``stdout``/``stderr`` as blobs and build the pending
+    ``ctx.invocation/v1`` manifest :func:`digest_output` digests.
 
-    ``contained`` is False when the calling host has no output-substitution
-    field, so this digest is stored and addressable but never replaces the raw
-    result in the transcript. It only affects telemetry honesty (see
-    :func:`render_run_digest`), never the digest bytes.
-
-    The universal emission gate (``ctx.hook._emission_gate``) calls this when a
-    PostToolUse tool result exceeds the byte budget: it persists the raw bytes
-    losslessly, synthesizes a ``ctx.invocation/v1`` manifest, and reuses
-    :func:`render_run_digest` to produce a bounded digest carrying a working
-    ``ctx get run:<short>#stdout`` retrieval ref.
-
-    By default the manifest ``argv`` is ``[tool_name]`` only — never the
-    tool's arguments — so the command-anchored profiles (git-diff, pytest,
-    search, build) decline and the result is classified purely on its
-    *shape*. That is the if-ladder cure: a new tool needs no new code
-    because dispatch is by output shape. A caller that *knows* the true
-    command (session replay reconstructing a steered `ctx run`) may pass
-    ``argv`` explicitly to restore command-anchored detection; identity is
-    then a pure function of (bytes, argv).
-
-    Returns ``(bounded_digest_text, short_run_id)``.
+    Split out of :func:`digest_output` unchanged so a caller that needs the
+    render without the emission-boundary filtering (``ctx.intake``, whose
+    digest must not depend on session engagement state) shares the one
+    manifest synthesis instead of keeping a copy of it.
     """
     out_b = stdout.encode("utf-8")
     err_b = stderr.encode("utf-8")
@@ -392,6 +389,48 @@ def digest_output(
             "bytesHash": "sha256:" + "0" * 64,
         },
     }
+    return manifest
+
+
+def digest_output(
+    store: Store,
+    ws: Workspace,
+    tool_name: str,
+    stdout: str,
+    stderr: str = "",
+    *,
+    is_error: bool = False,
+    argv: list[str] | None = None,
+    contained: bool = True,
+    producer: str | None = None,
+) -> tuple[str, str]:
+    """Digest an already-produced tool result (not a shell capture).
+
+    ``contained`` is False when the calling host has no output-substitution
+    field, so this digest is stored and addressable but never replaces the raw
+    result in the transcript. It only affects telemetry honesty (see
+    :func:`render_run_digest`), never the digest bytes.
+
+    The universal emission gate (``ctx.hook._emission_gate``) calls this when a
+    PostToolUse tool result exceeds the byte budget: it persists the raw bytes
+    losslessly, synthesizes a ``ctx.invocation/v1`` manifest, and reuses
+    :func:`render_run_digest` to produce a bounded digest carrying a working
+    ``ctx get run:<short>#stdout`` retrieval ref.
+
+    By default the manifest ``argv`` is ``[tool_name]`` only — never the
+    tool's arguments — so the command-anchored profiles (git-diff, pytest,
+    search, build) decline and the result is classified purely on its
+    *shape*. That is the if-ladder cure: a new tool needs no new code
+    because dispatch is by output shape. A caller that *knows* the true
+    command (session replay reconstructing a steered `ctx run`) may pass
+    ``argv`` explicitly to restore command-anchored detection; identity is
+    then a pure function of (bytes, argv).
+
+    Returns ``(bounded_digest_text, short_run_id)``.
+    """
+    manifest = synthesize_manifest(
+        store, ws, tool_name, stdout, stderr, is_error=is_error, argv=argv
+    )
 
     digest, final = render_run_digest(store, ws, manifest, focus=None,
                                       contained=contained, producer=producer)

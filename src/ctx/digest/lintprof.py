@@ -31,6 +31,12 @@ _ESLINT_LINE_RE = re.compile(
     r"^\s+(?P<line>\d+):(?P<col>\d+)\s+(?P<sev>error|warning)\s+(?P<msg>.*?)\s\s+(?P<rule>[\w@./-]+)$"
 )
 _ESLINT_FILE_RE = re.compile(r"^\S*[/\\][^\s:]+\.\w{1,12}$|^[^\s:]+\.\w{1,12}$")
+# A necessary condition for _ESLINT_FILE_RE, checked first. Both of its
+# alternatives end in ``\.\w{1,12}$``, and its first alternative backtracks
+# over every slash on a line (quadratic on a whitespace-free line full of
+# them: base64, minified JSON -- 3.3 s for one 200 KB line). This suffix test
+# is linear and rejects those lines without changing which lines match.
+_ESLINT_FILE_SUFFIX_RE = re.compile(r"\.\w{1,12}$")
 _TSC_RE = re.compile(
     r"^(?P<file>[^\s(]+)\((?P<line>\d+),\d+\):\s+(?P<sev>error|warning)\s+(?P<rule>TS\d+)"
 )
@@ -82,8 +88,13 @@ def _parse(lines: list[str]):
             diags.append((pending_rust[0], m.group("file"), pending_rust[1], pending_rust[2]))
             pending_rust = None
             continue
-        if _ESLINT_FILE_RE.match(ln.strip()) and not ln.startswith(" "):
-            current_file = ln.strip()
+        stripped = ln.strip()
+        if (
+            _ESLINT_FILE_SUFFIX_RE.search(stripped)
+            and _ESLINT_FILE_RE.match(stripped)
+            and not ln.startswith(" ")
+        ):
+            current_file = stripped
     return diags
 
 

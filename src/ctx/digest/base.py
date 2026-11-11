@@ -20,6 +20,53 @@ from ctx.workspace import Workspace
 # makes any partial parse explicit.
 MAX_PARSE_BYTES = 32 * 1024 * 1024
 
+# ---------------------------------------------------------------- intake origin
+#: ``argv[0]`` of every manifest minted by :mod:`ctx.intake` (pasted text, a
+#: file or the clipboard handed to ``ctx intake``). The colon makes it a name
+#: no shell command resolves to, so a captured command run never carries it.
+#:
+#: Profiles that should only ever apply to content a user handed over --
+#: never to a command's own output, whose digests are pinned byte-for-byte by
+#: golden tests and published receipts -- gate on :func:`from_intake`, not on
+#: this string directly.
+INTAKE_TOOL = "ctx:intake"
+
+
+def from_intake(ctx: "DigestContext | dict[str, Any]") -> bool:
+    """True only for a manifest created by :mod:`ctx.intake`.
+
+    Accepts a :class:`DigestContext` or a bare manifest. This is THE predicate
+    for "this artifact entered through intake": an intake-only profile
+    (``chunkmap/v1``, and any later traceback/CSV/diff profile that must not
+    change command-output digests) puts ``if not from_intake(ctx): return
+    None`` first in ``detect``. Intake manifests are synthesized with
+    ``argv == [INTAKE_TOOL, ...]``, ``shell`` false and a nulled git source;
+    all three are checked so a stray command named ``ctx:intake`` captured
+    inside a repository is not mistaken for one.
+    """
+    manifest = ctx if isinstance(ctx, dict) else getattr(ctx, "manifest", None)
+    if not isinstance(manifest, dict):
+        return False
+    argv = manifest.get("argv") or []
+    source = manifest.get("source") or {}
+    return (
+        bool(argv) and argv[0] == INTAKE_TOOL
+        and manifest.get("shell") is False
+        and source.get("gitHead") is None
+    )
+
+
+def intake_meta(manifest: dict[str, Any]) -> dict[str, str]:
+    """``label``/``name``/``encoding`` intake recorded as ``key:value`` argv
+    elements after :data:`INTAKE_TOOL`. ``label`` defaults to ``paste``."""
+    meta = {"label": "paste"}
+    for arg in (manifest.get("argv") or [])[1:]:
+        if isinstance(arg, str) and ":" in arg:
+            key, _, value = arg.partition(":")
+            if key in ("label", "name", "encoding") and value:
+                meta[key] = value
+    return meta
+
 
 @dataclass
 class StreamView:
@@ -92,6 +139,13 @@ class DigestContext:
                 return None
             if a < 1 or b < a or (total and b > total):
                 return None
+        elif kind == "bytes":
+            # 1-based inclusive byte offsets, the ``ctx get --bytes`` shape.
+            a, b = kw.get("a"), kw.get("b")
+            if not isinstance(a, int) or not isinstance(b, int):
+                return None
+            if a < 1 or b < a or b > stream.bytes:
+                return None
         blob = str(self.manifest["streams"][stream.name]["blob"])
         return self.store.register_span(blob, kind, **kw)
 
@@ -144,7 +198,31 @@ class DigestContext:
             return argv[0]
         return " ".join(argv)
 
+    def intake_line(self, *, sizes: bool = True, total: bool = False) -> str:
+        """The provenance line of an intake digest, in place of cwd/command/
+        exit: what was handed over (label, name, source encoding) and, with
+        ``sizes``, how big it is. ``total`` marks the sizes as the whole
+        payload's when a digest also reports a smaller scope."""
+        meta = intake_meta(self.manifest)
+        line = f"intake: {meta['label']}"
+        if "name" in meta:
+            line += f" · {meta['name']}"
+        if "encoding" in meta:
+            line += f" · decoded from {meta['encoding']}"
+        if sizes:
+            out = self.stdout
+            scope = " total" if total else ""
+            line += (
+                f" · {fmt_int(out.lines)} lines · {fmt_bytes(out.bytes)}{scope} · est "
+                f"{fmt_int(estimate_tokens(out.bytes))} tokens if inlined"
+            )
+        return line
+
     def header_lines(self) -> list[str]:
+        if from_intake(self):
+            # Content handed over is not a command: no cwd, command or exit
+            # status that would tell the model something ran and succeeded.
+            return [self.intake_line()]
         r = self.manifest["result"]
         status = "exit " + str(r["exitCode"]) if r["exitCode"] is not None else f"signal {r['signal']}"
         if r["timedOut"]:

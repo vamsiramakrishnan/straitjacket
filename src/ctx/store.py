@@ -746,7 +746,7 @@ class Store:
         note: str = "",
     ) -> str:
         blob_hash = blob_hash.removeprefix("sha256:")
-        params = (a, b) if kind == "region" else (template,)
+        params = (a, b) if kind in ("region", "bytes") else (template,)
         sid = self.span_id_for(blob_hash, kind, *params)
         with self.db:
             self.db.execute(
