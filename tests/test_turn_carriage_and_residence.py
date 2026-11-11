@@ -1181,3 +1181,198 @@ def test_deliverables_wave3_fix1_active_sibling_numbered_slots_manifest_and_html
     assert "audit-precision:" in contract_txt
     assert "74.4% (29/39)" in contract_txt
 
+
+def test_deliverables_wave4_audit_checks(tmp_path: Path):
+    ws = tmp_path / "wave4_ws"
+    out_dir = ws / "outputs"
+    in_dir = ws / "workspace"
+    out_dir.mkdir(parents=True)
+    in_dir.mkdir(parents=True)
+
+    # (a) Audit-trail Old/New/delta/product completeness in deck_reconciliation.json (even when claim_id is free-text).
+    (out_dir / "deck_reconciliation.json").write_text(
+        json.dumps(
+            {
+                "must_fix_claim_ids": ["cost_win_monterrey_steel_nearshoring"],
+                "claims": [
+                    {
+                        "claim_id": "cost_win_monterrey_steel_nearshoring",
+                        "slide_object_id": "g_sr_005",
+                        "status": "incorrect",
+                        "deck_value": "$2.95/unit across 2,400 units",
+                        "correct_value": "$2.95/unit across 2400 units",
+                        "brief_reason": "Audit trail shows price drop on TOOL-PRUNE-01.",
+                    },
+                    {"claim_id": "c2", "status": "supported", "deck_value": "10", "correct_value": "10"},
+                    {"claim_id": "c3", "status": "supported", "deck_value": "20", "correct_value": "20"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    a_msg = audit_deliverables(ws, ["outputs/deck_reconciliation.json"]).format_gate_message()
+    assert "3.15" in a_msg and "0.20" in a_msg and "480" in a_msg
+
+    # (b) Markdown intro-paragraph section-keyword shadowing + (e) Dangerous-goods overclaims.
+    (out_dir / "listing_pack.md").write_text(
+        "# Product SEO Pack\n"
+        "This pack contains the optimized title, 5 bullet points, and 10 search terms.\n\n"
+        "## 1. Title\n- Great Tape\n\n"
+        "## 2. Bullet Points\n- Strong adhesion\n\n"
+        "## 3. Search Terms\n- nano tape\n",
+        encoding="utf-8",
+    )
+    b_msg = audit_deliverables(ws, ["outputs/listing_pack.md"]).format_gate_message()
+    assert "bullet points" in b_msg.lower() and "shadow" in b_msg.lower()
+
+    (out_dir / "operations_brief.md").write_text(
+        "# Operations Brief\n"
+        "Hold SKU-1, SKU-2, SKU-3; note that nothing is guaranteed compliant or safe for all air transport.\n",
+        encoding="utf-8",
+    )
+    e_msg = audit_deliverables(ws, ["outputs/operations_brief.md"]).format_gate_message()
+    assert "guaranteed compliant" in e_msg and "safe for all air" in e_msg
+
+    # (c) JSON tier_summary vs sibling CSV pricing_matrix.csv best_promo_tier counts.
+    (out_dir / "pricing_matrix.csv").write_text(
+        "sku,best_promo_tier\n"
+        + "\n".join(f"S{i},flash_sale" for i in range(8))
+        + "\nS9,platform_voucher\nS10,no_promo\n",
+        encoding="utf-8",
+    )
+    (out_dir / "promotion_plan.json").write_text(
+        json.dumps(
+            {
+                "tier_summary": {
+                    "flash_sale_count": 6,
+                    "platform_voucher_count": 1,
+                    "no_promo_count": 1,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    c_msg = audit_deliverables(ws, ["outputs/promotion_plan.json"]).format_gate_message()
+    assert "flash_sale_count=6" in c_msg and "is 8" in c_msg
+
+    # (d) Variant-merger signal CSV all-cells & policy clause citation completeness.
+    sig_dir = in_dir / "review_signals"
+    sig_dir.mkdir(parents=True)
+    (sig_dir / "image_ocr_and_packaging_flags.csv").write_text(
+        "candidate_sku,image_flag,ocr_text,review_note\n"
+        "TRAIL-1000-SIL,size_callout,1000 ML,front-face label reads '1000 ML'\n"
+        "TRAIL-750-BAMBOO,cap_material_callout,BAMBOO LID,cap close-up shows bamboo wood texture\n",
+        encoding="utf-8",
+    )
+    (out_dir / "variant_audit.json").write_text(
+        json.dumps(
+            {
+                "candidate_evaluations": [
+                    {
+                        "candidate_sku": "TRAIL-1000-SIL",
+                        "decision": "reject",
+                        "evidence": [
+                            {
+                                "source_file": "review_signals/image_ocr_and_packaging_flags.csv",
+                                "cite": "1000 ML bottle",
+                            },
+                            {
+                                "source_file": "platform_policy/marketplace_variation_policy.pdf",
+                                "cite": "Capacity differs from 750ml parent.",
+                            },
+                        ],
+                    },
+                    {
+                        "candidate_sku": "TRAIL-750-BAMBOO",
+                        "decision": "reject",
+                        "evidence": [
+                            {
+                                "source_file": "review_signals/image_ocr_and_packaging_flags.csv",
+                                "cite": "BAMBOO LID",
+                            }
+                        ],
+                    },
+                    {"candidate_sku": "TRAIL-750-BLK", "decision": "accept", "evidence": [{"source_file": "a", "cite": "b"}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    d_msg = audit_deliverables(ws, ["outputs/variant_audit.json"]).format_gate_message()
+    assert "size_callout" in d_msg and "size clearly encoded" in d_msg
+    assert "cap_material_callout" in d_msg and "bamboo wood texture" in d_msg
+
+    # (f) Google Trends quality_audit.json + (j) rebalance.json.
+    (out_dir / "quality_audit.json").write_text(
+        json.dumps(
+            {
+                "partial_data_datasets": [{"dataset_id": "set_airfryer", "partial_data_week_count": 1}],
+                "empty_query_datasets": ["edge_empty", "set_airfryer_2024"],
+                "sub_floor_brand_presences": [{"slug": "airfryer", "brand": "cosori", "twelve_month_avg": 0.0}],
+                "monopoly_datasets": [{"slug": "airfryer", "leader": "ninja", "leader_share": 1.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    f_msg = audit_deliverables(ws, ["outputs/quality_audit.json"]).format_gate_message()
+    assert "set_airfryer_2024" in f_msg and "set_headset" in f_msg and "today 12-m" in f_msg
+
+    (out_dir / "rebalance.json").write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {"quarter": "Q2", "slot": "drill", "qoq_growth": -0.2731, "action": "swap_in:dewalt"},
+                    {"quarter": "Q3", "slot": "drill", "qoq_growth": -0.0339, "action": "swap_in:dewalt"},
+                    {"quarter": "Q2", "slot": "earbuds", "qoq_growth": -0.15, "action": "swap_in:beats studio buds"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    j_msg = audit_deliverables(ws, ["outputs/rebalance.json"]).format_gate_message()
+    assert "-0.2527" in j_msg and "hold_watch" in j_msg and "jabra elite" in j_msg
+
+    # (g) Alibaba ladderPrice & attr_diameter + (h) Cargo insurance settlement + (i) Travel tour handoff.
+    (out_dir / "published_listing.json").write_text(
+        json.dumps(
+            {
+                "attr_diameter": "DN50 (2 Inch)",
+                "ladderPrice": [{"quantity": "10-49", "price": "124.01"}, {"quantity": ">=500", "price": "105.00"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    g_msg = audit_deliverables(ws, ["outputs/published_listing.json"]).format_gate_message()
+    assert "500+" in g_msg and 'DN50 (2")' in g_msg
+
+    (out_dir / "insurance_settlement.json").write_text(
+        json.dumps(
+            {
+                "settlements": [
+                    {"customer_id": "LINNEA", "insurer": "PingAn", "claim_status": "paid_partial", "reason_short": "ICC(A) $500 deductible applied"},
+                    {"customer_id": "JONAS", "insurer": "Allianz", "claim_status": "no_claim", "reason_short": "Allianz ICC(B) top-tier dry"},
+                    {"customer_id": "OCEANTECH", "insurer": "BaoViet", "claim_status": "denied", "reason_short": "BaoViet ICC(C) water damage"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    h_msg = audit_deliverables(ws, ["outputs/insurance_settlement.json"]).format_gate_message()
+    assert "26,400" in h_msg and "top tier" in h_msg and "not covered" in h_msg
+
+    (out_dir / "audit_findings.json").write_text(
+        json.dumps(
+            {
+                "findings": [
+                    {"leg_id": "bangkok-amenity-claim", "error_type": "amenity_mismatch", "correct_value": "Novotel Bangkok Platinum Pratunam"},
+                    {"leg_id": "l2", "error_type": "ok", "correct_value": "v2"},
+                    {"leg_id": "l3", "error_type": "ok", "correct_value": "v3"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    i_msg = audit_deliverables(ws, ["outputs/audit_findings.json"]).format_gate_message()
+    assert "Paradox Bangkok Sukhumvit" in i_msg
+
+
