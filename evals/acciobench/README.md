@@ -238,8 +238,12 @@ can read and write it. Run with bubblewrap for any result you intend to publish.
 
 Every command the model issues runs inside the sandbox, with one exception kept for
 speed: a `bash` call that is exactly one plain `ctx` call reading only ctx's own store
-by a `run:` handle is answered by the harness directly, without starting the sandbox
-(about 70 ms cheaper per call). That is `ctx get run:ID[#stdout|#stderr] [--lines|--bytes|--records|--json-pointer|--span V] [--hashlines]`,
+by a `run:` handle is answered by the harness directly, without starting the sandbox.
+Measured on one machine (median of 40 interleaved calls): about 125 ms on the host
+against about 130 ms for the same call started inside the sandbox, so the shortcut is
+worth about 5 ms; nearly all of a ctx call is ctx itself starting. The larger saving
+is that no plain ctx call, on the host or in the sandbox, is wrapped in a second
+`ctx run` the way an ordinary command is (about 360 ms when it is). That is `ctx get run:ID[#stdout|#stderr] [--lines|--bytes|--records|--json-pointer|--span V] [--hashlines]`,
 `ctx search run:ID PATTERN...`, `ctx stats run:ID`, `ctx diff run:A run:B`,
 `ctx intake --chunks run:ID` and `ctx view run:ID ...`. The classification is the
 product's own (`ctx.hook.ctx_command_words` / `ctx.hook.ctx_read_kind`, the same
