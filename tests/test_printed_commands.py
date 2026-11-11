@@ -10,6 +10,7 @@ not runnable as printed; those are exempt and listed by the test.
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -122,7 +123,10 @@ def test_every_printed_command_is_approved_or_exempt(corpus):
         shapes.add((argv[1], hook._printed_read_kind(argv[1], argv[2:])))
     # The shapes the corpus must have produced.
     assert ("get", "store") in shapes and ("intake", "store") in shapes, shapes
-    assert ("view", "path") in shapes, shapes
+    # The image note names a `ctx view` crop only when Pillow can make one;
+    # without it the note says so and prints no command to approve.
+    if importlib.util.find_spec("PIL") is not None:
+        assert ("view", "path") in shapes, shapes
     print("approved shapes:", sorted(shapes))
     print("exempt (placeholders):", exempt)
 
