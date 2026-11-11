@@ -8,6 +8,7 @@ import re
 import tomllib
 from typing import Any
 
+from ctx.deliverables import format_deliverable_contract
 from evals.acciobench.ports import CompiledPortMap, rewrite_ports_surgical
 
 __all__ = [
@@ -25,9 +26,9 @@ __all__ = [
 SJ_EXECUTION_PROTOCOL: str = (
     "## Execution & Verification Protocol\n"
     "1. Scope & Parallelize Discovery: Scope each turn's reasoning to the current unresolved step rather than rehearsing downstream deliverables early. Batch independent `read`, `list`, `glob`, or `grep` calls in parallel in a single turn (up to 8 files at once). Read text/JSON/CSV/MD/YAML files under 500 lines whole once (omit `offset`/`limit`), and never re-read unchanged files already in context.\n"
-    "2. Interface Once, Retrieve Full Evidence, Batch Execute: Inspect any CLI `--help`, API/MCP schema, or web page structure once upfront. When a large output returns a `run:<id>` digest, call `ctx_retrieve` (`mode='get'` or `'search'`) to inspect omitted records/lines rather than guessing from the preview or re-running commands. Consolidate multi-item queries, pagination, parsing, and idempotent updates into ONE Python script via single-quoted heredoc (`python3 - <<'PY' ... PY`) or a `.py` file (avoid inline `python3 -c \"...\"` quoting) — or `browser_batch` / `browser_fill` / `browser_console` on UI tasks to execute multiple clicks/toggles/fills in one turn. On browser tasks, inspect `[dom-diff]` after actions and do not repeat `browser_snapshot` when no UI change occurred.\n"
+    "2. Interface Once, Retrieve Full Evidence, Batch Execute: Inspect any CLI `--help`, API/MCP schema, or web page structure once upfront. When a large output returns a `run:<id>` digest, call `ctx_retrieve` (`mode='get'` or `'search'`) to inspect omitted records/lines rather than guessing from the preview or re-running commands. Consolidate multi-item queries, pagination, parsing, and sectioned computation into ONE Python heredoc (`python3 - <<'PY' ... PY`) printing clearly labeled `[section: <name>]` headers (avoid inline `python3 -c \"...\"` quoting). On browser tasks, prefer `browser_batch` with `include_step_text=true` to execute `click -> read -> back` loops, toggles, and fills in one turn; inspect `[dom-diff]` after actions and do not repeat `browser_snapshot` when no UI change occurred.\n"
     "3. Deliberate on Semantics, Offload Mechanics to Python: Use reasoning to resolve ambiguity, constraints, and edge cases, then offload mechanical computation (>=2-number arithmetic, unit/currency/date math, sorting, aggregation, and schema serialization) to Python so structured deliverables (`/task/outputs/*.json`, `.csv`, `.yaml`, `.md`, `.html`) are written directly via `json.dump` / `csv.writer` rather than hand-typed.\n"
-    "4. Pinned State & Clean Finalization: Populate a concise 1-line `state_note` on tool calls recording verified facts, IDs, counts, and completed mutations so conclusions persist across context compaction. Run ONE consolidated verification check of `/task/outputs/*` and any modified service/UI state (counts, links, uploads, labels) against task requirements, remove temporary scripts or accidental probe items, and call `present_files`."
+    "4. Pinned Retrospective State & Clean Finalization: Populate a concise 1-line retrospective `state_note` on tool calls recording verified facts from prior steps (`key=val`, counts, IDs, completed mutations) or explicit provisional choices (`assumed: <choice>`). Run ONE consolidated verification check of `/task/outputs/*` and all modified service/UI state (counts, links, uploads, labels) against task requirements, remove temporary scripts or scratch probe items, and call `present_files`."
 )
 
 MUTATING_SHELL_RE: re.Pattern[str] = re.compile(
@@ -74,8 +75,9 @@ MUTATING_BROWSER_TOOLS: frozenset[str] = frozenset(
 _STATE_NOTE_PROP: dict[str, str] = {
     "type": "STRING",
     "description": (
-        "Concise 1-line checkpoint (<160 chars) of verified facts, key numbers/IDs, or ruled-out "
-        "options from prior steps so conclusions persist across context compaction"
+        "Concise 1-line retrospective checkpoint (<160 chars) of verified facts from prior steps "
+        "(`key=val`, counts, IDs, mutations) or explicit provisional choices (`assumed: <choice>`), "
+        "never unexecuted plans"
     ),
 }
 
@@ -155,6 +157,7 @@ def build_tools(
                 "properties": {
                     "path": {"type": "STRING", "description": "Directory path, e.g. '/task/workspace'"},
                     "show_hidden": {"type": "BOOLEAN", "description": "Include hidden files"},
+                    **sn,
                 },
                 "required": ["path"],
             },
@@ -167,6 +170,7 @@ def build_tools(
                 "properties": {
                     "pattern": {"type": "STRING", "description": "Glob pattern, e.g. '**/*.json'"},
                     "path": {"type": "STRING", "description": "Base directory to search in"},
+                    **sn,
                 },
                 "required": ["pattern"],
             },
@@ -180,6 +184,7 @@ def build_tools(
                     "pattern": {"type": "STRING", "description": "Regex pattern to search for"},
                     "path": {"type": "STRING", "description": "File or directory path (defaults to /task/workspace)"},
                     "ignore_case": {"type": "BOOLEAN", "description": "Case-insensitive match"},
+                    **sn,
                 },
                 "required": ["pattern"],
             },
@@ -448,6 +453,7 @@ def build_tools(
                                 "description": "'load', 'domcontentloaded', or 'networkidle'",
                             },
                             "url": {"type": "STRING", "description": "URL substring to wait for"},
+                            **sn,
                         },
                     },
                 },
@@ -472,6 +478,7 @@ def build_tools(
                         "properties": {
                             "targetId": {"type": "STRING", "description": "Browser tab targetId"},
                             "key": {"type": "STRING", "description": "Key name"},
+                            **sn,
                         },
                         "required": ["key"],
                     },
@@ -484,6 +491,7 @@ def build_tools(
                         "properties": {
                             "targetId": {"type": "STRING", "description": "Browser tab targetId"},
                             "direction": {"type": "STRING", "description": "'down', 'up', 'bottom', or 'top'"},
+                            **sn,
                         },
                         "required": ["direction"],
                     },
@@ -491,7 +499,7 @@ def build_tools(
                 {
                     "name": "browser_info",
                     "description": "List open browser tabs and their current URLs and titles.",
-                    "parameters": {"type": "OBJECT", "properties": {}},
+                    "parameters": {"type": "OBJECT", "properties": {**sn}},
                 },
                 {
                     "name": "web_fetch",
@@ -513,8 +521,8 @@ def build_tools(
                     "name": "browser_batch",
                     "description": (
                         "Execute multiple UI actions sequentially on the current tab in one turn "
-                        "(e.g. starring/selecting multiple rows, toggling checkboxes/labels, filling inputs and clicking save) "
-                        "and return per-step receipts plus one updated page snapshot with [dom-diff]."
+                        "(e.g. click -> read -> back loops, starring/selecting rows, toggling checkboxes, filling inputs) "
+                        "and return compact per-step digests plus one updated page snapshot with [dom-diff]."
                     ),
                     "parameters": {
                         "type": "OBJECT",
@@ -528,7 +536,7 @@ def build_tools(
                                     "properties": {
                                         "action": {
                                             "type": "STRING",
-                                            "description": "'click', 'fill', 'type', 'select', 'check', 'uncheck', 'press', or 'wait'",
+                                            "description": "'click', 'fill', 'type', 'select', 'check', 'uncheck', 'press', 'wait', 'back', 'forward', 'scroll', 'navigate', or 'read'",
                                         },
                                         "ref": {
                                             "type": "STRING",
@@ -536,7 +544,7 @@ def build_tools(
                                         },
                                         "value": {
                                             "type": "STRING",
-                                            "description": "Value/text/option/key/ms for fill, type, select, press, or wait",
+                                            "description": "Value/text/option/key/ms/URL/direction for fill, type, select, press, wait, navigate, or scroll",
                                         },
                                         "pressEnter": {
                                             "type": "BOOLEAN",
@@ -549,6 +557,14 @@ def build_tools(
                             "stopOnNavigation": {
                                 "type": "BOOLEAN",
                                 "description": "Stop remaining steps if the page URL changes (default false)",
+                            },
+                            "stopOnError": {
+                                "type": "BOOLEAN",
+                                "description": "Stop remaining steps immediately when a step raises an error (default true)",
+                            },
+                            "include_step_text": {
+                                "type": "BOOLEAN",
+                                "description": "Capture compact per-step URL/title/DOM-delta/visible-text digests (default true)",
                             },
                             **sn,
                         },
@@ -609,29 +625,70 @@ def build_prompt(case_dir: Path, port_map: dict[int, int] | CompiledPortMap) -> 
     return workspace_contract + task_prompt + anti_tamper
 
 
-def format_workspace_inventory(run_dir: Path) -> str:
-    """Render a compact Turn-0 Birth Gate workspace file manifest when 1..80 files exist."""
+_CLI_QUICKREF: str = (
+    "[cli-quickref] "
+    "stripe: `<resource> <op> [--k=v | -d k=v]`; negative/credit adjustment = `stripe invoiceitems create --customer=ID --currency=usd --amount=-CENTS`; `invoices finalize-invoice ID` | "
+    "jira: `issue list [--raw]|view|create|edit|comment add|move KEY \"Exact State\"|link IN OUT TYPE` | "
+    "dws: `doc read|list|create|comment --node ...`; `doc block list|insert|update|delete --node ...`; `schema` | "
+    "box: `folders:items 0|folders:create|files:get|files:upload|collaborations:create|comments:create` | "
+    "gws: `sheets get-text --spreadsheet-id ID`; `slides ... --presentation-id ID` | "
+    "ntn: `pages get|create|update`; `datasources resolve|query`; `files list`; `api` | "
+    "todoist: `list|show|add|modify ID [--section-name S --label-names L]|close|delete`"
+)
+
+
+def format_workspace_inventory(run_dir: Path, task_markdown: str = "") -> str:
+    """Render compact Turn-0 Birth Gate workspace files, deliverable contract, and CLI quickref."""
     ws_dir = (run_dir / "workspace").resolve()
     rd_dir = run_dir.resolve()
-    if not ws_dir.is_dir():
+    inv = ""
+    if ws_dir.is_dir():
+        wfiles = sorted(wf for wf in ws_dir.rglob("*") if wf.is_file() and not wf.name.startswith("."))
+        if 1 <= len(wfiles) <= 80:
+            items: list[str] = []
+            for wf in wfiles:
+                rel_f = wf.relative_to(rd_dir).as_posix()
+                sz = wf.stat().st_size
+                sz_s = (
+                    f"{sz} B"
+                    if sz < 1024
+                    else f"{sz / 1024:.1f} KB"
+                    if sz < 1024 * 1024
+                    else f"{sz / (1024 * 1024):.1f} MB"
+                )
+                items.append(f"/task/{rel_f} ({sz_s})")
+            raw_inv = f"[workspace files ({len(wfiles)}): " + ", ".join(items) + "]"
+            inv = raw_inv if len(raw_inv) <= 1800 else (raw_inv[:1760] + ", ...]")
+
+    resolved_md = (task_markdown or "").strip()
+    if not resolved_md:
+        for cand in (
+            rd_dir / "TASK.md",
+            rd_dir / "task.md",
+            rd_dir / "mock_case" / "task.md",
+            ws_dir / "TASK.md",
+            ws_dir / "task.md",
+        ):
+            if cand.is_file():
+                try:
+                    resolved_md = cand.read_text(encoding="utf-8", errors="replace").strip()
+                except OSError:
+                    resolved_md = ""
+                if resolved_md:
+                    break
+
+    if not inv and not resolved_md:
         return ""
-    wfiles = sorted(wf for wf in ws_dir.rglob("*") if wf.is_file() and not wf.name.startswith("."))
-    if not (1 <= len(wfiles) <= 80):
-        return ""
-    items: list[str] = []
-    for wf in wfiles:
-        rel_f = wf.relative_to(rd_dir).as_posix()
-        sz = wf.stat().st_size
-        sz_s = (
-            f"{sz} B"
-            if sz < 1024
-            else f"{sz / 1024:.1f} KB"
-            if sz < 1024 * 1024
-            else f"{sz / (1024 * 1024):.1f} MB"
-        )
-        items.append(f"/task/{rel_f} ({sz_s})")
-    inv = f"[workspace files ({len(wfiles)}): " + ", ".join(items) + "]"
-    return inv if len(inv) <= 1800 else (inv[:1760] + ", ...]")
+
+    parts: list[str] = []
+    if inv:
+        parts.append(inv)
+    if resolved_md:
+        contract = str(format_deliverable_contract(resolved_md, rd_dir) or "").strip()
+        if contract:
+            parts.append(contract)
+    parts.append(_CLI_QUICKREF)
+    return "\n".join(parts)
 
 
 def canonical_tool_sig(name: str, args: dict[str, Any], *, normalize_meta: bool = True) -> str:

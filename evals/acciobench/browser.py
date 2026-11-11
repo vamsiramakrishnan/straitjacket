@@ -21,7 +21,7 @@ _VIEWPORT = {"width": 1440, "height": 900}
 
 _SNAPSHOT_JS = """
 () => {
-  const INTERACTIVE = 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="option"], [role="combobox"], [onclick], [contenteditable="true"], summary';
+  const INTERACTIVE = 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="option"], [role="combobox"], [role="row"], [onclick], [contenteditable="true"], summary';
   const isVis = (el) => {
     const st = window.getComputedStyle(el);
     if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
@@ -36,7 +36,7 @@ _SNAPSHOT_JS = """
     el.setAttribute('data-sj-ref', ref);
     const tag = el.tagName.toLowerCase();
     const type = el.getAttribute('type') || '';
-    const role = el.getAttribute('role') || '';
+    const role = (el.getAttribute('role') || '').toLowerCase();
     const name = el.getAttribute('name') || '';
     const id = el.id || '';
     const placeholder = el.getAttribute('placeholder') || '';
@@ -48,6 +48,21 @@ _SNAPSHOT_JS = """
     const ariaChecked = el.getAttribute('aria-checked');
     const ariaSelected = el.getAttribute('aria-selected');
     const ariaExpanded = el.getAttribute('aria-expanded');
+    const dataStarred = el.getAttribute('data-starred');
+    const dataState = el.getAttribute('data-state');
+    let stateClasses = '';
+    if (tag === 'button' || role === 'button' || role === 'checkbox' || role === 'row') {
+      const rawCls = typeof el.className === 'string'
+        ? el.className
+        : (el.getAttribute('class') || '');
+      const clsHits = rawCls
+        .split(/\\s+/)
+        .filter(Boolean)
+        .filter(c => /(?:^|[-_])(active|starred|selected)(?:$|[-_])/i.test(c))
+        .map(c => c.replace(/[^A-Za-z0-9_:-]/g, ''))
+        .filter(Boolean);
+      if (clsHits.length) stateClasses = clsHits.slice(0, 6).join(',');
+    }
     let labelTxt = '';
     if (el.labels && el.labels.length) {
       labelTxt = Array.from(el.labels).map(l => l.innerText.trim()).join(' ');
@@ -83,6 +98,9 @@ _SNAPSHOT_JS = """
       ariaChecked !== null ? `checked=${ariaChecked}` : '',
       ariaSelected !== null ? `selected=${ariaSelected}` : '',
       ariaExpanded !== null ? `expanded=${ariaExpanded}` : '',
+      dataStarred !== null ? `data-starred=${/^[A-Za-z0-9_-]+$/.test(dataStarred) ? dataStarred : JSON.stringify(dataStarred.slice(0, 40))}` : '',
+      dataState !== null ? `data-state=${/^[A-Za-z0-9_-]+$/.test(dataState) ? dataState : JSON.stringify(dataState.slice(0, 40))}` : '',
+      stateClasses ? `state-classes=${stateClasses}` : '',
       tag === 'a' && el.getAttribute('href') ? `href=${JSON.stringify(el.getAttribute('href').slice(0,90))}` : '',
     ].filter(Boolean).join(' ');
     controls.push(`[${ref}] <${tag}${attrs ? ' ' + attrs : ''}> ${text}${opts}`.trim());
@@ -213,7 +231,21 @@ def _parse_snapshot_state(data: dict[str, Any]) -> tuple[dict[str, Any], dict[st
         checked_m = re.search(r"\bchecked=(true|false|mixed)", attrs)
         selected_m = re.search(r"\bselected=(true|false)", attrs)
         expanded_m = re.search(r"\bexpanded=(true|false)", attrs)
+        data_starred_m = re.search(r'\bdata-starred=("(?:\\.|[^"\\])*"|[^\s>]+)', attrs)
+        data_state_m = re.search(r'\bdata-state=("(?:\\.|[^"\\])*"|[^\s>]+)', attrs)
+        state_cls_m = re.search(r"\bstate-classes=([^\s>]+)", attrs)
         disabled = bool(re.search(r"(?:^|\s)disabled(?:\s|$)", attrs))
+
+        def _unquote(raw_m: re.Match[str] | None) -> str:
+            if not raw_m:
+                return ""
+            raw = raw_m.group(1)
+            if len(raw) >= 2 and raw.startswith('"') and raw.endswith('"'):
+                try:
+                    return str(json.loads(raw))
+                except Exception:
+                    return raw[1:-1]
+            return raw
 
         controls_map[key] = {
             "ref": ref,
@@ -222,18 +254,24 @@ def _parse_snapshot_state(data: dict[str, Any]) -> tuple[dict[str, Any], dict[st
             "checked": checked_m.group(1) if checked_m else "",
             "selected": selected_m.group(1) if selected_m else "",
             "expanded": expanded_m.group(1) if expanded_m else "",
+            "data-starred": _unquote(data_starred_m),
+            "data-state": _unquote(data_state_m),
+            "classes": state_cls_m.group(1) if state_cls_m else "",
             "disabled": "true" if disabled else "false",
             "text": text[:56],
         }
 
     body_raw = str(data.get("bodyText") or "")
-    body_lines = [ln.strip()[:90] for ln in body_raw.splitlines() if ln.strip()][:250]
+    raw_body_lines = [ln.strip() for ln in body_raw.splitlines() if ln.strip()][:250]
+    body_lines = [ln[:90] for ln in raw_body_lines]
     state = {
         "url": str(data.get("url") or ""),
         "title": str(data.get("title") or ""),
         "controls": controls_map,
         "body_lines": body_lines,
         "body_set": set(body_lines),
+        "raw_body_lines": raw_body_lines,
+        "raw_body_set": set(raw_body_lines),
     }
     return state, fallbacks
 
@@ -252,9 +290,30 @@ def _format_dom_diff(prev: dict[str, Any] | None, curr: dict[str, Any]) -> str:
     prev_c: dict[str, dict[str, Any]] = prev["controls"]
     curr_c: dict[str, dict[str, Any]] = curr["controls"]
     attrs_to_check = (
-        ("value", "pressed", "checked", "selected", "expanded", "disabled", "text")
+        (
+            "value",
+            "pressed",
+            "checked",
+            "selected",
+            "expanded",
+            "data-starred",
+            "data-state",
+            "classes",
+            "disabled",
+            "text",
+        )
         if same_url
-        else ("value", "pressed", "checked", "selected", "expanded", "disabled")
+        else (
+            "value",
+            "pressed",
+            "checked",
+            "selected",
+            "expanded",
+            "data-starred",
+            "data-state",
+            "classes",
+            "disabled",
+        )
     )
     for key, c_ent in curr_c.items():
         p_ent = prev_c.get(key)
@@ -458,9 +517,44 @@ class BrowserSession:
             + self._drain_tab_errors(tid)
         )
 
+    def _seed_dom_state(self, tid: str, page: Any) -> dict[str, Any] | None:
+        """Seed DOM state for ``tid`` if missing and ``enable_dom_diff`` is active."""
+        if not self.enable_dom_diff:
+            return None
+        cached = self._last_dom_state.get(tid)
+        if cached is not None:
+            return cached
+        try:
+            data = page.evaluate(_SNAPSHOT_JS)
+        except Exception:
+            return None
+        if not isinstance(data, dict) or ("controls" not in data and "bodyText" not in data):
+            return None
+        state, fallbacks = _parse_snapshot_state(data)
+        self._last_dom_state[tid] = state
+        self._ref_fallbacks[tid] = fallbacks
+        return state
+
+    def _capture_dom_diff(self, tid: str, page: Any) -> str:
+        """Capture current DOM state and return formatted ``[dom-diff]`` if enabled."""
+        if not self.enable_dom_diff:
+            return ""
+        try:
+            data = page.evaluate(_SNAPSHOT_JS)
+        except Exception:
+            return ""
+        if not isinstance(data, dict) or ("controls" not in data and "bodyText" not in data):
+            return ""
+        prev_state = self._last_dom_state.get(tid)
+        curr_state, fallbacks = _parse_snapshot_state(data)
+        self._last_dom_state[tid] = curr_state
+        self._ref_fallbacks[tid] = fallbacks
+        return _format_dom_diff(prev_state, curr_state).rstrip("\n")
+
     def fill_fields(self, target_id: str | None, fields: list[dict[str, Any]]) -> str:
         tid, page = self.get_page(target_id)
         self._tab_errors.pop(tid, None)
+        self._seed_dom_state(tid, page)
         done: list[str] = []
         last_norm_ref = ""
         for item in fields or []:
@@ -521,8 +615,11 @@ class BrowserSession:
                 container_hint = f"\n{hint_val}"
         except Exception:
             pass
+        diff_line = self._capture_dom_diff(tid, page)
+        diff_suffix = f"\n{diff_line}" if diff_line else ""
         return (
             f"Filled {len(done)} fields on {tid}: {', '.join(done)}"
+            f"{diff_suffix}"
             f"{container_hint}"
             f"{self._drain_tab_errors(tid)}"
         )
@@ -537,6 +634,8 @@ class BrowserSession:
     ) -> str:
         tid, page = self.get_page(target_id)
         self._tab_errors.pop(tid, None)
+        if not press_enter:
+            self._seed_dom_state(tid, page)
         loc = self._loc(page, ref)
         if clear_first:
             loc.fill(text, timeout=8000)
@@ -558,7 +657,9 @@ class BrowserSession:
                 )
                 + self._drain_tab_errors(tid)
             )
-        return f"Typed into {ref} on {tid}.{self._drain_tab_errors(tid)}"
+        diff_line = self._capture_dom_diff(tid, page)
+        diff_suffix = f"\n{diff_line}" if diff_line else ""
+        return f"Typed into {ref} on {tid}.{diff_suffix}{self._drain_tab_errors(tid)}"
 
     def act(
         self,
@@ -609,34 +710,115 @@ class BrowserSession:
             + self._drain_tab_errors(tid)
         )
 
+    @staticmethod
+    def _format_batch_step_digest(
+        idx: int,
+        step_label: str,
+        step_prev: dict[str, Any] | None,
+        step_curr: dict[str, Any],
+    ) -> str:
+        """Render a compact per-step digest of URL, title, DOM delta, and <=600 chars of new visible text."""
+        if step_prev is not None:
+            raw_diff = _format_dom_diff(step_prev, step_curr).strip()
+            dom_delta = (
+                raw_diff[len("[dom-diff] ") :]
+                if raw_diff.startswith("[dom-diff] ")
+                else raw_diff
+            )
+            if len(dom_delta) > 220:
+                dom_delta = dom_delta[:217] + "..."
+        else:
+            dom_delta = "initial"
+
+        curr_raw_lines: list[str] = list(
+            step_curr.get("raw_body_lines") or step_curr.get("body_lines") or []
+        )
+        if step_prev is not None:
+            prev_raw_set: set[str] = set(
+                step_prev.get("raw_body_set") or step_prev.get("body_set") or ()
+            )
+            new_lines = [ln for ln in curr_raw_lines if ln not in prev_raw_set]
+            if not new_lines and step_curr.get("url") != step_prev.get("url"):
+                new_lines = curr_raw_lines
+        else:
+            new_lines = curr_raw_lines
+
+        vis_text = " ; ".join(new_lines) if new_lines else "(no new visible text)"
+        if len(vis_text) > 600:
+            vis_text = vis_text[:597] + "..."
+
+        return (
+            f"[step {idx} ({step_label}): "
+            f"url={step_curr.get('url', '')} | title={step_curr.get('title', '')} | "
+            f"dom_delta={dom_delta} | visible_digest={vis_text}]"
+        )
+
     def batch(
         self,
         target_id: str | None,
         steps: list[dict[str, Any]],
         stop_on_navigation: bool = False,
+        *,
+        stop_on_error: bool = True,
+        include_step_text: bool = True,
     ) -> str:
-        """Execute up to 25 sequential UI actions in one turn and return receipts + final snapshot."""
+        """Execute up to 25 sequential UI actions in one turn and return per-step digests + final snapshot."""
         tid, page = self.get_page(target_id)
         self._tab_errors.pop(tid, None)
         capped = list(steps or [])[:25]
         receipts: list[str] = []
+        step_digests: list[str] = []
         completed_count = 0
+        batch_initial_state = self._last_dom_state.get(tid)
+        step_prev_state = batch_initial_state
+
+        if include_step_text and step_prev_state is None:
+            try:
+                pre_data = page.evaluate(_SNAPSHOT_JS)
+                if isinstance(pre_data, dict) and ("controls" in pre_data or "bodyText" in pre_data):
+                    step_prev_state, pre_fallbacks = _parse_snapshot_state(pre_data)
+                    self._ref_fallbacks[tid] = pre_fallbacks
+            except Exception:
+                pass
 
         for idx, item in enumerate(capped, start=1):
             action = str(item.get("action") or item.get("kind") or "click").strip().lower()
             ref = str(item.get("ref") or "").strip()
             val = item.get("value")
             url_before = str(getattr(page, "url", "") or "")
+            receipt_lbl = f"{action}({ref})" if ref else action
             try:
                 if action == "wait":
                     ms = min(max(int(val if val is not None else 250), 50), 5000)
                     page.wait_for_timeout(ms)
-                    receipts.append(f"{idx}:wait({ms}ms)")
+                    receipt_lbl = f"wait({ms}ms)"
                 elif action == "press":
                     key = str(val or ref or "Enter")
                     page.keyboard.press(key)
                     page.wait_for_timeout(120)
-                    receipts.append(f"{idx}:press({key})")
+                    receipt_lbl = f"press({key})"
+                elif action in ("back", "go_back"):
+                    page.go_back(wait_until="domcontentloaded", timeout=7000)
+                    page.wait_for_timeout(150)
+                    receipt_lbl = "back"
+                elif action in ("forward", "go_forward"):
+                    page.go_forward(wait_until="domcontentloaded", timeout=7000)
+                    page.wait_for_timeout(150)
+                    receipt_lbl = "forward"
+                elif action in ("navigate", "goto"):
+                    furl = self._fix_url(str(item.get("url") or val or ""))
+                    page.goto(furl, wait_until="domcontentloaded", timeout=15000)
+                    page.wait_for_timeout(150)
+                    receipt_lbl = f"navigate({furl})"
+                elif action == "scroll":
+                    px = int(item.get("pixels") or 600)
+                    amt = -px if str(val or "").lower() == "up" else px
+                    page.mouse.wheel(0, amt)
+                    page.wait_for_timeout(120)
+                    receipt_lbl = f"scroll({amt})"
+                elif action in ("read", "snapshot", "inspect"):
+                    page.wait_for_timeout(50)
+                    receipt_lbl = action
                 else:
                     loc = self._loc(page, ref)
                     if action == "click":
@@ -650,7 +832,7 @@ class BrowserSession:
                                 loc.scroll_into_view_if_needed(timeout=1500)
                                 loc.click(timeout=4500)
                         page.wait_for_timeout(120)
-                        receipts.append(f"{idx}:click({ref})")
+                        receipt_lbl = f"click({ref})"
                     elif action in ("check", "uncheck"):
                         truthy = action == "check"
                         try:
@@ -661,7 +843,7 @@ class BrowserSession:
                                 raise
                             fb_loc.set_checked(truthy, timeout=4500)
                         page.wait_for_timeout(80)
-                        receipts.append(f"{idx}:{action}({ref})")
+                        receipt_lbl = f"{action}({ref})"
                     elif action == "select":
                         sval = str(val if val is not None else "")
                         try:
@@ -678,7 +860,7 @@ class BrowserSession:
                                 except Exception:
                                     fb_loc.select_option(label=sval, timeout=4500)
                         page.wait_for_timeout(100)
-                        receipts.append(f"{idx}:select({ref}={sval[:28]!r})")
+                        receipt_lbl = f"select({ref}={sval[:28]!r})"
                     elif action in ("fill", "type"):
                         sval = str(val if val is not None else "")
                         try:
@@ -695,14 +877,36 @@ class BrowserSession:
                             page.wait_for_timeout(180)
                         else:
                             page.wait_for_timeout(60)
-                        receipts.append(f"{idx}:{action}({ref}={sval[:28]!r})")
+                        receipt_lbl = f"{action}({ref}={sval[:28]!r})"
                     else:
                         raise ValueError(f"unsupported batch action {action!r}")
+                receipts.append(f"{idx}:{receipt_lbl}")
                 completed_count += 1
             except Exception as exc:
                 err_head = str(exc).splitlines()[0][:120] if str(exc) else type(exc).__name__
-                receipts.append(f"{idx}:{action}({ref}) -> ERROR: {err_head}")
-                break
+                receipts.append(f"{idx}:{receipt_lbl} -> ERROR: {err_head}")
+                if include_step_text:
+                    step_digests.append(f"[step {idx} ({receipt_lbl}): error={err_head}]")
+                if stop_on_error:
+                    break
+                continue
+
+            if include_step_text:
+                try:
+                    step_data = page.evaluate(_SNAPSHOT_JS)
+                    if isinstance(step_data, dict) and (
+                        "controls" in step_data or "bodyText" in step_data
+                    ):
+                        step_curr, step_fallbacks = _parse_snapshot_state(step_data)
+                        self._ref_fallbacks[tid] = step_fallbacks
+                        step_digests.append(
+                            self._format_batch_step_digest(
+                                idx, receipt_lbl, step_prev_state, step_curr
+                            )
+                        )
+                        step_prev_state = step_curr
+                except Exception:
+                    pass
 
             url_after = str(getattr(page, "url", "") or "")
             if stop_on_navigation and url_before and url_after != url_before and idx < len(capped):
@@ -714,8 +918,20 @@ class BrowserSession:
             page.wait_for_load_state("domcontentloaded", timeout=2000)
         except Exception:
             pass
+
+        if batch_initial_state is not None:
+            self._last_dom_state[tid] = batch_initial_state
+        else:
+            self._last_dom_state.pop(tid, None)
+
+        digest_block = (
+            "=== Batch Step Digests ===\n" + "\n".join(step_digests) + "\n\n"
+            if step_digests
+            else ""
+        )
         return (
             f"[Batch {completed_count}/{len(capped)} steps on {tid}] {', '.join(receipts)}\n"
+            + digest_block
             + self.snapshot(tid, header=f"After batch on {tid}", include_diff=self.enable_dom_diff)
             + self._drain_tab_errors(tid)
         )

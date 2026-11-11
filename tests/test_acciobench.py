@@ -2068,7 +2068,7 @@ def test_wave2_dom_diff_browser_batch_ctx_retrieve_and_external_mutation_audit(t
     assert "[dom-diff]" in batch_out and "pressed=true->false" in batch_out
     sess.close()
 
-    # 3. ToolHost ctx_retrieve structured retrieval + external mutation idempotency/readback gate.
+    # 3. ToolHost ctx_retrieve structured retrieval + Q2 duplicate link gate + external mutation audit.
     extra_bin = tmp_path / "cli_bin"
     _write_executable(
         extra_bin / "jira",
@@ -2076,6 +2076,8 @@ def test_wave2_dom_diff_browser_batch_ctx_retrieve_and_external_mutation_audit(t
             "#!/usr/bin/env bash\n"
             'if [ "$1" = "issue" ] && [ "$2" = "link" ]; then\n'
             '  echo "Linked $3 -> $4 ($5)"\n'
+            'elif [ "$1" = "issue" ] && [ "$2" = "comment" ] && [ "$3" = "add" ]; then\n'
+            '  echo "Commented on $4"\n'
             'elif [ "$1" = "issue" ] && [ "$2" = "view" ]; then\n'
             '  echo "Issue $3: links=[PROJ-2 (Duplicates)]"\n'
             "fi\n"
@@ -2119,17 +2121,24 @@ def test_wave2_dom_diff_browser_batch_ctx_retrieve_and_external_mutation_audit(t
     assert "[ctx q" in q_out and "n=" in q_out
     assert metrics.ctx_retrievals == {"get": 1, "search": 1, "stats": 1, "q": 1}
 
-    # Execute duplicate non-idempotent external CLI mutation without trailing readback.
+    # Q2 Entry Gate blocks exact duplicate `jira issue link`; non-gated duplicate mutation triggers emission audit.
     (run_dir / "outputs" / "triage.json").write_text('{"status": "triaged"}', encoding="utf-8")
     host.step = 6
     host.execute_part("bash", {"command": "jira issue link PROJ-29 PROJ-2 Duplicates"})
     host.step = 7
-    host.execute_part("bash", {"command": "jira issue link PROJ-29 PROJ-2 Duplicates"})
-    assert host.external_mutation_count == 2
+    fr_dup_link, _, _ = host.execute_part("bash", {"command": "jira issue link PROJ-29 PROJ-2 Duplicates"})
+    assert "[ctx-entry-gate] Blocked duplicate `jira issue link`" in fr_dup_link["functionResponse"]["response"]["output"]
+    assert host.external_mutation_count == 1
+
+    host.step = 8
+    host.execute_part("bash", {"command": 'jira issue comment add PROJ-29 "Follow-up pending"'})
+    host.step = 9
+    host.execute_part("bash", {"command": 'jira issue comment add PROJ-29 "Follow-up pending"'})
+    assert host.external_mutation_count == 3
     assert len(host.duplicate_external_mutations) == 1
 
     # First present_files gates once, surfacing both duplicate mutation and missing post-mutation readback.
-    host.step = 8
+    host.step = 10
     fr_gate1, _, _ = host.execute_part("present_files", {"files": ["/task/outputs/triage.json"]})
     gate1_txt = fr_gate1["functionResponse"]["response"]["output"]
     assert host.completed is False
@@ -2138,10 +2147,11 @@ def test_wave2_dom_diff_browser_batch_ctx_retrieve_and_external_mutation_audit(t
     assert "without a subsequent read-only check" in gate1_txt
 
     # Readback updates last_external_readback_step, and second present_files completes cleanly.
-    host.step = 9
+    host.step = 11
     host.execute_part("bash", {"command": "jira issue view PROJ-29"})
-    assert host.last_external_readback_step == 9
-    host.step = 10
+    assert host.last_external_readback_step == 11
+    assert host.unverified_mutated_services() == set()
+    host.step = 12
     fr_done, _, _ = host.execute_part("present_files", {"files": ["/task/outputs/triage.json"]})
     assert host.completed is True
     assert "Deliverables presented:" in fr_done["functionResponse"]["response"]["output"]
@@ -2254,3 +2264,521 @@ def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
     assert "Python package 'pdfplumber'" in doc_report
     assert "Python package 'fitz'" in doc_report
     assert "bwrap sandbox:" in doc_report
+
+
+def test_deliverable_contract_and_q4_cross_row_outlier_detection(tmp_path: Path) -> None:
+    from ctx.deliverables import (
+        CLOSED_WORLD_CONTRACT_RULE,
+        audit_deliverables,
+        format_deliverable_contract,
+        verify_declared_deliverables,
+    )
+
+    task_md = (
+        "# Reconciliation Report\n\n"
+        "Write `/task/outputs/report.json` with array `items` containing keys "
+        "`id`, `amount`, and `status` (`ok` or `missing`).\n"
+    )
+    run_dir = tmp_path / "contract_ws"
+    (run_dir / "workspace").mkdir(parents=True)
+    (run_dir / "outputs").mkdir(parents=True)
+
+    contract = format_deliverable_contract(task_md, run_dir / "workspace")
+    assert "[deliverable-contract]" in contract
+    assert "/task/outputs/report.json" in contract
+    assert "amount" in contract and "status" in contract
+    assert CLOSED_WORLD_CONTRACT_RULE in contract
+
+    inv = format_workspace_inventory(run_dir, task_markdown=task_md)
+    assert "[deliverable-contract]" in inv
+    assert "[cli-quickref]" in inv
+
+    # Write deliverables containing both a formatted numeric outlier ("2,400") and a
+    # singleton status enum outlier ("needs_rounding_note") not mentioned in task_markdown.
+    report_path = run_dir / "outputs" / "report.json"
+    bad_rows = [
+        {"id": "INV-1", "amount": 1200, "status": "ok"},
+        {"id": "INV-2", "amount": 1500, "status": "ok"},
+        {"id": "INV-3", "amount": 1800, "status": "ok"},
+        {"id": "INV-4", "amount": 2100, "status": "ok"},
+        {"id": "INV-5", "amount": "2,400", "status": "needs_rounding_note"},
+    ]
+    report_path.write_text(json.dumps({"items": bad_rows}), encoding="utf-8")
+
+    ok_bad, issues_bad = verify_declared_deliverables(
+        ["outputs/report.json"],
+        task_markdown=task_md,
+        workspace_root=run_dir,
+    )
+    assert ok_bad is False
+    joined = "\n".join(issues_bad)
+    assert "2,400" in joined
+    assert "needs_rounding_note" in joined
+
+    audit_bad = audit_deliverables(
+        run_dir,
+        ["/task/outputs/report.json"],
+        declared_paths=["outputs/report.json"],
+        task_markdown=task_md,
+    )
+    assert audit_bad.should_gate is True
+    assert any("2,400" in adv for adv in audit_bad.advisories)
+    assert any("needs_rounding_note" in adv for adv in audit_bad.advisories)
+
+    # Clean, uniform rows pass without Q4 advisories.
+    good_rows = [
+        {"id": f"INV-{i}", "amount": 1000 + i * 200, "status": "ok" if i < 5 else "missing"}
+        for i in range(1, 6)
+    ]
+    report_path.write_text(json.dumps({"items": good_rows}), encoding="utf-8")
+    ok_good, issues_good = verify_declared_deliverables(
+        ["outputs/report.json"],
+        task_markdown=task_md,
+        workspace_root=run_dir,
+    )
+    assert ok_good is True
+    assert issues_good == []
+
+
+def test_structured_data_shape_zero_loss_and_error_tail_first(tmp_path: Path) -> None:
+    from ctx.toolresult import compress_tool_result, prepend_structured_data_shape
+
+    rows = [{"sku": f"SKU-{i:03d}", "qty": i + 1, "amount": (i + 1) * 12.5, "note": "x" * 20} for i in range(40)]
+    raw_json = json.dumps(rows, indent=2)
+    assert len(raw_json) >= 1500
+
+    shaped = prepend_structured_data_shape(raw_json)
+    assert shaped.startswith("[data-shape: format=json, rows=40")
+    assert "[compute-hint:" in shaped
+    assert shaped.endswith(raw_json)  # strictly additive: zero character loss
+
+    # Small outputs stay untouched.
+    small_json = json.dumps(rows[:2])
+    assert prepend_structured_data_shape(small_json) == small_json
+
+    # ToolHost applies [data-shape] in sj mode on large reads while leaving raw untouched.
+    host_sj, _, run_sj, _ = _make_host(tmp_path / "shape_sj", arm="sj", entry_gate_bytes=100_000, baseline_raw_cap=100_000)
+    host_raw, _, run_raw, _ = _make_host(tmp_path / "shape_raw", arm="raw", entry_gate_bytes=100_000, baseline_raw_cap=100_000)
+    for rdir in (run_sj, run_raw):
+        (rdir / "workspace" / "orders_big.json").write_text(raw_json, encoding="utf-8")
+    fr_sj, _, _ = host_sj.execute_part("read", {"path": "/task/workspace/orders_big.json"})
+    fr_raw, _, _ = host_raw.execute_part("read", {"path": "/task/workspace/orders_big.json"})
+    sj_out = fr_sj["functionResponse"]["response"]["output"]
+    raw_out = fr_raw["functionResponse"]["response"]["output"]
+    assert "[data-shape: format=json, rows=40" in sj_out
+    assert "[data-shape:" not in raw_out
+
+    # Error-tail-first surfaces final lines before middle truncation when Bash fails.
+    noise = "\n".join(f"log step {i:04d} ok" for i in range(300))
+    long_err = f"{noise}\nTraceback (most recent call last):\n  File \"app.py\", line 99\nValueError: FINAL_SENTINEL_ERR"
+    compressed = compress_tool_result(
+        "Bash",
+        long_err,
+        max_chars=1200,
+        exit_code=1,
+        ref="run:deadbeef#stdout",
+    )
+    assert compressed.startswith("[error-tail-first]")
+    assert "ValueError: FINAL_SENTINEL_ERR" in compressed
+
+
+def test_write_receipt_normalized_bash_cache_entry_gate_and_cli_subproc_err(tmp_path: Path) -> None:
+    extra_bin = tmp_path / "cli_bin"
+    _write_executable(
+        extra_bin / "ntn",
+        "#!/usr/bin/env bash\necho 'ntn ok'\n",
+    )
+    _write_executable(
+        extra_bin / "stripe",
+        "#!/usr/bin/env bash\necho 'Error: invalid request (HTTP 400 Bad Request)' >&2\nexit 1\n",
+    )
+    host_sj, _, run_sj, _ = _make_host(tmp_path / "host_sj", arm="sj", extra_bin=extra_bin)
+    host_raw, _, _, _ = _make_host(tmp_path / "host_raw", arm="raw", extra_bin=extra_bin)
+
+    # 1. [write-receipt] on write and edit (raw unaffected).
+    host_sj.step = 1
+    fr_w, _, _ = host_sj.execute_part(
+        "write",
+        {"path": "/task/workspace/sample.json", "content": json.dumps({"alpha": 1, "beta": 2})},
+    )
+    w_out = fr_w["functionResponse"]["response"]["output"]
+    assert "[write-receipt: lines=1" in w_out and "schema=json-dict keys=[alpha, beta]" in w_out
+
+    fr_e, _, _ = host_sj.execute_part(
+        "edit",
+        {"path": "/task/workspace/sample.json", "old_string": '"beta": 2', "new_string": '"beta": 3'},
+    )
+    e_out = fr_e["functionResponse"]["response"]["output"]
+    assert "[write-receipt: lines=1" in e_out and "schema=json-dict" in e_out
+
+    fr_rw, _, _ = host_raw.execute_part(
+        "write",
+        {"path": "/task/workspace/sample.json", "content": '{"alpha": 1}'},
+    )
+    assert "[write-receipt:" not in fr_rw["functionResponse"]["response"]["output"]
+
+    # 2. Flag-cluster normalization treats `ls -la` and `ls -l -a` at same epoch as cached duplicate.
+    host_sj.step = 2
+    host_sj.execute_part("bash", {"command": "ls -la /task/workspace"})
+    assert host_sj.last_call_was_dup is False
+    host_sj.step = 3
+    fr_dup, _, _ = host_sj.execute_part("bash", {"command": "ls -l -a /task/workspace"})
+    assert host_sj.last_call_was_dup is True
+    assert "[straitjacket] Identical call already ran" in fr_dup["functionResponse"]["response"]["output"]
+
+    # 3. Entry Gate blocks synthetic scratch probe on `ntn files create test-file.txt` unless staged in workspace.
+    host_sj.step = 4
+    fr_probe, _, _ = host_sj.execute_part("bash", {"command": "ntn files create test-file.txt"})
+    probe_out = fr_probe["functionResponse"]["response"]["output"]
+    assert "[ctx-entry-gate] Blocked synthetic scratch-probe creation" in probe_out
+
+    (run_sj / "workspace" / "real-deliverable.txt").write_text("hello", encoding="utf-8")
+    host_sj.step = 5
+    fr_real, _, _ = host_sj.execute_part("bash", {"command": "ntn files create real-deliverable.txt"})
+    assert "[ctx-entry-gate]" not in fr_real["functionResponse"]["response"]["output"]
+
+    # 4. Q5 subprocess CLI error inside a Python script surfaces `[cli-subprocess-error]`.
+    host_sj.step = 6
+    py_subproc = (
+        "python3 - <<'PY'\n"
+        "import subprocess\n"
+        "r = subprocess.run(['stripe', 'invoices', 'create'], capture_output=True, text=True)\n"
+        "print(r.stderr.strip())\n"
+        "PY"
+    )
+    fr_sub, _, _ = host_sj.execute_part("bash", {"command": py_subproc})
+    sub_out = fr_sub["functionResponse"]["response"]["output"]
+    assert "[cli-subprocess-error]" in sub_out
+
+
+def test_browser_batch_step_digests_and_widget_state_attribute_diff() -> None:
+    state = {
+        "starred": False,
+        "page": "inbox",
+        "detail": "",
+        "status_cls": "idle",
+    }
+
+    class FakeLoc:
+        def __init__(self, sel: str) -> None:
+            self.sel = sel
+
+        @property
+        def first(self) -> FakeLoc:
+            return self
+
+        def count(self) -> int:
+            return 1
+
+        def click(self, **kwargs: Any) -> None:
+            if "e1" in self.sel or "star" in self.sel:
+                state["starred"] = not state["starred"]
+                state["status_cls"] = "starred" if state["starred"] else "idle"
+            elif "e2" in self.sel or "open" in self.sel:
+                state["page"] = "thread-42"
+                state["detail"] = "Quarterly margin target confirmed at 28.5%"
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "http://127.0.0.1:20610/inbox"
+
+        def is_closed(self) -> bool:
+            return False
+
+        def on(self, event: str, handler: Any) -> None:
+            pass
+
+        def goto(self, url: str, **kwargs: Any) -> None:
+            self.url = url
+
+        def go_back(self, **kwargs: Any) -> None:
+            state["page"] = "inbox"
+            state["detail"] = ""
+
+        def title(self) -> str:
+            return f"Mail - {state['page']}"
+
+        def locator(self, sel: str) -> FakeLoc:
+            return FakeLoc(sel)
+
+        def evaluate(self, script: str, *args: Any) -> Any:
+            s_val = "true" if state["starred"] else "false"
+            d_state = "active" if state["starred"] else "default"
+            if state["page"] == "inbox":
+                controls = "\n".join(
+                    [
+                        f'[e1] <button #star-widget data-starred="{s_val}" data-state="{d_state}" state-classes={state["status_cls"]}> Star',
+                        "[e2] <button #open-thread> Open thread 42",
+                    ]
+                )
+                body = "Inbox list (1 unread)"
+                self.url = "http://127.0.0.1:20610/inbox"
+                cnt = 2
+            else:
+                controls = "[e9] <button #reply-btn> Reply"
+                body = f"Thread 42 detail\n{state['detail']}"
+                self.url = "http://127.0.0.1:20610/thread/42"
+                cnt = 1
+            return {
+                "url": self.url,
+                "title": self.title(),
+                "controlsCount": cnt,
+                "controls": controls,
+                "bodyText": body,
+            }
+
+        def wait_for_timeout(self, ms: int) -> None:
+            pass
+
+        def wait_for_load_state(self, state_name: str, **kwargs: Any) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FakeCtx:
+        def new_page(self) -> FakePage:
+            return FakePage()
+
+        def close(self) -> None:
+            pass
+
+    sess = BrowserSession(FakeCtx(), {}, enable_dom_diff=True)
+    sess.open_tab("http://127.0.0.1:20610/inbox")
+    sess.snapshot("vtab-1")
+
+    # Widget attribute diff tracks data-starred, data-state, and state-classes on single click.
+    star_out = sess.click("vtab-1", "e1")
+    assert "[dom-diff]" in star_out
+    assert "data-starred=false->true" in star_out
+    assert "data-state=default->active" in star_out
+    assert "classes=idle->starred" in star_out
+
+    # browser_batch with include_step_text=True emits compact per-step digests even across click -> back.
+    batch_out = sess.batch(
+        "vtab-1",
+        [
+            {"action": "click", "ref": "e2"},
+            {"action": "read"},
+            {"action": "back"},
+        ],
+        include_step_text=True,
+    )
+    assert "[Batch 3/3 steps on vtab-1]" in batch_out
+    assert "[step 1 (click(e2)):" in batch_out
+    assert "Quarterly margin target confirmed at 28.5%" in batch_out
+    assert "[step 3 (back):" in batch_out
+    assert "url=http://127.0.0.1:20610/inbox" in batch_out
+    sess.close()
+
+
+def test_loop_turn0_contract_q3_per_service_gates_and_residence_wiring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ctx.residence import WatermarkResidence
+
+    ds_root = tmp_path / "cab_q3"
+    _create_synthetic_task(ds_root, category="cli", task_id="cli-multi-svc")
+
+    extra_bin = tmp_path / "cli_bin"
+    _write_executable(
+        extra_bin / "stripe",
+        (
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "invoices" ] && [ "$2" = "create" ]; then echo "inv_1"; '
+            'elif [ "$1" = "invoices" ] && [ "$2" = "list" ]; then echo "inv_1 paid"; fi\n'
+        ),
+    )
+    _write_executable(
+        extra_bin / "jira",
+        (
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then echo "PROJ-10"; '
+            'elif [ "$1" = "issue" ] && [ "$2" = "list" ]; then echo "PROJ-10 open"; fi\n'
+        ),
+    )
+    monkeypatch.setenv("PATH", f"{extra_bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}")
+
+    # Spy on WatermarkResidence.maybe_compact kwargs to verify loop.py C1/C2 wiring.
+    compact_calls: list[dict[str, Any]] = []
+    orig_maybe_compact = WatermarkResidence.maybe_compact
+
+    def spy_maybe_compact(
+        self: WatermarkResidence,
+        contents: list[dict[str, Any]],
+        *,
+        remaining_steps: int | None = None,
+        has_final_output_write: bool = False,
+        min_turn_gap: int = 6,
+        deliverable_contract: str = "",
+    ) -> tuple[int, int]:
+        compact_calls.append(
+            {
+                "has_final_output_write": has_final_output_write,
+                "min_turn_gap": min_turn_gap,
+                "deliverable_contract": deliverable_contract,
+                "remaining_steps": remaining_steps,
+            }
+        )
+        return orig_maybe_compact(
+            self,
+            contents,
+            remaining_steps=remaining_steps,
+            has_final_output_write=has_final_output_write,
+            min_turn_gap=min_turn_gap,
+            deliverable_contract=deliverable_contract,
+        )
+
+    monkeypatch.setattr(WatermarkResidence, "maybe_compact", spy_maybe_compact)
+
+    class MultiServiceGateProvider:
+        def __init__(self) -> None:
+            self.turn = 0
+            self.first_prompt = ""
+            self.saw_jira_gate = False
+
+        def generate(
+            self,
+            model_id: str,
+            contents: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.turn += 1
+            if self.turn == 1:
+                self.first_prompt = contents[0]["parts"][0]["text"]
+                parts: list[dict[str, Any]] = [
+                    {"functionCall": {"name": "bash", "args": {"command": "stripe invoices create"}}},
+                ]
+            elif self.turn == 2:
+                parts = [{"functionCall": {"name": "bash", "args": {"command": "jira issue create"}}}]
+            elif self.turn == 3:
+                # Verify ONLY stripe -> jira remains in unverified_mutated_services()!
+                parts = [{"functionCall": {"name": "bash", "args": {"command": "stripe invoices list"}}}]
+            elif self.turn == 4:
+                parts = [
+                    {
+                        "functionCall": {
+                            "name": "write",
+                            "args": {
+                                "path": "/task/outputs/summary.json",
+                                "content": json.dumps({"total_usd": 420, "status": "verified"}),
+                            },
+                        }
+                    }
+                ]
+            elif self.turn == 5:
+                # Premature completed_text attempt while `jira` is still unverified.
+                parts = [{"text": "Done! Created invoice and Jira issue."}]
+            elif self.turn == 6:
+                last_msg = contents[-1]["parts"][0].get("text", "")
+                assert "[ctx-emission-gate]" in last_msg
+                assert "jira" in last_msg
+                assert "stripe" not in last_msg.split("without a subsequent read-only check for:", 1)[-1]
+                self.saw_jira_gate = True
+                parts = [{"functionCall": {"name": "bash", "args": {"command": "jira issue list"}}}]
+            else:
+                parts = [{"functionCall": {"name": "present_files", "args": {"files": ["/task/outputs/summary.json"]}}}]
+
+            return {
+                "candidates": [{"finishReason": "STOP", "content": {"role": "model", "parts": parts}}],
+                "usageMetadata": {"promptTokenCount": 600, "candidatesTokenCount": 30},
+            }
+
+        def judge_access_token(self) -> str:
+            return ""
+
+        def close(self) -> None:
+            pass
+
+    cfg = BenchConfig(
+        dataset_root=ds_root,
+        workdir=tmp_path / "q3_work",
+        provider="gemini",
+        api_key="dummy",
+        judge_provider="mock",
+        arms=("sj",),
+    )
+    prov = MultiServiceGateProvider()
+    res = run_trial(cfg, "cli-multi-svc", "sj", 91, prov)
+    assert res.passed is True
+    assert res.termination == "present_files"
+    assert res.emission_gate_hits == 1
+    assert prov.saw_jira_gate is True
+    assert "[deliverable-contract]" in prov.first_prompt
+    assert "[cli-quickref]" in prov.first_prompt
+
+    assert len(compact_calls) >= 5
+    # Before output write (turns 1..3), has_final_output_write is False; after write (turn 4+), it is True.
+    assert any(c["has_final_output_write"] is False for c in compact_calls[:3])
+    assert any(c["has_final_output_write"] is True for c in compact_calls[3:])
+    assert all(c["min_turn_gap"] == 6 for c in compact_calls)
+    assert all("[deliverable-contract]" in c["deliverable_contract"] for c in compact_calls)
+
+    # Also confirm present_files blocks when an unverified service remains.
+    ds_pf = tmp_path / "cab_q3_pf"
+    _create_synthetic_task(ds_pf, category="cli", task_id="cli-pf-svc")
+
+    class PresentFilesGateProvider:
+        def __init__(self) -> None:
+            self.turn = 0
+            self.saw_pf_gate = False
+
+        def generate(
+            self,
+            model_id: str,
+            contents: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.turn += 1
+            if self.turn == 1:
+                parts: list[dict[str, Any]] = [
+                    {"functionCall": {"name": "bash", "args": {"command": "jira issue create"}}},
+                ]
+            elif self.turn == 2:
+                parts = [
+                    {
+                        "functionCall": {
+                            "name": "write",
+                            "args": {
+                                "path": "/task/outputs/summary.json",
+                                "content": json.dumps({"total_usd": 420, "status": "verified"}),
+                            },
+                        }
+                    }
+                ]
+            elif self.turn == 3:
+                parts = [{"functionCall": {"name": "present_files", "args": {"files": ["/task/outputs/summary.json"]}}}]
+            elif self.turn == 4:
+                fr_out = contents[-1]["parts"][0]["functionResponse"]["response"]["output"]
+                assert "[ctx-emission-gate]" in fr_out and "jira" in fr_out
+                self.saw_pf_gate = True
+                parts = [{"functionCall": {"name": "bash", "args": {"command": "jira issue list"}}}]
+            else:
+                parts = [{"functionCall": {"name": "present_files", "args": {"files": ["/task/outputs/summary.json"]}}}]
+            return {
+                "candidates": [{"finishReason": "STOP", "content": {"role": "model", "parts": parts}}],
+                "usageMetadata": {"promptTokenCount": 500, "candidatesTokenCount": 25},
+            }
+
+        def judge_access_token(self) -> str:
+            return ""
+
+        def close(self) -> None:
+            pass
+
+    cfg_pf = BenchConfig(
+        dataset_root=ds_pf,
+        workdir=tmp_path / "q3_pf_work",
+        provider="gemini",
+        api_key="dummy",
+        judge_provider="mock",
+        arms=("sj",),
+    )
+    pf_prov = PresentFilesGateProvider()
+    res_pf = run_trial(cfg_pf, "cli-pf-svc", "sj", 92, pf_prov)
+    assert res_pf.passed is True
+    assert res_pf.termination == "present_files"
+    assert res_pf.emission_gate_hits == 1
+    assert pf_prov.saw_pf_gate is True

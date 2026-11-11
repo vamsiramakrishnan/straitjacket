@@ -17,7 +17,11 @@ for _p in (_REPO_ROOT, _REPO_SRC):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from ctx.deliverables import audit_deliverables, extract_declared_deliverables  # noqa: E402
+from ctx.deliverables import (  # noqa: E402
+    audit_deliverables,
+    extract_declared_deliverables,
+    format_deliverable_contract,
+)
 from ctx.residence import WatermarkResidence  # noqa: E402
 
 from .browser import BrowserPool, BrowserSession  # noqa: E402
@@ -45,6 +49,7 @@ _MAX_TEXT_NUDGES = 3
 _MIN_STEPS_FOR_TEXT_COMPLETE = 4
 _MAX_IDENTICAL_TURN_STREAK = 4
 _MAX_DUP_TURN_STREAK = 2
+_COMPACT_MIN_TURN_GAP = 6
 
 _MICRO_PY_MAX_RESULT_CHARS = 650
 _MICRO_PY_STREAK_LIMIT = 3
@@ -99,6 +104,32 @@ def _task_requires_network(spec: Any) -> bool:
         except Exception:
             pass
     return bool(getattr(spec, "requires_network", False))
+
+
+def _collect_external_advisories(host: Any) -> list[str]:
+    """Collect external-service verification advisories, including per-service readbacks."""
+    ext_adv_fn = getattr(host, "external_state_advisories", None)
+    adv = list(ext_adv_fn()) if callable(ext_adv_fn) else []
+    unverified_fn = getattr(host, "unverified_mutated_services", None)
+    unverified = sorted(str(s) for s in unverified_fn()) if callable(unverified_fn) else []
+    if unverified:
+        if not any("without a subsequent read-only check for:" in item for item in adv):
+            adv.append(
+                "External service state was mutated without a subsequent read-only check for: "
+                f"{', '.join(unverified)} — run one consolidated list/get readback for each "
+                "to confirm final remote item/file/link counts and statuses before finalizing."
+            )
+    elif not adv:
+        ext_mut_cnt = int(getattr(host, "external_mutation_count", 0) or 0)
+        last_mut_step = int(getattr(host, "last_external_mutation_step", 0) or 0)
+        last_read_step = int(getattr(host, "last_external_readback_step", 0) or 0)
+        if ext_mut_cnt > 0 and last_read_step < last_mut_step:
+            adv.append(
+                f"External service state was mutated at step {last_mut_step} "
+                "without a subsequent read-only check — run one consolidated list/get readback "
+                "to confirm final remote item/file/link counts and statuses before finalizing."
+            )
+    return adv
 
 
 def _format_progress(metrics: RunMetrics) -> str:
@@ -200,9 +231,9 @@ def run_trial(
                 active_pool = local_browser_pool
             browser = active_pool.acquire_session(ports_ref, enable_dom_diff=is_sj)
 
-        prompt_text = build_prompt(Path(spec.case_dir), ports_ref)
+        task_prompt = build_prompt(Path(spec.case_dir), ports_ref)
         declared_deliverables = (
-            extract_declared_deliverables(prompt_text) if is_sj else []
+            extract_declared_deliverables(task_prompt) if is_sj else []
         )
 
         max_steps = max(1, int(config.max_steps))
@@ -217,6 +248,7 @@ def run_trial(
             arm=arm_norm,
             max_steps=max_steps,
             declared_deliverables=declared_deliverables,
+            task_markdown=task_prompt if is_sj else "",
         )
 
         residence: WatermarkResidence | None = (
@@ -229,10 +261,18 @@ def run_trial(
             enable_state_note=is_sj,
         )
 
+        prompt_text = task_prompt
+        deliverable_contract_text = ""
         if is_sj:
-            birth_inv = format_workspace_inventory(run_dir)
+            ws_dir = run_dir / "workspace"
+            contract_root = ws_dir if ws_dir.is_dir() else run_dir
+            deliverable_contract_text = format_deliverable_contract(
+                task_prompt,
+                contract_root,
+            )
+            birth_inv = format_workspace_inventory(run_dir, task_markdown=task_prompt)
             if birth_inv:
-                prompt_text = f"{prompt_text}\n{birth_inv}\n"
+                prompt_text = f"{task_prompt}\n{birth_inv}\n"
 
         system_instruction = SJ_EXECUTION_PROTOCOL if is_sj else None
         contents: list[dict[str, Any]] = [
@@ -367,13 +407,14 @@ def run_trial(
                         continue
 
                     has_deliverables = host.has_user_deliverables()
-                    if is_sj and not host.completed and text_nudges == 0:
+                    if is_sj and not host.completed and not host.emission_gated_once:
                         pre_exit_audit = audit_deliverables(
                             run_dir,
                             [],
                             declared_paths=host.declared_deliverables,
+                            task_markdown=task_prompt,
                         )
-                        ext_adv = host.external_state_advisories()
+                        ext_adv = _collect_external_advisories(host)
                         if (
                             pre_exit_audit.should_gate
                             or bool(ext_adv)
@@ -512,11 +553,38 @@ def run_trial(
                     else:
                         micro_py_streak = 0
 
+                if is_sj and host.completed and not host.emission_gated_once:
+                    ext_adv = _collect_external_advisories(host)
+                    if ext_adv:
+                        host.completed = False
+                        host.emission_gated_once = True
+                        metrics.emission_gate_hits += 1
+                        gate_msg = (
+                            "[ctx-emission-gate] Pre-finalization verification check found items to confirm:\n"
+                            + "\n".join(f"- [CHECK] {item}" for item in ext_adv)
+                            + "\nResolve any issues above and call present_files to finalize."
+                        )
+                        updated_pf_resp = False
+                        for resp in reversed(responses):
+                            f_resp = resp.get("functionResponse")
+                            if isinstance(f_resp, dict) and f_resp.get("name") == "present_files":
+                                f_resp["response"] = {"output": gate_msg}
+                                updated_pf_resp = True
+                                break
+                        if not updated_pf_resp:
+                            responses.append({"text": gate_msg})
+
                 contents.append({"role": "user", "parts": responses})
+                has_final_output_write = bool(
+                    getattr(host, "outputs_written", None)
+                ) or host.has_user_deliverables()
                 if residence is not None and not host.completed:
                     n_comp, _ = residence.maybe_compact(
                         contents,
                         remaining_steps=max(0, max_steps - step),
+                        has_final_output_write=has_final_output_write,
+                        min_turn_gap=_COMPACT_MIN_TURN_GAP,
+                        deliverable_contract=deliverable_contract_text,
                     )
                     if n_comp:
                         metrics.compaction_epochs = residence.epochs

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import base64
 from concurrent.futures import ThreadPoolExecutor
+import csv
 import glob as pyglob
 import hashlib
 import html as htmlmod
+import io
 import json
 import mimetypes
 import os
@@ -30,6 +32,7 @@ for _p in (_REPO_ROOT, _REPO_SRC):
 from ctx.deliverables import audit_deliverables  # noqa: E402
 from ctx.residence import extract_mutation_receipts  # noqa: E402
 from ctx.sessiondir import session_reads_path  # noqa: E402
+from ctx.toolresult import prepend_structured_data_shape  # noqa: E402
 
 from evals.acciobench.browser import BrowserSession
 from evals.acciobench.config import BenchConfig, RunMetrics, resolve_ctx_bin
@@ -153,7 +156,7 @@ _CLEANUP_CLI_VERB_RE = re.compile(
     re.I,
 )
 _READBACK_CLI_VERB_RE = re.compile(
-    r"\b(?:list|ls|get|show|view|search|find|status|retrieve|info|read|export|whoami)\b",
+    r"(?:\b(?:list|ls|get|show|view|search|find|status|retrieve|info|read|export|whoami|query|resolve)\b|:items\b)",
     re.I,
 )
 _MUTATING_CLI_VERB_RE = re.compile(
@@ -189,6 +192,269 @@ _NAMED_CREATE_RECEIPT_RE = re.compile(
     r'(page|file|doc|document|sheet|database|task|issue|draft|folder)\s+"([^"]{2,120})"',
     re.I,
 )
+_DOMAIN_CLIS: tuple[str, ...] = ("stripe", "jira", "dws", "box", "gws", "ntn", "todoist")
+_CLI_SUBCOMMAND_REFS: dict[str, str] = {
+    "stripe": (
+        "stripe <resource> <op> [--k=v | -d \"nested[k]=v\"]; ops: customers, products, prices, "
+        "subscriptions, invoices, invoiceitems, charges, refunds; credit/negative invoice adjustments: "
+        "`stripe invoiceitems create --customer=CUS_ID --currency=usd --amount=-CENTS --description=\"...\"`; "
+        "`stripe invoices finalize-invoice INV_ID` (all amounts integer cents)."
+    ),
+    "jira": (
+        "jira issue list [--raw] | view KEY | create | edit KEY | comment add KEY | "
+        "move KEY \"<Exact Case-Sensitive State>\" | link INWARD OUTWARD LINK_TYPE; jira project list."
+    ),
+    "dws": (
+        "dws <service> <cmd> [flags]; doc read --node <id|url> --content-format markdown|jsonml; "
+        "doc list|create|comment|copy; doc block list|insert|update|delete --node <id>; dws schema for exact params."
+    ),
+    "box": (
+        "box <resource>:<op>; folders:items 0 | folders:create NAME --parent-id ID; "
+        "files:get ID | files:upload PATH --parent-id ID; collaborations:create; comments:create; tasks:create; shared-links:create."
+    ),
+    "gws": (
+        "gws sheets get-text --spreadsheet-id <id|url> | gws slides <cmd> --presentation-id <id> "
+        "(run `gws sheets --help` / `gws slides --help` once upfront for exact subcommands)."
+    ),
+    "ntn": (
+        "ntn pages get|create|update <page-id> --content <md>; "
+        "ntn datasources resolve <db-id> | query <ds-id>; ntn files list; ntn api for raw calls."
+    ),
+    "todoist": (
+        "todoist list | show <id> | add ... | modify <id> [--section-name ...] [--label-names ...] | "
+        "close <id> | delete <id> | projects | sections."
+    ),
+}
+_SHELL_CLI_INV_RE = re.compile(
+    r"(?:^|&&|\|\||;|\||\bdo\b|\bthen\b|\$\()\s*(?:env\s+[A-Z0-9_]+=\S+\s+)*"
+    r"(stripe|todoist|jira|box|dws|gws|ntn|shopify|gh)(?:\s+([^\n;|&`]*)|$)",
+    re.I | re.M,
+)
+_PY_LIST_CLI_RE = re.compile(
+    r"\[\s*[\"'](stripe|todoist|jira|box|dws|gws|ntn|shopify|gh)[\"']\s*,\s*([^\]]+)\]",
+    re.I,
+)
+_PY_STR_CLI_RE = re.compile(
+    r"""(["'])\s*(?:env\s+[A-Z0-9_]+=\S+\s+)*(stripe|todoist|jira|box|dws|gws|ntn|shopify|gh)\s+([^"'\n]+?)\1""",
+    re.I,
+)
+_SCRATCH_PROBE_CLI_CREATES_RE = re.compile(
+    r"(?:files:(?:upload|create)|folders:create|\b(?:create|upload|add|mkdir|new|copy)\b)",
+    re.I,
+)
+_FLAG_CLUSTER_CMDS: dict[str, frozenset[str]] = {
+    "ls": frozenset("aAdFhHilLnrRSt1"),
+    "grep": frozenset("cEFhHilLnqrRvwx"),
+    "sort": frozenset("fhHnruV"),
+    "wc": frozenset("clLmw"),
+    "du": frozenset("achkmsx"),
+    "ps": frozenset("aefux"),
+    "cat": frozenset("bns"),
+    "head": frozenset("qv"),
+    "tail": frozenset("fqv"),
+}
+_EMBEDDED_CLI_ERR_RE = re.compile(
+    r"(?:\bcommand not found\b|^\s*Usage:\s|\bHTTP(?:/[\d.]+)?\s+[45]\d\d\b)",
+    re.I | re.M,
+)
+_SECTION_HEADER_RE = re.compile(r"^\s*\[section:\s*([^\]]+?)\s*\]\s*$")
+
+
+def _normalize_bash_cmd_for_dedup(cmd: str) -> str:
+    """Normalize whitespace and POSIX short-flag clusters on simple shell commands for bash dedup."""
+    s = (cmd or "").strip()
+    if not s:
+        return ""
+    if "<<" in s or "\n" in s:
+        return "\n".join(ln.rstrip() for ln in s.splitlines() if ln.strip())
+    try:
+        tokens = list(shlex.shlex(s, posix=False, punctuation_chars=";|&"))
+    except ValueError:
+        return " ".join(s.split())
+    out: list[str] = []
+    cmd_word: str | None = None
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in (";", "&&", "||", "|", "&"):
+            out.append(tok)
+            cmd_word = None
+            i += 1
+            continue
+        if cmd_word is None and not tok.startswith(("-", "'", '"')) and "=" not in tok:
+            cmd_word = Path(tok).name.lower()
+            out.append(tok)
+            i += 1
+            continue
+        allowed = _FLAG_CLUSTER_CMDS.get(cmd_word or "")
+        if allowed and re.match(r"^-[A-Za-z0-9]+$", tok):
+            flags: list[str] = []
+            j = i
+            while j < len(tokens):
+                t = tokens[j]
+                if re.match(r"^-[A-Za-z0-9]+$", t) and all(ch in allowed for ch in t[1:]):
+                    flags.extend(f"-{ch}" for ch in t[1:])
+                    j += 1
+                else:
+                    break
+            if flags:
+                out.extend(sorted(set(flags)))
+                i = j
+                continue
+        out.append(tok)
+        i += 1
+    return " ".join(out)
+
+
+def _extract_cli_invocations(cmd: str) -> list[tuple[str, str, int]]:
+    """Extract ``(cli_bin, rest_args, char_pos)`` across shell segments and inline script calls."""
+    if not cmd:
+        return []
+    hits: list[tuple[str, str, int]] = []
+    seen_pos: set[int] = set()
+
+    # Track shell lines outside non-shell heredoc bodies cleanly so prose comments don't trigger.
+    heredoc_end: str | None = None
+    offset = 0
+    for ln in cmd.splitlines(keepends=True):
+        s_ln = ln.strip()
+        if heredoc_end is not None:
+            if s_ln == heredoc_end:
+                heredoc_end = None
+            offset += len(ln)
+            continue
+        m_hd = re.search(r"<<-?\s*['\"]?([A-Za-z0-9_]+)['\"]?", s_ln)
+        if m_hd and m_hd.group(1).upper() not in ("SH", "BASH"):
+            heredoc_end = m_hd.group(1)
+        if s_ln and not s_ln.startswith("#"):
+            for m in _SHELL_CLI_INV_RE.finditer(ln):
+                pos = offset + m.start(1)
+                if pos not in seen_pos:
+                    seen_pos.add(pos)
+                    hits.append((m.group(1).lower(), " ".join((m.group(2) or "").split()), pos))
+        offset += len(ln)
+
+    for m in _PY_LIST_CLI_RE.finditer(cmd):
+        pos = m.start(1)
+        if pos not in seen_pos:
+            seen_pos.add(pos)
+            arg_toks = re.findall(r"""["']([^"'\n]+)["']""", m.group(2))
+            hits.append((m.group(1).lower(), " ".join(arg_toks), pos))
+
+    for m in _PY_STR_CLI_RE.finditer(cmd):
+        pos = m.start(2)
+        if pos not in seen_pos:
+            seen_pos.add(pos)
+            hits.append((m.group(2).lower(), " ".join(m.group(3).split()), pos))
+
+    hits.sort(key=lambda item: item[2])
+    return hits
+
+
+def _parse_jira_link_call(rest: str) -> tuple[str, str, str] | None:
+    """Parse ``jira issue link INWARD OUTWARD LINK_TYPE`` positional tuple if matched."""
+    try:
+        toks = shlex.split(rest)
+    except ValueError:
+        toks = rest.split()
+    pos_args: list[str] = []
+    skip_next = False
+    for tok in toks:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok.startswith("-"):
+            if tok in ("-t", "--type", "-o", "--output") and "=" not in tok:
+                skip_next = True
+            continue
+        pos_args.append(tok)
+    if len(pos_args) >= 5 and pos_args[0].lower() == "issue" and pos_args[1].lower() == "link":
+        src = pos_args[2].strip().upper()
+        tgt = pos_args[3].strip().upper()
+        ltype = " ".join(pos_args[4:]).strip().lower()
+        if src and tgt and ltype:
+            return (src, tgt, ltype)
+    return None
+
+
+def _is_synthetic_probe_name(token: str) -> bool:
+    """Return True for throwaway scratch probe filenames/titles (test.txt, dummy*, tmp*, Untitled)."""
+    cleaned = token.strip().strip("\"'`").rstrip(",;")
+    if not cleaned:
+        return False
+    base = Path(cleaned).name.lower()
+    return (
+        base in ("test.txt", "test-file.txt", "untitled")
+        or base.startswith(("dummy", "tmp"))
+    )
+
+
+def _format_write_receipt(path: Path, text: str) -> str:
+    """Render a zero-extra-tool ``[write-receipt: ...]`` line summarizing file lines, bytes, and schema."""
+    n_lines = len(text.splitlines())
+    n_bytes = len(text.encode("utf-8"))
+    suf = path.suffix.lower()
+    schema = "text"
+
+    stripped = text.lstrip()
+    if suf == ".json" or (suf not in (".csv", ".tsv", ".md", ".txt", ".py", ".sh") and stripped.startswith(("{", "["))):
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                keys = [str(k)[:24] for k in list(obj.keys())[:8]]
+                more = f"+{len(obj) - 8}" if len(obj) > 8 else ""
+                schema = f"schema=json-dict keys=[{', '.join(keys)}{more}]"
+            elif isinstance(obj, list):
+                first_keys = ""
+                if obj and isinstance(obj[0], dict):
+                    ks = [str(k)[:20] for k in list(obj[0].keys())[:6]]
+                    first_keys = f" keys=[{', '.join(ks)}]"
+                schema = f"schema=json-list len={len(obj)}{first_keys}"
+            else:
+                schema = f"schema=json-{type(obj).__name__}"
+        except Exception as exc:
+            schema = f"schema=INVALID-JSON({type(exc).__name__})"
+    elif suf == ".jsonl":
+        schema = f"schema=jsonl lines={n_lines}"
+    elif suf in (".csv", ".tsv"):
+        delim = "\t" if suf == ".tsv" else ","
+        try:
+            rows = list(csv.reader(io.StringIO(text), delimiter=delim))
+            if rows:
+                cols = [c.strip()[:24] for c in rows[0][:8]]
+                more_c = f"+{len(rows[0]) - 8}" if len(rows[0]) > 8 else ""
+                schema = f"schema={suf[1:]} rows={max(0, len(rows) - 1)} cols=[{', '.join(cols)}{more_c}]"
+            else:
+                schema = f"schema={suf[1:]} rows=0"
+        except Exception as exc:
+            schema = f"schema=INVALID-{suf[1:].upper()}({type(exc).__name__})"
+    else:
+        schema = f"schema={suf[1:] or 'text'}"
+
+    return f"[write-receipt: lines={n_lines}, bytes={n_bytes}, {schema}]"
+
+
+def _format_section_receipt(out_txt: str) -> str:
+    """Summarize ``[section: <name>]`` blocks in inline bash stdout if present."""
+    sections: list[tuple[str, int]] = []
+    cur_name: str | None = None
+    cur_lines = 0
+    for ln in out_txt.splitlines():
+        m = _SECTION_HEADER_RE.match(ln)
+        if m:
+            if cur_name is not None:
+                sections.append((cur_name, cur_lines))
+            cur_name = m.group(1).strip()[:36]
+            cur_lines = 0
+        elif cur_name is not None and ln.strip():
+            cur_lines += 1
+    if cur_name is not None:
+        sections.append((cur_name, cur_lines))
+    if not sections:
+        return ""
+    preview = ", ".join(f"{name}: {cnt} lines" for name, cnt in sections[:10])
+    more = f", +{len(sections) - 10} more" if len(sections) > 10 else ""
+    return f"[section-receipt: {len(sections)} section(s) ({preview}{more})]"
 
 
 def format_numbered_lines(
@@ -273,6 +539,7 @@ class ToolHost:
         arm: str = "sj",
         max_steps: int = 135,
         declared_deliverables: list[str] | None = None,
+        task_markdown: str = "",
         use_bwrap: bool | None = None,
     ):
         arm_norm = arm.strip().lower()
@@ -306,11 +573,30 @@ class ToolHost:
         self.taught_bash_ctx: bool = False
         self.emission_gated_once: bool = False
         self.cli_enriched_cmds: set[str] = set()
+        self.cli_ref_shown: set[str] = set()
+        self._seen_jira_links: set[tuple[str, str, str]] = set()
         self.declared_deliverables: list[str] = list(declared_deliverables or [])
+        resolved_task_md = (task_markdown or "").strip()
+        if not resolved_task_md:
+            for cand in (
+                self.run_dir / "TASK.md",
+                self.run_dir / "task.md",
+                self.run_dir / "mock_case" / "task.md",
+            ):
+                if cand.is_file():
+                    try:
+                        resolved_task_md = cand.read_text(encoding="utf-8", errors="replace").strip()
+                    except OSError:
+                        resolved_task_md = ""
+                    if resolved_task_md:
+                        break
+        self.task_markdown: str = resolved_task_md
         self.untrashed_untitled_ids: dict[str, str] = {}
         self.external_mutation_count: int = 0
         self.last_external_mutation_step: int = 0
         self.last_external_readback_step: int = 0
+        self.mutated_services: set[str] = set()
+        self.verified_services: set[str] = set()
         self._non_idempotent_cmd_counts: dict[str, int] = {}
         self._non_idempotent_receipt_counts: dict[str, int] = {}
         self.duplicate_external_mutations: dict[str, str] = {}
@@ -902,40 +1188,198 @@ class ToolHost:
             rid = m.group(1)
             self.untrashed_untitled_ids[rid] = " ".join(m.group(0).split())[:90]
 
+    def _name_exists_in_workspace(self, name_lower: str) -> bool:
+        """Return True if a file or directory matching ``name_lower`` exists inside ``workspace/`` or ``outputs/``."""
+        for sub in ("workspace", "outputs"):
+            root = self.run_dir / sub
+            if not root.is_dir():
+                continue
+            for p in root.rglob("*"):
+                if p.name.lower() == name_lower:
+                    return True
+        return False
+
+    def _check_bash_entry_gate(self, cmd_rw: str) -> str | None:
+        """Block synthetic scratch-probe creations and duplicate ``jira issue link`` calls before execution."""
+        if not self.is_sj or not cmd_rw:
+            return None
+        invocations = _extract_cli_invocations(cmd_rw)
+        for cli_bin, rest, _ in invocations:
+            if not rest or "--help" in rest or re.search(r"(?:^|\s)-h(?:\s|$)", rest) or "--dry-run" in rest:
+                continue
+            rest_l = rest.lower()
+            is_persistent_probe_target = (
+                (cli_bin == "ntn" and rest_l.startswith("files "))
+                or cli_bin in ("box", "dws")
+            )
+            if is_persistent_probe_target and _SCRATCH_PROBE_CLI_CREATES_RE.search(rest):
+                try:
+                    toks = shlex.split(rest)
+                except ValueError:
+                    toks = rest.split()
+                for tok in toks[1:]:
+                    if tok.startswith("-"):
+                        if "=" in tok:
+                            tok = tok.split("=", 1)[1]
+                        else:
+                            continue
+                    if _is_synthetic_probe_name(tok):
+                        base_l = Path(tok.strip("\"'`")).name.lower()
+                        if not self._name_exists_in_workspace(base_l):
+                            return (
+                                f"[ctx-entry-gate] Blocked synthetic scratch-probe creation `{cli_bin} {rest[:90]}` "
+                                f"(`{tok}` does not exist in /task/workspace). Do not create throwaway or 'Untitled' "
+                                "probe items on persistent external services; query existing state or create final named deliverables."
+                            )
+            if cli_bin == "jira":
+                jlink = _parse_jira_link_call(rest)
+                if jlink is not None and jlink in self._seen_jira_links:
+                    src, tgt, ltype = jlink
+                    return (
+                        f"[ctx-entry-gate] Blocked duplicate `jira issue link` ({src}, {tgt}, {ltype!r}): "
+                        "that exact issue link was already created earlier in this run."
+                    )
+        return None
+
+    def _maybe_append_cli_subcommand_ref(self, cmd_rw: str, out: str) -> str:
+        """Append a 1-time compact ``[cli-subcommand-ref]`` card per domain CLI on first ``bash`` use."""
+        if not self.is_sj or not cmd_rw or out.startswith("[ctx-entry-gate]"):
+            return out
+        invoked: list[str] = []
+        for cli_bin, _, _ in _extract_cli_invocations(cmd_rw):
+            if cli_bin in _CLI_SUBCOMMAND_REFS and cli_bin not in self.cli_ref_shown and cli_bin not in invoked:
+                invoked.append(cli_bin)
+        if not invoked:
+            return out
+        cards: list[str] = []
+        for cli_bin in invoked:
+            self.cli_ref_shown.add(cli_bin)
+            cards.append(_CLI_SUBCOMMAND_REFS[cli_bin])
+        return out + "\n\n[cli-subcommand-ref]\n" + "\n".join(cards)
+
+    @staticmethod
+    def _append_cli_subprocess_error(cmd_rw: str, out: str) -> str:
+        """Tag embedded CLI subprocess errors (``command not found``, ``Usage:``, ``HTTP 4xx/5xx``)."""
+        if not out or "[cli-subprocess-error]" in out:
+            return out
+        explicit_help = bool(re.search(r"(?:^|\s)(?:--help|-h)(?:\s|$)", cmd_rw))
+        clean_help = (
+            explicit_help
+            and not out.startswith("[exit ")
+            and not re.search(
+                r"(?:Unknown command|unknown (?:flag|command|option)|command not found|"
+                r"\bError:|invalid argument|missing .*argument|\bHTTP(?:/[\d.]+)?\s+[45]\d\d\b)",
+                out,
+                re.I,
+            )
+        )
+        matched_lines: list[str] = []
+        for ln in out.splitlines():
+            s_ln = ln.strip()
+            if not s_ln:
+                continue
+            if _EMBEDDED_CLI_ERR_RE.search(ln):
+                if clean_help and re.match(r"^\s*Usage:\s", ln, re.I):
+                    continue
+                matched_lines.append(s_ln[:140])
+                if len(matched_lines) >= 2:
+                    break
+        if not matched_lines:
+            return out
+        snippet = " | ".join(matched_lines)[:240]
+        return out + f"\n[cli-subprocess-error] Embedded CLI failure detected: {snippet}"
+
+    def _apply_structured_shape(self, text: str, raw_for_detection: str | None = None) -> str:
+        """Prepend ``ctx.toolresult.prepend_structured_data_shape`` in ``sj`` mode with zero character loss."""
+        if not self.is_sj:
+            return text
+        probe = raw_for_detection if raw_for_detection is not None else text
+        if len(probe) < 1500:
+            return text
+        try:
+            shaped = str(prepend_structured_data_shape(probe))
+        except Exception:
+            return text
+        if not shaped or shaped == probe:
+            return text
+        if raw_for_detection is None:
+            return shaped
+        if shaped.endswith(probe):
+            prefix = shaped[: len(shaped) - len(probe)]
+            return prefix + text
+        first_ln = shaped.splitlines()[0].strip()
+        if first_ln.startswith("[data-shape:"):
+            return first_ln + "\n" + text
+        return text
+
+    def unverified_mutated_services(self) -> set[str]:
+        """Return mutated external services that have not had a subsequent readback verification."""
+        return set(self.mutated_services - self.verified_services)
+
     def _track_external_service_activity(self, cmd: str, out_txt: str) -> None:
-        """Track external service mutations, non-idempotent duplicates, and readbacks."""
-        if not cmd or out_txt.startswith(("[exit ", "ERROR:")):
+        """Track external service mutations, non-idempotent duplicates, and per-service readbacks."""
+        if not cmd or out_txt.startswith(("[exit ", "ERROR:", "[ctx-entry-gate]")):
             return
         receipts = extract_mutation_receipts(out_txt)
-        has_service_target = bool(_EXT_SERVICE_TARGET_RE.search(cmd)) or bool(receipts)
+        invocations = _extract_cli_invocations(cmd)
+        has_service_target = (
+            bool(_EXT_SERVICE_TARGET_RE.search(cmd))
+            or bool(invocations)
+            or bool(receipts)
+        )
         if not has_service_target:
             return
 
-        has_ext_mut = bool(receipts) or bool(_MCP_MUTATING_CALL_RE.search(cmd))
-        has_ext_read = bool(_MCP_READONLY_CALL_RE.search(cmd))
-        if _HTTP_MUTATION_RE.search(cmd) and not (has_ext_read and not has_ext_mut):
+        has_ext_mut = bool(receipts)
+        has_ext_read = False
+        last_mut_pos: dict[str, int] = {}
+        last_read_pos: dict[str, int] = {}
+        port_rx = re.compile(r"https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(\d+)")
+
+        if _MCP_MUTATING_CALL_RE.search(cmd):
             has_ext_mut = True
-        if _HTTP_READBACK_RE.search(cmd) and not has_ext_mut:
+            for m in _MCP_MUTATING_CALL_RE.finditer(cmd):
+                last_mut_pos["mcp"] = max(last_mut_pos.get("mcp", -1), m.start())
+        if _MCP_READONLY_CALL_RE.search(cmd):
             has_ext_read = True
+            for m in _MCP_READONLY_CALL_RE.finditer(cmd):
+                last_read_pos["mcp"] = max(last_read_pos.get("mcp", -1), m.start())
+
+        for m in _HTTP_MUTATION_RE.finditer(cmd):
+            window = cmd[max(0, m.start() - 40) : min(len(cmd), m.end() + 140)]
+            pm = port_rx.search(window)
+            svc = f"http:{pm.group(1)}" if pm else "http"
+            has_ext_mut = True
+            last_mut_pos[svc] = max(last_mut_pos.get(svc, -1), m.start())
+        for m in _HTTP_READBACK_RE.finditer(cmd):
+            window = cmd[max(0, m.start() - 40) : min(len(cmd), m.end() + 140)]
+            pm = port_rx.search(window)
+            svc = f"http:{pm.group(1)}" if pm else "http"
+            has_ext_read = True
+            last_read_pos[svc] = max(last_read_pos.get(svc, -1), m.start())
 
         cleaned_up = bool(_RESOURCE_CLEANUP_RE.search(out_txt))
-        for raw_seg in re.split(r"(?:\n|&&|\|\||;)", cmd):
-            seg = raw_seg.strip()
-            if not seg or seg.startswith("#") or "--help" in seg or re.search(r"(?:^|\s)-h(?:\s|$)", seg):
+        for cli_bin, rest, pos in invocations:
+            if not rest or "--help" in rest or re.search(r"(?:^|\s)-h(?:\s|$)", rest):
                 continue
-            m_cli = _EXT_CLI_LINE_RE.match(seg)
-            if not m_cli:
-                continue
-            cli_bin = m_cli.group(1).lower()
-            rest = " ".join(m_cli.group(2).split())
             if _CLEANUP_CLI_VERB_RE.search(rest):
                 has_ext_mut = True
                 cleaned_up = True
+                last_mut_pos[cli_bin] = max(last_mut_pos.get(cli_bin, -1), pos)
                 for dkey in list(self.duplicate_external_mutations):
-                    if any(tok in seg or tok in out_txt for tok in dkey.split() if len(tok) >= 4):
+                    if any(tok in rest or tok in out_txt for tok in dkey.split() if len(tok) >= 4):
                         self.duplicate_external_mutations.pop(dkey, None)
+                if cli_bin == "jira" and "unlink" in rest.lower():
+                    for jkey in list(self._seen_jira_links):
+                        if jkey[0] in rest.upper() and jkey[1] in rest.upper():
+                            self._seen_jira_links.discard(jkey)
             elif _NON_IDEMPOTENT_CLI_VERB_RE.search(rest) and "--dry-run" not in rest:
                 has_ext_mut = True
+                last_mut_pos[cli_bin] = max(last_mut_pos.get(cli_bin, -1), pos)
+                if cli_bin == "jira":
+                    jlink = _parse_jira_link_call(rest)
+                    if jlink is not None:
+                        self._seen_jira_links.add(jlink)
                 norm_sig = f"{cli_bin} {rest}"[:140]
                 cnt = self._non_idempotent_cmd_counts.get(norm_sig, 0) + 1
                 self._non_idempotent_cmd_counts[norm_sig] = cnt
@@ -944,10 +1388,25 @@ class ToolHost:
                         f"Duplicate non-idempotent service command ran {cnt}x (`{norm_sig}`) "
                         "— verify no extra duplicate resource, link, or uploaded file remains."
                     )
-            elif _MUTATING_CLI_VERB_RE.search(rest):
+            elif _MUTATING_CLI_VERB_RE.search(rest) and "--dry-run" not in rest:
                 has_ext_mut = True
+                last_mut_pos[cli_bin] = max(last_mut_pos.get(cli_bin, -1), pos)
             elif _READBACK_CLI_VERB_RE.search(rest):
                 has_ext_read = True
+                last_read_pos[cli_bin] = max(last_read_pos.get(cli_bin, -1), pos)
+
+        if receipts and not last_mut_pos:
+            last_mut_pos["external"] = len(cmd)
+
+        for svc, m_pos in last_mut_pos.items():
+            self.mutated_services.add(svc)
+            if last_read_pos.get(svc, -1) > m_pos:
+                self.verified_services.add(svc)
+            else:
+                self.verified_services.discard(svc)
+        for svc in last_read_pos:
+            if svc not in last_mut_pos and svc in self.mutated_services:
+                self.verified_services.add(svc)
 
         if cleaned_up and self.duplicate_external_mutations:
             for dkey in list(self.duplicate_external_mutations):
@@ -988,7 +1447,14 @@ class ToolHost:
             )
         for dup_msg in list(self.duplicate_external_mutations.values())[:3]:
             adv.append(dup_msg)
-        if (
+        unverified = sorted(self.unverified_mutated_services())
+        if unverified:
+            adv.append(
+                f"External service state was mutated without a subsequent read-only check for: "
+                f"{', '.join(unverified)} — run one consolidated list/get readback for each "
+                "to confirm final remote item/file/link counts and statuses before finalizing."
+            )
+        elif (
             self.external_mutation_count > 0
             and self.last_external_readback_step < self.last_external_mutation_step
         ):
@@ -1084,7 +1550,11 @@ class ToolHost:
 
         sig = ""
         if self.is_sj:
-            sig = canonical_tool_sig(name, args, normalize_meta=True)
+            dedup_args = args
+            if name == "bash":
+                norm_cmd = _normalize_bash_cmd_for_dedup(str((args or {}).get("command") or ""))
+                dedup_args = {**(args or {}), "command": norm_cmd}
+            sig = canonical_tool_sig(name, dedup_args, normalize_meta=True)
             dedup_key = (self.mutation_epoch, sig)
             if name in READONLY_TOOLS and dedup_key in self.seen:
                 first_step, prev_resp = self.seen[dedup_key]
@@ -1113,8 +1583,11 @@ class ToolHost:
 
         if self.is_sj:
             out_txt = str(((fr.get("functionResponse") or {}).get("response") or {}).get("output", ""))
+            entry_gated = out_txt.startswith("[ctx-entry-gate]")
             is_mutating = False
-            if name in ("write", "edit") or name in MUTATING_BROWSER_TOOLS:
+            if entry_gated:
+                is_mutating = False
+            elif name in ("write", "edit") or name in MUTATING_BROWSER_TOOLS:
                 is_mutating = True
             elif name == "bash":
                 cmd = str((args or {}).get("command") or "")
@@ -1130,7 +1603,7 @@ class ToolHost:
 
             if is_mutating:
                 self.mutation_epoch += 1
-            elif name in READONLY_TOOLS and not self.last_call_was_dup:
+            elif name in READONLY_TOOLS and not self.last_call_was_dup and not entry_gated:
                 self.seen[(self.mutation_epoch, sig)] = (self.step, fr["functionResponse"])
 
         return fr, n_chars, head
@@ -1293,6 +1766,8 @@ class ToolHost:
         self.metrics.inline_delivered += 1
         formatted = format_numbered_lines(sel_lines, off, len(all_lines))
         out = formatted[: self.config.baseline_raw_cap]
+        if self.is_sj:
+            out = self._apply_structured_shape(out, raw_for_detection=raw_slice)
         if rkey is not None:
             self.file_reads[rkey] = (self.step, "")
         return {"functionResponse": {"name": "read", "response": {"output": out}}}, len(out), out[:350]
@@ -1317,8 +1792,19 @@ class ToolHost:
             if not self.is_sj:
                 return self._raw_shell_run(cmd_rw, cwd_override=wd)
 
+            gated = self._check_bash_entry_gate(cmd_rw)
+            if gated is not None:
+                return gated
+
             out = self.ctx_run(cmd_rw, cwd_override=wd)
             out = self._maybe_enrich_cli_help(cmd_rw, out)
+            if not out.startswith(("[exit ", "[ctx run:", "[ctx-guard:", "ERROR:")):
+                out = self._apply_structured_shape(out)
+                sec_rcpt = _format_section_receipt(out)
+                if sec_rcpt:
+                    out = out + "\n\n" + sec_rcpt
+            out = self._maybe_append_cli_subcommand_ref(cmd_rw, out)
+            out = self._append_cli_subprocess_error(cmd_rw, out)
             if (
                 out.startswith("[exit ")
                 and _INLINE_PY_C_RE.search(cmd)
@@ -1353,7 +1839,10 @@ class ToolHost:
             if p.suffix.lower() in {".py", ".sh", ".bash", ".js", ".mjs"} and not p.is_relative_to(out_root):
                 content = self.rewrite_guest(content)
             p.write_text(content, encoding="utf-8")
-            return f"Successfully wrote {len(content)} characters to {raw}"
+            msg = f"Successfully wrote {len(content)} characters to {raw}"
+            if self.is_sj:
+                msg += f"\n{_format_write_receipt(p, content)}"
+            return msg
 
         if name == "edit":
             raw = str(args.get("file_path") or args.get("path") or "")
@@ -1372,8 +1861,12 @@ class ToolHost:
             txt = p.read_text(encoding="utf-8")
             if old_s not in txt:
                 return f"ERROR: old_string not found in {raw}"
-            p.write_text(txt.replace(old_s, new_s, 1), encoding="utf-8")
-            return f"Updated {raw}"
+            updated_txt = txt.replace(old_s, new_s, 1)
+            p.write_text(updated_txt, encoding="utf-8")
+            msg = f"Updated {raw}"
+            if self.is_sj:
+                msg += f"\n{_format_write_receipt(p, updated_txt)}"
+            return msg
 
         if name == "list":
             raw_p = str(args.get("path") or ".")
@@ -1444,6 +1937,7 @@ class ToolHost:
                     self.run_dir,
                     [str(p or "") for p in paths],
                     declared_paths=self.declared_deliverables,
+                    task_markdown=self.task_markdown,
                 )
                 ext_adv = self.external_state_advisories()
                 if audit.should_gate or ext_adv:
@@ -1478,6 +1972,8 @@ class ToolHost:
                     tid,
                     args.get("steps") or [],
                     bool(args.get("stopOnNavigation", False)),
+                    stop_on_error=bool(args.get("stopOnError", True)),
+                    include_step_text=bool(args.get("include_step_text", True)),
                 )
                 return self.capture_large_text("bbatch", raw_batch)
             if name == "browser_fill":
