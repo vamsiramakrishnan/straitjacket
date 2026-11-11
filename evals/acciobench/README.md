@@ -236,8 +236,9 @@ by a `run:` handle is answered by the harness directly, without starting the san
 `ctx intake --chunks run:ID` and `ctx view run:ID ...`. The classification is the
 product's own (`ctx.hook.ctx_command_words` / `ctx.hook.ctx_read_kind`, the same
 grammar the PreToolUse hook uses to self-approve store reads), not a harness regex:
-a comment, `$(...)`, backticks, a redirection, `&`, a here-string, a double-quoted
-word, an assignment prefix, `--workspace`, a path, a `repo:`/`blob:`/other handle,
+quoted words are fine when they mean exactly their text (`'foo bar'`, or `"foo bar"`
+with no `$`, backtick or backslash inside), but a comment, `$(...)`, backticks, a
+redirection, `&`, a here-string, any other double-quoted word, an assignment prefix, `--workspace`, a path, a `repo:`/`blob:`/other handle,
 `--glob`/`--scope`/`--symbol`, `q`, `run`, `py`, `seq`, `job` or any verb the grammar
 does not know all run inside the sandbox (a plain call with the same argv, anything
 else under `bash -c`). `ctx_retrieve` follows the same rule on the argv it builds

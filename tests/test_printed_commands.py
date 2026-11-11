@@ -164,6 +164,26 @@ def test_printed_path_reads_withdraw_under_a_read_rule(corpus):
     "ctx get run:0660dede8dbe --snapcompact",
     "ctx stats --session",
     "./ctx get run:0660dede8dbe#stdout",
+    # double quotes: only a literal string with no $, backtick or backslash is a word
+    'ctx search run:0660dede8dbe "$(id)"',
+    'ctx search run:0660dede8dbe "a$(id)b"',
+    'ctx search run:0660dede8dbe "`id`"',
+    'ctx search run:0660dede8dbe "a\\"b"',
+    'ctx search run:0660dede8dbe "a\\nb"',
+    'ctx search run:0660dede8dbe "$HOME"',
+    'ctx search run:0660dede8dbe "${HOME}"',
+    'ctx search run:0660dede8dbe "unterminated',
+    'ctx search run:0660dede8dbe unterminated"',
+    'ctx search run:0660dede8dbe a"b"',
+    'ctx search run:0660dede8dbe "a"b',
+    'ctx search run:0660dede8dbe "a"\'b\'',
+    'ctx get "run:0660dede8dbe#stdout" --lines "1:5"; id',
+    'ctx get "run:0660dede8dbe#stdout" # c',
+    'ctx get "run:xyz#stdout"',
+    'ctx get "run:0660dede8dbe #stdout"',
+    'ctx get "run:0660dede8dbe;id"',
+    'ctx get "ws:other/run:0660dede8dbe#stdout"',
+    '"ctx" get run:0660dede8dbe#stdout',
 ])
 def test_malformed_hash_and_other_shapes_are_not_approved(tmp_path, monkeypatch, command):
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -184,12 +204,30 @@ BAD_IDS = [
 @pytest.mark.parametrize("template", [
     "ctx get {h}", "ctx get {h} --lines 1:40", "ctx search {h} root", "ctx stats {h}",
     "ctx view {h}", "ctx diff {h} run:0660dede8dbe", "ctx intake --chunks {h}",
+    # a quoted handle is unquoted first, then checked against the same grammar
+    'ctx get "{h}"', 'ctx get "{h}" --lines 1:40', 'ctx search "{h}" root', "ctx stats '{h}'",
+    'ctx diff "{h}" run:0660dede8dbe', 'ctx intake --chunks "{h}"',
 ])
 def test_malformed_handles_are_never_approved(tmp_path, monkeypatch, bad, template):
     monkeypatch.setenv("HOME", str(tmp_path))
     command = template.format(h=bad)
     payload = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": command}}
     assert hook._ctx_self_approved(payload, str(tmp_path)) is False, command
+
+
+@pytest.mark.parametrize("command,words", [
+    ('ctx search run:0660dede8dbe "foo bar"', ["search", "run:0660dede8dbe", "foo bar"]),
+    ("ctx search run:0660dede8dbe 'foo bar'", ["search", "run:0660dede8dbe", "foo bar"]),
+    ('ctx search run:0660dede8dbe "a#b" --context 2', ["search", "run:0660dede8dbe", "a#b", "--context", "2"]),
+    ('ctx get "run:0660dede8dbe#stdout" --lines "1:40"', ["get", "run:0660dede8dbe#stdout", "--lines", "1:40"]),
+    ('ctx search run:0660dede8dbe "" x', ["search", "run:0660dede8dbe", "", "x"]),
+])
+def test_literal_double_quoted_words_read_like_single_quoted(tmp_path, monkeypatch, command, words):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert hook.ctx_command_words(command) == ["ctx", *words]
+    assert hook.ctx_read_kind(words) == "store"
+    payload = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": command}}
+    assert hook._ctx_self_approved(payload, str(tmp_path)) is True, command
 
 
 @pytest.mark.parametrize("span", ["abc", "ABCDEF1234", "0123456789a", "../x", "0123456789;"])
