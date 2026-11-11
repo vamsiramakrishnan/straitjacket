@@ -49,6 +49,7 @@ _MAX_TEXT_NUDGES = 3
 _MIN_STEPS_FOR_TEXT_COMPLETE = 4
 _MAX_IDENTICAL_TURN_STREAK = 4
 _MAX_DUP_TURN_STREAK = 2
+_MAX_SERVICE_DELTA_GATE_HITS = 2
 _COMPACT_MIN_TURN_GAP = 6
 
 _MICRO_PY_MAX_RESULT_CHARS = 650
@@ -130,6 +131,70 @@ def _collect_external_advisories(host: Any) -> list[str]:
                 "to confirm final remote item/file/link counts and statuses before finalizing."
             )
     return adv
+
+
+def _collect_service_and_ui_gate(host: Any) -> tuple[bool, list[str], str]:
+    """Collect pre-exit service-state delta and browser uncommitted-UI blockers."""
+    blocking = False
+    issues: list[str] = []
+    receipts: list[str] = []
+
+    audit_fn = getattr(host, "audit_service_state_delta", None)
+    if callable(audit_fn):
+        res = audit_fn()
+        if isinstance(res, tuple) and len(res) == 3:
+            sd_blocking, sd_issues, sd_receipt = res
+            if bool(sd_blocking):
+                blocking = True
+            if isinstance(sd_issues, (list, tuple, set)):
+                for item in sd_issues:
+                    item_s = str(item).strip()
+                    if item_s:
+                        issues.append(item_s)
+            receipt_s = str(sd_receipt or "").strip()
+            if receipt_s:
+                receipts.append(receipt_s)
+
+    browser = getattr(host, "browser", None)
+    ui_fn = getattr(browser, "check_uncommitted_ui_state", None) if browser is not None else None
+    if callable(ui_fn):
+        ui_res = ui_fn()
+        if isinstance(ui_res, (list, tuple, set)):
+            ui_issues = [str(item).strip() for item in ui_res if str(item).strip()]
+            if ui_issues:
+                blocking = True
+                issues.extend(ui_issues)
+                receipts.append(f"[uncommitted-ui-state: {'; '.join(ui_issues)}]")
+
+    return blocking, issues, "\n".join(receipts)
+
+
+def _format_gate_message(
+    *,
+    prefix_header: str,
+    pre_exit_audit: Any | None = None,
+    ext_adv: list[str] | None = None,
+    sd_issues: list[str] | None = None,
+    sd_receipt: str = "",
+) -> str:
+    """Format an actionable pre-exit gate message combining deliverable, service, and UI checks."""
+    sections: list[str] = []
+    if pre_exit_audit is not None and getattr(pre_exit_audit, "should_gate", False):
+        sections.append(pre_exit_audit.format_gate_message())
+    bullets: list[str] = []
+    for item in ext_adv or ():
+        bullets.append(f"- [CHECK] {item}" if "Verification" in prefix_header else f"- {item}")
+    for item in sd_issues or ():
+        if item not in (ext_adv or ()):
+            bullets.append(f"- [CHECK] {item}" if "Verification" in prefix_header else f"- {item}")
+    if bullets:
+        if not sections:
+            sections.append(prefix_header)
+        sections.extend(bullets)
+    if sd_receipt:
+        sections.append(sd_receipt)
+    sections.append("Resolve any issues above and call present_files to finalize.")
+    return "\n".join(sections)
 
 
 def _format_progress(metrics: RunMetrics) -> str:
@@ -287,6 +352,7 @@ def run_trial(
         next_tool_config: dict[str, Any] | None = None
         empty_turns = 0
         text_nudges = 0
+        service_delta_gate_hits = 0
         session_id = f"accio-{arm_norm}-{resolved_id[:_SESSION_TASK_PREFIX_CHARS]}-{int(t0)}"
 
         with (meta_dir / "trajectory.jsonl").open("w", encoding="utf-8") as traj:
@@ -407,34 +473,43 @@ def run_trial(
                         continue
 
                     has_deliverables = host.has_user_deliverables()
-                    if is_sj and not host.completed and not host.emission_gated_once:
-                        pre_exit_audit = audit_deliverables(
-                            run_dir,
-                            [],
-                            declared_paths=host.declared_deliverables,
-                            task_markdown=task_prompt,
+                    if is_sj and not host.completed:
+                        sd_blocking = False
+                        sd_issues: list[str] = []
+                        sd_receipt = ""
+                        if service_delta_gate_hits < _MAX_SERVICE_DELTA_GATE_HITS:
+                            sd_blocking, sd_issues, sd_receipt = _collect_service_and_ui_gate(host)
+
+                        if not host.emission_gated_once:
+                            pre_exit_audit = audit_deliverables(
+                                run_dir,
+                                [],
+                                declared_paths=host.declared_deliverables,
+                                task_markdown=task_prompt,
+                            )
+                            ext_adv = _collect_external_advisories(host)
+                            zero_mut = not has_deliverables and host.mutation_epoch == 0
+                        else:
+                            pre_exit_audit = None
+                            ext_adv = []
+                            zero_mut = False
+
+                        should_audit_gate = bool(
+                            pre_exit_audit is not None and pre_exit_audit.should_gate
                         )
-                        ext_adv = _collect_external_advisories(host)
-                        if (
-                            pre_exit_audit.should_gate
-                            or bool(ext_adv)
-                            or (not has_deliverables and host.mutation_epoch == 0)
-                        ):
+                        if should_audit_gate or ext_adv or sd_blocking or zero_mut:
                             text_nudges += 1
                             host.emission_gated_once = True
                             metrics.emission_gate_hits += 1
-                            if pre_exit_audit.should_gate or ext_adv:
-                                parts_msg: list[str] = []
-                                if pre_exit_audit.should_gate:
-                                    parts_msg.append(pre_exit_audit.format_gate_message())
-                                if ext_adv:
-                                    header = "" if parts_msg else "[ctx-emission-gate] Workspace/service state check:\n"
-                                    parts_msg.append(
-                                        header + "\n".join(f"- {item}" for item in ext_adv)
-                                    )
-                                gate_nudge = (
-                                    "\n".join(parts_msg)
-                                    + "\nResolve any issues above and call present_files to finalize."
+                            if sd_blocking:
+                                service_delta_gate_hits += 1
+                            if should_audit_gate or ext_adv or sd_blocking:
+                                gate_nudge = _format_gate_message(
+                                    prefix_header="[ctx-emission-gate] Workspace/service state check:",
+                                    pre_exit_audit=pre_exit_audit if should_audit_gate else None,
+                                    ext_adv=ext_adv,
+                                    sd_issues=sd_issues if sd_blocking else [],
+                                    sd_receipt=sd_receipt,
                                 )
                             else:
                                 gate_nudge = (
@@ -553,16 +628,28 @@ def run_trial(
                     else:
                         micro_py_streak = 0
 
-                if is_sj and host.completed and not host.emission_gated_once:
-                    ext_adv = _collect_external_advisories(host)
-                    if ext_adv:
+                if is_sj and host.completed:
+                    sd_blocking = False
+                    sd_issues = []
+                    sd_receipt = ""
+                    if service_delta_gate_hits < _MAX_SERVICE_DELTA_GATE_HITS:
+                        sd_blocking, sd_issues, sd_receipt = _collect_service_and_ui_gate(host)
+                    ext_adv = (
+                        _collect_external_advisories(host)
+                        if not host.emission_gated_once
+                        else []
+                    )
+                    if ext_adv or sd_blocking:
                         host.completed = False
                         host.emission_gated_once = True
                         metrics.emission_gate_hits += 1
-                        gate_msg = (
-                            "[ctx-emission-gate] Pre-finalization verification check found items to confirm:\n"
-                            + "\n".join(f"- [CHECK] {item}" for item in ext_adv)
-                            + "\nResolve any issues above and call present_files to finalize."
+                        if sd_blocking:
+                            service_delta_gate_hits += 1
+                        gate_msg = _format_gate_message(
+                            prefix_header="[ctx-emission-gate] Pre-finalization verification check found items to confirm:",
+                            ext_adv=ext_adv,
+                            sd_issues=sd_issues if sd_blocking else [],
+                            sd_receipt=sd_receipt,
                         )
                         updated_pf_resp = False
                         for resp in reversed(responses):

@@ -19,21 +19,255 @@ __all__ = ["BrowserPool", "BrowserSession"]
 _LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
 _VIEWPORT = {"width": 1440, "height": 900}
 
+_GMAIL_STATE_INIT_JS = """
+(() => {
+  if (window.__sj_gmail_hooked) return;
+  window.__sj_gmail_hooked = true;
+  const origFetch = window.fetch;
+  if (typeof origFetch !== 'function') return;
+  window.fetch = async function(...args) {
+    let reqUrl = '';
+    let reqBody = null;
+    try {
+      reqUrl = typeof args[0] === 'string' ? args[0] : ((args[0] && args[0].url) || '');
+      if (args[1] && typeof args[1].body === 'string') {
+        reqBody = JSON.parse(args[1].body);
+      }
+    } catch (_) {}
+    const res = await origFetch.apply(this, args);
+    try {
+      if (reqUrl.includes('/api/')) {
+        const clone = res.clone();
+        const data = await clone.json();
+        const st = (data && Array.isArray(data.messages))
+          ? data
+          : (data && data.state && Array.isArray(data.state.messages) ? data.state : null);
+        if (st) {
+          window.__sj_gmail_state = st;
+          if (reqUrl.includes('/api/label') && reqBody && reqBody.name) {
+            const nestedChk = document.getElementById('new-label-nested');
+            const nameStr = String(reqBody.name).trim();
+            if (nestedChk && nestedChk.checked && !reqBody.parentId) {
+              window.__sj_unparented_nested_label = nameStr;
+            } else if (reqBody.parentId && window.__sj_unparented_nested_label === nameStr) {
+              window.__sj_unparented_nested_label = '';
+            }
+          }
+        }
+      }
+    } catch (_) {}
+    return res;
+  };
+})();
+"""
+
 _SNAPSHOT_JS = """
-() => {
-  const INTERACTIVE = 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="option"], [role="combobox"], [role="row"], [onclick], [contenteditable="true"], summary';
+(readOnlyRefs = false) => {
+  const INTERACTIVE = 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="option"], [role="combobox"], [role="row"], tr.message-row, [data-thread-id], [data-legacy-thread-id], [data-message-id], [data-row-id], [data-id], [onclick], [contenteditable="true"], summary';
   const isVis = (el) => {
+    if (!el || el.hidden || el.closest('[hidden]')) return false;
     const st = window.getComputedStyle(el);
     if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
     const r = el.getBoundingClientRect();
     return r.width > 0 || r.height > 0 || el.tagName === 'OPTION';
   };
+
+  // Unhide #cc-wrap inside open #compose so #cc-field is directly visible and fillable in one snapshot.
+  const composeEl = document.getElementById('compose');
+  if (composeEl && !composeEl.hidden && isVis(composeEl)) {
+    const ccWrap = document.getElementById('cc-wrap');
+    if (ccWrap && ccWrap.hidden) ccWrap.hidden = false;
+  }
+
+  let gmailState = window.__sj_gmail_state || null;
+  if (!gmailState) {
+    try {
+      if (typeof state !== 'undefined' && state && Array.isArray(state.messages)) {
+        gmailState = state;
+      }
+    } catch (_) {}
+  }
+
+  const labelById = new Map();
+  if (gmailState && Array.isArray(gmailState.labels)) {
+    for (const l of gmailState.labels) {
+      if (l && l.id) labelById.set(String(l.id), l);
+    }
+  }
+  const resolveLabelPath = (labelId) => {
+    const l = labelById.get(String(labelId));
+    if (!l) return String(labelId || '');
+    if (l.type && l.type !== 'user') return String(l.id || l.name || labelId);
+    const parts = [String(l.name || l.id)];
+    const seen = new Set([String(l.id)]);
+    let cur = l;
+    while (cur && cur.parentId && !seen.has(String(cur.parentId)) && labelById.has(String(cur.parentId))) {
+      seen.add(String(cur.parentId));
+      cur = labelById.get(String(cur.parentId));
+      if (cur) parts.unshift(String(cur.name || cur.id));
+    }
+    return parts.join('/');
+  };
+  const IGNORE_LABELS = new Set(['inbox', 'INBOX', 'unread', 'UNREAD', 'starred', 'STARRED', 'all', 'ALL']);
+  const formatMsgLabels = (msg) => {
+    if (!msg) return [];
+    const raw = Array.isArray(msg.labels) ? msg.labels : (Array.isArray(msg.labelIds) ? msg.labelIds : []);
+    const out = [];
+    for (const lid of raw) {
+      const s = String(lid || '').trim();
+      if (!s || IGNORE_LABELS.has(s)) continue;
+      const resolved = resolveLabelPath(s);
+      if (resolved && !out.includes(resolved)) out.push(resolved);
+    }
+    return out;
+  };
+
+  // Match DOM rows to Gmail messages and compute row-level state badges.
+  const ROW_CANDIDATE_SEL = 'tr, [role="row"], [data-thread-id], [data-legacy-thread-id], [data-message-id], [data-row-id], [data-id]';
+  const rowBadges = new Map();
+  const matchedMsgIds = new Set();
+  let rowAutoIdx = 1;
+
+  for (const rowEl of document.querySelectorAll(ROW_CANDIDATE_SEL)) {
+    if (!isVis(rowEl)) continue;
+    if (rowEl.tagName === 'TR' && ((rowEl.querySelector('th') && !rowEl.querySelector('td')) || rowEl.querySelector('td.empty') || rowEl.classList.contains('draft-row'))) {
+      continue;
+    }
+    let explicitId = (
+      rowEl.getAttribute('data-message-id') ||
+      rowEl.getAttribute('data-thread-id') ||
+      rowEl.getAttribute('data-legacy-thread-id') ||
+      rowEl.getAttribute('data-row-id') ||
+      rowEl.getAttribute('data-id') ||
+      ''
+    ).trim();
+
+    let matchedMsg = null;
+    if (gmailState && Array.isArray(gmailState.messages)) {
+      if (explicitId) {
+        matchedMsg = gmailState.messages.find(m => String(m.id) === explicitId || String(m.threadId || '') === explicitId) || null;
+      }
+      if (!matchedMsg && (rowEl.classList.contains('message-row') || rowEl.closest('#message-list'))) {
+        const subjEl = rowEl.querySelector('.subject, .subject-line, [data-subject]');
+        const subjTxt = subjEl ? (subjEl.textContent || '').trim() : '';
+        const fromEl = rowEl.querySelector('.message-from');
+        const fromTxt = fromEl ? (fromEl.textContent || '').trim() : '';
+        const dateEl = rowEl.querySelector('.row-date-text, .message-date');
+        const dateTxt = dateEl ? (dateEl.textContent || '').trim() : '';
+        if (subjTxt) {
+          matchedMsg = gmailState.messages.find(m =>
+            !matchedMsgIds.has(String(m.id)) &&
+            String(m.subject || '').trim() === subjTxt &&
+            (!fromTxt || String(m.from || '').trim() === fromTxt) &&
+            (!dateTxt || String(m.date || '').trim() === dateTxt)
+          ) || gmailState.messages.find(m =>
+            !matchedMsgIds.has(String(m.id)) && String(m.subject || '').trim() === subjTxt
+          ) || gmailState.messages.find(m => String(m.subject || '').trim() === subjTxt) || null;
+        }
+      }
+      if (matchedMsg && matchedMsg.id) {
+        matchedMsgIds.add(String(matchedMsg.id));
+        if (!explicitId) {
+          explicitId = String(matchedMsg.id);
+          if (!readOnlyRefs) rowEl.setAttribute('data-message-id', explicitId);
+        }
+      }
+    }
+
+    const starEl = rowEl.querySelector('[data-starred], [aria-label*="Star" i], [aria-label*="星标"], .star-button, .message-star button, .starred')
+      || (rowEl.hasAttribute('data-starred') ? rowEl : null);
+    const domLabelEls = rowEl.querySelectorAll('.label-chip, .label-badge, .badge-label, .mail-label, [data-label], [data-label-name]');
+    const hasUnreadSignal = rowEl.hasAttribute('data-unread') || rowEl.classList.contains('unread') || rowEl.classList.contains('read')
+      || /(?:^|[，,\\s])(未读|unread)(?:$|[，,\\s])/i.test(rowEl.getAttribute('aria-label') || '');
+    const isInboxOrRoleRow = rowEl.classList.contains('message-row') || rowEl.getAttribute('role') === 'row';
+
+    if (!explicitId && !matchedMsg && !starEl && !domLabelEls.length && !hasUnreadSignal && !isInboxOrRoleRow) {
+      continue;
+    }
+
+    const rowId = explicitId || (matchedMsg && matchedMsg.id ? String(matchedMsg.id) : '') || rowEl.id || ('row-' + (rowAutoIdx++));
+
+    let starred = null;
+    if (starEl) {
+      const ds = starEl.getAttribute('data-starred') ?? rowEl.getAttribute('data-starred');
+      const ap = starEl.getAttribute('aria-pressed');
+      const sAria = (starEl.getAttribute('aria-label') || starEl.getAttribute('title') || '').trim();
+      const sTxt = (starEl.textContent || '').trim();
+      if (ds !== null && ds !== '') {
+        starred = /^(true|1|starred|yes|active)$/i.test(ds.trim());
+      } else if (ap === 'true' || ap === 'false') {
+        starred = ap === 'true';
+      } else if (/未加星标|not\\s+starred|unstarred|add\\s+star/i.test(sAria)) {
+        starred = false;
+      } else if (/已加星标|starred|remove\\s+star/i.test(sAria)) {
+        starred = true;
+      } else if (starEl.classList.contains('starred') || rowEl.classList.contains('starred') || sTxt.includes('★')) {
+        starred = true;
+      } else if (sTxt.includes('☆')) {
+        starred = false;
+      }
+    }
+    if (starred === null && matchedMsg) {
+      starred = !!matchedMsg.starred;
+    }
+    if (starred === null) starred = false;
+
+    let unread = null;
+    const du = rowEl.getAttribute('data-unread');
+    if (du !== null && du !== '') {
+      unread = /^(true|1|unread|yes)$/i.test(du.trim());
+    } else if (rowEl.classList.contains('unread')) {
+      unread = true;
+    } else if (rowEl.classList.contains('read')) {
+      unread = false;
+    } else if (matchedMsg) {
+      unread = !!matchedMsg.unread;
+    } else {
+      const rAria = rowEl.getAttribute('aria-label') || '';
+      unread = /(?:^|[，,\\s])(未读|unread)(?:$|[，,\\s])/i.test(rAria);
+    }
+
+    const labels = [];
+    if (matchedMsg) {
+      for (const l of formatMsgLabels(matchedMsg)) {
+        if (l && !labels.includes(l)) labels.push(l);
+      }
+    }
+    const rawDataLabels = rowEl.getAttribute('data-labels') || '';
+    if (rawDataLabels) {
+      for (const part of rawDataLabels.split(',')) {
+        const clean = part.trim();
+        if (clean && !IGNORE_LABELS.has(clean) && !labels.includes(clean)) labels.push(clean);
+      }
+    }
+    for (const lel of domLabelEls) {
+      const lval = (lel.getAttribute('data-label') || lel.getAttribute('data-label-name') || lel.textContent || '').trim();
+      if (lval && !IGNORE_LABELS.has(lval) && !labels.includes(lval)) labels.push(lval);
+    }
+
+    const badge = `[row_id=${rowId} starred=${starred ? 'true' : 'false'} unread=${unread ? 'true' : 'false'} labels=[${labels.join(', ')}]]`;
+    rowBadges.set(rowEl, { rowId, starred, unread, labels, badge });
+  }
+
+  // Clear stale data-sj-ref from hidden elements so Playwright .first never resolves to a hidden element.
+  if (!readOnlyRefs) {
+    for (const old of document.querySelectorAll('[data-sj-ref]')) {
+      old.removeAttribute('data-sj-ref');
+    }
+  }
+
   let counter = 1;
   const controls = [];
   for (const el of document.querySelectorAll(INTERACTIVE)) {
     if (!isVis(el)) continue;
-    const ref = 'e' + (counter++);
-    el.setAttribute('data-sj-ref', ref);
+    if (el.tagName === 'TR' && !rowBadges.has(el) && !el.hasAttribute('onclick') && el.getAttribute('role') !== 'row') {
+      continue;
+    }
+    const existingRef = el.getAttribute('data-sj-ref');
+    const ref = (readOnlyRefs && existingRef) ? existingRef : ('e' + (counter++));
+    if (!readOnlyRefs) {
+      el.setAttribute('data-sj-ref', ref);
+    }
     const tag = el.tagName.toLowerCase();
     const type = el.getAttribute('type') || '';
     const role = (el.getAttribute('role') || '').toLowerCase();
@@ -50,15 +284,17 @@ _SNAPSHOT_JS = """
     const ariaExpanded = el.getAttribute('aria-expanded');
     const dataStarred = el.getAttribute('data-starred');
     const dataState = el.getAttribute('data-state');
+    const rowInfo = rowBadges.get(el) || null;
+    const dataMsgId = el.getAttribute('data-message-id') || el.getAttribute('data-thread-id') || el.getAttribute('data-legacy-thread-id') || (rowInfo ? rowInfo.rowId : '');
     let stateClasses = '';
-    if (tag === 'button' || role === 'button' || role === 'checkbox' || role === 'row') {
+    if (tag === 'button' || role === 'button' || role === 'checkbox' || role === 'row' || tag === 'tr') {
       const rawCls = typeof el.className === 'string'
         ? el.className
         : (el.getAttribute('class') || '');
       const clsHits = rawCls
         .split(/\\s+/)
         .filter(Boolean)
-        .filter(c => /(?:^|[-_])(active|starred|selected)(?:$|[-_])/i.test(c))
+        .filter(c => /(?:^|[-_])(active|starred|selected|unread)(?:$|[-_])/i.test(c))
         .map(c => c.replace(/[^A-Za-z0-9_:-]/g, ''))
         .filter(Boolean);
       if (clsHits.length) stateClasses = clsHits.slice(0, 6).join(',');
@@ -67,7 +303,10 @@ _SNAPSHOT_JS = """
     if (el.labels && el.labels.length) {
       labelTxt = Array.from(el.labels).map(l => l.innerText.trim()).join(' ');
     }
-    const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 110);
+    const rawText = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    const text = rowInfo
+      ? `${rowInfo.badge} ${rawText.slice(0, 95)}`.trim()
+      : rawText.slice(0, 110);
     let val = '';
     if (tag === 'input' || tag === 'textarea' || tag === 'select') {
       if (type === 'checkbox' || type === 'radio') {
@@ -86,11 +325,12 @@ _SNAPSHOT_JS = """
       type ? `type=${type}` : '',
       role ? `role=${role}` : '',
       id ? `#${id}` : '',
+      dataMsgId ? `data-message-id=${JSON.stringify(dataMsgId)}` : '',
       name ? `name=${JSON.stringify(name)}` : '',
-      labelTxt ? `label=${JSON.stringify(labelTxt.slice(0,60))}` : '',
-      aria ? `aria=${JSON.stringify(aria.slice(0,60))}` : '',
-      titleAttr && titleAttr !== aria && titleAttr !== text ? `title=${JSON.stringify(titleAttr.slice(0,60))}` : '',
-      placeholder ? `placeholder=${JSON.stringify(placeholder.slice(0,60))}` : '',
+      labelTxt ? `label=${JSON.stringify(labelTxt.slice(0, 60))}` : '',
+      aria ? `aria=${JSON.stringify(aria.slice(0, 120))}` : '',
+      titleAttr && titleAttr !== aria && titleAttr !== rawText ? `title=${JSON.stringify(titleAttr.slice(0, 60))}` : '',
+      placeholder ? `placeholder=${JSON.stringify(placeholder.slice(0, 60))}` : '',
       val !== '' ? `value=${JSON.stringify(val)}` : '',
       disabled ? 'disabled' : '',
       readOnly ? 'readonly' : '',
@@ -101,7 +341,7 @@ _SNAPSHOT_JS = """
       dataStarred !== null ? `data-starred=${/^[A-Za-z0-9_-]+$/.test(dataStarred) ? dataStarred : JSON.stringify(dataStarred.slice(0, 40))}` : '',
       dataState !== null ? `data-state=${/^[A-Za-z0-9_-]+$/.test(dataState) ? dataState : JSON.stringify(dataState.slice(0, 40))}` : '',
       stateClasses ? `state-classes=${stateClasses}` : '',
-      tag === 'a' && el.getAttribute('href') ? `href=${JSON.stringify(el.getAttribute('href').slice(0,90))}` : '',
+      tag === 'a' && el.getAttribute('href') ? `href=${JSON.stringify(el.getAttribute('href').slice(0, 90))}` : '',
     ].filter(Boolean).join(' ');
     controls.push(`[${ref}] <${tag}${attrs ? ' ' + attrs : ''}> ${text}${opts}`.trim());
     if (controls.length >= 250) break;
@@ -109,11 +349,61 @@ _SNAPSHOT_JS = """
   for (const fi of document.querySelectorAll('input[type="file"]')) {
     if (!fi.getAttribute('data-sj-ref')) {
       const ref = 'e' + (counter++);
-      fi.setAttribute('data-sj-ref', ref);
+      if (!readOnlyRefs) fi.setAttribute('data-sj-ref', ref);
       controls.push(`[${ref}] <input type=file name=${JSON.stringify(fi.name||'')} accept=${JSON.stringify(fi.accept||'')} (file-upload)>`);
     }
   }
-  const bodyText = (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 16000);
+  let bodyText = (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 14500);
+  const rowBadgeLines = [];
+  const seenRowIds = new Set();
+  for (const info of rowBadges.values()) {
+    seenRowIds.add(info.rowId);
+    rowBadgeLines.push(info.badge);
+  }
+  if (gmailState && Array.isArray(gmailState.messages)) {
+    for (const msg of gmailState.messages) {
+      const mid = String(msg.id || '');
+      if (!mid || seenRowIds.has(mid)) continue;
+      seenRowIds.add(mid);
+      const mLabels = formatMsgLabels(msg);
+      rowBadgeLines.push(`[row_id=${mid} starred=${msg.starred ? 'true' : 'false'} unread=${msg.unread ? 'true' : 'false'} labels=[${mLabels.join(', ')}]]`);
+    }
+  }
+  const extraSummary = [];
+  if (rowBadgeLines.length) {
+    extraSummary.push('[Row State Summary] ' + rowBadgeLines.join(' '));
+  }
+  if (gmailState) {
+    const userLbls = (gmailState.labels || []).filter(l => l && l.type === 'user').map(l => {
+      const p = resolveLabelPath(l.id);
+      const isNested = !!l.parentId;
+      return `${p}(nested=${isNested})`;
+    });
+    if (userLbls.length) extraSummary.push('[User Labels] ' + userLbls.join(', '));
+    const drafts = (gmailState.drafts || []).map(d =>
+      `[draft to=${JSON.stringify(d.to || '')} cc=${JSON.stringify(d.cc || '')} subject=${JSON.stringify(d.subject || '')} body=${JSON.stringify(String(d.body || '').slice(0, 120))}]`
+    );
+    if (drafts.length) extraSummary.push('[Saved Drafts] ' + drafts.join(' ; '));
+    const filters = (gmailState.filters || []).map(f =>
+      `[filter from=${JSON.stringify(f.from || '')} to=${JSON.stringify(f.to || '')} subject=${JSON.stringify(f.subject || '')} hasWords=${JSON.stringify(f.hasWords || '')} actions=${JSON.stringify(f.actions || {})}]`
+    );
+    if (filters.length) extraSummary.push('[Saved Filters] ' + filters.join(' ; '));
+    const tasks = (gmailState.tasks || []).map(t =>
+      `[task title=${JSON.stringify(t.title || '')} due=${JSON.stringify(t.due || '')} completed=${!!t.completed} details=${JSON.stringify(String(t.details || '').slice(0, 100))}]`
+    );
+    if (tasks.length) extraSummary.push('[Saved Tasks] ' + tasks.join(' ; '));
+    const notes = (gmailState.notes || []).map(n =>
+      `[note title=${JSON.stringify(n.title || '')} body=${JSON.stringify(String(n.body || '').slice(0, 100))}]`
+    );
+    if (notes.length) extraSummary.push('[Saved Notes] ' + notes.join(' ; '));
+    const events = (gmailState.calendarEvents || []).map(e =>
+      `[event title=${JSON.stringify(e.title || '')} date=${JSON.stringify(e.date || '')} start=${JSON.stringify(e.start || '')} end=${JSON.stringify(e.end || '')} guests=${JSON.stringify(e.guests || '')} location=${JSON.stringify(e.location || '')} description=${JSON.stringify(String(e.description || '').slice(0, 100))}]`
+    );
+    if (events.length) extraSummary.push('[Saved Calendar Events] ' + events.join(' ; '));
+  }
+  if (extraSummary.length) {
+    bodyText = (bodyText + '\\n\\n' + extraSummary.join('\\n')).trim().slice(0, 16000);
+  }
   return {
     url: location.href,
     title: document.title,
@@ -121,6 +411,236 @@ _SNAPSHOT_JS = """
     controls: controls.join('\\n'),
     bodyText: bodyText,
   };
+}
+"""
+
+_UNCOMMITTED_UI_JS = """
+() => {
+  const isVis = (el) => {
+    if (!el || el.hidden || el.closest('[hidden]')) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 || r.height > 0;
+  };
+  const warnings = [];
+  const handledContainers = new WeakSet();
+
+  // 1. Check label creation modal / input (#new-label-name or label dialog)
+  const labelInput = document.getElementById('new-label-name')
+    || document.querySelector('[role="dialog"] input[aria-label*="标签名称"], .modal input[aria-label*="标签名称"], [role="dialog"] input[aria-label*="label name" i], .modal input[aria-label*="label name" i]');
+  if (labelInput && isVis(labelInput)) {
+    const modalRoot = labelInput.closest('#modal, [role="dialog"], dialog, .modal') || labelInput.parentElement;
+    if (modalRoot) handledContainers.add(modalRoot);
+    const val = String(labelInput.value || '').trim();
+    const nestedChk = document.getElementById('new-label-nested')
+      || (modalRoot && modalRoot.querySelector('input[type="checkbox"]'));
+    const parentSel = document.getElementById('new-label-parent')
+      || (modalRoot && modalRoot.querySelector('select'));
+    const saveBtn = document.getElementById('create-label-save')
+      || (modalRoot && modalRoot.querySelector('button[id*="save"], button[id*="create"], button[id*="confirm"]'));
+    if (val.includes('/') && (nestedChk || parentSel)) {
+      const parts = val.split('/');
+      const parentPart = parts[0].trim();
+      const childPart = parts.slice(1).join('/').trim();
+      warnings.push(
+        `Label creation input (#new-label-name) contains literal '/' (${JSON.stringify(val)}) while a parent-nesting control (#new-label-nested / #new-label-parent) exists — check the 'Nest label under' / '将此标签嵌套到下面的标签内' checkbox (#new-label-nested), select parent label ${JSON.stringify(parentPart)} in #new-label-parent, enter ONLY the child name ${JSON.stringify(childPart || val)} in #new-label-name, and click '创建' (#create-label-save)`
+      );
+    }
+    if (nestedChk && nestedChk.checked && parentSel && !String(parentSel.value || '').trim()) {
+      warnings.push(
+        `Label modal has nest checkbox (#new-label-nested) checked but parent label dropdown (#new-label-parent) is still empty ('') — select the parent label in #new-label-parent before clicking '创建' (#create-label-save)`
+      );
+    }
+    if ((val !== '' || (nestedChk && nestedChk.checked)) && saveBtn && isVis(saveBtn)) {
+      const btnText = (saveBtn.innerText || saveBtn.textContent || '创建').trim();
+      warnings.push(
+        `Label creation modal is open with uncommitted label ${JSON.stringify(val)} — click ${saveBtn.id ? '#' + saveBtn.id : 'the create button'} (${JSON.stringify(btnText)}) to commit`
+      );
+    }
+  }
+
+  // Check if a flat user label with '/' or an unparented nested label was created in Gmail mock state.
+  let gmailState = window.__sj_gmail_state || null;
+  if (!gmailState) {
+    try {
+      if (typeof state !== 'undefined' && state && Array.isArray(state.labels)) gmailState = state;
+    } catch (_) {}
+  }
+  if (gmailState && Array.isArray(gmailState.labels)) {
+    for (const lbl of gmailState.labels) {
+      if (lbl && lbl.type === 'user' && !lbl.parentId && String(lbl.name || '').includes('/')) {
+        const parts = String(lbl.name).split('/');
+        const pName = parts[0].trim();
+        const cName = parts.slice(1).join('/').trim();
+        const hasProperNested = gmailState.labels.some(other =>
+          other && other.type === 'user' && other.parentId && String(other.name || '').toLowerCase() === cName.toLowerCase()
+        );
+        if (!hasProperNested) {
+          warnings.push(
+            `Label ${JSON.stringify(lbl.name)} was created as a flat label with '/' instead of nested under parent ${JSON.stringify(pName)} — open #create-label-button, enter child name ${JSON.stringify(cName)} in #new-label-name, check #new-label-nested, select parent ${JSON.stringify(pName)} in #new-label-parent, click #create-label-save, and apply the nested label`
+          );
+        }
+      }
+    }
+    if (window.__sj_unparented_nested_label) {
+      const targetName = String(window.__sj_unparented_nested_label);
+      const fixed = gmailState.labels.some(l => l && l.type === 'user' && l.parentId && String(l.name || '') === targetName);
+      if (!fixed) {
+        warnings.push(
+          `Label ${JSON.stringify(targetName)} was created with #new-label-nested checked but #new-label-parent left empty (parentId='') — re-create ${JSON.stringify(targetName)} with #new-label-nested checked AND the parent label selected in #new-label-parent, then apply the nested label to the required messages`
+        );
+      }
+    }
+  }
+
+  // 2. Check open Filter modal (#filter-save)
+  const filterSave = document.getElementById('filter-save');
+  if (filterSave && isVis(filterSave)) {
+    const modalRoot = filterSave.closest('#modal, [role="dialog"], dialog, .modal') || filterSave.parentElement;
+    if (modalRoot) handledContainers.add(modalRoot);
+    const fFrom = (document.getElementById('filter-from')?.value || '').trim();
+    const fTo = (document.getElementById('filter-to')?.value || '').trim();
+    const fSubj = (document.getElementById('filter-subject')?.value || '').trim();
+    const fHas = (document.getElementById('filter-has')?.value || '').trim();
+    const fNot = (document.getElementById('filter-not')?.value || '').trim();
+    const fAtt = !!document.getElementById('filter-attachment')?.checked;
+    const fArch = !!document.getElementById('filter-archive')?.checked;
+    const fRead = !!document.getElementById('filter-read')?.checked;
+    const fStar = !!document.getElementById('filter-star')?.checked;
+    const fImp = !!document.getElementById('filter-important')?.checked;
+    if (fFrom || fTo || fSubj || fHas || fNot || fAtt || fArch || fRead || fStar || fImp) {
+      warnings.push(
+        `Filter modal ('创建过滤器') is open and uncommitted (from=${JSON.stringify(fFrom)}, subject=${JSON.stringify(fSubj)}, hasWords=${JSON.stringify(fHas)}, archive=${fArch}, markRead=${fRead}, star=${fStar}, alwaysImportant=${fImp}) — click #filter-save ('创建过滤器' / 'Create filter') to save`
+      );
+    }
+  }
+
+  // 3. Check open Advanced Search panel (#advanced-search)
+  const advPanel = document.getElementById('advanced-search');
+  if (advPanel && isVis(advPanel)) {
+    handledContainers.add(advPanel);
+    warnings.push(
+      `Advanced search panel (#advanced-search) is open — click #advanced-apply ('搜索') to search, or to open the '创建过滤器' (Create filter) dialog, click #more-list / #more-detail ('更多' in toolbar) and select '过滤此类邮件'`
+    );
+  }
+
+  // 4. Check open Compose / Draft editor (#compose)
+  const compose = document.getElementById('compose');
+  if (compose && isVis(compose)) {
+    handledContainers.add(compose);
+    const toVal = (document.getElementById('to-field')?.value || '').trim();
+    const ccVal = (document.getElementById('cc-field')?.value || '').trim();
+    const bccVal = (document.getElementById('bcc-field')?.value || '').trim();
+    const subjVal = (document.getElementById('subject-field')?.value || '').trim();
+    const bodyVal = (document.getElementById('body-field')?.value || '').trim();
+    if (toVal || ccVal || bccVal || subjVal || bodyVal) {
+      warnings.push(
+        `Compose/Draft editor (#compose) is open with uncommitted draft content (to=${JSON.stringify(toVal)}, cc=${JSON.stringify(ccVal)}, subject=${JSON.stringify(subjVal.slice(0, 50))}) — click #close-compose ('保存并关闭' / 'Save' / 'Save draft') to save the draft (or #send-options-button for scheduled send)`
+      );
+    }
+  }
+
+  // 5. Check open Inline Reply editor (#inline-reply)
+  const inlineReply = document.getElementById('inline-reply');
+  if (inlineReply && isVis(inlineReply)) {
+    handledContainers.add(inlineReply);
+    const replyVal = (document.getElementById('reply-body')?.value || '').trim();
+    if (replyVal) {
+      warnings.push(
+        `Inline Reply editor (#inline-reply) is open with uncommitted text — click #save-reply ('保存并关闭') to save draft`
+      );
+    }
+  }
+
+  // 6. Check Side-Panel Task form (#task-title / #task-details / #task-save)
+  const taskSave = document.getElementById('task-save');
+  const taskTitleEl = document.getElementById('task-title');
+  const taskDetailsEl = document.getElementById('task-details');
+  if ((taskSave && isVis(taskSave)) || (taskTitleEl && isVis(taskTitleEl))) {
+    const taskRoot = (taskSave || taskTitleEl).closest('.task-editor, form, section') || (taskSave || taskTitleEl).parentElement;
+    if (taskRoot) handledContainers.add(taskRoot);
+    const tTitle = (taskTitleEl?.value || '').trim();
+    const tDetails = (taskDetailsEl?.value || '').trim();
+    const tDue = (document.getElementById('task-due')?.value || '').trim();
+    if (tTitle || tDetails) {
+      warnings.push(
+        `Side-panel Task form is open with uncommitted task (title=${JSON.stringify(tTitle.slice(0, 50))}, due=${JSON.stringify(tDue)}) — click #task-save ('保存' / '添加任务' / 'Add task' / 'Save') to commit`
+      );
+    }
+  }
+
+  // 7. Check Side-Panel Note form (#note-title / #note-body / #note-save)
+  const noteSave = document.getElementById('note-save');
+  const noteTitleEl = document.getElementById('note-title');
+  const noteBodyEl = document.getElementById('note-body');
+  if ((noteSave && isVis(noteSave)) || (noteTitleEl && isVis(noteTitleEl))) {
+    const noteRoot = (noteSave || noteTitleEl).closest('.note-editor, form, section') || (noteSave || noteTitleEl).parentElement;
+    if (noteRoot) handledContainers.add(noteRoot);
+    const nTitle = (noteTitleEl?.value || '').trim();
+    const nBody = (noteBodyEl?.value || '').trim();
+    if (nTitle || nBody) {
+      warnings.push(
+        `Side-panel Note form is open with uncommitted note (title=${JSON.stringify(nTitle.slice(0, 50))}) — click #note-save ('完成' / 'Save') to commit`
+      );
+    }
+  }
+
+  // 8. Check Side-Panel Calendar event form (#calendar-title / #calendar-description / #calendar-save)
+  const calSave = document.getElementById('calendar-save');
+  const calTitleEl = document.getElementById('calendar-title');
+  const calDescEl = document.getElementById('calendar-description');
+  if ((calSave && isVis(calSave)) || (calTitleEl && isVis(calTitleEl))) {
+    const calRoot = (calSave || calTitleEl).closest('.calendar-editor, form, section') || (calSave || calTitleEl).parentElement;
+    if (calRoot) handledContainers.add(calRoot);
+    const cTitle = (calTitleEl?.value || '').trim();
+    const cDesc = (calDescEl?.value || '').trim();
+    const cGuests = (document.getElementById('calendar-guests')?.value || '').trim();
+    const cLoc = (document.getElementById('calendar-location')?.value || '').trim();
+    if (cTitle || cDesc || cGuests || cLoc) {
+      warnings.push(
+        `Calendar event form is open with uncommitted event (title=${JSON.stringify(cTitle.slice(0, 50))}) — click #calendar-save ('保存' / 'Save') to commit`
+      );
+    }
+  }
+
+  // 9. Check open Action Menu (.action-menu) or generic open modals/menus with checked/filled inputs and unclicked commit button
+  for (const menu of document.querySelectorAll('.action-menu, .label-menu, .filter-menu, #modal:not([hidden]), [role="dialog"], [role="menu"], dialog[open], .modal:not([hidden])')) {
+    if (!isVis(menu) || handledContainers.has(menu)) continue;
+    handledContainers.add(menu);
+    if (menu.classList.contains('action-menu')) {
+      const items = Array.from(menu.querySelectorAll('button, [role="menuitem"]'))
+        .filter(isVis)
+        .map(b => (b.innerText || b.textContent || '').trim())
+        .filter(Boolean)
+        .slice(0, 6);
+      if (items.length) {
+        warnings.push(`Menu (.action-menu) is open with options [${items.map(x => JSON.stringify(x)).join(', ')}] — click the desired menu option to apply`);
+      }
+      continue;
+    }
+    const filledInputs = Array.from(menu.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]), textarea'))
+      .filter(el => isVis(el) && String(el.value || '').trim() !== '');
+    const checkedBoxes = Array.from(menu.querySelectorAll('input[type="checkbox"]:checked, input[type="radio"]:checked, [role="checkbox"][aria-checked="true"], [role="menuitemcheckbox"][aria-checked="true"]'))
+      .filter(isVis);
+    if (!filledInputs.length && !checkedBoxes.length) continue;
+    const commitBtn = Array.from(menu.querySelectorAll('button, input[type="submit"], [role="button"]'))
+      .filter(el => isVis(el) && !el.disabled)
+      .find(el => {
+        const txt = (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+        return /^(apply|create|save|create filter|save draft|add task|创建|保存|创建过滤器|保存并关闭|应用|完成|添加任务|安排发送)$/i.test(txt);
+      });
+    if (commitBtn) {
+      const btnTxt = (commitBtn.innerText || commitBtn.value || commitBtn.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+      const btnId = commitBtn.id ? `#${commitBtn.id}` : '';
+      const ref = commitBtn.getAttribute('data-sj-ref') ? `[${commitBtn.getAttribute('data-sj-ref')}]` : '';
+      warnings.push(
+        `Open modal/menu has uncommitted inputs/selections — click ${ref}${btnId} ${JSON.stringify(btnTxt)} to commit`
+      );
+    }
+  }
+
+  return warnings;
 }
 """
 
@@ -197,9 +717,11 @@ def _parse_snapshot_state(data: dict[str, Any]) -> tuple[dict[str, Any], dict[st
         text = re.sub(r"\s+options=\[.*\]$", "", rest).strip()
 
         id_m = re.search(r"(?:^|\s)#([^\s\"']+)", attrs)
+        msg_id_m = re.search(r'\bdata-message-id=("[^"]+")', attrs)
         name_m = re.search(r'\bname=("[^"]+")', attrs)
         aria_m = re.search(r'\baria=("[^"]+")', attrs)
         href_m = re.search(r'\bhref=("[^"]+")', attrs)
+        row_badge_m = re.search(r"(\[row_id=[^\]]+\])", rest)
 
         base_key: str
         if id_m:
@@ -209,12 +731,20 @@ def _parse_snapshot_state(data: dict[str, Any]) -> tuple[dict[str, Any], dict[st
                 fallbacks[ref] = f"#{cid}"
             else:
                 fallbacks[ref] = f'[id={json.dumps(cid)}]'
+        elif msg_id_m:
+            base_key = f"{tag}[data-message-id={msg_id_m.group(1)}]"
+            fallbacks.setdefault(ref, f"[data-message-id={msg_id_m.group(1)}]")
         elif name_m and tag in ("input", "select", "textarea"):
             base_key = f"{tag}[name={name_m.group(1)}]"
             fallbacks.setdefault(ref, f"{tag}[name={name_m.group(1)}]")
         elif aria_m:
             base_key = f"{tag}[aria={aria_m.group(1)}]"
-            fallbacks.setdefault(ref, f"{tag}[aria-label={aria_m.group(1)}]")
+            try:
+                raw_aria_str = str(json.loads(aria_m.group(1)))
+            except Exception:
+                raw_aria_str = aria_m.group(1)[1:-1]
+            op = "^=" if len(raw_aria_str) >= 115 else "="
+            fallbacks.setdefault(ref, f"{tag}[aria-label{op}{aria_m.group(1)}]")
         elif href_m:
             base_key = f"a[href={href_m.group(1)}]"
         else:
@@ -258,6 +788,7 @@ def _parse_snapshot_state(data: dict[str, Any]) -> tuple[dict[str, Any], dict[st
             "data-state": _unquote(data_state_m),
             "classes": state_cls_m.group(1) if state_cls_m else "",
             "disabled": "true" if disabled else "false",
+            "row-state": row_badge_m.group(1) if row_badge_m else "",
             "text": text[:56],
         }
 
@@ -300,6 +831,7 @@ def _format_dom_diff(prev: dict[str, Any] | None, curr: dict[str, Any]) -> str:
             "data-state",
             "classes",
             "disabled",
+            "row-state",
             "text",
         )
         if same_url
@@ -313,6 +845,7 @@ def _format_dom_diff(prev: dict[str, Any] | None, curr: dict[str, Any]) -> str:
             "data-state",
             "classes",
             "disabled",
+            "row-state",
         )
     )
     for key, c_ent in curr_c.items():
@@ -320,9 +853,10 @@ def _format_dom_diff(prev: dict[str, Any] | None, curr: dict[str, Any]) -> str:
         if p_ent is None:
             continue
         deltas = [
-            f"{attr}={p_ent[attr]}->{c_ent[attr]}"
+            f"{attr}={p_ent.get(attr, '')}->{c_ent.get(attr, '')}"
             for attr in attrs_to_check
-            if p_ent[attr] != c_ent[attr] and (p_ent[attr] != "" or c_ent[attr] != "")
+            if p_ent.get(attr, "") != c_ent.get(attr, "")
+            and (p_ent.get(attr, "") != "" or c_ent.get(attr, "") != "")
         ]
         if deltas:
             items.append(f"{key} [{c_ent['ref']}]: {', '.join(deltas[:3])}")
@@ -410,6 +944,11 @@ class BrowserSession:
         return "\n[browser-errors] " + "; ".join(errs[:4])
 
     def _register_page(self, tid: str, page: Any) -> None:
+        try:
+            if hasattr(page, "add_init_script"):
+                page.add_init_script(_GMAIL_STATE_INIT_JS)
+        except Exception:
+            pass
         page.on("dialog", lambda d: d.accept())
         page.on("pageerror", lambda exc: self._record_tab_error(tid, f"JS pageerror: {str(exc)[:140]}"))
         page.on("response", lambda resp: self._on_response(tid, resp))
@@ -427,6 +966,35 @@ class BrowserSession:
         page = self._context.new_page()
         self._register_page(tid, page)
         return tid, page
+
+    def check_uncommitted_ui_state(self, target_id: str | None = None) -> list[str]:
+        """Inspect the active or specified tab for uncommitted modals, menus, or editors."""
+        if self._closed or not self.tabs:
+            return []
+        if target_id and target_id in self.tabs:
+            pages = [self.tabs[target_id]]
+        elif self.active_tab_id and self.active_tab_id in self.tabs:
+            pages = [self.tabs[self.active_tab_id]]
+        else:
+            pages = list(self.tabs.values())
+        warnings: list[str] = []
+        for page in pages:
+            try:
+                res = page.evaluate(_UNCOMMITTED_UI_JS)
+            except Exception:
+                continue
+            if isinstance(res, list):
+                for item in res:
+                    s = str(item or "").strip()
+                    if s and s not in warnings:
+                        warnings.append(s)
+        return warnings
+
+    def _format_uncommitted_ui_state(self, tid: str | None = None) -> str:
+        warnings = self.check_uncommitted_ui_state(tid)
+        if not warnings:
+            return ""
+        return "\n[uncommitted-ui-state: " + " | ".join(warnings) + "]"
 
     def open_tab(self, url: str) -> str:
         self._seq += 1
@@ -471,11 +1039,13 @@ class BrowserSession:
         self._last_dom_state[tid] = curr_state
         self._ref_fallbacks[tid] = fallbacks
         diff_line = _format_dom_diff(prev_state, curr_state) if include_diff else ""
+        uncommitted_suffix = self._format_uncommitted_ui_state(tid)
         return (
             f"[{header}] targetId={tid} | url={data['url']} | title={data['title']}\n"
             f"{diff_line}"
             f"=== Interactive Elements ({data['controlsCount']}) ===\n{data['controls']}\n\n"
             f"=== Visible Page Text ===\n{data['bodyText']}"
+            f"{uncommitted_suffix}"
         )
 
     @staticmethod
@@ -507,6 +1077,11 @@ class BrowserSession:
             else:
                 loc.scroll_into_view_if_needed(timeout=2000)
                 loc.click(button=btn, timeout=5000)
+        try:
+            if hasattr(page, "mouse") and hasattr(page.mouse, "move"):
+                page.mouse.move(0, 0)
+        except Exception:
+            pass
         page.wait_for_timeout(350)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=2000)
@@ -617,10 +1192,12 @@ class BrowserSession:
             pass
         diff_line = self._capture_dom_diff(tid, page)
         diff_suffix = f"\n{diff_line}" if diff_line else ""
+        uncommitted_suffix = self._format_uncommitted_ui_state(tid)
         return (
             f"Filled {len(done)} fields on {tid}: {', '.join(done)}"
             f"{diff_suffix}"
             f"{container_hint}"
+            f"{uncommitted_suffix}"
             f"{self._drain_tab_errors(tid)}"
         )
 
@@ -659,7 +1236,8 @@ class BrowserSession:
             )
         diff_line = self._capture_dom_diff(tid, page)
         diff_suffix = f"\n{diff_line}" if diff_line else ""
-        return f"Typed into {ref} on {tid}.{diff_suffix}{self._drain_tab_errors(tid)}"
+        uncommitted_suffix = self._format_uncommitted_ui_state(tid)
+        return f"Typed into {ref} on {tid}.{diff_suffix}{uncommitted_suffix}{self._drain_tab_errors(tid)}"
 
     def act(
         self,
@@ -695,11 +1273,11 @@ class BrowserSession:
         if k == "check":
             loc.check(timeout=5000)
             page.wait_for_timeout(150)
-            return f"Checked {ref}.{self._drain_tab_errors(tid)}"
+            return f"Checked {ref}.{self._format_uncommitted_ui_state(tid)}{self._drain_tab_errors(tid)}"
         if k == "uncheck":
             loc.uncheck(timeout=5000)
             page.wait_for_timeout(150)
-            return f"Unchecked {ref}.{self._drain_tab_errors(tid)}"
+            return f"Unchecked {ref}.{self._format_uncommitted_ui_state(tid)}{self._drain_tab_errors(tid)}"
         if k == "hover":
             loc.hover(timeout=5000)
             return f"Hovered {ref}.{self._drain_tab_errors(tid)}"
@@ -821,13 +1399,14 @@ class BrowserSession:
                     receipt_lbl = action
                 else:
                     loc = self._loc(page, ref)
+                    fb_loc_avail = self._fallback_loc(tid, page, ref)
+                    pri_timeout = 1200 if fb_loc_avail is not None else 4500
                     if action == "click":
                         try:
-                            loc.click(timeout=4500)
+                            loc.click(timeout=pri_timeout)
                         except Exception:
-                            fb_loc = self._fallback_loc(tid, page, ref)
-                            if fb_loc is not None:
-                                fb_loc.click(timeout=4500)
+                            if fb_loc_avail is not None:
+                                fb_loc_avail.click(timeout=4500)
                             else:
                                 loc.scroll_into_view_if_needed(timeout=1500)
                                 loc.click(timeout=4500)
@@ -836,42 +1415,39 @@ class BrowserSession:
                     elif action in ("check", "uncheck"):
                         truthy = action == "check"
                         try:
-                            loc.set_checked(truthy, timeout=4500)
+                            loc.set_checked(truthy, timeout=pri_timeout)
                         except Exception:
-                            fb_loc = self._fallback_loc(tid, page, ref)
-                            if fb_loc is None:
+                            if fb_loc_avail is None:
                                 raise
-                            fb_loc.set_checked(truthy, timeout=4500)
+                            fb_loc_avail.set_checked(truthy, timeout=4500)
                         page.wait_for_timeout(80)
                         receipt_lbl = f"{action}({ref})"
                     elif action == "select":
                         sval = str(val if val is not None else "")
                         try:
-                            loc.select_option(value=sval, timeout=4500)
+                            loc.select_option(value=sval, timeout=pri_timeout)
                         except Exception:
                             try:
-                                loc.select_option(label=sval, timeout=4500)
+                                loc.select_option(label=sval, timeout=pri_timeout)
                             except Exception:
-                                fb_loc = self._fallback_loc(tid, page, ref)
-                                if fb_loc is None:
+                                if fb_loc_avail is None:
                                     raise
                                 try:
-                                    fb_loc.select_option(value=sval, timeout=4500)
+                                    fb_loc_avail.select_option(value=sval, timeout=4500)
                                 except Exception:
-                                    fb_loc.select_option(label=sval, timeout=4500)
+                                    fb_loc_avail.select_option(label=sval, timeout=4500)
                         page.wait_for_timeout(100)
                         receipt_lbl = f"select({ref}={sval[:28]!r})"
                     elif action in ("fill", "type"):
                         sval = str(val if val is not None else "")
                         try:
-                            loc.fill(sval, timeout=5000)
+                            loc.fill(sval, timeout=pri_timeout)
                             target_loc = loc
                         except Exception:
-                            fb_loc = self._fallback_loc(tid, page, ref)
-                            if fb_loc is None:
+                            if fb_loc_avail is None:
                                 raise
-                            fb_loc.fill(sval, timeout=5000)
-                            target_loc = fb_loc
+                            fb_loc_avail.fill(sval, timeout=5000)
+                            target_loc = fb_loc_avail
                         if bool(item.get("pressEnter")):
                             target_loc.press("Enter")
                             page.wait_for_timeout(180)
@@ -893,12 +1469,14 @@ class BrowserSession:
 
             if include_step_text:
                 try:
-                    step_data = page.evaluate(_SNAPSHOT_JS)
+                    step_data = page.evaluate(_SNAPSHOT_JS, True)
                     if isinstance(step_data, dict) and (
                         "controls" in step_data or "bodyText" in step_data
                     ):
                         step_curr, step_fallbacks = _parse_snapshot_state(step_data)
-                        self._ref_fallbacks[tid] = step_fallbacks
+                        cur_fb = self._ref_fallbacks.setdefault(tid, {})
+                        for fk, fv in step_fallbacks.items():
+                            cur_fb.setdefault(fk, fv)
                         step_digests.append(
                             self._format_batch_step_digest(
                                 idx, receipt_lbl, step_prev_state, step_curr
@@ -913,6 +1491,11 @@ class BrowserSession:
                 receipts.append(f"(stopped at step {idx}: navigated to {url_after})")
                 break
 
+        try:
+            if hasattr(page, "mouse") and hasattr(page.mouse, "move"):
+                page.mouse.move(0, 0)
+        except Exception:
+            pass
         page.wait_for_timeout(180)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=2000)

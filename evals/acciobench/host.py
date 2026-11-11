@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -235,7 +236,7 @@ _PY_LIST_CLI_RE = re.compile(
     re.I,
 )
 _PY_STR_CLI_RE = re.compile(
-    r"""(["'])\s*(?:env\s+[A-Z0-9_]+=\S+\s+)*(stripe|todoist|jira|box|dws|gws|ntn|shopify|gh)\s+([^"'\n]+?)\1""",
+    r"""[fFrR]{0,2}(["'])\s*(?:env\s+[A-Z0-9_]+=\S+\s+)*(stripe|todoist|jira|box|dws|gws|ntn|shopify|gh)\s+([^"'\n]+?)\1""",
     re.I,
 )
 _SCRATCH_PROBE_CLI_CREATES_RE = re.compile(
@@ -338,7 +339,13 @@ def _extract_cli_invocations(cmd: str) -> list[tuple[str, str, int]]:
         pos = m.start(1)
         if pos not in seen_pos:
             seen_pos.add(pos)
-            arg_toks = re.findall(r"""["']([^"'\n]+)["']""", m.group(2))
+            arg_toks = [
+                a or b or c
+                for a, b, c in re.findall(
+                    r'"([^"\n]+)"|\'([^\'\n]+)\'|([A-Za-z_][A-Za-z0-9_]*)',
+                    m.group(2),
+                )
+            ]
             hits.append((m.group(1).lower(), " ".join(arg_toks), pos))
 
     for m in _PY_STR_CLI_RE.finditer(cmd):
@@ -378,15 +385,31 @@ def _parse_jira_link_call(rest: str) -> tuple[str, str, str] | None:
 
 
 def _is_synthetic_probe_name(token: str) -> bool:
-    """Return True for throwaway scratch probe filenames/titles (test.txt, dummy*, tmp*, Untitled)."""
+    """Return True for throwaway scratch probe filenames/titles (test*, dummy*, sample*, tmp*, Untitled)."""
     cleaned = token.strip().strip("\"'`").rstrip(",;")
     if not cleaned:
         return False
     base = Path(cleaned).name.lower()
-    return (
-        base in ("test.txt", "test-file.txt", "untitled")
-        or base.startswith(("dummy", "tmp"))
-    )
+    return base == "untitled" or base.startswith(("test", "dummy", "sample", "tmp"))
+
+
+def _resolve_inline_probe_tokens(cmd_rw: str, toks: list[str]) -> list[str]:
+    """Expand CLI argument tokens plus simple inline shell/Python variable assignments."""
+    candidates: list[str] = []
+    var_rx = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?|\{([A-Za-z_][A-Za-z0-9_]*)\}")
+    bare_ident_rx = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    for raw_tok in toks[1:]:
+        val = raw_tok.split("=", 1)[1] if raw_tok.startswith("-") and "=" in raw_tok else raw_tok
+        if raw_tok.startswith("-") and "=" not in raw_tok:
+            continue
+        candidates.append(val)
+        var_names = [a or b for a, b in var_rx.findall(val)]
+        if bare_ident_rx.match(val):
+            var_names.append(val)
+        for vname in dict.fromkeys(var_names):
+            assign_rx = re.compile(rf"""\b{re.escape(vname)}\s*=\s*["']([^"'\n]+)["']""")
+            candidates.extend(assign_rx.findall(cmd_rw))
+    return candidates
 
 
 def _format_write_receipt(path: Path, text: str) -> str:
@@ -575,6 +598,10 @@ class ToolHost:
         self.cli_enriched_cmds: set[str] = set()
         self.cli_ref_shown: set[str] = set()
         self._seen_jira_links: set[tuple[str, str, str]] = set()
+        self._cli_loop_bin: str = ""
+        self._cli_loop_streak: int = 0
+        self._cli_loop_last_step: int = -1
+        self._cli_loop_hints: dict[str, int] = {}
         self.declared_deliverables: list[str] = list(declared_deliverables or [])
         resolved_task_md = (task_markdown or "").strip()
         if not resolved_task_md:
@@ -689,6 +716,7 @@ class ToolHost:
             if pseg.is_dir():
                 support_dirs.append(pseg.resolve())
         self._support_ro_dirs: tuple[Path, ...] = tuple(dict.fromkeys(support_dirs))
+        self._service_baseline: dict[str, Any] = self._snapshot_service_baseline() if self.is_sj else {}
 
     @property
     def res(self) -> RunMetrics:
@@ -757,7 +785,12 @@ class ToolHost:
             return False
         if rp == self.sandbox_tmp or rp.is_relative_to(self.sandbox_tmp):
             return False
-        for secret_root in (self.config.dataset_root, self.config.workdir):
+        for secret_root in (
+            self.config.dataset_root,
+            self.config.workdir,
+            _REPO_ROOT / "evals",
+            _REPO_ROOT / "tests",
+        ):
             try:
                 sr = secret_root.resolve()
                 if rp == sr or rp.is_relative_to(sr):
@@ -805,7 +838,12 @@ class ToolHost:
         ]
         tmp_root = Path("/tmp").resolve()
         mask_candidates: list[Path] = []
-        for mdir in (self.config.dataset_root, self.config.workdir):
+        for mdir in (
+            self.config.dataset_root,
+            self.config.workdir,
+            _REPO_ROOT / "evals",
+            _REPO_ROOT / "tests",
+        ):
             try:
                 mr = mdir.resolve()
                 if mr.is_dir() and mr != Path("/"):
@@ -1217,18 +1255,13 @@ class ToolHost:
                     toks = shlex.split(rest)
                 except ValueError:
                     toks = rest.split()
-                for tok in toks[1:]:
-                    if tok.startswith("-"):
-                        if "=" in tok:
-                            tok = tok.split("=", 1)[1]
-                        else:
-                            continue
-                    if _is_synthetic_probe_name(tok):
-                        base_l = Path(tok.strip("\"'`")).name.lower()
+                for cand_tok in _resolve_inline_probe_tokens(cmd_rw, toks):
+                    if _is_synthetic_probe_name(cand_tok):
+                        base_l = Path(cand_tok.strip("\"'`")).name.lower()
                         if not self._name_exists_in_workspace(base_l):
                             return (
                                 f"[ctx-entry-gate] Blocked synthetic scratch-probe creation `{cli_bin} {rest[:90]}` "
-                                f"(`{tok}` does not exist in /task/workspace). Do not create throwaway or 'Untitled' "
+                                f"(`{cand_tok}` does not exist in /task/workspace). Do not create throwaway or 'Untitled' "
                                 "probe items on persistent external services; query existing state or create final named deliverables."
                             )
             if cli_bin == "jira":
@@ -1465,6 +1498,647 @@ class ToolHost:
             )
         return adv
 
+    @staticmethod
+    def _open_ro_sqlite(db_path: Path) -> sqlite3.Connection | None:
+        if not db_path.is_file():
+            return None
+        try:
+            return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.5)
+        except sqlite3.Error:
+            return None
+
+    @staticmethod
+    def _sqlite_table_count(con: sqlite3.Connection, table: str, *, active_only: bool = False) -> int:
+        try:
+            cols = {str(r[1]) for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+            if not cols:
+                return 0
+            if active_only and "is_deleted" in cols:
+                row = con.execute(f"SELECT COUNT(*) FROM {table} WHERE is_deleted = 0").fetchone()
+            else:
+                row = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            return int(row[0]) if row else 0
+        except sqlite3.Error:
+            return 0
+
+    def _find_service_state_dbs(self) -> dict[str, Path]:
+        """Locate live SQLite mock DBs under ``mock_env``, ``meta_dir/mock_state``, or ``run_dir/mock_state``."""
+        specs: tuple[tuple[str, tuple[str, ...], str, tuple[str, ...]], ...] = (
+            ("jira", ("JIRA_MOCK_STATE_DIR", "JIRA_MOCK_HOME"), "jira_cli", ("jira_mock.db",)),
+            ("ntn", ("NTN_MOCK_STATE_DIR", "NTN_MOCK_DATA_DIR"), "notion_cli", ("mock.db",)),
+            ("box", ("BOX_MOCK_STATE_DIR", "BOX_MOCK_HOME"), "box_cli", (".box/box_mock.db", "box_mock.db")),
+            ("dws", ("DWS_MOCK_STATE_DIR", "DWS_MOCK_HOME"), "dws_doc_cli", ("mock.db",)),
+            (
+                "gws",
+                ("GWS_MOCK_STATE_DIR", "GWS_MOCK_HOME"),
+                "google_workspace_cli",
+                (".cache/gws/mock.db", "mock.db"),
+            ),
+            (
+                "todoist",
+                ("TODOIST_MOCK_STATE_DIR", "TODOIST_MOCK_HOME"),
+                "todoist_cli",
+                (".cache/todoist/mock.db", "mock.db"),
+            ),
+        )
+        found: dict[str, Path] = {}
+        state_roots = [self.meta_dir / "mock_state", self.run_dir / "mock_state"]
+        for svc, env_keys, subdir, rel_dbs in specs:
+            cand_dirs: list[Path] = []
+            for ek in env_keys:
+                ev = self.mock_env.get(ek) or ""
+                if ev:
+                    cand_dirs.append(Path(ev))
+            for sr in state_roots:
+                cand_dirs.append(sr / subdir)
+            for base in cand_dirs:
+                if svc in found:
+                    break
+                for rel in rel_dbs:
+                    p = base / rel
+                    if p.is_file():
+                        found[svc] = p
+                        break
+        return found
+
+    def _load_json_service_states(self) -> dict[str, Any]:
+        """Load optional JSON mock-state snapshots under ``mock_state`` or service dirs for tests."""
+        out: dict[str, Any] = {}
+        svc_aliases = {
+            "jira": ("jira", "jira_cli"),
+            "ntn": ("notion", "notion_cli", "ntn"),
+            "box": ("box", "box_cli"),
+            "dws": ("dws", "dws_doc_cli"),
+            "gws": ("gws", "google_workspace_cli"),
+            "todoist": ("todoist", "todoist_cli"),
+        }
+        cand_files: list[tuple[Path, str]] = []
+        for root in (self.meta_dir / "mock_state", self.run_dir / "mock_state"):
+            if root.is_dir():
+                for p in sorted(root.rglob("*.json")):
+                    cand_files.append((p, str(p.relative_to(root)).lower()))
+        if self.run_dir.is_dir():
+            for p in sorted(self.run_dir.iterdir()):
+                if p.is_file() and p.suffix.lower() == ".json":
+                    cand_files.append((p, p.name.lower()))
+                elif p.is_dir() and p.name.lower() in {a for aliases in svc_aliases.values() for a in aliases}:
+                    for sp in sorted(p.rglob("*.json")):
+                        cand_files.append((sp, str(sp.relative_to(self.run_dir)).lower()))
+
+        for p, rel_l in cand_files:
+            try:
+                if p.stat().st_size > 2_000_000:
+                    continue
+            except OSError:
+                continue
+            for svc, keys in svc_aliases.items():
+                if svc in out:
+                    continue
+                if any(k in rel_l for k in keys):
+                    try:
+                        data = json.loads(p.read_text(encoding="utf-8"))
+                        if isinstance(data, dict):
+                            out[svc] = data
+                    except (OSError, json.JSONDecodeError):
+                        pass
+        return out
+
+    @staticmethod
+    def _extract_gws_presentation_summary(pres_data: dict[str, Any]) -> tuple[int, list[str], bool]:
+        """Return ``(slide_count, labeled_counts_sample, has_stale_template)`` for one GWS presentation."""
+        slides = pres_data.get("slides") or []
+        if not isinstance(slides, list):
+            return 0, [], False
+        texts: list[str] = []
+
+        def _collect_runs(obj: Any) -> None:
+            if isinstance(obj, dict):
+                if isinstance(obj.get("content"), str):
+                    texts.append(obj["content"])
+                for k, v in obj.items():
+                    if k != "content" and isinstance(v, (dict, list)):
+                        _collect_runs(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _collect_runs(item)
+
+        _collect_runs(slides)
+        joined = "\n".join(texts)
+        pairs = re.findall(r"\b([A-Za-z][A-Za-z0-9 _/-]{1,22})\s*[:=]\s*(\d+(?:\.\d+)?)\b", joined)
+        labeled: list[str] = []
+        seen_l: set[str] = set()
+        for k, v in pairs:
+            item = f"{' '.join(k.split())}={v}"
+            if item.lower() not in seen_l:
+                seen_l.add(item.lower())
+                labeled.append(item)
+                if len(labeled) >= 6:
+                    break
+        title = str(pres_data.get("title") or "")
+        stale_template = bool(
+            "AcmeCloud Launch Plan" in joined and title and "AcmeCloud Launch Plan" not in title
+        )
+        return len(slides), labeled, stale_template
+
+    def _snapshot_service_baseline(self) -> dict[str, Any]:
+        """Capture initial seeded counts/IDs across live service mock DBs before step 1."""
+        snap: dict[str, Any] = {}
+        dbs = self._find_service_state_dbs()
+
+        if "jira" in dbs:
+            con = self._open_ro_sqlite(dbs["jira"])
+            if con is not None:
+                try:
+                    links = con.execute(
+                        "SELECT UPPER(inward_key), UPPER(outward_key), LOWER(link_type) FROM issue_links"
+                    ).fetchall()
+                    link_counts: dict[tuple[str, str, str], int] = {}
+                    for r in links:
+                        key = (str(r[0]), str(r[1]), str(r[2]))
+                        link_counts[key] = link_counts.get(key, 0) + 1
+                    done_row = con.execute(
+                        "SELECT COUNT(*) FROM issues i JOIN issue_statuses s ON i.status_id = s.id "
+                        "WHERE LOWER(s.category) = 'done' OR LOWER(s.name) = 'done'"
+                    ).fetchone()
+                    snap["jira"] = {
+                        "link_counts": link_counts,
+                        "total_links": len(links),
+                        "done": int(done_row[0]) if done_row else 0,
+                    }
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        if "ntn" in dbs:
+            con = self._open_ro_sqlite(dbs["ntn"])
+            if con is not None:
+                try:
+                    page_ids = {
+                        str(r[0]) for r in con.execute("SELECT id FROM entities WHERE type = 'pages'").fetchall()
+                    }
+                    file_ids = {
+                        str(r[0]) for r in con.execute("SELECT id FROM entities WHERE type = 'files'").fetchall()
+                    }
+                    snap["ntn"] = {
+                        "page_ids": page_ids,
+                        "file_ids": file_ids,
+                        "pages": len(page_ids),
+                        "files": len(file_ids),
+                    }
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        if "box" in dbs:
+            con = self._open_ro_sqlite(dbs["box"])
+            if con is not None:
+                try:
+                    snap["box"] = {
+                        "folders": self._sqlite_table_count(con, "folders", active_only=True),
+                        "files": self._sqlite_table_count(con, "files", active_only=True),
+                        "collabs": self._sqlite_table_count(con, "collaborations", active_only=True),
+                        "tasks": self._sqlite_table_count(con, "tasks", active_only=True),
+                    }
+                finally:
+                    con.close()
+
+        if "dws" in dbs:
+            con = self._open_ro_sqlite(dbs["dws"])
+            if con is not None:
+                try:
+                    file_row = con.execute(
+                        "SELECT COUNT(*) FROM documents WHERE type = 'file'"
+                    ).fetchone()
+                    snap["dws"] = {
+                        "docs": self._sqlite_table_count(con, "documents"),
+                        "files": int(file_row[0]) if file_row else 0,
+                        "blocks": self._sqlite_table_count(con, "blocks"),
+                        "comments": self._sqlite_table_count(con, "comments"),
+                        "exports": self._sqlite_table_count(con, "exports"),
+                    }
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        if "gws" in dbs:
+            con = self._open_ro_sqlite(dbs["gws"])
+            if con is not None:
+                try:
+                    pres_hashes = {
+                        str(r[0]): hashlib.sha256(str(r[1]).encode("utf-8")).hexdigest()
+                        for r in con.execute("SELECT id, data FROM presentations").fetchall()
+                    }
+                    sheet_hashes = {
+                        str(r[0]): hashlib.sha256(str(r[1]).encode("utf-8")).hexdigest()
+                        for r in con.execute("SELECT id, data FROM spreadsheets").fetchall()
+                    }
+                    snap["gws"] = {"pres_hashes": pres_hashes, "sheet_hashes": sheet_hashes}
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        if "todoist" in dbs:
+            con = self._open_ro_sqlite(dbs["todoist"])
+            if con is not None:
+                try:
+                    cols = {str(r[1]) for r in con.execute("PRAGMA table_info(items)").fetchall()}
+                    if cols:
+                        total_i = self._sqlite_table_count(con, "items", active_only=True)
+                        checked_col = "checked" if "checked" in cols else ("is_completed" if "is_completed" in cols else "")
+                        done_i = 0
+                        if checked_col:
+                            r = con.execute(f"SELECT COUNT(*) FROM items WHERE {checked_col} != 0").fetchone()
+                            done_i = int(r[0]) if r else 0
+                        snap["todoist"] = {"items": total_i, "completed": done_i}
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        return snap
+
+    def audit_service_state_delta(self) -> tuple[bool, list[str], str]:
+        """Audit live mock service state deltas before exit and emit ``(blocking, issues, [service-delta])``."""
+        if not self.is_sj:
+            return False, [], ""
+
+        issues: list[str] = []
+        delta_parts: list[str] = []
+        dbs = self._find_service_state_dbs()
+        json_states = self._load_json_service_states()
+
+        # --- Jira ---
+        if "jira" in dbs:
+            con = self._open_ro_sqlite(dbs["jira"])
+            if con is not None:
+                try:
+                    base_j = self._service_baseline.get("jira") or {}
+                    base_lc: dict[tuple[str, str, str], int] = base_j.get("link_counts") or {}
+                    links = con.execute(
+                        "SELECT UPPER(inward_key), UPPER(outward_key), link_type FROM issue_links"
+                    ).fetchall()
+                    cur_lc: dict[tuple[str, str, str], tuple[str, int]] = {}
+                    for inw, outw, lt in links:
+                        key = (str(inw), str(outw), str(lt).lower())
+                        orig_lt, cnt = cur_lc.get(key, (str(lt), 0))
+                        cur_lc[key] = (orig_lt, cnt + 1)
+
+                    dup_msgs: list[str] = []
+                    for key, (orig_lt, cnt) in sorted(cur_lc.items()):
+                        if cnt > max(1, int(base_lc.get(key, 0))):
+                            dup_msgs.append(f"{key[0]}->{key[1]} ({orig_lt} x{cnt})")
+                    if dup_msgs:
+                        issues.append(
+                            f"Jira duplicate issue link(s) found: {', '.join(dup_msgs[:4])} "
+                            "— remove extra duplicate links so each pair has count=1."
+                        )
+
+                    dup_rows = con.execute(
+                        "SELECT DISTINCT l.inward_key, l.outward_key, l.link_type, s.name, s.category "
+                        "FROM issue_links l "
+                        "JOIN issues i ON UPPER(i.key) = UPPER(l.inward_key) "
+                        "JOIN issue_statuses s ON i.status_id = s.id "
+                        "WHERE LOWER(l.link_type) LIKE '%duplicate%'"
+                    ).fetchall()
+                    todo_dups: list[str] = []
+                    for inw, outw, lt, st_name, st_cat in dup_rows:
+                        key = (str(inw).upper(), str(outw).upper(), str(lt).lower())
+                        if key in base_lc:
+                            continue
+                        is_done = str(st_cat or "").strip().lower() == "done" or str(st_name or "").strip().lower() == "done"
+                        if not is_done:
+                            todo_dups.append(f"{inw} ({st_name})")
+                    if todo_dups:
+                        issues.append(
+                            f"Jira issue(s) linked as 'Duplicates' are not transitioned to 'Done': "
+                            f"{', '.join(todo_dups[:6])} — move duplicate issues to 'Done'."
+                        )
+
+                    done_row = con.execute(
+                        "SELECT COUNT(*) FROM issues i JOIN issue_statuses s ON i.status_id = s.id "
+                        "WHERE LOWER(s.category) = 'done' OR LOWER(s.name) = 'done'"
+                    ).fetchone()
+                    cur_done = int(done_row[0]) if done_row else 0
+                    cur_links = len(links)
+                    d_links = cur_links - int(base_j.get("total_links", cur_links))
+                    d_done = cur_done - int(base_j.get("done", cur_done))
+                    if d_links or d_done or dup_msgs or todo_dups or "jira" in self.mutated_services:
+                        delta_parts.append(f"jira: links={cur_links}({d_links:+d}) done={cur_done}({d_done:+d})")
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+        elif "jira" in json_states:
+            jdata = json_states["jira"]
+            jlinks = jdata.get("issue_links") or jdata.get("links") or []
+            jissues = {
+                str(it.get("key") or it.get("id") or "").upper(): str(it.get("status") or "")
+                for it in (jdata.get("issues") or [])
+                if isinstance(it, dict)
+            }
+            lc: dict[tuple[str, str, str], int] = {}
+            todo_dups_j: list[str] = []
+            for lk in jlinks:
+                if not isinstance(lk, dict):
+                    continue
+                src = str(lk.get("inward_key") or lk.get("source") or "").upper()
+                tgt = str(lk.get("outward_key") or lk.get("target") or "").upper()
+                ltype = str(lk.get("link_type") or lk.get("type") or "")
+                k = (src, tgt, ltype.lower())
+                lc[k] = lc.get(k, 0) + 1
+                if "duplicate" in k[2] and src in jissues and jissues[src].strip().lower() != "done":
+                    todo_dups_j.append(f"{src} ({jissues[src]})")
+            dup_j = [f"{k[0]}->{k[1]} (x{c})" for k, c in lc.items() if c > 1]
+            if dup_j:
+                issues.append(f"Jira duplicate issue link(s) found: {', '.join(dup_j[:4])}.")
+            if todo_dups_j:
+                issues.append(f"Jira 'Duplicates' issue(s) still not 'Done': {', '.join(todo_dups_j[:6])}.")
+            if jlinks or jissues:
+                done_j = sum(1 for st in jissues.values() if st.strip().lower() == "done")
+                delta_parts.append(f"jira: links={len(jlinks)} done={done_j}")
+
+        # --- Notion ---
+        if "ntn" in dbs:
+            con = self._open_ro_sqlite(dbs["ntn"])
+            if con is not None:
+                try:
+                    base_n = self._service_baseline.get("ntn") or {}
+                    base_pids: set[str] = base_n.get("page_ids") or set()
+                    base_fids: set[str] = base_n.get("file_ids") or set()
+                    page_rows = con.execute("SELECT id, data FROM entities WHERE type = 'pages'").fetchall()
+                    all_pids = {str(r[0]) for r in page_rows}
+                    has_root = "page_root" in all_pids
+                    orphan_pages: list[str] = []
+                    new_active_pages = 0
+                    for pid, raw in page_rows:
+                        pid_s = str(pid)
+                        if pid_s in base_pids or pid_s == "page_root":
+                            continue
+                        try:
+                            pd = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if pd.get("archived") or pd.get("inTrash"):
+                            continue
+                        new_active_pages += 1
+                        if has_root and not pd.get("parentId"):
+                            title = str(pd.get("title") or pid_s)[:60]
+                            orphan_pages.append(f"{title!r} ({pid_s})")
+                    if orphan_pages:
+                        issues.append(
+                            f"Notion newly created page(s) have parentId=None instead of 'page_root' "
+                            f"(or workspace parent): {', '.join(orphan_pages[:3])} — recreate or attach under 'page_root'."
+                        )
+
+                    file_rows = con.execute("SELECT id, data FROM entities WHERE type = 'files'").fetchall()
+                    new_files: list[tuple[str, str]] = []
+                    for fid, raw in file_rows:
+                        fid_s = str(fid)
+                        if fid_s in base_fids:
+                            continue
+                        try:
+                            fd = json.loads(raw)
+                            fname = str(fd.get("filename") or fd.get("name") or fid_s)
+                        except json.JSONDecodeError:
+                            fname = fid_s
+                        new_files.append((fid_s, fname))
+
+                    probe_files = [
+                        f"{fn} ({fid})"
+                        for fid, fn in new_files
+                        if _is_synthetic_probe_name(fn) and not self._name_exists_in_workspace(Path(fn).name.lower())
+                    ]
+                    if probe_files:
+                        issues.append(
+                            f"Notion has synthetic probe uploaded file(s): {', '.join(probe_files[:3])} "
+                            "— clean up stray test/sample uploads."
+                        )
+                    task_l = (self.task_markdown or "").lower()
+                    wants_upload = any(
+                        tok in task_l
+                        for tok in ("ntn files", "files create", "files upload", "上传", "upload", "evidence file", "certificate packet")
+                    )
+                    single_upload = (
+                        "恰好一个" in self.task_markdown
+                        or "exactly one" in task_l
+                        or "only one" in task_l
+                    )
+                    if new_files and not wants_upload:
+                        issues.append(
+                            f"Notion has {len(new_files)} unrequested uploaded file(s) "
+                            f"({', '.join(fn for _, fn in new_files[:3])}) when task did not ask for file uploads."
+                        )
+                    elif single_upload and len(new_files) > 1:
+                        issues.append(
+                            f"Notion has {len(new_files)} newly uploaded files "
+                            f"({', '.join(fn for _, fn in new_files[:4])}) when exactly 1 was requested."
+                        )
+
+                    if new_active_pages or new_files or orphan_pages or "ntn" in self.mutated_services:
+                        fnames_s = ",".join(fn for _, fn in new_files[:3])
+                        suffix = f" [{fnames_s}]" if fnames_s else ""
+                        delta_parts.append(
+                            f"ntn: +pages={new_active_pages}(orphan={len(orphan_pages)}) "
+                            f"files={len(file_rows)}(+{len(new_files)}{suffix})"
+                        )
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+        elif "ntn" in json_states:
+            ndata = json_states["ntn"]
+            npages = ndata.get("pages") or []
+            nfiles = ndata.get("files") or []
+            has_root = any(isinstance(p, dict) and p.get("id") == "page_root" for p in npages)
+            orphan_j = [
+                f"{p.get('title', p.get('id'))!r}"
+                for p in npages
+                if isinstance(p, dict)
+                and p.get("id") != "page_root"
+                and p.get("is_new", True)
+                and not p.get("archived")
+                and has_root
+                and not p.get("parentId")
+            ]
+            if orphan_j:
+                issues.append(f"Notion newly created page(s) have parentId=None: {', '.join(orphan_j[:3])}.")
+            extra_f = [f for f in nfiles if isinstance(f, dict) and f.get("is_new")]
+            if extra_f:
+                task_l = (self.task_markdown or "").lower()
+                wants_up = any(k in task_l for k in ("ntn files", "files create", "上传", "upload", "evidence"))
+                if not wants_up or (
+                    ("恰好一个" in self.task_markdown or "exactly one" in task_l) and len(extra_f) > 1
+                ):
+                    issues.append(f"Notion has extra uploaded file(s) ({len(extra_f)}).")
+            if npages or nfiles:
+                delta_parts.append(f"ntn: pages={len(npages)}(orphan={len(orphan_j)}) files={len(nfiles)}")
+
+        # --- Box ---
+        if "box" in dbs:
+            con = self._open_ro_sqlite(dbs["box"])
+            if con is not None:
+                try:
+                    base_b = self._service_baseline.get("box") or {}
+                    cur_b = {
+                        "folders": self._sqlite_table_count(con, "folders", active_only=True),
+                        "files": self._sqlite_table_count(con, "files", active_only=True),
+                        "collabs": self._sqlite_table_count(con, "collaborations", active_only=True),
+                        "tasks": self._sqlite_table_count(con, "tasks", active_only=True),
+                    }
+                    deltas = {k: cur_b[k] - int(base_b.get(k, cur_b[k])) for k in cur_b}
+                    if any(deltas.values()) or "box" in self.mutated_services:
+                        delta_parts.append(
+                            f"box: folders={cur_b['folders']}({deltas['folders']:+d}) "
+                            f"files={cur_b['files']}({deltas['files']:+d}) "
+                            f"collabs={cur_b['collabs']}({deltas['collabs']:+d}) "
+                            f"tasks={cur_b['tasks']}({deltas['tasks']:+d})"
+                        )
+                finally:
+                    con.close()
+
+        # --- DWS ---
+        if "dws" in dbs:
+            con = self._open_ro_sqlite(dbs["dws"])
+            if con is not None:
+                try:
+                    base_d = self._service_baseline.get("dws") or {}
+                    file_row = con.execute("SELECT COUNT(*) FROM documents WHERE type = 'file'").fetchone()
+                    cur_d = {
+                        "docs": self._sqlite_table_count(con, "documents"),
+                        "files": int(file_row[0]) if file_row else 0,
+                        "blocks": self._sqlite_table_count(con, "blocks"),
+                        "comments": self._sqlite_table_count(con, "comments"),
+                        "exports": self._sqlite_table_count(con, "exports"),
+                    }
+                    deltas = {k: cur_d[k] - int(base_d.get(k, cur_d[k])) for k in cur_d}
+                    if any(deltas.values()) or "dws" in self.mutated_services:
+                        delta_parts.append(
+                            f"dws: docs={cur_d['docs']}({deltas['docs']:+d}, files={deltas['files']:+d}) "
+                            f"blocks={cur_d['blocks']}({deltas['blocks']:+d}) "
+                            f"comments={cur_d['comments']}({deltas['comments']:+d})"
+                        )
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        # --- GWS ---
+        if "gws" in dbs:
+            con = self._open_ro_sqlite(dbs["gws"])
+            if con is not None:
+                try:
+                    base_g = self._service_baseline.get("gws") or {}
+                    base_ph = base_g.get("pres_hashes") or {}
+                    base_sh = base_g.get("sheet_hashes") or {}
+                    pres_rows = con.execute("SELECT id, data FROM presentations").fetchall()
+                    sheet_rows = con.execute("SELECT id, data FROM spreadsheets").fetchall()
+                    mod_pres_summaries: list[str] = []
+                    for pid, raw in pres_rows:
+                        pid_s = str(pid)
+                        raw_s = str(raw)
+                        h = hashlib.sha256(raw_s.encode("utf-8")).hexdigest()
+                        if pid_s not in base_ph or h != base_ph[pid_s]:
+                            try:
+                                pd = json.loads(raw_s)
+                            except json.JSONDecodeError:
+                                continue
+                            nslides, counts, stale = self._extract_gws_presentation_summary(pd)
+                            title = str(pd.get("title") or pid_s)[:36]
+                            extra = ", stale_template_slide0" if stale else ""
+                            cnt_s = f", counts={counts}" if counts else ", counts=[]"
+                            mod_pres_summaries.append(f"{title!r}(slides={nslides}{cnt_s}{extra})")
+                    sheets_mod = sum(
+                        1
+                        for sid, raw in sheet_rows
+                        if str(sid) not in base_sh
+                        or hashlib.sha256(str(raw).encode("utf-8")).hexdigest() != base_sh[str(sid)]
+                    )
+                    if mod_pres_summaries or sheets_mod or "gws" in self.mutated_services:
+                        pres_s = "; ".join(mod_pres_summaries[:2]) if mod_pres_summaries else "pres_mod=0"
+                        delta_parts.append(f"gws: {pres_s}, sheets_mod={sheets_mod}")
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        # --- Todoist ---
+        if "todoist" in dbs:
+            con = self._open_ro_sqlite(dbs["todoist"])
+            if con is not None:
+                try:
+                    base_t = self._service_baseline.get("todoist") or {}
+                    cols = {str(r[1]) for r in con.execute("PRAGMA table_info(items)").fetchall()}
+                    if cols:
+                        cur_i = self._sqlite_table_count(con, "items", active_only=True)
+                        checked_col = "checked" if "checked" in cols else ("is_completed" if "is_completed" in cols else "")
+                        cur_c = 0
+                        if checked_col:
+                            r = con.execute(f"SELECT COUNT(*) FROM items WHERE {checked_col} != 0").fetchone()
+                            cur_c = int(r[0]) if r else 0
+                        di = cur_i - int(base_t.get("items", cur_i))
+                        dc = cur_c - int(base_t.get("completed", cur_c))
+                        if di or dc or "todoist" in self.mutated_services:
+                            delta_parts.append(f"todoist: items={cur_i}({di:+d}) completed={cur_c}({dc:+d})")
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+
+        receipt = f"[service-delta: {' | '.join(delta_parts)}]" if delta_parts else ""
+        if len(receipt) > 650:
+            receipt = receipt[:646] + "...]"
+        return bool(issues), issues, receipt
+
+    def _track_cli_loop_streak(self, cmd_rw: str, out: str) -> str:
+        """Append ``[batch-compute-hint]`` after ``>= 3`` consecutive single-item turns on one domain CLI."""
+        if (
+            not self.is_sj
+            or not cmd_rw
+            or out.startswith(("[ctx-entry-gate]", "[straitjacket]", "ERROR:"))
+            or "--help" in cmd_rw
+            or re.search(r"(?:^|\s)-h(?:\s|$)", cmd_rw)
+        ):
+            return out
+
+        invs = _extract_cli_invocations(cmd_rw)
+        dom_invs = [
+            b
+            for b, rest, _ in invs
+            if b in _DOMAIN_CLIS
+            and rest
+            and "--help" not in rest
+            and not re.search(r"(?:^|\s)-h(?:\s|$)", rest)
+        ]
+        is_batched = len(dom_invs) != 1 or bool(re.search(r"\b(?:for|while)\b", cmd_rw))
+        if is_batched:
+            self._cli_loop_bin = ""
+            self._cli_loop_streak = 0
+            return out
+
+        cli_bin = dom_invs[0]
+        if self.step > 0 and self.step == self._cli_loop_last_step and cli_bin == self._cli_loop_bin:
+            return out
+        self._cli_loop_last_step = self.step
+
+        if cli_bin == self._cli_loop_bin:
+            self._cli_loop_streak += 1
+        else:
+            self._cli_loop_bin = cli_bin
+            self._cli_loop_streak = 1
+
+        if self._cli_loop_streak >= 3 and self._cli_loop_hints.get(cli_bin, 0) < 2:
+            self._cli_loop_hints[cli_bin] = self._cli_loop_hints.get(cli_bin, 0) + 1
+            self._cli_loop_streak = 0
+            out += (
+                "\n[batch-compute-hint: 3 single-item CLI turns detected; "
+                "batch remaining CLI calls/mutations in one python3/bash loop to avoid per-turn prefix re-billing]"
+            )
+        return out
+
     def _do_ctx_retrieve(self, args: dict[str, Any]) -> str:
         if not self.is_sj:
             return "ERROR: ctx_retrieve is unavailable in baseline arm"
@@ -1600,6 +2274,9 @@ class ToolHost:
                     or bool(MUTATING_SHELL_RE.search(cmd))
                 ):
                     is_mutating = True
+            elif name not in ("bash", "ctx_retrieve"):
+                self._cli_loop_bin = ""
+                self._cli_loop_streak = 0
 
             if is_mutating:
                 self.mutation_epoch += 1
@@ -1805,6 +2482,7 @@ class ToolHost:
                     out = out + "\n\n" + sec_rcpt
             out = self._maybe_append_cli_subcommand_ref(cmd_rw, out)
             out = self._append_cli_subprocess_error(cmd_rw, out)
+            out = self._track_cli_loop_streak(cmd_rw, out)
             if (
                 out.startswith("[exit ")
                 and _INLINE_PY_C_RE.search(cmd)

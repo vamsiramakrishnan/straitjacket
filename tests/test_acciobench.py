@@ -1158,7 +1158,7 @@ def test_providers_keepalive_pooling_untouched_defaults_and_adc_cache(
 
     def _fake_fetch_adc(self: AdcTokenCache) -> str:
         token_calls["n"] += 1
-        return f"ya29.mock-token-{token_calls['n']}"
+        return f"fake-bearer-token-{token_calls['n']}"
 
     monkeypatch.setattr(AdcTokenCache, "_default_fetch", _fake_fetch_adc)
     monkeypatch.delenv("VERTEX_ACCESS_TOKEN", raising=False)
@@ -1179,7 +1179,7 @@ def test_providers_keepalive_pooling_untouched_defaults_and_adc_cache(
     vtx.generate("gemini-2.5-flash", [{"role": "user", "parts": [{"text": "hello vertex"}]}], [])
     assert token_calls["n"] == 2  # Initial fetch + automatic refresh after 401!
     last_req = sent_requests[-1]
-    assert last_req["headers"].get("Authorization") == "Bearer ya29.mock-token-2"
+    assert last_req["headers"].get("Authorization") == "Bearer fake-bearer-token-2"
     assert last_req["body"]["generationConfig"]["maxOutputTokens"] == 8192
     assert last_req["body"]["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "HIGH"
     vtx.close()
@@ -2782,3 +2782,388 @@ def test_loop_turn0_contract_q3_per_service_gates_and_residence_wiring(
     assert res_pf.termination == "present_files"
     assert res_pf.emission_gate_hits == 1
     assert pf_prov.saw_pf_gate is True
+
+
+def test_wave3_deliverables_conditional_slots_manifest_and_dual_ratio(tmp_path: Path) -> None:
+    """Fix 1 checks: conditional non-remove sibling fields, numbered slots, manifest alias, and dual ratio."""
+    from ctx.deliverables import audit_deliverables, format_deliverable_contract
+
+    # 1. Conditional non-empty sibling-field check (non-remove row CLM-002 missing replacement_text).
+    run1 = tmp_path / "case_cond"
+    (run1 / "outputs").mkdir(parents=True)
+    claims_bad = {
+        "claims": [
+            {"claim_id": "CLM-001", "decision": "modify", "replacement_text": "Verified 10%"},
+            {"claim_id": "CLM-002", "decision": "modify", "replacement_text": ""},
+            {"claim_id": "CLM-003", "decision": "rewrite", "replacement_text": "Certified ISO"},
+            {"claim_id": "CLM-004", "decision": "remove", "replacement_text": ""},
+        ]
+    }
+    (run1 / "outputs" / "claims.json").write_text(json.dumps(claims_bad), encoding="utf-8")
+    audit_bad = audit_deliverables(run1, ["/task/outputs/claims.json"], declared_paths=["outputs/claims.json"])
+    assert audit_bad.should_gate is True
+    assert any("CLM-002" in iss and "replacement_text" in iss for iss in audit_bad.advisories)
+
+    claims_bad["claims"][1]["replacement_text"] = "Updated tested copy"
+    (run1 / "outputs" / "claims.json").write_text(json.dumps(claims_bad), encoding="utf-8")
+    audit_ok = audit_deliverables(run1, ["/task/outputs/claims.json"], declared_paths=["outputs/claims.json"])
+    assert audit_ok.should_gate is False
+
+    # 2. Numbered slots + workspace candidate images, plus manifest alias check.
+    run2 = tmp_path / "case_slots"
+    (run2 / "outputs").mkdir(parents=True)
+    (run2 / "workspace" / "assets").mkdir(parents=True)
+    for idx in range(1, 5):
+        (run2 / "workspace" / "assets" / f"photo_{idx}.jpg").write_bytes(b"img")
+    (run2 / "outputs" / "listing.json").write_text(
+        json.dumps(
+            {
+                "image_1": "photo_1.jpg",
+                "image_2": "photo_2.jpg",
+                "image_3": "",
+                "image_4": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run2 / "outputs" / "manifest.json").write_text(
+        json.dumps(
+            {
+                "navigation_sections": [{"id": "s1"}, {"id": "s2"}, {"id": "s3"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_slot_manifest = audit_deliverables(
+        run2,
+        ["/task/outputs/listing.json", "/task/outputs/manifest.json"],
+        declared_paths=["outputs/listing.json", "outputs/manifest.json"],
+        task_markdown="Write outputs/manifest.json with top-level sections and backend_required=false.",
+    )
+    assert audit_slot_manifest.should_gate is True
+    assert any("image_3" in iss and "4 candidate image" in iss for iss in audit_slot_manifest.advisories)
+    assert any("'sections' is missing" in iss for iss in audit_slot_manifest.advisories)
+    assert any("backend_required" in iss for iss in audit_slot_manifest.advisories)
+
+    # 3. Deliverable contract audit-precision dual-ratio reminder.
+    contract = format_deliverable_contract(
+        "Audit all supplier claims and write /task/outputs/reconciliation.json",
+        workspace_root=run1,
+    )
+    assert "audit-precision" in contract
+    assert "74.4% (29/39)" in contract
+
+
+def test_wave3_host_service_delta_entry_gate_and_cli_loop_hint(tmp_path: Path) -> None:
+    """Fixes 2a & 2b: Jira/Notion SQLite service-delta audit, inline ntn probe gate, and 3-turn CLI hint."""
+    import sqlite3
+
+    run_dir = tmp_path / "run_svc"
+    meta_dir = tmp_path / "meta_svc"
+    (run_dir / "workspace").mkdir(parents=True)
+    jira_dir = meta_dir / "mock_state" / "jira_cli"
+    ntn_dir = meta_dir / "mock_state" / "notion_cli"
+    jira_dir.mkdir(parents=True)
+    ntn_dir.mkdir(parents=True)
+
+    jira_db = jira_dir / "jira_mock.db"
+    jcon = sqlite3.connect(jira_db)
+    jcon.execute("CREATE TABLE issue_statuses (id INTEGER PRIMARY KEY, name TEXT, category TEXT)")
+    jcon.execute("CREATE TABLE issues (key TEXT PRIMARY KEY, status_id INTEGER)")
+    jcon.execute("CREATE TABLE issue_links (inward_key TEXT, outward_key TEXT, link_type TEXT)")
+    jcon.executemany(
+        "INSERT INTO issue_statuses VALUES (?, ?, ?)",
+        [(1, "To Do", "new"), (2, "Done", "done")],
+    )
+    jcon.executemany("INSERT INTO issues VALUES (?, ?)", [("PROJ-35", 1), ("PROJ-8", 2)])
+    jcon.commit()
+    jcon.close()
+
+    ntn_db = ntn_dir / "mock.db"
+    ncon = sqlite3.connect(ntn_db)
+    ncon.execute("CREATE TABLE entities (id TEXT, type TEXT, data TEXT)")
+    ncon.execute(
+        "INSERT INTO entities VALUES (?, ?, ?)",
+        ("page_root", "pages", json.dumps({"title": "Root"})),
+    )
+    ncon.commit()
+    ncon.close()
+
+    metrics_sj = RunMetrics(
+        task_id="cli-svc-delta",
+        task_rel="cli/cli-svc-delta",
+        category="cli",
+        arm="sj",
+        model_id="mock-model",
+    )
+    host_sj = ToolHost(
+        BenchConfig(dataset_root=tmp_path, workdir=tmp_path, judge_provider="mock"),
+        run_dir,
+        meta_dir,
+        {},
+        {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        metrics_sj,
+        None,
+        arm="sj",
+        task_markdown="Link duplicate defects to PROJ-8 and create a Notion handoff page (do not upload files).",
+    )
+
+    # Mutate Jira (duplicate link + Duplicates still To Do) and Notion (orphan page + probe file).
+    jcon2 = sqlite3.connect(jira_db)
+    jcon2.executemany(
+        "INSERT INTO issue_links VALUES (?, ?, ?)",
+        [("PROJ-35", "PROJ-8", "Duplicates"), ("PROJ-35", "PROJ-8", "Duplicates")],
+    )
+    jcon2.commit()
+    jcon2.close()
+
+    ncon2 = sqlite3.connect(ntn_db)
+    ncon2.execute(
+        "INSERT INTO entities VALUES (?, ?, ?)",
+        ("p_new", "pages", json.dumps({"title": "Orphan Handoff", "parentId": None})),
+    )
+    ncon2.execute(
+        "INSERT INTO entities VALUES (?, ?, ?)",
+        ("f_probe", "files", json.dumps({"filename": "test_probe.txt"})),
+    )
+    ncon2.commit()
+    ncon2.close()
+
+    blocking, issues, receipt = host_sj.audit_service_state_delta()
+    assert blocking is True
+    assert receipt.startswith("[service-delta:")
+    assert any("duplicate issue link" in iss.lower() and "PROJ-35->PROJ-8" in iss for iss in issues)
+    assert any("not transitioned to 'Done'" in iss and "PROJ-35" in iss for iss in issues)
+    assert any("parentId=None" in iss for iss in issues)
+    assert any("synthetic probe" in iss.lower() or "unrequested uploaded file" in iss.lower() for iss in issues)
+
+    def _bash(cmd: str) -> str:
+        fr, _, _ = host_sj.execute_part("bash", {"command": cmd})
+        return str(fr["functionResponse"]["response"]["output"])
+
+    # Inline Python subprocess ntn files upload of synthetic probe name must be blocked by entry gate.
+    blocked_out = _bash(
+        "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['ntn', 'files', 'create', 'test_dummy.txt'])\nPY"
+    )
+    assert blocked_out.startswith("[ctx-entry-gate]")
+
+    # 3 consecutive single-item CLI bash turns trigger [batch-compute-hint:] in sj mode, not raw.
+    host_sj.step = 1
+    assert "[batch-compute-hint:" not in _bash("dws --help >/dev/null || true")
+    host_sj.step = 2
+    assert "[batch-compute-hint:" not in _bash("echo dws doc 1")
+    for idx, step_n in enumerate((3, 4, 5), start=1):
+        host_sj.step = step_n
+        out = _bash(f"dws doc get id_{idx} 2>&1 || true")
+        if idx < 3:
+            assert "[batch-compute-hint:" not in out
+        else:
+            assert "[batch-compute-hint:" in out
+
+    (tmp_path / "run_raw" / "workspace").mkdir(parents=True)
+    (tmp_path / "meta_raw").mkdir(parents=True)
+    host_raw = ToolHost(
+        BenchConfig(dataset_root=tmp_path, workdir=tmp_path, judge_provider="mock"),
+        tmp_path / "run_raw",
+        tmp_path / "meta_raw",
+        {},
+        {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        RunMetrics(
+            task_id="cli-raw",
+            task_rel="cli/cli-raw",
+            category="cli",
+            arm="raw",
+            model_id="mock-model",
+        ),
+        None,
+        arm="raw",
+    )
+    assert host_raw.audit_service_state_delta() == (False, [], "")
+
+
+def test_wave3_sandbox_box_item_id_and_notion_port(tmp_path: Path) -> None:
+    """Fix 4: staged box-bench exposes item_id fallback and Notion runtime port detection strips env collisions."""
+    from evals.acciobench.sandbox import _patch_staged_mock_services, _spec_uses_notion
+
+    staged = tmp_path / "mock_services"
+    box_bin = staged / "box_cli" / "bin" / "box-bench"
+    box_bin.parent.mkdir(parents=True)
+    box_bin.write_text(
+        "function dump() {\n  return {\n    tasks: db.prepare('SELECT * FROM tasks WHERE is_deleted = 0').all(),\n  };\n}\n",
+        encoding="utf-8",
+    )
+    _patch_staged_mock_services(staged)
+    _patch_staged_mock_services(staged)
+    patched = box_bin.read_text(encoding="utf-8")
+    assert patched.count("item_id: t.item_id ?? t.file_id") == 1
+
+    case_dir = tmp_path / "cli-ntn-task"
+    (case_dir / "services").mkdir(parents=True)
+    (case_dir / "services" / "start_services.sh").write_text("#!/bin/bash\nntn-daemon-start\n", encoding="utf-8")
+    assert _spec_uses_notion(object(), case_dir=case_dir) is True
+
+    case_none = tmp_path / "cli-plain-task"
+    case_none.mkdir()
+    assert _spec_uses_notion(object(), case_dir=case_none) is False
+
+
+def test_wave3_schemas_protocol_and_loop_service_delta_gates(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Wave 3 schemas & loop wiring: protocol text plus service-delta/UI gate caps (<2) at present_files & completed_text."""
+    from evals.acciobench.schemas import SJ_EXECUTION_PROTOCOL
+
+    assert "Parent/Child" in SJ_EXECUTION_PROTOCOL
+    assert "[row_id=" in SJ_EXECUTION_PROTOCOL and "labels=[...]" in SJ_EXECUTION_PROTOCOL
+    assert "Apply" in SJ_EXECUTION_PROTOCOL
+
+    class _FakeBrowser:
+        def __init__(self, ui_sequence: list[list[str]]) -> None:
+            self._seq = list(ui_sequence)
+
+        def check_uncommitted_ui_state(self) -> list[str]:
+            return self._seq.pop(0) if self._seq else []
+
+    # Case 1: present_files blocks up to max 2 service_delta_gate_hits when blocking issues persist, then allows exit on 3rd.
+    ds_pf = tmp_path / "cab_w3_pf"
+    _create_synthetic_task(ds_pf, category="cli", task_id="cli-w3-pf")
+    audit_calls: list[int] = []
+
+    def _always_blocking_audit(self: ToolHost) -> tuple[bool, list[str], str]:
+        audit_calls.append(1)
+        return (
+            True,
+            ["Jira duplicate link PROJ-35->PROJ-8 found"],
+            "[service-delta: jira: links=2(+2) done=0(+0)]",
+        )
+
+    monkeypatch.setattr(ToolHost, "audit_service_state_delta", _always_blocking_audit)
+
+    class _PfGateCapProvider:
+        def __init__(self) -> None:
+            self.turn = 0
+            self.seen_gate_outputs: list[str] = []
+
+        def generate(self, model_id: str, contents: list[dict[str, Any]], tools: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+            self.turn += 1
+            if self.turn == 1:
+                parts: list[dict[str, Any]] = [
+                    {
+                        "functionCall": {
+                            "name": "write",
+                            "args": {
+                                "path": "/task/outputs/summary.json",
+                                "content": json.dumps({"total_usd": 420, "status": "ok"}),
+                            },
+                        }
+                    }
+                ]
+            else:
+                if self.turn >= 3:
+                    fr = contents[-1]["parts"][0]["functionResponse"]["response"]["output"]
+                    self.seen_gate_outputs.append(fr)
+                parts = [
+                    {"functionCall": {"name": "present_files", "args": {"files": ["/task/outputs/summary.json"]}}}
+                ]
+            return {
+                "candidates": [{"finishReason": "STOP", "content": {"role": "model", "parts": parts}}],
+                "usageMetadata": {"promptTokenCount": 400, "candidatesTokenCount": 20},
+            }
+
+        def judge_access_token(self) -> str:
+            return ""
+
+        def close(self) -> None:
+            pass
+
+    cfg_pf = BenchConfig(
+        dataset_root=ds_pf,
+        workdir=tmp_path / "w3_pf_work",
+        provider="gemini",
+        api_key="dummy",
+        judge_provider="mock",
+        arms=("sj",),
+    )
+    pf_prov = _PfGateCapProvider()
+    res_pf = run_trial(cfg_pf, "cli-w3-pf", "sj", 93, pf_prov)
+    assert res_pf.termination == "present_files"
+    assert res_pf.emission_gate_hits == 2
+    assert len(pf_prov.seen_gate_outputs) == 2
+    assert all("[service-delta:" in txt and "PROJ-35->PROJ-8" in txt for txt in pf_prov.seen_gate_outputs)
+
+    # Case 2: completed_text gate triggers both service-delta and browser check_uncommitted_ui_state even if emission_gated_once=True.
+    ds_txt = tmp_path / "cab_w3_txt"
+    _create_synthetic_task(ds_txt, category="cli", task_id="cli-w3-txt")
+    monkeypatch.setattr(
+        ToolHost,
+        "audit_service_state_delta",
+        lambda self: (False, [], "[service-delta: ntn: +pages=1(orphan=0)]"),
+    )
+    fake_browser = _FakeBrowser(
+        [
+            ["Open label menu has unclicked Apply button"],
+            [],
+        ]
+    )
+    orig_host_init = ToolHost.__init__
+
+    def _patched_host_init(self: ToolHost, *args: Any, **kwargs: Any) -> None:
+        orig_host_init(self, *args, **kwargs)
+        self.browser = fake_browser  # type: ignore[assignment]
+        self.emission_gated_once = True
+
+    monkeypatch.setattr(ToolHost, "__init__", _patched_host_init)
+
+    class _TxtGateProvider:
+        def __init__(self) -> None:
+            self.turn = 0
+            self.saw_ui_gate = False
+
+        def generate(self, model_id: str, contents: list[dict[str, Any]], tools: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+            self.turn += 1
+            if self.turn == 1:
+                parts: list[dict[str, Any]] = [
+                    {
+                        "functionCall": {
+                            "name": "write",
+                            "args": {
+                                "path": "/task/outputs/summary.json",
+                                "content": json.dumps({"total_usd": 420, "status": "ok"}),
+                            },
+                        }
+                    }
+                ]
+            elif self.turn == 2:
+                parts = [{"text": "Finished labeling threads."}]
+            else:
+                nudge = contents[-1]["parts"][0].get("text", "")
+                assert "[uncommitted-ui-state:" in nudge
+                assert "Apply" in nudge
+                assert "[service-delta:" in nudge
+                self.saw_ui_gate = True
+                parts = [{"text": "Applied label and verified."}]
+            return {
+                "candidates": [{"finishReason": "STOP", "content": {"role": "model", "parts": parts}}],
+                "usageMetadata": {"promptTokenCount": 400, "candidatesTokenCount": 20},
+            }
+
+        def judge_access_token(self) -> str:
+            return ""
+
+        def close(self) -> None:
+            pass
+
+    cfg_txt = BenchConfig(
+        dataset_root=ds_txt,
+        workdir=tmp_path / "w3_txt_work",
+        provider="gemini",
+        api_key="dummy",
+        judge_provider="mock",
+        arms=("sj",),
+    )
+    txt_prov = _TxtGateProvider()
+    res_txt = run_trial(cfg_txt, "cli-w3-txt", "sj", 94, txt_prov)
+    assert res_txt.termination == "completed_text"
+    assert res_txt.emission_gate_hits == 1
+    assert txt_prov.saw_ui_gate is True

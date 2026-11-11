@@ -234,6 +234,47 @@ def _stage_tree_recursive(
                 )
 
 
+def _spec_uses_notion(spec: Any, case_dir: Path | None = None) -> bool:
+    """Return True when a task spec or its startup scripts launch ``notion_cli``."""
+    if any(
+        getattr(m, "name", "") == "notion_cli"
+        for m in (getattr(spec, "runtime_mocks", None) or ())
+    ):
+        return True
+    root = case_dir
+    if root is None and getattr(spec, "case_dir", None):
+        root = Path(spec.case_dir)
+    if root is None:
+        return False
+    for rel in ("services/start_services.sh", "files/start_mock_services.sh"):
+        script = root / rel
+        if script.is_file():
+            try:
+                txt = script.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "notion_cli" in txt or "ntn-daemon-start" in txt:
+                return True
+    return False
+
+
+def _patch_staged_mock_services(dst: Path) -> None:
+    """Apply runtime compatibility patches to staged mutable mock service files in ``dst``."""
+    box_bench = dst / "box_cli" / "bin" / "box-bench"
+    if box_bench.is_file() and not box_bench.is_symlink():
+        try:
+            txt = box_bench.read_text(encoding="utf-8")
+            old_tasks_line = "tasks: db.prepare('SELECT * FROM tasks WHERE is_deleted = 0').all(),"
+            new_tasks_line = (
+                "tasks: db.prepare('SELECT * FROM tasks WHERE is_deleted = 0').all()"
+                ".map((t) => ({ ...t, item_id: t.item_id ?? t.file_id })),"
+            )
+            if old_tasks_line in txt and new_tasks_line not in txt:
+                box_bench.write_text(txt.replace(old_tasks_line, new_tasks_line), encoding="utf-8")
+        except OSError:
+            pass
+
+
 def stage_mock_services_tree(
     golden_mocks: Path,
     dst: Path,
@@ -256,6 +297,7 @@ def stage_mock_services_tree(
         in_service_subtree=False,
         rewrite_text=True,
     )
+    _patch_staged_mock_services(dst)
 
 
 def _direct_cli_state_exports(mock_name: str, mock_state_dir: Path) -> list[str]:
@@ -554,6 +596,7 @@ class TaskSandbox:
         self.has_mocks: bool = bool(getattr(spec, "runtime_mocks", ())) or (
             case_path / "services"
         ).is_dir()
+        self._has_notion: bool = _spec_uses_notion(spec, case_path)
 
         self.remapped_mocks: list[Any] = []
         self.mock_services_dir = self.meta_dir / "mock_services"
@@ -575,10 +618,8 @@ class TaskSandbox:
     def setup(self) -> None:
         raw_ports = discover_task_ports(self.spec)
         base_port = 20000 + self.slot * 100
-        has_notion = any(
-            getattr(m, "name", "") == "notion_cli"
-            for m in (getattr(self.spec, "runtime_mocks", None) or ())
-        )
+        has_notion = _spec_uses_notion(self.spec)
+        self._has_notion = has_notion
         self.port_map = _allocate_free_ports(raw_ports, base_port, has_notion=has_notion)
         self.compiled_ports = CompiledPortMap(self.port_map)
 
@@ -776,6 +817,7 @@ class TaskSandbox:
         env["CONTAINER_OUTPUT_DIR"] = str(self.run_dir / "outputs")
         env["MOCK_VERIFIER_TOKEN"] = self.verifier_token
         env["CCB_INTERNAL_BENCH_TOKEN"] = self.verifier_token
+        env.pop("NTN_MOCK_BACKEND_PORT", None)
         no_proxy_items = [
             x.strip()
             for x in (env.get("NO_PROXY") or env.get("no_proxy") or "").split(",")
@@ -799,10 +841,18 @@ class TaskSandbox:
             if rm.port is not None:
                 env[_runtime_mock_env_key(rm.name, "PORT")] = str(rm.port)
                 env[_runtime_mock_env_key(rm.name, "URL")] = f"http://127.0.0.1:{rm.port}"
+                if rm.name == "notion_cli":
+                    env["NTN_MOCK_BACKEND_PORT"] = str(int(rm.port) + 1)
             if rm.health_path:
                 env[_runtime_mock_env_key(rm.name, "HEALTH_PATH")] = rm.health_path
             for k, v in (rm.env or {}).items():
                 env[str(k)] = str(v)
+
+        if self._has_notion and "NTN_MOCK_BACKEND_PORT" not in env:
+            ntn_port = self.port_map.get(3300)
+            if ntn_port is not None:
+                env["NTN_MOCK_BACKEND_PORT"] = str(int(ntn_port) + 1)
+                self.runtime_mock_urls.setdefault("notion_cli", f"http://127.0.0.1:{ntn_port}")
 
         for env_var, def_p in _SINGLE_SERVICE_PORT_ENVS:
             if def_p in self.port_map and len(self.remapped_mocks) <= 1:
