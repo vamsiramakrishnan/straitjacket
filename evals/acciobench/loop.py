@@ -227,6 +227,46 @@ def _format_progress(metrics: RunMetrics) -> str:
     )
 
 
+def _interpret_reward(data: Any) -> tuple[float, int, int, list[dict[str, Any]]]:
+    """The one place a grader's reward is read: ``(score, checks_passed, checks_total,
+    checks_breakdown)``. Anything the harness cannot interpret raises ``ValueError`` and
+    becomes a grading error (ungraded), never a task failure."""
+    import math
+
+    if not isinstance(data, dict):
+        raise ValueError(f"reward.json is a {type(data).__name__}, not an object")
+    if "_error" in data:
+        raise ValueError(str(data.get("_error") or "grader failed"))
+
+    def _num(key: str) -> float | None:
+        v = data.get(key)
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError(f"reward.json {key!r} is not a finite number: {v!r}"[:_MAX_VERIFIER_ERR_CHARS])
+        return float(v)
+
+    score = _num("score")
+    cp = _num("checks_passed")
+    ct = _num("checks_total")
+    for key, v in (("checks_passed", cp), ("checks_total", ct)):
+        if v is not None and (v < 0 or v != int(v)):
+            raise ValueError(f"reward.json {key!r} is not a non-negative integer: {v!r}")
+    cp_i, ct_i = int(cp or 0), int(ct or 0)
+    if cp_i > ct_i:
+        raise ValueError(f"reward.json checks_passed {cp_i} > checks_total {ct_i}")
+    if score is None and ct_i == 0:
+        raise ValueError("reward.json has neither a score nor any checks")
+    if score is not None and score < 0:
+        raise ValueError(f"reward.json score is negative: {score!r}")
+    breakdown = data.get("checks_breakdown")
+    if breakdown is None:
+        breakdown = []
+    if not isinstance(breakdown, list) or not all(isinstance(c, dict) for c in breakdown):
+        raise ValueError("reward.json 'checks_breakdown' is not a list of objects")
+    return float(score or 0.0), cp_i, ct_i, breakdown
+
+
 def _grade_into(
     config: BenchConfig,
     provider: ModelProvider,
@@ -244,12 +284,16 @@ def _grade_into(
     )
     reward_json = meta_dir / "reward.json"
     reward_json.unlink(missing_ok=True)  # never read a previous grade as this one
-    grade_data = sandbox.grade(reward_json, judge_token=judge_tok)
+    try:
+        grade_data: Any = sandbox.grade(reward_json, judge_token=judge_tok)
+    except Exception as exc:
+        grade_data = {"_error": f"grader could not run: {type(exc).__name__}: {exc}"}
     metrics.notes = [n for n in metrics.notes if not n.startswith("verifier error:")]
+    try:
+        raw_score, cp_cnt, ct_cnt, breakdown = _interpret_reward(grade_data)
+    except ValueError as exc:
+        grade_data = {"_error": str(exc)}
     if "_error" not in grade_data:
-        raw_score = float(grade_data.get("score", 0.0) or 0.0)
-        cp_cnt = int(grade_data.get("checks_passed", 0) or 0)
-        ct_cnt = int(grade_data.get("checks_total", 0) or 0)
         metrics.grading_error = ""
         metrics.raw_verifier_score = raw_score
         metrics.checks_passed = cp_cnt
@@ -262,7 +306,7 @@ def _grade_into(
             metrics.passed = raw_score >= _PASS_SCORE_THRESHOLD
         metrics.failed_checks = [
             f"{chk.get('id')}: {str(chk.get('reason', ''))[:_MAX_CHECK_REASON_CHARS]}"
-            for chk in (grade_data.get("checks_breakdown") or [])
+            for chk in breakdown
             if not chk.get("passed")
         ]
     else:

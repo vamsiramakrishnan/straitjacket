@@ -135,7 +135,9 @@ python evals/acciobench_run.py run \
   deleted: if the move fails, that trial stops with an error and its directories stay
   where they were. `ctx_state/` is shared by all configurations.
 - **Grading errors are not failures**: when the official grader itself fails (timeout,
-  missing or invalid `reward.json`), `result.json` records `grading_error` (the grader's
+  missing, unparsable or uninterpretable `reward.json`: not an object, a non-numeric
+  or non-finite score, checks_passed > checks_total, neither a score nor checks, a
+  malformed checks_breakdown), `result.json` records `grading_error` (the grader's
   message) with `passed=false` and zero scores, and the agent's `termination` is kept.
   Reports (table, markdown, JSON `grading_error_runs`, HTML header) exclude such trials
   from solve rate and score aggregates and show their count separately. On resume, a

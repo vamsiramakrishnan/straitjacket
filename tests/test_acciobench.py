@@ -1708,6 +1708,34 @@ def test_run_command_survives_a_report_that_fails_to_render(
     assert f"report --workdir {workdir} --format html" in err
 
 
+@pytest.mark.parametrize(
+    "bad_reward",
+    ["[]", '{"score": "abc"}', "{}", '{"checks_passed": 3, "checks_total": 2}', '{"score": true}',
+     '{"score": 1.0, "checks_breakdown": "x"}', '"passed"', "null", '{"score": NaN}'],
+)
+def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Path, bad_reward: str) -> None:
+    ds_root = tmp_path / "cab"
+    flag = tmp_path / "grader_fixed"
+    case_dir = _create_synthetic_task(ds_root, category="file", task_id="file-badreward")
+    grader = case_dir / "grader"
+    (grader / "run.sh").rename(grader / "real.sh")
+    (grader / "bad.json").write_text(bad_reward, encoding="utf-8")
+    _write_executable(
+        grader / "run.sh",
+        "#!/usr/bin/env bash\n"
+        f'if [ ! -e "{flag}" ]; then cp "$(dirname "$0")/bad.json" "$REWARD_JSON"; exit 0; fi\n'
+        'exec bash "$(dirname "$0")/real.sh"\n',
+    )
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("sj",))
+    first = run_trial(cfg, "file-badreward", "sj", 21, _SolvingProvider())  # type: ignore[arg-type]
+    assert first.termination == "present_files"
+    assert first.grading_error and first.passed is False, first.notes
+    flag.touch()
+    second = run_trial(cfg, "file-badreward", "sj", 21, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert second.grading_error == "" and second.passed is True
+
+
 def test_legacy_verifier_error_note_loads_as_grading_error() -> None:
     legacy = {"task_id": "t", "arm": "sj", "model_id": "m", "termination": "present_files",
               "passed": False, "notes": ["verifier error: Traceback ... TimeoutError"]}
