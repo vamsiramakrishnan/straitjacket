@@ -187,6 +187,22 @@ python evals/acciobench_run.py report \
 | Finalization check | Direct `present_files` | Structural **Emission Gate** catching missing/0-byte/malformed-JSON deliverables and stray scratch scripts in `/task/outputs` |
 | System instruction | None | Concise 4-rule domain-agnostic `SJ_EXECUTION_PROTOCOL` |
 
+### `/tmp` without bubblewrap
+
+With `bwrap`, bash sees the run's private directory (`<run>_meta/sandbox_tmp`) as
+`/tmp`, the same directory the file tools map `/tmp/...` to. Without it (macOS,
+`ACCIOBENCH_NO_BWRAP=1`, `use_bwrap=False`) both arms rewrite `/tmp` paths in commands
+and helper scripts by one rule: a `/tmp` path (`/tmp` as a whole leading path
+component, so not `/tmpfoo`, `/tmp.txt`, `~/tmp`, `/var/tmp` or `http://x/tmp/y`) is
+the private one unless its first component below `/tmp` exists in the host's `/tmp`
+and not in the private directory, in which case it is a host path (the ctx
+executable, the run directory or workdir when they live under `/tmp`) and is left
+alone. `TMPDIR` points at the private directory as well. So the file tools and bash
+round-trip in both directions, `ls /tmp` shows the run's files, and new files land in
+the private directory, never the host's `/tmp`. (A bash write to a name that already
+exists only in the host's `/tmp` still reaches that host file; the fallback has no
+filesystem isolation in any case.)
+
 ### Which `ctx` calls run on the host (`sj` arm)
 
 Every command the model issues runs inside the sandbox, with one exception kept for

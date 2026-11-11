@@ -59,6 +59,11 @@ __all__ = [
 
 IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 _TASK_PATH_RE = re.compile(r"(^|(?<![A-Za-z0-9_.-]))/task(?=/|$|[^A-Za-z0-9_-])")
+# `/tmp` as a whole leading path component (not /tmpfoo, /tmp.txt, ~/tmp, /var/tmp,
+# http://x/tmp/y, file:///tmp/y), with the first component below it captured.
+_TMP_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9_.~/$-])/tmp(?=/|$|[^A-Za-z0-9_.-])(?:/([^/\s'\"`;|&<>(){}$\\]*))?"
+)
 _DIGEST_SIZE_RE = re.compile(r"stdout:\s*\d+\s*lines\s*\u00b7\s*([\d.]+)\s*(B|KiB|MiB)")
 _SHELL_HISTORY_RE = re.compile(r"\.(?:bash|zsh)_history\b")
 _INLINE_PY_C_RE = re.compile(r"\bpython3?(?:\.\d+)?\b[^\n]*\s-c\s")
@@ -718,6 +723,9 @@ class ToolHost:
         )
         if self.is_sj:
             base_env["CTX_STATE_HOME"] = str(config.ctx_state_home)
+        if not self._use_bwrap:
+            # No mount namespace: point temp files at the run's private /tmp (see _rewrite_tmp).
+            base_env["TMPDIR"] = str(self.sandbox_tmp)
         self.env = base_env
         support_dirs: list[Path] = [Path(sys.prefix).resolve(), _REPO_SRC.resolve()]
         for seg in dict.fromkeys(raw_path_parts):
@@ -831,8 +839,30 @@ class ToolHost:
             return rewrite_ports_surgical(text, self.compiled_ports, is_service_script=False)
         return text
 
+    def _rewrite_tmp(self, text: str) -> str:
+        """Fallback (no bwrap) only: give bash the same private ``/tmp`` the file tools use.
+
+        Rule: a ``/tmp`` path (``/tmp`` as a whole leading path component) means the
+        run's private directory, unless its first component below ``/tmp`` exists in the
+        host's ``/tmp`` and not in the private directory -- then it is a host path (the
+        ctx executable, the run directory or workdir when they live under ``/tmp``) and
+        is left alone. ``TMPDIR`` points the child at the private directory too."""
+        if "/tmp" not in text:
+            return text
+        private = str(self.sandbox_tmp)
+
+        def _sub(m: re.Match[str]) -> str:
+            name = m.group(1)
+            if name is None:
+                return private
+            if name and os.path.lexists(f"/tmp/{name}") and not os.path.lexists(f"{private}/{name}"):
+                return m.group(0)
+            return f"{private}/{name}"
+
+        return _TMP_PATH_RE.sub(_sub, text)
+
     def rewrite(self, cmd: str) -> str:
-        c = _TASK_PATH_RE.sub(lambda m: f"{m.group(1)}{self.run_dir}", cmd)
+        c = _TASK_PATH_RE.sub(lambda m: f"{m.group(1)}{self.run_dir}", self._rewrite_tmp(cmd))
         return self.rewrite_ports(c)
 
     def rewrite_guest(self, text: str) -> str:

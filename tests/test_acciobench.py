@@ -2349,6 +2349,54 @@ def test_wave2_dom_diff_browser_batch_ctx_retrieve_and_external_mutation_audit(t
     assert "Deliverables presented:" in fr_done["functionResponse"]["response"]["output"]
 
 
+def _assert_private_tmp_round_trip(host: ToolHost, tag: str, host_tmp_marker: Path) -> None:
+    """File tools and bash agree on a private /tmp, in both directions, with or without bwrap."""
+
+    def bash(cmd: str) -> str:
+        host.mutation_epoch += 1  # never answered by the readonly dedup
+        fr, _, _ = host.execute_part("bash", {"command": cmd})
+        return fr["functionResponse"]["response"]["output"]
+
+    def tool(name: str, args: dict[str, Any]) -> str:
+        host.mutation_epoch += 1
+        fr, _, _ = host.execute_part(name, args)
+        return fr["functionResponse"]["response"]["output"]
+
+    note, made = f"step_note_{tag}.txt", f"bash_made_{tag}.txt"
+    host_tmp_before = set(os.listdir("/tmp"))
+
+    # write tool -> bash
+    tool("write", {"file_path": f"/tmp/{note}", "content": f"NOTE_{tag}"})
+    assert not (Path("/tmp") / note).exists()
+    assert f"NOTE_{tag}" in bash(f"cat /tmp/{note}")
+    # bash -> read tool (a new file lands in the private directory)
+    bash(f"echo BASH_{tag} > /tmp/{made} && mkdir -p /tmp/sub_{tag} && echo NESTED > /tmp/sub_{tag}/n.txt")
+    assert (host.sandbox_tmp / made).read_text(encoding="utf-8").strip() == f"BASH_{tag}"
+    assert f"BASH_{tag}" in tool("read", {"file_path": f"/tmp/{made}"})
+    assert "NESTED" in tool("read", {"file_path": f"/tmp/sub_{tag}/n.txt"})
+    # ls /tmp shows the run's files
+    listing = bash("ls /tmp")
+    assert note in listing and made in listing and f"sub_{tag}" in listing
+    assert "NESTED" in bash(f"cd /tmp/sub_{tag} && cat n.txt")
+    # look-alikes are untouched
+    looks = ["/tmpfoo", "/tmp.txt", "http://x/tmp/y", "~/tmp", "/var/tmp", "file:///tmp/z"]
+    out_lines = bash("printf '%s\\n' " + " ".join(f"'{s}'" for s in looks)).splitlines()
+    assert out_lines[-len(looks):] == looks
+    # host paths under /tmp the harness itself uses keep working (run dir, ctx, python)
+    if str(host.run_dir).startswith("/tmp/"):
+        (host.run_dir / "workspace").mkdir(parents=True, exist_ok=True)
+        (host.run_dir / "workspace" / f"hp_{tag}.txt").write_text("HOSTPATH_OK", encoding="utf-8")
+        assert "HOSTPATH_OK" in bash(f"cat {host.run_dir}/workspace/hp_{tag}.txt")
+    if not host._use_bwrap:
+        # an existing host /tmp entry the run does not shadow stays reachable
+        assert "HOST_TMP_SECRET" in bash(f"cat {host_tmp_marker}")
+    # nothing new appeared in the host's /tmp
+    assert not (Path("/tmp") / made).exists()
+    assert not (Path("/tmp") / f"sub_{tag}").exists()
+    leaked = {n for n in set(os.listdir("/tmp")) - host_tmp_before if tag in n}
+    assert leaked == set()
+
+
 def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2395,17 +2443,13 @@ def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
             fr_gr_mc, _, _ = host.execute_part("grep", {"pattern": "SECRET_GRADER", "path": str(meta_dir)})
             assert fr_gr_mc["functionResponse"]["response"]["output"] == "(no matches)"
 
-            # The write tool keeps /tmp in the run's private directory, never the host's.
-            host.execute_part("write", {"file_path": "/tmp/step_note.txt", "content": f"NOTE_{arm}"})
-            assert not (Path("/tmp") / "step_note.txt").exists()
+            # The write tool keeps /tmp in the run's private directory, never the host's,
+            # and bash sees that same directory as /tmp: with bwrap through the mount
+            # namespace, without it through the fallback's /tmp rule.
+            _assert_private_tmp_round_trip(host, f"{arm}_default", host_tmp_marker)
 
             if bwrap_sandbox_executable() is not None:
                 assert host._use_bwrap is True
-                # Inside the namespace bash sees that same directory as /tmp, so the
-                # write/read tools and bash round-trip. Without bwrap there is no mount
-                # namespace and bash sees the host's /tmp (path/env confinement only).
-                fr_cat_tmp, _, _ = host.execute_part("bash", {"command": "cat /tmp/step_note.txt"})
-                assert f"NOTE_{arm}" in fr_cat_tmp["functionResponse"]["response"]["output"]
                 probe_sh = (
                     "pwd && cat /task/workspace/input.txt && "
                     f"test ! -e {str(host_tmp_marker)!r} && echo TMP_ISOLATED && "
@@ -2440,6 +2484,21 @@ def test_tool_host_bwrap_namespace_isolation_fallback_and_doctor(
         assert fb_host._use_bwrap is False
         fr_fb, _, _ = fb_host.execute_part("bash", {"command": "cat /task/workspace/w.txt"})
         assert "FB_OK" in fr_fb["functionResponse"]["response"]["output"]
+        # The same /tmp checks on an explicit fallback host, also where bwrap exists.
+        _assert_private_tmp_round_trip(fb_host, "sj_fallback", host_tmp_marker)
+        fb_host.mutation_epoch += 1
+        fr_tmpd, _, _ = fb_host.execute_part(
+            "bash", {"command": "python3 -c 'import tempfile; print(tempfile.gettempdir())'"}
+        )
+        assert str(fb_host.sandbox_tmp) in fr_tmpd["functionResponse"]["response"]["output"]
+        raw_fb_run = cfg.runs_dir / "t_fb__raw"
+        (raw_fb_run / "workspace").mkdir(parents=True, exist_ok=True)
+        raw_fb_host = ToolHost(
+            cfg, raw_fb_run, cfg.runs_dir / "t_fb__raw_meta", {}, dict(os.environ),
+            RunMetrics(task_id="t_fb", task_rel="file/t_fb", category="file", arm="raw", model_id="m"),
+            None, arm="raw", use_bwrap=False,
+        )
+        _assert_private_tmp_round_trip(raw_fb_host, "raw_fallback", host_tmp_marker)
 
         # Broken inline python3 -c quote syntax surfaces 1-line heredoc hint on sj arm.
         fr_syn, _, _ = fb_host.execute_part("bash", {"command": 'python3 -c "x = \'unterminated"'})
