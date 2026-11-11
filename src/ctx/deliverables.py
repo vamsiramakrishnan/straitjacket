@@ -56,6 +56,33 @@ _FORMATTED_NUM_STR_RE = re.compile(
     r"^[+-]?\$?\s*(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?\s*%)\s*$"
 )
 _CLEAN_ENUM_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_NUMBERED_SLOT_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*?)_(\d+)$")
+_IMAGE_SLOT_PREFIXES = frozenset(
+    {"image", "img", "photo", "pic", "picture", "thumbnail", "banner"}
+)
+_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg"})
+_INACTIVE_DECISION_VALUES = frozenset(
+    {"remove", "removed", "drop", "dropped", "delete", "deleted"}
+)
+_DECISION_COL_NAMES = ("decision", "action", "status", "disposition", "verdict")
+_SECTION_ALIAS_KEYS = (
+    "navigation_sections",
+    "nav_sections",
+    "site_sections",
+    "page_sections",
+    "sections_summary",
+    "section_list",
+    "nav_items",
+    "navigation",
+)
+_HTML_SECTION_RE = re.compile(
+    r"<section\b[^>]*\bid=[\"']([^\"']+)[\"'][^>]*>(.*?)</section>",
+    re.S | re.I,
+)
+_HTML_DATA_SIGNAL_RE = re.compile(
+    r"(?:<table\b|<img\b|<svg\b|<canvas\b|<script\b|class=[\"'][^\"']*metric)",
+    re.I,
+)
 _JSON_KEY_COLON_RE = re.compile(r'"([A-Za-z_][A-Za-z0-9_.-]{0,48})"\s*:')
 _BACKTICK_SPAN_RE = re.compile(r"`([^`\n]{1,120})`")
 _IDENT_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,48}$")
@@ -422,9 +449,37 @@ def format_deliverable_contract(
     else:
         lines.append("- deliverables: none declared under /task/outputs (complete required service/UI actions)")
 
+    md_low = md_text.lower()
+    if any(
+        w in md_low
+        for w in (
+            "audit",
+            "reconcil",
+            "claim",
+            "supplier",
+            "rollup",
+            "section",
+            "核对",
+            "审计",
+            "供应商",
+        )
+    ):
+        lines.append(
+            "- audit-precision: cover 100% of input sections/suppliers/claims; classify rounding discrepancies "
+            'as "incorrect" (in must_fix_claim_ids); format ratios with both 1-decimal % and exact fraction '
+            '(e.g. "74.4% (29/39)"); include full names + emails for owners and full formula (unit delta, new price, plain int qty, total) for savings.'
+        )
+    if not specs and any(
+        w in md_low for w in ("/api/cli/", "发品", "草稿", "image_1", "keyword_1", "listing")
+    ):
+        lines.append(
+            "- publish-completeness: populate all numbered slots (image_1..image_N with every valid non-corrupt "
+            "product photo; keyword_1..keyword_N with multi-word spec phrases) and copy full spec strings for attributes."
+        )
+
     body = "\n".join(lines)
-    if len(body) > 360:
-        body = body[:357].rsplit("\n", 1)[0]
+    if len(body) > 540:
+        body = body[:537].rsplit("\n", 1)[0]
     return f"{body}\n{CLOSED_WORLD_CONTRACT_RULE}"
 
 
@@ -454,6 +509,120 @@ def _is_plain_numeric_str(val: Any) -> bool:
 
 def _is_formatted_numeric_str(val: Any) -> bool:
     return isinstance(val, str) and bool(_FORMATTED_NUM_STR_RE.match(val.strip()))
+
+
+def _find_markdown_field_rule(task_markdown: str, field_name: str) -> str:
+    """Return a concise conditional/nullability rule sentence from ``task_markdown`` mentioning ``field_name``."""
+    if not task_markdown or not field_name:
+        return ""
+    f_low = field_name.lower()
+    rule_keywords = (
+        "empty",
+        "null",
+        "only when",
+        "unless",
+        "required",
+        "must",
+        "non-empty",
+        "为空",
+        "必填",
+        "仅当",
+    )
+    for raw_ln in task_markdown.splitlines():
+        ln = raw_ln.strip()
+        if not ln or ln.startswith(('"', "{", "}", "//", "#")):
+            continue
+        low = ln.lower()
+        if f_low in low and any(kw in low for kw in rule_keywords):
+            cleaned = ln.lstrip("-*•0123456789.) ").strip()
+            if 10 <= len(cleaned) <= 150:
+                return cleaned
+    return ""
+
+
+def _list_workspace_candidate_images(workspace_root: Path | None) -> list[str]:
+    if workspace_root is None:
+        return []
+    found: list[str] = []
+    seen: set[Path] = set()
+    search_roots = [workspace_root]
+    ws_sub = workspace_root / "workspace"
+    if ws_sub.is_dir():
+        search_roots = [ws_sub, workspace_root]
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        try:
+            for p in sorted(root.rglob("*")):
+                if not p.is_file():
+                    continue
+                if any(ig in p.parts for ig in ("mock_audit", "mock_state", ".git", "outputs")):
+                    continue
+                if p.suffix.lower() in _IMAGE_EXTS:
+                    rp = p.resolve()
+                    if rp not in seen and p.stat().st_size > 0:
+                        seen.add(rp)
+                        found.append(p.name)
+        except OSError:
+            pass
+    return found
+
+
+def _inspect_numbered_slots(
+    rel_label: str,
+    data: Any,
+    workspace_root: Path | None = None,
+) -> list[str]:
+    """Check JSON dicts for numbered slot groups (e.g. ``image_1..image_5``) with empty sibling slots."""
+    issues: list[str] = []
+    dicts_to_check: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(data, dict):
+        dicts_to_check.append(("", data))
+        for k, v in data.items():
+            if isinstance(v, dict):
+                dicts_to_check.append((f"{k}.", v))
+            elif isinstance(v, list) and 1 <= len(v) <= 8 and all(isinstance(x, dict) for x in v):
+                for idx, item in enumerate(v):
+                    dicts_to_check.append((f"{k}[{idx}].", item))
+    elif isinstance(data, list) and 1 <= len(data) <= 8 and all(isinstance(x, dict) for x in data):
+        for idx, item in enumerate(data):
+            dicts_to_check.append((f"[{idx}].", item))
+
+    ws_images: list[str] | None = None
+    for prefix_path, obj in dicts_to_check:
+        groups: dict[str, list[tuple[int, str, Any]]] = {}
+        for k, v in obj.items():
+            m = _NUMBERED_SLOT_RE.match(str(k))
+            if m:
+                groups.setdefault(m.group(1), []).append((int(m.group(2)), str(k), v))
+        for grp_name, slots in groups.items():
+            if len(slots) < 2:
+                continue
+            slots.sort(key=lambda t: t[0])
+            empty_keys = [k for _, k, v in slots if _is_empty_scalar_or_collection(v)]
+            pop_cnt = len(slots) - len(empty_keys)
+            if pop_cnt >= 1 and empty_keys:
+                max_idx = slots[-1][0]
+                min_idx = slots[0][0]
+                is_img = grp_name.lower() in _IMAGE_SLOT_PREFIXES or grp_name.lower().endswith(
+                    ("_image", "_img", "_photo")
+                )
+                extra_img = ""
+                if is_img and workspace_root is not None:
+                    if ws_images is None:
+                        ws_images = _list_workspace_candidate_images(workspace_root)
+                    if len(ws_images) > pop_cnt:
+                        sample_imgs = ", ".join(ws_images[:6])
+                        extra_img = (
+                            f" ({len(ws_images)} candidate image files exist in workspace: {sample_imgs})"
+                        )
+                loc = f" at '{prefix_path.rstrip('.')}'" if prefix_path else ""
+                issues.append(
+                    f"In {rel_label}{loc}, numbered slot group '{grp_name}_{min_idx}..{grp_name}_{max_idx}' "
+                    f"has empty slot(s) {empty_keys} ({pop_cnt}/{len(slots)} populated){extra_img} — "
+                    f"populate all valid '{grp_name}_N' slots."
+                )
+    return issues
 
 
 def _inspect_cross_row_consistency(
@@ -548,10 +717,141 @@ def _inspect_cross_row_consistency(
     return issues
 
 
+def _inspect_claim_reconciliation_records(
+    rel_label: str,
+    arr_name: str,
+    records: list[dict[str, Any]],
+    parent_data: Any,
+    task_markdown: str = "",
+) -> list[str]:
+    """Check deck/claim reconciliation arrays for rounding-status hedging, missing fractions, and savings formula details."""
+    issues: list[str] = []
+    if len(records) < 3:
+        return issues
+    sample_keys = set().union(*(r.keys() for r in records[:4]))
+    if not ("claim_id" in sample_keys and ("correct_value" in sample_keys or "deck_value" in sample_keys)):
+        return issues
+
+    md_low = (task_markdown or "").lower()
+    must_fix_set: set[str] | None = None
+    if isinstance(parent_data, dict) and isinstance(parent_data.get("must_fix_claim_ids"), list):
+        must_fix_set = {str(x).strip() for x in parent_data["must_fix_claim_ids"]}
+
+    for idx, r in enumerate(records):
+        cid = _record_label(r, idx)
+        st = str(r.get("status") or "").strip()
+        st_low = st.lower()
+        cv = str(r.get("correct_value") or "").strip()
+        dv = str(r.get("deck_value") or "").strip()
+
+        if st and any(w in st_low for w in ("rounding", "note", "minor", "approx")) and st_low not in md_low:
+            issues.append(
+                f"In {rel_label}, array '{arr_name}' row {idx} ({cid}) uses non-standard status {st!r} — "
+                f"when deck_value ({dv!r}) differs from correct_value ({cv!r}) due to rounding, use status "
+                f"'incorrect' and include '{cid}' in 'must_fix_claim_ids'."
+            )
+        elif st_low == "incorrect" and must_fix_set is not None and cid not in must_fix_set:
+            issues.append(
+                f"In {rel_label}, '{cid}' has status='incorrect' in '{arr_name}' but is missing from 'must_fix_claim_ids'."
+            )
+
+        if cv and ("coverage" in cid.lower() or "%" in dv or "%" in cv):
+            has_pct = bool(re.search(r"\d+\.\d+\s*%?", cv))
+            has_frac = bool(re.search(r"\b\d+\s*/\s*\d+\b", cv))
+            if ("coverage" in cid.lower() or "/" in dv or "/" in str(r.get("evidence") or "")) and not (
+                has_pct and has_frac
+            ):
+                issues.append(
+                    f"In {rel_label}, claim '{cid}' correct_value={cv!r} should include both the 1-decimal "
+                    f"percentage and exact integer fraction (e.g. '74.4% (29/39)')."
+                )
+
+        if cv and "savings" in cid.lower():
+            nums_in_cv = re.findall(r"\d+(?:\.\d+)?", cv.replace(",", ""))
+            if len(nums_in_cv) < 3 or re.search(r"\b\d{1,3},\d{3}\b", cv):
+                issues.append(
+                    f"In {rel_label}, savings claim '{cid}' correct_value={cv!r} should state the full "
+                    f"calculation (unit savings delta, new unit price, plain integer quantity without commas, and total savings)."
+                )
+
+    return issues
+
+
+def _inspect_html_section_coverage(
+    rel_label: str,
+    data: Any,
+    workspace_root: Path | None,
+) -> list[str]:
+    """When a JSON deliverable audits HTML sections via ``section_id``, check coverage against workspace HTML data sections."""
+    if workspace_root is None:
+        return []
+    arrays: list[tuple[str, list[dict[str, Any]]]] = []
+    if isinstance(data, list) and all(isinstance(x, dict) for x in data):
+        arrays.append(("$", data))
+    elif isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+                arrays.append((str(k), v))
+
+    sec_arrays = [
+        (name, arr)
+        for name, arr in arrays
+        if len(arr) >= 4 and sum(1 for r in arr if isinstance(r.get("section_id"), str) and r.get("section_id").strip()) >= 4
+    ]
+    if not sec_arrays:
+        return []
+
+    html_files: list[Path] = []
+    for root in (workspace_root / "workspace", workspace_root):
+        if root.is_dir():
+            try:
+                for p in sorted(root.rglob("*.html")):
+                    if p.is_file() and not any(ig in p.parts for ig in ("outputs", "mock_audit", "mock_state")):
+                        if p.resolve() not in {h.resolve() for h in html_files}:
+                            html_files.append(p)
+            except OSError:
+                pass
+    if not html_files:
+        return []
+
+    issues: list[str] = []
+    for hp in html_files[:3]:
+        try:
+            html_txt = hp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        data_sec_ids: list[str] = []
+        for m in _HTML_SECTION_RE.finditer(html_txt):
+            sec_id = m.group(1).strip()
+            sec_body = m.group(2)
+            if sec_id and _HTML_DATA_SIGNAL_RE.search(sec_body) and sec_id not in data_sec_ids:
+                data_sec_ids.append(sec_id)
+        if len(data_sec_ids) < 5:
+            continue
+        data_sec_set = set(data_sec_ids)
+        for arr_name, arr in sec_arrays:
+            reported = {
+                str(r.get("section_id")).strip()
+                for r in arr
+                if isinstance(r.get("section_id"), str) and str(r.get("section_id")).strip()
+            }
+            covered = [s for s in data_sec_ids if s in reported]
+            missing = [s for s in data_sec_ids if s not in reported]
+            if len(covered) * 4 >= len(data_sec_set) * 3 and 1 <= len(missing) <= 2:
+                rel_hp = _to_rel_display(hp, workspace_root)
+                issues.append(
+                    f"In {rel_label}, array '{arr_name}' covers {len(covered)}/{len(data_sec_ids)} data-bearing "
+                    f"<section id='...'> blocks from {rel_hp} but omits section_id={missing} — "
+                    f"audit all table/metric sections in {rel_hp} and update summary counts."
+                )
+    return issues
+
+
 def _inspect_json_record_arrays(
     rel_label: str,
     data: Any,
     task_markdown: str = "",
+    workspace_root: Path | None = None,
 ) -> tuple[list[str], str]:
     """Return ``(advisories, shape_summary)`` for parsed JSON ``data``."""
     advisories: list[str] = []
@@ -566,28 +866,66 @@ def _inspect_json_record_arrays(
     elif isinstance(data, dict):
         key_parts: list[str] = []
         empty_top: list[str] = []
-        for k, v in list(data.items())[:16]:
+        for idx_k, (k, v) in enumerate(data.items()):
             if isinstance(v, list):
-                key_parts.append(f"{k}[{len(v)}]")
+                if idx_k < 16:
+                    key_parts.append(f"{k}[{len(v)}]")
                 if len(v) == 0:
                     empty_top.append(f"{k}=[]")
                 elif all(isinstance(x, dict) for x in v):
                     arrays_to_check.append((str(k), v))
             elif isinstance(v, dict):
-                key_parts.append(f"{k}{{{len(v)}}}")
+                if idx_k < 16:
+                    key_parts.append(f"{k}{{{len(v)}}}")
                 if len(v) == 0:
                     empty_top.append(f"{k}={{}}")
             elif v is None or (isinstance(v, str) and not v.strip()):
-                key_parts.append(f"{k}=empty")
+                if idx_k < 16:
+                    key_parts.append(f"{k}=empty")
                 empty_top.append(f"{k}={v!r}")
             else:
-                key_parts.append(str(k))
+                if idx_k < 16:
+                    key_parts.append(str(k))
         more = f", +{len(data) - 16} keys" if len(data) > 16 else ""
         shape = f"JSON object keys=[{', '.join(key_parts)}{more}]"
-        if empty_top and len(empty_top) <= 4:
+
+        # Numbered-Slot & Workspace-Asset Check (e.g. image_1..image_5, keyword_1..keyword_3).
+        slot_issues = _inspect_numbered_slots(rel_label, data, workspace_root=workspace_root)
+        advisories.extend(slot_issues)
+
+        if empty_top and len(empty_top) <= 4 and not slot_issues:
             advisories.append(
                 f"{rel_label} has empty/null top-level field(s): {', '.join(empty_top)} — confirm this matches the schema."
             )
+
+        # Manifest Key Alias Check (e.g. navigation_sections vs sections, missing backend_required).
+        md_low = (task_markdown or "").lower()
+        rel_low = rel_label.lower()
+        has_top_sections = isinstance(data.get("sections"), list) and len(data.get("sections") or []) > 0
+        if not has_top_sections:
+            for alias_k in data:
+                ak_str = str(alias_k)
+                if ak_str == "sections":
+                    continue
+                if ak_str in _SECTION_ALIAS_KEYS or ak_str.endswith("_sections"):
+                    val_alias = data.get(alias_k)
+                    if isinstance(val_alias, list) and len(val_alias) >= 3:
+                        if (
+                            "manifest" in rel_low
+                            or ak_str.endswith("_sections")
+                            or any(w in md_low for w in ("sections", "section", "导航", "段落", "板块", "模块", "manifest"))
+                        ):
+                            advisories.append(
+                                f"In {rel_label}, found '{ak_str}' ({len(val_alias)} items) but top-level key "
+                                f"'sections' is missing — include top-level '\"sections\": [...]' alongside '{ak_str}'."
+                            )
+                            break
+        if "manifest" in rel_low and "backend_required" not in data:
+            if any(w in md_low for w in ("backend_required", "backend", "后台", "静态", "static")):
+                advisories.append(
+                    f"In {rel_label}, top-level boolean key 'backend_required' is missing — "
+                    f"include '\"backend_required\": false' (or true if backend is required by task.md)."
+                )
     else:
         shape = f"JSON {type(data).__name__}"
 
@@ -616,6 +954,13 @@ def _inspect_json_record_arrays(
                         enum_cols.append(ck)
             enum_cols.sort(key=lambda ck: len({str(r.get(ck)).strip() for r in records}))
 
+        decision_cols = [
+            ck
+            for ck in all_keys
+            if ck.lower() in _DECISION_COL_NAMES
+            and all(isinstance(r.get(ck), str) and r.get(ck).strip() for r in records)
+        ]
+
         for k in all_keys:
             missing_labels: list[str] = []
             populated = 0
@@ -625,22 +970,96 @@ def _inspect_json_record_arrays(
                 else:
                     populated += 1
             sparse_cnt = len(missing_labels)
+            if sparse_cnt == 0:
+                continue
+
+            md_rule = _find_markdown_field_rule(task_markdown, k)
+            rule_suffix = f" (task.md rule: {md_rule!r})" if md_rule else ""
+
+            # Check if a decision/status column splits records into active (non-remove) vs inactive (remove/drop/delete) rows.
+            handled_by_active_split = False
+            for d_col in decision_cols:
+                if d_col == k:
+                    continue
+                active_rows = [
+                    (idx, r)
+                    for idx, r in enumerate(records)
+                    if str(r.get(d_col)).strip().lower() not in _INACTIVE_DECISION_VALUES
+                ]
+                inactive_rows = [
+                    (idx, r)
+                    for idx, r in enumerate(records)
+                    if str(r.get(d_col)).strip().lower() in _INACTIVE_DECISION_VALUES
+                ]
+                if not inactive_rows or len(active_rows) < 3:
+                    continue
+                inactive_pop = sum(
+                    1
+                    for _, r in inactive_rows
+                    if k in r and not _is_empty_scalar_or_collection(r.get(k))
+                )
+                if inactive_pop != 0:
+                    continue
+                active_missing = [
+                    _record_label(r, idx)
+                    for idx, r in active_rows
+                    if k not in r or _is_empty_scalar_or_collection(r.get(k))
+                ]
+                active_pop = len(active_rows) - len(active_missing)
+                if len(active_missing) == 0:
+                    # 100% of active (non-remove) rows are populated and 0% of remove rows are populated -> valid conditional nullability!
+                    handled_by_active_split = True
+                    break
+                if 1 <= len(active_missing) <= 3 and (
+                    active_pop * 4 >= len(active_rows) * 3
+                    or active_pop * 5 >= len(active_rows) * 3
+                    or active_pop >= 4
+                ):
+                    groups: dict[str, list[tuple[bool, str]]] = {}
+                    for idx, r in enumerate(records):
+                        gval = str(r.get(d_col)).strip()
+                        is_pop = k in r and not _is_empty_scalar_or_collection(r.get(k))
+                        groups.setdefault(gval, []).append((is_pop, _record_label(r, idx)))
+                    parts_s: list[str] = []
+                    for g, items in groups.items():
+                        pop_g = sum(1 for p, _ in items if p)
+                        tot_g = len(items)
+                        if pop_g == 0 and tot_g <= 4:
+                            ids_s = ", ".join(lbl for _, lbl in items[:4])
+                            parts_s.append(f"{g}=0/{tot_g} [{ids_s}]")
+                        else:
+                            parts_s.append(f"{g}={pop_g}/{tot_g}")
+                    act_sample = ", ".join(active_missing[:5])
+                    advisories.append(
+                        f"In {rel_label}, array '{arr_name}' ({n} records) has null/empty '{k}' on "
+                        f"{len(active_missing)} non-remove record(s) [{act_sample}] while populated on "
+                        f"{active_pop}/{len(active_rows)} active records (by '{d_col}': {'; '.join(parts_s)}){rule_suffix} — "
+                        f"populate '{k}' for all non-remove '{d_col}' states."
+                    )
+                    handled_by_active_split = True
+                    break
+
+            if handled_by_active_split:
+                if len(advisories) >= 5:
+                    break
+                continue
+
             if populated >= max(2, (n + 1) // 2) and 1 <= sparse_cnt <= (n // 2):
                 sample = ", ".join(missing_labels[:5])
                 if sparse_cnt > 5:
                     sample += f", +{sparse_cnt - 5} more"
                 advisories.append(
                     f"In {rel_label}, array '{arr_name}' ({n} records) has null/empty '{k}' on "
-                    f"{sparse_cnt} record(s) [{sample}] while populated on {populated}/{n} — "
+                    f"{sparse_cnt} record(s) [{sample}] while populated on {populated}/{n}{rule_suffix} — "
                     f"verify whether empty '{k}' is allowed for those records."
                 )
-                if len(advisories) >= 4:
+                if len(advisories) >= 5:
                     break
             elif enum_cols and 2 <= populated < max(2, (n + 1) // 2) and all(k in r for r in records):
                 for ck in enum_cols:
                     if ck == k:
                         continue
-                    groups: dict[str, list[tuple[bool, str]]] = {}
+                    groups = {}
                     for idx, r in enumerate(records):
                         gval = str(r.get(ck)).strip()
                         is_pop = not _is_empty_scalar_or_collection(r.get(k))
@@ -648,7 +1067,7 @@ def _inspect_json_record_arrays(
                     full_groups = [g for g, items in groups.items() if all(p for p, _ in items)]
                     zero_groups = [g for g, items in groups.items() if not any(p for p, _ in items)]
                     if full_groups and len(zero_groups) >= 2:
-                        parts_s: list[str] = []
+                        parts_s = []
                         for g, items in groups.items():
                             pop_g = sum(1 for p, _ in items if p)
                             tot_g = len(items)
@@ -659,11 +1078,11 @@ def _inspect_json_record_arrays(
                                 parts_s.append(f"{g}={pop_g}/{tot_g}")
                         advisories.append(
                             f"In {rel_label}, array '{arr_name}' ({n} records) populates '{k}' on "
-                            f"{populated}/{n} records (by '{ck}': {'; '.join(parts_s)}) — "
+                            f"{populated}/{n} records (by '{ck}': {'; '.join(parts_s)}){rule_suffix} — "
                             f"verify which '{ck}' states require non-empty '{k}'."
                         )
                         break
-                if len(advisories) >= 4:
+                if len(advisories) >= 5:
                     break
 
         if n >= 5:
@@ -674,7 +1093,14 @@ def _inspect_json_record_arrays(
                 if issue not in advisories:
                     advisories.append(issue)
 
-        if len(advisories) >= 6:
+        claim_issues = _inspect_claim_reconciliation_records(
+            rel_label, arr_name, records, data, task_markdown=task_markdown
+        )
+        for issue in claim_issues:
+            if issue not in advisories:
+                advisories.append(issue)
+
+        if len(advisories) >= 7:
             break
 
     return advisories, shape
@@ -803,8 +1229,14 @@ def audit_deliverables(
             except Exception as exc:
                 blocking.append(f"Invalid JSON syntax in '{rel_lbl}': {exc}")
                 continue
-            j_adv, j_shape = _inspect_json_record_arrays(rel_lbl, parsed, task_markdown=resolved_md)
+            j_adv, j_shape = _inspect_json_record_arrays(
+                rel_lbl, parsed, task_markdown=resolved_md, workspace_root=ws
+            )
             advisories.extend(j_adv)
+            html_sec_adv = _inspect_html_section_coverage(rel_lbl, parsed, workspace_root=ws)
+            for hsa in html_sec_adv:
+                if hsa not in advisories:
+                    advisories.append(hsa)
             summaries.append(f"{rel_lbl}: {j_shape}")
         elif ext == ".csv":
             try:

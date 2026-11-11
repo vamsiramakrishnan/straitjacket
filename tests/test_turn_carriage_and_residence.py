@@ -992,3 +992,192 @@ def test_watermark_residence_k1_fact_bearing_state_notes_and_compaction_recap():
         ["write('outputs/a.json')"],
     )
     assert recap_block.index("assumed: tax_rate=0.08") < recap_block.index("verified 10 items")
+
+
+def test_deliverables_wave3_fix1_active_sibling_numbered_slots_manifest_and_html_audit(tmp_path: Path):
+    from ctx.deliverables import format_deliverable_contract, verify_declared_deliverables
+
+    ws = tmp_path / "wave3_ws"
+    out_dir = ws / "outputs"
+    in_dir = ws / "workspace"
+    img_dir = in_dir / "images"
+    out_dir.mkdir(parents=True)
+    img_dir.mkdir(parents=True)
+
+    # 1. Conditional Non-Empty Sibling-Field Check (5/8 active rows, 7/8 active rows, and 8/8 clean).
+    claim_md = (
+        "Write `outputs/claim_review.json` with decisions (`approve`, `revise`, `remove`, `needs_more_evidence`).\n"
+        "- `replacement_text` may be empty only when the decision is `remove`.\n"
+    )
+    rows_5_of_8 = [
+        {"claim_id": f"CLM-00{i}", "decision": "revise", "replacement_text": f"Revised {i}"}
+        for i in (1, 5, 6, 10, 12)
+    ] + [
+        {"claim_id": "CLM-002", "decision": "approve", "replacement_text": ""},
+        {"claim_id": "CLM-003", "decision": "approve", "replacement_text": ""},
+        {"claim_id": "CLM-007", "decision": "needs_more_evidence", "replacement_text": ""},
+    ] + [
+        {"claim_id": f"CLM-00{i}", "decision": "remove", "replacement_text": ""}
+        for i in (4, 8, 9, 11)
+    ]
+    (out_dir / "claim_review.json").write_text(
+        json.dumps({"claims": rows_5_of_8}),
+        encoding="utf-8",
+    )
+    ok_5, issues_5 = verify_declared_deliverables(
+        ["outputs/claim_review.json"],
+        task_markdown=claim_md,
+        workspace_root=ws,
+    )
+    assert ok_5 is False
+    joined_5 = "\n".join(issues_5)
+    assert "CLM-002, CLM-003, CLM-007" in joined_5
+    assert "5/8 active records" in joined_5
+    assert "may be empty only when the decision is `remove`" in joined_5
+
+    # 7/8 active populated (only CLM-007 missing) -> flags ONLY CLM-007, not the 4 remove rows.
+    for r in rows_5_of_8:
+        if r["claim_id"] in ("CLM-002", "CLM-003"):
+            r["replacement_text"] = "Keep approved wording"
+    (out_dir / "claim_review.json").write_text(
+        json.dumps({"claims": rows_5_of_8}),
+        encoding="utf-8",
+    )
+    ok_7, issues_7 = verify_declared_deliverables(
+        ["outputs/claim_review.json"],
+        task_markdown=claim_md,
+        workspace_root=ws,
+    )
+    assert ok_7 is False
+    joined_7 = "\n".join(issues_7)
+    assert "[CLM-007]" in joined_7
+    assert "7/8 active records" in joined_7
+
+    # 8/8 active populated + 4/4 remove rows empty -> 100% clean (no false positive on remove rows!).
+    for r in rows_5_of_8:
+        if r["claim_id"] == "CLM-007":
+            r["replacement_text"] = "Pending lab verification wording"
+    (out_dir / "claim_review.json").write_text(
+        json.dumps({"claims": rows_5_of_8}),
+        encoding="utf-8",
+    )
+    ok_8, issues_8 = verify_declared_deliverables(
+        ["outputs/claim_review.json"],
+        task_markdown=claim_md,
+        workspace_root=ws,
+    )
+    assert ok_8 is True
+    assert issues_8 == []
+
+    # 2. Numbered-Slot & Workspace-Asset Check beyond 16th key in a 29-key dict.
+    for idx_img in range(1, 6):
+        (img_dir / f"projector_0{idx_img}.jpg").write_bytes(b"\xff\xd8\xff\xe0valid_jpeg")
+    listing_payload: dict = {f"attr_{i}": f"val_{i}" for i in range(1, 25)}
+    listing_payload.update(
+        {
+            "image_1": "images/projector_01.jpg",
+            "image_2": "images/projector_02.jpg",
+            "image_3": "",
+            "image_4": "",
+            "image_5": "",
+        }
+    )
+    (out_dir / "listing.json").write_text(json.dumps(listing_payload), encoding="utf-8")
+    audit_slot = audit_deliverables(ws, ["outputs/listing.json"])
+    assert audit_slot.should_gate is True
+    slot_msg = audit_slot.format_gate_message()
+    assert "['image_3', 'image_4', 'image_5']" in slot_msg
+    assert "2/5 populated" in slot_msg
+    assert "5 candidate image files exist in workspace" in slot_msg
+
+    # 3. Manifest Key Alias Check (Chinese prompt with navigation_sections and missing sections / backend_required).
+    manifest_md = "生成 `outputs/implementation_manifest.json`，包含导航段落摘要（至少 6 个）以及是否需要后台（不需要）。"
+    (out_dir / "implementation_manifest.json").write_text(
+        json.dumps(
+            {
+                "site_title": "Hengyan Industrial",
+                "navigation_sections": ["hero", "products", "specs", "certs", "faq", "contact"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_man = audit_deliverables(ws, ["outputs/implementation_manifest.json"], task_markdown=manifest_md)
+    assert audit_man.should_gate is True
+    man_msg = audit_man.format_gate_message()
+    assert "navigation_sections" in man_msg and "'sections' is missing" in man_msg
+    assert "'backend_required' is missing" in man_msg
+
+    # 4. HTML <section id> coverage check + Deck reconciliation check + format_deliverable_contract hints.
+    sec_blocks = ['<section id="executive-overview"><p>Intro narrative only</p></section>']
+    expected_10 = [
+        "methodology",
+        "scorecard",
+        "category-summary",
+        "brand-deep-dive",
+        "Geo-signals",
+        "seasonality",
+        "coffee-snapshot",
+        "appendix-table",
+        "related-queries",
+        "launch-calendar",
+    ]
+    for sid in expected_10:
+        sec_blocks.append(f'<section id="{sid}"><table><tr><td>8.50</td></tr></table></section>')
+    (in_dir / "analyst_report.html").write_text("\n".join(sec_blocks), encoding="utf-8")
+    (out_dir / "audit_report.json").write_text(
+        json.dumps(
+            {
+                "findings": [
+                    {"section_id": sid, "status": "verified"}
+                    for sid in expected_10
+                    if sid != "coffee-snapshot"
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_html = audit_deliverables(ws, ["outputs/audit_report.json"])
+    assert audit_html.should_gate is True
+    assert "['coffee-snapshot']" in audit_html.format_gate_message()
+
+    (out_dir / "claim_audit.json").write_text(
+        json.dumps(
+            {
+                "must_fix_claim_ids": ["pruning_shears_savings"],
+                "claims": [
+                    {
+                        "claim_id": "inventory_coverage",
+                        "status": "needs_rounding_note",
+                        "deck_value": "74.0% (29/39)",
+                        "correct_value": "74.4%",
+                    },
+                    {
+                        "claim_id": "pruning_shears_savings",
+                        "status": "incorrect",
+                        "deck_value": "$600",
+                        "correct_value": "$480.00",
+                    },
+                    {
+                        "claim_id": "q1_revenue",
+                        "status": "supported",
+                        "deck_value": "$1.2M",
+                        "correct_value": "$1.2M",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_deck = audit_deliverables(ws, ["outputs/claim_audit.json"])
+    deck_msg = audit_deck.format_gate_message()
+    assert "needs_rounding_note" in deck_msg and "must_fix_claim_ids" in deck_msg
+    assert "74.4% (29/39)" in deck_msg
+    assert "pruning_shears_savings" in deck_msg
+
+    contract_txt = format_deliverable_contract(
+        "Reconcile supplier risk rollup and write `outputs/claim_audit.json`.",
+        workspace_root=ws,
+    )
+    assert "audit-precision:" in contract_txt
+    assert "74.4% (29/39)" in contract_txt
+
