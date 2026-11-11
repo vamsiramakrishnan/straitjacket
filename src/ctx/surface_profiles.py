@@ -192,16 +192,15 @@ def _excluded_servers(records, selected, ws_root) -> list[str]:
     return sorted(n for n in surface._mcp_server_commands(ws_root) if n not in kept)
 
 
-def write_private(path: Path, content: str) -> None:
+def write_private(path: Path, content: str, *, root: Path | None = None) -> None:
     """Write a launch file at 0600: it carries full server commands (argument
-    values can be credentials), whatever scope they came from."""
-    import os
+    values can be credentials), whatever scope they came from. Never through
+    a symlink, nor through a directory symlinked outside ``root`` (raises
+    ``ctx.launchform.UnsafeWrite`` naming the file)."""
+    from ctx.launchform import write_safely
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(content)
-    os.chmod(path, 0o600)  # an existing file keeps its old mode through O_CREAT
+    write_safely(path, content, root=root if root is not None else path.parent,
+                 mode=0o600, force_mode=True)
 
 
 def emit_claude(servers: dict[str, list[str]], excluded: list[str],
@@ -346,8 +345,13 @@ def compile_profile(ws_root: Path | str, name: str, *, host: str = "claude",
         for rel, content in emitted["files"].items():
             if not content:
                 continue
-            write_private(root / rel, content)
-            written.append(rel)
+            from ctx.launchform import UnsafeWrite
+
+            try:
+                write_private(root / rel, content, root=root)
+                written.append(rel)
+            except UnsafeWrite as e:
+                issues.append(f"refused to write {rel}: {e}; ctx never writes through a link")
 
     return {
         # v2: `tokens` is priced on `tokens.basis` for this host (v1: inline).

@@ -117,7 +117,14 @@ def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
             "remove it first — the plugin contains the skill (SPEC §4.3)"
         )
 
+    from ctx.launchform import UnsafeWrite, _dir_refusal, copy_tree_safely, write_safely
+
     dest = workspace_root / ".agents" / "plugins" / PLUGIN_DIRNAME
+    if dest.is_symlink():
+        raise UnsafeWrite(f"{dest}: it is a symlink")
+    why = _dir_refusal(dest, workspace_root)
+    if why:
+        raise UnsafeWrite(f"{dest}: {why}")
     dest.mkdir(parents=True, exist_ok=True)
 
     exe_argv = shlex.split(exe)
@@ -141,14 +148,12 @@ def render_plugin(workspace_root: Path, ctx_exe: str | None = None) -> Path:
 
     for name in _PLUGIN_FILES:
         doc = json.loads((template / name).read_text(encoding="utf-8"))
-        (dest / name).write_text(json.dumps(substitute(doc), indent=2) + "\n", encoding="utf-8")
+        write_safely(dest / name, json.dumps(substitute(doc), indent=2) + "\n",
+                     root=workspace_root)
 
     for subdir in ("skills", "agents"):
-        src = template / subdir
-        dst = dest / subdir
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(src, dst)
+        # No link followed in the template or in the workspace copy.
+        copy_tree_safely(template / subdir, dest / subdir, root=workspace_root)
     return dest
 
 
@@ -182,8 +187,15 @@ def install_antigravity_statusline(exe: str, *, settings_path: Path | None = Non
             "command": f"{exe} statusline antigravity",
             "enabled": True,
         }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        import os as _os
+
+        from ctx.launchform import UnsafeWrite, write_safely
+
+        home = Path(_os.environ.get("HOME") or Path.home())
+        try:
+            write_safely(path, json.dumps(merged, indent=2) + "\n", root=home)
+        except UnsafeWrite as e:
+            return f"statusLine not installed: {e}; ctx never writes through a link"
         return f"added statusLine to {path}"
     except Exception as e:  # never let statusline setup break wrap
         return f"statusLine not installed ({type(e).__name__}); set it manually"
@@ -194,8 +206,14 @@ def install_antigravity(ws: Workspace, *, init_policy: bool = True) -> str:
 
     # Before anything that might refuse: a ctx status line still in the
     # unsafe `python -m ctx` form is rewritten in place.
+    from ctx.launchform import UnsafeWrite
+
     upgraded = upgrade_launch_forms(ws.root, ["antigravity"])
-    dest = render_plugin(ws.root)
+    try:
+        dest = render_plugin(ws.root)
+    except UnsafeWrite as e:
+        return "\n".join([*upgraded, f"cannot install the Antigravity plugin: {e}; "
+                           "ctx never writes through a link"])
     lines = [*upgraded, f"installed plugin: {dest}"]
     exe = _ctx_executable()
     lines.append(install_antigravity_statusline(exe))
@@ -218,14 +236,22 @@ def init_workspace(root: Path, *, quiet: bool = False) -> list[str]:
     lines: list[str] = []
     cfg = root / CONFIG_FILENAME
     ign = root / IGNORE_FILENAME
-    if not cfg.exists():
-        cfg.write_text(_CTX_TOML_TEMPLATE, encoding="utf-8")
-        lines.append(f"wrote {cfg.name}")
+    from ctx.launchform import UnsafeWrite, write_safely
+
+    if not cfg.exists() and not cfg.is_symlink():
+        try:
+            write_safely(cfg, _CTX_TOML_TEMPLATE, root=root)
+            lines.append(f"wrote {cfg.name}")
+        except UnsafeWrite as e:
+            lines.append(f"did not write {cfg.name}: {e}")
     elif not quiet:
         lines.append(f"{cfg.name} already exists; left unchanged")
-    if not ign.exists():
-        ign.write_text(_CTXIGNORE_TEMPLATE, encoding="utf-8")
-        lines.append(f"wrote {ign.name}")
+    if not ign.exists() and not ign.is_symlink():
+        try:
+            write_safely(ign, _CTXIGNORE_TEMPLATE, root=root)
+            lines.append(f"wrote {ign.name}")
+        except UnsafeWrite as e:
+            lines.append(f"did not write {ign.name}: {e}")
     elif not quiet:
         lines.append(f"{ign.name} already exists; left unchanged")
     return lines
@@ -361,11 +387,17 @@ def install_gateway(ws: "Workspace", host: str, *, apply: bool = False) -> str:
     lines.append(f"gateway wiring for {host}: fronts {len(backends)} backend(s) "
                  f"[{', '.join(sorted(backends)) or 'none'}]")
     if apply:
+        from ctx.launchform import UnsafeWrite
         from ctx.surface_profiles import write_private
 
+        written = []
         for rel, content in files.items():
-            write_private(root / rel, content)  # 0600: carries full server commands
-        lines.append("  wrote: " + ", ".join(files))
+            try:
+                write_private(root / rel, content, root=root)  # 0600: full server commands
+                written.append(rel)
+            except UnsafeWrite as e:
+                lines.append(f"  refused {rel}: {e}; ctx never writes through a link")
+        lines.append("  wrote: " + (", ".join(written) or "nothing"))
         lines.append("  tip: set [surface] gateway = true in ctx.toml so the "
                      "SessionStart gate knows disclosure is progressive")
     else:
@@ -755,12 +787,14 @@ def install_claude(ws: Workspace, *, init_policy: bool = True) -> str:
 
     agent_src = _template_dir() / "agents" / "ctx-explorer.md"
     agent_dst = root / ".claude" / "agents" / "ctx-explorer.md"
-    if agent_dst.exists():
+    if agent_dst.exists() or agent_dst.is_symlink():
         lines.append(".claude/agents/ctx-explorer.md exists; left unchanged")
     elif agent_src.is_file():
-        agent_dst.parent.mkdir(parents=True, exist_ok=True)
-        agent_dst.write_bytes(agent_src.read_bytes())
-        lines.append(f"wrote {agent_dst.relative_to(root)}")
+        try:
+            write_safely(agent_dst, agent_src.read_bytes(), root=root)
+            lines.append(f"wrote {agent_dst.relative_to(root)}")
+        except UnsafeWrite as e:
+            lines.append(f"did not write the explorer agent: {e}")
 
     # The teaching surface Claude Code otherwise lacks (measured in
     # evals/ask-diagnose-3arm-2026-07-20.md: agents adopt ctx ask/q only
@@ -905,19 +939,27 @@ captured at the source and returned as a bounded, addressable digest — work
 def _upsert_agents_block(path: Path, block: str) -> str:
     """Insert or replace the ctx-harness block in AGENTS.md, preserving the
     rest of the file. Returns a one-line status."""
+    from ctx.launchform import UnsafeWrite, write_safely
+
     block = block.strip() + "\n"
-    if not path.is_file():
-        path.write_text(block, encoding="utf-8")
-        return f"wrote {path.name}"
-    text = path.read_text(encoding="utf-8")
-    if _CODEX_MARK_START in text and _CODEX_MARK_END in text:
-        pre = text[: text.index(_CODEX_MARK_START)]
-        post = text[text.index(_CODEX_MARK_END) + len(_CODEX_MARK_END) :]
-        path.write_text(pre + block + post.lstrip("\n"), encoding="utf-8")
-        return f"refreshed ctx-harness block in {path.name}"
-    sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-    path.write_text(text + sep + block, encoding="utf-8")
-    return f"appended ctx-harness block to {path.name}"
+    root = path.parent
+    try:
+        if path.is_symlink():
+            raise UnsafeWrite(f"{path}: it is a symlink")
+        if not path.is_file():
+            write_safely(path, block, root=root)
+            return f"wrote {path.name}"
+        text = path.read_text(encoding="utf-8")
+        if _CODEX_MARK_START in text and _CODEX_MARK_END in text:
+            pre = text[: text.index(_CODEX_MARK_START)]
+            post = text[text.index(_CODEX_MARK_END) + len(_CODEX_MARK_END) :]
+            write_safely(path, pre + block + post.lstrip("\n"), root=root)
+            return f"refreshed ctx-harness block in {path.name}"
+        sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+        write_safely(path, text + sep + block, root=root)
+        return f"appended ctx-harness block to {path.name}"
+    except UnsafeWrite as e:
+        return f"did not update {path.name}: {e}; ctx never writes through a link"
 
 
 def install_codex(ws: Workspace, *, init_policy: bool = True) -> str:

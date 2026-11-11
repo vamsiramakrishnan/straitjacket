@@ -389,15 +389,21 @@ _JSON_ARGV_IN_TEXT = re.compile(r'(?P<pre>"[^"]*"\s*,\s*)?"-m"\s*,\s*"ctx')
 
 #: Allow-list, one reason each. Launches that run the repository's OWN code
 #: by design, and option tables that merely NAME a flag.
-_BY_DESIGN = {
-    "facts.py": "the repository's test command (pytest runs the repo's code by design)",
-    "substitute.py": "a table of grep flags (`-c` is grep's count), not a launch",
-    "command_spans.py": "a table of git option names, not a launch",
-    "toolresult.py": "classifies `sh -c` commands it observes; launches nothing",
-    "hook.py": "recognizes commands (`head -c`, `python -P -m ctx`); launches nothing",
-    "installer.py": "ownership recognizers compare argv slices like ['-m', 'ctx']",
-    "launchform.py": "recognizes and rewrites the old form; launches nothing",
-    "selfcmd.py": "defines the safe form (SAFE_PATH_FLAG) and its recognizer",
+_BY_DESIGN: dict[str, dict[str, str]] = {
+    # file -> {function -> reason}. Only these FUNCTIONS are exempt; a new
+    # launch anywhere else in the same file is scanned.
+    "facts.py": {
+        "teach_no_run": "names the repository's own test command (pytest runs repo code by design)",
+        "_pytest_layout": "the repository's test command (pytest runs repo code by design)",
+        "_auto_capture_fails": "the repository's test command (pytest runs repo code by design)",
+    },
+    "installer.py": {
+        "upgrade_unsafe_ctx_commands": "rewrites the old form; its message names it",
+        "doctor_checks": "the doctor's message names the unsafe form",
+    },
+    "launchform.py": {
+        "upgrade": "rewrites the old form; its message names it",
+    },
 }
 #: Single strings allowed elsewhere: (file, text in the hit, reason).
 _ALLOWED_STRINGS = (
@@ -462,7 +468,8 @@ def _text_of(node: ast.AST) -> str | None:
     return None
 
 
-def _unsafe_interpreter_launches(path: Path) -> list[str]:
+def _unsafe_interpreter_launches(path: Path, skip_functions: frozenset[str] = frozenset()
+                                 ) -> list[str]:
     """Every launch of a Python interpreter in this file that would put the
     current directory on ``sys.path``: ``-m`` / ``-c`` / stdin / a relative
     script without a preceding ``-P`` or ``-I``, written as
@@ -488,12 +495,18 @@ def _unsafe_interpreter_launches(path: Path) -> list[str]:
     except ValueError:
         label = path.name
     seen: set[int] = set()
+    skipped: set[int] = set()          # bodies of exempt (recognizer) functions
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in skip_functions:
+            skipped.update(id(n) for n in ast.walk(node))
     for node in ast.walk(tree):          # docstrings are prose, not launchers
         if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
                 and node.body and isinstance(node.body[0], ast.Expr) \
                 and isinstance(node.body[0].value, ast.Constant):
             seen.add(id(node.body[0].value))
     for node in ast.walk(tree):
+        if id(node) in skipped:
+            continue
         if isinstance(node, (ast.List, ast.Tuple)) and len(node.elts) >= 2:
             head = node.elts[0]
             if isinstance(head, ast.Constant):
@@ -529,9 +542,8 @@ def test_source_has_no_unsafe_interpreter_launch():
     hits: list[str] = []
     for root in _SCAN_ROOTS:
         for path in _py_files(root) if root.is_dir() else []:
-            if path.name in _BY_DESIGN:
-                continue
-            hits += [h for h in _unsafe_interpreter_launches(path)
+            skip = frozenset(_BY_DESIGN.get(path.name, {}))
+            hits += [h for h in _unsafe_interpreter_launches(path, skip)
                      if not any(path.name == f and snip in h for f, snip, _ in _ALLOWED_STRINGS)]
     # text templates and generated launchers
     for root in (REPO / "plugins", SRC / "data"):
@@ -576,6 +588,19 @@ _SCAN_CASES = {
     "bash -c": ("x=['bash','-c','echo']\n", False),
     "git -c": ("x=['git','-c','a=b','log']\n", False),
 }
+
+
+def test_exemptions_are_per_function_not_per_file(tmp_path):
+    """A launch planted in an exempted FILE, outside its exempted functions,
+    is still caught."""
+    for name, funcs in _BY_DESIGN.items():
+        copy = tmp_path / name
+        copy.write_text((SRC / name).read_text(encoding="utf-8")
+                        + "\n\ndef _planted_launch():\n"
+                          "    import sys\n    return [sys.executable, '-m', 'ctx']\n")
+        hits = _unsafe_interpreter_launches(copy, frozenset(funcs))
+        assert any("sys.executable -m ctx" in h for h in hits), (name, hits)
+        assert all(" -m ctx" in h for h in hits), (name, hits)   # nothing else leaks
 
 
 @pytest.mark.parametrize("name", sorted(_SCAN_CASES))

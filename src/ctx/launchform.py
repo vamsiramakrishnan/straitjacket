@@ -389,22 +389,59 @@ def _dir_refusal(directory: Path, root: Path | None) -> str | None:
     return None
 
 
-def write_safely(path: Path, text: str, *, root: Path | None, mode: int = 0o644) -> None:
+def write_safely(path: Path, text: str | bytes, *, root: Path | None, mode: int = 0o644,
+                 force_mode: bool = False) -> None:
     """Create or replace ``path`` without ever writing through a link or a
-    directory symlinked outside ``root``. Raises :class:`UnsafeWrite`."""
-    if path.exists() or path.is_symlink():
-        replace_file_safely(path, text, root=root)
-        return
-    why = _dir_refusal(path.parent, root)
+    directory symlinked outside ``root``. Raises :class:`UnsafeWrite`, whose
+    message names the file. ``force_mode`` applies ``mode`` even when
+    replacing (launch files are always 0600)."""
+    try:
+        if path.exists() or path.is_symlink():
+            replace_file_safely(path, text, root=root, mode=mode if force_mode else None)
+            return
+        why = _dir_refusal(path.parent, root)
+        if why:
+            raise UnsafeWrite(why)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        why = _dir_refusal(path.parent, root)   # re-check after creating
+        if why:
+            raise UnsafeWrite(why)
+        data = text.encode("utf-8") if isinstance(text, str) else text
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), mode)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+    except UnsafeWrite as exc:
+        if str(path) in str(exc):
+            raise
+        raise UnsafeWrite(f"{path}: {exc}") from None
+
+
+def copy_tree_safely(src: Path, dst: Path, *, root: Path | None) -> None:
+    """Replace directory ``dst`` with a copy of ``src`` without following a
+    link on either side: symlinks inside ``src`` are refused, ``dst`` (and
+    the directories above it, up to ``root``) must not be links leading out,
+    and every file is written with :func:`write_safely`."""
+    import shutil
+
+    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+        for name in [*dirnames, *filenames]:
+            if os.path.islink(os.path.join(dirpath, name)):
+                raise UnsafeWrite(f"{os.path.join(dirpath, name)}: template contains a symlink")
+    if dst.is_symlink():
+        raise UnsafeWrite(f"{dst}: it is a symlink")
+    why = _dir_refusal(dst.parent, root)
     if why:
-        raise UnsafeWrite(why)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    why = _dir_refusal(path.parent, root)   # re-check after creating
-    if why:
-        raise UnsafeWrite(why)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), mode)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(text)
+        raise UnsafeWrite(f"{dst}: {why}")
+    if dst.exists():
+        shutil.rmtree(dst)            # unlinks links inside; never follows them
+    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+        rel = Path(dirpath).relative_to(src)
+        target_dir = dst / rel
+        if target_dir.is_symlink():
+            raise UnsafeWrite(f"{target_dir}: it is a symlink")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for f in sorted(filenames):
+            write_safely(target_dir / f, (Path(dirpath) / f).read_bytes(), root=root)
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -415,7 +452,8 @@ def _within(path: Path, root: Path) -> bool:
         return False
 
 
-def replace_file_safely(path: Path, text: str, *, root: Path | None = None) -> None:
+def replace_file_safely(path: Path, text: str | bytes, *, root: Path | None = None,
+                        mode: int | None = None) -> None:
     """Replace ``path``'s contents atomically without ever writing through a
     link: the new bytes go to a fresh file created exclusively (O_EXCL, a
     random name) in the same directory with the target's mode, which is
@@ -426,12 +464,14 @@ def replace_file_safely(path: Path, text: str, *, root: Path | None = None) -> N
     why = write_refusal(path, root)
     if why:
         raise UnsafeWrite(why)
-    mode = path.stat().st_mode & 0o7777
+    if mode is None:
+        mode = path.stat().st_mode & 0o7777
+    data = text.encode("utf-8") if isinstance(text, str) else text
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".ctx-upgrade", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "wb") as fh:
             os.fchmod(fh.fileno(), mode)
-            fh.write(text)
+            fh.write(data)
         os.replace(tmp, path)
     except BaseException:
         try:

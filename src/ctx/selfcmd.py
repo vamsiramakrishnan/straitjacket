@@ -58,19 +58,30 @@ _ROOT_MARKERS = (".git", "ctx.toml", ".ctx")
 
 
 def workspace_boundary(start: str | None = None) -> str:
-    """The workspace root containing ``start`` (default: the current
-    directory): the nearest ancestor holding ``.git``, ``ctx.toml`` or
-    ``.ctx``; the start directory itself when none does. Run from a
-    subdirectory, the boundary is still the whole repository."""
+    """The boundary of the workspace containing ``start`` (default: the
+    current directory): the OUTERMOST ancestor holding ``.git``,
+    ``ctx.toml`` or ``.ctx``, so a nested repository, a submodule or a
+    ``ctx.toml`` above the git root all count as one workspace. The walk
+    stops below the user's home directory (HOME itself and above are where
+    tools are installed, never "the repository").
+
+    LIMIT: with no marker anywhere, the boundary is the start directory
+    itself, so a PATH entry pointing at a sibling or parent directory of
+    an unmarked working directory is not recognised as workspace content."""
     cur = os.path.realpath(start or os.getcwd())
+    home = os.path.realpath(os.environ.get("HOME") or os.path.expanduser("~"))
+    outermost = None
     probe = cur
     while True:
+        if probe == home or (os.path.commonpath([probe, home]) == probe and cur.startswith(home + os.sep)):
+            break                      # never HOME or its ancestors
         if any(os.path.exists(os.path.join(probe, m)) for m in _ROOT_MARKERS):
-            return probe
+            outermost = probe
         parent = os.path.dirname(probe)
         if parent == probe:
-            return cur
+            break
         probe = parent
+    return outermost or cur
 
 
 def _inside_cwd(path: str) -> bool:
