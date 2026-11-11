@@ -1988,7 +1988,8 @@ def test_task_inputs_digest_never_blocks_or_raises_on_odd_entries(
 @pytest.mark.parametrize(
     "bad_reward",
     ["[]", '{"score": "abc"}', "{}", '{"checks_passed": 3, "checks_total": 2}', '{"score": true}',
-     '{"score": 1.0, "checks_breakdown": "x"}', '"passed"', "null", '{"score": NaN}'],
+     '{"score": 1.0, "checks_breakdown": "x"}', '"passed"', "null", '{"score": NaN}',
+     '{"score": 5}', '{"score": 85, "checks_passed": 3, "checks_total": 4}', '{"score": 1.001}'],
 )
 def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Path, bad_reward: str) -> None:
     ds_root = tmp_path / "cab"
@@ -2012,6 +2013,36 @@ def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Pat
     flag.touch()
     second = run_trial(cfg, "file-badreward", "sj", 21, _MustNotGenerateProvider())  # type: ignore[arg-type]
     assert second.grading_error == "" and second.passed is True
+
+
+def test_reward_score_above_one_is_a_grading_error_not_a_pass(tmp_path: Path) -> None:
+    """Scores are on a 0..1 scale: anything above 1 (beyond float noise) is not
+    interpretable, with or without checks; float noise just above 1 is a full score."""
+    from evals.acciobench.loop import _grade_into
+
+    class _Sandbox:
+        def __init__(self, reward: Any) -> None:
+            self.reward = reward
+
+        def grade(self, reward_json: Path, *, judge_token: str = "") -> Any:
+            return self.reward
+
+    cfg = BenchConfig(dataset_root=tmp_path / "cab", workdir=tmp_path / "w", judge_provider="mock")
+
+    def grade(reward: Any) -> RunMetrics:
+        m = RunMetrics(task_id="t", task_rel="t", category="file", arm="sj", model_id="m")
+        _grade_into(cfg, _SolvingProvider(), _Sandbox(reward), tmp_path, m)  # type: ignore[arg-type]
+        return m
+
+    for bad in ({"score": 5}, {"score": 85, "checks_passed": 3, "checks_total": 4}, {"score": 1.5}):
+        m = grade(bad)
+        assert m.grading_error and "above 1" in m.grading_error, bad
+        assert m.passed is False and m.capacity_score == 0.0 and m.raw_verifier_score == 0.0
+    for ok, passed, cap in (({"score": 1.0 + 1e-9}, True, 1.0), ({"score": 0.5}, False, 0.5),
+                            ({"score": 1.0, "checks_passed": 3, "checks_total": 4}, True, 0.75)):
+        m = grade(ok)
+        assert m.grading_error == "" and m.passed is passed and m.capacity_score == cap, ok
+        assert m.raw_verifier_score <= 1.0
 
 
 def test_legacy_verifier_error_note_loads_as_grading_error() -> None:

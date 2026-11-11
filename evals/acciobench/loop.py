@@ -72,6 +72,7 @@ _TRAJ_TEXT_PREVIEW_CHARS = 800
 _TRAJ_HEAD_PREVIEW_CHARS = 200
 _SESSION_TASK_PREFIX_CHARS = 32
 _PASS_SCORE_THRESHOLD = 0.9999
+_SCORE_SCALE_TOLERANCE = 1e-6
 _MAX_CHECK_REASON_CHARS = 140
 _MAX_VERIFIER_ERR_CHARS = 240
 _MAX_NOTE_ERR_CHARS = 300
@@ -275,6 +276,12 @@ def _interpret_reward(data: Any) -> tuple[float, int, int, list[dict[str, Any]]]
         raise ValueError("reward.json has neither a score nor any checks")
     if score is not None and score < 0:
         raise ValueError(f"reward.json score is negative: {score!r}")
+    if score is not None and score > 1.0 + _SCORE_SCALE_TOLERANCE:
+        # Scores are on a 0..1 scale (the pass threshold, the reports and every grader in
+        # this repository assume it); 85 or 5 would otherwise be recorded as "passed".
+        raise ValueError(f"reward.json score {score!r} is above 1, outside the 0..1 scale")
+    if score is not None:
+        score = min(score, 1.0)  # float noise just above 1
     breakdown = data.get("checks_breakdown")
     if breakdown is None:
         breakdown = []

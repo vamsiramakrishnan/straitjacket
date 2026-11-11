@@ -167,8 +167,8 @@ run without bwrap, but say that a scored run will be refused.
   once; a second link to it, or a link back to an ancestor, is recorded by name.
 - **Grading errors are not failures**: when the official grader itself fails (timeout,
   missing, unparsable or uninterpretable `reward.json`: not an object, a non-numeric
-  or non-finite score, checks_passed > checks_total, neither a score nor checks, a
-  malformed checks_breakdown), `result.json` records `grading_error` (the grader's
+  or non-finite score, a negative score or one above 1, checks_passed > checks_total,
+  neither a score nor checks, a malformed checks_breakdown), `result.json` records `grading_error` (the grader's
   message) with `passed=false` and zero scores, and the agent's `termination` is kept.
   Reports (table, markdown, JSON `grading_error_runs`, HTML header) exclude such trials
   from solve rate and score aggregates and show their count separately. On resume, a
@@ -183,6 +183,11 @@ run without bwrap, but say that a scored run will be refused.
   with that reason, rather than being graded against another trial's service.
   Results written before this change that carry a `verifier error:` note and
   `passed=false` load as grading errors.
+  A reward `score` is read on a 0..1 scale (the pass threshold is 0.9999 and reports
+  treat capacity as a fraction): a score above 1 (beyond a 1e-6 float tolerance, which
+  is read as 1.0) is a grading error whether or not checks are present, so a grader
+  that reports `85` or `5` is never recorded as a pass. A result already on disk is not
+  re-read by this rule.
 - **Untouched model defaults**: `thinkingConfig` and `maxOutputTokens` are left unset by default so models run at their native provider defaults. Optional `--thinking-level` and `--max-output-tokens` flags are exposed strictly for explicit ablation studies.
 
 ---
