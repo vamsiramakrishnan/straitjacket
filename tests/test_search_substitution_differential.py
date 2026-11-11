@@ -223,8 +223,15 @@ def test_rewritten_search_gives_the_same_answer(repo, command, monkeypatch, tmp_
         if argv[0] == "tree":
             want_l = {ln for ln in want_l if "director" not in ln}
             have_l = {ln for ln in have_l if "director" not in ln}
-        extra = {ln for ln in have_l - want_l if _STATE in ln or ln.strip() in (
-            "", "e.count", "fixture.count")}
+        # Whatever ctx keeps in its bookkeeping directory, by name: tree draws
+        # the directory's children without repeating its name on each line.
+        state_names: set[str] = set()
+        for _dp, _dirs, _names in os.walk(os.path.join(str(repo), _STATE)):
+            state_names.update(_dirs)
+            state_names.update(_names)
+        extra = {ln for ln in have_l - want_l
+                 if _STATE in ln or not ln.strip()
+                 or ln.lstrip("\u2502\u251c\u2514\u2500 \xa0").strip() in state_names}
         if argv[0] == "ls":  # entries under the state directory's own block
             block = got.split(f"./{_STATE}:", 1)[-1].split("\n\n", 1)[0] if _STATE in got else ""
             extra |= {ln for ln in have_l - want_l if ln and ln in block.splitlines()}
