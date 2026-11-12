@@ -2220,6 +2220,36 @@ def test_a_reused_result_without_a_sandbox_field_is_recorded_or_reported_unknown
     assert payload["unsandboxed_runs"] == 0 and payload["isolation_unknown_runs"] == 1
 
 
+def test_a_stored_score_above_one_loads_as_a_grading_error_and_is_regraded(tmp_path: Path) -> None:
+    """A result graded before scores above 1 were refused (old shape: no grading_error
+    key) loads as ungraded: reports leave it out and resume re-grades it."""
+    from evals.acciobench.report import compute_summary_payload
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-oldscore")
+    cfg = BenchConfig(allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
+                      dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("raw",))
+    assert run_trial(cfg, "file-oldscore", "raw", 52, _SolvingProvider()).passed  # type: ignore[arg-type]
+    result_file = cfg.runs_dir / "file-oldscore__raw__t1_meta" / "result.json"
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    for key in ("grading_error", "sandbox"):
+        doc.pop(key)
+    doc.update(passed=True, capacity_score=5.0, raw_verifier_score=5.0, checks_passed=0, checks_total=0)
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+
+    (loaded,) = load_run_results(cfg.workdir)
+    assert loaded.passed is False and "above the 0..1 score scale" in loaded.grading_error
+    payload = compute_summary_payload([loaded])
+    assert payload["grading_error_runs"] == 1 and payload["arms"]["raw"]["overall"]["n"] == 0
+    for ok in ({"capacity_score": 1.0, "raw_verifier_score": 1.0 + 1e-9}, {"capacity_score": 0.5}):
+        assert RunMetrics.from_dict({"task_id": "t", "arm": "raw", "model_id": "m", **ok}).grading_error == ""
+
+    regraded = run_trial(cfg, "file-oldscore", "raw", 52, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert regraded.grading_error == "" and regraded.passed and regraded.capacity_score == 1.0
+    assert json.loads(result_file.read_text(encoding="utf-8"))["raw_verifier_score"] == 1.0
+
+
 def test_reward_score_above_one_is_a_grading_error_not_a_pass(tmp_path: Path) -> None:
     """Scores are on a 0..1 scale: anything above 1 (beyond float noise) is not
     interpretable, with or without checks; float noise just above 1 is a full score."""

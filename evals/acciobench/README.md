@@ -218,8 +218,10 @@ run without bwrap, but say that a scored run will be refused.
   A reward `score` is read on a 0..1 scale (the pass threshold is 0.9999 and reports
   treat capacity as a fraction): a score above 1 (beyond a 1e-6 float tolerance, which
   is read as 1.0) is a grading error whether or not checks are present, so a grader
-  that reports `85` or `5` is never recorded as a pass. A result already on disk is not
-  re-read by this rule.
+  that reports `85` or `5` is never recorded as a pass. The same rule applies when a
+  result is loaded: a stored `raw_verifier_score` or `capacity_score` above 1 (a result
+  graded before this rule) loads as a grading error saying the stored score is above
+  the 0..1 scale, so reports leave it out and resume re-grades it.
 - **Untouched model defaults**: `thinkingConfig` and `maxOutputTokens` are left unset by default so models run at their native provider defaults. Optional `--thinking-level` and `--max-output-tokens` flags are exposed strictly for explicit ablation studies.
 
 ---

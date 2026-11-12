@@ -21,6 +21,8 @@ import tomllib
 from typing import Any
 
 VALID_ARMS = frozenset({"raw", "sj"})
+#: Scores are on a 0..1 scale; anything above 1 + this is uninterpretable.
+SCORE_SCALE_TOLERANCE = 1e-6
 KNOWN_CATEGORIES = ("api", "browser", "cli", "file")
 
 _CAB_LOAD_LOCK = threading.Lock()
@@ -220,6 +222,22 @@ class RunMetrics:
                 kwargs["grading_error"] = str(legacy)[len("verifier error:"):].strip() or "verifier error"
         else:
             kwargs["grading_error"] = str(data.get("grading_error") or "")
+        if not kwargs.get("grading_error"):
+            # Scores are on a 0..1 scale. A result graded before scores above 1 were
+            # refused (a grader that reported 5 or 85) is ungraded, not passed: reports
+            # leave it out and resume re-grades it.
+            for key in ("raw_verifier_score", "capacity_score"):
+                val = data.get(key)
+                if (
+                    isinstance(val, (int, float))
+                    and not isinstance(val, bool)
+                    and val > 1.0 + SCORE_SCALE_TOLERANCE
+                ):
+                    kwargs["grading_error"] = (
+                        f"stored {key} {val!r} is above the 0..1 score scale; re-grade it"
+                    )
+                    kwargs["passed"] = False
+                    break
 
         return cls(**kwargs)
 
