@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -1804,7 +1805,7 @@ def test_ctx_code_identity_hashes_the_launched_ctx_code_not_its_version_or_path(
 
     def fresh(ctx_bin: Path) -> str:
         cfg_mod._CODE_ID_CACHE.clear()  # one computation per process: start a "new process"
-        return cfg_mod.ctx_code_identity(ctx_bin)
+        return cfg_mod.ctx_code_identity(BenchConfig(dataset_root=tmp_path / "cab", workdir=tmp_path / "w", ctx_bin=ctx_bin))
 
     def fake_ctx(root: Path, body: str = "VALUE = 1\n") -> Path:
         pkg = root / "ctx"
@@ -1854,6 +1855,84 @@ def test_ctx_code_identity_hashes_the_launched_ctx_code_not_its_version_or_path(
     monkeypatch.setitem(sys.modules, "ctx", types.SimpleNamespace(__file__=str(moved / "__init__.py")))
     cfg_mod._CODE_ID_CACHE.clear()
     assert cfg_mod.harness_ctx_code_identity() == edited
+
+
+def _venv_with_fake_ctx(root: Path, marker: str | None) -> tuple[Path, Path | None]:
+    """A virtualenv (no pip) whose site-packages holds a fake ``ctx`` printing ``marker``
+    (no ctx at all when ``marker`` is None). Returns (venv bin dir, package dir)."""
+    import venv
+
+    venv.create(root, with_pip=False, symlinks=True, clear=True)
+    bin_dir = root / "bin"
+    if marker is None:
+        return bin_dir, None
+    site = subprocess.run(
+        [str(bin_dir / "python"), "-I", "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True, text=True, timeout=60, check=True,
+    ).stdout.strip()
+    pkg = Path(site) / "ctx"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "cli.py").write_text(f"def main():\n    print({marker!r})\n    return 0\n", encoding="utf-8")
+    (pkg / "__main__.py").write_text("import sys\nfrom ctx.cli import main\nsys.exit(main())\n", encoding="utf-8")
+    return bin_dir, pkg
+
+
+def test_ctx_code_identity_sees_the_package_the_trial_really_launches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``#!/usr/bin/env python3`` resolves on the trial's PATH (the ctx's own directory
+    first), not the harness's; a venv's python given as --ctx-bin launches that venv's
+    ctx; a Python launcher with no visible ctx package is ``unavailable``, never a hash
+    of the interpreter's bytes."""
+    from evals.acciobench import config as cfg_mod
+
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    venv_bin, pkg = _venv_with_fake_ctx(tmp_path / "venv_a", "fake-ctx-a")
+    assert pkg is not None
+    entry = _write_executable(
+        venv_bin / "ctx", "#!/usr/bin/env python3\nimport sys\nfrom ctx.cli import main\nsys.exit(main())\n"
+    )
+    # The harness's own python3 is another interpreter, which has no such package.
+    assert shutil.which("python3") != str(venv_bin / "python3")
+
+    def identity(ctx_bin: Path) -> str:
+        cfg_mod._CODE_ID_CACHE.clear()
+        return cfg_mod.ctx_code_identity(BenchConfig(dataset_root=tmp_path / "cab", workdir=tmp_path / "w", ctx_bin=ctx_bin))
+
+    want = "pkg:" + cfg_mod._code_digest(pkg)
+    assert identity(entry) == want
+    (pkg / "cli.py").write_text("def main():\n    print('fake-ctx-a2')\n    return 0\n", encoding="utf-8")
+    edited = "pkg:" + cfg_mod._code_digest(pkg)
+    assert edited != want and identity(entry) == edited
+
+    # --ctx-bin <venv>/bin/python: not symlink-resolved, so the venv's ctx is what runs.
+    vpy = venv_bin / "python"
+    assert vpy.is_symlink()
+    cfg = BenchConfig(dataset_root=tmp_path / "cab", workdir=tmp_path / "w", ctx_bin=vpy)
+    assert cfg.ctx_bin == vpy and resolve_ctx_bin(cfg.ctx_bin) == vpy
+    assert identity(vpy) == edited
+    run_dir, meta_dir = tmp_path / "w" / "runs" / "x", tmp_path / "w" / "runs" / "x_meta"
+    run_dir.mkdir(parents=True)
+    meta_dir.mkdir(parents=True)
+    host = ToolHost(cfg, run_dir, meta_dir, {}, dict(os.environ),
+                    RunMetrics(task_id="t", task_rel="t", category="file", arm="sj", model_id="m"), None, arm="sj")
+    cp = host.ctx(["--version"])
+    assert "fake-ctx-a2" in (cp.stdout or ""), (cp.stdout, cp.stderr)
+
+    # A Python launcher whose interpreter has no ctx: unavailable, with one warning.
+    bare_bin, _ = _venv_with_fake_ctx(tmp_path / "venv_bare", None)
+    bare_entry = _write_executable(
+        tmp_path / "bare_entry" / "ctx", f"#!{bare_bin / 'python'}\nfrom ctx.cli import main\nmain()\n"
+    )
+    capsys.readouterr()
+    cfg_mod._WARNED_NO_PKG.clear()
+    for target in (bare_entry, bare_bin / "python"):
+        got = identity(target)
+        assert got.startswith("unavailable (") and "no ctx package" in got, got
+        assert identity(target) == got
+    err = capsys.readouterr().err
+    assert err.count("[warn] ctx code identity") == 2, err
 
 
 def test_resume_reruns_sj_when_ctx_code_changes_and_raw_does_not(tmp_path: Path) -> None:

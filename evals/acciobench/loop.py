@@ -515,7 +515,7 @@ def run_trial(
         # The code itself, not only the version it reports: the ctx the trial launches and
         # the ctx package this process runs in-process (residence, deliverable audits, the
         # hook grammar). The raw arm uses neither, so its fingerprint leaves both out.
-        trial_inputs["ctx_code"] = ctx_code_identity(config.ctx_bin)
+        trial_inputs["ctx_code"] = ctx_code_identity(config)
         trial_inputs["harness_ctx_code"] = harness_ctx_code_identity()
     fingerprint = config_fingerprint(config, _HARNESS_BEHAVIOUR, trial_inputs)
     if config.resume and result_file.is_file():

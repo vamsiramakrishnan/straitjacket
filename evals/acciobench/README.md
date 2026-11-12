@@ -155,20 +155,31 @@ run without bwrap, but say that a scored run will be refused.
   launches (`--ctx-bin`, else the venv's or `PATH`'s `ctx`, else the source-checkout
   shim): when it is a Python console-script entry point that imports `ctx`, a Python
   interpreter (run as `-P -m ctx`), or the shim, the hash covers the `ctx` package that
-  interpreter would import, found with `importlib.util.find_spec` in a child run as
-  `python -P` from `/` (nothing is imported or run from a trial's directory). Any
-  other `ctx` (a shell wrapper, a compiled binary) falls back to a hash of the
-  executable's own bytes, so an edit behind such a wrapper is not seen: pass
-  `--no-cache` there. (2) The `ctx` package the harness imports in-process (residence
-  compaction, deliverable audits and the hook grammar, all used by the `sj` arm only).
-  The `raw` arm runs no ctx code, launched or in-process, so neither hash is part of
-  its fingerprint and an edit to ctx never re-runs `raw` trials. Both hashes read file
-  contents under relative paths (`__pycache__` and `.pyc` skipped), so moving a
-  checkout does not invalidate a workdir; each is computed once per process (about
-  25 ms for the launched ctx, most of it one interpreter start, and under 10 ms for the
-  in-process package, measured on one machine; about 0 afterwards). Adding these
-  hashes changed every `sj` fingerprint once: `sj` results written before them are
-  re-run on the next resume (`raw` results are kept).
+  interpreter would import. The package is found with `importlib.util.find_spec` in a
+  child run as `python -P` from `/` (nothing is imported or run from a trial's
+  directory), in the environment a trial launches ctx with: the same PATH, built by
+  the same helper (`config.trial_path`), so `#!/usr/bin/env python3` resolves to the
+  interpreter the trial would run (ctx's own directory comes first); the same
+  PYTHONPATH; and, under bwrap, an empty HOME (no user site-packages), as in the
+  sandbox. If such a Python launcher's `ctx` package cannot be found, the identity is
+  `unavailable (...)` and one `[warn]` line per process says an edit to ctx will not be
+  detected. Any other `ctx` (a shell wrapper, a compiled binary) is identified by a
+  hash of its own bytes, so an edit behind such a wrapper is not seen: pass
+  `--no-cache` there. `--ctx-bin <venv>/bin/python` is kept as given (a venv's python
+  is a symlink to the base interpreter; resolving it would launch an interpreter
+  without the venv's `ctx`). (2) The `ctx` package the harness imports in-process
+  (residence compaction, deliverable audits, the hook grammar, the window telemetry
+  store), all used by the `sj` arm only. The harness runs no ctx code for the `raw`
+  arm, launched or in-process, so neither hash is part of its fingerprint and an edit
+  to ctx never re-runs `raw` trials. (A `ctx` executable is still reachable on the
+  `raw` arm's PATH, through the mock services' PATH and the harness's venv `bin`; a
+  `raw` model that called it on its own would run it, and that is not fingerprinted.)
+  Both hashes read file contents under relative paths (`__pycache__` and `.pyc`
+  skipped), so moving a checkout does not invalidate a workdir; each is computed once
+  per process (measured on one machine: roughly 20 to 30 ms for the launched ctx, most
+  of it one interpreter start, and roughly 10 ms for the in-process package; about 0
+  afterwards). Adding these hashes changed every `sj` fingerprint once: `sj` results
+  written before them are re-run on the next resume (`raw` results are kept).
   A result written before fingerprints existed is reused only if its
   `model_id` equals `--model` (one `[legacy]` line says so); never across models.
   When a result does not match, one `[rerun]` line says why and the previous trial
