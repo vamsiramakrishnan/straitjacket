@@ -274,9 +274,13 @@ ctx plan run investigation.json
 Use `ctx q` for bounded pipelines over typed facts:
 
 ```bash
-ctx q 'fails last | in-changed'
 ctx q 'refs TokenBucket | group file | top 5'
+ctx q 'fails last | in-changed'   # after the tests ran through `ctx run`
 ```
+
+`fails last`, `records run:<id>…` and `ctx ask --intent diagnose` read output
+captured by `ctx run`; for a file that already exists (a log), use grep, Read
+windows, or `ctx search repo:<file> PATTERN`.
 
 `ctx q` has bounded stage counts and no recursion or unbounded loops. This keeps execution cost predictable.
 
