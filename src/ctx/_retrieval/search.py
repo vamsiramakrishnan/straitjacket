@@ -414,8 +414,9 @@ def search(
 
     skipped_binary = 0
     engine_note = ""
+    oversized: list[str] = []
     if index_targets is not None:
-        targets, considered, skipped_binary, engine_note = index_targets
+        targets, considered, skipped_binary, engine_note, oversized = index_targets
     elif ref.kind == "run":
         targets, skipped_binary = _resolve_run_targets(store, ref, glob=glob)
         considered = len(targets) + skipped_binary
@@ -500,10 +501,41 @@ def search(
             )
         )
 
+    total = len(matches)
+    direct_note = ""
+    scanned_targets = len(targets)
+    telemetry_bytes = sum(len(t.text) for t in targets)
+    if oversized and considered <= DIRECT_SCAN_MAX_FILES:
+        # A file named on its own (or a small set): scanned directly, its
+        # real matches merged into the same rows, ordered and capped as one.
+        cut_short: list[str] = []
+        for rel in oversized:
+            try:
+                d_rows, d_total, d_lines, d_read, d_size = _scan_direct(
+                    ws, rel, rxs, mode_all=mode_all, context=context, cap=cap)
+            except OSError:
+                continue
+            rows.extend(d_rows)
+            total += d_total
+            scanned_lines += d_lines
+            scanned_targets += 1
+            telemetry_bytes += d_read
+            if d_read < d_size:
+                cut_short.append(f"{rel} (first {fmt_int(d_read)} of {fmt_int(d_size)} bytes)")
+        rows.sort(key=lambda r: (r.target, r.line_no))
+        del rows[cap:]
+        direct_note = (f" · {len(oversized)} over the 1 MiB index limit scanned directly"
+                       + (f"; stopped early: {', '.join(cut_short)}" if cut_short else ""))
+    elif oversized:
+        names = ", ".join(oversized[:5]) + (f", … {len(oversized) - 5} more"
+                                            if len(oversized) > 5 else "")
+        direct_note = (f"\n  {len(oversized)} files over the 1 MiB index limit were not "
+                       f"searched: {names} (name one to search it: "
+                       "ctx search repo:<file> PATTERN)")
     if engine_note:
         scanned = (
-            f"  scanned: {fmt_int(len(targets))} of {fmt_int(considered)} targets · "
-            f"{fmt_int(scanned_lines)} lines · {engine_note}"
+            f"  scanned: {fmt_int(scanned_targets)} of {fmt_int(considered)} targets · "
+            f"{fmt_int(scanned_lines)} lines · {engine_note}{direct_note}"
         )
     else:
         scanned = (
@@ -513,13 +545,13 @@ def search(
     return _render_search(
         store, ws, ref, ref_text, patterns, rows,
         mode_all=mode_all,
-        total=len(matches),
+        total=total,
         scanned=scanned,
         cap=cap,
         # Snapshot-on-read for repo evidence (SPEC §6.3) — only repo targets
         # have a workspace file to pin.
         snapshots=ref.kind == "repo",
-        telemetry_bytes=sum(len(t.text) for t in targets),
+        telemetry_bytes=telemetry_bytes,
         filters=query.describe() if query is not None else "",
     )
 
@@ -527,13 +559,14 @@ def search(
 def _index_candidates(
     store: Store, ws: Workspace, ref: Ref, query, rxs, *, fixed: bool, mode_all: bool,
     glob: str | None, scope: str | None,
-) -> tuple[list[SearchTarget], int, int, str] | None:
+) -> tuple[list[SearchTarget], int, int, str, list[str]] | None:
     """The text-index rung: candidate files from trigrams (and ``sym:``),
     read for verification. None when the index is off, unbuilt and too big
     to build implicitly, or when nothing in the query has a trigram to
     offer — the lower rungs then scan the corpus as before.
 
-    Returns ``(targets, corpus size, binary skipped, engine note)``."""
+    Returns ``(targets, corpus size, binary skipped, engine note, files of
+    the corpus over the index's size limit)``."""
     import os
 
     from ctx import codeindex, searchq
@@ -568,6 +601,9 @@ def _index_candidates(
         # Byte-stable on an unchanged tree: no timings, no "re-indexed"
         # counts (search results are content-addressed and cached on them).
         note = "index trigram"
+        # Files the index left out for size are not candidates of anything:
+        # without this a search of a 2 MB log answered "matches: 0".
+        oversized = _oversized(ws, keep, idx.files)
     finally:
         idx.close()
     targets: list[SearchTarget] = []
@@ -581,7 +617,146 @@ def _index_candidates(
             skipped_binary += 1
             continue
         targets.append(SearchTarget(label=rel, text=data.decode("utf-8", "replace")))
-    return targets, considered, skipped_binary, note
+    return targets, considered, skipped_binary, note, oversized
+
+
+#: A search whose corpus is at most this many files (a file named on its
+#: own, or a small explicit set) scans its files over the index's size limit
+#: directly instead of skipping them. A wider search names them instead.
+DIRECT_SCAN_MAX_FILES = 8
+#: Bytes a direct scan reads per file, at most; past it the scan stops and
+#: says how far it got.
+DIRECT_SCAN_MAX_BYTES = 256 << 20
+#: Read size of one block of the direct scan (whole lines; a longer line is
+#: read on until its end or the bound below).
+_DIRECT_BLOCK = 1 << 20
+#: A single line longer than this is cut into pieces of this size.
+_DIRECT_LINE_MAX = 8 << 20
+#: Text kept around a block for context lines and private-key lookbehind.
+_DIRECT_EDGE_CHARS = 16384
+
+
+def _oversized(ws: Workspace, rels: list[str], indexed) -> list[str]:
+    """``rels`` the index left out for size (it drops files over
+    ``codeindex.MAX_FILE_BYTES``): only files it does not hold are stat'ed."""
+    from ctx import codeindex
+
+    out = []
+    for rel in rels:
+        if rel in indexed:
+            continue
+        try:
+            if (ws.root / rel).stat().st_size > codeindex.MAX_FILE_BYTES:
+                out.append(rel)
+        except OSError:
+            continue
+    return out
+
+
+def _line_blocks(fh, limit: int):
+    """Decoded blocks of whole lines from a binary file object, in order,
+    reading at most ``limit`` bytes. Yields ``(text, nbytes)``; the last
+    block may lack a trailing newline. Memory is bounded by one block plus
+    one line (a line over ``_DIRECT_LINE_MAX`` is cut)."""
+    carry = b""
+    read = 0
+    while read < limit:
+        chunk = fh.read(min(_DIRECT_BLOCK, limit - read))
+        if not chunk:
+            break
+        read += len(chunk)
+        buf = carry + chunk
+        cut = buf.rfind(b"\n") + 1
+        if cut == 0 and len(buf) < _DIRECT_LINE_MAX:
+            carry = buf
+            continue
+        if cut == 0:
+            cut = len(buf)
+        carry = buf[cut:]
+        yield buf[:cut].decode("utf-8", "replace"), cut
+    if carry:
+        yield carry.decode("utf-8", "replace"), len(carry)
+
+
+def _scan_direct(
+    ws: Workspace, rel: str, rxs, *, mode_all: bool, context: int, cap: int,
+) -> tuple[list[RenderRow], int, int, int, int]:
+    """A bounded streaming scan of one file the index does not hold.
+
+    Blocks of whole lines are matched with the same ``finditer`` and
+    leftmost-match-per-line rule as the in-memory engine; a hit is rendered
+    with :func:`_hit_window` over the block plus the text around it, so its
+    lines are cut, redaction-aware and private-key-blanked the same way.
+    Only the first ``cap`` hits are rendered; all are counted.
+
+    Returns ``(rows, total, lines, bytes_read, file_bytes)``.
+    """
+    path = ws.root / rel
+    size = path.stat().st_size
+    rows: list[RenderRow] = []
+    total = 0
+    seen: set[int] = set()
+    base = 1  # line number of the block's first line
+    nread = 0
+    lines = 0
+    policy = ws.config.redaction
+    with open(path, "rb") as fh:
+        blocks = _line_blocks(fh, DIRECT_SCAN_MAX_BYTES)
+        prev = ""
+        cur = next(blocks, None)
+        while cur is not None:
+            text, nbytes = cur
+            nxt = next(blocks, None)
+            nread += nbytes
+            last = nxt is None
+            per_line: dict[int, tuple[int, int, int]] = {}
+            for pi, rx in enumerate(rxs):
+                line_start = 0
+                next_nl = text.find("\n")
+                for m in rx.finditer(text):
+                    start = m.start()
+                    if start >= len(text) and not last:
+                        break  # the next block's first line: matched there
+                    while next_nl != -1 and next_nl < start:
+                        line_start = next_nl + 1
+                        next_nl = text.find("\n", line_start)
+                    seen.add(pi)
+                    old = per_line.get(line_start)
+                    if old is None or (start, pi) < (old[1], old[0]):
+                        per_line[line_start] = (pi, start, m.end())
+            total += len(per_line)
+            if per_line and len(rows) < cap:
+                pre = prev[-_DIRECT_EDGE_CHARS:]
+                pre = pre[pre.find("\n") + 1:] if len(prev) > _DIRECT_EDGE_CHARS else pre
+                post = ""
+                if nxt is not None and context:
+                    stop = -1
+                    for _ in range(context):
+                        stop = nxt[0].find("\n", stop + 1, _DIRECT_EDGE_CHARS)
+                        if stop < 0:
+                            break
+                    post = nxt[0][: stop if stop >= 0 else min(len(nxt[0]), _DIRECT_EDGE_CHARS)]
+                target = SearchTarget(label=rel, text=pre + text + post)
+                n = base
+                at = 0
+                for ls in sorted(per_line):
+                    if len(rows) >= cap:
+                        break
+                    n += text.count("\n", at, ls)
+                    at = ls
+                    pi, a, b = per_line[ls]
+                    before, line, after = _hit_window(target, len(pre) + ls, context, policy)
+                    rows.append(RenderRow(target=rel, line_no=n, col_a=a - ls + 1,
+                                          col_b=b - ls + 1, text=line, before=before,
+                                          after=after, contextual=bool(context)))
+            nl = text.count("\n")
+            base += nl
+            lines += nl + (1 if last and text and not text.endswith("\n") else 0)
+            prev = text
+            cur = nxt
+    if mode_all and len(seen) < len(rxs):
+        return [], 0, lines, nread, size
+    return rows, total, lines, nread, size
 
 
 def _unescape(pattern: str) -> str:
@@ -621,7 +796,7 @@ def _render_symbol_sites(
     symbol table, each verified against the file's current line."""
     from ctx import codeindex
 
-    targets, considered, skipped_binary, note = index_targets
+    targets, considered, skipped_binary, note, _oversized_rels = index_targets
     idx = codeindex.Index(store, ws)
     rows: list[RenderRow] = []
     try:
