@@ -63,7 +63,7 @@ python evals/acciobench_run.py validate \
 For each task, `validate` deterministically:
 1. Stages an isolated `TaskSandbox` on a dedicated port block (`20000 + slot * 100`) and starts any `services/start_services.sh` or `runtime_mocks` daemons.
 2. Exercises `ToolHost` (`arm="sj"`) + `ctx run --json` Entry Gate capture on synthetic large output to verify sidecar storage and digest generation.
-3. Runs the task's official `grader/run.sh` (`verify_task.py`) against untouched/empty `/task/outputs` with `--judge-provider mock` to confirm **zero baseline setup leakage** (an untouched workspace must not spuriously pass).
+3. Runs the task's official `grader/run.sh` (`verify_task.py`) against untouched/empty `/task/outputs` with `--judge-provider mock` to confirm **zero baseline setup leakage** (an untouched workspace must not spuriously pass). The reward is read exactly as a scored trial reads it: a `reward.json` the harness cannot interpret (a non-finite, negative or above-1 score, and the other cases under *Grading errors* below) fails the referee as `grader output not interpretable`, not as leakage and not as a pass.
 4. Tears down the sandbox and verifies **zero leaked child processes** for the slot token.
 
 ---

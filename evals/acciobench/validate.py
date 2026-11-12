@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -23,6 +24,7 @@ from typing import Any
 
 from .config import BenchConfig, RunMetrics, discover_all_tasks, load_cab_task, resolve_ctx_bin
 from .host import ToolHost, bwrap_sandbox_executable, bwrap_unavailable_reason
+from .loop import _interpret_reward
 from .sandbox import TaskSandbox, _resolve_runtime_paths, kill_by_slot_tag
 
 __all__ = ["run_doctor", "validate_task_referee"]
@@ -403,13 +405,23 @@ def validate_task_referee(config: BenchConfig, task_id: str, slot: int = 0) -> d
             # Run official grader on empty outputs — must execute cleanly and NOT pass
             reward_json = meta_dir / "reward.json"
             grade_data = sandbox.grade(reward_json, judge_token="")
-            if "_error" in grade_data:
+            interpreted: tuple[float, int, int] | None = None
+            if isinstance(grade_data, dict) and "_error" in grade_data:
                 errors.append(f"grader failed: {str(grade_data.get('_error'))[:260]}")
             else:
+                # The same reading a scored trial gets (loop._interpret_reward): a reward
+                # the harness cannot interpret is a referee failure, not leakage or a pass.
+                try:
+                    score, cp_cnt, ct_cnt, _ = _interpret_reward(grade_data)
+                    interpreted = (score, cp_cnt, ct_cnt)
+                except ValueError as exc:
+                    errors.append(
+                        f"grader output not interpretable: {str(exc)[:200]} "
+                        f"(reward.json: {json.dumps(grade_data, default=str)[:160]})"
+                    )
+            if interpreted is not None:
                 grader_ok = True
-                baseline_score = float(grade_data.get("score", 0.0) or 0.0)
-                checks_passed = int(grade_data.get("checks_passed", 0) or 0)
-                checks_total = int(grade_data.get("checks_total", 0) or 0)
+                baseline_score, checks_passed, checks_total = interpreted
                 if checks_total > 0:
                     baseline_passed = (checks_passed == checks_total) or (baseline_score >= 0.9999)
                 else:

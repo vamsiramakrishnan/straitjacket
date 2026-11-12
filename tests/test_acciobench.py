@@ -2250,6 +2250,36 @@ def test_a_stored_score_above_one_loads_as_a_grading_error_and_is_regraded(tmp_p
     assert json.loads(result_file.read_text(encoding="utf-8"))["raw_verifier_score"] == 1.0
 
 
+@pytest.mark.parametrize(
+    ("reward", "expect"),
+    [
+        ('{"score": 0.0, "checks_passed": 0, "checks_total": 2}', "ok"),
+        ('{"score": 1.0}', "leakage"),
+        ('{"score": 0.0, "checks_passed": 2, "checks_total": 2}', "leakage"),
+        ('{"score": 85, "checks_passed": 0, "checks_total": 4}', "uninterpretable"),
+        ('{"score": 5}', "uninterpretable"),
+        ('{"score": NaN}', "uninterpretable"),
+        ('{"score": -3}', "uninterpretable"),
+        ('[1, 2]', "uninterpretable"),
+    ],
+)
+def test_validate_reads_rewards_like_a_scored_trial(tmp_path: Path, reward: str, expect: str) -> None:
+    ds_root = tmp_path / "cab"
+    case_dir = _create_synthetic_task(ds_root, category="file", task_id="file-refreward")
+    _write_executable(case_dir / "grader" / "run.sh", f"#!/usr/bin/env bash\necho '{reward}' > \"$REWARD_JSON\"\n")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock")
+    res = validate_task_referee(cfg, "file-refreward", slot=88)
+    joined = " | ".join(res["errors"])
+    if expect == "ok":
+        assert res["ok"] and res["grader_ok"] and not res["baseline_passed"], joined
+    elif expect == "leakage":
+        assert not res["ok"] and res["baseline_passed"] and "baseline setup leakage" in joined
+    else:
+        assert not res["ok"] and not res["grader_ok"] and not res["baseline_passed"]
+        assert "grader output not interpretable" in joined and "leakage" not in joined, joined
+
+
 def test_reward_score_above_one_is_a_grading_error_not_a_pass(tmp_path: Path) -> None:
     """Scores are on a 0..1 scale: anything above 1 (beyond float noise) is not
     interpretable, with or without checks; float noise just above 1 is a full score."""
