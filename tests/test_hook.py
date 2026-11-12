@@ -1,6 +1,7 @@
 """Acceptance: hook JSON contract, classification policy, fail-open."""
 
 import json
+import shlex
 
 import pytest
 import subprocess
@@ -406,3 +407,92 @@ def test_slice_reads_and_non_code_files_keep_the_bounded_page(state_home, tmp_pa
     notes.write_text("x" * 20000, encoding="utf-8")
     d = _classify("Read", {"file_path": str(notes)}, tmp_path)
     assert d["rewrite"]["updatedInput"]["limit"] == 240  # no parser: first page as before
+
+
+# ------------------------------------------- text readers and git listings
+# Measured on Antigravity (182 labelled commands replayed through the hook):
+# standalone `nl`/`seq`/`sort`/`cut`/`base64` were "unknown" and asked the
+# human (a headless run ends with no answer), and `git ls-files`, `git
+# ls-tree -r`, `git rev-list`, `git grep -n` and `ls src/*/*` ran natively and
+# flooded the context.
+TEXT_READERS = ["nl README.md", "fold -w 100 app.min.js", "fmt notes.txt",
+                "column -t data.tsv", "paste a b", "comm a b", "seq 1 50000",
+                "sort data.csv", "cut -d, -f2 data.csv", "uniq data.txt", "uniq -c -",
+                "base64 icon.png", "rev a.txt", "expand a.txt", "unexpand a.txt"]
+GIT_FLOODS = ["git ls-files", "git ls-files src", "git ls-tree -r HEAD", "git ls-tree -rt HEAD",
+              "git rev-list HEAD", "git rev-list --all", "git rev-list -n 5000 HEAD",
+              "git rev-list -n 5 --objects HEAD", "git grep -n 'def '", "git grep -c TODO",
+              "git grep -l TODO", "git for-each-ref", "git for-each-ref --count=100000",
+              "git ls-remote origin", "git show-ref", "git -C sub ls-files"]
+GIT_BOUNDED = ["git rev-list --count HEAD", "git rev-list -n 5 HEAD",
+               "git rev-list --max-count=3 HEAD", "git rev-list -1 HEAD", "git grep -q TODO",
+               "git grep --quiet TODO", "git for-each-ref --count=5",
+               "git show-ref --verify refs/heads/main", "git show-ref -q refs/heads/main",
+               "git ls-tree HEAD", "git ls-tree HEAD src/"]
+WRITERS = ["sort -o out.txt data.csv", "sort --output=out.txt data.csv", "sort -uo out.txt d",
+           "uniq in.txt out.txt", "uniq -f 1 in.txt out.txt", "base64 -o out.b64 icon.png",
+           "base64 --output=x icon.png"]
+
+
+@pytest.mark.parametrize("cmd", TEXT_READERS + GIT_FLOODS + ["ls src/*/*", "ls -l *.py", "ls x?"])
+def test_text_readers_git_listings_and_globbed_ls_are_captured(tmp_path, cmd):
+    d = _classify("run_command", {"CommandLine": cmd}, tmp_path)
+    # the decision a host without input substitution gets is the deny; the
+    # rewrite is what Antigravity and steering hosts run instead
+    assert d["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run"), (cmd, d)
+    assert d["rewrite"]["command"].endswith(shlex.quote(cmd)), d
+
+
+@pytest.mark.parametrize("cmd", GIT_BOUNDED + ["ls", "ls -la src", "ls src/a.py"])
+def test_bounded_listings_stay_native(tmp_path, cmd):
+    d = _classify("run_command", {"CommandLine": cmd}, tmp_path)
+    assert d == {"decision": "allow"}, (cmd, d)
+
+
+@pytest.mark.parametrize("cmd", WRITERS)
+def test_text_readers_that_write_a_file_are_judged_as_unknown(tmp_path, cmd):
+    d = _classify("run_command", {"CommandLine": cmd}, tmp_path)
+    assert d["decision"] == "force_ask" and "unknown output bound" in d["reason"], (cmd, d)
+    assert "rewrite" not in d
+    (tmp_path / "ctx.toml").write_text('version = 1\n[guard]\nunknown_command = "deny"\n')
+    assert _classify("run_command", {"CommandLine": cmd}, tmp_path)["decision"] == "deny"
+
+
+@pytest.mark.parametrize("cmd", ["yes", "tee out.txt", "tr a b"])
+def test_yes_tee_and_tr_stay_unknown(tmp_path, cmd):
+    d = _classify("run_command", {"CommandLine": cmd}, tmp_path)
+    assert d["decision"] == "force_ask" and "unknown output bound" in d["reason"], (cmd, d)
+
+
+@pytest.mark.parametrize("cmd,want", [
+    # (the verdict each pipeline had before these programs were captured alone)
+    ("git ls-files | wc -l", {"decision": "allow"}),
+    ("git grep -n TODO | head -5", {"decision": "allow"}),
+    ("ls src/* | head", {"decision": "allow"}),
+    ("seq 10 | sort", "capture"),
+    ("cat data.csv | sort | uniq -c", "capture"),
+    ("base64 icon.png | head -3", "ask"),
+    ("cat in | sort -o out.txt", "capture"),
+])
+def test_pipelines_keep_their_verdicts(tmp_path, cmd, want):
+    d = _classify("run_command", {"CommandLine": cmd}, tmp_path)
+    if want == "capture":
+        assert d["rewrite"]["updatedInput"]["CommandLine"].startswith("ctx run"), d
+        assert "--shell" in d["rewrite"]["updatedInput"]["CommandLine"], d
+    elif want == "ask":
+        assert d["decision"] == "force_ask" and "rewrite" not in d, d
+    else:
+        assert d == want, d
+
+
+def test_text_reader_keeps_every_existing_protection(tmp_path):
+    (tmp_path / "ctx.toml").write_text('version = 1\n[guard]\ndeny_commands = ["sort"]\n')
+    d = _classify("run_command", {"CommandLine": "sort a.txt"}, tmp_path)
+    assert d["decision"] == "deny" and "rewrite" not in d
+    (tmp_path / "ctx.toml").write_text("version = 1\n")
+    d = _classify("run_command", {"CommandLine": f"nl {tmp_path}/.env"}, tmp_path)
+    assert d["decision"] == "force_ask" and "secret" in d["reason"].lower()
+    _steering_deny(tmp_path)
+    for cmd in ("seq 1 5", "git ls-files", "ls src/*/*"):
+        d = _classify("run_command", {"CommandLine": cmd}, tmp_path)
+        assert d["decision"] == "deny" and "rewrite" not in d, cmd

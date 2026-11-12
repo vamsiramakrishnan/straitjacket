@@ -218,6 +218,9 @@ output bound, and the host decides about the command. **Fix:** confirm a genuine
 safe unknown command, or use `ctx run -- …` when it can flood. You can change `[guard]
 unknown_command` (`allow` / `deny` / `ask` / `force_ask`), but a blanket `allow`
 removes the review boundary for both unclassified reads and unclassified mutations.
+Common read-only text tools (`nl`, `seq`, `sort`, `cut`, `base64`, …) are not unknown:
+alone they are captured like `cat`; only their file-writing forms (`sort -o`, `uniq IN
+OUT`, `base64 -o`) still reach this prompt.
 See [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 
 ### "in-place sed/awk" or "deeply nested shell" prompts

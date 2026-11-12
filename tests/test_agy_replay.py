@@ -150,6 +150,38 @@ def test_replayed_flooding_command_is_rewritten_in_place(env):
     assert shlex.split(out["overwrite"]["CommandLine"])[-1] == "cat big.log"
 
 
+@pytest.mark.parametrize("command", [
+    "nl a.txt", "seq 1 50000", "sort a.txt", "cut -d' ' -f2 a.txt", "base64 a.txt",
+    "git ls-files", "git ls-tree -r HEAD", "git rev-list HEAD", "git grep -n line",
+    "ls */*",
+])
+def test_replayed_text_reader_and_listing_are_rewritten_not_asked(env, command):
+    """Measured in the 182-command replay: these were asked (a headless run
+    ends with no answer) or ran natively and flooded."""
+    out = _replay("pre-tool-use", _flood(env, command), env)
+    assert out["decision"] == "allow", out
+    assert set(out["overwrite"]) == {"CommandLine"}
+    assert shlex.split(out["overwrite"]["CommandLine"])[-1] == command
+
+
+@pytest.mark.parametrize("command,decision", [
+    ("git rev-list --count HEAD", "allow"), ("git ls-tree HEAD", "allow"), ("ls -la", "allow"),
+    ("git ls-files | wc -l", "allow"),           # a pipeline keeps its verdict
+    ("sort -o out.txt a.txt", "force_ask"),       # writes a file: an unknown mutator
+    ("base64 a.txt | head -3", "force_ask"),      # unvouched part, as before
+    ("yes | head -n 5", "force_ask"),
+])
+def test_replayed_bounded_writing_and_piped_forms(env, command, decision):
+    out = _replay("pre-tool-use", _flood(env, command), env)
+    assert out["decision"] == decision and "overwrite" not in out, out
+
+
+def test_replayed_text_reader_rewrite_respects_a_deny_rule(env):
+    _rules(env, allow=["command(ctx)"], deny=["command(sort)"])
+    out = _replay("pre-tool-use", _flood(env, "sort a.txt"), env)
+    assert out["decision"] == "deny" and "overwrite" not in out
+
+
 def test_replayed_large_read_file_is_bounded_in_place(env):
     payload = _with_args(_materialize(_load("pre_tool_use_read_file.json"), env),
                          Path=str(env["ws"] / "big.log"))

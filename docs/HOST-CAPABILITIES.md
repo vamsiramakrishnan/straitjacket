@@ -276,7 +276,18 @@ Known limits of that check:
   prompt was not observed.
 
 **Tool output.** Nothing can replace or capture a tool result on this host. Output
-is bounded only by rewriting the command before it runs. A result from a tool that
+is bounded only by rewriting the command before it runs. So the classifier names
+the common read-only text tools (`nl`, `fold`, `fmt`, `column`, `paste`, `comm`,
+`seq`, `sort`, `cut`, `uniq`, `base64`, `rev`, `expand`, `unexpand`) and the git
+listings (`ls-files`, `ls-tree -r`, `rev-list`, `grep`, `for-each-ref`, `ls-remote`,
+`show-ref`) and rewrites them like `cat` when they run on their own, as it does `ls`
+with a glob operand. Before, the text tools were unknown and asked (a headless run
+ended with no answer) and the listings ran natively: in a replay of 182 labelled
+commands, asks went from 13 to 3 and floods run natively from 5 to 0. Forms bounded
+by their arguments stay native (`rev-list --count`, `rev-list -n 5`, `grep -q`,
+`for-each-ref --count=5`, `show-ref --verify`, a non-recursive `ls-tree`), forms that
+write a file (`sort -o`, `uniq IN OUT`, `base64 -o`) are judged as an unknown
+command, and as parts of a pipeline these programs keep their earlier verdicts. A result from a tool that
 is not rewritten (an MCP tool, `search_web`, a sub-agent) reaches the transcript
 whole; a connector that returns a large payload is the gap. If a `PostToolUse` payload
 does carry a result, ctx stores it so it keeps an address; it still cannot change

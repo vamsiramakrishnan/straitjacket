@@ -254,6 +254,20 @@ _UNBOUNDED_CMDS = {
 
 # git subcommands that flood; the rest of git is judged separately.
 _GIT_UNBOUNDED = {"log", "diff", "show", "blame", "reflog", "shortlog", "whatchanged"}
+# git listings: one line per file, object, commit or ref, so a repository's
+# size is their output's size. Captured when run on their own, unless the
+# arguments bound them (_git_listing_bounded); as a part of a compound they
+# are judged as before (allowed), so pipelines keep their verdicts.
+_GIT_LISTINGS = frozenset({"ls-files", "ls-tree", "rev-list", "grep", "for-each-ref",
+                           "ls-remote", "show-ref"})
+
+# Read-only text tools: output that grows with their input (or, for seq, with
+# their arguments). On their own they are captured like cat; the forms that
+# write a file (_text_reader_writes) are judged as an unknown command is. As
+# compound parts they keep their old verdicts. `yes`, `tee` and `tr` are not
+# here: one never ends, one writes files, one is judged as a filter only.
+_TEXT_READERS = frozenset({"nl", "fold", "fmt", "column", "paste", "comm", "seq", "sort",
+                           "cut", "uniq", "base64", "rev", "expand", "unexpand"})
 
 # Text-transform tools (M-K5.3, docs/SUBSTRATE.md): read-only invocations
 # are unbounded-output commands (→ ctx run capture, like grep/find); an
@@ -1694,7 +1708,8 @@ def _path_outside(path_str: str, workspace_root: str | None) -> bool:
 
 
 def classify_command(
-    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
+    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None,
+    part: bool = False,
 ) -> dict[str, str]:
     """Classify a command, then abbreviate any lesson already taught.
 
@@ -1702,8 +1717,12 @@ def classify_command(
     re-send its full explanation every time. Replaying this repo's own
     transcripts found sessions the harness made *worse* (128 -> 439 tokens,
     -243%) purely from repeated advice. Decay is applied here, once, so every
-    builder inherits it instead of 20 of them each remembering to."""
-    return _classify_command_inner(command, policy, _depth, cwd=cwd)
+    builder inherits it instead of 20 of them each remembering to.
+
+    ``part`` marks one part of a compound command (``_compound_verdict``):
+    the standalone-only rules for text readers, git listings and globbed
+    ``ls`` do not apply to it, so a pipeline keeps the verdict it had."""
+    return _classify_command_inner(command, policy, _depth, cwd=cwd, part=part)
 
 
 def _lesson_key(reason: str) -> str:
@@ -1985,7 +2004,8 @@ def _compound_verdict(
     for seg in segments:
         hit = seen.get(seg)
         if hit is None:
-            hit = (classify_command(seg, policy, _depth + 1, cwd=cwd), _part_program(seg))
+            hit = (classify_command(seg, policy, _depth + 1, cwd=cwd, part=True),
+                   _part_program(seg))
             seen[seg] = hit
         d, part = hit
         decisions.append(d)
@@ -2039,7 +2059,8 @@ def _compound_verdict(
 
 
 def _classify_command_inner(
-    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
+    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None,
+    part: bool = False,
 ) -> dict[str, str]:
     """Classify a shell command string. Conservative and config-driven; not a
     shell-security parser (SPEC §11)."""
@@ -2188,7 +2209,7 @@ def _classify_command_inner(
 
     # `bash -c '<inner>'`: classify the inner command, not the shell.
     if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
-        inner = classify_command(argv[2], policy, _depth + 1, cwd=cwd)
+        inner = classify_command(argv[2], policy, _depth + 1, cwd=cwd, part=part)
         rw = inner.get("_rewrite")
         if isinstance(rw, dict) and "command" in rw:
             # The inner command decided the class; the capture still runs the
@@ -2268,7 +2289,9 @@ def _classify_command_inner(
 
     if prog == "git":
         sub, _git_rest = git_subcommand(argv)
-        if sub in _GIT_UNBOUNDED:
+        if sub in _GIT_UNBOUNDED or (
+            sub in _GIT_LISTINGS and not part and not _git_listing_bounded(
+                sub, _git_rest, int(policy.get("_head_tail_max", _HEAD_TAIL_MAX)))):
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
         if sub == "status" and not ("--short" in argv or "-s" in argv or "--porcelain" in argv):
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
@@ -2276,6 +2299,11 @@ def _classify_command_inner(
 
     if prog == "ls":
         if any(a.startswith("-") and "R" in a for a in argv[1:]):
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+        # A glob operand (`ls src/*/*`) lists every directory it matches,
+        # like -R one level at a time: captured when run on its own.
+        if not part and any(not a.startswith("-") and any(ch in a for ch in "*?[")
+                            for a in argv[1:]):
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
         return dict(DECISION_ALLOW)
 
@@ -2322,6 +2350,11 @@ def _classify_command_inner(
         if choose_guard({"flood_command": True}) == "rewrite_command":
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
 
+    if prog in _TEXT_READERS and not part and not _text_reader_writes(prog, argv):
+        # Read-only: captured like cat. A form that writes a file falls
+        # through to the unknown-command policy, as any unknown mutator does.
+        return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+
     # Unknown command → configured policy.
     unknown = policy.get("unknown_command", "force_ask")
     if unknown == "allow" or policy.get("mode") == "advisory":
@@ -2332,6 +2365,88 @@ def _classify_command_inner(
         f"CTX_CONTEXT_GUARD: unknown output bound for {prog!r}. "
         f"If output may be large, run: ctx run -- {' '.join(shlex.quote(a) for a in argv)}"
     )
+
+
+def _short_cluster_has(arg: str, letter: str) -> bool:
+    return arg.startswith("-") and not arg.startswith("--") and letter in arg[1:]
+
+
+def _text_reader_writes(prog: str, argv: list[str]) -> bool:
+    """Does this text-reader invocation write a file? ``sort -o F`` /
+    ``--output``, BSD ``base64 -o F`` / ``--output``, and ``uniq IN OUT``.
+    Conservative: a short-option cluster holding ``o`` counts as one (a
+    false positive only asks)."""
+    args = argv[1:]
+    if prog in ("sort", "base64"):
+        for a in args:
+            if a == "--":
+                return False
+            if a.startswith("--output") or _short_cluster_has(a, "o"):
+                return True
+        return False
+    if prog == "uniq":
+        operands: list[str] = []
+        skip = only_operands = False
+        for a in args:
+            if skip:
+                skip = False
+            elif only_operands or a == "-" or not a.startswith("-"):
+                operands.append(a)
+            elif a == "--":
+                only_operands = True
+            elif a in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
+                skip = True
+        return len(operands) >= 2
+    return False
+
+
+def _count_value(rest: list[str], *flags: str) -> int | None:
+    """The integer given to any of ``flags`` (``-n 5``, ``-n5``, ``--x=5``,
+    ``--x 5``), or None. ``-N`` counts as ``-n N`` when ``-n`` is a flag."""
+    for i, a in enumerate(rest):
+        if a == "--":
+            break
+        raw = None
+        for f in flags:
+            if a == f and i + 1 < len(rest):
+                raw = rest[i + 1]
+            elif f.startswith("--") and a.startswith(f + "="):
+                raw = a[len(f) + 1:]
+            elif not f.startswith("--") and a.startswith(f) and a[len(f):].isdigit():
+                raw = a[len(f):]
+        if raw is None and "-n" in flags and re.fullmatch(r"-\d+", a):
+            raw = a[1:]
+        if raw is not None and raw.isdigit():
+            return int(raw)
+    return None
+
+
+def _git_listing_bounded(sub: str, rest: list[str], cap: int) -> bool:
+    """Is this git listing bounded by its own arguments? Only forms whose
+    output cannot grow with the repository: ``grep -q``, ``rev-list
+    --count`` (one number), ``rev-list -n N`` without objects,
+    ``for-each-ref --count=N``, ``show-ref --verify/--exists/-q``, and a
+    non-recursive ``ls-tree`` (one directory, like plain ``ls``). ``grep
+    -c``/``-l`` print a line per matching file, ``ls-files`` and
+    ``ls-remote`` have no bounded form: they stay captured."""
+    opts = rest[:rest.index("--")] if "--" in rest else rest
+    if sub == "grep":
+        return "-q" in opts or "--quiet" in opts
+    if sub == "rev-list":
+        if "--count" in opts:
+            return True
+        if any(a.startswith("--objects") or a in ("--disk-usage",) for a in opts):
+            return False
+        n = _count_value(opts, "-n", "--max-count")
+        return n is not None and n <= cap
+    if sub == "for-each-ref":
+        n = _count_value(opts, "--count")
+        return n is not None and n <= cap
+    if sub == "show-ref":
+        return any(a in ("--verify", "--exists", "-q", "--quiet") for a in opts)
+    if sub == "ls-tree":
+        return not any(a == "-r" or _short_cluster_has(a, "r") for a in opts)
+    return False
 
 
 def _extract_line_count(argv: list[str]) -> int | None:
