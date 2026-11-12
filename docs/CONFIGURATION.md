@@ -72,7 +72,7 @@ ceiling is captured and shown as a bounded digest instead.
 | `max_inline_lines` | `240` | Line cap injected when an oversized read is rewritten to a bounded window. |
 | `max_matches` | `80` | Maximum match count returned by a search. |
 | `session_read_budget_bytes` | `262144` (256 KiB) | Cumulative native-read budget per session before graduated pressure kicks in. |
-| `max_tool_output_bytes` | `16384` | Emission gate (output side): a tool result larger than this is digested before it reaches the model. |
+| `max_tool_output_bytes` | `16384` | Emission gate (output side): a tool result larger than this is digested before it reaches the model. Measured on the result's text (a Read's lines, a Grep/Glob listing), not its JSON wrapper. A Read window the guard bounded is cut to whole lines that fit instead of digested. |
 | `window_pressure_pct` | `70` | Context-window fullness (%) at which budgets start tightening. |
 | `failure_budget_factor` | `2.0` | Failing runs get this multiple of the standard digest budget — a failure carries the evidence you need. |
 | `digest_head_lines` | `5` | Head lines shown for a generic text flood. |

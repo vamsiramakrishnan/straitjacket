@@ -4565,6 +4565,9 @@ def _normalize_tool_response(tr: Any) -> tuple[str, str]:
             return "\n".join(b["text"] for b in tr), ""
         return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
     if isinstance(tr, dict):
+        text = _native_result_text(tr)
+        if text is not None:
+            return text, ""
         if isinstance(tr.get("content"), list):
             return _normalize_tool_response(tr["content"])
         if isinstance(tr.get("stdout"), str):
@@ -4572,6 +4575,46 @@ def _normalize_tool_response(tr: Any) -> tuple[str, str]:
         if isinstance(tr.get("text"), str):
             return tr["text"], ""
     return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
+
+
+#: Claude Code's text-Read result: ``{"type": "text", "file": {...}}``.
+_READ_FILE_KEYS = frozenset({"filePath", "content", "numLines", "startLine", "totalLines"})
+#: Claude Code's Grep (``mode``: content / files_with_matches / count) and
+#: Glob results: a ``filenames`` list plus counters, and for Grep's content
+#: and count modes the matched text in ``content``.
+_LISTING_KEYS = frozenset({"mode", "filenames", "content", "numFiles", "numLines",
+                           "numMatches", "durationMs", "truncated", "appliedLimit",
+                           "appliedOffset"})
+
+
+def _read_text_file(tr: Any) -> dict[str, Any] | None:
+    """The ``file`` object of a text Read result, or None for any other shape."""
+    if not (isinstance(tr, dict) and tr.get("type") == "text" and set(tr) <= {"type", "file"}):
+        return None
+    f = tr.get("file")
+    if isinstance(f, dict) and isinstance(f.get("content"), str) and set(f) <= _READ_FILE_KEYS:
+        return f
+    return None
+
+
+def _native_result_text(tr: dict[str, Any]) -> str | None:
+    """The text a native tool's structured result carries, or None.
+
+    Only shapes whose every key is accounted for: a text Read (the file's
+    lines, exactly as read) and a Grep/Glob listing (the matched text, or the
+    file names one per line; the counters beside them are derivable from it).
+    Measuring and storing the JSON wrapper instead made a 240-line Read count
+    as one 18 KB string and come back from ``ctx get`` JSON-escaped."""
+    f = _read_text_file(tr)
+    if f is not None:
+        return f["content"]
+    if set(tr) <= _LISTING_KEYS and isinstance(tr.get("filenames"), list) \
+            and all(isinstance(x, str) for x in tr["filenames"]):
+        if tr.get("mode") in ("content", "count") and isinstance(tr.get("content"), str):
+            return tr["content"]
+        if not isinstance(tr.get("content"), str) or not tr["content"]:
+            return "\n".join(tr["filenames"])
+    return None
 
 
 def _tool_command(payload: dict[str, Any]) -> str | None:
@@ -4908,6 +4951,121 @@ def _shape_output(tr: Any, text: str, budget: int,
     return None, None, False
 
 
+def _guard_window(payload: dict[str, Any], tr: Any, policy: dict[str, Any],
+                  ws_root: str | None) -> dict[str, Any] | None:
+    """The ``file`` object of a text Read the read guard itself bounded, else
+    None.
+
+    Decided the way :func:`classify_read` decided it, from the same facts and
+    one ``stat``: a Claude Code ``Read`` of a file over ``max_inline_bytes``
+    that is not ctx's own ledger, not a secret path and not outside the
+    workspace, under a policy that lets the guard steer. Such a Read only
+    runs at all because the guard rewrote it to a line window (otherwise it
+    was denied or asked), so its result is a window the guard chose -- which
+    the output gate must never turn into a digest of a different kind."""
+    f = _read_text_file(tr)
+    if f is None or str(payload.get("tool_name") or payload.get("toolName") or "") != "Read":
+        return None
+    n = f.get("numLines")
+    max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+    if not isinstance(n, int) or isinstance(n, bool) or not 0 < n <= max_lines:
+        return None
+    if not _steering_allows(policy):
+        return None
+    ti = payload.get("tool_input") or payload.get("toolInput") or {}
+    path = f.get("filePath") or (ti.get("file_path") if isinstance(ti, dict) else None)
+    if not isinstance(path, str) or not path:
+        return None
+    if ws_root and not os.path.isabs(path):
+        path = os.path.join(ws_root, path)
+    if _LEDGER_DIR_NAME in path.replace("\\", "/").split("/"):
+        return None
+    if _is_secret_path(path, ws_root) or _path_outside(path, ws_root):
+        return None
+    try:
+        size = os.stat(path).st_size
+    except OSError:
+        return None
+    if size <= int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT)):
+        return None
+    return f
+
+
+def _fit_read_window(tr: dict[str, Any], f: dict[str, Any], budget: int,
+                     policy: dict[str, Any]) -> tuple[Any, str, int] | None:
+    """The largest leading part of a guard-bounded Read window that fits
+    ``budget`` (serialized result plus note, the measure every shaped output
+    is held to), as the same Read result a smaller ``limit`` would have
+    produced -- whole lines, ``numLines`` set to match -- plus one note naming
+    the lines shown and the ``offset`` to continue from.
+
+    Returns ``(value, note, delivered_bytes)``, or None when not even the
+    first line fits (one enormous line), where the caller falls back to the
+    ordinary digest. The cut goes through ``clip_redacting``: a secret that
+    straddles it is blanked, never shown as a prefix too short to match."""
+    from ctx.textutil import clip_redacting
+
+    content = f["content"]
+    start = f.get("startLine")
+    start = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 1
+    ends: list[int] = []
+    pos = 0
+    while True:
+        i = content.find("\n", pos)
+        if i < 0:
+            ends.append(len(content))
+            break
+        ends.append(i)
+        pos = i + 1
+    total = f.get("totalLines")
+    of_total = (f" of {total:,}" if isinstance(total, int)
+                and not isinstance(total, bool) and total > 0 else "")
+    red = _redaction_policy(policy)
+
+    def build(k: int) -> tuple[Any, str, str]:
+        text = clip_redacting(content, ends[k - 1], red)
+        note = (f"CTX_CONTEXT_GUARD: this Read was cut to fit the {budget:,}-byte output "
+                f"budget; it shows lines {start}-{start + k - 1}{of_total}. "
+                f"Continue with Read offset={start + k} limit={k}.")
+        return dict(tr, file=dict(f, content=text, numLines=k)), note, text
+
+    def fits(k: int) -> bool:
+        value, note, _ = build(k)
+        return _jsize(value) + len(note.encode("utf-8", "replace")) <= budget
+
+    lo, hi = 0, len(ends) - 1  # all lines did not fit: that is why we are here
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid - 1
+    if lo < 1:
+        return None
+    value, note, text = build(lo)
+    return value, note, len(text.encode("utf-8", "replace"))
+
+
+def _settle_window_charge(payload: dict[str, Any], ws_root: str | None,
+                          policy: dict[str, Any], delivered: int) -> None:
+    """Settle the session read ledger for a guard-bounded Read: PreToolUse
+    charged ``max_inline_bytes`` up front (it cannot know the window's size
+    without reading the file); what the model received is ``delivered``.
+    Fail-open, like every ledger write."""
+    try:
+        session_id = str(payload.get("session_id") or payload.get("conversation_id")
+                         or payload.get("conversationId") or "unknown")
+        charged = int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT))
+        delta = delivered - charged
+        if delta < 0:
+            # Never below zero: a refund is only of what was charged.
+            delta = max(delta, -_ledger_charge(ws_root, session_id, 0))
+        if delta:
+            _ledger_charge(ws_root, session_id, delta)
+    except Exception:
+        pass
+
+
 def _shape_replacement(tr: Any, text: str, budget: int = _MAX_TOOL_OUTPUT_BYTES_DEFAULT,
                        handle: str | None = None) -> tuple[Any, bool]:
     """Back-compatible view of :func:`_shape_output`: ``(value, shaped)``."""
@@ -5144,7 +5302,7 @@ def _host_full_output(payload: dict[str, Any], tr: dict[str, Any]) -> str | None
     return data.decode("utf-8", "replace")
 
 
-def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
+def _emission_gate(payload: dict[str, Any], flavor: str, reserve: int = 0) -> str | None:
     """The universal output-side gate. When a tool result exceeds the byte
     budget, persist it losslessly and return a bounded digest (with a working
     ``ctx get`` ref) to substitute for the raw output via ``updatedToolOutput``.
@@ -5171,6 +5329,12 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     also reach the store, so the result keeps an address and ``ctx get`` can
     resolve it afterwards. Capture is worth having even where substitution is
     impossible; the alternative is bytes that flood *and* vanish.
+
+    A Read window the read guard itself bounded (:func:`_guard_window`) is
+    never digested on Claude Code: over budget it is cut to its largest
+    leading part that fits (``reserve`` bytes are kept for the context text
+    that travels with it), returned as the note, and the fitted result is
+    left in ``_GATE_STATS["window"]`` for the caller to send.
     """
     can_substitute = can_substitute_output(flavor)
     _GATE_STATS.clear()
@@ -5235,6 +5399,8 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     # -- phase 2: budget. A broken policy read degrades to the built-in
     # default threshold; it must not skip the gate.
     threshold = _MAX_TOOL_OUTPUT_BYTES_DEFAULT
+    window: dict[str, Any] | None = None
+    policy: dict[str, Any] = {}
     try:
         policy = _apply_window_pressure(_load_guard_policy(ws_root), ws_root)
         if str(policy.get("mode")) == "advisory":
@@ -5243,7 +5409,10 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         threshold = int(
             policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT)
         )
+        if flavor == "claude-code":
+            window = _guard_window(payload, tr, policy, ws_root)
     except Exception as exc:
+        window = None
         _note_guard_failure(ws_root, op="emission_gate", stage="policy", exc=exc)
 
     try:
@@ -5261,6 +5430,8 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         or (isinstance(tr, dict) and tr.get("isError"))
     )
     if size <= threshold:
+        if window is not None:
+            _settle_window_charge(payload, ws_root, policy, size)
         if can_substitute and _single_named_pytest(command or ""):
             try:
                 from ctx import reflex
@@ -5278,6 +5449,20 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
 
     # -- phase 3: over budget. From here None would mean "emit everything
     # raw", so every failure degrades to the bounded fallback instead.
+    if window is not None and isinstance(tr, dict):
+        try:
+            fitted = _fit_read_window(tr, window, threshold - max(0, reserve), policy)
+        except Exception as exc:
+            fitted = None
+            _note_guard_failure(ws_root, op="emission_gate", stage="window", exc=exc)
+        if fitted is not None:
+            value, note, delivered = fitted
+            _settle_window_charge(payload, ws_root, policy, delivered)
+            _GATE_STATS["window"] = (value, note)
+            _GATE_STATS["decision"] = "window_fitted"
+            return note
+        # Not even one whole line fits (one enormous line): the ordinary
+        # digest below, of the file's text, with its handle.
     try:
         # Lazy: only pay the Store/digest import cost on the over-budget path.
         from ctx.digest import digest_output
@@ -5516,10 +5701,23 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
             media = "unreadable"
         if media:
             gated = False
+    # The relay is drained before the gate on Claude Code and Codex (they
+    # always have a channel for it), so the nudge and relay text that travel
+    # in the same additionalContext are inside the budget the result is held
+    # to -- both by shaping below and by a fitted Read window in the gate.
+    relay_text = ""
+    relay_drained = False
+    if flavor in ("claude-code", "codex"):
+        try:
+            relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
+        except Exception:
+            relay_text = ""
+        relay_drained = True
+    extra = sum(len(x.encode("utf-8", "replace")) + 1 for x in (nudge, relay_text) if x)
     if gated:
         try:
             # Universal emission gate: replace over-budget output with a digest.
-            replacement = _emission_gate(payload, flavor)
+            replacement = _emission_gate(payload, flavor, reserve=extra)
         except Exception:
             # _emission_gate is written not to raise; if it somehow does, the
             # result is still not released un-gated.
@@ -5534,19 +5732,12 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     shape_context: str | None = None
     shaped = True
     budget = int(_GATE_STATS.get("threshold") or _MAX_TOOL_OUTPUT_BYTES_DEFAULT)
-    # The relay is drained before shaping on Claude Code (it always has a
-    # channel there), so the nudge and relay text that travel in the same
-    # additionalContext are inside the budget the shaped result is held to.
-    relay_text = ""
-    relay_drained = False
-    if flavor in ("claude-code", "codex"):
-        try:
-            relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
-        except Exception:
-            relay_text = ""
-        relay_drained = True
-    extra = sum(len(x.encode("utf-8", "replace")) + 1 for x in (nudge, relay_text) if x)
-    if replacement is not None and flavor == "claude-code" and kind != "mcp":
+    window = _GATE_STATS.get("window")
+    if replacement is not None and isinstance(window, tuple) and flavor == "claude-code":
+        # A guard-bounded Read cut to fit: the file's own lines in the Read
+        # result's own shape, the note (the replacement) beside it.
+        updated_output, shape_context = window
+    elif replacement is not None and flavor == "claude-code" and kind != "mcp":
         try:
             updated_output, shape_context, shaped = _shape_output(
                 _tool_response(payload), replacement, budget - extra, _GATE_STATS.get("handle"))

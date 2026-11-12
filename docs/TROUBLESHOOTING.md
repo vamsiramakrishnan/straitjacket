@@ -146,6 +146,15 @@ this is exactly why `ctx wrap` removes the native `Grep`/`Glob` tools under the
 default `[guard] collapse` setting (which now governs only this) — make sure you set the host up with `ctx wrap` (not a
 hand-rolled hook), and prefer `ctx search` / `ctx q` for repository search.
 
+### A large-file Read shows fewer than 240 lines
+
+**Not a bug.** The guard bounds a Read of a file over `max_inline_bytes` to
+`max_inline_lines` lines; when those lines are themselves over
+`max_tool_output_bytes` (long log lines), the output gate keeps the leading whole
+lines that fit and adds a note with the range shown and the `offset` to continue
+from. Earlier releases replaced such a Read with a JSON shape digest holding no
+line of the file.
+
 ### The guard isn't confining paths
 
 **Cause:** path confinement is only enforced once a workspace root resolves. If
