@@ -2061,6 +2061,8 @@ def test_concurrent_regrades_with_the_same_saved_port_each_get_their_own_service
     import socket
     import threading
 
+    from evals.acciobench import sandbox as sandbox_mod
+
     ds_root = tmp_path / "cab"
     runtime_dir = tmp_path / "runtime"
     (runtime_dir / "mock_services").mkdir(parents=True)
@@ -2071,6 +2073,12 @@ def test_concurrent_regrades_with_the_same_saved_port_each_get_their_own_service
             s.settimeout(0.5)
             return s.connect_ex(("127.0.0.1", port)) == 0
 
+    def wait_until_free(p: int) -> None:
+        deadline = time.monotonic() + 10
+        while not sandbox_mod._is_port_free(p) and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    wait_until_free(20000 + 86 * 100)  # an earlier test may have just released the slot's first port
     trials = []
     for name in ("api-turn-a", "api-turn-b"):
         _create_synthetic_task(ds_root, category="api", task_id=name, mock_services=True, service_port=4477)
@@ -2082,6 +2090,10 @@ def test_concurrent_regrades_with_the_same_saved_port_each_get_their_own_service
             port = first.port_map[4477]
         finally:
             first.cleanup()
+        # cleanup() returns once the service's processes are signalled; the kernel frees
+        # the port a moment later. The next trial in the slot gets the same port only
+        # after that, so wait for it instead of racing it.
+        wait_until_free(port)
         trials.append((spec, run_dir, meta_dir, port))
     assert trials[0][3] == trials[1][3], "sequential trials in one slot share the port"
     port = trials[0][3]
