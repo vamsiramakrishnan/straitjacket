@@ -262,7 +262,7 @@ def test_matrix_is_wide():
 #: listings, a globbed ls). Under steering = "rewrite" each is captured; the
 #: capture must print exactly what the command prints.
 CAPTURED_ALONE = [
-    "nl a.txt", "seq 1 5", "sort -r a.txt b.txt", "cut -c1-3 a.txt", "uniq -c a.txt",
+    "nl a.txt", "seq 1 500", "sort -r a.txt b.txt", "cut -c1-3 a.txt", "uniq -c a.txt",
     "base64 a.txt", "rev a.txt", "fold -w 4 a.txt", "paste a.txt b.txt", "fmt a.txt",
     "expand a.txt", "unexpand a.txt", "comm a.txt b.txt", "column -t a.txt",
     "ls *.txt dir/*", "git ls-files", "git grep -n CONTENT", "git ls-tree -r HEAD",

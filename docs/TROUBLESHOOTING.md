@@ -218,9 +218,13 @@ output bound, and the host decides about the command. **Fix:** confirm a genuine
 safe unknown command, or use `ctx run -- …` when it can flood. You can change `[guard]
 unknown_command` (`allow` / `deny` / `ask` / `force_ask`), but a blanket `allow`
 removes the review boundary for both unclassified reads and unclassified mutations.
-Common read-only text tools (`nl`, `seq`, `sort`, `cut`, `base64`, …) are not unknown:
-alone they are captured like `cat`; only their file-writing forms (`sort -o`, `uniq IN
-OUT`, `base64 -o`) still reach this prompt.
+Common read-only text tools (`nl`, `sort`, `cut`, `base64`, …) run on their own are
+captured like `cat` when they read workspace files. They still reach this prompt when
+they write a file or run a program (`sort -o`/`--out`, `uniq IN OUT`, `sort
+--compress-program`), take operands from a file, are not the real tool (`./sort`, an
+environment prefix), or read outside the workspace or a device. `seq` is sized by its
+arguments: up to 400 lines it runs as is, up to a million it is captured, otherwise it
+asks.
 See [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 
 ### "in-place sed/awk" or "deeply nested shell" prompts

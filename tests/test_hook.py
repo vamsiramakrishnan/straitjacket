@@ -471,7 +471,11 @@ def test_yes_tee_and_tr_stay_unknown(tmp_path, cmd):
     ("ls src/* | head", {"decision": "allow"}),
     ("seq 10 | sort", "capture"),
     ("cat data.csv | sort | uniq -c", "capture"),
-    ("base64 icon.png | head -3", "ask"),
+    ("base64 icon.png | head -3", "capture"),   # vouched like the other text readers
+    ("base64 -o x icon.png | head -3", "ask"),  # ... unless it writes a file
+    ("./base64 icon.png | head -3", "ask"),     # ... or is a workspace script
+    ("X=1 base64 icon.png | head -3", "ask"),   # ... or carries an environment prefix
+    ("yes | head -n 5", "ask"),
     ("cat in | sort -o out.txt", "capture"),
 ])
 def test_pipelines_keep_their_verdicts(tmp_path, cmd, want):
@@ -493,6 +497,58 @@ def test_text_reader_keeps_every_existing_protection(tmp_path):
     d = _classify("run_command", {"CommandLine": f"nl {tmp_path}/.env"}, tmp_path)
     assert d["decision"] == "force_ask" and "secret" in d["reason"].lower()
     _steering_deny(tmp_path)
-    for cmd in ("seq 1 5", "git ls-files", "ls src/*/*"):
+    for cmd in ("seq 1 5000", "git ls-files", "ls src/*/*"):
         d = _classify("run_command", {"CommandLine": cmd}, tmp_path)
         assert d["decision"] == "deny" and "rewrite" not in d, cmd
+
+
+# ------------------------------------- review round 1: what a reader may not do
+@pytest.mark.parametrize("cmd", [
+    "sort --out=o.txt f", "sort --o=o.txt f", "sort --ou=o f", "base64 --out=x f",
+    "sort -S 1k --compress-program=./ev.sh big", "sort --compress=./ev.sh big",
+    "sort --co=./ev.sh big", "sort --files0-from=list", "sort --fi=list",
+    "./sort f", "subdir/cut f", "LD_PRELOAD=./x.so sort f", "env LC_ALL=C sort f",
+    "cut -c1 /proc/1/environ", "base64 /dev/urandom", "fold -w1 /dev/zero", "sort /dev/zero",
+    "seq inf", "seq 1 1000000000", "seq -f %g 5", "seq 0 0 5", "seq a b",
+])
+def test_readers_that_write_run_or_read_outside_are_unknown(tmp_path, cmd):
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
+    assert d["decision"] == "force_ask" and "unknown output bound" in d["reason"], (cmd, d)
+    assert "rewrite" not in d
+
+
+@pytest.mark.parametrize("cmd", ["sort ~/.netrc", "sort ../../x", "cut -f1 /etc/passwd",
+                                 "nl ..", "cut -d / -f1 f"])
+def test_reader_operands_outside_the_workspace_are_unknown(tmp_path, cmd):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(ws)}, ws)
+    assert d["decision"] == "force_ask" and "rewrite" not in d, (cmd, d)
+
+
+@pytest.mark.parametrize("cmd", ["sort data/x.csv", "nl ./README.md", "cut -f1 sub/../a.txt"])
+def test_reader_operands_inside_the_workspace_are_captured(tmp_path, cmd):
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
+    assert "rewrite" in d, (cmd, d)
+
+
+@pytest.mark.parametrize("cmd,want", [
+    ("seq 10", "allow"), ("seq 2 2 800", "allow"), ("seq -w 5 -1 1", "allow"),
+    ("seq 1 401", "capture"), ("seq 1 1000000", "capture"), ("seq 1000001", "unknown"),
+])
+def test_seq_is_sized_by_its_arguments(tmp_path, cmd, want):
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
+    if want == "allow":
+        assert d == {"decision": "allow"}, d
+    elif want == "capture":
+        assert "rewrite" in d, d
+    else:
+        assert d["decision"] == "force_ask" and "rewrite" not in d, d
+
+
+@pytest.mark.parametrize("cmd", ["git for-each-ref --count=0", "git rev-list -n 0 HEAD",
+                                 "git rev-list --max-count=0 HEAD", "git grep -e -q PAT",
+                                 "git grep -f pats -q", "git grep --regexp=x -q"])
+def test_git_counts_of_zero_and_q_as_a_pattern_are_not_bounds(tmp_path, cmd):
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
+    assert "rewrite" in d, (cmd, d)

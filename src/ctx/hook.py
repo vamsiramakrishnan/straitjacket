@@ -1946,6 +1946,23 @@ def _vouched(prog: str, argv: list[str]) -> bool:
         return False
 
 
+def _plain_base64_part(segment: str) -> bool:
+    """``base64`` as a compound part is vouched like the other text readers
+    in ``_INERT_PARTS`` -- but only the real tool reading: a bare program
+    name, no environment prefix, no output file."""
+    try:
+        words = shlex.split(segment)
+    except ValueError:
+        return False
+    argv = _unwrap(words)
+    if not argv or argv[0] != "base64":
+        return False
+    prefix = words[: len(words) - len(argv)]
+    if any(_ENV_ASSIGN_RE.match(t) or os.path.basename(t) == "env" for t in prefix):
+        return False
+    return not _text_reader_writes("base64", argv)
+
+
 def _part_program(segment: str) -> tuple[str, list[str]] | None:
     try:
         argv = _unwrap(shlex.split(segment))
@@ -2015,7 +2032,7 @@ def _compound_verdict(
         if part is None:
             hard.append((seg, d))
         elif d.get("decision") in ("deny", "force_ask") and not d.get("_rewrite"):
-            if prog not in _INERT_PARTS:
+            if prog not in _INERT_PARTS and not _plain_base64_part(seg):
                 hard.append((seg, d))
         elif _find_acts(argv):
             unvouched.append(seg)
@@ -2129,6 +2146,7 @@ def _classify_command_inner(
     if not argv:
         return dict(DECISION_ALLOW)
 
+    raw_argv = argv
     argv = _unwrap(argv)
     if not argv:
         return dict(DECISION_ALLOW)
@@ -2350,10 +2368,17 @@ def _classify_command_inner(
         if choose_guard({"flood_command": True}) == "rewrite_command":
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
 
-    if prog in _TEXT_READERS and not part and not _text_reader_writes(prog, argv):
-        # Read-only: captured like cat. A form that writes a file falls
-        # through to the unknown-command policy, as any unknown mutator does.
-        return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+    if prog in _TEXT_READERS and not part:
+        # Read-only: captured like cat. A form that writes a file, runs a
+        # program, reads an operand list, names a workspace script, carries an
+        # environment prefix or reads outside the workspace (a device never
+        # ends) falls through to the unknown-command policy. `seq` is sized
+        # from its own arguments.
+        verdict = _text_reader_verdict(prog, raw_argv, argv, cwd, policy)
+        if verdict == "allow":
+            return dict(DECISION_ALLOW)
+        if verdict == "capture":
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
 
     # Unknown command → configured policy.
     unknown = policy.get("unknown_command", "force_ask")
@@ -2372,16 +2397,21 @@ def _short_cluster_has(arg: str, letter: str) -> bool:
 
 
 def _text_reader_writes(prog: str, argv: list[str]) -> bool:
-    """Does this text-reader invocation write a file? ``sort -o F`` /
-    ``--output``, BSD ``base64 -o F`` / ``--output``, and ``uniq IN OUT``.
-    Conservative: a short-option cluster holding ``o`` counts as one (a
-    false positive only asks)."""
+    """Is this text-reader invocation more than a plain read? It writes a
+    file (``sort -o F``, BSD ``base64 -o F``, any abbreviation of
+    ``--output`` -- GNU accepts ``--out=``, ``--o=``), runs a program
+    (``sort --compress-program``, ``--co…``), takes its operands from a
+    file (``sort --files0-from``, ``--fi…``: the secret-path check never
+    sees those names), or is ``uniq IN OUT``. Conservative: a short-option
+    cluster holding ``o`` counts as a writer (a false positive only asks)."""
     args = argv[1:]
     if prog in ("sort", "base64"):
         for a in args:
             if a == "--":
                 return False
-            if a.startswith("--output") or _short_cluster_has(a, "o"):
+            if a.startswith("--o") or _short_cluster_has(a, "o"):
+                return True
+            if prog == "sort" and a.startswith(("--co", "--fi")):
                 return True
         return False
     if prog == "uniq":
@@ -2400,6 +2430,93 @@ def _text_reader_writes(prog: str, argv: list[str]) -> bool:
     return False
 
 
+#: Paths that are never workspace files: devices and kernel views. Reading
+#: one may never end (`/dev/zero`), and `ctx run` has no capture cap.
+_NOT_FILES = ("/dev/", "/proc/", "/sys/")
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_NUMBER_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+#: Largest `seq` output captured; more is judged as an unknown command.
+_SEQ_CAPTURE_MAX = 1_000_000
+
+
+def _seq_lines(argv: list[str]) -> int | None:
+    """Lines ``seq`` prints, from its own arguments, or None when they do
+    not size it (``inf``, a step of 0, a format option, not numbers)."""
+    operands: list[float] = []
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if _NUMBER_RE.match(a):
+            operands.append(float(a))
+        elif a in ("-w", "--equal-width"):
+            pass
+        elif a in ("-s", "--separator"):
+            i += 1
+        elif a.startswith("--separator=") or (a.startswith("-s") and len(a) > 2):
+            pass
+        else:
+            return None  # -f/--format, an abbreviation, or not a number
+        i += 1
+    if not 1 <= len(operands) <= 3:
+        return None
+    first, step, last = (1.0, 1.0, operands[0]) if len(operands) == 1 else (
+        (operands[0], 1.0, operands[1]) if len(operands) == 2 else tuple(operands))
+    if step == 0:
+        return None
+    n = (last - first) / step
+    if n != n or n in (float("inf"), float("-inf")):
+        return None
+    return 0 if n < 0 else int(n) + 1
+
+
+def _operand_outside(argv: list[str], cwd: str | None, root: str | None) -> bool:
+    """Does any path-shaped operand leave the workspace? An argument with a
+    ``/``, a leading ``~`` or a bare ``..``, resolved against ``cwd``; a
+    device or kernel path always counts. Option values count too (``cut -d
+    / -f1`` only asks)."""
+    for a in argv[1:]:
+        if a.startswith("-") and a != "-":
+            if "=" not in a:
+                continue
+            a = a.split("=", 1)[1]
+        if not ("/" in a or a.startswith("~") or a == ".."):
+            continue
+        p = os.path.expanduser(a)
+        if not os.path.isabs(p):
+            p = os.path.join(cwd or root or os.getcwd(), p)
+        p = os.path.abspath(p)
+        if p.startswith(_NOT_FILES) or p in ("/dev", "/proc", "/sys"):
+            return True
+        if root and _path_outside(p, root):
+            return True
+    return False
+
+
+def _text_reader_verdict(prog: str, raw_argv: list[str], argv: list[str],
+                         cwd: str | None, policy: dict[str, Any]) -> str:
+    """``allow``, ``capture`` or ``unknown`` for a standalone text reader.
+    Captured only when it is the real tool (a bare name, no environment
+    prefix: ``./sort`` is a workspace script, ``LD_PRELOAD=… sort`` is not
+    the tool) doing a plain read of workspace files. ``seq`` is sized by its
+    arguments: at most the head/tail cap runs natively like ``head -n N``,
+    at most a million lines is captured, anything else is unknown."""
+    prefix = raw_argv[: len(raw_argv) - len(argv)]
+    if "/" in argv[0] or any(_ENV_ASSIGN_RE.match(t) or os.path.basename(t) == "env"
+                             for t in prefix):
+        return "unknown"
+    if _text_reader_writes(prog, argv):
+        return "unknown"
+    if prog == "seq":
+        n = _seq_lines(argv)
+        if n is None or n > _SEQ_CAPTURE_MAX:
+            return "unknown"
+        return "allow" if n <= int(policy.get("_head_tail_max", _HEAD_TAIL_MAX)) else "capture"
+    if _operand_outside(argv, cwd, policy.get("_ws_root")):
+        return "unknown"
+    return "capture"
+
+
 def _count_value(rest: list[str], *flags: str) -> int | None:
     """The integer given to any of ``flags`` (``-n 5``, ``-n5``, ``--x=5``,
     ``--x 5``), or None. ``-N`` counts as ``-n N`` when ``-n`` is a flag."""
@@ -2416,8 +2533,10 @@ def _count_value(rest: list[str], *flags: str) -> int | None:
                 raw = a[len(f):]
         if raw is None and "-n" in flags and re.fullmatch(r"-\d+", a):
             raw = a[1:]
-        if raw is not None and raw.isdigit():
-            return int(raw)
+        if raw is not None and raw.isdigit() and int(raw) >= 1:
+            return int(raw)  # 0 means "no limit" to git: not a bound
+        if raw is not None:
+            return None
     return None
 
 
@@ -2431,6 +2550,11 @@ def _git_listing_bounded(sub: str, rest: list[str], cap: int) -> bool:
     ``ls-remote`` have no bounded form: they stay captured."""
     opts = rest[:rest.index("--")] if "--" in rest else rest
     if sub == "grep":
+        # With -e/-f the pattern is an option value, so a `-q` may be the
+        # pattern itself (`git grep -e -q PAT` prints matches).
+        if any(a in ("-e", "-f") or a.startswith(("-e", "-f", "--regexp", "--file"))
+               for a in opts):
+            return False
         return "-q" in opts or "--quiet" in opts
     if sub == "rev-list":
         if "--count" in opts:
