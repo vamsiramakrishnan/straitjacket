@@ -567,8 +567,8 @@ def _ws_with_links(tmp_path):
 
 
 @pytest.mark.parametrize("cmd", [
-    "sort lnk", "sort *.env", "sort data/*.csv", "nl data/sales.cs?", "sort {a,/etc/passwd}",
-    "sort $HOME/x", "sort ~user/x", "sort < /etc/passwd", "sort -T/etc data/sales.csv",
+    "sort lnk", "sort *.env", "sort data/*.csv", "nl data/sales.cs?", "sort ~user/x",
+    "sort ~root/x", "sort -T/etc data/sales.csv",
     "sort -T /tmp data/sales.csv", "sort --temporary-directory=/tmp data/sales.csv",
     "sort --te=/tmp data/sales.csv", "seq -s xx 1 400", "seq --separator=, 1 5", "seq -x 5",
 ])
@@ -597,3 +597,33 @@ def test_quoted_literals_and_inside_links_are_still_captured(tmp_path, cmd):
 def test_seq_with_only_equal_width_is_still_sized(tmp_path):
     assert _classify("run_command", {"CommandLine": "seq -w 1 10"}, tmp_path) == {
         "decision": "allow"}
+
+
+#: Verdicts recorded on main (64e52b6) by running its classify() through a
+#: workspace for each command: text readers inside compound or meta-bearing
+#: commands are decided by the compound/meta rules, and the standalone rule
+#: must not change any of them. The one deliberate change is `base64` as a
+#: plain pipeline part, vouched like the other text readers (review round 1,
+#: item 11): main asked, this tree captures.
+MAIN_META_VERDICTS = {
+    "sort < data/sales.csv": "captured", "sort < /etc/passwd": "captured",
+    "sort data/sales.csv > out.txt": "captured", "sort data/sales.csv > out.txt 2>&1": "allow",
+    "sort $HOME/x": "captured", "sort {a,/etc/passwd}": "captured",
+    "sort $(echo data/sales.csv)": "captured", "sort `echo data/sales.csv`": "captured",
+    "nl data/sales.csv && echo ok": "captured", "nl data/sales.csv; echo ok": "captured",
+    "cat data/sales.csv | sort": "captured", "sort data/sales.csv | head -3": "captured",
+    "cut -d, -f1 data/sales.csv | uniq -c": "captured", "seq 1 5 | paste -sd+": "captured",
+    "sort -u data/sales.csv | wc -l": "captured", 'fold -w 5 "$F"': "captured",
+    "comm <(sort a) <(sort b)": "captured", "expand data/sales.csv | rev": "captured",
+}
+DELIBERATE = {"base64 data/sales.csv | head -3": ("force_ask", "captured"),
+              "echo x | base64": ("force_ask", "captured")}
+
+
+@pytest.mark.parametrize("cmd", list(MAIN_META_VERDICTS) + list(DELIBERATE))
+def test_text_readers_with_shell_metacharacters_keep_mains_verdict(tmp_path, cmd):
+    ws = _ws_with_links(tmp_path)
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(ws)}, ws)
+    got = "captured" if "rewrite" in d else d["decision"]
+    want = MAIN_META_VERDICTS.get(cmd) or DELIBERATE[cmd][1]
+    assert got == want, (cmd, d)

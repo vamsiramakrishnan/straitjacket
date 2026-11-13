@@ -2243,11 +2243,6 @@ def _classify_command_inner(
             argv, policy, original=stripped, has_meta=has_meta
         )  # stdin consumer: never rewritten
 
-    if has_meta and prog in _TEXT_READERS and not part and _unquoted_expansion(stripped):
-        # One text reader whose operands the shell will expand or redirect
-        # (`sort {a,/etc/passwd}`, `sort $HOME/x`, `sort < f`): its inputs
-        # cannot be seen, so it is not captured; the unknown policy decides.
-        return _unknown_command(prog, argv, policy, stripped, has_meta)
     if has_meta:
         # A pipeline containing head is not automatically safe (SPEC §11.2).
         # Canonical decision stays force_ask; under rewrite steering the
