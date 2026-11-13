@@ -341,3 +341,16 @@ def test_codex_post_tool_use_small_noop(state_home, workspace_dir):
         "codex",
     )
     assert out == {}
+
+
+def test_scoping_the_run_only_verbs_grew_no_card_or_skill_body():
+    """Byte sizes before the run-only verbs were scoped (main at 64e52b6):
+    every teaching surface that carries them is at most that long."""
+    from pathlib import Path
+
+    from ctx.installer import _render_codex_file
+
+    root = Path(__file__).resolve().parent.parent
+    skill = (root / "plugins/antigravity/skills/ctx-harness/SKILL.md").read_bytes()
+    assert len(skill) <= 11440
+    assert len(_render_codex_file("AGENTS.md", "ctx").encode()) <= 2183

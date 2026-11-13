@@ -87,10 +87,9 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     (symbols, sites, files, records) — bounded, no loops, every stage
     addressable. Examples: `ctx q 'refs TokenBucket | group file | top 3
     | get --context 5'`; `ctx q 'corpus --ext py --changed | outline'`;
-    after tests ran through `ctx run`: `ctx q 'fails last | in-changed'`
-    (failing tests inside changed symbols); on output captured by `ctx run`:
-    `ctx q 'records run:<id>#stdout --jsonl | group level | count'`. For an
-    existing file use grep, read windows, or `ctx search repo:<file> PATTERN`.
+    only after `ctx run`: `ctx q 'fails last | in-changed'` (failures in
+    changed symbols), `ctx q 'records run:<id>#stdout --jsonl | count'`;
+    a plain file: grep, read windows, `ctx search repo:<file> PATTERN`;
     `distinct <field>` and `histogram <field>` summarize any stream.
     Also available as the MCP `q` op (`options.pipeline`) — prefer one
     pipeline over several round-trips whenever the answer is a composition
