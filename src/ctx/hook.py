@@ -4849,8 +4849,13 @@ def _native_result_text(tr: dict[str, Any]) -> str | None:
         return f["content"]
     if set(tr) <= _LISTING_KEYS and isinstance(tr.get("filenames"), list) \
             and all(isinstance(x, str) for x in tr["filenames"]):
+        # Only when the text says everything: no truncation or paging flag
+        # (the stored copy would lose that the listing is partial), and
+        # never a content string beside a non-empty file list.
+        if any(tr.get(k) for k in ("truncated", "appliedLimit", "appliedOffset")):
+            return None
         if tr.get("mode") in ("content", "count") and isinstance(tr.get("content"), str):
-            return tr["content"]
+            return None if tr["filenames"] else tr["content"]
         if not isinstance(tr.get("content"), str) or not tr["content"]:
             return "\n".join(tr["filenames"])
     return None
@@ -5240,11 +5245,23 @@ def _fit_read_window(tr: dict[str, Any], f: dict[str, Any], budget: int,
 
     Returns ``(value, note, delivered_bytes)``, or None when not even the
     first line fits (one enormous line), where the caller falls back to the
-    ordinary digest. The cut goes through ``clip_redacting``: a secret that
-    straddles it is blanked, never shown as a prefix too short to match."""
-    from ctx.textutil import clip_redacting
+    ordinary digest.
 
+    What the hook sends is redacted first, then cut: every secret in the
+    window is replaced by its marker one line segment at a time
+    (``mask_hits``), so a multi-line key keeps its line count and
+    ``numLines``, the note's range and the continuation offset still name
+    exactly the source lines shown. The budget is measured on the redacted
+    text; the cut itself goes through ``clip_redacting``. Limit: a key whose
+    BEGIN line lies above the window is not seen (a native Read of that
+    window would show the same lines)."""
+    from ctx.textutil import clip_redacting, mask_hits, secret_hits
+
+    red = _redaction_policy(policy)
     content = f["content"]
+    hits = secret_hits(content, 0, len(content), policy=red)
+    if hits:
+        content = mask_hits(content, 0, len(content), hits)
     start = f.get("startLine")
     start = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 1
     ends: list[int] = []
@@ -5259,7 +5276,6 @@ def _fit_read_window(tr: dict[str, Any], f: dict[str, Any], budget: int,
     total = f.get("totalLines")
     of_total = (f" of {total:,}" if isinstance(total, int)
                 and not isinstance(total, bool) and total > 0 else "")
-    red = _redaction_policy(policy)
 
     def build(k: int) -> tuple[Any, str, str]:
         text = clip_redacting(content, ends[k - 1], red)

@@ -172,6 +172,97 @@ def test_cut_never_shows_a_secret_prefix_at_its_edge(ws):
     assert "BEGIN RSA PRIVATE KEY" not in content
 
 
+GHP = "ghp_" + "Z9" * 18  # a GitHub token shape the redactor knows
+
+
+def _post(ws, path, tr, session="s1", **extra):
+    return _run("post", {"tool_name": "Read", "cwd": str(ws), "session_id": session,
+                         "tool_input": {"file_path": path, "limit": 240},
+                         "tool_response": tr, **extra})
+
+
+def test_secrets_inside_the_kept_window_are_redacted_line_for_line(ws):
+    path, lines = _log(ws, 100)
+    lines = list(lines)
+    lines[10] = f"token={GHP} in line 11"
+    lines[20:23] = ["-----BEGIN RSA PRIVATE KEY-----", "MIIEowIBAAKCAQEA" + "q" * 60,
+                    "-----END RSA PRIVATE KEY-----"]
+    tr = _read_result(path, lines)
+    hso = _post(ws, path, tr)["hookSpecificOutput"]
+    f = hso["updatedToolOutput"]["file"]
+    shown = f["content"].split("\n")
+    k = f["numLines"]
+    assert GHP not in f["content"] and "MIIEowIBAAKCAQEA" not in f["content"]
+    assert "BEGIN RSA PRIVATE KEY" not in f["content"] and "[ctx:redacted" in shown[10]
+    # the key's three lines are still three lines: numbering, the note's range
+    # and the continuation offset all describe the source lines exactly
+    assert len(shown) == k and all("[ctx:redacted" in shown[i] for i in (20, 21, 22))
+    assert shown[23] == lines[23] and shown[k - 1] == lines[k - 1]
+    assert f"lines 1-{k} of" in hso["additionalContext"]
+    assert f"offset={k + 1}" in hso["additionalContext"]
+    sent = len(json.dumps(hso["updatedToolOutput"], ensure_ascii=False).encode())
+    assert sent + len(hso["additionalContext"].encode()) <= 16384  # measured after redaction
+
+
+@pytest.mark.parametrize("unit", ["é", "日本", "😀"])
+def test_cut_of_multibyte_lines_is_whole_lines_within_budget(ws, unit):
+    lines = [f"{i:04d} " + unit * (60 // len(unit.encode())) * 2 for i in range(600)]
+    path = ws / "u.log"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tr = _read_result(str(path), lines)
+    hso = _post(ws, str(path), tr)["hookSpecificOutput"]
+    f = hso["updatedToolOutput"]["file"]
+    assert f["content"] == "\n".join(lines[:f["numLines"]])
+    sent = len(json.dumps(hso["updatedToolOutput"], ensure_ascii=False).encode())
+    assert sent + len(hso["additionalContext"].encode()) <= 16384
+
+
+def test_cut_of_crlf_lines_keeps_each_line_whole(ws):
+    lines = [f"{i:05d} " + "w" * 90 + "\r" for i in range(600)]  # Read splits on \n
+    path = ws / "crlf.log"
+    path.write_bytes(("\n".join(lines) + "\n").encode())
+    tr = _read_result(str(path), lines)
+    f = _post(ws, str(path), tr)["hookSpecificOutput"]["updatedToolOutput"]["file"]
+    assert f["content"] == "\n".join(lines[:f["numLines"]]) and f["content"].endswith("\r")
+
+
+def test_ledger_settles_each_read_once_and_never_below_zero(ws):
+    path, lines = _log(ws, 100)
+    out1 = _bounded_read(ws, path, _read_result(path, lines))
+    d1 = len(out1["hookSpecificOutput"]["updatedToolOutput"]["file"]["content"].encode())
+    assert _ledger_total(ws) == d1
+    small, _ = _log(ws, 30)
+    tr2 = _read_result(small, _, start=241)
+    _bounded_read(ws, small, tr2)  # under budget: passes, settled to its size
+    assert _ledger_total(ws) == d1 + len(tr2["file"]["content"].encode())
+    # a Post with no Pre charge (the guard's charge was lost) cannot drive the
+    # ledger below zero
+    _post(ws, small, tr2, session="fresh")
+    assert _ledger_total(ws, "fresh") == 0
+
+
+def test_reserve_keeps_nudge_and_fitted_window_within_budget(ws, monkeypatch):
+    monkeypatch.setattr(hook, "_emission_nudge", lambda payload: "N" * 3000)
+    path, lines = _log(ws, 100)
+    hso = _bounded_read(ws, path, _read_result(path, lines))["hookSpecificOutput"]
+    assert hso["additionalContext"].endswith("N" * 3000)
+    sent = (len(json.dumps(hso["updatedToolOutput"], ensure_ascii=False).encode())
+            + len(hso["additionalContext"].encode()))
+    assert sent <= 16384
+    assert hso["updatedToolOutput"]["file"]["numLines"] < 150  # the reserve was taken
+
+
+@pytest.mark.parametrize("tr", [
+    {"mode": "content", "numFiles": 2, "filenames": ["a.py", "b.py"], "content": "a.py:1:x"},
+    {"mode": "files_with_matches", "numFiles": 2, "filenames": ["a", "b"], "appliedLimit": 2},
+    {"mode": "content", "filenames": [], "content": "x", "appliedOffset": 10},
+    {"filenames": ["a.py"], "durationMs": 4, "numFiles": 1, "truncated": True},
+])
+def test_listing_text_is_extracted_only_when_nothing_is_lost(tr):
+    assert hook._normalize_tool_response(tr) == (json.dumps(tr, ensure_ascii=False,
+                                                            sort_keys=True), "")
+
+
 # ------------------------------------------------- still protected
 def _handle(text: str) -> str:
     m = re.search(r"ctx get (run:[0-9a-f]+#stdout)", text)
