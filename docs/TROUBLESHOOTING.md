@@ -221,10 +221,11 @@ removes the review boundary for both unclassified reads and unclassified mutatio
 Common read-only text tools (`nl`, `sort`, `cut`, `base64`, …) run on their own are
 captured like `cat` when they read workspace files. They still reach this prompt when
 they write a file or run a program (`sort -o`/`--out`, `uniq IN OUT`, `sort
---compress-program`), take operands from a file, are not the real tool (`./sort`, an
-environment prefix), or read outside the workspace or a device. `seq` is sized by its
-arguments: up to 400 lines it runs as is, up to a million it is captured, otherwise it
-asks.
+--compress-program`, `sort -T`), take operands from a file, are not the real tool
+(`./sort`, an environment prefix), name an input ctx cannot see before it runs (a glob,
+a brace, `$`, `<`, `~user`), or read outside the workspace or a device, symbolic links
+followed. `seq` without options is sized by its arguments: up to 400 lines it runs as
+is, up to a million it is captured, otherwise it asks.
 See [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 
 ### "in-place sed/awk" or "deeply nested shell" prompts

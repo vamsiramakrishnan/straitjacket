@@ -199,6 +199,23 @@ def test_replayed_seq_classes_and_base64_part(env, command, kind):
     assert ("overwrite" in out) == (kind == "captured"), out
 
 
+@pytest.mark.parametrize("command,captured", [
+    ("sort lnk", False), ("sort *.txt", False), ("sort {a.txt,/etc/passwd}", False),
+    ("sort $HOME/x", False), ("sort ~user/x", False), ("sort < /etc/passwd", False),
+    ("sort -T/etc a.txt", False), ("seq -s xx 1 400", False),
+    ("sort inlnk", True), ("cut -d ',' -f2 a.txt", True), ("sort -t ',' -k2 a.txt", True),
+    ("cut -d' ' -f1 a.txt", True),
+])
+def test_replayed_reader_captured_only_when_its_inputs_are_visible(env, command, captured):
+    (env["ws"] / "lnk").symlink_to("/etc/passwd")
+    (env["ws"] / "inlnk").symlink_to("a.txt")
+    out = _replay("pre-tool-use", _flood(env, command), env)
+    if captured:
+        assert out["decision"] == "allow" and "overwrite" in out, out
+    else:
+        assert out["decision"] == "force_ask" and "overwrite" not in out, out
+
+
 def test_replayed_text_reader_rewrite_respects_a_deny_rule(env):
     _rules(env, allow=["command(ctx)"], deny=["command(sort)"])
     out = _replay("pre-tool-use", _flood(env, "sort a.txt"), env)

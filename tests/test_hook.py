@@ -552,3 +552,48 @@ def test_seq_is_sized_by_its_arguments(tmp_path, cmd, want):
 def test_git_counts_of_zero_and_q_as_a_pattern_are_not_bounds(tmp_path, cmd):
     d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
     assert "rewrite" in d, (cmd, d)
+
+
+# ---------------- review round 2: capture only what the classifier can see
+def _ws_with_links(tmp_path):
+    ws = tmp_path / "ws"
+    (ws / "data").mkdir(parents=True)
+    (ws / "data" / "sales.csv").write_text("a,1\nb,2\n")
+    (ws / "lnk").symlink_to("/etc/passwd")
+    (ws / "inlnk").symlink_to("data/sales.csv")
+    (ws / ".env").write_text("K=v\n")
+    (ws / "envlnk").symlink_to(ws / ".env")
+    return ws
+
+
+@pytest.mark.parametrize("cmd", [
+    "sort lnk", "sort *.env", "sort data/*.csv", "nl data/sales.cs?", "sort {a,/etc/passwd}",
+    "sort $HOME/x", "sort ~user/x", "sort < /etc/passwd", "sort -T/etc data/sales.csv",
+    "sort -T /tmp data/sales.csv", "sort --temporary-directory=/tmp data/sales.csv",
+    "sort --te=/tmp data/sales.csv", "seq -s xx 1 400", "seq --separator=, 1 5", "seq -x 5",
+])
+def test_reader_inputs_it_cannot_see_are_unknown(tmp_path, cmd):
+    ws = _ws_with_links(tmp_path)
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(ws)}, ws)
+    assert d["decision"] == "force_ask" and "rewrite" not in d, (cmd, d)
+
+
+def test_reader_through_a_link_to_a_secret_gets_the_secret_verdict(tmp_path):
+    ws = _ws_with_links(tmp_path)
+    d = _classify("run_command", {"CommandLine": "sort envlnk", "Cwd": str(ws)}, ws)
+    assert d["decision"] == "force_ask" and "secret" in d["reason"].lower()
+
+
+@pytest.mark.parametrize("cmd", [
+    "sort inlnk", "cut -d ',' -f2 data/sales.csv", "sort -t ',' -k2 data/sales.csv",
+    "cut -d' ' -f1 data/sales.csv", "cut -d '*' -f1 data/sales.csv", "nl 'data/sales.csv'",
+])
+def test_quoted_literals_and_inside_links_are_still_captured(tmp_path, cmd):
+    ws = _ws_with_links(tmp_path)
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(ws)}, ws)
+    assert "rewrite" in d, (cmd, d)
+
+
+def test_seq_with_only_equal_width_is_still_sized(tmp_path):
+    assert _classify("run_command", {"CommandLine": "seq -w 1 10"}, tmp_path) == {
+        "decision": "allow"}

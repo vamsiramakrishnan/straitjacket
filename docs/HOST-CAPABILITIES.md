@@ -288,7 +288,8 @@ by their arguments stay native (`rev-list --count`, `rev-list -n 5`, `grep -q` w
 `for-each-ref --count=5`, `show-ref --verify`, a non-recursive `ls-tree`; a count of 0
 is no bound). A text tool is judged as an unknown command when it writes a file or
 runs a program, takes its operands from a file, is not the bare tool (`./sort`, an
-environment prefix) or reads outside the workspace or a device; `seq` is sized by
+environment prefix), names inputs the shell will expand, or reads outside the
+workspace or a device (links resolved); `seq` without options is sized by
 its arguments (native up to the head/tail cap, captured up to a million lines). As
 parts of a pipeline these programs keep their earlier verdicts, except that a plain
 `base64` is now vouched like the other text tools (asks: 13 to 2). A result from a tool that

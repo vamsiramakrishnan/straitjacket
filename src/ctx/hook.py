@@ -2243,6 +2243,11 @@ def _classify_command_inner(
             argv, policy, original=stripped, has_meta=has_meta
         )  # stdin consumer: never rewritten
 
+    if has_meta and prog in _TEXT_READERS and not part and _unquoted_expansion(stripped):
+        # One text reader whose operands the shell will expand or redirect
+        # (`sort {a,/etc/passwd}`, `sort $HOME/x`, `sort < f`): its inputs
+        # cannot be seen, so it is not captured; the unknown policy decides.
+        return _unknown_command(prog, argv, policy, stripped, has_meta)
     if has_meta:
         # A pipeline containing head is not automatically safe (SPEC §11.2).
         # Canonical decision stays force_ask; under rewrite steering the
@@ -2374,13 +2379,22 @@ def _classify_command_inner(
         # environment prefix or reads outside the workspace (a device never
         # ends) falls through to the unknown-command policy. `seq` is sized
         # from its own arguments.
-        verdict = _text_reader_verdict(prog, raw_argv, argv, cwd, policy)
+        verdict = ("unknown" if _unquoted_expansion(stripped)
+                   else _text_reader_verdict(prog, raw_argv, argv, cwd, policy))
+        if verdict == "secret":
+            return _secret_path_force_ask()
         if verdict == "allow":
             return dict(DECISION_ALLOW)
         if verdict == "capture":
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
 
     # Unknown command → configured policy.
+    return _unknown_command(prog, argv, policy, stripped, has_meta)
+
+
+def _unknown_command(prog: str, argv: list[str], policy: dict[str, Any],
+                     stripped: str, has_meta: bool) -> dict[str, Any]:
+    """The configured ``unknown_command`` disposition."""
     unknown = policy.get("unknown_command", "force_ask")
     if unknown == "allow" or policy.get("mode") == "advisory":
         return dict(DECISION_ALLOW)
@@ -2451,11 +2465,7 @@ def _seq_lines(argv: list[str]) -> int | None:
             operands.append(float(a))
         elif a in ("-w", "--equal-width"):
             pass
-        elif a in ("-s", "--separator"):
-            i += 1
-        elif a.startswith("--separator=") or (a.startswith("-s") and len(a) > 2):
-            pass
-        else:
+        else:  # -s/--separator and -f/--format size the output themselves
             return None  # -f/--format, an abbreviation, or not a number
         i += 1
     if not 1 <= len(operands) <= 3:
@@ -2493,6 +2503,67 @@ def _operand_outside(argv: list[str], cwd: str | None, root: str | None) -> bool
     return False
 
 
+_GLOB_CHARS = frozenset("*?[")
+
+
+def _unquoted_expansion(command: str) -> bool:
+    """Does the raw command line hold anything the shell would expand or
+    redirect -- a glob character, a brace, ``$``, a backtick or ``<``
+    outside quotes, or a ``~user`` -- so that what runs is not what the
+    tokens say? Judged on the raw string, because ``shlex`` drops the
+    quotes: in ``cut -d '*' f`` and ``cut -d * f`` it yields the same
+    token, but only the second is a glob. A small quote-state scan:
+    single quotes make everything literal, double quotes keep ``$`` and
+    backtick live, a backslash makes the next character literal."""
+    quote = ""
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+        elif ch == "\\":
+            i += 1
+        elif quote == '"':
+            if ch == '"':
+                quote = ""
+            elif ch in "$`":
+                return True
+        elif ch in "'\"":
+            quote = ch
+        elif ch in _GLOB_CHARS or ch in "{}$`<":
+            return True
+        elif ch == "~" and (i == 0 or command[i - 1] in " \t=:") and \
+                i + 1 < len(command) and command[i + 1] not in " \t/":
+            return True  # ~user/...: another user's home
+        i += 1
+    return False
+
+
+def _operands_resolve(argv: list[str], cwd: str | None, root: str | None) -> str:
+    """Judge every operand that names an existing file by where it really
+    is (``realpath``: a link inside the workspace may point anywhere).
+    ``capture`` when all stay in the workspace, ``secret`` for a secret
+    path, else ``unknown``. Only existing operands are resolved."""
+    base = cwd or root or os.getcwd()
+    for a in argv[1:]:
+        if a == "-" or (a.startswith("-") and "=" not in a):
+            continue
+        if a.startswith("-"):
+            a = a.split("=", 1)[1]
+        p = a if os.path.isabs(a) else os.path.join(base, a)
+        if not os.path.exists(p):
+            continue
+        real = os.path.realpath(p)
+        if real.startswith(_NOT_FILES) or real in ("/dev", "/proc", "/sys"):
+            return "unknown"
+        if _is_secret_path(real, root):
+            return "secret"
+        if root and _path_outside(real, root):
+            return "unknown"
+    return "capture"
+
+
 def _text_reader_verdict(prog: str, raw_argv: list[str], argv: list[str],
                          cwd: str | None, policy: dict[str, Any]) -> str:
     """``allow``, ``capture`` or ``unknown`` for a standalone text reader.
@@ -2512,9 +2583,12 @@ def _text_reader_verdict(prog: str, raw_argv: list[str], argv: list[str],
         if n is None or n > _SEQ_CAPTURE_MAX:
             return "unknown"
         return "allow" if n <= int(policy.get("_head_tail_max", _HEAD_TAIL_MAX)) else "capture"
+    if prog == "sort" and any(_short_cluster_has(a, "T") or a.startswith("--te")
+                              for a in argv[1:]):
+        return "unknown"  # -T DIR / --temporary-directory: writes outside the read
     if _operand_outside(argv, cwd, policy.get("_ws_root")):
         return "unknown"
-    return "capture"
+    return _operands_resolve(argv, cwd, policy.get("_ws_root"))
 
 
 def _count_value(rest: list[str], *flags: str) -> int | None:
