@@ -27,14 +27,17 @@ from ctx.residence import WatermarkResidence  # noqa: E402
 
 from .browser import BrowserPool, BrowserSession  # noqa: E402
 from .config import (  # noqa: E402
+    SCORE_SCALE_TOLERANCE,
     BenchConfig,
     RunMetrics,
     config_fingerprint,
+    ctx_code_identity,
     ctx_version,
+    harness_ctx_code_identity,
     load_cab_task,
     task_inputs_digest,
 )
-from .host import ToolHost, bwrap_sandbox_executable  # noqa: E402
+from .host import ToolHost, bwrap_sandbox_executable, unsandboxed_refusal_message  # noqa: E402
 from .providers import ModelProvider  # noqa: E402
 from .sandbox import TaskSandbox  # noqa: E402
 from .schemas import (  # noqa: E402
@@ -47,7 +50,7 @@ from .schemas import (  # noqa: E402
     is_mutating_tool_call,
 )
 
-__all__ = ["run_trial"]
+__all__ = ["UnsandboxedRunRefused", "run_trial", "scored_run_sandbox"]
 
 _VALID_ARMS = frozenset({"raw", "sj"})
 _RESUMABLE_ERROR_TERMINATIONS = frozenset({"", "api_error", "setup_error", "error"})
@@ -77,6 +80,22 @@ _MAX_VERIFIER_ERR_CHARS = 240
 _MAX_NOTE_ERR_CHARS = 300
 
 _PRINT_LOCK = threading.Lock()
+
+
+class UnsandboxedRunRefused(RuntimeError):
+    """A scored run was asked for without the bwrap sandbox and without the override."""
+
+
+def scored_run_sandbox(config: BenchConfig) -> str:
+    """How a scored trial under ``config`` is sandboxed: ``"bwrap"`` when the sandbox is
+    usable, ``"none"`` when it is not and ``config.allow_unsandboxed`` says to run anyway.
+    Otherwise raises :class:`UnsandboxedRunRefused` with the reason, how to install
+    bubblewrap and the override. ``ACCIOBENCH_NO_BWRAP`` alone is never enough."""
+    if bwrap_sandbox_executable() is not None:
+        return "bwrap"
+    if config.allow_unsandboxed:
+        return "none"
+    raise UnsandboxedRunRefused(unsandboxed_refusal_message())
 
 
 def _resolve_task_metadata(config: BenchConfig, spec: Any, fallback_task_id: str) -> tuple[str, str, str]:
@@ -259,6 +278,12 @@ def _interpret_reward(data: Any) -> tuple[float, int, int, list[dict[str, Any]]]
         raise ValueError("reward.json has neither a score nor any checks")
     if score is not None and score < 0:
         raise ValueError(f"reward.json score is negative: {score!r}")
+    if score is not None and score > 1.0 + SCORE_SCALE_TOLERANCE:
+        # Scores are on a 0..1 scale (the pass threshold, the reports and every grader in
+        # this repository assume it); 85 or 5 would otherwise be recorded as "passed".
+        raise ValueError(f"reward.json score {score!r} is above 1, outside the 0..1 scale")
+    if score is not None:
+        score = min(score, 1.0)  # float noise just above 1
     breakdown = data.get("checks_breakdown")
     if breakdown is None:
         breakdown = []
@@ -466,6 +491,8 @@ def run_trial(
     if arm_norm not in _VALID_ARMS:
         raise ValueError(f"Unsupported arm {arm!r}. Expected one of {sorted(_VALID_ARMS)}.")
     is_sj = arm_norm == "sj"
+    # Before anything is staged, graded or sent to a model: every caller is covered.
+    sandbox_kind = scored_run_sandbox(config)
 
     spec = load_cab_task(config.dataset_root, task_id)
     resolved_id, task_rel, category = _resolve_task_metadata(config, spec, task_id)
@@ -479,15 +506,18 @@ def run_trial(
     meta_dir = config.runs_dir / f"{slug}_meta"
     result_file = meta_dir / "result.json"
 
-    fingerprint = config_fingerprint(
-        config,
-        _HARNESS_BEHAVIOUR,
-        {
-            "task_inputs": task_inputs_digest(Path(spec.case_dir)),
-            "bwrap_sandbox": bwrap_sandbox_executable() is not None,
-            "ctx_version": ctx_version(config.ctx_bin) if is_sj else None,
-        },
-    )
+    trial_inputs: dict[str, Any] = {
+        "task_inputs": task_inputs_digest(Path(spec.case_dir)),
+        "bwrap_sandbox": sandbox_kind == "bwrap",
+        "ctx_version": ctx_version(config.ctx_bin) if is_sj else None,
+    }
+    if is_sj:
+        # The code itself, not only the version it reports: the ctx the trial launches and
+        # the ctx package this process runs in-process (residence, deliverable audits, the
+        # hook grammar). The raw arm uses neither, so its fingerprint leaves both out.
+        trial_inputs["ctx_code"] = ctx_code_identity(config)
+        trial_inputs["harness_ctx_code"] = harness_ctx_code_identity()
+    fingerprint = config_fingerprint(config, _HARNESS_BEHAVIOUR, trial_inputs)
     if config.resume and result_file.is_file():
         try:
             saved = json.loads(result_file.read_text(encoding="utf-8"))
@@ -501,6 +531,14 @@ def run_trial(
                 pass
             elif str(saved.get("termination", "")) not in _RESUMABLE_ERROR_TERMINATIONS:
                 cached = RunMetrics.from_dict(saved)
+                if not cached.sandbox and str(saved.get("config_fingerprint") or "") == fingerprint:
+                    # The fingerprint records whether bwrap was active, so a matching
+                    # result ran in the current mode; record it (a legacy result accepted
+                    # on model_id alone stays "" = unknown).
+                    cached.sandbox = sandbox_kind
+                    result_file.write_text(
+                        json.dumps(cached.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+                    )
                 if cached.grading_error:
                     # The agent finished; only the grader failed. Grade its outputs again.
                     regraded = _regrade_cached(
@@ -537,6 +575,7 @@ def run_trial(
         wave=wave,
         bucket=bucket,
         config_fingerprint=fingerprint,
+        sandbox=sandbox_kind,
     )
 
     sandbox = TaskSandbox(config, spec, run_dir, meta_dir, slot)

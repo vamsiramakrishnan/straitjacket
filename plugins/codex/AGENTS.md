@@ -18,17 +18,18 @@ pre-filtering; the digest already selects the load-bearing evidence.
 - Answer repository questions with `ctx ask "<q>" --intent <intent>` — one
   bounded evidence view instead of a search/read/search loop. Intents:
   `locate`/`impact`/`trace` use `--symbol X` unless the question contains one
-  unambiguous identifier; `diagnose` reads the last run's failure facts and
-  never reruns; `compare` compares execution receipts (`--run A --against B`),
-  not arbitrary concepts; `verify`/`review` run tests (execute-class, CLI-only).
-  For a multi-step investigation you can name, run a compiled `ctx.plan/v1`
-  via the `investigate` op.
+  unambiguous identifier; `diagnose` reads failures of a test run
+  captured by `ctx run`, never reruns; `compare` compares execution receipts
+  (`--run A --against B`); `verify`/`review` run tests (execute-class,
+  CLI-only). For a multi-step investigation you can name, run a compiled
+  `ctx.plan/v1` via the `investigate` op.
 - Compose typed facts with `ctx q '<stage> | <stage>'` (a bounded, total
   algebra) instead of piping raw output through grep/awk/jq: e.g.
-  `refs X | group file | top 3 | get`, `fails last | in-changed` (failing
-  tests in changed symbols), `corpus --ext py --changed | outline` (bound
-  the file set before scanning), `records run:<id>#stdout --jsonl | group
-  level | count` (query captured JSON where it lives).
+  `refs X | group file | top 3 | get`, `corpus --ext py --changed | outline`.
+  Only for output captured by `ctx run`: `fails last | in-changed`,
+  `records run:<id>#stdout --jsonl | group level | count`.
+- For an existing file: grep, read windows, or
+  `ctx search repo:<file> PATTERN`.
 - Bounded retrieval verbs: `ctx search`, `ctx get`, `ctx stats`, `ctx map`,
   `ctx def`/`refs`/`impact`. One tool (`ctx`), operations by parameter.
 <!-- ctx-harness:end -->

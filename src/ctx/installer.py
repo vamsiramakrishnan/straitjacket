@@ -918,20 +918,18 @@ This workspace is harnessed by `{exe}`. Noisy command and file output is
 captured at the source and returned as a bounded, addressable digest — work
 *with* it rather than paging or pre-filtering around it.
 
-- Answer repository questions with `ctx ask "<q>" --intent
-  locate|impact|diagnose` — one bounded evidence view instead of a
-  search/read/search loop. `diagnose` reads the last captured run's failure
-  facts and names the culprit symbol; it never reruns tests. `locate` =
-  where is X defined/used; `impact` = what breaks if X changes. Pass
-  `--symbol X` for locate/impact unless the question has one unambiguous
-  identifier.
+- Answer code questions with `ctx ask "<q>" --intent locate|impact` (where
+  X is defined/used; what breaks if X changes) — one bounded evidence view
+  instead of a search/read/search loop. Pass `--symbol X` unless the
+  question has one unambiguous identifier.
 - Compose typed facts with `ctx q '<stage> | <stage>'` (bounded, total)
-  instead of piping through grep/awk/jq: `refs X | group file | top 3 | get`,
-  `fails last | in-changed` (failing tests in changed symbols),
-  `corpus --ext py --changed | outline`, `records run:<id>#stdout --jsonl |
-  group level | count`.
+  instead of piping through grep/awk/jq: `refs X | group file | top 3 | get`.
 - Capture noisy commands with `ctx run -- <cmd>`; pull exact bytes with
   `ctx get <handle>`. Cite handles/coordinates instead of re-quoting output.
+- Only for output captured by `ctx run`: `ctx ask --intent diagnose`,
+  `ctx q 'fails last | in-changed'`, `ctx q 'records run:<id>#stdout'`.
+- For an existing file (a log): grep, Read windows, or
+  `ctx search repo:<file> PATTERN`.
 {_CODEX_MARK_END}
 """
 

@@ -172,6 +172,46 @@ def test_install_claude_delivers_verb_card(workspace_dir):
     assert t2.count("ctx-harness:start") == 1
 
 
+_RUN_ONLY = ("--intent diagnose", "fails last | in-changed", "records run:<id>#stdout")
+
+
+def _card_bullets(text: str) -> list[str]:
+    return [b.replace("\n  ", " ") for b in text.split("\n- ")[1:]]
+
+
+def test_claude_card_scopes_run_only_verbs_to_ctx_run_output():
+    """Measured: 4 of 20 sessions ran `ctx ask --intent diagnose`, `ctx q
+    'fails last'` or `ctx q 'records …'` on a plain log file and got "no
+    captured test run" / "bad handle" (7 wasted turns). Each of those verbs
+    appears only in the bullet that says it needs `ctx run` output, and the
+    card says what to do for an existing file instead -- without growing."""
+    from ctx.installer import _render_claude_md
+
+    card = _render_claude_md("ctx")
+    bullets = _card_bullets(card)
+    for verb in _RUN_ONLY:
+        holders = [b for b in bullets if verb in b]
+        assert len(holders) == 1, verb
+        assert holders[0].startswith("Only for output captured by `ctx run`"), holders[0]
+    existing = [b for b in bullets if b.startswith("For an existing file")]
+    assert existing and "ctx search repo:<file> PATTERN" in existing[0]
+    assert "Read windows" in existing[0] and "grep" in existing[0]
+    assert len(card) <= 1191  # the card's size before this wording (characters)
+
+
+def test_codex_card_scopes_run_only_verbs_the_same_way():
+    from ctx.installer import _render_codex_file
+
+    bullets = _card_bullets(_render_codex_file("AGENTS.md", "ctx"))
+    for verb in ("fails last | in-changed", "records run:<id>#stdout"):
+        holders = [b for b in bullets if verb in b]
+        assert len(holders) == 1 and "Only for output captured by `ctx run`" in holders[0]
+    assert any("diagnose` reads failures of a test run captured by `ctx run`" in b
+               for b in bullets)
+    assert any(b.startswith("For an existing file") and "ctx search repo:<file> PATTERN" in b
+               for b in bullets)
+
+
 def test_install_claude_preserves_user_statusline(workspace_dir):
     from ctx.installer import install_claude
 
@@ -301,3 +341,16 @@ def test_codex_post_tool_use_small_noop(state_home, workspace_dir):
         "codex",
     )
     assert out == {}
+
+
+def test_scoping_the_run_only_verbs_grew_no_card_or_skill_body():
+    """Byte sizes before the run-only verbs were scoped (main at 64e52b6):
+    every teaching surface that carries them is at most that long."""
+    from pathlib import Path
+
+    from ctx.installer import _render_codex_file
+
+    root = Path(__file__).resolve().parent.parent
+    skill = (root / "plugins/antigravity/skills/ctx-harness/SKILL.md").read_bytes()
+    assert len(skill) <= 11440
+    assert len(_render_codex_file("AGENTS.md", "ctx").encode()) <= 2183

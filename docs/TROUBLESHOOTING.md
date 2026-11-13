@@ -146,6 +146,15 @@ this is exactly why `ctx wrap` removes the native `Grep`/`Glob` tools under the
 default `[guard] collapse` setting (which now governs only this) — make sure you set the host up with `ctx wrap` (not a
 hand-rolled hook), and prefer `ctx search` / `ctx q` for repository search.
 
+### A large-file Read shows fewer than 240 lines
+
+**Not a bug.** The guard bounds a Read of a file over `max_inline_bytes` to
+`max_inline_lines` lines; when those lines are themselves over
+`max_tool_output_bytes` (long log lines), the output gate keeps the leading whole
+lines that fit and adds a note with the range shown and the `offset` to continue
+from. Earlier releases replaced such a Read with a JSON shape digest holding no
+line of the file.
+
 ### The guard isn't confining paths
 
 **Cause:** path confinement is only enforced once a workspace root resolves. If
@@ -209,6 +218,15 @@ output bound, and the host decides about the command. **Fix:** confirm a genuine
 safe unknown command, or use `ctx run -- …` when it can flood. You can change `[guard]
 unknown_command` (`allow` / `deny` / `ask` / `force_ask`), but a blanket `allow`
 removes the review boundary for both unclassified reads and unclassified mutations.
+Common read-only text tools (`nl`, `sort`, `cut`, `base64`, …) run on their own are
+captured like `cat` when they read workspace files. They still reach this prompt when
+they write a file or run a program (`sort -o`/`--out`, `uniq IN OUT`, `sort
+--compress-program`, `sort -T`), take operands from a file, are not the real tool
+(`./sort`, an environment prefix), name an input ctx cannot see before it runs (a glob
+or `~user`), or read outside the workspace or a device, symbolic links followed. A
+command with shell metacharacters (`<`, `$`, braces, pipes) keeps the verdict it had
+before these tools were named. `seq` without options is sized by its arguments: up to 400 lines it runs as
+is, up to a million it is captured, otherwise it asks.
 See [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 
 ### "in-place sed/awk" or "deeply nested shell" prompts

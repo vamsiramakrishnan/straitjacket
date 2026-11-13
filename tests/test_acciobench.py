@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -1307,6 +1308,7 @@ def test_run_trial_and_run_suite_paired_arms_with_residence_and_resume(tmp_path:
 
     provider = ScriptedProvider()
     cfg = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root,
         workdir=tmp_path / "ab_work",
         provider="gemini",
@@ -1405,6 +1407,7 @@ def test_grading_error_is_ungraded_reported_apart_and_regraded_on_resume(tmp_pat
     flag = tmp_path / "grader_has_run_once"
     _flaky_grader_task(ds_root, "file-flaky-grader", flag)
     cfg = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root, workdir=tmp_path / "work", provider="gemini", api_key="dummy",
         judge_provider="mock", arms=("sj",), slot_offset=70,
     )
@@ -1470,6 +1473,7 @@ def test_resume_accepts_cached_results_only_for_the_same_configuration(
     ds_root = tmp_path / "cab"
     _create_synthetic_task(ds_root, category="file", task_id="file-fp")
     base = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root, workdir=tmp_path / "work", model="model-a", provider="gemini",
         api_key="dummy", judge_provider="mock", arms=("sj",), slot_offset=60,
     )
@@ -1578,6 +1582,7 @@ def test_supersede_never_deletes_a_previous_configurations_trial(
     ds_root = tmp_path / "cab"
     _create_synthetic_task(ds_root, category="file", task_id="file-sup")
     cfg_a = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root, workdir=tmp_path / "work", model="model-a", provider="gemini",
         api_key="dummy", judge_provider="mock", arms=("sj",),
     )
@@ -1700,7 +1705,7 @@ def test_run_command_survives_a_report_that_fails_to_render(
 
     monkeypatch.setattr(ab_cli, "render_summary_report", boom)
     args = ab_cli.build_parser().parse_args(
-        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-rep",
+        ["run", "--allow-unsandboxed", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-rep",
          "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock"]
     )
     assert ab_cli._cmd_run(args) == 0
@@ -1738,7 +1743,8 @@ def test_run_reports_leave_out_an_earlier_result_for_a_trial_that_raised(
     monkeypatch.setattr(ab_cli, "run_suite", fake_suite)
     out_json = tmp_path / "report.json"
     args = ab_cli.build_parser().parse_args(
-        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-a,file-b",
+        ["run", "--allow-unsandboxed", "--dataset-root", str(ds_root), "--workdir", str(workdir),
+         "--tasks", "file-a,file-b",
          "--arms", "raw,sj", "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock",
          "--format", "json", "--output", str(out_json), "--no-html-report"]
     )
@@ -1778,7 +1784,8 @@ def test_run_reports_show_no_completed_run_when_every_trial_raised(
     monkeypatch.setattr(ab_cli, "run_suite", all_raise)
     out_json = tmp_path / "report.json"
     args = ab_cli.build_parser().parse_args(
-        ["run", "--dataset-root", str(ds_root), "--workdir", str(workdir), "--tasks", "file-a,file-b",
+        ["run", "--allow-unsandboxed", "--dataset-root", str(ds_root), "--workdir", str(workdir),
+         "--tasks", "file-a,file-b",
          "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock",
          "--format", "json", "--output", str(out_json), "--no-html-report"]
     )
@@ -1786,6 +1793,175 @@ def test_run_reports_show_no_completed_run_when_every_trial_raised(
     assert capsys.readouterr().err.count("[not recorded]") == 2
     doc = json.loads(out_json.read_text(encoding="utf-8"))
     assert doc["total_runs"] == 0 and doc["arms"] == {}
+
+
+def test_ctx_code_identity_hashes_the_launched_ctx_code_not_its_version_or_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An edit to ctx that keeps its version changes the identity; moving the checkout or
+    a new __pycache__ does not; nothing is imported from the caller's directory; a ctx
+    that is not a Python entry point is identified by its own bytes."""
+    from evals.acciobench import config as cfg_mod
+
+    def fresh(ctx_bin: Path) -> str:
+        cfg_mod._CODE_ID_CACHE.clear()  # one computation per process: start a "new process"
+        return cfg_mod.ctx_code_identity(BenchConfig(dataset_root=tmp_path / "cab", workdir=tmp_path / "w", ctx_bin=ctx_bin))
+
+    def fake_ctx(root: Path, body: str = "VALUE = 1\n") -> Path:
+        pkg = root / "ctx"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("__version__ = '1.0'\n", encoding="utf-8")
+        (pkg / "cli.py").write_text(body + "def main():\n    return 0\n", encoding="utf-8")
+        return pkg
+
+    pkg = fake_ctx(tmp_path / "checkout_a")
+    monkeypatch.setenv("PYTHONPATH", str(pkg.parent))
+    entry = _write_executable(
+        tmp_path / "bin" / "ctx",
+        f"#!{sys.executable}\nimport sys\nfrom ctx.cli import main\nif __name__ == '__main__':\n    sys.exit(main())\n",
+    )
+    first = fresh(entry)
+    assert first.startswith("pkg:")
+    assert fresh(entry) == first
+    # A planted ctx/ in the current directory is never imported by the probe.
+    planted = tmp_path / "rundir"
+    marker = tmp_path / "planted_ran"
+    (planted / "ctx").mkdir(parents=True)
+    (planted / "ctx" / "__init__.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+    monkeypatch.chdir(planted)
+    assert fresh(entry) == first and not marker.exists()
+    # Byte-code caches are not code.
+    (pkg / "__pycache__").mkdir()
+    (pkg / "__pycache__" / "cli.cpython-311.pyc").write_bytes(b"\0" * 32)
+    assert fresh(entry) == first
+    # Same content elsewhere (a moved checkout): same identity.
+    moved = fake_ctx(tmp_path / "checkout_b")
+    monkeypatch.setenv("PYTHONPATH", str(moved.parent))
+    assert fresh(entry) == first
+    # An edit that keeps the version: a different identity.
+    (moved / "cli.py").write_text("VALUE = 22\ndef main():\n    return 0\n", encoding="utf-8")
+    edited = fresh(entry)
+    assert edited.startswith("pkg:") and edited != first
+    # A Python interpreter launched as `-P -m ctx` resolves the same package.
+    assert fresh(Path(sys.executable)) == edited
+    # Not a Python entry point (a shell wrapper): its own bytes, stably.
+    wrapper = _write_executable(tmp_path / "wrap" / "ctx", "#!/usr/bin/env bash\nexec ctx-real \"$@\"\n")
+    w1 = fresh(wrapper)
+    assert w1.startswith("exe:") and fresh(wrapper) == w1
+    wrapper.write_text("#!/usr/bin/env bash\nexec ctx-real --v2 \"$@\"\n", encoding="utf-8")
+    assert fresh(wrapper) not in (w1, edited)
+
+    # The ctx package this process imports: hashed by content, once per process.
+    monkeypatch.setitem(sys.modules, "ctx", types.SimpleNamespace(__file__=str(moved / "__init__.py")))
+    cfg_mod._CODE_ID_CACHE.clear()
+    assert cfg_mod.harness_ctx_code_identity() == edited
+
+
+def _venv_with_fake_ctx(root: Path, marker: str | None) -> tuple[Path, Path | None]:
+    """A virtualenv (no pip) whose site-packages holds a fake ``ctx`` printing ``marker``
+    (no ctx at all when ``marker`` is None). Returns (venv bin dir, package dir)."""
+    import venv
+
+    venv.create(root, with_pip=False, symlinks=True, clear=True)
+    bin_dir = root / "bin"
+    if marker is None:
+        return bin_dir, None
+    site = subprocess.run(
+        [str(bin_dir / "python"), "-I", "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True, text=True, timeout=60, check=True,
+    ).stdout.strip()
+    pkg = Path(site) / "ctx"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "cli.py").write_text(f"def main():\n    print({marker!r})\n    return 0\n", encoding="utf-8")
+    (pkg / "__main__.py").write_text("import sys\nfrom ctx.cli import main\nsys.exit(main())\n", encoding="utf-8")
+    return bin_dir, pkg
+
+
+def test_ctx_code_identity_sees_the_package_the_trial_really_launches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``#!/usr/bin/env python3`` resolves on the trial's PATH (the ctx's own directory
+    first), not the harness's; a venv's python given as --ctx-bin launches that venv's
+    ctx; a Python launcher with no visible ctx package is ``unavailable``, never a hash
+    of the interpreter's bytes."""
+    from evals.acciobench import config as cfg_mod
+
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    venv_bin, pkg = _venv_with_fake_ctx(tmp_path / "venv_a", "fake-ctx-a")
+    assert pkg is not None
+    entry = _write_executable(
+        venv_bin / "ctx", "#!/usr/bin/env python3\nimport sys\nfrom ctx.cli import main\nsys.exit(main())\n"
+    )
+    # The harness's own python3 is another interpreter, which has no such package.
+    assert shutil.which("python3") != str(venv_bin / "python3")
+
+    def identity(ctx_bin: Path) -> str:
+        cfg_mod._CODE_ID_CACHE.clear()
+        return cfg_mod.ctx_code_identity(BenchConfig(dataset_root=tmp_path / "cab", workdir=tmp_path / "w", ctx_bin=ctx_bin))
+
+    want = "pkg:" + cfg_mod._code_digest(pkg)
+    assert identity(entry) == want
+    (pkg / "cli.py").write_text("def main():\n    print('fake-ctx-a2')\n    return 0\n", encoding="utf-8")
+    edited = "pkg:" + cfg_mod._code_digest(pkg)
+    assert edited != want and identity(entry) == edited
+
+    # --ctx-bin <venv>/bin/python: not symlink-resolved, so the venv's ctx is what runs.
+    vpy = venv_bin / "python"
+    assert vpy.is_symlink()
+    cfg = BenchConfig(dataset_root=tmp_path / "cab", workdir=tmp_path / "w", ctx_bin=vpy)
+    assert cfg.ctx_bin == vpy and resolve_ctx_bin(cfg.ctx_bin) == vpy
+    assert identity(vpy) == edited
+    run_dir, meta_dir = tmp_path / "w" / "runs" / "x", tmp_path / "w" / "runs" / "x_meta"
+    run_dir.mkdir(parents=True)
+    meta_dir.mkdir(parents=True)
+    host = ToolHost(cfg, run_dir, meta_dir, {}, dict(os.environ),
+                    RunMetrics(task_id="t", task_rel="t", category="file", arm="sj", model_id="m"), None, arm="sj")
+    cp = host.ctx(["--version"])
+    assert "fake-ctx-a2" in (cp.stdout or ""), (cp.stdout, cp.stderr)
+
+    # A Python launcher whose interpreter has no ctx: unavailable, with one warning.
+    bare_bin, _ = _venv_with_fake_ctx(tmp_path / "venv_bare", None)
+    bare_entry = _write_executable(
+        tmp_path / "bare_entry" / "ctx", f"#!{bare_bin / 'python'}\nfrom ctx.cli import main\nmain()\n"
+    )
+    capsys.readouterr()
+    cfg_mod._WARNED_NO_PKG.clear()
+    for target in (bare_entry, bare_bin / "python"):
+        got = identity(target)
+        assert got.startswith("unavailable (") and "no ctx package" in got, got
+        assert identity(target) == got
+    err = capsys.readouterr().err
+    assert err.count("[warn] ctx code identity") == 2, err
+
+
+def test_resume_reruns_sj_when_ctx_code_changes_and_raw_does_not(tmp_path: Path) -> None:
+    import evals.acciobench.loop as loop_mod
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-ctxcode")
+    cfg = BenchConfig(allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
+                      dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("raw", "sj"))
+
+    def reruns(arm: str) -> bool:
+        prov = _SolvingProvider()
+        run_trial(cfg, "file-ctxcode", arm, 41, prov)  # type: ignore[arg-type]
+        return prov.calls > 0
+
+    real = (loop_mod.ctx_code_identity, loop_mod.harness_ctx_code_identity)
+    try:
+        loop_mod.ctx_code_identity = lambda _bin=None: "pkg:aaaa"  # type: ignore[assignment]
+        loop_mod.harness_ctx_code_identity = lambda: "pkg:bbbb"  # type: ignore[assignment]
+        assert reruns("raw") and reruns("sj")
+        assert not reruns("raw") and not reruns("sj")
+        loop_mod.ctx_code_identity = lambda _bin=None: "pkg:cccc"  # type: ignore[assignment]
+        assert reruns("sj") and not reruns("raw")
+        loop_mod.harness_ctx_code_identity = lambda: "pkg:dddd"  # type: ignore[assignment]
+        assert reruns("sj") and not reruns("raw")
+        assert not reruns("sj")
+    finally:
+        loop_mod.ctx_code_identity, loop_mod.harness_ctx_code_identity = real  # type: ignore[assignment]
 
 
 def test_task_inputs_digest_follows_directory_links_like_staging_does(tmp_path: Path) -> None:
@@ -1885,6 +2061,8 @@ def test_concurrent_regrades_with_the_same_saved_port_each_get_their_own_service
     import socket
     import threading
 
+    from evals.acciobench import sandbox as sandbox_mod
+
     ds_root = tmp_path / "cab"
     runtime_dir = tmp_path / "runtime"
     (runtime_dir / "mock_services").mkdir(parents=True)
@@ -1895,6 +2073,12 @@ def test_concurrent_regrades_with_the_same_saved_port_each_get_their_own_service
             s.settimeout(0.5)
             return s.connect_ex(("127.0.0.1", port)) == 0
 
+    def wait_until_free(p: int) -> None:
+        deadline = time.monotonic() + 10
+        while not sandbox_mod._is_port_free(p) and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    wait_until_free(20000 + 86 * 100)  # an earlier test may have just released the slot's first port
     trials = []
     for name in ("api-turn-a", "api-turn-b"):
         _create_synthetic_task(ds_root, category="api", task_id=name, mock_services=True, service_port=4477)
@@ -1906,6 +2090,10 @@ def test_concurrent_regrades_with_the_same_saved_port_each_get_their_own_service
             port = first.port_map[4477]
         finally:
             first.cleanup()
+        # cleanup() returns once the service's processes are signalled; the kernel frees
+        # the port a moment later. The next trial in the slot gets the same port only
+        # after that, so wait for it instead of racing it.
+        wait_until_free(port)
         trials.append((spec, run_dir, meta_dir, port))
     assert trials[0][3] == trials[1][3], "sequential trials in one slot share the port"
     port = trials[0][3]
@@ -1982,7 +2170,8 @@ def test_task_inputs_digest_never_blocks_or_raises_on_odd_entries(
 @pytest.mark.parametrize(
     "bad_reward",
     ["[]", '{"score": "abc"}', "{}", '{"checks_passed": 3, "checks_total": 2}', '{"score": true}',
-     '{"score": 1.0, "checks_breakdown": "x"}', '"passed"', "null", '{"score": NaN}'],
+     '{"score": 1.0, "checks_breakdown": "x"}', '"passed"', "null", '{"score": NaN}',
+     '{"score": 5}', '{"score": 85, "checks_passed": 3, "checks_total": 4}', '{"score": 1.001}'],
 )
 def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Path, bad_reward: str) -> None:
     ds_root = tmp_path / "cab"
@@ -1997,7 +2186,8 @@ def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Pat
         f'if [ ! -e "{flag}" ]; then cp "$(dirname "$0")/bad.json" "$REWARD_JSON"; exit 0; fi\n'
         'exec bash "$(dirname "$0")/real.sh"\n',
     )
-    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+    cfg = BenchConfig(allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
+                      dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
                       judge_provider="mock", arms=("sj",))
     first = run_trial(cfg, "file-badreward", "sj", 21, _SolvingProvider())  # type: ignore[arg-type]
     assert first.termination == "present_files"
@@ -2007,6 +2197,131 @@ def test_uninterpretable_reward_is_a_grading_error_and_is_regraded(tmp_path: Pat
     assert second.grading_error == "" and second.passed is True
 
 
+def test_a_reused_result_without_a_sandbox_field_is_recorded_or_reported_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cached result written before ``sandbox`` existed: with a matching fingerprint it
+    ran in the current mode, so that mode is recorded on reuse; a legacy result accepted on
+    model_id alone stays unknown and reports count it as such."""
+    from evals.acciobench.report import compute_summary_payload
+
+    monkeypatch.setenv("ACCIOBENCH_NO_BWRAP", "1")
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-oldbox")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("raw",), allow_unsandboxed=True)
+    result_file = cfg.runs_dir / "file-oldbox__raw__t1_meta" / "result.json"
+    assert run_trial(cfg, "file-oldbox", "raw", 51, _SolvingProvider()).sandbox == "none"  # type: ignore[arg-type]
+
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    doc.pop("sandbox")
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    assert load_run_results(cfg.workdir)[0].sandbox == ""
+    reused = run_trial(cfg, "file-oldbox", "raw", 51, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert reused.sandbox == "none"
+    assert json.loads(result_file.read_text(encoding="utf-8"))["sandbox"] == "none"
+    assert compute_summary_payload(load_run_results(cfg.workdir))["unsandboxed_runs"] == 1
+
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    doc.pop("sandbox")
+    doc.pop("config_fingerprint")
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+    legacy = run_trial(cfg, "file-oldbox", "raw", 51, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert legacy.sandbox == ""
+    payload = compute_summary_payload(load_run_results(cfg.workdir))
+    assert payload["unsandboxed_runs"] == 0 and payload["isolation_unknown_runs"] == 1
+
+
+def test_a_stored_score_above_one_loads_as_a_grading_error_and_is_regraded(tmp_path: Path) -> None:
+    """A result graded before scores above 1 were refused (old shape: no grading_error
+    key) loads as ungraded: reports leave it out and resume re-grades it."""
+    from evals.acciobench.report import compute_summary_payload
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-oldscore")
+    cfg = BenchConfig(allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
+                      dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("raw",))
+    assert run_trial(cfg, "file-oldscore", "raw", 52, _SolvingProvider()).passed  # type: ignore[arg-type]
+    result_file = cfg.runs_dir / "file-oldscore__raw__t1_meta" / "result.json"
+    doc = json.loads(result_file.read_text(encoding="utf-8"))
+    for key in ("grading_error", "sandbox"):
+        doc.pop(key)
+    doc.update(passed=True, capacity_score=5.0, raw_verifier_score=5.0, checks_passed=0, checks_total=0)
+    result_file.write_text(json.dumps(doc), encoding="utf-8")
+
+    (loaded,) = load_run_results(cfg.workdir)
+    assert loaded.passed is False and "above the 0..1 score scale" in loaded.grading_error
+    payload = compute_summary_payload([loaded])
+    assert payload["grading_error_runs"] == 1 and payload["arms"]["raw"]["overall"]["n"] == 0
+    for ok in ({"capacity_score": 1.0, "raw_verifier_score": 1.0 + 1e-9}, {"capacity_score": 0.5}):
+        assert RunMetrics.from_dict({"task_id": "t", "arm": "raw", "model_id": "m", **ok}).grading_error == ""
+
+    regraded = run_trial(cfg, "file-oldscore", "raw", 52, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    assert regraded.grading_error == "" and regraded.passed and regraded.capacity_score == 1.0
+    assert json.loads(result_file.read_text(encoding="utf-8"))["raw_verifier_score"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("reward", "expect"),
+    [
+        ('{"score": 0.0, "checks_passed": 0, "checks_total": 2}', "ok"),
+        ('{"score": 1.0}', "leakage"),
+        ('{"score": 0.0, "checks_passed": 2, "checks_total": 2}', "leakage"),
+        ('{"score": 85, "checks_passed": 0, "checks_total": 4}', "uninterpretable"),
+        ('{"score": 5}', "uninterpretable"),
+        ('{"score": NaN}', "uninterpretable"),
+        ('{"score": -3}', "uninterpretable"),
+        ('[1, 2]', "uninterpretable"),
+    ],
+)
+def test_validate_reads_rewards_like_a_scored_trial(tmp_path: Path, reward: str, expect: str) -> None:
+    ds_root = tmp_path / "cab"
+    case_dir = _create_synthetic_task(ds_root, category="file", task_id="file-refreward")
+    _write_executable(case_dir / "grader" / "run.sh", f"#!/usr/bin/env bash\necho '{reward}' > \"$REWARD_JSON\"\n")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock")
+    res = validate_task_referee(cfg, "file-refreward", slot=88)
+    joined = " | ".join(res["errors"])
+    if expect == "ok":
+        assert res["ok"] and res["grader_ok"] and not res["baseline_passed"], joined
+    elif expect == "leakage":
+        assert not res["ok"] and res["baseline_passed"] and "baseline setup leakage" in joined
+    else:
+        assert not res["ok"] and not res["grader_ok"] and not res["baseline_passed"]
+        assert "grader output not interpretable" in joined and "leakage" not in joined, joined
+
+
+def test_reward_score_above_one_is_a_grading_error_not_a_pass(tmp_path: Path) -> None:
+    """Scores are on a 0..1 scale: anything above 1 (beyond float noise) is not
+    interpretable, with or without checks; float noise just above 1 is a full score."""
+    from evals.acciobench.loop import _grade_into
+
+    class _Sandbox:
+        def __init__(self, reward: Any) -> None:
+            self.reward = reward
+
+        def grade(self, reward_json: Path, *, judge_token: str = "") -> Any:
+            return self.reward
+
+    cfg = BenchConfig(dataset_root=tmp_path / "cab", workdir=tmp_path / "w", judge_provider="mock")
+
+    def grade(reward: Any) -> RunMetrics:
+        m = RunMetrics(task_id="t", task_rel="t", category="file", arm="sj", model_id="m")
+        _grade_into(cfg, _SolvingProvider(), _Sandbox(reward), tmp_path, m)  # type: ignore[arg-type]
+        return m
+
+    for bad in ({"score": 5}, {"score": 85, "checks_passed": 3, "checks_total": 4}, {"score": 1.5}):
+        m = grade(bad)
+        assert m.grading_error and "above 1" in m.grading_error, bad
+        assert m.passed is False and m.capacity_score == 0.0 and m.raw_verifier_score == 0.0
+    for ok, passed, cap in (({"score": 1.0 + 1e-9}, True, 1.0), ({"score": 0.5}, False, 0.5),
+                            ({"score": 1.0, "checks_passed": 3, "checks_total": 4}, True, 0.75)):
+        m = grade(ok)
+        assert m.grading_error == "" and m.passed is passed and m.capacity_score == cap, ok
+        assert m.raw_verifier_score <= 1.0
+
+
 def test_legacy_verifier_error_note_loads_as_grading_error() -> None:
     legacy = {"task_id": "t", "arm": "sj", "model_id": "m", "termination": "present_files",
               "passed": False, "notes": ["verifier error: Traceback ... TimeoutError"]}
@@ -2014,6 +2329,108 @@ def test_legacy_verifier_error_note_loads_as_grading_error() -> None:
     assert m.grading_error.startswith("Traceback")
     ok = RunMetrics.from_dict({"task_id": "t", "arm": "sj", "model_id": "m", "passed": True})
     assert ok.grading_error == ""
+
+
+def test_scored_run_refuses_to_start_without_the_bwrap_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No bwrap and no explicit override: nothing is staged, graded or sent to a model,
+    whoever calls (CLI, run_suite, run_trial), and ACCIOBENCH_NO_BWRAP alone is no override."""
+    import evals.acciobench.orchestrator as orch_mod
+    from evals.acciobench.loop import UnsandboxedRunRefused
+
+    monkeypatch.setenv("ACCIOBENCH_NO_BWRAP", "1")
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-nobwrap")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("raw", "sj"))
+    assert cfg.allow_unsandboxed is False
+
+    with pytest.raises(UnsandboxedRunRefused, match="ACCIOBENCH_NO_BWRAP is set"):
+        run_trial(cfg, "file-nobwrap", "raw", 31, _MustNotGenerateProvider())  # type: ignore[arg-type]
+    monkeypatch.setattr(orch_mod, "create_provider", lambda *_a: pytest.fail("provider created"))
+    with pytest.raises(UnsandboxedRunRefused):
+        run_suite(cfg, ["file-nobwrap"])
+    assert not cfg.workdir.exists()
+
+    monkeypatch.setattr(ab_cli, "run_suite", lambda *a, **k: pytest.fail("run_suite called"))
+    args = ab_cli.build_parser().parse_args(
+        ["run", "--dataset-root", str(ds_root), "--workdir", str(cfg.workdir), "--tasks", "file-nobwrap",
+         "--provider", "gemini", "--api-key", "dummy", "--judge-provider", "mock"]
+    )
+    assert ab_cli._cmd_run(args) != 0
+    err = capsys.readouterr().err
+    assert "Refusing a scored run" in err and "ACCIOBENCH_NO_BWRAP is set" in err
+    assert "apt-get install -y bubblewrap" in err and "--allow-unsandboxed" in err
+    assert not cfg.workdir.exists()
+
+    # doctor still runs, and says a scored run would be refused.
+    _ok, lines = run_doctor(cfg)
+    assert any("bwrap sandbox: unavailable" in ln and "REFUSED" in ln for ln in lines)
+
+
+def test_allow_unsandboxed_runs_warns_and_every_report_counts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import evals.acciobench.orchestrator as orch_mod
+    from evals.acciobench.html_report import build_html_report_payload
+    from evals.acciobench.report import compute_summary_payload
+
+    ds_root = tmp_path / "cab"
+    _create_synthetic_task(ds_root, category="file", task_id="file-unsandboxed")
+    cfg = BenchConfig(dataset_root=ds_root, workdir=tmp_path / "w", provider="gemini", api_key="d",
+                      judge_provider="mock", arms=("sj",), allow_unsandboxed=True)
+    monkeypatch.setenv("ACCIOBENCH_NO_BWRAP", "1")
+    monkeypatch.setattr(orch_mod, "create_provider", lambda *_a: _SolvingProvider())
+    capsys.readouterr()
+    (res,) = run_suite(cfg, ["file-unsandboxed"])
+    assert "WARNING: --allow-unsandboxed" in capsys.readouterr().err
+    assert res.sandbox == "none" and res.passed
+    saved = json.loads((cfg.runs_dir / "file-unsandboxed__sj__t1_meta" / "result.json").read_text(encoding="utf-8"))
+    assert saved["sandbox"] == "none"
+
+    # One sandboxed result next to it, and one written before sandboxing was recorded.
+    for arm, extra in (("raw", {"sandbox": "bwrap"}), ("raw", {})):
+        meta = cfg.runs_dir / f"file-old-{len(extra)}__{arm}__t1_meta"
+        meta.mkdir(parents=True)
+        (meta / "result.json").write_text(json.dumps(dict(
+            task_id=f"file-old-{len(extra)}", task_rel="file/x", category="file", arm=arm, model_id="m",
+            steps=3, termination="present_files", passed=True, capacity_score=1.0, **extra)), encoding="utf-8")
+    loaded = load_run_results(cfg.workdir)
+    assert sorted(r.sandbox for r in loaded) == ["", "bwrap", "none"]
+    payload = compute_summary_payload(loaded)
+    assert payload["unsandboxed_runs"] == 1 and payload["arms"]["sj"]["unsandboxed_runs"] == 1
+    assert payload["arms"]["raw"]["unsandboxed_runs"] == 0
+    for fmt in ("table", "markdown"):
+        assert "NO FILESYSTEM ISOLATION: 1 trial(s)" in render_summary_report(loaded, format=fmt), fmt
+    assert json.loads(render_summary_report(loaded, format="json"))["unsandboxed_runs"] == 1
+    html_meta = build_html_report_payload(loaded, workdir=cfg.workdir)["meta"]
+    assert html_meta["unsandboxed_total"] == 1 and html_meta["unsandboxed"] == {"sj": 1, "raw": 0}
+    assert 'id="unsandboxed-runs"' in render_summary_report(loaded, format="html", workdir=cfg.workdir)
+    # The result written before sandboxing was recorded is counted as unknown, everywhere.
+    assert payload["isolation_unknown_runs"] == 1 and payload["arms"]["raw"]["isolation_unknown_runs"] == 1
+    for fmt in ("table", "markdown"):
+        assert "ISOLATION UNKNOWN: 1 trial(s)" in render_summary_report(loaded, format=fmt), fmt
+    assert json.loads(render_summary_report(loaded, format="json"))["isolation_unknown_runs"] == 1
+    assert html_meta["isolation_unknown_total"] == 1 and html_meta["isolation_unknown"] == {"sj": 0, "raw": 1}
+    assert 'id="isolation-unknown-runs"' in render_summary_report(loaded, format="html", workdir=cfg.workdir)
+    # Sandboxed results alone: no warning, and the JSON still states both counts (0).
+    sandboxed = [r for r in loaded if r.sandbox == "bwrap"]
+    for fmt in ("table", "markdown"):
+        assert "ISOLATION" not in render_summary_report(sandboxed, format=fmt), fmt
+    doc = json.loads(render_summary_report(sandboxed, format="json"))
+    assert doc["unsandboxed_runs"] == 0 and doc["isolation_unknown_runs"] == 0
+
+    # With the real sandbox available, the same trial records "bwrap".
+    from evals.acciobench.host import bwrap_sandbox_executable
+
+    monkeypatch.delenv("ACCIOBENCH_NO_BWRAP")
+    if bwrap_sandbox_executable() is not None:
+        import dataclasses as _dc
+
+        again = run_trial(_dc.replace(cfg, allow_unsandboxed=False), "file-unsandboxed", "sj", 32,
+                          _SolvingProvider())  # type: ignore[arg-type]
+        assert again.sandbox == "bwrap" and again.passed
 
 
 # ---------------------------------------------------------------------------
@@ -2615,6 +3032,7 @@ def test_host_empirical_fs_mutation_untitled_hygiene_and_loop_exit_guards(tmp_pa
             pass
 
     cfg = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root,
         workdir=tmp_path / "guard_work",
         provider="gemini",
@@ -3734,6 +4152,7 @@ def test_loop_turn0_contract_q3_per_service_gates_and_residence_wiring(
             pass
 
     cfg = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_root,
         workdir=tmp_path / "q3_work",
         provider="gemini",
@@ -3811,6 +4230,7 @@ def test_loop_turn0_contract_q3_per_service_gates_and_residence_wiring(
             pass
 
     cfg_pf = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_pf,
         workdir=tmp_path / "q3_pf_work",
         provider="gemini",
@@ -4120,6 +4540,7 @@ def test_wave3_schemas_protocol_and_loop_service_delta_gates(
             pass
 
     cfg_pf = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_pf,
         workdir=tmp_path / "w3_pf_work",
         provider="gemini",
@@ -4197,6 +4618,7 @@ def test_wave3_schemas_protocol_and_loop_service_delta_gates(
             pass
 
     cfg_txt = BenchConfig(
+        allow_unsandboxed=True,  # explicit opt-in: CI has no bwrap
         dataset_root=ds_txt,
         workdir=tmp_path / "w3_txt_work",
         provider="gemini",

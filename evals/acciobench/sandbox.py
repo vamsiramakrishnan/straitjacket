@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Any
 
-from .config import BenchConfig, resolve_ctx_bin
+from .config import BenchConfig, resolve_ctx_bin, service_path
 from .ports import CompiledPortMap, discover_task_ports
 
 _WORKSPACE_REWRITE_EXTS = frozenset(
@@ -925,17 +925,11 @@ class TaskSandbox:
         (mock_scratch_work / "tmp").mkdir(parents=True, exist_ok=True)
 
         env = dict(os.environ)
-        path_parts: list[str] = [str(self.meta_dir / "bin")]
-        if self._runtime_bin is not None:
-            path_parts.append(str(self._runtime_bin))
         try:
-            ctx_exec = resolve_ctx_bin(self.config.ctx_bin)
-            path_parts.append(str(ctx_exec.parent))
+            ctx_exec: Path | None = resolve_ctx_bin(self.config.ctx_bin)
         except FileNotFoundError:
-            pass
-        path_parts.append(str(Path(sys.executable).resolve().parent))
-        path_parts.append(env.get("PATH", "/usr/local/bin:/usr/bin:/bin"))
-        env["PATH"] = os.pathsep.join(dict.fromkeys(p for p in path_parts if p))
+            ctx_exec = None
+        env["PATH"] = service_path(self.meta_dir / "bin", self._runtime_bin, ctx_exec)
 
         env["SJ_SLOT_TOKEN"] = self.slot_tag
         env["CCB_MOCK_SERVICES_ROOT"] = str(self.mock_services_dir)

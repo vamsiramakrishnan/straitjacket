@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import shlex
 import shutil
 import stat
@@ -20,6 +21,8 @@ import tomllib
 from typing import Any
 
 VALID_ARMS = frozenset({"raw", "sj"})
+#: Scores are on a 0..1 scale; anything above 1 + this is uninterpretable.
+SCORE_SCALE_TOLERANCE = 1e-6
 KNOWN_CATEGORIES = ("api", "browser", "cli", "file")
 
 _CAB_LOAD_LOCK = threading.Lock()
@@ -49,6 +52,9 @@ class BenchConfig:
     chrome_bin: Path | None = None  # Optional browser binary override
     thinking_level: str | None = None  # None = untouched model defaults!
     max_output_tokens: int | None = None  # None = untouched model defaults!
+    # A scored run refuses to start without the bwrap sandbox unless this is set
+    # (`run --allow-unsandboxed`); results then record sandbox="none".
+    allow_unsandboxed: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dataset_root", Path(self.dataset_root).expanduser().resolve())
@@ -56,7 +62,9 @@ class BenchConfig:
         if self.runtime_dir is not None:
             object.__setattr__(self, "runtime_dir", Path(self.runtime_dir).expanduser().resolve())
         if self.ctx_bin is not None:
-            object.__setattr__(self, "ctx_bin", Path(self.ctx_bin).expanduser().resolve())
+            # Absolute, NOT symlink-resolved: a virtualenv's bin/python is a symlink to the
+            # base interpreter, and only the venv path imports the venv's packages.
+            object.__setattr__(self, "ctx_bin", Path(os.path.abspath(Path(self.ctx_bin).expanduser())))
         if self.chrome_bin is not None:
             object.__setattr__(self, "chrome_bin", Path(self.chrome_bin).expanduser().resolve())
 
@@ -154,6 +162,10 @@ class RunMetrics:
     # config_fingerprint(config) of the configuration that produced this result; resume
     # accepts a cached result only for the same fingerprint ("" = written before it).
     config_fingerprint: str = ""
+    # How the trial was sandboxed: "bwrap" (mount + PID namespaces), "none" (path/env
+    # confinement only, no filesystem isolation; allowed only by --allow-unsandboxed),
+    # "" for results written before this was recorded.
+    sandbox: str = ""
 
     @property
     def is_grading_error(self) -> bool:
@@ -210,6 +222,22 @@ class RunMetrics:
                 kwargs["grading_error"] = str(legacy)[len("verifier error:"):].strip() or "verifier error"
         else:
             kwargs["grading_error"] = str(data.get("grading_error") or "")
+        if not kwargs.get("grading_error"):
+            # Scores are on a 0..1 scale. A result graded before scores above 1 were
+            # refused (a grader that reported 5 or 85) is ungraded, not passed: reports
+            # leave it out and resume re-grades it.
+            for key in ("raw_verifier_score", "capacity_score"):
+                val = data.get(key)
+                if (
+                    isinstance(val, (int, float))
+                    and not isinstance(val, bool)
+                    and val > 1.0 + SCORE_SCALE_TOLERANCE
+                ):
+                    kwargs["grading_error"] = (
+                        f"stored {key} {val!r} is above the 0..1 score scale; re-grade it"
+                    )
+                    kwargs["passed"] = False
+                    break
 
         return cls(**kwargs)
 
@@ -240,7 +268,8 @@ def config_fingerprint(
 ) -> str:
     """A short stable hash of what a trial measured: FINGERPRINT_FIELDS, the harness's own
     behaviour constants (``harness``) and per-trial inputs (``trial``: the task's own
-    files, the ctx version, whether the bwrap sandbox is active)."""
+    files, the ctx version and code hashes on the sj arm, whether the bwrap sandbox is
+    active)."""
     doc = {name: getattr(config, name) for name in FINGERPRINT_FIELDS}
     doc["harness"] = dict(sorted((harness or {}).items()))
     if trial:
@@ -350,10 +379,227 @@ def ctx_version(ctx_bin: Path | None = None) -> str:
         return ver
 
 
+_CODE_ID_CACHE: dict[str, str] = {}
+_CODE_ID_LOCK = threading.Lock()
+# Printed by the probe below; run with ``-P`` and cwd="/" so nothing is imported from the
+# caller's (or a trial's) directory. ``find_spec`` of a top-level name does not import it.
+_FIND_CTX_PROBE = (
+    "import importlib.util as u\n"
+    "s = u.find_spec('ctx')\n"
+    "locs = list(s.submodule_search_locations or []) if s is not None else []\n"
+    "print(locs[0] if locs else (s.origin or '') if s is not None else '')\n"
+)
+_PY_IMPORTS_CTX_RE = re.compile(rb"^\s*(?:from\s+ctx(?:\.\w+)*\s+import\b|import\s+ctx\b)", re.M)
+_PIP_TRAMPOLINE_RE = re.compile(rb"^'''exec' \"?([^\"\s]+)\"?", re.M)
+
+
+def _code_digest(location: Path) -> str:
+    """Content hash of a package directory (``__pycache__``/``.pyc`` skipped, relative
+    paths only, so a moved checkout hashes the same) or of a single module file."""
+    if location.is_dir():
+        return task_inputs_digest(location)
+    return _file_digest(location, location.stat())[:16]
+
+
+def _ctx_shim_path() -> Path:
+    return Path(tempfile.gettempdir()) / f"straitjacket_ctx_bin_{os.getuid()}" / "ctx"
+
+
+def service_path(meta_bin: Path | None, runtime_bin: Path | None, ctx_exe: Path | None) -> str:
+    """PATH a trial's mock services get (``TaskSandbox.service_env``); the trial's own PATH
+    includes it (:func:`trial_path`)."""
+    parts = [str(meta_bin)] if meta_bin is not None else []
+    if runtime_bin is not None:
+        parts.append(str(runtime_bin))
+    if ctx_exe is not None:
+        parts.append(str(ctx_exe.parent))
+    parts.append(str(Path(sys.executable).resolve().parent))
+    parts.append(os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"))
+    return os.pathsep.join(dict.fromkeys(p for p in parts if p))
+
+
+def trial_path(
+    meta_bin: Path | None, ctx_exe: Path | None, runtime_dir: Path | None, service_path_value: str
+) -> str:
+    """PATH a trial's commands run with, ctx included (``ToolHost``). ``ctx_exe`` is the
+    ctx the ``sj`` arm launches (``None`` on ``raw``). The code-identity probe resolves a
+    ``#!/usr/bin/env python3`` entry point on this same PATH."""
+    parts = [str(meta_bin)] if meta_bin is not None else []
+    if ctx_exe is not None and ctx_exe.parent.is_dir():
+        parts.append(str(ctx_exe.absolute().parent))
+    for venv_bin in (Path(sys.executable).absolute().parent, Path(sys.prefix) / "bin"):
+        if venv_bin.is_dir():
+            parts.append(str(venv_bin))
+    if runtime_dir is not None and (runtime_dir / "bin").is_dir():
+        parts.append(str((runtime_dir / "bin").resolve()))
+    for source in (service_path_value, os.environ.get("PATH", "/usr/bin:/bin")):
+        parts.extend(seg for seg in source.split(os.pathsep) if seg)
+    return os.pathsep.join(dict.fromkeys(parts))
+
+
+def ctx_launch_path(config: BenchConfig, ctx_exe: Path) -> str:
+    """The PATH a trial launches ``ctx_exe`` with, less the trial's own ``<meta>/bin``
+    (which holds only the harness's ctx shim and staged mock CLIs)."""
+    from .sandbox import _resolve_runtime_paths  # noqa: PLC0415 (sandbox imports config)
+
+    _, runtime_bin, _ = _resolve_runtime_paths(config)
+    return trial_path(None, ctx_exe, config.runtime_dir, service_path(None, runtime_bin, ctx_exe))
+
+
+
+
+def _entry_point_interpreter(exe: Path, launch_path: str | None = None) -> Path | str | None:
+    """The Python interpreter of a console-script entry point that imports ``ctx``
+    (``#!/path/python``, ``#!/usr/bin/env python3`` resolved on ``launch_path``, or pip's
+    ``/bin/sh`` trampoline for long paths). ``None`` when ``exe`` is not such an entry
+    point (a shell wrapper, a compiled binary); a string saying why when it is one but its
+    interpreter cannot be found."""
+    try:
+        with exe.open("rb") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return None
+    if not head.startswith(b"#!") or not _PY_IMPORTS_CTX_RE.search(head):
+        return None
+    first = head[2:].split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+    try:
+        words = shlex.split(first)
+    except ValueError:
+        return "unreadable shebang"
+    cand: str | None = None
+    if words and Path(words[0]).name == "env":
+        name = next((w for w in words[1:] if not w.startswith("-") and "=" not in w), None)
+        cand = shutil.which(name, path=launch_path) if name else None
+        if cand is None:
+            return f"{name or 'interpreter'} not on the trial's PATH"
+    elif words and "python" in Path(words[0]).name.lower():
+        cand = words[0]
+    else:
+        m = _PIP_TRAMPOLINE_RE.search(head)
+        cand = m.group(1).decode("utf-8", "replace") if m else None
+    if not cand or not Path(cand).is_file():
+        return "interpreter not found"
+    return Path(cand)
+
+
+def _find_ctx_package(
+    interpreter: Path, extra_pythonpath: str = "", launch_path: str | None = None
+) -> Path | None:
+    """Where ``interpreter -P -m ctx`` would import ``ctx`` from, without importing it,
+    in the environment a trial launches it with (its PATH; under bwrap its HOME is an
+    empty directory, so no user site-packages)."""
+    import subprocess  # noqa: PLC0415
+
+    from .host import bwrap_sandbox_executable  # noqa: PLC0415 (host imports config)
+
+    env = dict(os.environ)
+    if launch_path is not None:
+        env["PATH"] = launch_path
+    if extra_pythonpath:
+        env["PYTHONPATH"] = extra_pythonpath + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    with tempfile.TemporaryDirectory(prefix="ctx-probe-home-") as empty_home:
+        if bwrap_sandbox_executable() is not None:
+            env["HOME"] = empty_home  # the sandbox sets HOME=/task/tmp, empty at start
+        try:
+            cp = subprocess.run(
+                [str(interpreter), "-P", "-c", _FIND_CTX_PROBE],
+                capture_output=True, text=True, timeout=30, cwd="/", env=env,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+    found = (cp.stdout or "").strip().splitlines()
+    if cp.returncode != 0 or not found or not found[-1].strip():
+        return None
+    loc = Path(found[-1].strip())
+    return loc if loc.exists() else None
+
+
+_WARNED_NO_PKG: set[str] = set()
+
+
+def ctx_code_identity(config: BenchConfig) -> str:
+    """Identity of the code the ``sj`` arm launches as ctx (``config.ctx_bin``, else the
+    default), computed once per process per executable and launch PATH:
+
+    - ``pkg:<hash>`` of the ``ctx`` package it imports, when it is a console-script entry
+      point that imports ``ctx``, a Python interpreter (run as ``-P -m ctx``) or the
+      source-checkout shim; the package is located as a trial would launch it;
+    - ``exe:<hash>`` of the executable's own bytes when it is none of those (a shell
+      wrapper, a compiled binary);
+    - ``unavailable (...)`` when it is a Python entry point or interpreter whose ``ctx``
+      package cannot be found (one warning per process), or when there is no ctx at all.
+
+    Nothing is imported or run from a trial directory: the probe runs the interpreter
+    with ``-P`` from ``/``."""
+    try:
+        exe = resolve_ctx_bin(config.ctx_bin)
+    except FileNotFoundError:
+        return "unavailable (no ctx executable)"
+    launch_path = ctx_launch_path(config, exe)
+    key = f"{exe}\0{launch_path}"
+    with _CODE_ID_LOCK:
+        hit = _CODE_ID_CACHE.get(key)
+        if hit is not None:
+            return hit
+        pkg: Path | None = None
+        why_missing = ""
+        if exe == _ctx_shim_path():
+            repo_src = Path(__file__).resolve().parents[2] / "src"
+            pkg = _find_ctx_package(Path(sys.executable).resolve(), str(repo_src), launch_path)
+            why_missing = "the source-checkout shim's interpreter has no ctx package"
+        else:
+            interp = exe if "python" in exe.name.lower() else _entry_point_interpreter(exe, launch_path)
+            if isinstance(interp, Path):
+                pkg = _find_ctx_package(interp, launch_path=launch_path)
+                why_missing = f"{interp.name} has no ctx package"
+            elif isinstance(interp, str):
+                why_missing = f"Python entry point: {interp}"
+        try:
+            if pkg is not None:
+                ident = f"pkg:{_code_digest(pkg)}"
+            elif why_missing:
+                ident = f"unavailable ({why_missing})"
+                if key not in _WARNED_NO_PKG:
+                    _WARNED_NO_PKG.add(key)
+                    print(
+                        f"[warn] ctx code identity: {exe} is a Python launcher but its ctx "
+                        f"package was not found ({why_missing}); an edit to ctx will not be "
+                        "detected on resume.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            else:
+                ident = f"exe:{_code_digest(exe)}"
+        except OSError as exc:
+            ident = f"unavailable ({type(exc).__name__})"
+        _CODE_ID_CACHE[key] = ident
+        return ident
+
+
+def harness_ctx_code_identity() -> str:
+    """Content hash of the ``ctx`` package this process imports (the ``sj`` arm's
+    residence, deliverable audits and hook grammar run in-process), once per process."""
+    with _CODE_ID_LOCK:
+        hit = _CODE_ID_CACHE.get("<in-process>")
+        if hit is not None:
+            return hit
+        try:
+            import ctx  # noqa: PLC0415
+
+            origin = Path(getattr(ctx, "__file__", "") or "")
+            loc = origin.parent if origin.name == "__init__.py" else origin
+            ident = f"pkg:{_code_digest(loc)}"
+        except Exception as exc:
+            ident = f"unavailable ({type(exc).__name__})"
+        _CODE_ID_CACHE["<in-process>"] = ident
+        return ident
+
+
 def resolve_ctx_bin(explicit: Path | None = None) -> Path:
     """Locate the `ctx` CLI executable or synthesize a `python -m ctx` shim."""
     if explicit is not None:
-        candidate = Path(explicit).expanduser().resolve()
+        # Not symlink-resolved (see BenchConfig): <venv>/bin/python must stay the venv's.
+        candidate = Path(os.path.abspath(Path(explicit).expanduser()))
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
         raise FileNotFoundError(f"Explicit ctx executable not found or not executable: {candidate}")

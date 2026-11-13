@@ -237,6 +237,13 @@ watches `read_file` and `view_file`. A file above `[budgets] max_inline_bytes`
   402,979 bytes). If the result ends at line 240, the file may continue: Read it again
   with offset=241 limit=240, or search it for what you need." Before, the model was
   not told.
+- A window the guard bounded is never turned into a digest by the output gate. If
+  its lines are over `max_tool_output_bytes`, Claude Code receives the largest
+  leading part that fits, as whole file lines in the Read result's own shape, plus
+  one note: "this Read was cut to fit the 16,384-byte output budget; it shows lines
+  1-181 of 6,001. Continue with Read offset=182 limit=181." The session read budget
+  is charged what was delivered. Only a single line too long to fit falls back to a
+  digest of the file's text.
 - A cumulative session read budget (`session_read_budget_bytes`, 256 KiB) tightens
   later reads.
 - Secret-bearing paths and paths outside the workspace always ask; they are never

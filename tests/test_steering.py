@@ -386,6 +386,44 @@ def test_canonical_classify_keeps_deny_for_doctor(tmp_path):
     assert "rewrite" in d
 
 
+# ------------------------------------- text readers, git listings, ls globs
+def test_text_reader_is_steered_not_asked_on_antigravity(tmp_path):
+    """`nl`/`seq`/`sort` alone used to be "unknown" and asked the human,
+    which ends a headless Antigravity run with no answer."""
+    for cmd in ("nl README.md", "seq 1 5000", "sort data.csv"):
+        out = _invoke_hook(_payload({"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path))
+        assert out["decision"] == "deny", (cmd, out)  # legacy payload: deny naming the capture
+        assert f"ctx run --passthrough --shell -- {shlex.quote(cmd)}" in out["reason"], out
+    out = _invoke_hook(_payload({"CommandLine": "sort -o out.txt d", "Cwd": str(tmp_path)},
+                                tmp_path))
+    assert out["decision"] == "force_ask" and "unknown output bound" in out["reason"]
+
+
+def test_git_listing_and_ls_glob_are_steered_on_antigravity(tmp_path):
+    for cmd in ("git ls-files", "git ls-tree -r HEAD", "git rev-list HEAD",
+                "git grep -n 'def '", "ls src/*/*"):
+        out = _invoke_hook(_payload({"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path))
+        assert out["decision"] == "deny" and "ctx run --passthrough" in out["reason"], (cmd, out)
+    for cmd in ("git rev-list --count HEAD", "git ls-tree HEAD", "ls -la"):
+        out = _invoke_hook(_payload({"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path))
+        assert out == {"decision": "allow"}, (cmd, out)
+
+
+def test_text_reader_and_listing_reach_claude_code_as_written(tmp_path):
+    """Default steering on Claude Code: unchanged, as for every shell command;
+    under steering = "rewrite" they are captured like cat."""
+    for cmd in ("seq 1 5000", "git ls-files", "ls src/*/*"):
+        out = _invoke_hook(_payload({"command": cmd, "Cwd": str(tmp_path)}, tmp_path, "Bash"),
+                           flavor="claude-code")
+        assert out == {}, (cmd, out)
+    _steering(tmp_path, "rewrite")
+    for cmd in ("seq 1 5000", "git ls-files", "ls src/*/*"):
+        out = _invoke_hook(_payload({"command": cmd, "Cwd": str(tmp_path)}, tmp_path, "Bash"),
+                           flavor="claude-code")
+        assert out["hookSpecificOutput"]["updatedInput"]["command"] == (
+            f"ctx run --passthrough --shell -- {shlex.quote(cmd)}"), (cmd, out)
+
+
 # ------------------------------------------------------------ fail-open
 def test_fail_open_on_garbage_stdin_still_allows():
     assert _invoke_hook("this is not json {{{") == {"decision": "allow"}

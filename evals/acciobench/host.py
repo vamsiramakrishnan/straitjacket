@@ -38,7 +38,7 @@ from ctx.sessiondir import session_reads_path  # noqa: E402
 from ctx.toolresult import prepend_structured_data_shape  # noqa: E402
 
 from evals.acciobench.browser import BrowserSession
-from evals.acciobench.config import BenchConfig, RunMetrics, resolve_ctx_bin
+from evals.acciobench.config import BenchConfig, RunMetrics, resolve_ctx_bin, trial_path
 from evals.acciobench.ports import CompiledPortMap, rewrite_ports_surgical
 from evals.acciobench.schemas import (
     MUTATING_BROWSER_TOOLS,
@@ -51,10 +51,12 @@ __all__ = [
     "IMAGE_EXTS",
     "ToolHost",
     "bwrap_sandbox_executable",
+    "bwrap_unavailable_reason",
     "extract_pdf_text",
     "format_numbered_lines",
     "has_user_deliverables",
     "parse_pdf_pages",
+    "unsandboxed_refusal_message",
 ]
 
 IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
@@ -140,6 +142,40 @@ def bwrap_sandbox_executable() -> str | None:
         ok_bin = None
     _BWRAP_PROBE_CACHE = (True, ok_bin)
     return ok_bin
+
+
+def bwrap_unavailable_reason() -> str:
+    """Why :func:`bwrap_sandbox_executable` found no usable sandbox (call it only then)."""
+    if os.environ.get("ACCIOBENCH_NO_BWRAP", "").strip().lower() in ("1", "true", "yes"):
+        return "ACCIOBENCH_NO_BWRAP is set"
+    if sys.platform != "linux":
+        return f"bubblewrap needs Linux; this host is {sys.platform}"
+    if not shutil.which("bwrap"):
+        return "bwrap is not on PATH"
+    return (
+        "bwrap is installed but cannot create mount + PID namespaces here "
+        "(unprivileged user namespaces may be disabled)"
+    )
+
+
+def unsandboxed_refusal_message() -> str:
+    """What a refused scored run prints: why, how to install bubblewrap, the override."""
+    return (
+        "Refusing a scored run: the bubblewrap (bwrap) sandbox is not available "
+        f"({bwrap_unavailable_reason()}).\n"
+        "Without it both arms run under path/env confinement only, which has NO filesystem "
+        "isolation: the agent can read the dataset, grader and private answer files, so its "
+        "score cannot be trusted.\n"
+        "Install bubblewrap on Linux (Debian/Ubuntu: sudo apt-get install -y bubblewrap; "
+        "Fedora: sudo dnf install -y bubblewrap; Arch: sudo pacman -S bubblewrap), allow "
+        "unprivileged user namespaces, leave ACCIOBENCH_NO_BWRAP unset, and check with "
+        "'python evals/acciobench_run.py doctor'.\n"
+        "To run anyway without filesystem isolation, pass --allow-unsandboxed to 'run' "
+        "(BenchConfig(allow_unsandboxed=True)): each result is then recorded with "
+        "sandbox=\"none\" and every report counts those trials."
+    )
+
+
 _UNTITLED_CREATE_RE = re.compile(
     r'(?:Created|Added)\s+(?:page|doc|document|database|sheet)\s+"Untitled"\s*\(([A-Za-z0-9_-]{4,64})\)',
     re.I,
@@ -695,9 +731,10 @@ class ToolHost:
         self._bwrap_bin: str | None = bwrap_cand if (use_bwrap is None or use_bwrap) else None
         self._use_bwrap: bool = self._bwrap_bin is not None
 
-        raw_path_parts: list[str] = [str(self.bin_dir)]
+        launched_ctx: Path | None = None
         if self.is_sj:
             ctx_bin = resolve_ctx_bin(config.ctx_bin)
+            launched_ctx = ctx_bin
             if "python" in ctx_bin.name.lower():
                 # `-P` (ctx.selfcmd): `python -m` would put the current directory -- the
                 # run directory the model writes into -- first on sys.path, so a planted
@@ -707,8 +744,6 @@ class ToolHost:
             else:
                 self._ctx_cmd_prefix = [str(ctx_bin)]
                 shim_exec = f'exec "{ctx_bin}" --workspace "{self.ctx_ws}" "$@"'
-            if ctx_bin.parent.is_dir():
-                raw_path_parts.append(str(ctx_bin.absolute().parent))
 
             self.ctx_ws.mkdir(parents=True, exist_ok=True)
             self.ctx_extract_dir.mkdir(parents=True, exist_ok=True)
@@ -721,16 +756,9 @@ class ToolHost:
             )
             config.ctx_state_home.mkdir(parents=True, exist_ok=True)
 
-        for venv_bin in (Path(sys.executable).absolute().parent, Path(sys.prefix) / "bin"):
-            if venv_bin.is_dir():
-                raw_path_parts.append(str(venv_bin))
-        if config.runtime_dir is not None and (config.runtime_dir / "bin").is_dir():
-            raw_path_parts.append(str((config.runtime_dir / "bin").resolve()))
-        for source_path in (self.mock_env.get("PATH", ""), os.environ.get("PATH", "/usr/bin:/bin")):
-            for seg in source_path.split(os.pathsep):
-                if seg:
-                    raw_path_parts.append(seg)
-        path_env = os.pathsep.join(dict.fromkeys(raw_path_parts))
+        # One helper builds this PATH for trials and for the ctx code-identity probe.
+        path_env = trial_path(self.bin_dir, launched_ctx, config.runtime_dir, self.mock_env.get("PATH", ""))
+        raw_path_parts = path_env.split(os.pathsep)
 
         client_env = {
             k: v

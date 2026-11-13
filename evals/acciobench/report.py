@@ -220,6 +220,20 @@ def count_grading_errors(runs: list[RunMetrics]) -> int:
     return sum(1 for r in runs if r.grading_error and r.termination not in _INFRA_ERROR_TERMINATIONS)
 
 
+def count_unsandboxed(runs: list[RunMetrics]) -> int:
+    """Trials recorded as run without the bwrap sandbox (no filesystem isolation), whatever
+    their outcome. Results whose isolation is unknown are counted by
+    :func:`count_isolation_unknown` instead."""
+    return sum(1 for r in runs if r.sandbox == "none")
+
+
+def count_isolation_unknown(runs: list[RunMetrics]) -> int:
+    """Trials whose isolation is unknown: written before the sandbox was recorded and
+    never re-recorded (a legacy result reused on ``model_id`` alone). Every result is
+    "bwrap", "none" or unknown; reports show the last two."""
+    return sum(1 for r in runs if r.sandbox not in ("bwrap", "none"))
+
+
 def _is_scorable(r: RunMetrics) -> bool:
     return r.termination not in _INFRA_ERROR_TERMINATIONS and not r.grading_error
 
@@ -534,6 +548,8 @@ def compute_summary_payload(
             "completed_tasks": len(rows),
             "error_runs": errors_by_arm[a],
             "grading_error_runs": count_grading_errors(by_arm_raw[a]),
+            "unsandboxed_runs": count_unsandboxed(by_arm_raw[a]),
+            "isolation_unknown_runs": count_isolation_unknown(by_arm_raw[a]),
             "overall": _summarize_metrics_slice(rows, "All Tasks"),
             "by_category": {c: _summarize_metrics_slice([r for r in rows if r.category == c], f"Category: {c}") for c in cats},
             "by_bucket": {
@@ -653,6 +669,10 @@ def compute_summary_payload(
     return {
         "total_runs": len(results),
         "grading_error_runs": sum(a["grading_error_runs"] for a in arms_payload.values()),
+        # Trials that ran without filesystem isolation (--allow-unsandboxed); always present.
+        "unsandboxed_runs": sum(a["unsandboxed_runs"] for a in arms_payload.values()),
+        # Trials whose isolation is unknown (results that predate sandbox recording).
+        "isolation_unknown_runs": sum(a["isolation_unknown_runs"] for a in arms_payload.values()),
         "unpaired_tasks": len(unpaired),
         "unpaired": unpaired,
         "arms": arms_payload,
@@ -671,6 +691,30 @@ def _fmt_ev(val: float | None) -> str:
     if val is None:
         return "n/a"
     return f"{val:.3f}"
+
+
+def _sandbox_note(payload: dict[str, Any]) -> str:
+    """Lines naming trials that ran without filesystem isolation and trials whose isolation
+    is unknown, or "" when every trial ran in the bwrap sandbox."""
+
+    def per_arm(key: str) -> str:
+        return ", ".join(f"{name}={a[key]}" for name, a in payload["arms"].items() if a.get(key))
+
+    lines: list[str] = []
+    total = int(payload.get("unsandboxed_runs") or 0)
+    if total:
+        lines.append(
+            f"NO FILESYSTEM ISOLATION: {total} trial(s) ran without the bwrap sandbox "
+            f"({per_arm('unsandboxed_runs')}; --allow-unsandboxed). The agent could read grader "
+            "and answer files; these scores are not comparable to sandboxed results."
+        )
+    unknown = int(payload.get("isolation_unknown_runs") or 0)
+    if unknown:
+        lines.append(
+            f"ISOLATION UNKNOWN: {unknown} trial(s) predate sandbox recording "
+            f"({per_arm('isolation_unknown_runs')}); they may have run without the bwrap sandbox."
+        )
+    return "\n".join(lines)
 
 
 def _grading_error_note(payload: dict[str, Any]) -> str:
@@ -701,13 +745,17 @@ def _grading_error_note(payload: dict[str, Any]) -> str:
 def _render_table(payload: dict[str, Any]) -> str:
     arms = payload["arms"]
     gnote = _grading_error_note(payload)
+    snote = _sandbox_note(payload)
     if not arms or all(a["completed_tasks"] == 0 for a in arms.values()):
-        return "No completed runs found." + (f"\n{gnote}" if gnote else "")
+        return "\n".join(x for x in (snote, "No completed runs found.", gnote) if x)
 
     lines: list[str] = []
     lines.append("=" * 136)
     lines.append(" ACCIOBENCH SUMMARY REPORT")
     lines.append("=" * 136)
+    if snote:
+        lines.extend(snote.splitlines())
+        lines.append("-" * 136)
     lines.append(
         f"{'Arm / Slice':<28} | {'N':>4} | {'Solve':>14} | {'Cap':>6} | "
         f"{'Steps (sum/med)':>16} | {'GenTok':>11} | {'TotTok':>12} | {'Cache%':>6} | {'Wall(m)':>7}"
@@ -790,12 +838,16 @@ def _render_table(payload: dict[str, Any]) -> str:
 def _render_markdown(payload: dict[str, Any]) -> str:
     arms = payload["arms"]
     gnote = _grading_error_note(payload)
+    snote = _sandbox_note(payload)
+    head = "## AccioBench Summary Report\n\n" + "".join(
+        f"> **Warning:** {ln}\n\n" for ln in snote.splitlines()
+    )
     if not arms or all(a["completed_tasks"] == 0 for a in arms.values()):
-        return "## AccioBench Summary Report\n\nNo completed runs found.\n" + (
+        return head + "No completed runs found.\n" + (
             "".join(f"\n> {ln}" for ln in gnote.splitlines()) + "\n" if gnote else ""
         )
 
-    lines: list[str] = ["## AccioBench Summary Report", ""]
+    lines: list[str] = head.rstrip("\n").split("\n") + [""]
     lines.append("### Per-Arm Summary")
     lines.append("")
     lines.append(

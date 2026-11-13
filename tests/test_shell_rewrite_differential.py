@@ -256,3 +256,41 @@ def test_signal_and_high_status_contract(tmp_path):
 
 def test_matrix_is_wide():
     assert len(COMMANDS) >= 80
+
+
+#: Capture primitives added for Antigravity (text readers on their own, git
+#: listings, a globbed ls). Under steering = "rewrite" each is captured; the
+#: capture must print exactly what the command prints.
+CAPTURED_ALONE = [
+    "nl a.txt", "seq 1 500", "sort -r a.txt b.txt", "cut -c1-3 a.txt", "uniq -c a.txt",
+    "base64 a.txt", "rev a.txt", "fold -w 4 a.txt", "paste a.txt b.txt", "fmt a.txt",
+    "expand a.txt", "unexpand a.txt", "comm a.txt b.txt", "column -t a.txt",
+    "ls *.txt dir/*", "git ls-files", "git grep -n CONTENT", "git ls-tree -r HEAD",
+    "git rev-list --all",
+]
+
+
+@pytest.mark.parametrize("command", CAPTURED_ALONE)
+def test_new_capture_primitives_print_what_the_command_prints(command, tmp_path):
+    if not REF_SHELL.endswith("bash"):
+        pytest.skip("the matrix is written for bash")
+    if shutil.which(command.split()[0]) is None:
+        pytest.skip(f"{command.split()[0]} not installed")
+    root = tmp_path / "ws"
+    env = _env(tmp_path)
+    (tmp_path / "home").mkdir()
+    _materialise(root)
+    truth = subprocess.run([REF_SHELL, "-c", command], cwd=root, env=env, capture_output=True,
+                           stdin=subprocess.DEVNULL, timeout=60)
+    _materialise(root)
+    (root / "ctx.toml").write_text('version = 1\n[guard]\nsteering = "rewrite"\n')
+    rewrite = (_hook(command, root, env).get("updatedInput") or {}).get("command")
+    assert rewrite and rewrite.startswith("ctx run "), (command, rewrite)
+    (root / "ctx.toml").write_text("version = 1\n")  # the file the truth run saw
+    got = subprocess.run([REF_SHELL, "-c", rewrite], cwd=root, env=env, capture_output=True,
+                         stdin=subprocess.DEVNULL, timeout=60)
+    assert _status(got.returncode) == _status(truth.returncode), (command, got.stdout[-300:])
+    out, err = _stored_streams(root, env, got.stdout.decode("utf-8", "replace"))
+    if command.startswith("ls"):
+        out = b"\n".join(ln for ln in out.split(b"\n") if b".ctx-session-reads" not in ln)
+    assert (out, err) == (truth.stdout, truth.stderr), (command, truth.stdout[:300], out[:300])

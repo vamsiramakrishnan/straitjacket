@@ -63,7 +63,7 @@ python evals/acciobench_run.py validate \
 For each task, `validate` deterministically:
 1. Stages an isolated `TaskSandbox` on a dedicated port block (`20000 + slot * 100`) and starts any `services/start_services.sh` or `runtime_mocks` daemons.
 2. Exercises `ToolHost` (`arm="sj"`) + `ctx run --json` Entry Gate capture on synthetic large output to verify sidecar storage and digest generation.
-3. Runs the task's official `grader/run.sh` (`verify_task.py`) against untouched/empty `/task/outputs` with `--judge-provider mock` to confirm **zero baseline setup leakage** (an untouched workspace must not spuriously pass).
+3. Runs the task's official `grader/run.sh` (`verify_task.py`) against untouched/empty `/task/outputs` with `--judge-provider mock` to confirm **zero baseline setup leakage** (an untouched workspace must not spuriously pass). The reward is read exactly as a scored trial reads it: a `reward.json` the harness cannot interpret (a non-finite, negative or above-1 score, and the other cases under *Grading errors* below) fails the referee as `grader output not interpretable`, not as leakage and not as a pass.
 4. Tears down the sandbox and verifies **zero leaked child processes** for the slot token.
 
 ---
@@ -108,6 +108,29 @@ python evals/acciobench_run.py run \
   --workers 8
 ```
 
+### Bubblewrap Is Required for Scored Runs
+
+`run` refuses to start when the bwrap sandbox is unavailable (bwrap missing, unable to
+create mount + PID namespaces, a non-Linux host, or `ACCIOBENCH_NO_BWRAP=1`): it exits
+non-zero before any model call or trial setup and prints why, how to install
+bubblewrap (`sudo apt-get install -y bubblewrap` on Debian/Ubuntu) and the override.
+Without bubblewrap neither arm has filesystem isolation (see
+[`/tmp` without bubblewrap](#tmp-without-bubblewrap)), so a score cannot be trusted.
+The only override is the explicit `--allow-unsandboxed` flag on `run`
+(`BenchConfig(allow_unsandboxed=True)`); `ACCIOBENCH_NO_BWRAP` alone is not one. The
+check sits in `run_trial` itself, so every caller (`run`, `run_suite`, a script) is
+covered. With the override, `run` prints one prominent warning at start, every
+`result.json` records `sandbox: "none"` (`"bwrap"` when sandboxed). Every result is
+`bwrap`, `none`, or unknown (`""`: written before this field existed), and reports
+show the last two: table and markdown put a `NO FILESYSTEM ISOLATION` and an
+`ISOLATION UNKNOWN` line at the top when either count is non-zero; JSON always carries
+`unsandboxed_runs` and `isolation_unknown_runs` (total and per arm); the HTML header
+shows both. A cached result without the field whose fingerprint matches the current
+run is recorded with the current mode when it is reused (the fingerprint includes
+whether bwrap is active, so it ran in that mode); a legacy result reused on `model_id`
+alone stays unknown. `doctor` and `validate` cost nothing and still
+run without bwrap, but say that a scored run will be refused.
+
 ### Task Selection & Resume Controls
 
 - `--tasks id1,id2,...`: run explicit task IDs.
@@ -122,13 +145,41 @@ python evals/acciobench_run.py run \
   compaction constants, a content hash of the task's own directory (prompt,
   `task.toml`, workspace, services, and the grader, rubric and private answers, since
   a changed grader changes the recorded score), the version the benchmarked ctx
-  reports (`ctx --version`, asked once per process; `sj` arm only), and whether the
-  bwrap sandbox is active). A cached result is reused only when its fingerprint
-  matches; worker counts, slot offsets, output paths, credentials and host paths are
-  not part of it (moving the dataset does not invalidate a workdir; changing its
-  content does). The ctx version is the string `ctx --version` prints, not a hash of
-  its source: an edit to ctx that keeps the version is NOT detected, so pass
-  `--no-cache` or a fresh `--workdir` when comparing two builds of the same version.
+  reports (`ctx --version`), a content hash of the ctx code itself (below), and
+  whether the bwrap sandbox is active). A cached result is reused only when its
+  fingerprint matches; worker counts, slot offsets, output paths, credentials and host
+  paths are not part of it (moving the dataset does not invalidate a workdir; changing
+  its content does).
+  **ctx code (`sj` arm only)**: the `sj` fingerprint carries two content hashes, so an
+  edit to ctx is detected even when its version stays the same. (1) The ctx the trial
+  launches (`--ctx-bin`, else the venv's or `PATH`'s `ctx`, else the source-checkout
+  shim): when it is a Python console-script entry point that imports `ctx`, a Python
+  interpreter (run as `-P -m ctx`), or the shim, the hash covers the `ctx` package that
+  interpreter would import. The package is found with `importlib.util.find_spec` in a
+  child run as `python -P` from `/` (nothing is imported or run from a trial's
+  directory), in the environment a trial launches ctx with: the same PATH, built by
+  the same helper (`config.trial_path`), so `#!/usr/bin/env python3` resolves to the
+  interpreter the trial would run (ctx's own directory comes first); the same
+  PYTHONPATH; and, under bwrap, an empty HOME (no user site-packages), as in the
+  sandbox. If such a Python launcher's `ctx` package cannot be found, the identity is
+  `unavailable (...)` and one `[warn]` line per process says an edit to ctx will not be
+  detected. Any other `ctx` (a shell wrapper, a compiled binary) is identified by a
+  hash of its own bytes, so an edit behind such a wrapper is not seen: pass
+  `--no-cache` there. `--ctx-bin <venv>/bin/python` is kept as given (a venv's python
+  is a symlink to the base interpreter; resolving it would launch an interpreter
+  without the venv's `ctx`). (2) The `ctx` package the harness imports in-process
+  (residence compaction, deliverable audits, the hook grammar, the window telemetry
+  store), all used by the `sj` arm only. The harness runs no ctx code for the `raw`
+  arm, launched or in-process, so neither hash is part of its fingerprint and an edit
+  to ctx never re-runs `raw` trials. (A `ctx` executable is still reachable on the
+  `raw` arm's PATH, through the mock services' PATH and the harness's venv `bin`; a
+  `raw` model that called it on its own would run it, and that is not fingerprinted.)
+  Both hashes read file contents under relative paths (`__pycache__` and `.pyc`
+  skipped), so moving a checkout does not invalidate a workdir; each is computed once
+  per process (measured on one machine: roughly 20 to 30 ms for the launched ctx, most
+  of it one interpreter start, and roughly 10 ms for the in-process package; about 0
+  afterwards). Adding these hashes changed every `sj` fingerprint once: `sj` results
+  written before them are re-run on the next resume (`raw` results are kept).
   A result written before fingerprints existed is reused only if its
   `model_id` equals `--model` (one `[legacy]` line says so); never across models.
   When a result does not match, one `[rerun]` line says why and the previous trial
@@ -148,8 +199,8 @@ python evals/acciobench_run.py run \
   once; a second link to it, or a link back to an ancestor, is recorded by name.
 - **Grading errors are not failures**: when the official grader itself fails (timeout,
   missing, unparsable or uninterpretable `reward.json`: not an object, a non-numeric
-  or non-finite score, checks_passed > checks_total, neither a score nor checks, a
-  malformed checks_breakdown), `result.json` records `grading_error` (the grader's
+  or non-finite score, a negative score or one above 1, checks_passed > checks_total,
+  neither a score nor checks, a malformed checks_breakdown), `result.json` records `grading_error` (the grader's
   message) with `passed=false` and zero scores, and the agent's `termination` is kept.
   Reports (table, markdown, JSON `grading_error_runs`, HTML header) exclude such trials
   from solve rate and score aggregates and show their count separately. On resume, a
@@ -164,6 +215,13 @@ python evals/acciobench_run.py run \
   with that reason, rather than being graded against another trial's service.
   Results written before this change that carry a `verifier error:` note and
   `passed=false` load as grading errors.
+  A reward `score` is read on a 0..1 scale (the pass threshold is 0.9999 and reports
+  treat capacity as a fraction): a score above 1 (beyond a 1e-6 float tolerance, which
+  is read as 1.0) is a grading error whether or not checks are present, so a grader
+  that reports `85` or `5` is never recorded as a pass. The same rule applies when a
+  result is loaded: a stored `raw_verifier_score` or `capacity_score` above 1 (a result
+  graded before this rule) loads as a grading error saying the stored score is above
+  the 0..1 scale, so reports leave it out and resume re-grades it.
 - **Untouched model defaults**: `thinkingConfig` and `maxOutputTokens` are left unset by default so models run at their native provider defaults. Optional `--thinking-level` and `--max-output-tokens` flags are exposed strictly for explicit ablation studies.
 
 ---
@@ -216,7 +274,7 @@ results are already on disk, so `run` names the report that failed, prints the
 | Output containment | Raw subprocess / file output truncated at `400,000` chars | **Entry Gate** (`24,576` B): large outputs stored via `ctx run --json`, returning structured digests + `ctx get`/`ctx search` handles |
 | Redundant call & file guards | None | Readonly call dedup per `mutation_epoch` (a bash signature normalizes only blanks, a trailing `#` comment as the shell reads it and short-flag clusters; `#` inside a word such as `run:ID#stdout` is text, so each `--lines` page is its own call) + content-addressed `sha256` file re-read dedup |
 |CLI discovery | Raw `--help` stdout | Concurrent subcommand `--help` signature enrichment (`[cli-lsp subcommand signatures]`) |
-| Process & filesystem sandbox | Linux `bubblewrap` (`bwrap`) mount + PID namespace isolation (`/task` mount, isolated `/tmp`, `dataset_root`/sibling `runs`/`mock_case` masked via `--tmpfs`, graceful fallback on macOS) | Identical `bwrap` mount + PID namespace isolation |
+| Process & filesystem sandbox | Linux `bubblewrap` (`bwrap`) mount + PID namespace isolation (`/task` mount, isolated `/tmp`, `dataset_root`/sibling `runs`/`mock_case` masked via `--tmpfs`; required for scored runs, see above) | Identical `bwrap` mount + PID namespace isolation |
 | Context residence | Append-only full transcript | `WatermarkResidence` preserving mutating turns & `state_note` checkpoints while compacting stale thoughts, read-only floods, and old UI control listings |
 | Finalization check | Direct `present_files` | Structural **Emission Gate** catching missing/0-byte/malformed-JSON deliverables and stray scratch scripts in `/task/outputs` |
 | System instruction | None | Concise 4-rule domain-agnostic `SJ_EXECUTION_PROTOCOL` |
@@ -241,7 +299,8 @@ What the fallback cannot do, by design: it has **no filesystem isolation** (bash
 read and write anything the harness user can, the dataset and grader files included);
 a path built at run time (`T=/t; T=${T}mp`, `$(echo /tm)p`) is not seen by the rewrite;
 and a name that already exists only in the host's `/tmp` is left to the host, so bash
-can read and write it. Run with bubblewrap for any result you intend to publish.
+can read and write it. This is why a scored `run` refuses to start without bubblewrap
+unless `--allow-unsandboxed` is passed, and why reports count every trial that ran so.
 
 ### Which `ctx` calls run on the host (`sj` arm)
 

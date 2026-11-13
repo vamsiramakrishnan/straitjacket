@@ -254,6 +254,20 @@ _UNBOUNDED_CMDS = {
 
 # git subcommands that flood; the rest of git is judged separately.
 _GIT_UNBOUNDED = {"log", "diff", "show", "blame", "reflog", "shortlog", "whatchanged"}
+# git listings: one line per file, object, commit or ref, so a repository's
+# size is their output's size. Captured when run on their own, unless the
+# arguments bound them (_git_listing_bounded); as a part of a compound they
+# are judged as before (allowed), so pipelines keep their verdicts.
+_GIT_LISTINGS = frozenset({"ls-files", "ls-tree", "rev-list", "grep", "for-each-ref",
+                           "ls-remote", "show-ref"})
+
+# Read-only text tools: output that grows with their input (or, for seq, with
+# their arguments). On their own they are captured like cat; the forms that
+# write a file (_text_reader_writes) are judged as an unknown command is. As
+# compound parts they keep their old verdicts. `yes`, `tee` and `tr` are not
+# here: one never ends, one writes files, one is judged as a filter only.
+_TEXT_READERS = frozenset({"nl", "fold", "fmt", "column", "paste", "comm", "seq", "sort",
+                           "cut", "uniq", "base64", "rev", "expand", "unexpand"})
 
 # Text-transform tools (M-K5.3, docs/SUBSTRATE.md): read-only invocations
 # are unbounded-output commands (→ ctx run capture, like grep/find); an
@@ -1694,7 +1708,8 @@ def _path_outside(path_str: str, workspace_root: str | None) -> bool:
 
 
 def classify_command(
-    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
+    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None,
+    part: bool = False,
 ) -> dict[str, str]:
     """Classify a command, then abbreviate any lesson already taught.
 
@@ -1702,8 +1717,12 @@ def classify_command(
     re-send its full explanation every time. Replaying this repo's own
     transcripts found sessions the harness made *worse* (128 -> 439 tokens,
     -243%) purely from repeated advice. Decay is applied here, once, so every
-    builder inherits it instead of 20 of them each remembering to."""
-    return _classify_command_inner(command, policy, _depth, cwd=cwd)
+    builder inherits it instead of 20 of them each remembering to.
+
+    ``part`` marks one part of a compound command (``_compound_verdict``):
+    the standalone-only rules for text readers, git listings and globbed
+    ``ls`` do not apply to it, so a pipeline keeps the verdict it had."""
+    return _classify_command_inner(command, policy, _depth, cwd=cwd, part=part)
 
 
 def _lesson_key(reason: str) -> str:
@@ -1927,6 +1946,23 @@ def _vouched(prog: str, argv: list[str]) -> bool:
         return False
 
 
+def _plain_base64_part(segment: str) -> bool:
+    """``base64`` as a compound part is vouched like the other text readers
+    in ``_INERT_PARTS`` -- but only the real tool reading: a bare program
+    name, no environment prefix, no output file."""
+    try:
+        words = shlex.split(segment)
+    except ValueError:
+        return False
+    argv = _unwrap(words)
+    if not argv or argv[0] != "base64":
+        return False
+    prefix = words[: len(words) - len(argv)]
+    if any(_ENV_ASSIGN_RE.match(t) or os.path.basename(t) == "env" for t in prefix):
+        return False
+    return not _text_reader_writes("base64", argv)
+
+
 def _part_program(segment: str) -> tuple[str, list[str]] | None:
     try:
         argv = _unwrap(shlex.split(segment))
@@ -1985,7 +2021,8 @@ def _compound_verdict(
     for seg in segments:
         hit = seen.get(seg)
         if hit is None:
-            hit = (classify_command(seg, policy, _depth + 1, cwd=cwd), _part_program(seg))
+            hit = (classify_command(seg, policy, _depth + 1, cwd=cwd, part=True),
+                   _part_program(seg))
             seen[seg] = hit
         d, part = hit
         decisions.append(d)
@@ -1995,7 +2032,7 @@ def _compound_verdict(
         if part is None:
             hard.append((seg, d))
         elif d.get("decision") in ("deny", "force_ask") and not d.get("_rewrite"):
-            if prog not in _INERT_PARTS:
+            if prog not in _INERT_PARTS and not _plain_base64_part(seg):
                 hard.append((seg, d))
         elif _find_acts(argv):
             unvouched.append(seg)
@@ -2039,7 +2076,8 @@ def _compound_verdict(
 
 
 def _classify_command_inner(
-    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None
+    command: str, policy: dict[str, Any], _depth: int = 0, *, cwd: str | None = None,
+    part: bool = False,
 ) -> dict[str, str]:
     """Classify a shell command string. Conservative and config-driven; not a
     shell-security parser (SPEC §11)."""
@@ -2108,6 +2146,7 @@ def _classify_command_inner(
     if not argv:
         return dict(DECISION_ALLOW)
 
+    raw_argv = argv
     argv = _unwrap(argv)
     if not argv:
         return dict(DECISION_ALLOW)
@@ -2188,7 +2227,7 @@ def _classify_command_inner(
 
     # `bash -c '<inner>'`: classify the inner command, not the shell.
     if prog in ("bash", "sh", "zsh", "dash", "fish") and len(argv) >= 3 and argv[1] == "-c":
-        inner = classify_command(argv[2], policy, _depth + 1, cwd=cwd)
+        inner = classify_command(argv[2], policy, _depth + 1, cwd=cwd, part=part)
         rw = inner.get("_rewrite")
         if isinstance(rw, dict) and "command" in rw:
             # The inner command decided the class; the capture still runs the
@@ -2268,7 +2307,9 @@ def _classify_command_inner(
 
     if prog == "git":
         sub, _git_rest = git_subcommand(argv)
-        if sub in _GIT_UNBOUNDED:
+        if sub in _GIT_UNBOUNDED or (
+            sub in _GIT_LISTINGS and not part and not _git_listing_bounded(
+                sub, _git_rest, int(policy.get("_head_tail_max", _HEAD_TAIL_MAX)))):
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
         if sub == "status" and not ("--short" in argv or "-s" in argv or "--porcelain" in argv):
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
@@ -2276,6 +2317,11 @@ def _classify_command_inner(
 
     if prog == "ls":
         if any(a.startswith("-") and "R" in a for a in argv[1:]):
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+        # A glob operand (`ls src/*/*`) lists every directory it matches,
+        # like -R one level at a time: captured when run on its own.
+        if not part and any(not a.startswith("-") and any(ch in a for ch in "*?[")
+                            for a in argv[1:]):
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
         return dict(DECISION_ALLOW)
 
@@ -2322,7 +2368,28 @@ def _classify_command_inner(
         if choose_guard({"flood_command": True}) == "rewrite_command":
             return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
 
+    if prog in _TEXT_READERS and not part:
+        # Read-only: captured like cat. A form that writes a file, runs a
+        # program, reads an operand list, names a workspace script, carries an
+        # environment prefix or reads outside the workspace (a device never
+        # ends) falls through to the unknown-command policy. `seq` is sized
+        # from its own arguments.
+        verdict = ("unknown" if _unquoted_expansion(stripped)
+                   else _text_reader_verdict(prog, raw_argv, argv, cwd, policy))
+        if verdict == "secret":
+            return _secret_path_force_ask()
+        if verdict == "allow":
+            return dict(DECISION_ALLOW)
+        if verdict == "capture":
+            return _deny_cmd(argv, policy, original=stripped, has_meta=has_meta)
+
     # Unknown command → configured policy.
+    return _unknown_command(prog, argv, policy, stripped, has_meta)
+
+
+def _unknown_command(prog: str, argv: list[str], policy: dict[str, Any],
+                     stripped: str, has_meta: bool) -> dict[str, Any]:
+    """The configured ``unknown_command`` disposition."""
     unknown = policy.get("unknown_command", "force_ask")
     if unknown == "allow" or policy.get("mode") == "advisory":
         return dict(DECISION_ALLOW)
@@ -2332,6 +2399,247 @@ def _classify_command_inner(
         f"CTX_CONTEXT_GUARD: unknown output bound for {prog!r}. "
         f"If output may be large, run: ctx run -- {' '.join(shlex.quote(a) for a in argv)}"
     )
+
+
+def _short_cluster_has(arg: str, letter: str) -> bool:
+    return arg.startswith("-") and not arg.startswith("--") and letter in arg[1:]
+
+
+def _text_reader_writes(prog: str, argv: list[str]) -> bool:
+    """Is this text-reader invocation more than a plain read? It writes a
+    file (``sort -o F``, BSD ``base64 -o F``, any abbreviation of
+    ``--output`` -- GNU accepts ``--out=``, ``--o=``), runs a program
+    (``sort --compress-program``, ``--co…``), takes its operands from a
+    file (``sort --files0-from``, ``--fi…``: the secret-path check never
+    sees those names), or is ``uniq IN OUT``. Conservative: a short-option
+    cluster holding ``o`` counts as a writer (a false positive only asks)."""
+    args = argv[1:]
+    if prog in ("sort", "base64"):
+        for a in args:
+            if a == "--":
+                return False
+            if a.startswith("--o") or _short_cluster_has(a, "o"):
+                return True
+            if prog == "sort" and a.startswith(("--co", "--fi")):
+                return True
+        return False
+    if prog == "uniq":
+        operands: list[str] = []
+        skip = only_operands = False
+        for a in args:
+            if skip:
+                skip = False
+            elif only_operands or a == "-" or not a.startswith("-"):
+                operands.append(a)
+            elif a == "--":
+                only_operands = True
+            elif a in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
+                skip = True
+        return len(operands) >= 2
+    return False
+
+
+#: Paths that are never workspace files: devices and kernel views. Reading
+#: one may never end (`/dev/zero`), and `ctx run` has no capture cap.
+_NOT_FILES = ("/dev/", "/proc/", "/sys/")
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_NUMBER_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+#: Largest `seq` output captured; more is judged as an unknown command.
+_SEQ_CAPTURE_MAX = 1_000_000
+
+
+def _seq_lines(argv: list[str]) -> int | None:
+    """Lines ``seq`` prints, from its own arguments, or None when they do
+    not size it (``inf``, a step of 0, a format option, not numbers)."""
+    operands: list[float] = []
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if _NUMBER_RE.match(a):
+            operands.append(float(a))
+        elif a in ("-w", "--equal-width"):
+            pass
+        else:  # -s/--separator and -f/--format size the output themselves
+            return None  # -f/--format, an abbreviation, or not a number
+        i += 1
+    if not 1 <= len(operands) <= 3:
+        return None
+    first, step, last = (1.0, 1.0, operands[0]) if len(operands) == 1 else (
+        (operands[0], 1.0, operands[1]) if len(operands) == 2 else tuple(operands))
+    if step == 0:
+        return None
+    n = (last - first) / step
+    if n != n or n in (float("inf"), float("-inf")):
+        return None
+    return 0 if n < 0 else int(n) + 1
+
+
+def _operand_outside(argv: list[str], cwd: str | None, root: str | None) -> bool:
+    """Does any path-shaped operand leave the workspace? An argument with a
+    ``/``, a leading ``~`` or a bare ``..``, resolved against ``cwd``; a
+    device or kernel path always counts. Option values count too (``cut -d
+    / -f1`` only asks)."""
+    for a in argv[1:]:
+        if a.startswith("-") and a != "-":
+            if "=" not in a:
+                continue
+            a = a.split("=", 1)[1]
+        if not ("/" in a or a.startswith("~") or a == ".."):
+            continue
+        p = os.path.expanduser(a)
+        if not os.path.isabs(p):
+            p = os.path.join(cwd or root or os.getcwd(), p)
+        p = os.path.abspath(p)
+        if p.startswith(_NOT_FILES) or p in ("/dev", "/proc", "/sys"):
+            return True
+        if root and _path_outside(p, root):
+            return True
+    return False
+
+
+_GLOB_CHARS = frozenset("*?[")
+
+
+def _unquoted_expansion(command: str) -> bool:
+    """Does the raw command line hold anything the shell would expand or
+    redirect -- a glob character, a brace, ``$``, a backtick or ``<``
+    outside quotes, or a ``~user`` -- so that what runs is not what the
+    tokens say? Judged on the raw string, because ``shlex`` drops the
+    quotes: in ``cut -d '*' f`` and ``cut -d * f`` it yields the same
+    token, but only the second is a glob. A small quote-state scan:
+    single quotes make everything literal, double quotes keep ``$`` and
+    backtick live, a backslash makes the next character literal."""
+    quote = ""
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+        elif ch == "\\":
+            i += 1
+        elif quote == '"':
+            if ch == '"':
+                quote = ""
+            elif ch in "$`":
+                return True
+        elif ch in "'\"":
+            quote = ch
+        elif ch in _GLOB_CHARS or ch in "{}$`<":
+            return True
+        elif ch == "~" and (i == 0 or command[i - 1] in " \t=:") and \
+                i + 1 < len(command) and command[i + 1] not in " \t/":
+            return True  # ~user/...: another user's home
+        i += 1
+    return False
+
+
+def _operands_resolve(argv: list[str], cwd: str | None, root: str | None) -> str:
+    """Judge every operand that names an existing file by where it really
+    is (``realpath``: a link inside the workspace may point anywhere).
+    ``capture`` when all stay in the workspace, ``secret`` for a secret
+    path, else ``unknown``. Only existing operands are resolved."""
+    base = cwd or root or os.getcwd()
+    for a in argv[1:]:
+        if a == "-" or (a.startswith("-") and "=" not in a):
+            continue
+        if a.startswith("-"):
+            a = a.split("=", 1)[1]
+        p = a if os.path.isabs(a) else os.path.join(base, a)
+        if not os.path.exists(p):
+            continue
+        real = os.path.realpath(p)
+        if real.startswith(_NOT_FILES) or real in ("/dev", "/proc", "/sys"):
+            return "unknown"
+        if _is_secret_path(real, root):
+            return "secret"
+        if root and _path_outside(real, root):
+            return "unknown"
+    return "capture"
+
+
+def _text_reader_verdict(prog: str, raw_argv: list[str], argv: list[str],
+                         cwd: str | None, policy: dict[str, Any]) -> str:
+    """``allow``, ``capture`` or ``unknown`` for a standalone text reader.
+    Captured only when it is the real tool (a bare name, no environment
+    prefix: ``./sort`` is a workspace script, ``LD_PRELOAD=… sort`` is not
+    the tool) doing a plain read of workspace files. ``seq`` is sized by its
+    arguments: at most the head/tail cap runs natively like ``head -n N``,
+    at most a million lines is captured, anything else is unknown."""
+    prefix = raw_argv[: len(raw_argv) - len(argv)]
+    if "/" in argv[0] or any(_ENV_ASSIGN_RE.match(t) or os.path.basename(t) == "env"
+                             for t in prefix):
+        return "unknown"
+    if _text_reader_writes(prog, argv):
+        return "unknown"
+    if prog == "seq":
+        n = _seq_lines(argv)
+        if n is None or n > _SEQ_CAPTURE_MAX:
+            return "unknown"
+        return "allow" if n <= int(policy.get("_head_tail_max", _HEAD_TAIL_MAX)) else "capture"
+    if prog == "sort" and any(_short_cluster_has(a, "T") or a.startswith("--te")
+                              for a in argv[1:]):
+        return "unknown"  # -T DIR / --temporary-directory: writes outside the read
+    if _operand_outside(argv, cwd, policy.get("_ws_root")):
+        return "unknown"
+    return _operands_resolve(argv, cwd, policy.get("_ws_root"))
+
+
+def _count_value(rest: list[str], *flags: str) -> int | None:
+    """The integer given to any of ``flags`` (``-n 5``, ``-n5``, ``--x=5``,
+    ``--x 5``), or None. ``-N`` counts as ``-n N`` when ``-n`` is a flag."""
+    for i, a in enumerate(rest):
+        if a == "--":
+            break
+        raw = None
+        for f in flags:
+            if a == f and i + 1 < len(rest):
+                raw = rest[i + 1]
+            elif f.startswith("--") and a.startswith(f + "="):
+                raw = a[len(f) + 1:]
+            elif not f.startswith("--") and a.startswith(f) and a[len(f):].isdigit():
+                raw = a[len(f):]
+        if raw is None and "-n" in flags and re.fullmatch(r"-\d+", a):
+            raw = a[1:]
+        if raw is not None and raw.isdigit() and int(raw) >= 1:
+            return int(raw)  # 0 means "no limit" to git: not a bound
+        if raw is not None:
+            return None
+    return None
+
+
+def _git_listing_bounded(sub: str, rest: list[str], cap: int) -> bool:
+    """Is this git listing bounded by its own arguments? Only forms whose
+    output cannot grow with the repository: ``grep -q``, ``rev-list
+    --count`` (one number), ``rev-list -n N`` without objects,
+    ``for-each-ref --count=N``, ``show-ref --verify/--exists/-q``, and a
+    non-recursive ``ls-tree`` (one directory, like plain ``ls``). ``grep
+    -c``/``-l`` print a line per matching file, ``ls-files`` and
+    ``ls-remote`` have no bounded form: they stay captured."""
+    opts = rest[:rest.index("--")] if "--" in rest else rest
+    if sub == "grep":
+        # With -e/-f the pattern is an option value, so a `-q` may be the
+        # pattern itself (`git grep -e -q PAT` prints matches).
+        if any(a in ("-e", "-f") or a.startswith(("-e", "-f", "--regexp", "--file"))
+               for a in opts):
+            return False
+        return "-q" in opts or "--quiet" in opts
+    if sub == "rev-list":
+        if "--count" in opts:
+            return True
+        if any(a.startswith("--objects") or a in ("--disk-usage",) for a in opts):
+            return False
+        n = _count_value(opts, "-n", "--max-count")
+        return n is not None and n <= cap
+    if sub == "for-each-ref":
+        n = _count_value(opts, "--count")
+        return n is not None and n <= cap
+    if sub == "show-ref":
+        return any(a in ("--verify", "--exists", "-q", "--quiet") for a in opts)
+    if sub == "ls-tree":
+        return not any(a == "-r" or _short_cluster_has(a, "r") for a in opts)
+    return False
 
 
 def _extract_line_count(argv: list[str]) -> int | None:
@@ -4565,6 +4873,9 @@ def _normalize_tool_response(tr: Any) -> tuple[str, str]:
             return "\n".join(b["text"] for b in tr), ""
         return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
     if isinstance(tr, dict):
+        text = _native_result_text(tr)
+        if text is not None:
+            return text, ""
         if isinstance(tr.get("content"), list):
             return _normalize_tool_response(tr["content"])
         if isinstance(tr.get("stdout"), str):
@@ -4572,6 +4883,51 @@ def _normalize_tool_response(tr: Any) -> tuple[str, str]:
         if isinstance(tr.get("text"), str):
             return tr["text"], ""
     return json.dumps(tr, ensure_ascii=False, sort_keys=True), ""
+
+
+#: Claude Code's text-Read result: ``{"type": "text", "file": {...}}``.
+_READ_FILE_KEYS = frozenset({"filePath", "content", "numLines", "startLine", "totalLines"})
+#: Claude Code's Grep (``mode``: content / files_with_matches / count) and
+#: Glob results: a ``filenames`` list plus counters, and for Grep's content
+#: and count modes the matched text in ``content``.
+_LISTING_KEYS = frozenset({"mode", "filenames", "content", "numFiles", "numLines",
+                           "numMatches", "durationMs", "truncated", "appliedLimit",
+                           "appliedOffset"})
+
+
+def _read_text_file(tr: Any) -> dict[str, Any] | None:
+    """The ``file`` object of a text Read result, or None for any other shape."""
+    if not (isinstance(tr, dict) and tr.get("type") == "text" and set(tr) <= {"type", "file"}):
+        return None
+    f = tr.get("file")
+    if isinstance(f, dict) and isinstance(f.get("content"), str) and set(f) <= _READ_FILE_KEYS:
+        return f
+    return None
+
+
+def _native_result_text(tr: dict[str, Any]) -> str | None:
+    """The text a native tool's structured result carries, or None.
+
+    Only shapes whose every key is accounted for: a text Read (the file's
+    lines, exactly as read) and a Grep/Glob listing (the matched text, or the
+    file names one per line; the counters beside them are derivable from it).
+    Measuring and storing the JSON wrapper instead made a 240-line Read count
+    as one 18 KB string and come back from ``ctx get`` JSON-escaped."""
+    f = _read_text_file(tr)
+    if f is not None:
+        return f["content"]
+    if set(tr) <= _LISTING_KEYS and isinstance(tr.get("filenames"), list) \
+            and all(isinstance(x, str) for x in tr["filenames"]):
+        # Only when the text says everything: no truncation or paging flag
+        # (the stored copy would lose that the listing is partial), and
+        # never a content string beside a non-empty file list.
+        if any(tr.get(k) for k in ("truncated", "appliedLimit", "appliedOffset")):
+            return None
+        if tr.get("mode") in ("content", "count") and isinstance(tr.get("content"), str):
+            return None if tr["filenames"] else tr["content"]
+        if not isinstance(tr.get("content"), str) or not tr["content"]:
+            return "\n".join(tr["filenames"])
+    return None
 
 
 def _tool_command(payload: dict[str, Any]) -> str | None:
@@ -4908,6 +5264,132 @@ def _shape_output(tr: Any, text: str, budget: int,
     return None, None, False
 
 
+def _guard_window(payload: dict[str, Any], tr: Any, policy: dict[str, Any],
+                  ws_root: str | None) -> dict[str, Any] | None:
+    """The ``file`` object of a text Read the read guard itself bounded, else
+    None.
+
+    Decided the way :func:`classify_read` decided it, from the same facts and
+    one ``stat``: a Claude Code ``Read`` of a file over ``max_inline_bytes``
+    that is not ctx's own ledger, not a secret path and not outside the
+    workspace, under a policy that lets the guard steer. Such a Read only
+    runs at all because the guard rewrote it to a line window (otherwise it
+    was denied or asked), so its result is a window the guard chose -- which
+    the output gate must never turn into a digest of a different kind."""
+    f = _read_text_file(tr)
+    if f is None or str(payload.get("tool_name") or payload.get("toolName") or "") != "Read":
+        return None
+    n = f.get("numLines")
+    max_lines = int(policy.get("max_inline_lines", _MAX_INLINE_LINES_DEFAULT))
+    if not isinstance(n, int) or isinstance(n, bool) or not 0 < n <= max_lines:
+        return None
+    if not _steering_allows(policy):
+        return None
+    ti = payload.get("tool_input") or payload.get("toolInput") or {}
+    path = f.get("filePath") or (ti.get("file_path") if isinstance(ti, dict) else None)
+    if not isinstance(path, str) or not path:
+        return None
+    if ws_root and not os.path.isabs(path):
+        path = os.path.join(ws_root, path)
+    if _LEDGER_DIR_NAME in path.replace("\\", "/").split("/"):
+        return None
+    if _is_secret_path(path, ws_root) or _path_outside(path, ws_root):
+        return None
+    try:
+        size = os.stat(path).st_size
+    except OSError:
+        return None
+    if size <= int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT)):
+        return None
+    return f
+
+
+def _fit_read_window(tr: dict[str, Any], f: dict[str, Any], budget: int,
+                     policy: dict[str, Any]) -> tuple[Any, str, int] | None:
+    """The largest leading part of a guard-bounded Read window that fits
+    ``budget`` (serialized result plus note, the measure every shaped output
+    is held to), as the same Read result a smaller ``limit`` would have
+    produced -- whole lines, ``numLines`` set to match -- plus one note naming
+    the lines shown and the ``offset`` to continue from.
+
+    Returns ``(value, note, delivered_bytes)``, or None when not even the
+    first line fits (one enormous line), where the caller falls back to the
+    ordinary digest.
+
+    What the hook sends is redacted first, then cut: every secret in the
+    window is replaced by its marker one line segment at a time
+    (``mask_hits``), so a multi-line key keeps its line count and
+    ``numLines``, the note's range and the continuation offset still name
+    exactly the source lines shown. The budget is measured on the redacted
+    text; the cut itself goes through ``clip_redacting``. Limit: a key whose
+    BEGIN line lies above the window is not seen (a native Read of that
+    window would show the same lines)."""
+    from ctx.textutil import clip_redacting, mask_hits, secret_hits
+
+    red = _redaction_policy(policy)
+    content = f["content"]
+    hits = secret_hits(content, 0, len(content), policy=red)
+    if hits:
+        content = mask_hits(content, 0, len(content), hits)
+    start = f.get("startLine")
+    start = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 1
+    ends: list[int] = []
+    pos = 0
+    while True:
+        i = content.find("\n", pos)
+        if i < 0:
+            ends.append(len(content))
+            break
+        ends.append(i)
+        pos = i + 1
+    total = f.get("totalLines")
+    of_total = (f" of {total:,}" if isinstance(total, int)
+                and not isinstance(total, bool) and total > 0 else "")
+
+    def build(k: int) -> tuple[Any, str, str]:
+        text = clip_redacting(content, ends[k - 1], red)
+        note = (f"CTX_CONTEXT_GUARD: this Read was cut to fit the {budget:,}-byte output "
+                f"budget; it shows lines {start}-{start + k - 1}{of_total}. "
+                f"Continue with Read offset={start + k} limit={k}.")
+        return dict(tr, file=dict(f, content=text, numLines=k)), note, text
+
+    def fits(k: int) -> bool:
+        value, note, _ = build(k)
+        return _jsize(value) + len(note.encode("utf-8", "replace")) <= budget
+
+    lo, hi = 0, len(ends) - 1  # all lines did not fit: that is why we are here
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid - 1
+    if lo < 1:
+        return None
+    value, note, text = build(lo)
+    return value, note, len(text.encode("utf-8", "replace"))
+
+
+def _settle_window_charge(payload: dict[str, Any], ws_root: str | None,
+                          policy: dict[str, Any], delivered: int) -> None:
+    """Settle the session read ledger for a guard-bounded Read: PreToolUse
+    charged ``max_inline_bytes`` up front (it cannot know the window's size
+    without reading the file); what the model received is ``delivered``.
+    Fail-open, like every ledger write."""
+    try:
+        session_id = str(payload.get("session_id") or payload.get("conversation_id")
+                         or payload.get("conversationId") or "unknown")
+        charged = int(policy.get("max_inline_bytes", _MAX_INLINE_BYTES_DEFAULT))
+        delta = delivered - charged
+        if delta < 0:
+            # Never below zero: a refund is only of what was charged.
+            delta = max(delta, -_ledger_charge(ws_root, session_id, 0))
+        if delta:
+            _ledger_charge(ws_root, session_id, delta)
+    except Exception:
+        pass
+
+
 def _shape_replacement(tr: Any, text: str, budget: int = _MAX_TOOL_OUTPUT_BYTES_DEFAULT,
                        handle: str | None = None) -> tuple[Any, bool]:
     """Back-compatible view of :func:`_shape_output`: ``(value, shaped)``."""
@@ -5144,7 +5626,7 @@ def _host_full_output(payload: dict[str, Any], tr: dict[str, Any]) -> str | None
     return data.decode("utf-8", "replace")
 
 
-def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
+def _emission_gate(payload: dict[str, Any], flavor: str, reserve: int = 0) -> str | None:
     """The universal output-side gate. When a tool result exceeds the byte
     budget, persist it losslessly and return a bounded digest (with a working
     ``ctx get`` ref) to substitute for the raw output via ``updatedToolOutput``.
@@ -5171,6 +5653,12 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     also reach the store, so the result keeps an address and ``ctx get`` can
     resolve it afterwards. Capture is worth having even where substitution is
     impossible; the alternative is bytes that flood *and* vanish.
+
+    A Read window the read guard itself bounded (:func:`_guard_window`) is
+    never digested on Claude Code: over budget it is cut to its largest
+    leading part that fits (``reserve`` bytes are kept for the context text
+    that travels with it), returned as the note, and the fitted result is
+    left in ``_GATE_STATS["window"]`` for the caller to send.
     """
     can_substitute = can_substitute_output(flavor)
     _GATE_STATS.clear()
@@ -5235,6 +5723,8 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
     # -- phase 2: budget. A broken policy read degrades to the built-in
     # default threshold; it must not skip the gate.
     threshold = _MAX_TOOL_OUTPUT_BYTES_DEFAULT
+    window: dict[str, Any] | None = None
+    policy: dict[str, Any] = {}
     try:
         policy = _apply_window_pressure(_load_guard_policy(ws_root), ws_root)
         if str(policy.get("mode")) == "advisory":
@@ -5243,7 +5733,10 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         threshold = int(
             policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT)
         )
+        if flavor == "claude-code":
+            window = _guard_window(payload, tr, policy, ws_root)
     except Exception as exc:
+        window = None
         _note_guard_failure(ws_root, op="emission_gate", stage="policy", exc=exc)
 
     try:
@@ -5261,6 +5754,8 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
         or (isinstance(tr, dict) and tr.get("isError"))
     )
     if size <= threshold:
+        if window is not None:
+            _settle_window_charge(payload, ws_root, policy, size)
         if can_substitute and _single_named_pytest(command or ""):
             try:
                 from ctx import reflex
@@ -5278,6 +5773,20 @@ def _emission_gate(payload: dict[str, Any], flavor: str) -> str | None:
 
     # -- phase 3: over budget. From here None would mean "emit everything
     # raw", so every failure degrades to the bounded fallback instead.
+    if window is not None and isinstance(tr, dict):
+        try:
+            fitted = _fit_read_window(tr, window, threshold - max(0, reserve), policy)
+        except Exception as exc:
+            fitted = None
+            _note_guard_failure(ws_root, op="emission_gate", stage="window", exc=exc)
+        if fitted is not None:
+            value, note, delivered = fitted
+            _settle_window_charge(payload, ws_root, policy, delivered)
+            _GATE_STATS["window"] = (value, note)
+            _GATE_STATS["decision"] = "window_fitted"
+            return note
+        # Not even one whole line fits (one enormous line): the ordinary
+        # digest below, of the file's text, with its handle.
     try:
         # Lazy: only pay the Store/digest import cost on the over-budget path.
         from ctx.digest import digest_output
@@ -5516,10 +6025,23 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
             media = "unreadable"
         if media:
             gated = False
+    # The relay is drained before the gate on Claude Code and Codex (they
+    # always have a channel for it), so the nudge and relay text that travel
+    # in the same additionalContext are inside the budget the result is held
+    # to -- both by shaping below and by a fitted Read window in the gate.
+    relay_text = ""
+    relay_drained = False
+    if flavor in ("claude-code", "codex"):
+        try:
+            relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
+        except Exception:
+            relay_text = ""
+        relay_drained = True
+    extra = sum(len(x.encode("utf-8", "replace")) + 1 for x in (nudge, relay_text) if x)
     if gated:
         try:
             # Universal emission gate: replace over-budget output with a digest.
-            replacement = _emission_gate(payload, flavor)
+            replacement = _emission_gate(payload, flavor, reserve=extra)
         except Exception:
             # _emission_gate is written not to raise; if it somehow does, the
             # result is still not released un-gated.
@@ -5534,19 +6056,12 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
     shape_context: str | None = None
     shaped = True
     budget = int(_GATE_STATS.get("threshold") or _MAX_TOOL_OUTPUT_BYTES_DEFAULT)
-    # The relay is drained before shaping on Claude Code (it always has a
-    # channel there), so the nudge and relay text that travel in the same
-    # additionalContext are inside the budget the shaped result is held to.
-    relay_text = ""
-    relay_drained = False
-    if flavor in ("claude-code", "codex"):
-        try:
-            relay_text, _ = _relay_drain(payload, flavor, "post-tool-use")
-        except Exception:
-            relay_text = ""
-        relay_drained = True
-    extra = sum(len(x.encode("utf-8", "replace")) + 1 for x in (nudge, relay_text) if x)
-    if replacement is not None and flavor == "claude-code" and kind != "mcp":
+    window = _GATE_STATS.get("window")
+    if replacement is not None and isinstance(window, tuple) and flavor == "claude-code":
+        # A guard-bounded Read cut to fit: the file's own lines in the Read
+        # result's own shape, the note (the replacement) beside it.
+        updated_output, shape_context = window
+    elif replacement is not None and flavor == "claude-code" and kind != "mcp":
         try:
             updated_output, shape_context, shaped = _shape_output(
                 _tool_response(payload), replacement, budget - extra, _GATE_STATS.get("handle"))

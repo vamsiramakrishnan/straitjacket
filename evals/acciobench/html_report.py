@@ -28,6 +28,8 @@ from .report import (
     _collapse_arm_runs,
     _infer_arm_from_legacy,
     count_grading_errors,
+    count_isolation_unknown,
+    count_unsandboxed,
     load_baseline_records,
     load_run_results,
 )
@@ -1567,6 +1569,12 @@ def build_html_report_payload(
             "grading_errors_total": sum(count_grading_errors(by_arm_runs[a]) for a in live_arms),
             "unpaired_tasks": len(unpaired_tasks),
             "unpaired": unpaired_tasks,
+            # Trials that ran without filesystem isolation (--allow-unsandboxed).
+            "unsandboxed": {a: count_unsandboxed(by_arm_runs[a]) for a in live_arms},
+            "unsandboxed_total": sum(count_unsandboxed(by_arm_runs[a]) for a in live_arms),
+            # Trials whose isolation is unknown (results that predate sandbox recording).
+            "isolation_unknown": {a: count_isolation_unknown(by_arm_runs[a]) for a in live_arms},
+            "isolation_unknown_total": sum(count_isolation_unknown(by_arm_runs[a]) for a in live_arms),
         },
         "arms_order": arms_order,
         "scopes": scopes,

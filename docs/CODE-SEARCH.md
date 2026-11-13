@@ -63,6 +63,14 @@ a 50k-file tree about 250 ms per query — and the first build, which above
 latency budget) but by `ctx index --text`; `ctx doctor` and `ctx index
 --status` say which case you are in.
 
+Files over 1 MiB are not indexed (a log or a data dump has trigrams of
+everything). A search over at most eight files (`ctx search repo:server.log
+PATTERN`, or a small directory or glob) scans those files directly, in blocks of
+whole lines up to 256 MiB per file, and the coverage line says "N over the 1 MiB
+index limit scanned directly". A wider search does not scan them; it says "N files
+over the 1 MiB index limit were not searched: …" instead of reporting zero matches
+for files it never read.
+
 Segments accumulate as files change; past sixteen the index compacts by
 re-reading the live files (the cheapest correct merge, and it re-verifies).
 `CTX_SEARCH_INDEX=off` disables the whole tier; `CTX_SEARCH_ENGINE=rg|python`
