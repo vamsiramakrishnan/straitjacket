@@ -97,3 +97,12 @@ def test_context_lines_come_from_neighbouring_blocks(state_home, big_repo, monke
     for n in (21343, 21344, 21345, 21346, 21347, 21348, 21349):
         assert f"L{n}: " in out
     assert " >L21346: ERROR db connection reset" in out
+
+
+def test_a_binary_file_over_the_limit_is_skipped_as_binary(state_home, big_repo):
+    import os as _os
+
+    (big_repo / "bin.dat").write_bytes(b"needle\x00" + _os.urandom(3 * 1024 * 1024))
+    out = _search(big_repo, "repo:bin.dat", ["needle"])
+    assert "matches: 0" in out and "1 binary skipped" in out
+    assert "�" not in out and "scanned directly" not in out

@@ -509,7 +509,11 @@ def search(
         # A file named on its own (or a small set): scanned directly, its
         # real matches merged into the same rows, ordered and capped as one.
         cut_short: list[str] = []
+        scanned_direct = 0
         for rel in oversized:
+            if _sniff_binary(ws, rel):
+                skipped_binary += 1  # as the in-memory engines count it
+                continue
             try:
                 d_rows, d_total, d_lines, d_read, d_size = _scan_direct(
                     ws, rel, rxs, mode_all=mode_all, context=context, cap=cap)
@@ -519,12 +523,14 @@ def search(
             total += d_total
             scanned_lines += d_lines
             scanned_targets += 1
+            scanned_direct += 1
             telemetry_bytes += d_read
             if d_read < d_size:
                 cut_short.append(f"{rel} (first {fmt_int(d_read)} of {fmt_int(d_size)} bytes)")
         rows.sort(key=lambda r: (r.target, r.line_no))
         del rows[cap:]
-        direct_note = (f" · {len(oversized)} over the 1 MiB index limit scanned directly"
+        direct_note = ((f" · {scanned_direct} over the 1 MiB index limit scanned directly"
+                        if scanned_direct else "")
                        + (f"; stopped early: {', '.join(cut_short)}" if cut_short else ""))
     elif oversized:
         names = ", ".join(oversized[:5]) + (f", … {len(oversized) - 5} more"
@@ -535,7 +541,8 @@ def search(
     if engine_note:
         scanned = (
             f"  scanned: {fmt_int(scanned_targets)} of {fmt_int(considered)} targets · "
-            f"{fmt_int(scanned_lines)} lines · {engine_note}{direct_note}"
+            f"{fmt_int(scanned_lines)} lines · {engine_note}"
+            + (f" · {skipped_binary} binary skipped" if skipped_binary else "") + direct_note
         )
     else:
         scanned = (
@@ -651,6 +658,16 @@ def _oversized(ws: Workspace, rels: list[str], indexed) -> list[str]:
         except OSError:
             continue
     return out
+
+
+def _sniff_binary(ws: Workspace, rel: str) -> bool:
+    """The binary test every search engine here applies: a NUL byte in the
+    first 8 KiB."""
+    try:
+        with open(ws.root / rel, "rb") as fh:
+            return b"\x00" in fh.read(8192)
+    except OSError:
+        return False
 
 
 def _line_blocks(fh, limit: int):
