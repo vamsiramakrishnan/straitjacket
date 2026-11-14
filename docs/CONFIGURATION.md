@@ -88,7 +88,12 @@ have.
 When command output is too large to show whole, the digests that summarise
 text-like output (`text/v1`, `build/v1`, `lint/v1`, `jsonl/v1`,
 `logtemplate/v1`; from `ctx run`, the hook's output gate and the Claude Code
-failure hook alike) carry an evidence map. Every *error-like line* (error
+failure hook alike) carry an evidence map. (A host that passes a failed
+command's output only cut short and keeps no copy -- Claude Code passes the
+first ~10,000 characters and nothing else -- gives ctx nothing to map: there
+the failure hook adds one line, once per session, saying how many characters
+the host passed and that `ctx run --passthrough --shell -- '<command>'`,
+if it is safe to run again, keeps all of it with a map.) Every *error-like line* (error
 words, failure counts, exit codes, `file:line` coordinates; ANSI colour removed
 first) is grouped into a distinct message:
 
@@ -101,9 +106,14 @@ first) is grouped into a distinct message:
   slots stay collapsed into one message marked `varies`, which shows the
   values: with at most 8 of them, every value with its count and first line
   (`varies: 0041 ×1 L10 · 0042 ×1 L55 · 0043 ×1 L90`); with more, the count,
-  the values seen at most twice (rarest first, a few, with their lines) and
-  `all its lines: ctx get run:<id>#stdout --span <token>`, a bounded, paged
-  listing of every line of that message (the top one is also under `next:`).
+  the range when every value is a number (`numeric: min 7 · max 149999`),
+  and either the least frequent values (count ascending, then value, with
+  their first lines) or, when every value has the same count, that fact
+  (`50,001 distinct values, each ×1`). Two commands follow: `values: ctx get
+  run:<id>#stdout --span <token>` lists the distinct values with count and
+  first line, least frequent first, 100 per call (the top one is also under
+  `next:`); `all its lines: …` pages through every line of the message, each
+  page reading on from where the previous one ended.
 
 The map then states, exactly:
 
@@ -141,6 +151,8 @@ listed + not listed = distinct messages.
 | `threshold` | `0.5` | Minimum P(yes) for a candidate to be expanded by the model; free slots follow the local order. |
 | `max_candidates` | `40` | Most candidate messages sent per request (local order). |
 | `max_candidate_bytes` | `600` | Most bytes of one candidate excerpt. |
+| `proxy` | `""` | Home file only. `""`: no proxy; `"env"`: the environment's proxy variables; a URL: that proxy. |
+| `ca_file` | `""` | Home file only. A CA bundle to trust instead of the built-in store (owned by you, not group/world-writable). |
 
 **Where it can be turned on.** Only one place can turn the picker on or set
 its endpoint, model and key variable: the file `.config/ctx/config.toml` in
@@ -154,13 +166,29 @@ writable by group or others. `api_key_env` must be one of `GEMINI_API_KEY`,
 so even a wrong file can never name an arbitrary secret. Environment
 variables and a workspace `ctx.toml` can be set by a repository (a host's
 project settings can set the hook's environment), so both may only turn the
-picker off (`CTX_PICKER_MODE=local`, or `mode = "local"` in `[picker]`) or
+picker off (`CTX_PICKER_MODE` set to `local`, `off`, `0`, `false`, `no`,
+`none` or `disabled`, any case; `shadow` there lowers a `model` file setting
+to shadow; or `mode = "local"` in the workspace `[picker]`) or
 lower `max_candidates`, `max_candidate_bytes` and `timeout_ms`
 (`CTX_PICKER_MAX_CANDIDATES`, `CTX_PICKER_MAX_CANDIDATE_BYTES`,
 `CTX_PICKER_TIMEOUT_MS`); anything else there is ignored and recorded once.
 `ctx doctor` shows the effective mode, the file it came from, and why any
-setting was ignored. Redirects are never followed (the key would travel with
-them).
+setting was ignored (the endpoint shown with any `user:password@` masked and
+no query string). The file is read through one open descriptor whose owner and
+mode are checked before it is read. Redirects are never followed (the key
+would travel with them).
+
+**Where it connects.** Only the home file decides that, too. By default the
+picker's connection ignores the environment's proxy variables (`HTTPS_PROXY`
+and friends) and its CA variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`): no proxy,
+and the interpreter's built-in trust store (the compiled-in OpenSSL default
+paths; the system store on Windows). The home file may opt in with
+`proxy = "env"` (use the environment's proxy settings), `proxy = "<url>"`, and
+`ca_file = "<path>"` (owned by the current user and not writable by group or
+others, like the config file). **A machine behind a mandatory proxy needs
+`proxy = "env"` (or the proxy's URL) in the home file**, and a TLS-inspecting
+proxy also needs its CA as `ca_file`; otherwise the picker fails open to the
+local choice. `ctx doctor` shows both.
 
 **What is sent** (only in `shadow` or `model` mode, only from a live delivery
 -- `ctx run` and the hook's output gate, never `ctx replay` or other

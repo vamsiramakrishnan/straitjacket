@@ -6267,23 +6267,58 @@ def _failure_evidence(payload: dict[str, Any], flavor: str) -> str | None:
     if str(policy.get("mode")) == "advisory":
         return None
     threshold = int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT))
-    full = _failure_full_output(payload) or text
+    host_copy = _failure_full_output(payload)
+    full = host_copy or text
+    command = _tool_command(payload)
+    hint = None
+    if host_copy is None and _failure_text_cut(text) and command and not _ran_ctx(payload):
+        hint = _failure_cut_hint(ws_root, text, command)
     if len(full.encode("utf-8", "replace")) <= threshold:
-        return None
+        return hint
     from ctx.digest import digest_output
     from ctx.store import Store
     from ctx.workspace import resolve_workspace
 
     ws = resolve_workspace(ws_root)
     store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-    command = _tool_command(payload)
     digest, _short = digest_output(store, ws, name, full, "", is_error=True,
                                    argv=_command_argv(command), contained=False,
                                    producer=_relay_subscriber(flavor, payload), picker=True)
     if "evidence map (exact" not in digest:
-        return None
-    return ("[ctx] this failed command's output is stored; its digest and evidence map:\n"
+        return hint
+    return ((hint + "\n" if hint else "")
+            + "[ctx] this failed command's output is stored; its digest and evidence map:\n"
             + digest)
+
+
+#: A failure text at least this long that ends mid-line, with no host copy,
+#: was cut by the host (observed: Claude Code passes "Exit code N" plus the
+#: first ~10,000 characters and keeps nothing else).
+_FAILURE_CUT_MIN_BYTES = 8000
+_EXIT_PREFIX_RE = re.compile(r"\AExit code -?\d+\n")
+_FAILURE_CUT_LESSON = "failure output cut by the host"
+
+
+def _failure_text_cut(text: str) -> bool:
+    return (len(text.encode("utf-8", "replace")) >= _FAILURE_CUT_MIN_BYTES
+            and not text.endswith("\n"))
+
+
+def _failure_cut_hint(ws_root: str, text: str, command: str) -> str | None:
+    """One line, once per session (lesson decay): the host passed only the
+    first N characters, and `ctx run` would keep all of it -- an option, not
+    an instruction."""
+    try:
+        from ctx.engagement import note_taught
+
+        if not note_taught(ws_root, _FAILURE_CUT_LESSON):
+            return None
+    except Exception:
+        return None
+    shown = len(_EXIT_PREFIX_RE.sub("", text, count=1))
+    return (f"[ctx] The host passed only the first {shown:,} characters of this output. "
+            f"If it is safe to run again, `{_capture_command(command)}` keeps all of it, "
+            "with a map of every error-like line.")
 
 
 def _internal_error_setting(

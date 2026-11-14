@@ -643,3 +643,198 @@ def test_failure_path_digest_is_no_larger_than_the_success_path(state_home, work
     ws = make_ws(workspace_dir)
     bad, _ = digest_output(make_store(ws), ws, "Bash", _log(), argv=["./ci.sh"], is_error=True)
     assert len(bad.encode()) <= len(ok.encode()) + 16
+
+
+# ---------------------------------------------------------------- round 4: connection settings
+import shutil as _shutil
+import socket as _socket
+import ssl as _ssl
+
+
+def _make_ca(tmp_path):
+    """A local CA and a server certificate for 127.0.0.1 (openssl CLI)."""
+    d = tmp_path / "pki"
+    d.mkdir()
+    run = lambda *a: subprocess.run(["openssl", *a], cwd=d, check=True, capture_output=True,
+                                    timeout=60)
+    run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem",
+        "-days", "2", "-subj", "/CN=ctx test CA")
+    run("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "srv.key", "-out", "srv.csr",
+        "-subj", "/CN=127.0.0.1")
+    (d / "ext.cnf").write_text("subjectAltName=IP:127.0.0.1\n")
+    run("x509", "-req", "-in", "srv.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+        "-out", "srv.pem", "-days", "2", "-extfile", "ext.cnf")
+    (d / "ca.pem").chmod(0o600)
+    return d
+
+
+def _tls_stub(pki):
+    s = _Stub()
+    ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(str(pki / "srv.pem"), str(pki / "srv.key"))
+    s.server.socket = ctx.wrap_socket(s.server.socket, server_side=True)
+    s.url = s.url.replace("http://", "https://")
+    return s
+
+
+@pytest.mark.skipif(_shutil.which("openssl") is None, reason="needs the openssl CLI")
+def test_the_trust_store_ignores_ssl_cert_file_and_dir_unless_the_home_file_names_a_ca(
+        tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from ctx.digest.decision_client import DecisionClient
+    from ctx.digest.picker import PickerError
+
+    pki = _make_ca(tmp_path)
+    tls = _tls_stub(pki)
+    try:
+        monkeypatch.setenv(KEY_ENV, KEY)
+        monkeypatch.setenv("SSL_CERT_FILE", str(pki / "ca.pem"))
+        monkeypatch.setenv("SSL_CERT_DIR", str(pki))
+        pol = SimpleNamespace(endpoint=tls.url, model="m", api_key_env=KEY_ENV, timeout_ms=3000,
+                              proxy="", ca_file="")
+        with pytest.raises(PickerError, match="transport"):
+            DecisionClient(pol).score("i", "c", ["rootcause a"])
+        assert tls.requests == []
+        pol.ca_file = str(pki / "ca.pem")                         # the home file's opt-in
+        scores, _ = DecisionClient(pol).score("i", "c", ["rootcause a"])
+        assert scores == [0.97] and len(tls.requests) == 1
+        (pki / "ca.pem").chmod(0o666)                             # but not a writable one
+        with pytest.raises(PickerError, match="ca_file ignored: writable"):
+            DecisionClient(pol).score("i", "c", ["x"])
+    finally:
+        tls.close()
+
+
+class _ConnectRecorder:
+    def __init__(self):
+        self.lines: list[str] = []
+        self.sock = _socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(5)
+        self.url = f"http://127.0.0.1:{self.sock.getsockname()[1]}"
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self):
+        while True:
+            try:
+                c, _ = self.sock.accept()
+            except OSError:
+                return
+            try:
+                c.settimeout(2)
+                self.lines.append(c.recv(4096).decode("latin-1").split("\r\n")[0])
+                c.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            except OSError:
+                pass
+            finally:
+                c.close()
+
+    def close(self):
+        self.sock.close()
+
+
+def test_proxy_variables_are_ignored_unless_the_home_file_opts_in(state_home, workspace_dir,
+                                                                  monkeypatch):
+    rec = _ConnectRecorder()
+    try:
+        monkeypatch.setenv(KEY_ENV, KEY)
+        for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY",
+                     "all_proxy"):
+            monkeypatch.setenv(name, rec.url)
+        for name in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(name, raising=False)
+        endpoint = "https://decisions.example.invalid/v1beta/decisions"
+        _user_file(f'[picker]\nmode = "model"\nendpoint = "{endpoint}"\n'
+                   f'api_key_env = "{KEY_ENV}"\ntimeout_ms = 1500\n')
+        local, _ = _run(workspace_dir)
+        assert rec.lines == []                                    # no connection to the proxy
+        assert _ledger(workspace_dir)[-1]["error"] is not None    # failed open
+        _user_file(f'[picker]\nmode = "model"\nendpoint = "{endpoint}"\n'
+                   f'api_key_env = "{KEY_ENV}"\ntimeout_ms = 1500\nproxy = "env"\n')
+        _run(workspace_dir)
+        assert rec.lines and rec.lines[0].startswith("CONNECT decisions.example.invalid:443")
+    finally:
+        rec.close()
+
+
+def test_doctor_masks_the_endpoint_and_shows_the_connection_settings(state_home, workspace_dir):
+    from ctx.installer import doctor_checks
+
+    _user_file('[picker]\nmode = "model"\nendpoint = "https://user:S3CRET@host.example/x?key=abc"\n'
+               'proxy = "env"\nca_file = "/etc/my-ca.pem"\n')
+    detail = {n: d for n, _ok, d in doctor_checks(make_ws(workspace_dir))}["evidence-map picker"]
+    assert "S3CRET" not in detail and "key=abc" not in detail
+    assert "endpoint=https://***@host.example/x" in detail
+    assert "proxy=env" in detail and "ca_file=/etc/my-ca.pem" in detail
+
+
+@pytest.mark.parametrize("word", ["local", "OFF", "0", "false", "No", "none", "Disabled"])
+def test_every_off_word_is_a_kill_switch(state_home, workspace_dir, stub, monkeypatch, word):
+    monkeypatch.setenv(KEY_ENV, KEY)
+    _config(workspace_dir, "model", stub.url)
+    monkeypatch.setenv("CTX_PICKER_MODE", word)
+    _run(workspace_dir)
+    assert stub.requests == []
+    assert make_ws(workspace_dir).config.picker.mode == "local"
+
+
+def test_shadow_in_the_environment_lowers_model_but_cannot_raise_local(
+        state_home, workspace_dir, stub, monkeypatch):
+    monkeypatch.setenv(KEY_ENV, KEY)
+    _config(workspace_dir, "model", stub.url)
+    monkeypatch.setenv("CTX_PICKER_MODE", "shadow")
+    assert make_ws(workspace_dir).config.picker.mode == "shadow"
+    _config(workspace_dir, "")
+    pol = make_ws(workspace_dir).config.picker
+    assert pol.mode == "local" and any("CTX_PICKER_MODE" in n for n in pol.notes)
+
+
+def test_the_home_file_must_belong_to_the_current_user(state_home, workspace_dir, stub,
+                                                       monkeypatch):
+    import ctx.config as cfg
+
+    monkeypatch.setenv(KEY_ENV, KEY)
+    _config(workspace_dir, "model", stub.url)
+    assert make_ws(workspace_dir).config.picker.mode == "model"
+    monkeypatch.setattr(cfg, "current_uid", lambda: os.getuid() + 4242)
+    pol = make_ws(workspace_dir).config.picker
+    assert pol.mode == "local" and any("not owned by the current user" in n for n in pol.notes)
+
+
+# ---------------------------------------------------------------- round 4: host-cut failure text
+def _real_failure_payload(workspace_dir, command, error, session="sess-1"):
+    return {"session_id": session, "transcript_path": "/tmp/t.jsonl", "cwd": str(workspace_dir),
+            "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
+            "tool_input": {"command": command}, "tool_use_id": "toolu_x", "error": error,
+            "is_interrupt": False, "duration_ms": 1234}
+
+
+def _cut_text(n_chars=10_000):
+    body = "".join(f"2025-01-01 10:00:{i % 60:02d} INFO step {i} ok\n" for i in range(600))
+    return "Exit code 1\n" + body[:n_chars] + "partial line with no newl"
+
+
+def test_a_failure_text_cut_by_the_host_gets_one_line(state_home, workspace_dir):
+    from ctx.hook import _capture_command
+
+    out = _failure_hook(_real_failure_payload(workspace_dir, "./ci.sh --all", _cut_text()))
+    ctx_text = out["hookSpecificOutput"]["additionalContext"]
+    assert ctx_text.count("\n") == 0
+    assert "The host passed only the first 10,025 characters" in ctx_text
+    assert f"`{_capture_command('./ci.sh --all')}`" in ctx_text
+    assert "If it is safe to run again" in ctx_text
+    # told once per session
+    again = _failure_hook(_real_failure_payload(workspace_dir, "./ci.sh --all", _cut_text()))
+    assert again == {}
+
+
+@pytest.mark.parametrize("case", ["short", "newline", "ctx-run"])
+def test_no_cut_line_when_the_text_was_not_cut(state_home, workspace_dir, case):
+    if case == "short":
+        p = _real_failure_payload(workspace_dir, "./ci.sh", "Exit code 1\nboom no newline")
+    elif case == "newline":
+        p = _real_failure_payload(workspace_dir, "./ci.sh", _cut_text() + "\n")
+    else:
+        p = _real_failure_payload(workspace_dir, "ctx run -- ./ci.sh", _cut_text())
+    assert _failure_hook(p) == {}
