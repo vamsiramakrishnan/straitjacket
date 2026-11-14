@@ -361,6 +361,11 @@ def _legacy_emitted(ws, text: str, exit_code: int) -> str:
         if "output (complete):" in text
         else ws.config.budgets.digest_tokens
     )
+    # Documented delta: a digest carrying an evidence map gets the map's own
+    # byte allowance (ctx.digest.evidence_map.budget_tokens) on top.
+    from ctx.digest.evidence_map import budget_tokens
+
+    budget += budget_tokens(ws, text)
     if exit_code != 0:
         budget = int(budget * ws.config.budgets.failure_budget_factor)
     eng = ws.config.engagement

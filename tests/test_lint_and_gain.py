@@ -157,7 +157,10 @@ def test_failure_budget_factor_applied(ws_store, tmp_path, monkeypatch, capsys):
 
     ws, _ = ws_store
     (ws.root / "ctx.toml").write_text(
-        "version = 1\n[budgets]\ndigest_tokens = 60\nfailure_budget_factor = 3.0\n",
+        # evidence_map_bytes small too: the map's own allowance is added to
+        # the budget, and at its default both digests would fit uncut.
+        "version = 1\n[budgets]\ndigest_tokens = 60\nfailure_budget_factor = 3.0\n"
+        "evidence_map_bytes = 200\n",
         encoding="utf-8",
     )
     code = (

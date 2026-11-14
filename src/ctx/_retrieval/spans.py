@@ -11,7 +11,7 @@ omission and hands out coordinates.
 from __future__ import annotations
 
 from ctx.store import Store
-from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int, index_lines
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int, index_lines, redaction_scope
 from ctx.workspace import Workspace
 
 from .common import RetrievalError, _emit, _read_bytes_range, blob_reader, edge_masked_bytes
@@ -93,10 +93,54 @@ def _resolve_span(store: Store, ws: Workspace, ref_text: str, label: str, span_i
         # The piece's edges were chosen by ctx: a secret crossing them is
         # masked here, judged with the bytes around the piece.
         out.append(_context_redacted(store, blob, a - 1, a - 1 + len(chunk), ws.config.redaction))
+    elif span["kind"] == "messages":
+        out.extend(_message_listing(store, ws, ref_text, blob, int(span["a"]), int(span["b"])))
     else:  # pragma: no cover - registry only writes these kinds
         raise RetrievalError(f"unknown span kind {span['kind']!r}")
 
     return _emit(ws, "\n".join(out), budget.result_tokens)
+
+
+#: Rows one page of a ``messages`` span lists before handing out the next page.
+MESSAGE_PAGE_ROWS = 40
+
+
+def _message_listing(store: Store, ws: Workspace, ref_text: str, blob: str,
+                     a: int, b: int) -> list[str]:
+    """Every distinct message of one stream (the evidence map's grouping),
+    ordered by first occurrence, rows ``a``..``b`` of that order, a page at a
+    time. Exact: the header counts every message of the stream."""
+    from types import SimpleNamespace
+
+    from ctx.digest.base import MAX_PARSE_BYTES, StreamView
+    from ctx.digest.evidence_map import LIST_SAMPLE_CHARS, _shown_line, build
+
+    path = store.blob_path(store.resolve_id(blob, kinds=("blob",)))
+    with path.open("rb") as fh:
+        data = fh.read(MAX_PARSE_BYTES + 1)
+    whole = len(data) <= MAX_PARSE_BYTES
+    text = data[:MAX_PARSE_BYTES].decode("utf-8", "replace")
+    view = StreamView("stdout", len(data), text.count("\n"), "text/plain", text, whole)
+    empty = StreamView("stderr", 0, 0, "text/plain", "", True)
+    emap = build(SimpleNamespace(stdout=view, stderr=empty, focus_terms=()))
+    msgs = sorted(emap.messages, key=lambda m: m.first) if emap else []
+    total = len(msgs)
+    a = max(1, a)
+    end = min(b, total, a + MESSAGE_PAGE_ROWS - 1)
+    scope = "" if whole else " in the parsed part"
+    out = [f"messages (exact{scope}): {fmt_int(total)} distinct · "
+           f"{fmt_int(emap.signal_lines if emap else 0)} error-like lines · "
+           f"rows {a}-{end} by first occurrence (×count · lines · first sample)"]
+    fired: set[str] = set()
+    with redaction_scope(ws.config.redaction):
+        for m in msgs[a - 1:end]:
+            span = (f"first L{m.first}  last L{m.last}" if m.count > 1 else f"L{m.first}")
+            sample = _shown_line(emap.lines["stdout"][m.first - 1].strip(), LIST_SAMPLE_CHARS, fired)
+            out.append(f"  ×{fmt_int(m.count)}  {span}  {sample}")
+    if end < min(b, total):
+        sid = store.register_span(blob, "messages", a=end + 1, b=total)
+        out.append(f"… +{fmt_int(min(b, total) - end)} more · next: ctx get {ref_text} --span {sid}")
+    return out
 
 
 def _zoom_region(store: Store, blob: str, a: int, b: int, inline_cap: int) -> list[str]:

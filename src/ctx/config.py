@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +64,10 @@ class Budgets:
     # shown; the middle is declared-omitted with a span/--lines address.
     digest_head_lines: int = 5
     digest_tail_lines: int = 5
+    # Evidence map (ctx.digest.evidence_map): byte cap for its excerpts plus
+    # its list of other distinct messages, measured after redaction. The
+    # accounting line and the closing sentence ride outside the cap.
+    evidence_map_bytes: int = 1500
 
 
 @dataclass(frozen=True)
@@ -329,6 +333,49 @@ class IntakePolicy:
     threshold_bytes: int = 0      # 0 = [budgets] max_inline_bytes
 
 
+#: Hosted default for ``[picker] endpoint`` (a compatible server can be named
+#: instead). Contacted only when ``[picker] mode`` is ``shadow`` or ``model``.
+PICKER_DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/decisions"
+
+
+@dataclass(frozen=True)
+class PickerPolicy:
+    """Who chooses which distinct messages a digest's evidence map expands.
+
+    ``mode``
+      ``local`` (default): the deterministic local rule; nothing is sent
+      anywhere and no network module is imported.
+      ``shadow``: the decision endpoint is asked too and both choices are
+      recorded in ``.ctx-session-reads/picker.jsonl``, but the digest is the
+      local one, byte for byte.
+      ``model``: the endpoint's yes/no relevance scores choose the expanded
+      excerpts (top ``threshold``-or-better, local order for the rest).
+      The list of every other message is unchanged, so nothing is hidden.
+
+      Any value other than ``shadow`` or ``model`` means ``local``: sending
+      is opt-in and a typo never turns it on.
+
+    What is sent, only in ``shadow``/``model`` mode: an intent line (the
+    user's last prompt when ctx has it, first 300 characters, else the
+    command line and ``--focus``), the command, and up to ``max_candidates``
+    candidate excerpts (each at most ``max_candidate_bytes``), all redacted.
+    The key is read from the environment variable NAMED by ``api_key_env``
+    at call time; its value is never logged, stored or shown. On a timeout
+    (``timeout_ms``), an error, a missing key or a malformed answer the
+    digest is exactly the local one and the failure is recorded once in
+    ``guard-failures.jsonl``.
+    """
+
+    mode: str = "local"           # local | shadow | model
+    endpoint: str = PICKER_DEFAULT_ENDPOINT
+    model: str = "gemini-decision-1"
+    api_key_env: str = "GEMINI_API_KEY"
+    timeout_ms: int = 3000
+    threshold: float = 0.5
+    max_candidates: int = 40
+    max_candidate_bytes: int = 600
+
+
 @dataclass(frozen=True)
 class Config:
     version: int = 1
@@ -344,6 +391,7 @@ class Config:
     surface: SurfacePolicy = field(default_factory=SurfacePolicy)
     media: MediaPolicy = field(default_factory=MediaPolicy)
     intake: IntakePolicy = field(default_factory=IntakePolicy)
+    picker: PickerPolicy = field(default_factory=PickerPolicy)
     scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # ws:<alias> routing targets: alias -> workspace path (absolute, or
     # relative to this workspace root). Committed in ctx.toml [aliases].
@@ -476,6 +524,17 @@ def load_config(workspace_root: Path | None) -> Config:
     intake = IntakePolicy(mode=mode if mode in ("advise", "block", "off") else "off",
                           threshold_bytes=intake.threshold_bytes)
 
+    picker_raw = raw.get("picker")
+    picker = _pick(picker_raw if isinstance(picker_raw, dict) else {}, PickerPolicy)
+    # Sending is opt-in: anything but exactly shadow/model (after trimming and
+    # case-folding) is local, like [intake] mode failing toward off.
+    pmode = picker.mode.strip().casefold() if isinstance(picker.mode, str) else "local"
+    picker = replace(picker, mode=pmode if pmode in ("shadow", "model") else "local",
+                     timeout_ms=max(100, min(picker.timeout_ms, 30000)),
+                     threshold=max(0.0, min(picker.threshold, 1.0)),
+                     max_candidates=max(1, min(picker.max_candidates, 200)),
+                     max_candidate_bytes=max(80, min(picker.max_candidate_bytes, 4000)))
+
     eng_raw = raw.get("engagement") or {}
     ed = Engagement()
     engagement = Engagement(
@@ -535,6 +594,7 @@ def load_config(workspace_root: Path | None) -> Config:
         surface=surface,
         media=_media_policy(raw.get("media")),
         intake=intake,
+        picker=picker,
         scopes=scopes,
         aliases=aliases,
     )

@@ -179,6 +179,20 @@ class LintProfile(Profile):
             f"ctx get {rid}#{first_stream} --lines {first_line}:{end}",
         ]
         shown = 1
+        emap = self.evidence_map(ctx)
+        if emap is not None:
+            # The map accounts for every error-like line; its next steps
+            # follow from it. The first-diagnostic slice stays for repair.
+            map_lines, map_next, r = emap
+            total = ctx.stdout.lines + ctx.stderr.lines
+            return "\n".join(
+                ctx.header_lines()
+                + body
+                + map_lines
+                + self.coverage_lines(ctx, shown + r.windows,
+                                      max(0, total - (end - first_line + 1) - r.excerpt_lines))
+                + self.next_lines(ctx, map_next + suggestions[1:])
+            )
         return "\n".join(
             ctx.header_lines()
             + body

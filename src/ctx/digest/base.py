@@ -121,6 +121,12 @@ class DigestContext:
     # renders vs the byte-identical pytest/v1 pass path) declare the final
     # version here; None means the profile's static ``version``.
     meta_profile_version: str | None = None
+    # Evidence-map picker (ctx.digest.picker.PickerRun) for a live delivery
+    # path with [picker] mode shadow/model; None means the local rule.
+    picker: Any = None
+    # Redaction pattern names the evidence map replaced while rendering, so
+    # the digest's "redaction: applied" note names them.
+    evmap_fired: set = field(default_factory=set)
 
     def mint_span(self, stream: "StreamView", kind: str, **kw: Any) -> str | None:
         """Mint an addressable span into ``stream``.
@@ -152,6 +158,10 @@ class DigestContext:
             if not isinstance(a, int) or not isinstance(b, int):
                 return None
             if a < 1 or b < a or b > stream.bytes:
+                return None
+        elif kind == "messages":
+            a, b = kw.get("a"), kw.get("b")
+            if not isinstance(a, int) or not isinstance(b, int) or a < 1 or b < a:
                 return None
         blob = str(self.manifest["streams"][stream.name]["blob"])
         return self.store.register_span(blob, kind, **kw)
@@ -303,6 +313,13 @@ class Profile:
         omitted_n = omitted if omitted is not None else max(0, total - shown_spans)
         lines.append(f"  shown: {shown_spans} spans · omitted: {fmt_int(omitted_n)} lines")
         return lines
+
+    def evidence_map(self, ctx: DigestContext):
+        """``(lines, suggestions, render)`` of the shared evidence map
+        (:func:`ctx.digest.evidence_map.section`), or None."""
+        from ctx.digest.evidence_map import section
+
+        return section(ctx)
 
     def next_lines(self, ctx: DigestContext, suggestions: list[str]) -> list[str]:
         # Graduated engagement (mechanism C): a passive session gets zero

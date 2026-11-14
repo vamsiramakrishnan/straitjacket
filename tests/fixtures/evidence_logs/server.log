@@ -1,0 +1,127 @@
+2025-02-11 09:00:00 INFO  [queue-3] GET /api/v1/items/5206 200 72ms
+2025-02-11 09:00:01 INFO  [queue-3] GET /api/v1/items/6141 200 56ms
+2025-02-11 09:00:02 WARN  [db-1] slow request /api/v1/report took 2170ms
+2025-02-11 09:00:03 ERROR [cache-2] upstream connection reset by peer
+2025-02-11 09:00:03 INFO  [cache-2] retry 1/3 succeeded
+2025-02-11 09:00:04 INFO  [cache-2] GET /api/v1/items/1360 200 39ms
+2025-02-11 09:00:05 INFO  [cache-2] GET /api/v1/items/3807 200 45ms
+2025-02-11 09:00:06 INFO  [queue-3] GET /api/v1/items/7359 200 66ms
+2025-02-11 09:00:07 INFO  [queue-3] GET /api/v1/items/6841 200 19ms
+2025-02-11 09:00:08 INFO  [svc-b] GET /api/v1/items/4639 200 40ms
+2025-02-11 09:00:09 INFO  [svc-a] GET /api/v1/items/8451 200 49ms
+2025-02-11 09:00:10 INFO  [db-1] GET /api/v1/items/3715 200 13ms
+2025-02-11 09:00:11 INFO  [svc-a] GET /api/v1/items/6268 200 79ms
+2025-02-11 09:00:12 INFO  [cache-2] GET /api/v1/items/843 200 19ms
+2025-02-11 09:00:13 WARN  [db-1] slow request /api/v1/report took 2804ms
+2025-02-11 09:00:14 INFO  [svc-a] GET /api/v1/items/2644 200 23ms
+2025-02-11 09:00:15 INFO  [svc-b] GET /api/v1/items/7262 200 40ms
+2025-02-11 09:00:16 INFO  [svc-b] GET /api/v1/items/689 200 48ms
+2025-02-11 09:00:17 ERROR [db-1] upstream connection reset by peer
+2025-02-11 09:00:17 INFO  [db-1] retry 1/3 succeeded
+2025-02-11 09:00:18 INFO  [svc-b] GET /api/v1/items/6880 200 28ms
+2025-02-11 09:00:19 INFO  [db-1] GET /api/v1/items/189 200 37ms
+2025-02-11 09:00:20 INFO  [cache-2] GET /api/v1/items/8722 200 69ms
+2025-02-11 09:00:21 INFO  [cache-2] GET /api/v1/items/3696 200 74ms
+2025-02-11 09:00:22 INFO  [svc-b] GET /api/v1/items/1451 200 63ms
+2025-02-11 09:00:23 INFO  [queue-3] GET /api/v1/items/4217 200 79ms
+2025-02-11 09:00:24 INFO  [cache-2] GET /api/v1/items/4837 200 6ms
+2025-02-11 09:00:25 INFO  [cache-2] GET /api/v1/items/4276 200 65ms
+2025-02-11 09:00:26 INFO  [cache-2] GET /api/v1/items/5506 200 39ms
+2025-02-11 09:00:27 INFO  [svc-a] GET /api/v1/items/2460 200 25ms
+2025-02-11 09:00:28 INFO  [db-1] GET /api/v1/items/7238 200 12ms
+2025-02-11 09:00:29 WARN  [db-1] slow request /api/v1/report took 1577ms
+2025-02-11 09:00:30 INFO  [db-1] GET /api/v1/items/32 200 6ms
+2025-02-11 09:00:31 INFO  [db-1] GET /api/v1/items/4253 200 41ms
+2025-02-11 09:00:32 ERROR [queue-3] upstream connection reset by peer
+2025-02-11 09:00:32 INFO  [queue-3] retry 1/3 succeeded
+2025-02-11 09:00:33 INFO  [cache-2] GET /api/v1/items/8444 200 51ms
+2025-02-11 09:00:34 INFO  [svc-a] GET /api/v1/items/8499 200 90ms
+2025-02-11 09:00:35 INFO  [svc-a] GET /api/v1/items/3959 200 38ms
+2025-02-11 09:00:36 INFO  [svc-b] GET /api/v1/items/917 200 7ms
+2025-02-11 09:00:37 INFO  [queue-3] GET /api/v1/items/5575 200 65ms
+2025-02-11 09:00:38 INFO  [svc-b] GET /api/v1/items/3421 200 47ms
+2025-02-11 09:00:39 INFO  [cache-2] GET /api/v1/items/8327 200 48ms
+2025-02-11 09:00:40 INFO  [queue-3] GET /api/v1/items/4446 200 36ms
+2025-02-11 09:00:41 WARN  [cache-2] slow request /api/v1/report took 1486ms
+2025-02-11 09:00:42 INFO  [svc-b] GET /api/v1/items/5068 200 34ms
+2025-02-11 09:00:43 INFO  [queue-3] GET /api/v1/items/907 200 4ms
+2025-02-11 09:00:44 ERROR [cache-2] upstream connection reset by peer
+2025-02-11 09:00:44 INFO  [cache-2] retry 1/3 succeeded
+2025-02-11 09:00:45 INFO  [queue-3] GET /api/v1/items/7343 200 35ms
+2025-02-11 09:00:46 INFO  [svc-b] GET /api/v1/items/3127 200 48ms
+2025-02-11 09:00:47 ERROR [svc-b] upstream connection reset by peer
+2025-02-11 09:00:47 INFO  [svc-b] retry 1/3 succeeded
+2025-02-11 09:00:48 INFO  [svc-a] GET /api/v1/items/2328 200 46ms
+2025-02-11 09:00:49 INFO  [cache-2] GET /api/v1/items/8816 200 5ms
+2025-02-11 09:00:50 INFO  [cache-2] GET /api/v1/items/7378 200 65ms
+2025-02-11 09:00:51 INFO  [svc-b] GET /api/v1/items/1757 200 6ms
+2025-02-11 09:00:52 INFO  [db-1] GET /api/v1/items/1439 200 46ms
+2025-02-11 09:00:53 ERROR [queue-3] upstream connection reset by peer
+2025-02-11 09:00:53 INFO  [queue-3] retry 1/3 succeeded
+2025-02-11 09:00:54 ERROR [queue-3] upstream connection reset by peer
+2025-02-11 09:00:54 INFO  [queue-3] retry 1/3 succeeded
+2025-02-11 09:00:55 INFO  [svc-a] GET /api/v1/items/2047 200 84ms
+2025-02-11 09:00:56 INFO  [db-1] GET /api/v1/items/638 200 9ms
+2025-02-11 09:00:57 INFO  [svc-a] GET /api/v1/items/7743 200 23ms
+2025-02-11 09:00:58 INFO  [svc-a] GET /api/v1/items/7601 200 27ms
+2025-02-11 09:00:59 INFO  [queue-3] GET /api/v1/items/7515 200 34ms
+2025-02-11 09:01:00 INFO  [svc-a] GET /api/v1/items/6409 200 19ms
+2025-02-11 09:01:01 INFO  [svc-a] GET /api/v1/items/2678 200 41ms
+2025-02-11 09:01:02 INFO  [svc-b] GET /api/v1/items/1692 200 55ms
+2025-02-11 09:09:28 INFO  [svc-b] GET /api/v1/items/7749 200 8ms
+2025-02-11 09:09:29 INFO  [db-1] GET /api/v1/items/8690 200 2ms
+2025-02-11 09:09:30 INFO  [cache-2] GET /api/v1/items/6047 200 66ms
+2025-02-11 09:09:31 INFO  [cache-2] GET /api/v1/items/7482 200 72ms
+2025-02-11 09:09:32 INFO  [cache-2] GET /api/v1/items/537 200 69ms
+2025-02-11 09:09:33 INFO  [db-1] GET /api/v1/items/6499 200 14ms
+2025-02-11 09:09:34 INFO  [cache-2] GET /api/v1/items/6197 200 90ms
+2025-02-11 09:09:35 INFO  [cache-2] GET /api/v1/items/1857 200 74ms
+2025-02-11 09:09:36 INFO  [svc-b] GET /api/v1/items/1175 200 4ms
+2025-02-11 09:09:37 WARN  [queue-3] 429 from rate limiter, backing off 100ms
+2025-02-11 09:09:38 INFO  [svc-a] GET /api/v1/items/6919 200 86ms
+2025-02-11 09:09:39 INFO  [queue-3] GET /api/v1/items/8809 200 79ms
+2025-02-11 09:09:40 INFO  [queue-3] GET /api/v1/items/7789 200 17ms
+2025-02-11 09:09:41 INFO  [db-1] GET /api/v1/items/6517 200 63ms
+2025-02-11 09:09:42 INFO  [db-1] GET /api/v1/items/4572 200 27ms
+2025-02-11 09:09:42 FATAL [svc-a] accept4 failed: Too many open files (EMFILE), limit=1024
+2025-02-11 09:09:42 FATAL [svc-a] listener closed; worker exiting with code 71
+2025-02-11 09:09:43 INFO  [queue-3] GET /api/v1/items/1457 200 63ms
+2025-02-11 09:09:44 ERROR [cache-2] upstream connection reset by peer
+2025-02-11 09:09:44 INFO  [cache-2] retry 1/3 succeeded
+2025-02-11 09:09:45 INFO  [svc-a] GET /api/v1/items/7510 200 52ms
+2025-02-11 09:09:46 INFO  [svc-a] GET /api/v1/items/7360 200 65ms
+2025-02-11 09:09:47 INFO  [svc-a] GET /api/v1/items/7370 200 27ms
+2025-02-11 09:09:48 INFO  [db-1] GET /api/v1/items/7227 200 16ms
+2025-02-11 09:09:49 INFO  [svc-a] GET /api/v1/items/8561 200 70ms
+2025-02-11 09:09:50 WARN  [queue-3] 429 from rate limiter, backing off 100ms
+2025-02-11 09:09:51 ERROR [svc-a] upstream connection reset by peer
+2025-02-11 09:09:51 INFO  [svc-a] retry 1/3 succeeded
+2025-02-11 09:09:52 INFO  [svc-b] GET /api/v1/items/570 200 7ms
+2025-02-11 09:09:53 INFO  [cache-2] GET /api/v1/items/7794 200 12ms
+2025-02-11 09:09:54 INFO  [svc-a] GET /api/v1/items/7895 200 14ms
+2025-02-11 09:09:55 INFO  [cache-2] GET /api/v1/items/5617 200 33ms
+2025-02-11 16:55:35 INFO  [cache-2] GET /api/v1/items/85 200 90ms
+2025-02-11 16:55:36 INFO  [svc-b] GET /api/v1/items/5133 200 3ms
+2025-02-11 16:55:37 INFO  [cache-2] GET /api/v1/items/943 200 16ms
+2025-02-11 16:55:38 INFO  [db-1] GET /api/v1/items/1080 200 32ms
+2025-02-11 16:55:39 INFO  [db-1] GET /api/v1/items/8108 200 71ms
+2025-02-11 16:55:40 WARN  [svc-b] 429 from rate limiter, backing off 100ms
+2025-02-11 16:55:41 WARN  [svc-a] slow request /api/v1/report took 2795ms
+2025-02-11 16:55:42 INFO  [db-1] GET /api/v1/items/332 200 59ms
+2025-02-11 16:55:43 INFO  [cache-2] GET /api/v1/items/1537 200 85ms
+2025-02-11 16:55:44 INFO  [svc-b] GET /api/v1/items/3968 200 41ms
+2025-02-11 16:55:45 INFO  [cache-2] GET /api/v1/items/8 200 29ms
+2025-02-11 16:55:46 INFO  [queue-3] GET /api/v1/items/8028 200 57ms
+2025-02-11 16:55:47 INFO  [queue-3] GET /api/v1/items/4578 200 30ms
+2025-02-11 16:55:48 INFO  [db-1] GET /api/v1/items/6002 200 82ms
+2025-02-11 16:55:49 WARN  [svc-b] slow request /api/v1/report took 2924ms
+2025-02-11 16:55:50 INFO  [queue-3] GET /api/v1/items/2472 200 19ms
+2025-02-11 16:55:51 INFO  [db-1] GET /api/v1/items/2644 200 30ms
+2025-02-11 16:55:52 INFO  [cache-2] GET /api/v1/items/2241 200 52ms
+2025-02-11 16:55:53 INFO  [queue-3] GET /api/v1/items/211 200 24ms
+2025-02-11 16:55:54 INFO  [cache-2] GET /api/v1/items/8773 200 46ms
+2025-02-11 16:55:55 INFO  [queue-3] GET /api/v1/items/7513 200 16ms
+2025-02-11 16:55:56 INFO  [svc-a] GET /api/v1/items/3465 200 61ms
+2025-02-11 16:55:57 INFO  [svc-b] GET /api/v1/items/3419 200 3ms
+2025-02-11 16:55:58 INFO  [svc-b] GET /api/v1/items/3047 200 81ms
+2025-02-11 16:55:59 WARN  [db-1] 429 from rate limiter, backing off 100ms

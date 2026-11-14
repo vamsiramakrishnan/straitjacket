@@ -100,6 +100,9 @@ def _emit_run_digest(ws, digest: str, manifest: dict, store=None, signature=None
         if "output (complete):" in digest
         else ws.config.budgets.digest_tokens
     )
+    from ctx.digest.evidence_map import budget_tokens
+
+    base += budget_tokens(ws, digest)
     # Failure asymmetry rides through the resolver: a failing run's output
     # is evidence, not boilerplate. exitCode != 0 covers None too: timeouts
     # and signal deaths are failures (docs/LADDERS.md edge 4 — parity with
