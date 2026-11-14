@@ -912,21 +912,22 @@ def _render_claude_md(exe: str) -> str:
     idempotent and removable, exactly like the Codex AGENTS.md block."""
     return f"""\
 {_CODEX_MARK_START}
-## Context harness (ctx / straitjacket)
+## Context harness (ctx)
 
-This workspace is harnessed by `{exe}`: noisy output comes back as a
-bounded, addressable digest; work with it, not around it.
+Harnessed by `{exe}`: noisy output comes back as a bounded, addressable
+digest; work with it, not around it.
 
 - Answer code questions with `ctx ask "<q>" --intent locate|impact` (where X
   is used; what breaks if it changes), not a search/read loop; add
-  `--symbol X` unless the question names an identifier.
+  `--symbol X` unless one is named.
 - Compose facts with `ctx q '<stage> | <stage>'`, not grep/awk/jq
   pipes: `refs X | group file | top 3 | get`.
 - Capture noisy commands with `ctx run -- <cmd>`; pull bytes with `ctx get
   <handle>`; cite handles, don't re-quote.
 - Digest excerpts are verbatim with real line numbers; "(exact)" counts are
-  exact; "every error-like line is one of these N messages" is literally
-  true (varies = collapsed values). Fetch only what is not shown.
+  exact; "every error-like line is one of these N messages" is true; a
+  "varies" message stands for several values, listed on its row or by its
+  command. Fetch only what is not shown.
 - Only for output captured by `ctx run`: `ctx ask --intent diagnose`,
   `ctx q 'fails last | in-changed'`, `ctx q 'records run:<id>#stdout'`.
 - For an existing file: grep, Read windows, or
@@ -1083,7 +1084,8 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         "evidence-map picker",
         True,
         f"mode={pk.mode} (from {pk.source})"
-        + (f" endpoint={pk.endpoint} key from ${pk.api_key_env}" if pk.mode != "local" else ""),
+        + (f" endpoint={pk.endpoint} key from ${pk.api_key_env}" if pk.mode != "local" else "")
+        + "".join(f"; {n}" for n in pk.notes),
     )
 
     try:

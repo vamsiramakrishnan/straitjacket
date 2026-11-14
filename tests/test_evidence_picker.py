@@ -19,7 +19,7 @@ import pytest
 from conftest import make_store, make_ws
 from ctx.digest import digest_output
 
-KEY_ENV = "CTX_TEST_PICKER_KEY"
+KEY_ENV = "CTX_PICKER_API_KEY"   # one of the allowed key names
 KEY = "picker-test-key-VALUE-9f8e7d6c5b4a"
 
 
@@ -100,28 +100,40 @@ _MP: list = []
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
-    """No real user config or CTX_PICKER_* variable leaks into a test."""
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    """No real user config or CTX_PICKER_* variable leaks into a test: the
+    account home (the one place that can enable the picker) is a temporary
+    directory, injected through ctx.config.account_home."""
+    import ctx.config as cfg
+
+    home = tmp_path / "account-home"
+    home.mkdir()
+    monkeypatch.setattr(cfg, "account_home", lambda: str(home))
     for name in ("MODE", "ENDPOINT", "MODEL", "API_KEY_ENV", "TIMEOUT_MS", "THRESHOLD",
                  "MAX_CANDIDATES", "MAX_CANDIDATE_BYTES"):
         monkeypatch.delenv(f"CTX_PICKER_{name}", raising=False)
-    _MP[:] = [monkeypatch]
+    _MP[:] = [monkeypatch, home]
     yield
     _MP.clear()
 
 
+def _user_file(body: str) -> Path:
+    f = _MP[1] / ".config" / "ctx" / "config.toml"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(body, encoding="utf-8")
+    f.chmod(0o600)
+    return f
+
+
 def _config(workspace_dir: Path, mode: str, url: str = "", timeout_ms: int = 3000) -> None:
-    """Enable the picker the only way that counts: from OUTSIDE the
-    workspace (environment variables); "" means the default (local)."""
-    mp = _MP[0]
+    """Enable the picker the only way that counts: the account-home file;
+    "" means the default (local)."""
+    f = _MP[1] / ".config" / "ctx" / "config.toml"
     if not mode:
-        for k in ("MODE", "ENDPOINT", "API_KEY_ENV", "TIMEOUT_MS"):
-            mp.delenv(f"CTX_PICKER_{k}", raising=False)
+        if f.exists():
+            f.unlink()
         return
-    mp.setenv("CTX_PICKER_MODE", mode)
-    mp.setenv("CTX_PICKER_ENDPOINT", url)
-    mp.setenv("CTX_PICKER_API_KEY_ENV", KEY_ENV)
-    mp.setenv("CTX_PICKER_TIMEOUT_MS", str(timeout_ms))
+    _user_file(f'[picker]\nmode = "{mode}"\nendpoint = "{url}"\n'
+               f'api_key_env = "{KEY_ENV}"\ntimeout_ms = {timeout_ms}\n')
 
 
 def _run(workspace_dir, picker=True):
@@ -322,7 +334,7 @@ def test_default_hook_imports_no_network_module(tmp_path):
             f"sys.stderr.write('\\nLOADED=' + {probe})\n")
     env = {"PYTHONPATH": str(root / "src"), "PATH": "/usr/bin:/bin",
            "CTX_STATE_HOME": str(tmp_path / "state"), "HOME": str(tmp_path),
-           "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+           "XDG_CONFIG_HOME": str(tmp_path / "xdg"), "CTX_PICKER_MODE": "model"}
     out = subprocess.run([sys.executable, "-c", code, "hook", "claude-code", "post-tool-use"],
                          input=payload, capture_output=True, text=True, env=env, cwd=str(ws),
                          timeout=120)
@@ -396,15 +408,12 @@ def test_user_level_config_enables_and_the_workspace_can_only_disable_or_lower(
     other = _Stub()
     try:
         monkeypatch.setenv(KEY_ENV, KEY)
-        user = tmp_path / "xdg" / "ctx"
-        user.mkdir(parents=True)
-        (user / "config.toml").write_text(
-            f'[picker]\nmode = "model"\nendpoint = "{stub.url}"\napi_key_env = "{KEY_ENV}"\n',
-            encoding="utf-8")
+        path = _user_file(f'[picker]\nmode = "model"\nendpoint = "{stub.url}"\n'
+                          f'api_key_env = "{KEY_ENV}"\n')
         _ws_toml(workspace_dir, "")
         _run(workspace_dir)
         assert len(stub.requests) == 1                      # user-level enable works
-        assert make_ws(workspace_dir).config.picker.source.startswith("user config ")
+        assert make_ws(workspace_dir).config.picker.source == str(path)
         # the workspace cannot redirect it
         _ws_toml(workspace_dir, f'endpoint = "{other.url}"\nmax_candidates = 2\n')
         _run(workspace_dir)
@@ -420,15 +429,87 @@ def test_user_level_config_enables_and_the_workspace_can_only_disable_or_lower(
         other.close()
 
 
-def test_doctor_names_the_effective_mode_and_its_source(state_home, workspace_dir, monkeypatch):
+def test_doctor_names_the_effective_mode_its_file_and_what_was_ignored(
+        state_home, workspace_dir, monkeypatch):
     from ctx.installer import doctor_checks
 
-    monkeypatch.setenv("CTX_PICKER_MODE", "shadow")
+    path = _user_file('[picker]\nmode = "shadow"\n')
     checks = {name: detail for name, _ok, detail in doctor_checks(make_ws(workspace_dir))}
-    assert checks["evidence-map picker"].startswith("mode=shadow (from environment CTX_PICKER_MODE)")
-    monkeypatch.delenv("CTX_PICKER_MODE")
+    assert checks["evidence-map picker"].startswith(f"mode=shadow (from {path})")
+    monkeypatch.setenv("CTX_PICKER_ENDPOINT", "https://elsewhere.example/x")
+    checks = {name: detail for name, _ok, detail in doctor_checks(make_ws(workspace_dir))}
+    assert "ignored: CTX_PICKER_ENDPOINT" in checks["evidence-map picker"]
+    path.unlink()
+    monkeypatch.delenv("CTX_PICKER_ENDPOINT")
     checks = {name: detail for name, _ok, detail in doctor_checks(make_ws(workspace_dir))}
     assert checks["evidence-map picker"] == "mode=local (from default)"
+
+
+def test_the_environment_cannot_enable_the_picker_only_disable_or_lower(
+        state_home, workspace_dir, stub, monkeypatch):
+    monkeypatch.setenv(KEY_ENV, KEY)
+    for k, v in (("MODE", "model"), ("ENDPOINT", stub.url), ("API_KEY_ENV", KEY_ENV),
+                 ("MODEL", "x")):
+        monkeypatch.setenv(f"CTX_PICKER_{k}", v)
+    _run(workspace_dir)
+    assert stub.requests == []
+    fails = [f for f in _failures(workspace_dir) if f["op"] == "config"]
+    assert len(fails) == 1 and "CTX_PICKER_ENDPOINT" in fails[0]["detail"]
+    for k in ("MODE", "ENDPOINT", "API_KEY_ENV", "MODEL"):
+        monkeypatch.delenv(f"CTX_PICKER_{k}")
+    _config(workspace_dir, "model", stub.url)
+    monkeypatch.setenv("CTX_PICKER_MAX_CANDIDATES", "2")
+    _run(workspace_dir)
+    assert len(stub.requests) == 1 and len(stub.requests[0]["doc"]["questions"]) <= 2
+    monkeypatch.setenv("CTX_PICKER_MODE", "local")             # the kill switch
+    _run(workspace_dir)
+    assert len(stub.requests) == 1
+
+
+def test_home_and_xdg_variables_do_not_locate_an_enabling_file(
+        state_home, workspace_dir, stub, monkeypatch, tmp_path):
+    monkeypatch.setenv(KEY_ENV, KEY)
+    for base, sub in ((tmp_path / "fakehome", ".config/ctx"), (tmp_path / "fakexdg", "ctx")):
+        d = base / sub
+        d.mkdir(parents=True)
+        (d / "config.toml").write_text(
+            f'[picker]\nmode = "model"\nendpoint = "{stub.url}"\napi_key_env = "{KEY_ENV}"\n',
+            encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "fakexdg"))
+    _run(workspace_dir)
+    assert stub.requests == []
+
+
+def test_the_account_home_lookup_ignores_HOME(monkeypatch, tmp_path):
+    import ctx.config as cfg
+
+    monkeypatch.undo()                     # the real lookup, not the fixture's
+    real = cfg.account_home()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert cfg.account_home() == real and real != str(tmp_path)
+
+
+def test_a_key_variable_outside_the_fixed_list_is_refused(state_home, workspace_dir, stub,
+                                                          monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "should-never-leave")
+    _user_file(f'[picker]\nmode = "model"\nendpoint = "{stub.url}"\napi_key_env = "GITHUB_TOKEN"\n')
+    _run(workspace_dir)
+    assert stub.requests == []
+    pol = make_ws(workspace_dir).config.picker
+    assert pol.mode == "local" and any("api_key_env must be one of" in n for n in pol.notes)
+    assert any("api_key_env must be one of" in f["detail"] for f in _failures(workspace_dir))
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX permissions")
+def test_a_group_or_world_writable_user_file_is_ignored(state_home, workspace_dir, stub,
+                                                        monkeypatch):
+    monkeypatch.setenv(KEY_ENV, KEY)
+    f = _user_file(f'[picker]\nmode = "model"\nendpoint = "{stub.url}"\napi_key_env = "{KEY_ENV}"\n')
+    f.chmod(0o666)
+    _run(workspace_dir)
+    assert stub.requests == []
+    assert any("writable by group or others" in x["detail"] for x in _failures(workspace_dir))
 
 
 # ---------------------------------------------------------------- transport guards
