@@ -1,0 +1,27 @@
+[ctx run:8956c843e556 profile=logtemplate/v1]
+cwd: .
+command: cat corpus.log
+exit: 0
+stdout: 20,001 lines · 979.1 KiB · est 250,648 tokens
+stderr: 0 lines · 0 B
+templates: 11 cover 20,001/20,001 lines · top 10 shown (20,000 lines)
+  2,608× L6: INFO worker-<*> request req-<*> enqueued in <*> · span 0f44195122
+  2,545× L11: INFO worker-<*> request req-<*> validated in <*> · span 432ba740c9
+  2,508× L2: INFO worker-<*> request req-<*> accepted in <*> · span 02398680c8
+  2,493× L5: INFO worker-<*> request req-<*> dispatched in <*> · span 0ee5d290df
+  2,485× L1: INFO worker-<*> request req-<*> processed in <*> · span 293a8c7444
+  2,463× L7: INFO worker-<*> request req-<*> forwarded in <*> · span 6ec949596b
+  2,461× L18: INFO worker-<*> request req-<*> cached in <*> · span 5e48f87a56
+  2,435× L21: INFO worker-<*> request req-<*> completed in <*> · span 0ae8019381
+  1× L5000: ERROR db-pool connection refused on shard <*> (attempt <*>)
+  1× L14238: INFO worker-<*> checkout request req-<*> fell back to legacy gateway after circuit opened
+exceptional:
+  L5000: ERROR db-pool connection refused on shard 7 (attempt 3)
+  L17650: ERROR cache eviction storm: 4128 keys dropped in 200ms window
+  L14238: INFO worker-14 checkout request req-14237 fell back to legacy gateway after circuit opened
+coverage:
+  parsed: 20,001/20,001 lines
+  shown: 13 spans · omitted: 19,988 lines
+next:
+  ctx search run:8956c843e556 'ERROR' --context 3
+  ctx get run:8956c843e556#stdout --lines 5000:5003

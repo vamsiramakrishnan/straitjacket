@@ -535,13 +535,14 @@ def _size(rows: list[str]) -> int:
 
 def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDING",
            order: list[int] | None = None, labels: dict[int, str] | None = None,
-           k: int = EXPAND_K) -> Rendered:
+           k: int = EXPAND_K, above: set[int] | None = None) -> Rendered:
     """The map's digest lines. ``order`` is the expansion order (indices into
     ``emap.messages``; default the local order); ``labels`` names who picked
     each expanded message. The list is always in the local order, whoever
     chose the excerpts, and excerpts never push a message off it."""
     msgs = emap.messages
-    order = list(range(len(msgs))) if order is None else list(order)
+    above = set(above or ())
+    order = [i for i in (range(len(msgs)) if order is None else order) if i not in above]
     labels = labels or {}
     fired: set[str] = set()
     cap = max(200, int(cap_bytes))
@@ -585,7 +586,7 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
         out: list[str] = []
         for stream, a, b, members in wins:
             for i, m in enumerate(msgs):
-                if m.count == 1 and m.stream == stream and a <= m.first <= b:
+                if m.count == 1 and m.stream == stream and a <= m.first <= b and i not in above:
                     shown.add(i)
             head = f"  {stream} L{a}-L{b}"
             cmds: list[str] = []
@@ -613,7 +614,7 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
         return out, shown, len(wins), sum(w[2] - w[1] + 1 for w in wins)
 
     # 1. the list first: as many rows as fit, rare first
-    base_listed, _ = fit_rows(set(), cap)
+    base_listed, _ = fit_rows(set(above), cap)
     base_set = set(base_listed)
     # 2. excerpts with what is left, never dropping a row from (1)
     block: list[str] = []
@@ -629,7 +630,7 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
             room = cap - _size(blk)
             if room < 0:
                 continue
-            lst, _ = fit_rows(shw, room)
+            lst, _ = fit_rows(shw | above, room)
             if (base_set - shw) <= set(lst):
                 block, shown, listed, windows, excerpt_n, picks = blk, shw, lst, nw, nl, cand
                 done = True
@@ -638,7 +639,7 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
             break
 
     total = len(msgs)
-    unlisted = total - len(shown) - len(listed)
+    unlisted = total - len(above) - len(shown) - len(listed)
     if emap.partial:
         spans = [f"{s} lines {emap.first_line}-{p + emap.first_line - 1} of {fmt_int(t)}"
                  for s, (p, t) in sorted(emap.parsed.items())]
@@ -647,7 +648,9 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
         scope = ""
     out = [
         f"{ACCOUNT_PREFIX}{scope}): {fmt_int(emap.signal_lines)} error-like lines · "
-        f"{fmt_int(total)} distinct messages · {fmt_int(len(shown))} shown with context · "
+        f"{fmt_int(total)} distinct messages · "
+        + (f"{fmt_int(len(above))} shown above ({_above_refs(emap, above)}) · " if above else "")
+        + f"{fmt_int(len(shown))} shown with context · "
         f"{fmt_int(len(listed))} listed · {fmt_int(unlisted)} not listed",
     ]
     if block:
@@ -707,7 +710,50 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
 
 
 # ---------------------------------------------------------------- profiles
-def section(ctx: Any) -> tuple[list[str], list[str], Rendered] | None:
+_BODY_LINE_RE = re.compile(r"(?:^|\s)(?:(stdout|stderr):)?L(\d+): (.*)$")
+
+
+def _message_lines_of(m: Message) -> list[int]:
+    """The line numbers of a message's occurrences when they are known from
+    the map alone (it occurs at most twice: first and last)."""
+    if m.count == 1:
+        return [m.first]
+    if m.count == 2:
+        return [m.first, m.last]
+    return []
+
+
+def shown_above(emap: EvidenceMap, body: list[str] | None) -> set[int]:
+    """Indices of messages whose every line the profile body already prints
+    verbatim, with its real line number (``L<n>: <the line>``, same stream).
+    Such a message gets no excerpt and no list row: the map adds only what
+    the body does not show."""
+    if not body:
+        return set()
+    seen: dict[tuple[str, int], str] = {}
+    for ln in body:
+        m = _BODY_LINE_RE.search(ln)
+        if m:
+            seen[(m.group(1) or "stdout", int(m.group(2)))] = m.group(3).strip()
+    out = set()
+    if not seen:
+        return out
+    for i, msg in enumerate(emap.messages):
+        nums = _message_lines_of(msg)
+        if nums and all(seen.get((msg.stream, n)) == line_of(emap, msg.stream, n).strip()
+                        for n in nums):
+            out.add(i)
+    return out
+
+
+def _above_refs(emap: EvidenceMap, above: set[int]) -> str:
+    refs = sorted({(emap.messages[i].stream, n) for i in above
+                   for n in _message_lines_of(emap.messages[i])}, key=lambda t: (t[0], t[1]))
+    return ", ".join(_loc(st, n) for st, n in refs)
+
+
+def section(ctx: Any, above_body: list[str] | None = None
+            ) -> tuple[list[str], list[str], Rendered] | None:
     """The evidence map for a profile's digest: (lines, next-step
     suggestions, render), or None when the whole output fits inline (the
     profile can show everything) or no line is a signal line. Runs the
@@ -722,6 +768,11 @@ def section(ctx: Any) -> tuple[list[str], list[str], Rendered] | None:
     emap = build(ctx)
     if emap is None:
         return None
+    above = shown_above(emap, above_body)
+    if len(above) == len(emap.messages):
+        # Every error-like line is already printed verbatim by the profile
+        # body: the map would add nothing, so it adds no bytes either.
+        return None
     order = labels = None
     picker = getattr(ctx, "picker", None)
     if picker is not None:
@@ -729,7 +780,7 @@ def section(ctx: Any) -> tuple[list[str], list[str], Rendered] | None:
             order, labels = picker.choose(emap, EXPAND_K)
         except Exception:  # noqa: BLE001 -- the local map is always the fallback
             order = labels = None
-    r = render(ctx, emap, cap_bytes=map_cap(budgets), order=order, labels=labels)
+    r = render(ctx, emap, cap_bytes=map_cap(budgets), order=order, labels=labels, above=above)
     fired = getattr(ctx, "evmap_fired", None)
     if isinstance(fired, set):
         fired.update(r.fired)
@@ -761,6 +812,7 @@ def budget_tokens(ws: Any, digest: str) -> int:
 # ---------------------------------------------------------------- delivery
 _ACCOUNT_RE = re.compile(
     r"^evidence map \(exact[^)]*\): [\d,]+ error-like lines · ([\d,]+) distinct messages · "
+    r"(?:([\d,]+) shown above \(([^)]*)\) · )?"
     r"([\d,]+) shown with context · ([\d,]+) listed · ([\d,]+) not listed$")
 
 
@@ -789,9 +841,22 @@ def map_supported(text: str) -> bool:
     m = _ACCOUNT_RE.match(lines[a])
     if not m:
         return False
-    total, shown, listed, unlisted = (int(g.replace(",", "")) for g in m.groups())
-    if shown + listed + unlisted != total:
+    total, above_n, refs, shown, listed, unlisted = m.groups()
+    total, shown, listed, unlisted = (int(g.replace(",", "")) for g in (total, shown, listed, unlisted))
+    above_n = int(above_n.replace(",", "")) if above_n else 0
+    if above_n + shown + listed + unlisted != total:
         return False
+    if refs:
+        # "shown above" is true only if those lines are really above the map
+        pre = lines[:a]
+        for ref in refs.split(", "):
+            mm = re.fullmatch(r"(?:(stdout|stderr):)?L(\d+)", ref.strip())
+            if not mm:
+                return False
+            st, n = mm.group(1) or "stdout", mm.group(2)
+            pat = re.compile(rf"(?:^|\s){'(?:stdout:)?' if st == 'stdout' else st + ':'}L{n}: ")
+            if not any(pat.search(ln) for ln in pre):
+                return False
     body = lines[a + 1:b]
     rows = sum(1 for ln in body if ln.startswith("    ×"))
     closing = any(ln.startswith("  every error-like line is ") for ln in body)

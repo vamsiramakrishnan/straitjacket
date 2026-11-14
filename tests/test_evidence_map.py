@@ -327,7 +327,7 @@ def test_partial_parse_never_claims_the_whole(state_home, workspace_dir, monkeyp
     from ctx.retrieval import Selector, get
 
     monkeypatch.setattr(base, "MAX_PARSE_BYTES", 30_000)
-    rows = [f"INFO line {i} " + "x" * 40 for i in range(2000)]
+    rows = [f"line {i} " + "x" * 40 for i in range(2000)]
     rows[10] = "ERROR early thing failed"
     rows[-1] = "FATAL: the real cause at the very end"
     digest, rid, ws, store = _digest(workspace_dir, _log(rows))
@@ -350,7 +350,7 @@ def test_partial_parse_never_claims_the_whole(state_home, workspace_dir, monkeyp
 def test_unlisted_messages_have_a_command_that_lists_them(state_home, workspace_dir):
     from ctx.retrieval import Selector, get
 
-    rows = [f"INFO request {i} handled" for i in range(1500)]
+    rows = [f"request {i} handled" for i in range(1500)]
     names = [f"unit{c}{d}" for c in "abcdefghijklmnopqrst" for d in "xyz"]
     for j, name in enumerate(names):
         rows[10 + j * 20] = f"ERROR {name.replace('unit', 'unit-')} crashed hard, giving up now"
@@ -387,7 +387,7 @@ def test_long_lines_are_windowed_on_the_signal_and_every_cut_is_marked():
 # ---------------------------------------------------------------- redaction, cap
 def test_secret_inside_a_sample_line_is_masked(state_home, workspace_dir):
     token = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
-    rows = [f"INFO line {i} " + "x" * 40 for i in range(300)]
+    rows = [f"line {i} " + "x" * 40 for i in range(300)]
     rows[150] = f"ERROR auth failed for token={token} retrying"
     rows[151] = "INFO dsn postgres://admin:SuperSecretPw99@db.internal/app"
     digest, _, _, _ = _digest(workspace_dir, _log(rows))
@@ -650,3 +650,79 @@ def test_line_listing_pages_from_where_the_last_page_ended(state_home, workspace
 def test_a_quoted_string_with_escaped_quotes_is_one_value():
     assert E.skeleton(r'ERROR msg="quota \"exceeded\" 3" code 3')[1] == \
         (r'msg="quota \"exceeded\" 3"', "3")
+
+
+# ---------------------------------------------------------------- round 5: only what the body does not show
+def test_field_needle_digest_is_byte_identical_to_main():
+    """The headline record (evals/field-needle-record.json): its logtemplate
+    body already prints every error-like line verbatim under `exceptional:`,
+    so the map adds nothing and the digest is exactly main's."""
+    import os
+    import subprocess
+    import sys
+    import tempfile
+
+    from evals.field_needle import build_corpus
+
+    root = Path(__file__).resolve().parent.parent
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "corpus.log").write_text(build_corpus(), encoding="utf-8")
+        env = dict(os.environ, PYTHONPATH=str(root / "src"), CTX_STATE_HOME=td + "/st")
+        p = subprocess.run([sys.executable, "-m", "ctx", "run", "--shell", "cat corpus.log"],
+                           cwd=td, env=env, capture_output=True, text=True, timeout=300)
+    got = re.sub(r"run:[0-9a-f]{12}", "run:8956c843e556", p.stdout)
+    want = (FIX.parent / "field_needle_main_digest.txt").read_text(encoding="utf-8")
+    assert got == want
+
+
+def _partly_shown_log():
+    rows = [f"2025-01-01 INFO request {i} handled ok" for i in range(3000)]
+    words = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi".split()
+    for j, w in enumerate(words):
+        rows[100 + j * 170] = f"2025-01-01 ERROR subsystem {w} failed to start"
+    return rows
+
+
+def test_a_body_that_shows_some_lines_gets_the_split_accounting_and_no_duplicate(
+        state_home, workspace_dir):
+    rows = _partly_shown_log()
+    digest, _, _, _ = _digest(workspace_dir, _log(rows))
+    assert "profile=logtemplate/v1" in digest
+    head = next(ln for ln in digest.splitlines() if ln.startswith("evidence map"))
+    m = re.match(r"evidence map \(exact\): 16 error-like lines · 16 distinct messages · "
+                 r"(\d+) shown above \(([^)]*)\) · (\d+) shown with context · (\d+) listed · "
+                 r"(\d+) not listed$", head)
+    assert m, head
+    above, refs, shown, listed, unlisted = int(m[1]), m[2], int(m[3]), int(m[4]), int(m[5])
+    assert above + shown + listed + unlisted == 16 and above >= 1 and shown + listed >= 1
+    assert E.map_supported(digest)
+    # no line is printed twice: a "shown above" line gets no excerpt and no row
+    lines, a, b = E.map_section(digest)
+    section = "\n".join(lines[a + 1:b])
+    for ref in refs.split(", "):
+        n = ref.removeprefix("L")
+        assert f"L{n}: " not in section, ref                    # no excerpt line
+        assert not re.search(rf"^    ×1  L{n}  ", section, re.M)  # no list row
+        assert f"\n  L{n}: " in "\n".join(lines[:a])           # it is in the body
+
+
+def test_a_clip_that_removes_a_shown_above_line_never_leaves_the_claim(state_home, workspace_dir):
+    digest, _, _, _ = _digest(workspace_dir, _log(_partly_shown_log()))
+    assert "shown above" in digest
+    for tokens in range(30, 1300, 17):
+        out = E.deliver(digest, tokens)
+        assert E.map_supported(out), (tokens, out)
+        if "shown above (" in out:
+            refs = re.search(r"shown above \(([^)]*)\)", out).group(1)
+            pre = out.split("\nevidence map")[0]
+            for ref in refs.split(", "):
+                assert f"{ref}: " in pre
+
+
+def test_map_supported_rejects_a_shown_above_line_that_is_not_there():
+    text = ("[ctx run:abc profile=x]\n  L5: ERROR boom\n"
+            "evidence map (exact): 2 error-like lines · 2 distinct messages · 1 shown above (L9) · "
+            "1 shown with context · 0 listed · 0 not listed\n"
+            "  every error-like line is one of these 2 messages.")
+    assert not E.map_supported(text)
+    assert E.map_supported(text.replace("(L9)", "(L5)"))

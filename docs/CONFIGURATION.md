@@ -121,6 +121,13 @@ The map then states, exactly:
 evidence map (exact): 686 error-like lines · 6 distinct messages · 3 shown with context · 3 listed · 0 not listed
 ```
 
+The map adds only what the profile body above it does not already show. A
+message whose lines the body prints verbatim with their real line numbers
+(`logtemplate/v1`'s `exceptional:` section does this for rare lines) gets no
+excerpt and no row; the accounting counts it as `N shown above (L…)`, and the
+delivered text is checked to really contain those lines. When the body shows
+every error-like line the digest has no map at all.
+
 Space is spent on the list first: one row per message (`×count  first L…
 last L…  sample`), rarest first, as many as the cap holds. The top three
 messages are then shown as excerpts (verbatim except control characters, two

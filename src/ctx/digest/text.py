@@ -268,7 +268,7 @@ class TextProfile(Profile):
                     + self.next_lines(ctx, suggestions)
                 )
             spans = []
-        emap = None if (spans or binary) else self.evidence_map(ctx)
+        emap = None if (spans or binary) else self.evidence_map(ctx, above=lines + summary)
         if emap is not None:
             # Every error-like line accounted for: excerpts, a list, and the
             # exact count of what is in neither (ctx.digest.evidence_map).

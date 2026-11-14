@@ -579,7 +579,7 @@ class BuildProfile(Profile):
                 summary.append(f"    {path}  {n}")
                 shown += 1
         rid = "run:PENDING"
-        emap = self.evidence_map(ctx)
+        emap = self.evidence_map(ctx, above=summary)
         if emap is not None:
             map_lines, map_next, r = emap
             total = ctx.stdout.lines + ctx.stderr.lines

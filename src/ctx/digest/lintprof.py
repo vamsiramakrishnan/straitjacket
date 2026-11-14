@@ -179,7 +179,7 @@ class LintProfile(Profile):
             f"ctx get {rid}#{first_stream} --lines {first_line}:{end}",
         ]
         shown = 1
-        emap = self.evidence_map(ctx)
+        emap = self.evidence_map(ctx, above=body)
         if emap is not None:
             # The map accounts for every error-like line; its next steps
             # follow from it. The first-diagnostic slice stays for repair.

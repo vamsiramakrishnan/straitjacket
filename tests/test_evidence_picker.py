@@ -85,7 +85,9 @@ def stub():
 
 
 def _log() -> str:
-    rows = [f"2025-01-01 10:{i // 60 % 60:02d}:{i % 60:02d} INFO step {i} ok " + "p" * 30
+    # plain step lines (no level word, no timestamp): the text/v1 profile, whose
+    # body does not print the error lines, so the map (and the picker) runs
+    rows = [f"step {i} ok " + "p" * 30
             for i in range(600)]
     rows[100] = "2025-01-01 10:01:40 FATAL alpha crashed"
     rows[250] = "2025-01-01 10:04:10 FATAL beta crashed"

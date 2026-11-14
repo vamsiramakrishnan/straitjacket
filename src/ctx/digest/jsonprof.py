@@ -181,7 +181,7 @@ class JsonLinesProfile(Profile):
             f"ctx search {rid} '<pattern>' --context 1",
             f"ctx get {rid}#stdout --records 1:20",
         ]
-        emap = self.evidence_map(ctx)
+        emap = self.evidence_map(ctx, above=summary)
         if emap is not None:
             map_lines, map_next, r = emap
             total = ctx.stdout.lines + ctx.stderr.lines

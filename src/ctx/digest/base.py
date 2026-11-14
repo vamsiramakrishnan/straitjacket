@@ -317,12 +317,15 @@ class Profile:
         lines.append(f"  shown: {shown_spans} spans · omitted: {fmt_int(omitted_n)} lines")
         return lines
 
-    def evidence_map(self, ctx: DigestContext):
+    def evidence_map(self, ctx: DigestContext, above: list[str] | None = None):
         """``(lines, suggestions, render)`` of the shared evidence map
-        (:func:`ctx.digest.evidence_map.section`), or None."""
+        (:func:`ctx.digest.evidence_map.section`), or None. ``above`` is the
+        profile body delivered before it: a message whose lines it already
+        prints verbatim gets nothing more, and a map with nothing left to add
+        is not emitted at all."""
         from ctx.digest.evidence_map import section
 
-        return section(ctx)
+        return section(ctx, above)
 
     def next_lines(self, ctx: DigestContext, suggestions: list[str]) -> list[str]:
         # Graduated engagement (mechanism C): a passive session gets zero
