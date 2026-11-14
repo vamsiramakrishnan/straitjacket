@@ -508,13 +508,23 @@ def test_text_reader_keeps_every_existing_protection(tmp_path):
     "sort -S 1k --compress-program=./ev.sh big", "sort --compress=./ev.sh big",
     "sort --co=./ev.sh big", "sort --files0-from=list", "sort --fi=list",
     "./sort f", "subdir/cut f", "LD_PRELOAD=./x.so sort f", "env LC_ALL=C sort f",
-    "cut -c1 /proc/1/environ", "base64 /dev/urandom", "fold -w1 /dev/zero", "sort /dev/zero",
     "seq inf", "seq 1 1000000000", "seq -f %g 5", "seq 0 0 5", "seq a b",
 ])
 def test_readers_that_write_run_or_read_outside_are_unknown(tmp_path, cmd):
     d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
     assert d["decision"] == "force_ask" and "unknown output bound" in d["reason"], (cmd, d)
     assert "rewrite" not in d
+
+
+@pytest.mark.parametrize("cmd", ["cut -c1 /proc/1/environ", "base64 /dev/urandom",
+                                 "fold -w1 /dev/zero", "sort /dev/zero"])
+def test_reader_on_a_device_gets_the_read_guards_outside_ask(tmp_path, cmd):
+    # A device or kernel view is outside the workspace: the Read tool asks
+    # about it, so a reader of it asks the same way (a safety ask, kept on
+    # every host), never an unknown-command or volume answer.
+    d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
+    assert d["decision"] == "force_ask" and "rewrite" not in d, (cmd, d)
+    assert d["reason"].startswith("CTX_CONTEXT_GUARD: path resolves outside"), d
 
 
 @pytest.mark.parametrize("cmd", ["sort ~/.netrc", "sort ../../x", "cut -f1 /etc/passwd",
@@ -606,18 +616,29 @@ def test_seq_with_only_equal_width_is_still_sized(tmp_path):
 #: plain pipeline part, vouched like the other text readers (review round 1,
 #: item 11): main asked, this tree captures.
 MAIN_META_VERDICTS = {
-    "sort < data/sales.csv": "captured", "sort < /etc/passwd": "captured",
+    "sort < data/sales.csv": "captured",
     "sort data/sales.csv > out.txt": "captured", "sort data/sales.csv > out.txt 2>&1": "allow",
-    "sort $HOME/x": "captured", "sort {a,/etc/passwd}": "captured",
-    "sort $(echo data/sales.csv)": "captured", "sort `echo data/sales.csv`": "captured",
+
     "nl data/sales.csv && echo ok": "captured", "nl data/sales.csv; echo ok": "captured",
     "cat data/sales.csv | sort": "captured", "sort data/sales.csv | head -3": "captured",
     "cut -d, -f1 data/sales.csv | uniq -c": "captured", "seq 1 5 | paste -sd+": "captured",
-    "sort -u data/sales.csv | wc -l": "captured", 'fold -w 5 "$F"': "captured",
+    "sort -u data/sales.csv | wc -l": "captured",
     "comm <(sort a) <(sort b)": "captured", "expand data/sales.csv | rev": "captured",
 }
 DELIBERATE = {"base64 data/sales.csv | head -3": ("force_ask", "captured"),
-              "echo x | base64": ("force_ask", "captured")}
+              "echo x | base64": ("force_ask", "captured"),
+              # The Read rule for shell readers: an input redirected from a
+              # file outside the workspace is a read of that file (the Read
+              # tool asks), and an operand that is not a literal path cannot
+              # be judged, so it is the unknown-command policy's, not a capture.
+              "sort < /etc/passwd": ("captured", "force_ask"),
+              "sort $HOME/x": ("captured", "force_ask"),
+              'fold -w 5 "$F"': ("captured", "force_ask"),
+              # a brace alternative outside the workspace is a read of it
+              "sort {a,/etc/passwd}": ("captured", "force_ask"),
+              # a command substitution names the file: not a literal path
+              "sort $(echo data/sales.csv)": ("captured", "force_ask"),
+              "sort `echo data/sales.csv`": ("captured", "force_ask")}
 
 
 @pytest.mark.parametrize("cmd", list(MAIN_META_VERDICTS) + list(DELIBERATE))

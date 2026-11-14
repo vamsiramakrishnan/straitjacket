@@ -209,6 +209,22 @@ outside the workspace root. **Fix:** confirm the prompt, pass `--workspace` to
 widen the root, or set `[workspace] allow_outside_root = true` if this is
 routine for your setup.
 
+**One rule for every read.** A file gets the same decision whether it is read with
+the Read tool or with a shell reader (`cat`, `tac`, `head`, `tail`, `less`, `more`,
+`grep`/`rg`, `awk`, `sed`, `strings`, `xxd`, `od`, `sort`, `cut`, `nl` and the other
+read-only text tools): a secret-bearing path, a path outside the workspace once links
+and `..` are resolved (`/etc/hosts`, `~/notes.txt`, `/tmp/x.log`, a link that points
+out, `/dev/zero`, `/proc/…`, `/dev/stdin`) and, inside the workspace, anything that is
+not a regular file or a directory (a FIFO, a device) is asked about on Claude Code and
+Antigravity and denied on Codex, which has no ask, and is never captured; any other
+file keeps the reader's usual decision (captured, or run as typed). Every file the
+command opens is judged: each operand, a `-f` script or pattern file, an input
+redirect, each alternative of a brace expression. `sudo` and `doas` never change the
+decision, and under them a path the caller cannot even inspect counts as outside. An
+operand that is not a literal path (`$VAR`, a command substitution) cannot be judged,
+so the unknown-command policy decides it, never a silent capture. The one exception
+is the Read tool's own carve-out for Antigravity's MCP schema files.
+
 ### "unknown output bound for '`<prog>`'"
 
 **Cause:** under `guarded` mode, a command the classifier doesn't recognize is
@@ -222,10 +238,11 @@ Common read-only text tools (`nl`, `sort`, `cut`, `base64`, …) run on their ow
 captured like `cat` when they read workspace files. They still reach this prompt when
 they write a file or run a program (`sort -o`/`--out`, `uniq IN OUT`, `sort
 --compress-program`, `sort -T`), take operands from a file, are not the real tool
-(`./sort`, an environment prefix), name an input ctx cannot see before it runs (a glob
-or `~user`), or read outside the workspace or a device, symbolic links followed. A
-command with shell metacharacters (`<`, `$`, braces, pipes) keeps the verdict it had
-before these tools were named. `seq` without options is sized by its arguments: up to 400 lines it runs as
+(`./sort`, an environment prefix), or name an input ctx cannot see before it runs (a
+glob, `~user`, `$VAR`, a command substitution). A read outside the workspace or of a
+device gets the Read tool's answer instead (see "path resolves outside the active
+workspace" above). Otherwise a command with shell metacharacters (`<`, braces, pipes)
+keeps the verdict it had before these tools were named. `seq` without options is sized by its arguments: up to 400 lines it runs as
 is, up to a million it is captured, otherwise it asks.
 See [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 

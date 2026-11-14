@@ -6,6 +6,15 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- Shell readers (`cat`, `head`, `tail`, `less`, `more`, `grep`, `awk`, `sed`, `sort`, `cut`
+  and the other read-only text tools) now get the Read tool's decision for the files they
+  open: a path outside the workspace (links and `..` resolved; devices, `/proc`,
+  `/dev/stdin`), a FIFO or device inside it, or a secret path asks on Claude Code and
+  Antigravity and is denied on Codex, under `sudo`/`doas` too, and is never captured. They
+  used to be captured or run as typed (`sudo cat /etc/shadow` was captured with no
+  question). A workspace file, a pipeline and a redirect keep their decision. An operand
+  that is not a literal path (`$VAR`, a command substitution) is never captured. On
+  Claude Code and Codex the command's working directory now resolves relative paths.
 - `ctx run` (and background jobs) store at most `[store] max_capture_bytes` (64 MiB)
   of a command's output: each stream keeps its head and tail, the middle is dropped and
   counted exactly, and the `capped/v1` digest says `captured X of Y bytes`. Retrieval

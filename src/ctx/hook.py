@@ -2025,8 +2025,22 @@ def _compound_verdict(
                    _part_program(seg))
             seen[seg] = hit
         d, part = hit
-        decisions.append(d)
         prog, argv = part if part is not None else ("", [])
+        if (prog in _FILE_READERS and ("$(" in stripped or "`" in stripped)
+                and "_" in _reader_operands(prog, argv)):
+            # The splitter stands a command substitution in as `_`: the file
+            # this reader opens is whatever the substitution prints, which
+            # cannot be judged as a path (the Read rule's "not literal").
+            d = _unknown_command(prog, argv, policy, seg, True)
+            if d.get("decision") != "allow":
+                d["_not_literal"] = "1"
+        if d.get("_not_literal"):
+            # A reader of a path that is not literal is hard even where the
+            # program is an inert filter (`cat`, `sort`) in a pipeline.
+            decisions.append(d)
+            hard.append((seg, d))
+            continue
+        decisions.append(d)
         if d.get("_safety"):
             return d  # a rule the repo committed, a secret, an escape: as is
         if part is None:
@@ -2122,6 +2136,9 @@ def _classify_command_inner(
                     inner = []
                 if _names_secret_path(inner, cwd):
                     return _secret_path_force_ask()
+                reader = _reader_door(_unwrap(inner), cwd, policy, inner)
+                if reader is not None:
+                    return reader
                 escape = _container_escape(inner, cwd)
                 if escape is not None:
                     return _container_escape_force_ask(escape)
@@ -2164,6 +2181,9 @@ def _classify_command_inner(
         inner = _ctx_run_inner(argv)
         if _names_secret_path(inner, cwd):
             return _secret_path_force_ask()
+        reader = _reader_door(_unwrap(inner), cwd, policy, inner)
+        if reader is not None:
+            return reader
         escape = _container_escape(inner, cwd)
         if escape is not None:
             return _container_escape_force_ask(escape)
@@ -2192,6 +2212,22 @@ def _classify_command_inner(
     # the bare WORD "secrets", which is a sentence, not a file.
     if _names_secret_path(argv, cwd):
         return _secret_path_force_ask()
+    # A reader (cat, head, grep, sed, sort, ...) gets the Read tool's decision
+    # for the files it opens: outside the workspace (links resolved), a
+    # device, a FIFO or a secret asks on every host, as a Read would. Under
+    # sudo/doas too: a wrapper never makes the decision looser.
+    # An operand that is not a literal path ($VAR, a substitution) cannot be
+    # judged: the unknown-command policy decides, never a silent capture.
+    if prog in _FILE_READERS:
+        verdict = _reader_path_verdict(prog, argv, cwd, policy.get("_ws_root"),
+                                       elevated=_elevated(raw_argv, argv))
+        if verdict == "unknown":
+            unknown = _unknown_command(prog, argv, policy, stripped, has_meta)
+            if unknown.get("decision") != "allow":
+                unknown["_not_literal"] = "1"  # never inert in a pipeline
+            return unknown
+        if verdict:
+            return _reader_force_ask(verdict)
     escape = _container_escape(argv, cwd)
     if escape is not None:
         return _container_escape_force_ask(escape)
@@ -2440,7 +2476,7 @@ def _text_reader_writes(prog: str, argv: list[str]) -> bool:
 
 
 #: Paths that are never workspace files: devices and kernel views. Reading
-#: one may never end (`/dev/zero`), and `ctx run` has no capture cap.
+#: one may never end (`/dev/zero`); `ctx run` stores at most its cap of it.
 _NOT_FILES = ("/dev/", "/proc/", "/sys/")
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _NUMBER_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
@@ -2557,6 +2593,228 @@ def _operands_resolve(argv: list[str], cwd: str | None, root: str | None) -> str
         if root and _path_outside(real, root):
             return "unknown"
     return "capture"
+
+
+#: The one rule for a file a tool or command is about to read (docs/
+#: TROUBLESHOOTING.md, "Reads outside the workspace"). The Read guard
+#: (classify_read) and every shell reader (_reader_path_verdict) ask it, so a
+#: file gets the same decision through either door.
+def _read_path_class(path_abs: str, root: str | None) -> str | None:
+    """``secret``, ``outside`` (resolved through links, devices and kernel
+    views included), ``not_file`` (a FIFO, socket or device inside the
+    workspace: reading one may never end) or None for an ordinary read."""
+    if _is_secret_path(path_abs, root):
+        return "secret"
+    if _path_outside(path_abs, root):
+        return "outside"
+    try:
+        st = os.stat(path_abs)
+    except (OSError, ValueError):
+        return None
+    import stat as _st
+
+    if not (_st.S_ISREG(st.st_mode) or _st.S_ISDIR(st.st_mode)):
+        return "not_file"
+    return None
+
+
+#: Shell programs that print what is in the files they are given. Their file
+#: operands are judged by _read_path_class, exactly as the Read tool judges
+#: the same file. Option letters that take a value, per program, so a value
+#: (``cut -d /``, ``head -n 5``) is not mistaken for a file.
+_READER_VALUE_OPTS = {
+    "cat": "", "tac": "s", "head": "nc", "tail": "ncs", "less": "bhjkoOpPtTxyz",
+    "more": "n", "grep": "ABCDdefm", "egrep": "ABCDdefm", "fgrep": "ABCDdefm",
+    "rg": "ABCEefgjMmrTt", "ag": "ABCGgm", "ack": "ABCgm",
+    "awk": "fvFEil", "gawk": "fvFEil", "mawk": "fvF", "nawk": "fvF",
+    "sed": "efl", "strings": "netT", "xxd": "lscgoC", "od": "AjNtSw", "hexdump": "nsef",
+    "nl": "bdfhilnsvw", "fold": "w", "fmt": "wpg", "column": "scoNRWHOEdlr", "paste": "d",
+    "comm": "", "seq": "sf", "sort": "ktoST", "cut": "bcdf", "uniq": "fsw", "base64": "w",
+    "rev": "", "expand": "t", "unexpand": "t",
+}
+_FILE_READERS = frozenset(_READER_VALUE_OPTS)
+#: Readers whose first operand is a pattern or program, not a file, unless
+#: one is given by option (-e/-f, --regexp/--expression/--file).
+_PATTERN_FIRST = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack",
+                            "awk", "gawk", "mawk", "nawk", "sed"})
+_READER_LONG_VALUES = frozenset({
+    "--lines", "--bytes", "--regexp", "--file", "--expression", "--max-count",
+    "--after-context", "--before-context", "--context", "--field-separator",
+    "--assign", "--key", "--delimiter", "--fields", "--characters", "--width",
+    "--separator", "--format", "--glob", "--type", "--type-not", "--sleep-interval",
+    "--pid", "--label", "--include", "--exclude", "--exclude-dir",
+})
+
+
+def _reader_operands(prog: str, argv: list[str]) -> list[str]:
+    """The files a reader invocation opens: its file operands, plus the
+    script file of ``-f``/``--file`` for the pattern-first tools."""
+    values = _READER_VALUE_OPTS.get(prog, "")
+    pattern_first = prog in _PATTERN_FIRST
+    files: list[str] = []
+    positional: list[str] = []
+    script_given = False
+    only = False
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if only or a == "-" or not a.startswith("-"):
+            positional.append(a)
+        elif a == "--":
+            only = True
+        elif a.startswith("--"):
+            name, eq, val = a.partition("=")
+            if name in ("--regexp", "--expression", "--file"):
+                script_given = True
+            if not eq and name in _READER_LONG_VALUES and i + 1 < len(argv):
+                i += 1
+                val = argv[i]
+            if name == "--file" and pattern_first and val:
+                files.append(val)
+        else:
+            for j, ch in enumerate(a[1:], start=1):
+                if ch in values:
+                    val = a[j + 1:]
+                    if not val and i + 1 < len(argv):
+                        i += 1
+                        val = argv[i]
+                    if pattern_first and ch in "ef":
+                        script_given = True
+                        if ch == "f" and val:
+                            files.append(val)
+                    break
+        i += 1
+    if pattern_first and not script_given and positional:
+        positional = positional[1:]
+    if prog in ("awk", "gawk", "mawk", "nawk"):
+        positional = [a for a in positional if not _ENV_ASSIGN_RE.match(a)]
+    return files + [a for a in positional if a != "-"]
+
+
+_READ_CLASS_RANK = {"secret": 3, "outside": 2, "not_file": 1}
+
+
+def _reader_path_verdict(prog: str, argv: list[str], cwd: str | None, root: str | None,
+                         *, elevated: bool = False) -> str | None:
+    """What the Read guard would decide for the files this reader opens:
+    the strictest :func:`_read_path_class` over them, ``unknown`` when an
+    operand is not a literal path (``$VAR``, a substitution), or None.
+    ``elevated`` (under sudo/doas): a path the caller cannot even stat is
+    judged as outside, since the elevated reader can open what the guard
+    could not resolve."""
+    base = cwd or root or os.getcwd()
+    worst: str | None = None
+    operands: list[str] = []
+    for a in _reader_operands(prog, argv):
+        alts = _brace_alternatives(a) if "{" in a else [a]
+        if alts is None or any("$" in x or "`" in x for x in alts):
+            worst = worst or "unknown"
+            continue
+        operands.extend(alts)
+    for a in operands:
+        p = os.path.expanduser(a)
+        if not os.path.isabs(p):
+            p = os.path.join(base, p)
+        cls = _read_path_class(p, root)
+        if cls is None and elevated:
+            try:
+                os.stat(p)
+            except PermissionError:
+                cls = "outside"
+            except OSError:
+                pass
+        if cls and _READ_CLASS_RANK[cls] > _READ_CLASS_RANK.get(worst or "", 0):
+            worst = cls
+    return worst
+
+
+def _brace_alternatives(word: str, limit: int = 64) -> list[str] | None:
+    """The words a brace expression stands for (``{a,/etc/x}`` -> ``a``,
+    ``/etc/x``), so each is judged as a path; None when it cannot be
+    expanded with confidence (a ``{1..9}`` range, unbalanced, too many)."""
+    out = [word]
+    for _ in range(8):
+        nxt: list[str] = []
+        changed = False
+        for w in out:
+            start = w.find("{")
+            depth, end, commas = 0, -1, []
+            for i in range(start, len(w)) if start != -1 else ():
+                ch = w[i]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+                elif ch == "," and depth == 1:
+                    commas.append(i)
+            if start == -1:
+                nxt.append(w)
+                continue
+            if end == -1:
+                return None
+            inner = w[start + 1:end]
+            if ".." in inner and not commas:
+                return None
+            if not commas:
+                nxt.append(w)  # `{}` or `{x}`: literal to the shell
+                continue
+            cuts = [start] + commas + [end]
+            for a, b in zip(cuts, cuts[1:]):
+                nxt.append(w[:start] + w[a + 1:b] + w[end + 1:])
+            changed = True
+        out = nxt
+        if len(out) > limit:
+            return None
+        if not changed:
+            # A comma left inside braces is a group this scan did not open
+            # (`{x}{a,/etc/x}`): not judged with confidence.
+            return None if any("{" in w and "," in w for w in out) else out
+    return None
+
+
+_OUTSIDE_READ_REASON = (
+    "CTX_CONTEXT_GUARD: path resolves outside the active workspace. "
+    "Confirm outside-root access explicitly or pass --workspace."
+)
+_NOT_FILE_READ_REASON = (
+    "CTX_CONTEXT_GUARD: path is not a regular file (a device, FIFO or socket); "
+    "reading it may never end. Confirm it explicitly."
+)
+
+
+def _reader_force_ask(verdict: str) -> dict[str, str] | None:
+    """The decision the Read guard gives a file of this class, as a shell
+    reader's decision: the same reason, kept on every host (safety class)."""
+    if verdict == "secret":
+        return _secret_path_force_ask()
+    if verdict in ("outside", "not_file"):
+        d = _force_ask(_OUTSIDE_READ_REASON if verdict == "outside" else _NOT_FILE_READ_REASON)
+        d["_safety"] = "1"
+        return d
+    return None
+
+
+def _reader_door(argv: list[str], cwd: str | None, policy: dict[str, Any],
+                 raw_argv: list[str] | None = None) -> dict[str, str] | None:
+    """The Read rule for one (unwrapped) command, or None when it does not
+    apply. ``raw_argv`` is the command before wrappers were stripped."""
+    if not argv:
+        return None
+    prog = os.path.basename(argv[0])
+    if prog not in _FILE_READERS:
+        return None
+    verdict = _reader_path_verdict(prog, argv, cwd, policy.get("_ws_root"),
+                                   elevated=_elevated(raw_argv or argv, argv))
+    return _reader_force_ask(verdict) if verdict else None
+
+
+def _elevated(raw_argv: list[str], argv: list[str]) -> bool:
+    """Was ``argv`` unwrapped from under sudo or doas?"""
+    return any(os.path.basename(t) in ("sudo", "doas")
+               for t in raw_argv[: len(raw_argv) - len(argv)])
 
 
 def _text_reader_verdict(prog: str, raw_argv: list[str], argv: list[str],
@@ -3336,16 +3594,16 @@ def classify_read(
 ) -> dict[str, str]:
     if workspace_root and not os.path.isabs(path_str):
         path_str = os.path.join(workspace_root, path_str)  # fix: resolve relative paths against workspace_root, not process CWD
-    if _is_secret_path(path_str, workspace_root):
+    path_class = _read_path_class(path_str, workspace_root)
+    if path_class == "secret":
         return _force_ask(
             "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires an explicit "
             "user-visible permission step; it is excluded from automatic capture."
         )
-    if _path_outside(path_str, workspace_root):
-        return _force_ask(
-            "CTX_CONTEXT_GUARD: path resolves outside the active workspace. "
-            "Confirm outside-root access explicitly or pass --workspace."
-        )
+    if path_class == "outside":
+        return _force_ask(_OUTSIDE_READ_REASON)
+    if path_class == "not_file":
+        return _force_ask(_NOT_FILE_READ_REASON)
     # Media reads (ctx.mediaread). Only past the secret and workspace checks
     # above, so a media decision can never reach a file the guard refuses;
     # decided from the suffix alone before any system call, so a source-file
@@ -3642,6 +3900,13 @@ def classify(
             if isinstance(v, str) and v:
                 cwd = v
                 break
+        if cwd is None:
+            # The directory the host runs the command in (Claude Code and
+            # Codex send it on the payload): a relative path names a file
+            # there, so `cat ../a.txt` from a subdirectory is a workspace file.
+            v = payload.get("cwd")
+            if isinstance(v, str) and v and os.path.isabs(v):
+                cwd = v
         decision = classify_command(command, policy, cwd=cwd or workspace_root)
         # Replacement surface (docs/REPLACEMENT-SURFACE.md): when collapse is
         # enabled, a recognised navigation-loop shape — recursive grep, or a
@@ -4078,6 +4343,10 @@ def _is_safety_ask(decision: dict[str, Any]) -> bool:
     return bool(decision.get("_safety")) or reason.startswith((
         "CTX_CONTEXT_GUARD: secret-bearing path", "CTX_CONTEXT_GUARD: container escape",
         "CTX_RELAY_INTERRUPT", "CTX_CONTEXT_GUARD: path outside workspace",
+        # The Read guard's own decisions for a shell reader (_reader_force_ask):
+        # the same file gets the same answer through either door.
+        "CTX_CONTEXT_GUARD: path resolves outside the active workspace",
+        "CTX_CONTEXT_GUARD: path is not a regular file",
         "CTX_CONTEXT_GUARD: one of your Claude Code"))
 
 
