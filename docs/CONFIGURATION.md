@@ -584,23 +584,21 @@ cannot remove these, only add to them:
 .env  .env.*  **/.env  **/.env.*  **/secrets/**  **/credentials/**
 **/*.pem  **/*.key  **/id_rsa*  **/id_ed25519*  **/.aws/**
 **/.config/gcloud/**  **/.ssh/**
-**/.netrc  **/_netrc  **/.npmrc  **/.pypirc  **/.git-credentials
-**/.docker/config.json  **/.kube/config  **/.config/gh/hosts.yml
-**/.config/gh/hosts.yaml  **/.cargo/credentials  **/.cargo/credentials.toml
-**/.gem/credentials  **/.terraformrc  **/terraform.rc  **/*.tfvars  **/*.tfvars.json
-**/.netrc.*  **/.netrc~  **/.npmrc.*  **/.npmrc~  **/.pypirc.*  **/.pypirc~
-**/.git-credentials.*  **/.git-credentials~  **/*.tfvars.*  **/*.tfvars~
 ```
 
-The hook's own check also matches these names in any letter case (`.NPMRC`,
-`TERRAFORM.TFVARS`) and with any backup suffix; the `ctx get` globs above match
-the lower-case names only.
-
-The credential files are named exactly, wherever they are: a project's own `.npmrc`
-or `.pypirc` can hold a registry token as literally as the one in your home
-directory, so it is treated the same. `*.tfvars` is included because Terraform
-variable files are where provider passwords and keys conventionally go (GitHub's
-Terraform `.gitignore` excludes them for that reason); a plain one costs a prompt.
+Credential files are refused by name as well, by the same list the shell guard uses
+(`src/ctx/secretpaths.py`), in any letter case, at any depth and with a backup suffix
+(`.npmrc.bak`, `.netrc~`, `.NPMRC`): `.netrc`, `_netrc`, `.npmrc`, `.pypirc`,
+`.git-credentials`, `.terraformrc`, `terraform.rc`, `.docker/config.json`,
+`.kube/config`, `.config/gh/hosts.yml`/`.yaml`, `.cargo/credentials(.toml)`,
+`.gem/credentials` and `*.tfvars(.json)`. A template copy is not a credential file:
+a suffix `.example`, `.sample`, `.template`, `.dist`, `.tmpl` or `.defaults`
+(`.npmrc.example`, `terraform.tfvars.sample`). A project's own `.npmrc` or `.pypirc`
+can hold a registry token as literally as the one in your home directory, so it is
+treated the same. `*.tfvars` is included because Terraform variable files are where
+provider passwords and keys conventionally go (GitHub's Terraform `.gitignore` excludes
+them for that reason); a plain one costs a prompt. (`.env` keeps its older glob
+rule above, under which `.env.example` is refused too.)
 
 `.ctxignore` at the workspace root **adds** to that list — one glob per line,
 `#` comments and blank lines ignored. It is additive only: nothing you write can

@@ -147,6 +147,7 @@ from ctx import governance as _gov
 from ctx.proxywindow import read_window_doc
 from ctx.sessiondir import LEDGER_DIR_NAME as _LEDGER_DIR_NAME
 from ctx.sessiondir import session_reads_dir
+from ctx.secretpaths import CREDENTIAL_PATTERN as _CREDENTIAL_PATTERN
 
 # Media reads (ctx.mediaread): what the read guard does with an image, video
 # or audio file. That module is imported only once a path's suffix says it
@@ -297,24 +298,13 @@ _SHELL_META_RE = re.compile(r"[|;&<>`$(){}\\\n\r]|\|\||&&|\$\(")
 # For a safety classifier the failure direction must be over-matching: a
 # false positive costs one permission prompt, a false negative leaks a key.
 #
-# Well-known credential files by exact name: each tool's documented place for
-# a login, a registry or API token, or a cluster key (netrc for curl/git/ftp,
-# npm, PyPI's twine, git's credential store, docker login, kubectl, the GitHub
-# CLI, cargo, RubyGems, Terraform's CLI config) -- in the home directory or a
-# project, where a .npmrc/.pypirc can carry a literal token just the same.
-# *.tfvars: Terraform variable values, the conventional home of a provider
-# password or key (GitHub's Terraform .gitignore excludes them as "likely to
-# contain sensitive data"); an ask on a plain region/size file is the price.
+# Well-known credential files by name (.netrc, .npmrc, *.tfvars ...): one list,
+# ctx.secretpaths, shared with retrieval, in any letter case, with backup
+# suffixes and without template copies.
 _SECRET_PATH_RE = re.compile(
     r"(^|/)(\.env(\..*)?|\.aws|\.ssh|\.config/gcloud)(/|$)"
     r"|(?<![A-Za-z])(secrets?|credentials?)(?![A-Za-z])"
-    r"|\.(pem|key)$|id_rsa|id_ed25519"
-    # Any letter case, and a backup or copy of one (`.npmrc.bak`, `.netrc~`,
-    # `.npmrc.old`), following the `.env.*` precedent above.
-    r"|(?i:(^|/)(\.netrc|_netrc|\.npmrc|\.pypirc|\.git-credentials|\.terraformrc|terraform\.rc"
-    r"|\.docker/config\.json|\.kube/config|\.config/gh/hosts\.ya?ml"
-    r"|\.cargo/credentials(\.toml)?|\.gem/credentials)(\.[^/]*|~)?$)"
-    r"|(?i:\.tfvars(\.json)?(\.[^/]*|~)?$)",
+    r"|\.(pem|key)$|id_rsa|id_ed25519|" + _CREDENTIAL_PATTERN,
 )
 
 # Secret filenames carrying neither a slash nor a dot: without this the

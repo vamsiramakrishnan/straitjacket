@@ -25,9 +25,12 @@ CREDENTIAL_FILES = [
 ]
 ORDINARY = ["package.json", "config.yml", "docker/config.json", "kube/config", "netrc.py",
             "src/npmrc_parser.py", "terraform.rcx", "notes/tfvars.md", "npmrc.md"]
+#: Template copies: not credential files (one shared list, ctx.secretpaths).
+TEMPLATES = ["terraform.tfvars.example", ".npmrc.example", ".npmrc.sample", ".pypirc.sample",
+             ".netrc.template", "x.tfvars.dist"]
 #: Backups, copies and other letter cases of the names, as `.env.bak` is.
 VARIANTS = [".npmrc.bak", ".netrc~", ".npmrc.old", ".NPMRC", "TERRAFORM.TFVARS",
-            ".pypirc.orig", ".kube/config.backup", "prod.tfvars.example"]
+            ".pypirc.orig", ".kube/config.backup", "prod.tfvars.bak"]
 HOSTS = ("claude-code", "antigravity", "codex")
 SECRET_REASON = "CTX_CONTEXT_GUARD: secret-bearing path"
 
@@ -39,7 +42,7 @@ def ws(tmp_path, monkeypatch):
     root.mkdir()
     (root / ".git").mkdir()
     (root / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
-    for rel in CREDENTIAL_FILES + ORDINARY + VARIANTS:
+    for rel in CREDENTIAL_FILES + ORDINARY + VARIANTS + TEMPLATES:
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("x\n", encoding="utf-8")
@@ -108,14 +111,13 @@ def test_ordinary_project_files_are_not_secret(ws, rel):
 
 
 def test_ctx_get_refuses_the_same_files(ws):
-    from ctx.config import load_ctxignore
-    from ctx.pathglob import matches
+    from conftest import make_ws
 
-    globs = load_ctxignore(ws)
-    for rel in CREDENTIAL_FILES:
-        assert any(matches(rel, g) for g in globs), rel
-    for rel in ORDINARY:
-        assert not any(matches(rel, g) for g in globs), rel
+    w = make_ws(ws)
+    for rel in CREDENTIAL_FILES + VARIANTS:
+        assert w.is_ignored(rel), rel
+    for rel in ORDINARY + TEMPLATES:
+        assert not w.is_ignored(rel), rel
 
 
 def test_bearer_tokens_are_redacted_and_ordinary_text_is_not():
