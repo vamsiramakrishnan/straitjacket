@@ -220,6 +220,8 @@ class EvidenceMap:
     pem: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     parsed: dict[str, tuple[int, int]] = field(default_factory=dict)  # stream -> (parsed, total)
     first_line: int = 1              # number of the first mapped line (spans)
+    #: stream -> a line longer than the parse cap, mapped only in its first part
+    long_lines: dict[str, int] = field(default_factory=dict)
 
 
 def _group(stream: str, rows: list[tuple[int, int, tuple[str, ...]]], skel: str,
@@ -274,10 +276,21 @@ def build_streams(views: list[tuple[str, str, bool, int]], terms: tuple[str, ...
     lines_by: dict[str, list[str]] = {}
     pem: dict[str, list[tuple[int, int]]] = {}
     parsed: dict[str, tuple[int, int]] = {}
+    long_lines: dict[str, int] = {}
     messages: list[Message] = []
     for name, raw, whole, nlines in views:
         if not raw:
             continue
+        if not whole and not raw.endswith("\n"):
+            head, sep, _tail = raw.rpartition("\n")
+            if sep:
+                # The parse cap fell inside a line: map only complete lines;
+                # the continuation starts at the cut line, from its start.
+                raw = head + sep
+            else:
+                # One line longer than the cap: its first part is mapped and
+                # the continuation starts at the next line (declared).
+                long_lines[name] = first_line
         text = strip_ansi(raw)
         lines = index_lines(text)
         lines_by[name] = lines
@@ -298,7 +311,8 @@ def build_streams(views: list[tuple[str, str, bool, int]], terms: tuple[str, ...
             messages.extend(_group(name, rows, skel, lines, terms, first_line))
     if not messages:
         return None
-    return EvidenceMap(local_order(messages), total, partial, lines_by, pem, parsed, first_line)
+    return EvidenceMap(local_order(messages), total, partial, lines_by, pem, parsed, first_line,
+                       long_lines)
 
 
 def build(ctx: Any) -> EvidenceMap | None:
@@ -701,6 +715,8 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
                 if sid:
                     cmds.append(f"ctx get {rid}#{stream} --span {sid}")
         line = "  lines past the parse cap are not mapped"
+        for stream, n in sorted(emap.long_lines.items()):
+            line += f" (and {stream} L{n} is longer than the cap: only its first part is mapped)"
         if cmds:
             line += "; map them: " + "  ·  ".join(cmds)
             suggestions.extend(cmds)

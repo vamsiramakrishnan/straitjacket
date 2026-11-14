@@ -813,3 +813,59 @@ def test_fuzz_pages_against_row_length_and_budget(state_home, workspace_dir, wid
     assert m, digest
     seen = _walk(store, ws, m.group(1), m.group(2), r"^  ×\d+  L\d+  ERROR (unit[a-z]{2})")
     assert sorted(seen) == sorted(names)
+
+
+# ---------------------------------------------------------------- round 6: the cap inside a line
+def _cap_digest(workspace_dir, monkeypatch, rows, cap):
+    import ctx.digest.base as base
+
+    monkeypatch.setattr(base, "MAX_PARSE_BYTES", cap)
+    return _digest(workspace_dir, _log(rows))
+
+
+def _walk_parts(store, ws, digest):
+    from ctx.retrieval import Selector, get
+
+    m = re.search(r"map them: ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", digest)
+    out = ""
+    for _ in range(20):
+        if not m:
+            return out
+        page = get(store, ws, m.group(1), Selector(span=m.group(2)))
+        out += page
+        m = re.search(r"next part: ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", page)
+    raise AssertionError("no end")
+
+
+def test_the_continuation_starts_at_the_line_the_cap_cut(state_home, workspace_dir, monkeypatch):
+    rows = ["ERROR early thing failed"] + ["y" * 99] * 195 + ["x" * 3000 + " FATAL the real cause"]
+    rows += [f"line {i}" for i in range(3000)]
+    digest, rid, ws, store = _cap_digest(workspace_dir, monkeypatch, rows, 20_000)
+    head = next(ln for ln in digest.splitlines() if ln.startswith("evidence map"))
+    assert "stdout lines 1-196 of" in head            # the cut line is not counted as parsed
+    out = _walk_parts(store, ws, digest)
+    assert "messages (exact for lines 197-" in out
+    assert "L197  " in out and "FATAL the real cause" in out
+    assert out.count("FATAL the real cause") == 1
+
+
+def test_the_cap_on_a_newline_and_on_the_last_byte(state_home, workspace_dir, monkeypatch):
+    rows = ["ERROR early thing failed"] + ["y" * 99] * 300 + ["FATAL at the end"]
+    text = _log(rows)
+    upto = len("\n".join(rows[:200]).encode()) + 1          # just after line 200's newline
+    digest, rid, ws, store = _cap_digest(workspace_dir, monkeypatch, rows, upto)
+    assert "stdout lines 1-200 of" in digest
+    out = _walk_parts(store, ws, digest)
+    assert "messages (exact for lines 201-" in out and "FATAL at the end" in out
+    digest2, *_ = _cap_digest(workspace_dir, monkeypatch, rows, len(text.encode()))
+    assert "later lines are not in this map" not in digest2   # the whole file was parsed
+
+
+def test_a_line_longer_than_the_cap_is_declared_and_the_parts_advance(
+        state_home, workspace_dir, monkeypatch):
+    rows = ["ERROR early thing failed", "z" * 3_000_000 + " FATAL lost", "ERROR after the big line"]
+    rows += [f"line {i}" for i in range(50)]
+    digest, rid, ws, store = _cap_digest(workspace_dir, monkeypatch, rows, 1_000_000)
+    out = _walk_parts(store, ws, digest)
+    assert "ERROR after the big line" in out
+    assert "is longer than the cap: only its first part is mapped" in digest + out
