@@ -20,7 +20,7 @@ import pytest
 
 from conftest import make_store, make_ws
 
-CAP = 64 * 1024  # per command: 32 KiB per stream, 16 KiB head + 16 KiB tail
+CAP = 64 * 1024  # per stream: 32 KiB head + 32 KiB tail
 
 
 def _ws(workspace_dir: Path, cap: int = CAP):
@@ -109,7 +109,7 @@ def test_runaway_command_is_stopped_and_disk_stays_bounded(state_home, workspace
     block = out["capture"]
     assert block["totalBytes"] >= 16 * CAP  # drained, and counted, up to the limit
     assert block["totalBytes"] % 100 == 0 and block["totalLines"] == block["totalBytes"] // 100
-    assert out["bytes"] <= CAP // 2
+    assert out["bytes"] <= CAP
     # Everything the store holds for this run: the cap plus manifests/index.
     assert _dir_bytes(state_home) <= CAP + 256 * 1024
 
@@ -135,7 +135,7 @@ def test_stderr_and_no_newline_output_respect_the_cap(state_home, workspace_dir)
     for name, total in (("stderr", 500000), ("stdout", 300000)):
         meta = m["streams"][name]
         assert meta["capture"]["totalBytes"] == total and meta["capture"]["totalLines"] == 1
-        assert meta["bytes"] <= CAP // 2 + 1  # + the line break that ends the cut head
+        assert meta["bytes"] <= CAP + 1  # + the line break that ends the cut head
 
 
 def test_small_command_is_unchanged(state_home, workspace_dir):
@@ -159,7 +159,7 @@ def test_background_job_is_capped_too(state_home, workspace_dir):
     assert wait_for_done(store, job, timeout=90)
     digest, m = finalize_job(ws, store, job)
     assert m["result"]["outputLimited"] is True
-    assert m["streams"]["stdout"]["bytes"] <= CAP // 2
+    assert m["streams"]["stdout"]["bytes"] <= CAP
     assert "profile=capped/v1" in digest.splitlines()[0]
 
 
@@ -184,8 +184,8 @@ def capped(state_home, workspace_dir):
 def test_digest_states_exact_counts(capped):
     ws, store, digest, m, short = capped
     block = m["streams"]["stdout"]["capture"]
-    head_n = (16 * 1024) // LINE
-    tail_n = (16 * 1024) // LINE
+    head_n = (32 * 1024) // LINE
+    tail_n = (32 * 1024) // LINE
     assert block["headLines"] == head_n and block["tailLines"] == tail_n
     assert f"profile=capped/v1" in digest
     total = 20000 * LINE
@@ -247,3 +247,67 @@ def test_diff_refuses_a_capped_capture(capped):
     ws, store, _digest, m, short = capped
     with pytest.raises(RetrievalError, match="capped capture"):
         run_diff(store, ws, f"run:{short}", f"run:{short}")
+
+
+# ------------------------------------------------------- review round 1
+def test_one_stream_may_use_the_whole_cap(state_home, workspace_dir):
+    # The cap is per stream: a command writing only stdout keeps up to all
+    # of it (it used to be cut at half the cap with stderr empty).
+    ws = _ws(workspace_dir)
+    store = make_store(ws)
+    data_len = CAP - 1000
+    script = f"import sys; sys.stdout.write('x' * {data_len - 1} + '\\n')"
+    m = _run(ws, store, [sys.executable, "-c", script]).manifest
+    assert "capture" not in m["streams"]["stdout"]
+    assert m["streams"]["stdout"]["bytes"] == data_len
+
+
+def test_a_line_cut_by_the_cap_says_where_its_rest_is(state_home, workspace_dir):
+    from ctx.digest import render_run_digest
+    from ctx.retrieval import Selector, get
+    from ctx.textutil import short_id
+
+    ws = _ws(workspace_dir)
+    store = make_store(ws)
+    script = "import sys; sys.stdout.write('a' * 300000)"
+    m = _run(ws, store, [sys.executable, "-c", script]).manifest
+    _digest, final = render_run_digest(store, ws, m)
+    short = short_id(final["id"])
+    block = final["streams"]["stdout"]["capture"]
+    assert block["headLines"] == 1 and block["tailFirstLine"] == 1
+    out = get(store, ws, f"run:{short}#stdout", Selector(lines=(1, 1)))
+    assert "L1 was cut by the capture" in out
+    assert f"--bytes {block['tailStartByte']}:300000" in out
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
+def test_a_background_writer_is_drained_not_waited_for(state_home, workspace_dir, tmp_path):
+    # A descendant that keeps the output open (`server &`) does not hold the
+    # capture: after the grace period its pipe goes to a detached drain, so
+    # it keeps running (and is never killed by a closed pipe).
+    import signal
+
+    ws = _ws(workspace_dir)
+    store = make_store(ws)
+    pidfile = tmp_path / "bg.pid"
+    script = (f"(while :; do echo tick || exit 1; sleep 0.05; done) & echo $! > {pidfile}; "
+              "echo started")
+    start = time.monotonic()
+    m = _run(ws, store, [script], shell=True, timeout=60).manifest
+    took = time.monotonic() - start
+    pid = int(pidfile.read_text().strip())
+    try:
+        assert took < 20, took
+        assert m["result"]["exitCode"] == 0
+        assert _blob(store, m["streams"]["stdout"]).startswith(b"started\n") or \
+            b"started\n" in _blob(store, m["streams"]["stdout"])
+        time.sleep(0.5)
+        # still running (not a zombie): its writes went to the drain, not a
+        # closed pipe
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        assert state != "Z", state
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass

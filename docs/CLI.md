@@ -146,9 +146,10 @@ The digest header contains the run handle. Use it for later retrieval, search, o
 
 ### Output that never stops
 
-At most `[store] max_capture_bytes` (64 MiB by default) of one command's output
-is stored: half for stdout and half for stderr, each kept as its first and its
-last quarter of the cap, cut at line breaks where one is near. The middle is
+At most `[store] max_capture_bytes` (64 MiB by default) of each of a command's
+streams is stored, stdout and stderr separately, so a command stores at most twice
+that and a build that writes 50 MB to stdout is kept whole. Past the cap a stream
+keeps its first and its last half of the cap, cut at line breaks where one is near. The middle is
 dropped and counted, and the byte and line counts stay exact. The digest of
 such a run is `capped/v1`: it says `captured X of Y bytes`, which lines were
 kept and which were not stored, and shows the first and last lines under their
@@ -159,7 +160,7 @@ is refused, a range that runs into it stops at the edge and says so, and
 
 Past the cap the command keeps running: its output is read and counted but not
 stored, until it exits or `--timeout` stops it, so a large build is never cut
-off at an arbitrary point. A command whose output passes 16 times the cap
+off at an arbitrary point. A command whose output (both streams together) passes 16 times the cap
 (1 GiB by default) is stopped: its process group is killed, the run reports
 `signal SIGKILL` and `outputLimited`, and the digest says why. Nothing an agent
 can use prints that much, and a generator reaches it in seconds rather than

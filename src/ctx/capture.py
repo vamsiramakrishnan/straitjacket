@@ -62,9 +62,11 @@ def command_cap(configured: Any) -> int:
     return max(MIN_CAP, value)
 
 
-def stream_cap(command_bytes: int) -> int:
-    """Each of stdout and stderr gets half of the per-command cap."""
-    return max(MIN_CAP // 2, command_bytes // 2)
+def stream_cap(cap_bytes: int) -> int:
+    """The cap is per stream: stdout and stderr may each store up to it, so
+    one stream (the usual case: a build or a test run writes to one) gets
+    the whole cap instead of half of it with the other stream empty."""
+    return max(MIN_CAP, cap_bytes)
 
 
 class CappedSpool:
@@ -233,6 +235,9 @@ class CappedSpool:
             "droppedBytes": total - head - tail_len,
             "droppedLines": max(0, tail_first - head_lines - 1),
             "lineBreakAdded": synthetic,
+            # The stored tail starts at a line start only when it was cut
+            # forward to one; otherwise its first line began in the middle.
+            "tailStartsLine": bool(skip),
         }
 
 

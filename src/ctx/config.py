@@ -197,8 +197,8 @@ class OrchestratePolicy:
 class StorePolicy:
     backend: str = "user-state"  # user-state | local (advisory only)
     retention_days: int = 30
-    # Hard cap on the output bytes one captured command stores (stdout and
-    # stderr get half each; head and tail kept, the middle dropped and
+    # Hard cap on the output bytes a captured command stores per stream
+    # (stdout and stderr each; head and tail kept, the middle dropped and
     # counted). See ctx.capture and docs/CONFIGURATION.md.
     max_capture_bytes: int = 64 * 1024 * 1024
 

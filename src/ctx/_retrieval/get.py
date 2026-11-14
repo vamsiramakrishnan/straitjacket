@@ -814,7 +814,31 @@ def _capped_lines(store, ws, ref_text, blob_hash, cm: CapMap, selector, budget, 
         continuation = fit_next
         rendered = rendered[: b - a + 1]
     header.insert(1, f"selector: --lines {a}:{b} of {fmt_int(total)}")
+    for note in _cut_line_notes(cm, a, b, in_head, ref_text):
+        header.append(note)
     return "\n".join(rendered), continuation
+
+
+def _cut_line_notes(cm: CapMap, a: int, b: int, in_head: bool, ref_text: str) -> list[str]:
+    """Say so when a shown line is only part of an original line: the head
+    was cut inside its last line, or the tail starts inside its first."""
+    notes = []
+    h = cm.head_lines
+    if in_head and cm.added and a <= h <= b:
+        if cm.tail_lines and cm.tail_first == h:
+            notes.append(
+                f"note: L{h} was cut by the capture: shown up to byte {cm.head_bytes:,}; "
+                f"its end is stored from byte {cm.tail_start:,} (ctx get {ref_text} "
+                f"--bytes {cm.tail_start}:{cm.total_bytes}), and bytes "
+                f"{cm.head_bytes + 1:,}-{cm.tail_start - 1:,} of it were not stored")
+        else:
+            notes.append(f"note: L{h} was cut by the capture after byte {cm.head_bytes:,}; "
+                         "the rest of it was not stored")
+    if (not in_head and cm.tail_lines and not cm.c.get("tailStartsLine", True)
+            and a <= cm.tail_first <= b):
+        notes.append(f"note: L{cm.tail_first} is shown from byte {cm.tail_start:,} of the "
+                     "stream; its beginning was not stored")
+    return notes
 
 
 def _capped_bytes(store, ws, ref_text, blob_hash, cm: CapMap, a, b, budget, eff_rtok,

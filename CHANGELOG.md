@@ -22,7 +22,7 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
   that is not a literal path (`$VAR`, a command substitution) is never captured. On
   Claude Code and Codex the command's working directory now resolves relative paths.
 - `ctx run` (and background jobs) store at most `[store] max_capture_bytes` (64 MiB)
-  of a command's output: each stream keeps its head and tail, the middle is dropped and
+  per output stream: past it a stream keeps its head and tail, the middle is dropped and
   counted exactly, and the `capped/v1` digest says `captured X of Y bytes`. Retrieval
   of a capped stream uses the original line numbers and refuses the dropped middle. A
   command whose output passes 16 times the cap is stopped (`outputLimited`). A command
