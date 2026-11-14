@@ -12,6 +12,7 @@ work on the stored part. Nothing here claims coverage of the dropped middle.
 
 from __future__ import annotations
 
+from ctx import bounds
 from ctx.capture import RUNAWAY_FACTOR, CapMap, command_cap
 from ctx.digest.base import DigestContext, Profile
 from ctx.textutil import (
@@ -55,7 +56,7 @@ class CappedProfile(Profile):
         lines = index_lines(data.decode("utf-8", "replace"))
         if size > _TAIL_READ and lines:
             lines = lines[1:]  # the first may be a fragment of a longer line
-        return lines[-n:]
+        return lines[len(lines) - min(n, len(lines)):]
 
     def render(self, ctx: DigestContext) -> str:
         m = ctx.manifest
@@ -80,8 +81,8 @@ class CappedProfile(Profile):
         out.append(f"capture: capped · captured {fmt_int(cap_total)} of "
                    f"{fmt_int(all_total)} bytes "
                    f"({fmt_bytes(cap_total)} of {fmt_bytes(all_total)})")
-        head_n = max(1, int(ctx.ws.config.budgets.digest_head_lines))
-        tail_n = max(1, int(ctx.ws.config.budgets.digest_tail_lines))
+        head_n = bounds.count(ctx.ws.config.budgets.digest_head_lines)
+        tail_n = bounds.count(ctx.ws.config.budgets.digest_tail_lines)
         for view in (ctx.stdout, ctx.stderr):
             cm = caps.get(view.name)
             if cm is None:

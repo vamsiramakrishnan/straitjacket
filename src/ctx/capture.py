@@ -135,7 +135,7 @@ class CappedSpool:
         size = self.tail_cap
         if len(data) > size:  # only the last `size` bytes can survive
             self._ring_total += len(data) - size
-            data = data[-size:]
+            data = data[len(data) - size:]
         while data:
             off = self._ring_total % size
             n = min(len(data), size - off)
@@ -282,7 +282,7 @@ class CapMap:
         """The stored line holding original line ``orig``, or None."""
         in_head = 1 <= orig <= self.head_lines
         in_tail = self.tail_lines and self.tail_first <= orig <= self.last_line
-        if in_tail and (prefer_tail or not in_head):
+        if in_tail and not (in_head and not prefer_tail):
             return self.head_lines + orig - self.tail_first + 1
         if in_head:
             return orig
