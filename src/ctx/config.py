@@ -34,6 +34,23 @@ BUILTIN_DENY_GLOBS = (
     "**/.aws/**",
     "**/.config/gcloud/**",
     "**/.ssh/**",
+    # Well-known credential files (the hook's _SECRET_PATH_RE names the same).
+    "**/.netrc",
+    "**/_netrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/.git-credentials",
+    "**/.docker/config.json",
+    "**/.kube/config",
+    "**/.config/gh/hosts.yml",
+    "**/.config/gh/hosts.yaml",
+    "**/.cargo/credentials",
+    "**/.cargo/credentials.toml",
+    "**/.gem/credentials",
+    "**/.terraformrc",
+    "**/terraform.rc",
+    "**/*.tfvars",
+    "**/*.tfvars.json",
 )
 
 

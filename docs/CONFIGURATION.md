@@ -498,7 +498,7 @@ Advise mode records no token saving, because nothing was avoided.
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Enable secret redaction in model-visible output. |
-| `patterns` | full built-in set | Active redaction patterns. The set includes `url-credentials` (the `user:password@` part of a URL such as `postgres://admin:pw@host/db`, the user possibly empty: `redis://:pw@host`). |
+| `patterns` | full built-in set | Active redaction patterns. The set includes `url-credentials` (the `user:password@` part of a URL such as `postgres://admin:pw@host/db`, the user possibly empty: `redis://:pw@host`) and `bearer-token` (`Bearer` followed by 16 or more token characters, as in an `Authorization` header; a short JWT there too). A bare `password=…`/`secret=…` pair is not redacted: in source code it is usually a variable (`connect(password=password)`), which a pattern would blank. |
 
 A guard rail worth knowing: if `patterns` is set to something that isn't a list
 (a bare string typo, say), straitjacket rejects it and falls back to the full
@@ -584,7 +584,17 @@ cannot remove these, only add to them:
 .env  .env.*  **/.env  **/.env.*  **/secrets/**  **/credentials/**
 **/*.pem  **/*.key  **/id_rsa*  **/id_ed25519*  **/.aws/**
 **/.config/gcloud/**  **/.ssh/**
+**/.netrc  **/_netrc  **/.npmrc  **/.pypirc  **/.git-credentials
+**/.docker/config.json  **/.kube/config  **/.config/gh/hosts.yml
+**/.config/gh/hosts.yaml  **/.cargo/credentials  **/.cargo/credentials.toml
+**/.gem/credentials  **/.terraformrc  **/terraform.rc  **/*.tfvars  **/*.tfvars.json
 ```
+
+The credential files are named exactly, wherever they are: a project's own `.npmrc`
+or `.pypirc` can hold a registry token as literally as the one in your home
+directory, so it is treated the same. `*.tfvars` is included because Terraform
+variable files are where provider passwords and keys conventionally go (GitHub's
+Terraform `.gitignore` excludes them for that reason); a plain one costs a prompt.
 
 `.ctxignore` at the workspace root **adds** to that list — one glob per line,
 `#` comments and blank lines ignored. It is additive only: nothing you write can

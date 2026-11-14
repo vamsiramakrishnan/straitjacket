@@ -100,6 +100,11 @@ REDACTION_PATTERNS: dict[str, re.Pattern[str]] = {
     ),
     "google-api-key": re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
     "generic-api-token": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    # An HTTP bearer credential as a header or log line prints it
+    # (`Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig`): 16+ token
+    # characters after the word, so a short JWT the `jwt` shape misses is
+    # caught here; `Bearer <token>` and `Bearer realm=...` are not.
+    "bearer-token": re.compile(r"(?i)\bBearer[ \t]+[A-Za-z0-9._~+/-]{16,}=*"),
     # A password inside a URL (`postgres://admin:pw@host/db`, or with an
     # empty user, `redis://:pw@host`): the userinfo part up to the `@`.
     "url-credentials": re.compile(

@@ -185,7 +185,10 @@ row stating the current behaviour.
 ### "secret-bearing path … requires an explicit permission step"
 
 **Not a bug.** Reading a path that looks secret-bearing (`.env`, `.aws`, `.ssh`,
-`*.pem`, `*.key`, `id_rsa`, `credentials`, `secrets` …) always force-asks and is
+`*.pem`, `*.key`, `id_rsa`, `credentials`, `secrets`, and credential files by name:
+`.netrc`/`_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.docker/config.json`,
+`.kube/config`, `.config/gh/hosts.yml`, `.cargo/credentials`, `.gem/credentials`,
+`.terraformrc`/`terraform.rc`, `*.tfvars`, in your home or in a project) always force-asks and is
 excluded from automatic capture — even under permissive steering. **Fix:**
 confirm the prompt if you really intend it; there's no way to silence this by
 config, by design.

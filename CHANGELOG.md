@@ -6,6 +6,12 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- Well-known credential files are secret paths, through the Read tool and every shell
+  reader, at home or in a project: `.netrc`, `_netrc`, `.npmrc`, `.pypirc`,
+  `.git-credentials`, `.docker/config.json`, `.kube/config`, `.config/gh/hosts.yml`,
+  `.cargo/credentials`, `.gem/credentials`, `.terraformrc`, `terraform.rc` and `*.tfvars`.
+  A new `bearer-token` redaction pattern blanks `Bearer <16+ token characters>`,
+  including a JWT too short for the `jwt` pattern.
 - Shell readers (`cat`, `head`, `tail`, `less`, `more`, `grep`, `awk`, `sed`, `sort`, `cut`
   and the other read-only text tools) now get the Read tool's decision for the files they
   open: a path outside the workspace (links and `..` resolved; devices, `/proc`,

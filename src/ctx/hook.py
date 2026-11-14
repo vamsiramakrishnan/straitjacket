@@ -296,15 +296,28 @@ _SHELL_META_RE = re.compile(r"[|;&<>`$(){}\\\n\r]|\|\||&&|\$\(")
 # filename, bounded by non-letters so `secretary.py` is still not a secret.
 # For a safety classifier the failure direction must be over-matching: a
 # false positive costs one permission prompt, a false negative leaks a key.
+#
+# Well-known credential files by exact name: each tool's documented place for
+# a login, a registry or API token, or a cluster key (netrc for curl/git/ftp,
+# npm, PyPI's twine, git's credential store, docker login, kubectl, the GitHub
+# CLI, cargo, RubyGems, Terraform's CLI config) -- in the home directory or a
+# project, where a .npmrc/.pypirc can carry a literal token just the same.
+# *.tfvars: Terraform variable values, the conventional home of a provider
+# password or key (GitHub's Terraform .gitignore excludes them as "likely to
+# contain sensitive data"); an ask on a plain region/size file is the price.
 _SECRET_PATH_RE = re.compile(
     r"(^|/)(\.env(\..*)?|\.aws|\.ssh|\.config/gcloud)(/|$)"
     r"|(?<![A-Za-z])(secrets?|credentials?)(?![A-Za-z])"
-    r"|\.(pem|key)$|id_rsa|id_ed25519",
+    r"|\.(pem|key)$|id_rsa|id_ed25519"
+    r"|(^|/)(\.netrc|_netrc|\.npmrc|\.pypirc|\.git-credentials|\.terraformrc|terraform\.rc"
+    r"|\.docker/config\.json|\.kube/config|\.config/gh/hosts\.ya?ml"
+    r"|\.cargo/credentials(\.toml)?|\.gem/credentials)$"
+    r"|\.tfvars(\.json)?$",
 )
 
 # Secret filenames carrying neither a slash nor a dot: without this the
 # path-shape filter below would skip them.
-_SECRET_BARE_RE = re.compile(r"^(id_rsa|id_ed25519|id_ecdsa|id_dsa)$")
+_SECRET_BARE_RE = re.compile(r"^(id_rsa|id_ed25519|id_ecdsa|id_dsa|_netrc)$")
 
 def _is_secret_path(path_str: str, root: str | None = None) -> bool:
     """Does this path name -- or the file it actually opens -- bear secrets?
@@ -1803,11 +1816,16 @@ def _names_secret_path(argv: list[str], cwd: str | None) -> bool:
 
 
 def _secret_path_force_ask() -> dict[str, str]:
-    return _force_ask(
+    d = _force_ask(
         "CTX_CONTEXT_GUARD: secret-bearing path. Reading it requires "
         "an explicit user-visible permission step; it is excluded "
         "from automatic capture."
     )
+    # Safety class: a part of a pipeline or chain (`cat .env | wc -l`) keeps
+    # this answer for the whole command. Without the mark the compound rule
+    # read `cat` as an inert filter and captured the whole line.
+    d["_safety"] = "1"
+    return d
 
 
 # Container-engine invocations that reach past the workspace confinement.
