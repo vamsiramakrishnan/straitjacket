@@ -11,8 +11,26 @@ from ctx.textutil import estimate_tokens
 from ctx.workspace import Workspace
 
 
-def record_telemetry(store: Store, op: str, raw_bytes: int, emitted_bytes: int) -> None:
-    """Append an operational telemetry event."""
+_RUN_REF_RE = None
+
+
+def run_handle(ref_text: object) -> str | None:
+    """``run:<hex>`` when ``ref_text`` addresses a run, else None. Only the
+    content-addressed id is kept (never a path or a selector)."""
+    global _RUN_REF_RE
+    if _RUN_REF_RE is None:
+        import re
+
+        _RUN_REF_RE = re.compile(r"^run:([0-9a-f]{6,64})(?:[#\s]|$)")
+    m = _RUN_REF_RE.match(str(ref_text or "").strip())
+    return f"run:{m.group(1)}" if m else None
+
+
+def record_telemetry(store: Store, op: str, raw_bytes: int, emitted_bytes: int,
+                     ref: str | None = None) -> None:
+    """Append an operational telemetry event. ``ref`` (a ``get``/``search``
+    of a run) records which run handle was fetched from, so a digest's
+    follow-up fetches can be counted (``ctx replay --picker``)."""
     import json as _json
     import time as _time
 
@@ -25,6 +43,9 @@ def record_telemetry(store: Store, op: str, raw_bytes: int, emitted_bytes: int) 
             "emitted_bytes": emitted_bytes,
             "est_tokens_avoided": max(0, (raw_bytes - emitted_bytes) // 4),
         }
+        handle = run_handle(ref)
+        if handle:
+            event["ref"] = handle
         with path.open("a", encoding="utf-8") as fh:
             fh.write(_json.dumps(event, sort_keys=True) + "\n")
     except OSError:

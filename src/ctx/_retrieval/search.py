@@ -295,7 +295,7 @@ def _render_search(
     result = _emit(
         ws, "\n".join(out), ws.config.budgets.result_tokens, continuation, handle=ref_text
     )
-    record_telemetry(store, "search", telemetry_bytes, len(result.encode("utf-8")))
+    record_telemetry(store, "search", telemetry_bytes, len(result.encode("utf-8")), ref=ref_text)
     return result
 
 
