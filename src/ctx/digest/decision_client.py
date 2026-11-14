@@ -44,6 +44,11 @@ def _loopback(host: str) -> bool:
         return False
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        raise PickerError("redirect refused")
+
+
 class DecisionClient:
     def __init__(self, policy: Any) -> None:
         self.endpoint = str(policy.endpoint)
@@ -57,7 +62,9 @@ class DecisionClient:
             raise PickerError("endpoint scheme")
         if url.scheme == "http" and not _loopback(url.hostname or ""):
             raise PickerError("plain http allowed only to a loopback endpoint")
-        handlers: list[Any] = []
+        # Never follow a redirect: urllib re-sends every header, the key
+        # included, to wherever the Location points.
+        handlers: list[Any] = [_NoRedirect()]
         if _loopback(url.hostname or ""):
             handlers.append(urllib.request.ProxyHandler({}))
         opener = urllib.request.build_opener(*handlers)
@@ -68,6 +75,8 @@ class DecisionClient:
         try:
             with opener.open(req, timeout=self.deadline) as resp:
                 raw = resp.read(MAX_RESPONSE_BYTES + 1)
+        except PickerError:
+            raise
         except urllib.error.HTTPError as e:
             raise PickerError(f"http {int(e.code)}") from None
         except urllib.error.URLError as e:

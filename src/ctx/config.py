@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -374,6 +375,111 @@ class PickerPolicy:
     threshold: float = 0.5
     max_candidates: int = 40
     max_candidate_bytes: int = 600
+    #: where the effective mode came from (shown by `ctx doctor`)
+    source: str = "default"
+
+
+#: Picker keys a workspace ctx.toml may set, and only downward: a cloned
+#: repository must never turn sending on, choose where it goes, or name the
+#: environment variable whose value is sent as the key.
+_PICKER_WORKSPACE_LOWER = ("max_candidates", "max_candidate_bytes", "timeout_ms")
+_PICKER_ENV = {
+    "mode": "CTX_PICKER_MODE", "endpoint": "CTX_PICKER_ENDPOINT", "model": "CTX_PICKER_MODEL",
+    "api_key_env": "CTX_PICKER_API_KEY_ENV", "timeout_ms": "CTX_PICKER_TIMEOUT_MS",
+    "threshold": "CTX_PICKER_THRESHOLD", "max_candidates": "CTX_PICKER_MAX_CANDIDATES",
+    "max_candidate_bytes": "CTX_PICKER_MAX_CANDIDATE_BYTES",
+}
+
+
+def user_config_path() -> Path:
+    """``$XDG_CONFIG_HOME/ctx/config.toml``, else ``~/.config/ctx/config.toml``:
+    the only FILE that can enable the picker (environment variables are the
+    other way)."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return Path(base) / "ctx" / "config.toml"
+
+
+def resolve_picker(ws_raw: Any, workspace_root: Path | None) -> PickerPolicy:
+    """The effective ``[picker]``: the user-level file, then ``CTX_PICKER_*``
+    environment variables, may set anything; the workspace ``ctx.toml`` may
+    only turn it off (``mode = "local"``) or lower ``max_candidates``,
+    ``max_candidate_bytes`` and ``timeout_ms``. Anything else there is
+    ignored and recorded once in the guard-failure ledger."""
+    proto = PickerPolicy()
+    vals: dict[str, Any] = {}
+    source = "default"
+    path = user_config_path()
+    if path.is_file():
+        import tomllib
+
+        try:
+            user = tomllib.loads(path.read_text(encoding="utf-8")).get("picker")
+        except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+            user = None
+        if isinstance(user, dict):
+            for k, v in user.items():
+                if k in _PICKER_ENV:
+                    vals[k] = _coerce_like(getattr(proto, k), v)
+            if "mode" in user:
+                source = f"user config {path}"
+    for k, name in _PICKER_ENV.items():
+        v = os.environ.get(name)
+        if v is not None and v.strip():
+            vals[k] = _coerce_like(getattr(proto, k), v.strip())
+            if k == "mode":
+                source = f"environment {name}"
+    pol = replace(proto, **vals)
+    mode = pol.mode.strip().casefold() if isinstance(pol.mode, str) else "local"
+    pol = replace(pol, mode=mode if mode in ("shadow", "model") else "local")
+    if isinstance(ws_raw, dict) and ws_raw:
+        ignored = []
+        for k, v in ws_raw.items():
+            if k == "mode" and isinstance(v, str) and v.strip().casefold() == "local":
+                if pol.mode != "local":
+                    pol = replace(pol, mode="local")
+                    source += "; disabled by workspace ctx.toml"
+            elif k in _PICKER_WORKSPACE_LOWER:
+                lowered = _coerce_like(getattr(proto, k), v)
+                if lowered < getattr(pol, k):
+                    pol = replace(pol, **{k: lowered})
+            else:
+                ignored.append(k)
+        if ignored:
+            _note_ignored_picker_keys(workspace_root, sorted(ignored))
+    return replace(pol,
+                   timeout_ms=max(100, min(pol.timeout_ms, 30000)),
+                   threshold=max(0.0, min(pol.threshold, 1.0)),
+                   max_candidates=max(1, min(pol.max_candidates, 200)),
+                   max_candidate_bytes=max(80, min(pol.max_candidate_bytes, 4000)),
+                   source=source)
+
+
+def _note_ignored_picker_keys(workspace_root: Path | None, keys: list[str]) -> None:
+    """One guard-failure record per distinct set of ignored keys."""
+    if workspace_root is None:
+        return
+    try:
+        import json
+        import time
+
+        from ctx.sessiondir import session_reads_dir
+
+        detail = ("workspace ctx.toml [picker] can only disable the picker or lower its "
+                  "limits; ignored: " + ", ".join(keys))
+        d = session_reads_dir(workspace_root)
+        ledger = os.path.join(d, "guard-failures.jsonl")
+        try:
+            with open(ledger, encoding="utf-8") as fh:
+                if any(detail in line for line in fh):
+                    return
+        except OSError:
+            pass
+        os.makedirs(d, exist_ok=True)
+        with open(ledger, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"op": "config", "stage": "picker", "error": "ignored",
+                                 "detail": detail, "ts": time.time()}, sort_keys=True) + "\n")
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -462,10 +568,10 @@ def load_config(workspace_root: Path | None) -> Config:
     """Load ``ctx.toml`` from the workspace root; malformed files degrade to
     defaults rather than blocking the harness (fail-open, SPEC §15)."""
     if workspace_root is None:
-        return Config()
+        return Config(picker=resolve_picker(None, None))
     path = workspace_root / CONFIG_FILENAME
     if not path.is_file():
-        return Config()
+        return Config(picker=resolve_picker(None, workspace_root))
     # Lazy: tomllib costs ~4ms at import and the common hook-path case
     # (no ctx.toml present) returns above without ever needing it.
     import tomllib
@@ -473,7 +579,7 @@ def load_config(workspace_root: Path | None) -> Config:
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
-        return Config()
+        return Config(picker=resolve_picker(None, workspace_root))
 
     scopes: dict[str, tuple[str, ...]] = {}
     for name, body in (raw.get("scopes") or {}).items():
@@ -524,16 +630,7 @@ def load_config(workspace_root: Path | None) -> Config:
     intake = IntakePolicy(mode=mode if mode in ("advise", "block", "off") else "off",
                           threshold_bytes=intake.threshold_bytes)
 
-    picker_raw = raw.get("picker")
-    picker = _pick(picker_raw if isinstance(picker_raw, dict) else {}, PickerPolicy)
-    # Sending is opt-in: anything but exactly shadow/model (after trimming and
-    # case-folding) is local, like [intake] mode failing toward off.
-    pmode = picker.mode.strip().casefold() if isinstance(picker.mode, str) else "local"
-    picker = replace(picker, mode=pmode if pmode in ("shadow", "model") else "local",
-                     timeout_ms=max(100, min(picker.timeout_ms, 30000)),
-                     threshold=max(0.0, min(picker.threshold, 1.0)),
-                     max_candidates=max(1, min(picker.max_candidates, 200)),
-                     max_candidate_bytes=max(80, min(picker.max_candidate_bytes, 4000)))
+    picker = resolve_picker(raw.get("picker"), workspace_root)
 
     eng_raw = raw.get("engagement") or {}
     ed = Engagement()

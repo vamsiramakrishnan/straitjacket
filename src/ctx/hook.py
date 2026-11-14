@@ -6223,33 +6223,24 @@ def main_post_tool_use_failure(flavor: str = "claude-code") -> int:
     return 0
 
 
-_PERSISTED_RE = re.compile(r"Full output saved to: (\S+)")
+#: The failure path digests at most this much of a host-saved output: the
+#: hook must stay fast, and a larger file is still addressable by the host.
+_FAILURE_FULL_MAX = 8 * 1024 * 1024
 
 
-def _failure_persisted_output(payload: dict[str, Any], text: str) -> str | None:
-    """Claude Code's saved full output named in a failure text, trusted only
-    inside THIS session's ``tool-results`` directory (as
-    :func:`_host_full_output`), a regular file of at most ``_HOST_FULL_MAX``."""
-    m = _PERSISTED_RE.search(text)
-    session = str(payload.get("session_id") or "")
-    if not m or not session or "/" in session or session in (".", ".."):
+def _failure_full_output(payload: dict[str, Any]) -> str | None:
+    """The full output Claude Code saved for this failed call, from the
+    HOST-PROVIDED location only (``tool_response.persistedOutputPath`` and
+    ``persistedOutputSize``, checked exactly as :func:`_host_full_output`
+    checks them) and at most ``_FAILURE_FULL_MAX`` bytes; never a path the
+    output text mentions."""
+    tr = payload.get("tool_response")
+    if not isinstance(tr, dict):
         return None
-    path = m.group(1)
-    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-    projects = os.path.realpath(os.path.join(config, "projects"))
-    real = os.path.realpath(path)
-    if real != os.path.abspath(path) or not real.startswith(projects + os.sep):
+    size = tr.get("persistedOutputSize")
+    if not isinstance(size, int) or size > _FAILURE_FULL_MAX:
         return None
-    parts = os.path.relpath(real, projects).split(os.sep)
-    if len(parts) != 4 or parts[1] != session or parts[2] != "tool-results":
-        return None
-    import stat as _stat
-
-    st = os.lstat(real)
-    if not _stat.S_ISREG(st.st_mode) or st.st_size > _HOST_FULL_MAX:
-        return None
-    with open(real, "rb") as fh:
-        return fh.read(_HOST_FULL_MAX).decode("utf-8", "replace")
+    return _host_full_output(payload, tr)
 
 
 def _failure_evidence(payload: dict[str, Any], flavor: str) -> str | None:
@@ -6257,8 +6248,8 @@ def _failure_evidence(payload: dict[str, Any], flavor: str) -> str | None:
 
     A command that exits non-zero reaches only PostToolUseFailure, which can
     add context but not replace the output. When the failure text (or the
-    full output Claude Code saved, which the text names) is over the output
-    budget, the output is stored like the gate stores it and its digest --
+    full output Claude Code saved, at the location the host provides) is
+    over the output budget, the output is stored like the gate stores it and its digest --
     header with the ``run:`` handle, the evidence map, next steps -- is added.
     A ``ctx run`` digest is already that, so it is left alone."""
     if flavor != "claude-code":
@@ -6276,7 +6267,7 @@ def _failure_evidence(payload: dict[str, Any], flavor: str) -> str | None:
     if str(policy.get("mode")) == "advisory":
         return None
     threshold = int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT))
-    full = _failure_persisted_output(payload, text) or text
+    full = _failure_full_output(payload) or text
     if len(full.encode("utf-8", "replace")) <= threshold:
         return None
     from ctx.digest import digest_output

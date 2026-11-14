@@ -362,10 +362,11 @@ def render_run_digest(
 
 
 def _picker_run(ws: Workspace, ctx: DigestContext, focus: str | None):
-    """A :class:`ctx.digest.picker.PickerRun` when ``[picker] mode`` is
-    shadow or model, else None (the default: nothing imported, nothing sent)."""
+    """A :class:`ctx.digest.picker.PickerRun` for a live delivery. In the
+    default local mode it only records the local choice (the baseline of
+    ``ctx replay --picker``); nothing is sent and no client is imported."""
     policy = getattr(ws.config, "picker", None)
-    if policy is None or policy.mode not in ("shadow", "model"):
+    if policy is None:
         return None
     try:
         from ctx.digest.picker import PickerRun
@@ -551,11 +552,14 @@ def digest_output(
         if "output (complete):" in digest
         else ws.config.budgets.digest_tokens
     )
-    from ctx.digest.evidence_map import budget_tokens
+    from ctx.digest.evidence_map import budget_tokens, deliver
 
-    budget += budget_tokens(ws, digest)
-    if is_error:
+    extra = budget_tokens(ws, digest)
+    if extra:
+        # digest_tokens plus exactly the map's bytes, failure or not.
+        budget += extra
+    elif is_error:
         budget = int(budget * ws.config.budgets.failure_budget_factor)
     eng = ws.config.engagement
     cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
-    return bounded(filter_digest(digest, cap), budget), short
+    return deliver(filter_digest(digest, cap), budget), short

@@ -110,10 +110,13 @@ class PickerRun:
         texts: list[str] = []
         used = 0
         cap = int(self.policy.max_candidate_bytes)
+        from ctx.digest.evidence_map import line_of, n_lines
+
         for i, m in enumerate(emap.messages[: int(self.policy.max_candidates)]):
-            lines = emap.lines[m.stream]
-            a, b = max(1, m.first - 2), min(len(lines), m.first + 2)
-            rows = [f"L{n}: {_redacted(lines[n - 1], 200)}" for n in range(a, b + 1)]
+            # line_of: the same sanitised line the digest would show (ANSI
+            # removed, private-key body lines replaced), then redacted.
+            a, b = max(emap.first_line, m.first - 2), min(n_lines(emap, m.stream), m.first + 2)
+            rows = [f"L{n}: {_redacted(line_of(emap, m.stream, n), 200)}" for n in range(a, b + 1)]
             if m.count > 1:
                 rows.append(f"(this message occurs {m.count} times, lines {m.first}-{m.last})")
             text = _redacted("\n".join(rows), cap)
@@ -128,8 +131,22 @@ class PickerRun:
     def choose(self, emap: Any, k: int) -> tuple[list[int] | None, dict[int, str] | None]:
         """(expansion order, labels) for the render; (None, None) = local."""
         mode = self.policy.mode
-        idx, texts = self.candidates(emap)
         local_pick = list(range(min(k, len(emap.messages))))
+        if mode not in ("shadow", "model"):
+            # Local: nothing is sent and no client is imported; the record
+            # is the baseline `ctx replay --picker` compares the modes with.
+            n = min(int(self.policy.max_candidates), len(emap.messages))
+            refs = [_ref(emap.messages[i]) for i in range(n)]
+            self.record = {
+                "schema": SCHEMA, "ts": round(time.time(), 3), "mode": "local", "handle": None,
+                "candidates": n, "messages": len(emap.messages), "local_order": refs,
+                "scores": None, "model_order": None,
+                "local_expanded": [_ref(emap.messages[i]) for i in local_pick],
+                "expanded": [_ref(emap.messages[i]) for i in local_pick],
+                "latency_ms": 0.0, "tokens": None, "error": None, "model": None,
+            }
+            return None, None
+        idx, texts = self.candidates(emap)
         rec: dict[str, Any] = {
             "schema": SCHEMA, "ts": round(time.time(), 3), "mode": mode, "handle": None,
             "candidates": len(idx), "messages": len(emap.messages),
@@ -269,17 +286,30 @@ def picker_report(ws_root: Any, telemetry_path: Any) -> dict[str, Any]:
                     fetches.setdefault(str(ev["ref"]), []).append(float(ev.get("ts") or 0))
     except OSError:
         pass
+    # Each fetch belongs to ONE record: the latest record of that handle at
+    # or before the fetch (the same output digested twice yields one handle).
+    owned: dict[int, int] = {}
+    by_handle: dict[str, list[tuple[float, int]]] = {}
+    for k, rec in enumerate(rows):
+        by_handle.setdefault(str(rec.get("handle")), []).append((float(rec.get("ts") or 0), k))
+    for handle, times in fetches.items():
+        recs = sorted(by_handle.get(handle, ()))
+        for t in times:
+            owner = None
+            for ts, k in recs:
+                if ts <= t:
+                    owner = k
+            if owner is not None:
+                owned[owner] = owned.get(owner, 0) + 1
     modes: dict[str, dict[str, Any]] = {}
-    for rec in rows:
+    for k, rec in enumerate(rows):
         m = modes.setdefault(str(rec.get("mode")), {
             "digests": 0, "followed_by_fetch": 0, "fetches": 0, "errors": 0,
             "compared": 0, "top_pick_differs": 0, "latency_ms": [], "tokens": 0})
         m["digests"] += 1
-        after = [t for t in fetches.get(str(rec.get("handle")), ())
-                 if t >= float(rec.get("ts") or 0)]
-        if after:
+        if owned.get(k):
             m["followed_by_fetch"] += 1
-            m["fetches"] += len(after)
+            m["fetches"] += owned[k]
         if rec.get("error"):
             m["errors"] += 1
         lo, mo = rec.get("local_order") or [], rec.get("model_order") or []

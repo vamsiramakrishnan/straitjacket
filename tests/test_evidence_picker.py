@@ -43,10 +43,17 @@ class _Stub:
                     self.send_response(500)
                     self.end_headers()
                     return
+                if stub.behaviour.startswith("redirect:"):
+                    self.send_response(307)
+                    self.send_header("Location", stub.behaviour.split(":", 1)[1])
+                    self.end_headers()
+                    return
                 if stub.behaviour == "garbage":
                     out = b"{not json"
                 elif stub.behaviour == "missing":
                     out = json.dumps({"answers": {}}).encode()
+                elif stub.behaviour == "range":
+                    out = json.dumps({"answers": {qid: {"noul": 1.7} for qid in doc["questions"]}}).encode()
                 else:
                     answers = {qid: {"type": "noul",
                                      "noul": 0.97 if "rootcause" in q["instructions"] else 0.03}
@@ -88,12 +95,33 @@ def _log() -> str:
     return "\n".join(rows) + "\n"
 
 
+_MP: list = []
+
+
+@pytest.fixture(autouse=True)
+def _isolate(monkeypatch, tmp_path):
+    """No real user config or CTX_PICKER_* variable leaks into a test."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    for name in ("MODE", "ENDPOINT", "MODEL", "API_KEY_ENV", "TIMEOUT_MS", "THRESHOLD",
+                 "MAX_CANDIDATES", "MAX_CANDIDATE_BYTES"):
+        monkeypatch.delenv(f"CTX_PICKER_{name}", raising=False)
+    _MP[:] = [monkeypatch]
+    yield
+    _MP.clear()
+
+
 def _config(workspace_dir: Path, mode: str, url: str = "", timeout_ms: int = 3000) -> None:
-    text = "version = 1\n"
-    if mode:
-        text += (f'[picker]\nmode = "{mode}"\nendpoint = "{url}"\n'
-                 f'api_key_env = "{KEY_ENV}"\ntimeout_ms = {timeout_ms}\n')
-    (workspace_dir / "ctx.toml").write_text(text, encoding="utf-8")
+    """Enable the picker the only way that counts: from OUTSIDE the
+    workspace (environment variables); "" means the default (local)."""
+    mp = _MP[0]
+    if not mode:
+        for k in ("MODE", "ENDPOINT", "API_KEY_ENV", "TIMEOUT_MS"):
+            mp.delenv(f"CTX_PICKER_{k}", raising=False)
+        return
+    mp.setenv("CTX_PICKER_MODE", mode)
+    mp.setenv("CTX_PICKER_ENDPOINT", url)
+    mp.setenv("CTX_PICKER_API_KEY_ENV", KEY_ENV)
+    mp.setenv("CTX_PICKER_TIMEOUT_MS", str(timeout_ms))
 
 
 def _run(workspace_dir, picker=True):
@@ -127,7 +155,8 @@ def test_local_is_the_default_and_sends_nothing(state_home, workspace_dir, stub,
     digest, _ = _run(workspace_dir)
     assert "evidence map (exact)" in digest
     assert stub.requests == []
-    assert _ledger(workspace_dir) == []
+    recs = _ledger(workspace_dir)
+    assert [r["mode"] for r in recs] == ["local"] and recs[0]["scores"] is None
     assert "picked by" not in digest
 
 
@@ -237,6 +266,14 @@ def test_replay_reports_follow_up_fetches_per_mode(state_home, workspace_dir, st
     from ctx.retrieval import Selector, get
 
     monkeypatch.setenv(KEY_ENV, KEY)
+    _config(workspace_dir, "")
+    _, rid0 = _run(workspace_dir)
+    _, rid0b = _run(workspace_dir)          # the same output twice: one handle, two records
+    assert rid0 == rid0b
+    ws = make_ws(workspace_dir)
+    get(make_store(ws), ws, f"run:{rid0}#stdout", Selector(lines=(1, 3)))
+    get(make_store(ws), ws, f"run:{rid0}#stdout", Selector(lines=(4, 6)))
+    time.sleep(0.01)
     _config(workspace_dir, "shadow", stub.url)
     _, rid1 = _run(workspace_dir)
     _config(workspace_dir, "model", stub.url)
@@ -247,8 +284,10 @@ def test_replay_reports_follow_up_fetches_per_mode(state_home, workspace_dir, st
     capsys.readouterr()
     main(["--workspace", str(workspace_dir), "replay", "--picker", "--json"])
     report = json.loads(capsys.readouterr().out)
-    model, shadow = report["modes"]["model"], report["modes"]["shadow"]
+    model, shadow, local = (report["modes"][k] for k in ("model", "shadow", "local"))
     assert (model["digests"], model["followed_by_fetch"], model["fetches"]) == (1, 1, 2)
+    # each fetch counted once, not once per record of the handle
+    assert (local["digests"], local["followed_by_fetch"], local["fetches"]) == (2, 1, 2)
     assert (shadow["digests"], shadow["followed_by_fetch"]) == (1, 0)
     assert shadow["compared"] == 1 and shadow["top_pick_differs"] == 1
     main(["--workspace", str(workspace_dir), "replay", "--picker"])
@@ -276,13 +315,14 @@ def test_default_hook_imports_no_network_module(tmp_path):
     payload = json.dumps({"session_id": "s", "cwd": str(ws), "hook_event_name": "PostToolUse",
                           "tool_name": "Bash", "tool_input": {"command": "./ci.sh"},
                           "tool_response": {"stdout": _log() * 20, "stderr": ""}})
-    probe = ("','.join(m for m in ('ctx.digest.decision_client', 'ctx.digest.picker', "
+    probe = ("','.join(m for m in ('ctx.digest.decision_client', "
              "'urllib.request', 'http.client', 'ssl') if m in sys.modules)")
     code = ("import sys\nfrom ctx.cli import main\n"
             "try:\n    main()\nexcept SystemExit:\n    pass\n"
             f"sys.stderr.write('\\nLOADED=' + {probe})\n")
     env = {"PYTHONPATH": str(root / "src"), "PATH": "/usr/bin:/bin",
-           "CTX_STATE_HOME": str(tmp_path / "state"), "HOME": str(tmp_path)}
+           "CTX_STATE_HOME": str(tmp_path / "state"), "HOME": str(tmp_path),
+           "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
     out = subprocess.run([sys.executable, "-c", code, "hook", "claude-code", "post-tool-use"],
                          input=payload, capture_output=True, text=True, env=env, cwd=str(ws),
                          timeout=120)
@@ -326,3 +366,199 @@ def test_failure_hook_leaves_a_ctx_run_digest_alone(state_home, workspace_dir):
                          "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
                          "tool_input": {"command": "ctx run -- ./ci.sh"}, "error": text})
     assert out == {}
+
+
+# ---------------------------------------------------------------- where it may be enabled
+def _ws_toml(workspace_dir, body: str) -> None:
+    (workspace_dir / "ctx.toml").write_text("version = 1\n[picker]\n" + body, encoding="utf-8")
+
+
+def test_a_workspace_ctx_toml_cannot_enable_the_picker(state_home, workspace_dir, stub,
+                                                        monkeypatch):
+    """The reviewer's repro: a cloned repository naming the endpoint and an
+    environment variable must send nothing."""
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+    _ws_toml(workspace_dir, f'mode = "model"\nendpoint = "{stub.url}"\n'
+                            'api_key_env = "PYTHONHASHSEED"\nmodel = "x"\n')
+    _run(workspace_dir)
+    _run(workspace_dir)
+    assert stub.requests == []
+    ws = make_ws(workspace_dir)
+    assert ws.config.picker.mode == "local" and ws.config.picker.endpoint != stub.url
+    fails = [f for f in _failures(workspace_dir) if f["op"] == "config"]
+    assert len(fails) == 1                      # recorded once, not per load
+    assert "api_key_env" in fails[0]["detail"] and "endpoint" in fails[0]["detail"]
+    assert "PYTHONHASHSEED" not in fails[0]["detail"] and stub.url not in fails[0]["detail"]
+
+
+def test_user_level_config_enables_and_the_workspace_can_only_disable_or_lower(
+        state_home, workspace_dir, stub, monkeypatch, tmp_path):
+    other = _Stub()
+    try:
+        monkeypatch.setenv(KEY_ENV, KEY)
+        user = tmp_path / "xdg" / "ctx"
+        user.mkdir(parents=True)
+        (user / "config.toml").write_text(
+            f'[picker]\nmode = "model"\nendpoint = "{stub.url}"\napi_key_env = "{KEY_ENV}"\n',
+            encoding="utf-8")
+        _ws_toml(workspace_dir, "")
+        _run(workspace_dir)
+        assert len(stub.requests) == 1                      # user-level enable works
+        assert make_ws(workspace_dir).config.picker.source.startswith("user config ")
+        # the workspace cannot redirect it
+        _ws_toml(workspace_dir, f'endpoint = "{other.url}"\nmax_candidates = 2\n')
+        _run(workspace_dir)
+        assert len(stub.requests) == 2 and other.requests == []
+        assert len(stub.requests[-1]["doc"]["questions"]) <= 2   # lowering is honoured
+        # ... but it can turn it off
+        _ws_toml(workspace_dir, 'mode = "local"\n')
+        _run(workspace_dir)
+        assert len(stub.requests) == 2
+        pol = make_ws(workspace_dir).config.picker
+        assert pol.mode == "local" and "disabled by workspace ctx.toml" in pol.source
+    finally:
+        other.close()
+
+
+def test_doctor_names_the_effective_mode_and_its_source(state_home, workspace_dir, monkeypatch):
+    from ctx.installer import doctor_checks
+
+    monkeypatch.setenv("CTX_PICKER_MODE", "shadow")
+    checks = {name: detail for name, _ok, detail in doctor_checks(make_ws(workspace_dir))}
+    assert checks["evidence-map picker"].startswith("mode=shadow (from environment CTX_PICKER_MODE)")
+    monkeypatch.delenv("CTX_PICKER_MODE")
+    checks = {name: detail for name, _ok, detail in doctor_checks(make_ws(workspace_dir))}
+    assert checks["evidence-map picker"] == "mode=local (from default)"
+
+
+# ---------------------------------------------------------------- transport guards
+def test_a_redirect_is_refused_and_the_key_never_reaches_the_second_host(
+        state_home, workspace_dir, stub, monkeypatch):
+    target = _Stub()
+    try:
+        monkeypatch.setenv(KEY_ENV, KEY)
+        _config(workspace_dir, "")
+        local, _ = _run(workspace_dir)
+        stub.behaviour = "redirect:" + target.url
+        _config(workspace_dir, "model", stub.url)
+        got, _ = _run(workspace_dir)
+        assert got == local
+        assert len(stub.requests) == 1 and target.requests == []
+        assert _ledger(workspace_dir)[-1]["error"] == "redirect refused"
+        assert [f["detail"] for f in _failures(workspace_dir) if f["op"] == "picker"] == \
+            ["redirect refused"]
+    finally:
+        target.close()
+
+
+def test_plain_http_is_refused_unless_loopback():
+    from types import SimpleNamespace
+
+    from ctx.digest.decision_client import DecisionClient
+    from ctx.digest.picker import PickerError
+
+    pol = SimpleNamespace(endpoint="http://decisions.example.invalid/v1", model="m",
+                          api_key_env="CTX_TEST_ANY", timeout_ms=500)
+    client = DecisionClient(pol)
+    with pytest.raises(PickerError, match="plain http allowed only to a loopback endpoint"):
+        client._request(b"{}", "k")
+
+
+def test_scores_outside_0_1_are_malformed_in_the_client_and_in_the_picker(stub, monkeypatch):
+    from types import SimpleNamespace
+
+    from ctx.digest import evidence_map as E
+    from ctx.digest.base import StreamView
+    from ctx.digest.decision_client import DecisionClient
+    from ctx.digest.picker import PickerError, PickerRun
+
+    monkeypatch.setenv(KEY_ENV, KEY)
+    stub.behaviour = "range"
+    pol = SimpleNamespace(endpoint=stub.url, model="m", api_key_env=KEY_ENV, timeout_ms=2000,
+                          mode="model", threshold=0.5, max_candidates=10, max_candidate_bytes=400)
+    with pytest.raises(PickerError, match="malformed answer"):
+        DecisionClient(pol).score("i", "c", ["a", "b"])
+
+    class Bad:
+        def score(self, intent, command, candidates):
+            return [1.5] * len(candidates), None
+
+    text = _log()
+    view = StreamView("stdout", len(text), text.count("\n"), "text/plain", text, True)
+    ctx = SimpleNamespace(stdout=view, stderr=StreamView("stderr", 0, 0, "text/plain", "", True),
+                          focus_terms=())
+    run = PickerRun(pol, None, "./ci.sh", None, scorer=Bad())
+    assert run.choose(E.build(ctx), 3) == (None, None)
+    assert run.record["error"] == "malformed answer"
+
+
+def test_the_request_carries_only_what_the_digest_would_show(state_home, workspace_dir, stub,
+                                                             monkeypatch):
+    monkeypatch.setenv(KEY_ENV, KEY)
+    rows = _log().splitlines()
+    pem_body = "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun"
+    rows[497:500] = ["-----BEGIN RSA PRIVATE KEY-----", pem_body, "-----END RSA PRIVATE KEY-----"]
+    rows[502] = "INFO dsn postgres://admin:SuperSecretPw99@db.internal/app"
+    token = "ghp_" + "Z" * 36
+    rows[501] = f"INFO retry with token {token}"
+    _config(workspace_dir, "model", stub.url)
+    ws = make_ws(workspace_dir)
+    digest, _ = digest_output(make_store(ws), ws, "Bash", "\n".join(rows) + "\n",
+                              argv=["./ci.sh"], picker=True)
+    sent = json.dumps(stub.requests[0]["doc"])
+    assert "rootcause" in sent                                  # the candidate went out ...
+    assert "L499: " in sent and "L502: " in sent and "L503: " in sent
+    for secret in (pem_body, "SuperSecretPw99", token):
+        assert secret not in sent and secret not in digest      # ... sanitised
+
+
+# ---------------------------------------------------------------- failure hook file read
+def _persisted(tmp_path, session: str, data: bytes, *, folder="tool-results"):
+    d = tmp_path / "claude" / "projects" / "proj" / session / folder
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "out.txt"
+    f.write_bytes(data)
+    return f
+
+
+def _fail_payload(workspace_dir, session, path=None, size=None, error="Exit code 1\nshort"):
+    p = {"cwd": str(workspace_dir), "session_id": session, "hook_event_name": "PostToolUseFailure",
+         "tool_name": "Bash", "tool_input": {"command": "./ci.sh"}, "error": error}
+    if path is not None:
+        p["tool_response"] = {"persistedOutputPath": str(path), "persistedOutputSize": size}
+    return p
+
+
+def test_failure_hook_reads_only_the_host_provided_file(state_home, workspace_dir, tmp_path,
+                                                        monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    data = _log().encode()
+    good = _persisted(tmp_path, "s1", data)
+    out = _failure_hook(_fail_payload(workspace_dir, "s1", good, len(data)))
+    assert "FATAL alpha crashed" in out["hookSpecificOutput"]["additionalContext"]
+    # a path the output TEXT names is never read
+    text = "Exit code 1\nFull output saved to: " + str(good)
+    assert _failure_hook(_fail_payload(workspace_dir, "s1", error=text)) == {}
+    # another session's file, a file outside tool-results, a wrong size
+    other = _persisted(tmp_path, "s2", data)
+    assert _failure_hook(_fail_payload(workspace_dir, "s1", other, len(data))) == {}
+    outside = _persisted(tmp_path, "s1", data, folder="elsewhere")
+    assert _failure_hook(_fail_payload(workspace_dir, "s1", outside, len(data))) == {}
+    assert _failure_hook(_fail_payload(workspace_dir, "s1", good, len(data) + 1)) == {}
+
+
+def test_failure_hook_bounds_the_bytes_it_reads(state_home, workspace_dir, tmp_path, monkeypatch):
+    import ctx.hook as hook
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    data = _log().encode()
+    good = _persisted(tmp_path, "s1", data)
+    monkeypatch.setattr(hook, "_FAILURE_FULL_MAX", len(data) - 1)
+    assert _failure_hook(_fail_payload(workspace_dir, "s1", good, len(data))) == {}
+
+
+def test_failure_path_digest_is_no_larger_than_the_success_path(state_home, workspace_dir):
+    ok, _ = _run(workspace_dir)
+    ws = make_ws(workspace_dir)
+    bad, _ = digest_output(make_store(ws), ws, "Bash", _log(), argv=["./ci.sh"], is_error=True)
+    assert len(bad.encode()) <= len(ok.encode()) + 16

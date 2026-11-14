@@ -100,6 +100,11 @@ REDACTION_PATTERNS: dict[str, re.Pattern[str]] = {
     ),
     "google-api-key": re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
     "generic-api-token": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    # A password inside a URL (`postgres://admin:pw@host/db`): the userinfo
+    # part, user and password, up to the `@`.
+    "url-credentials": re.compile(
+        r"\b[A-Za-z][A-Za-z0-9+.-]{1,20}://[^\s:/@'\"<>]{1,128}:[^\s@/'\"<>]{1,256}@"
+    ),
 }
 
 
