@@ -16,7 +16,7 @@ metadata:
 
 ## Goal
 
-Keep the transcript bounded and append-only. Full payloads live in CTX artifacts; the conversation receives only deterministic digests and exact evidence slices.
+Keep the transcript bounded and append-only: full payloads live in CTX artifacts, the conversation gets deterministic digests and exact slices.
 
 ## Required behavior
 
@@ -26,7 +26,7 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 4. Search the working repository with `ctx search repo: '<pattern>' --glob '<glob>'` rather than broad raw grep output. Bound the file set *before* an expensive scan: `ctx q 'corpus --ext py --changed | ...'` (or the `repo.files` plan op) selects the eligible files with a coverage receipt — select files, then scan.
 5. Read only exact evidence using `ctx get <ref> --lines A:B`, `--bytes`, `--records`, `--json-pointer`, `--symbol`, or `--span <token>` (span tokens appear in digests at omission points; resolving one is always bounded).
 6. Use `ctx stats <ref>` for schema, counts, heavy hitters, and structured summaries.
-7. Treat artifact handles and coordinates as evidence citations. Preserve them in plans, findings, and checkpoints.
+7. Treat handles and coordinates as evidence citations; keep them in plans, findings, and checkpoints. Digest excerpts are verbatim with real line numbers, "(exact)" counts are exact, and "all N distinct messages are above" means no others exist: fetch only what a digest lists as not shown.
 8. Never re-run a command merely to recover output already stored under a handle.
 9. Never inspect the CTX backing-store path directly and never paste a complete blob into the conversation.
 10. Prefer one multi-pattern search over serial single-pattern searches.
@@ -38,8 +38,7 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
     output becomes a `checkpoint:` your dependents read; you do not need to
     repeat it.
 11. Cite evidence by handle and coordinate (`run:<id>#stdout L14238`), never
-    by re-quoting it: quoted evidence duplicates context and burns output
-    tokens, while the citation resolves exactly for any reader.
+    by re-quoting it: the citation resolves exactly for any reader.
 12. Keep intermediate narration to one terse line per step; reserve full
     prose for the final user-facing report. Terseness governs scripts and
     intermediate narration only — never the final deliverable, which must
@@ -48,10 +47,8 @@ Keep the transcript bounded and append-only. Full payloads live in CTX artifacts
 13. Apply the solution ladder before writing any code — prefer in order:
     not needed at all, reuse what exists, a native platform/runtime feature,
     standard library, a one-liner, minimal new code. Be lazy about the
-    solution, never about reading. Reuse ranks above stdlib deliberately:
-    in a codebase with its own vocabulary, hand-rolling with `hashlib` what
-    the repo already exposes as a shared helper is the wrong move even
-    though both are "simple". The ladder does **not** apply to trust
+    solution, never about reading. Reuse ranks above stdlib: hand-rolling
+    what the repo already exposes as a shared helper is the wrong move. The ladder does **not** apply to trust
     boundaries, data loss, security, or accessibility — on those four,
     write the fuller version. Deliberately deferred improvements are
     declared (`ctx debt add "<note>" --ref repo:file:line`), never silently

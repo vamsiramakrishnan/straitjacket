@@ -914,21 +914,22 @@ def _render_claude_md(exe: str) -> str:
 {_CODEX_MARK_START}
 ## Context harness (ctx / straitjacket)
 
-This workspace is harnessed by `{exe}`. Noisy command and file output is
-captured at the source and returned as a bounded, addressable digest — work
-*with* it rather than paging or pre-filtering around it.
+This workspace is harnessed by `{exe}`: noisy output comes back as a
+bounded, addressable digest — work *with* it, don't page around it.
 
-- Answer code questions with `ctx ask "<q>" --intent locate|impact` (where
-  X is defined/used; what breaks if X changes) — one bounded evidence view
-  instead of a search/read/search loop. Pass `--symbol X` unless the
-  question has one unambiguous identifier.
-- Compose typed facts with `ctx q '<stage> | <stage>'` (bounded, total)
-  instead of piping through grep/awk/jq: `refs X | group file | top 3 | get`.
-- Capture noisy commands with `ctx run -- <cmd>`; pull exact bytes with
-  `ctx get <handle>`. Cite handles/coordinates instead of re-quoting output.
+- Answer code questions with `ctx ask "<q>" --intent locate|impact` (where X
+  is used; what breaks if it changes), not a search/read loop; add
+  `--symbol X` unless the question names one identifier.
+- Compose facts with `ctx q '<stage> | <stage>'` instead of piping
+  through grep/awk/jq: `refs X | group file | top 3 | get`.
+- Capture noisy commands with `ctx run -- <cmd>`; pull bytes with `ctx get
+  <handle>`; cite handles, don't re-quote output.
+- Digest excerpts are verbatim with real line numbers; "(exact)" counts are
+  exact; "all N distinct messages are above" means no others exist. Fetch
+  only what it lists as not shown.
 - Only for output captured by `ctx run`: `ctx ask --intent diagnose`,
   `ctx q 'fails last | in-changed'`, `ctx q 'records run:<id>#stdout'`.
-- For an existing file (a log): grep, Read windows, or
+- For an existing file: grep, Read windows, or
   `ctx search repo:<file> PATTERN`.
 {_CODEX_MARK_END}
 """
