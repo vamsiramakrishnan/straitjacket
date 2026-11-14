@@ -5809,6 +5809,9 @@ def _emission_gate(payload: dict[str, Any], flavor: str, reserve: int = 0) -> st
             # watching `digest` wants a peer's expensive output, not an echo
             # of the flood it just produced itself.
             producer=_relay_subscriber(flavor, payload),
+            # A live delivery: [picker] mode shadow/model may consult the
+            # decision endpoint here (never by default).
+            picker=True,
         )
         if not isinstance(text, str) or not text.strip():
             raise ValueError("digest produced no text")
@@ -6172,11 +6175,13 @@ def main_post_tool_use_failure(flavor: str = "claude-code") -> int:
     Claude Code fires PostToolUse only for tools that succeeded; a failed
     tool -- an edit whose ``old_string`` matched nothing, a command that
     exited non-zero -- fires PostToolUseFailure instead, whose contract can
-    add context but cannot replace the result. So this stage only observes:
-    it records the edit outcome (the failure half of the edit ledger, which
+    add context but cannot replace the result. So this stage observes -- it
+    records the edit outcome (the failure half of the edit ledger, which
     PostToolUse alone can never see) and one coverage row with the failure
-    text's size, so failure output shows up as the ungoverned bytes it is.
-    Always writes ``{}``; every error is swallowed.
+    text's size, so failure output shows up as the ungoverned bytes it is --
+    and, for an over-budget shell failure, adds the stored output's digest
+    and evidence map as ``additionalContext`` (:func:`_failure_evidence`).
+    Writes ``{}`` otherwise; every error is swallowed.
     """
     payload: dict[str, Any] = {}
     try:
@@ -6199,9 +6204,95 @@ def main_post_tool_use_failure(flavor: str = "claude-code") -> int:
                            payload, kind, "observe", "failed", size, size)
     except Exception:
         pass
-    sys.stdout.write("{}\n")
+    context = None
+    try:
+        context = _failure_evidence(payload, flavor)
+    except Exception as exc:
+        try:
+            _note_guard_failure(_resolve_workspace_root(payload), op="post_failure",
+                                stage="evidence", exc=exc)
+        except Exception:
+            pass
+    if context:
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PostToolUseFailure", "additionalContext": context}},
+            sort_keys=True) + "\n")
+    else:
+        sys.stdout.write("{}\n")
     sys.stdout.flush()
     return 0
+
+
+_PERSISTED_RE = re.compile(r"Full output saved to: (\S+)")
+
+
+def _failure_persisted_output(payload: dict[str, Any], text: str) -> str | None:
+    """Claude Code's saved full output named in a failure text, trusted only
+    inside THIS session's ``tool-results`` directory (as
+    :func:`_host_full_output`), a regular file of at most ``_HOST_FULL_MAX``."""
+    m = _PERSISTED_RE.search(text)
+    session = str(payload.get("session_id") or "")
+    if not m or not session or "/" in session or session in (".", ".."):
+        return None
+    path = m.group(1)
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    projects = os.path.realpath(os.path.join(config, "projects"))
+    real = os.path.realpath(path)
+    if real != os.path.abspath(path) or not real.startswith(projects + os.sep):
+        return None
+    parts = os.path.relpath(real, projects).split(os.sep)
+    if len(parts) != 4 or parts[1] != session or parts[2] != "tool-results":
+        return None
+    import stat as _stat
+
+    st = os.lstat(real)
+    if not _stat.S_ISREG(st.st_mode) or st.st_size > _HOST_FULL_MAX:
+        return None
+    with open(real, "rb") as fh:
+        return fh.read(_HOST_FULL_MAX).decode("utf-8", "replace")
+
+
+def _failure_evidence(payload: dict[str, Any], flavor: str) -> str | None:
+    """Additional context for a failed shell command on Claude Code.
+
+    A command that exits non-zero reaches only PostToolUseFailure, which can
+    add context but not replace the output. When the failure text (or the
+    full output Claude Code saved, which the text names) is over the output
+    budget, the output is stored like the gate stores it and its digest --
+    header with the ``run:`` handle, the evidence map, next steps -- is added.
+    A ``ctx run`` digest is already that, so it is left alone."""
+    if flavor != "claude-code":
+        return None
+    name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    if name != "Bash":
+        return None
+    text = str(payload.get("error") or "")
+    if "[ctx " in text and _ran_ctx(payload):
+        return None
+    ws_root = _resolve_workspace_root(payload)
+    if not ws_root:
+        return None
+    policy = _load_guard_policy(ws_root)
+    if str(policy.get("mode")) == "advisory":
+        return None
+    threshold = int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT))
+    full = _failure_persisted_output(payload, text) or text
+    if len(full.encode("utf-8", "replace")) <= threshold:
+        return None
+    from ctx.digest import digest_output
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+
+    ws = resolve_workspace(ws_root)
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    command = _tool_command(payload)
+    digest, _short = digest_output(store, ws, name, full, "", is_error=True,
+                                   argv=_command_argv(command), contained=False,
+                                   producer=_relay_subscriber(flavor, payload), picker=True)
+    if "evidence map (exact" not in digest:
+        return None
+    return ("[ctx] this failed command's output is stored; its digest and evidence map:\n"
+            + digest)
 
 
 def _internal_error_setting(
