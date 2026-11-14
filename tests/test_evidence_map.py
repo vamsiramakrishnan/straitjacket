@@ -141,10 +141,10 @@ def test_unique_id_lines_still_collapse_and_say_so():
     emap = E.build(ctx)
     assert len(emap.messages) == 1
     m = emap.messages[0]
-    assert m.count == 300 and m.varies == [(f"req-{7919}x", 300)]
+    assert m.count == 300 and [v.distinct for v in m.varies] == [300]
     text = "\n".join(E.render(ctx, emap, cap_bytes=1500).lines)
-    assert "(300 distinct values)" in text
-    assert "values marked varies are collapsed" in text
+    assert "varies: 300 distinct values" in text
+    assert "a message marked varies stands for several values" in text
 
 
 def test_volatile_parts_are_masked_unconditionally():
@@ -478,11 +478,119 @@ def test_cards_state_the_digest_guarantee_without_growing():
     for card in (claude, codex, skill):
         flat = " ".join(card.split())
         assert "verbatim with real line numbers" in flat
-        assert '"every error-like line is one of these N messages" is literally true' in flat
-        assert "varies = collapsed values" in flat
+        assert '"every error-like line is one of these N messages" is true' in flat
+        assert '"varies" message stands for several values, listed on its row or by its command' in flat
         assert "no others exist" not in flat
         assert "not shown" in flat
     assert "Reuse ranks above stdlib deliberately" in skill
     assert len(claude) <= 1092
     assert len(codex.encode()) <= 2183
     assert len(skill.encode()) <= 11438
+
+
+# ---------------------------------------------------------------- varies (round 3)
+def _codes_log():
+    rows = [f"2025-03-01 10:{(i // 60) % 60:02d}:{i % 60:02d} INFO worker heartbeat ok"
+            for i in range(3000)]
+    for j in range(1000):
+        rows[2 + j * 3] = f"2025-03-01 10:00:00 ERROR worker exit code {1000 + (j % 499)}"
+    rows[2981] = "2025-03-01 10:49:40 ERROR worker exit code 137"
+    return _log(rows)
+
+
+def test_many_valued_slot_shows_its_rare_values_and_a_command_that_lists_its_lines(
+        state_home, workspace_dir):
+    from ctx.retrieval import Selector, get
+
+    digest, rid, ws, store = _digest(workspace_dir, _codes_log())
+    assert "varies: 500 distinct values; seen at most twice:" in digest
+    assert "137 ×1 L2982" in digest
+    m = re.search(r"all (?:its lines|lines of L\d+): ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", digest)
+    assert m
+    nxt = digest.split("\nnext:\n", 1)[1]
+    assert f"ctx get {m.group(1)} --span {m.group(2)}" in nxt        # top collapsed in next:
+    out = get(store, ws, m.group(1), Selector(span=m.group(2)))
+    assert "message lines (exact): 1,000" in out
+    seen = set(re.findall(r"^L(\d+): ", out, re.M))
+    for _ in range(30):
+        more = re.search(r"next: ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", out)
+        if not more:
+            break
+        out = get(store, ws, more.group(1), Selector(span=more.group(2)))
+        seen |= set(re.findall(r"^L(\d+): ", out, re.M))
+    assert len(seen) == 1000 and "2982" in seen
+
+
+def test_few_valued_collapsed_slot_prints_every_value():
+    rows = ["2025-03-01 10:00:00 INFO applying batch ok"] * 2000
+    rows[9] = "2025-03-01 10:00:09 ERROR migration 0041 failed"
+    rows[54] = "2025-03-01 10:00:54 ERROR migration 0042 failed"
+    rows[89] = "2025-03-01 10:01:29 ERROR migration 0043 failed"
+    ctx = _view_ctx(_log(rows))
+    text = "\n".join(E.render(ctx, E.build(ctx), cap_bytes=1500).lines)
+    assert "varies: 0041 ×1 L10 · 0042 ×1 L55 · 0043 ×1 L90" in text
+    assert "distinct values)" not in text
+
+
+@pytest.mark.parametrize("n", [8, 9])
+def test_the_8_9_boundary(n):
+    rows = ["INFO ok"] * 400
+    for j in range(n):
+        rows[10 + j * 30] = f"ERROR job j{j:02d}x aborted"
+    ctx = _view_ctx(_log(rows))
+    emap = E.build(ctx)
+    text = "\n".join(E.render(ctx, emap, cap_bytes=1500).lines)
+    assert len(emap.messages) == 1
+    if n == 8:
+        for j in range(n):
+            assert f"j{j:02d}x ×1 L{11 + j * 30}" in text
+    else:
+        assert "varies: 9 distinct values; seen at most twice: j00x ×1 L11" in text
+        assert "(+6 more)" in text
+
+
+def test_a_quoted_string_is_one_value():
+    rows = ['ts=2025-03-01T10:00:00Z level=info msg="tick ok"'] * 2000
+    for j in range(30):
+        rows[10 + j * 50] = 'ts=2025-03-01T10:00:00Z level=error msg="quota exceeded" svc=api'
+    rows[1990] = 'ts=2025-03-01T10:00:00Z level=error msg="deadline exceeded" svc=api'
+    emap = E.build(_view_ctx(_log(rows)))
+    assert len(emap.messages) == 2
+    assert E.skeleton('level=error msg="quota exceeded" svc=api')[1] == \
+        ("level=error", 'msg="quota exceeded"', "svc=api")
+    assert E.skeleton("Can't resolve './x' here")[1] == ("Can't", "'./x'")
+
+
+def test_rows_never_print_one_distinct_value_or_an_empty_cut():
+    rows = ["INFO ok"] * 600
+    for j in range(40):
+        rows[5 + j * 13] = (f"FAILED tests/test_cache.py::test_case_number_{j}_with_a_long_name "
+                            f"in shard {j % 2}")
+    ctx = _view_ctx(_log(rows))
+    text = "\n".join(E.render(ctx, E.build(ctx), cap_bytes=1500).lines)
+    assert "(1 distinct values)" not in text
+    assert "+0 chars" not in text
+    assert E._shown_line("x" * 50, 32, set()) == "x" * 32 + " … +18 chars"
+
+
+def test_8_bit_csi_is_stripped():
+    assert E.strip_ansi("\x9b31mERROR\x9b0m boom") == "ERROR boom"
+    rows = ["INFO ok"] * 300
+    rows[50] = "\x9b31mERROR\x9b0m disk failed"
+    ctx = _view_ctx(_log(rows))
+    text = "\n".join(E.render(ctx, E.build(ctx), cap_bytes=1500).lines)
+    assert "\x9b" not in text and "L51: ERROR disk failed" in text
+
+
+def test_a_budget_too_small_for_the_map_says_so(state_home, workspace_dir):
+    digest, _, _, _ = _digest(workspace_dir, _codes_log())
+    out = E.deliver(digest, 20)
+    assert "evidence map omitted: budget" in out and "evidence map (exact" not in out
+
+
+def test_url_credentials_with_an_empty_user_are_redacted():
+    from ctx.textutil import REDACTION_PATTERNS, redact
+
+    out, fired = redact("cache redis://:hunter2pass@cache:6379/0 up", tuple(REDACTION_PATTERNS))
+    assert "hunter2pass" not in out and fired == ["url-credentials"]
+    assert redact("see http://host:8080/x", tuple(REDACTION_PATTERNS))[1] == []

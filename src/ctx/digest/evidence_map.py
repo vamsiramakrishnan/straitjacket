@@ -63,11 +63,13 @@ MAP_VERSION = "evmap/v2"
 ACCOUNT_PREFIX = "evidence map (exact"
 
 # ---------------------------------------------------------------- ANSI
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x9b[0-9;?]*[ -/]*[@-~]"
+                      r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
 
 
 def strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text) if "\x1b" in text else text
+    """Remove 7-bit (ESC [) and 8-bit (CSI, U+009B) escape sequences."""
+    return _ANSI_RE.sub("", text) if ("\x1b" in text or "\x9b" in text) else text
 
 
 # ---------------------------------------------------------------- signal scan
@@ -142,6 +144,13 @@ _VOLATILE_RES = (
     (re.compile(r"\bthread[-_ ]?\d+\b", re.IGNORECASE), "thread-<tid>"),
 )
 _SLOT_RE = re.compile(r"[\d/'\"`@=]")
+#: Tokens: a quoted string (with any key= prefix and trailing punctuation) is
+#: ONE token, so `msg="quota exceeded"` and `msg="deadline exceeded"` are two
+#: values of one slot; a single quote opens a string only at a token start
+#: or after `=`, `:`, `(` or `[` (so "can't" stays a word).
+_TOKEN_RE = re.compile(
+    r"""[^\s"'`]*(?:"[^"\n]{0,200}"|`[^`\n]{0,200}`|(?:(?<=[=:(\[])|(?<!\S))'[^'\n]{0,200}')\S*"""
+    r"""|\S+""")
 _PLACEHOLDERS = ("<ts>", "<dur>", "<hex>", "<uuid>", "pid=<pid>", "pid:<pid>", "[<pid>]", "<pid>",
                  "<tid>")
 
@@ -153,7 +162,7 @@ def skeleton(line: str) -> tuple[str, tuple[str, ...]]:
         s = rx.sub(rep, s)
     out: list[str] = []
     vals: list[str] = []
-    for tok in s.split():
+    for tok in _TOKEN_RE.findall(s):
         bare = tok
         if "<" in tok:
             for ph in _PLACEHOLDERS:
@@ -174,6 +183,18 @@ def message_key(line: str) -> str:
 
 # ---------------------------------------------------------------- the map
 @dataclass
+class Varies:
+    """A collapsed slot of one message: its position, and every value it
+    took with (count, first line)."""
+    slot: int
+    values: dict[str, list[int]]
+
+    @property
+    def distinct(self) -> int:
+        return len(self.values)
+
+
+@dataclass
 class Message:
     stream: str
     key: str
@@ -182,8 +203,11 @@ class Message:
     first: int
     last: int
     focus: int = 0
-    #: collapsed slots: (value in the sample line, distinct values)
-    varies: list[tuple[str, int]] = field(default_factory=list)
+    #: collapsed slots that take more than one value in this message
+    varies: list[Varies] = field(default_factory=list)
+    skel: str = ""
+    #: split slot values (slot index -> value) that define the message
+    fixed: dict[int, str] = field(default_factory=dict)
 
     def ref(self) -> str:
         return f"{self.stream}:L{self.first}"
@@ -215,26 +239,30 @@ def _group(stream: str, rows: list[tuple[int, int, tuple[str, ...]]], skel: str,
         # (3+ lines, all different: an id or a counter, not a category).
         split.append(len(seen) <= FEW_VALUES and (len(seen) < count or count <= 2))
     msgs: dict[tuple[str, ...], list[Any]] = {}
+    coll_j = [j for j in range(nslots) if not split[j]]
     for n, tier, vals in rows:
         key = tuple(v for j, v in enumerate(vals) if split[j])
         rec = msgs.get(key)
         if rec is None:
-            rec = msgs[key] = [n, n, 0, tier, [set() for j in range(nslots) if not split[j]], vals]
+            rec = msgs[key] = [n, n, 0, tier, [{} for _ in coll_j], vals]
         rec[1] = n
         rec[2] += 1
         rec[3] = max(rec[3], tier)
-        col = 0
-        for j in range(nslots):
-            if not split[j]:
-                rec[4][col].add(vals[j])
-                col += 1
+        for c, j in enumerate(coll_j):
+            d = rec[4][c].get(vals[j])
+            if d is None:
+                rec[4][c][vals[j]] = [1, n]
+            else:
+                d[0] += 1
     out = []
-    for key, (first, last, count, tier, sets, sample_vals) in msgs.items():
-        coll = [sample_vals[j] for j in range(nslots) if not split[j]]
+    for key, (first, last, count, tier, dicts, sample_vals) in msgs.items():
         low = lines[first - first_line].lower()
-        out.append(Message(stream, skel + "\x00" + "\x00".join(key), tier, count, first, last,
-                           sum(1 for t in terms if t in low),
-                           [(coll[c], len(s)) for c, s in enumerate(sets)]))
+        out.append(Message(
+            stream, skel + "\x00" + "\x00".join(key), tier, count, first, last,
+            sum(1 for t in terms if t in low),
+            # a slot constant within this message is not "varies"
+            [Varies(j, d) for j, d in zip(coll_j, dicts) if len(d) > 1],
+            skel, {j: v for j, v in enumerate(sample_vals) if split[j]}))
     return out
 
 
@@ -346,9 +374,9 @@ def _shown_line(text: str, width: int, fired: set[str]) -> str:
         return text
     m = _SIGNAL_POS_RE.search(text)
     pos = m.start() if m else 0
-    if pos + 30 <= width:
-        return clip_redacting(text, width) + f" … +{len(text) - width} chars"
     a = max(0, pos - _WINDOW_LEAD)
+    if pos + 30 <= width or a == 0:
+        return clip_redacting(text, width) + f" … +{len(text) - width} chars"
     rest = tail_redacting(text, len(text) - a)
     shown = clip_redacting(rest, width)
     after = len(rest) - len(shown)
@@ -404,11 +432,52 @@ def _loc(stream: str, n: int) -> str:
     return f"L{n}" if stream == "stdout" else f"{stream}:L{n}"
 
 
+#: rare values of a many-valued slot printed on the row, at most
+RARE_VALUES_SHOWN = 3
+_VALUE_CHARS = 32
+
+
+def _value(v: str, fired: set[str]) -> str:
+    return _shown_line(v, _VALUE_CHARS, fired)
+
+
 def _varies(m: Message, fired: set[str]) -> str:
+    """Every value of a few-valued collapsed slot with count and first line;
+    for a many-valued one, its count and its rarest values (seen once or
+    twice) with their lines. The command that lists the message's lines is
+    printed separately (:func:`_lines_cmd`)."""
     if not m.varies:
         return ""
-    bits = [f"`{_shown_line(v, 24, fired)}` ({fmt_int(c)} distinct values)" for v, c in m.varies]
-    return " · varies: " + ", ".join(bits)
+    bits = []
+    for v in m.varies:
+        items = sorted(v.values.items(), key=lambda kv: kv[1][1])
+        if v.distinct <= FEW_VALUES:
+            bits.append(" · ".join(f"{_value(val, fired)} ×{fmt_int(c)} L{n}" for val, (c, n) in items))
+        else:
+            rare = sorted((kv for kv in items if kv[1][0] <= 2), key=lambda kv: (kv[1][0], kv[1][1]))
+            text = f"{fmt_int(v.distinct)} distinct values"
+            if rare:
+                shown = rare[:RARE_VALUES_SHOWN]
+                text += "; seen at most twice: " + " · ".join(
+                    f"{_value(val, fired)} ×{c} L{n}" for val, (c, n) in shown)
+                if len(rare) > len(shown):
+                    text += f" (+{fmt_int(len(rare) - len(shown))} more)"
+            bits.append(text)
+    return " · varies: " + "; ".join(bits)
+
+
+def _lines_cmd(ctx: Any, m: Message, rid: str) -> str | None:
+    """The exact, bounded command that lists every line of message ``m``
+    (a ``message_lines`` span over the stored stream)."""
+    if not m.varies or not hasattr(ctx, "mint_span"):
+        return None
+    import json
+
+    view = ctx.stderr if m.stream == "stderr" else ctx.stdout
+    spec = json.dumps({"sk": m.skel, "fixed": {str(k): v for k, v in sorted(m.fixed.items())}},
+                      sort_keys=True)
+    sid = ctx.mint_span(view, "message_lines", template=spec)
+    return f"ctx get {rid}#{m.stream} --span {sid}" if sid else None
 
 
 def _size(rows: list[str]) -> int:
@@ -436,9 +505,14 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
             m = msgs[i]
             span = (f"first {_loc(m.stream, m.first)}  last {_loc(m.stream, m.last)}"
                     if m.count > 1 else _loc(m.stream, m.first))
-            r = row_text[i] = (f"    ×{fmt_int(m.count)}  {span}  "
-                               f"{_shown_line(line_of(emap, m.stream, m.first).strip(), LIST_SAMPLE_CHARS, fired)}"
-                               f"{_varies(m, fired)}")
+            r = (f"    ×{fmt_int(m.count)}  {span}  "
+                 f"{_shown_line(line_of(emap, m.stream, m.first).strip(), LIST_SAMPLE_CHARS, fired)}"
+                 f"{_varies(m, fired)}")
+            if any(v.distinct > FEW_VALUES for v in m.varies):
+                cmd = _lines_cmd(ctx, m, rid)
+                if cmd:
+                    r += f" · all its lines: {cmd}"
+            row_text[i] = r
         return r
 
     def fit_rows(exclude: set[int], room: int) -> tuple[list[int], int]:
@@ -463,17 +537,24 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
                 if m.count == 1 and m.stream == stream and a <= m.first <= b:
                     shown.add(i)
             head = f"  {stream} L{a}-L{b}"
+            cmds: list[str] = []
             for idx in members:
                 m = msgs[idx]
                 bits = []
                 if m.count > 1:
-                    bits.append(f"L{m.first} recurs ×{fmt_int(m.count)}, last L{m.last}"
-                                + _varies(m, fired).replace(" · varies:", ", varies:"))
+                    bit = (f"L{m.first} recurs ×{fmt_int(m.count)}, last L{m.last}"
+                           + _varies(m, fired).replace(" · varies:", ", varies:"))
+                    if any(v.distinct > FEW_VALUES for v in m.varies):
+                        cmd = _lines_cmd(ctx, m, rid)
+                        if cmd:
+                            cmds.append(f"    all lines of L{m.first}: {cmd}")
+                    bits.append(bit)
                 if idx in labels:
                     bits.append(f"L{m.first} picked by {labels[idx]}")
                 if bits:
                     head += " · " + " · ".join(bits)
             out.append(head + ":")
+            out.extend(cmds)
             for n in range(a, b + 1):
                 out.append(f"    L{n}: {_shown_line(line_of(emap, stream, n), EXCERPT_LINE_CHARS, fired)}")
         return out, shown, len(wins), sum(w[2] - w[1] + 1 for w in wins)
@@ -523,6 +604,12 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
         out.append("  other messages (×count · lines · first sample):")
         out.extend(row(i) for i in listed)
     suggestions: list[str] = []
+    top_varied = next((i for i in range(len(msgs)) if (i in shown or i in listed)
+                       and any(v.distinct > FEW_VALUES for v in msgs[i].varies)), None)
+    if top_varied is not None:
+        cmd = _lines_cmd(ctx, msgs[top_varied], rid)
+        if cmd:
+            suggestions.append(cmd)
     if listed:
         m = msgs[listed[0]]
         suggestions.append(
@@ -530,8 +617,10 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
             f"{min(n_lines(emap, m.stream), m.first + EXCERPT_CONTEXT)}")
     if unlisted == 0 and not emap.partial:
         varies = any(msgs[i].varies for i in range(total))
-        out.append(f"  every error-like line is one of these {fmt_int(total)} messages"
-                   + ("; values marked varies are collapsed." if varies else "."))
+        what = (f"one of these {fmt_int(total)} messages" if total > 1 else "this one message")
+        out.append(f"  every error-like line is {what}"
+                   + ("; a message marked varies stands for several values, shown on its line "
+                      "or listed by its command." if varies else "."))
     if unlisted:
         cmds = []
         for stream in ("stderr", "stdout"):
@@ -654,7 +743,7 @@ def map_supported(text: str) -> bool:
         return False
     body = lines[a + 1:b]
     rows = sum(1 for ln in body if ln.startswith("    ×"))
-    closing = any(ln.startswith("  every error-like line is one of these") for ln in body)
+    closing = any(ln.startswith("  every error-like line is ") for ln in body)
     notlisted = any(re.match(r"^  \+[\d,]+ distinct messages not listed", ln) for ln in body)
     if rows != listed:
         return False
@@ -688,10 +777,11 @@ def fit_digest(text: str, budget_tokens_: int, reserve_bytes: int = 0) -> str:
     need = _size(pre[:1]) + _size([marker]) + _size(mp)
     if need > budget:
         handle = re.search(r"\[ctx run:([0-9a-f]+|PENDING)", text)
-        note = "evidence map omitted: it did not fit the output budget"
+        note = "evidence map omitted: budget"
         if handle:
             note += f"; ctx get run:{handle.group(1)}#stdout --lines 1:40 to start reading"
-        return "\n".join(pre + [note] + post)
+        # right under the header line, so a later cut cannot remove it
+        return "\n".join(pre[:1] + [note] + pre[1:] + post)
     keep = 1
     while keep < len(pre) and _size(pre[:keep + 1]) + _size([marker]) + _size(mp) <= budget:
         keep += 1
@@ -709,8 +799,7 @@ def drop_map(text: str) -> str:
     if sec is None:
         return text
     lines, a, b = sec
-    return "\n".join(lines[:a] + ["evidence map omitted: it did not fit the output budget"]
-                     + lines[b:])
+    return "\n".join(lines[:1] + ["evidence map omitted: budget"] + lines[1:a] + lines[b:])
 
 
 def deliver(text: str, budget: int, continuation: str | None = None,
