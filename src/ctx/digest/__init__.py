@@ -15,6 +15,7 @@ from typing import Any
 from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile, from_intake
 from ctx.digest.binprof import BinaryProfile
+from ctx.digest.capped import CappedProfile
 from ctx.digest.delimprof import DelimitedDataProfile
 from ctx.digest.intakeprof import ChunkMapProfile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
@@ -82,7 +83,17 @@ _PROFILES: tuple[Profile, ...] = (
 )
 
 
+#: A capture that passed the cap is described by capped/v1 alone (its
+#: structured profile would number lines by position in the stored part).
+#: Kept out of _PROFILES so the extractor epoch of every other capture is
+#: unchanged.
+_CAPPED = CappedProfile()
+
+
 def detect_profile(ctx: DigestContext) -> tuple[Profile, str]:
+    reason = _CAPPED.detect(ctx)
+    if reason:
+        return _CAPPED, reason
     for profile in _PROFILES:
         reason = profile.detect(ctx)
         if reason:

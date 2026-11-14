@@ -215,6 +215,7 @@ def start_job(
         "cwd": rel_cwd,  # model-visible form (manifest); abs path is operational
         "cwdAbs": str(workdir),
         "timeout": timeout,
+        "captureCapBytes": ws.config.store.max_capture_bytes,
         "focus": focus,
         "state": "launching",
         "createdAt": time.time(),
@@ -283,26 +284,7 @@ def supervise_main(jobdir_str: str) -> int:
     else:
         popen_args, popen_shell = argv, False
 
-    with (jobdir / "stdout").open("wb") as out_fh, (jobdir / "stderr").open("wb") as err_fh:
-        try:
-            proc = subprocess.Popen(
-                popen_args,
-                cwd=meta["cwdAbs"],
-                shell=popen_shell,
-                stdout=out_fh,
-                stderr=err_fh,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,  # own group: killable without touching us
-            )
-        except FileNotFoundError:
-            meta.update(state="failed", error=f"command not found: {argv[0]}")
-            _write_meta(jobdir, meta)
-            return 1
-        except OSError as e:
-            meta.update(state="failed", error=f"spawn failed: {e}")
-            _write_meta(jobdir, meta)
-            return 1
-
+    def started(proc: subprocess.Popen) -> bool:
         meta.update(
             state="running",
             pid=proc.pid,  # pgid == pid (start_new_session)
@@ -310,8 +292,39 @@ def supervise_main(jobdir_str: str) -> int:
             startedAt=time.time(),
         )
         _write_meta(jobdir, meta)
+        return wait_or_kill(proc, meta.get("timeout"))
 
-        timed_out = wait_or_kill(proc, meta.get("timeout"))
+    from ctx.capture import capture_process, command_cap
+
+    try:
+        # The spools are capped exactly as a foreground capture's are
+        # (ctx.capture); the launcher recorded the workspace's cap in meta.
+        outcome = capture_process(
+            popen_args,
+            out_path=jobdir / "stdout",
+            err_path=jobdir / "stderr",
+            cap_bytes=command_cap(meta.get("captureCapBytes")),
+            wait=started,
+            cwd=meta["cwdAbs"],
+            shell=popen_shell,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,  # own group: killable without touching us
+        )
+    except FileNotFoundError:
+        meta.update(state="failed", error=f"command not found: {argv[0]}")
+        _write_meta(jobdir, meta)
+        return 1
+    except OSError as e:
+        meta.update(state="failed", error=f"spawn failed: {e}")
+        _write_meta(jobdir, meta)
+        return 1
+    proc = outcome["proc"]
+    timed_out = outcome["waited"]
+    capture = {k: v for k, v in outcome["capture"].items() if v}
+    if capture:
+        meta["capture"] = capture
+    if outcome["outputLimited"]:
+        meta["outputLimited"] = True
 
     exit_code, sig_name = exit_status(proc.returncode)
     meta.update(
@@ -408,7 +421,8 @@ def finalize_job(ws: Workspace, store: Store, job_id: str) -> tuple[str, dict[st
     for name in ("stdout", "stderr"):
         if not (jobdir / name).exists():  # pragma: no cover - created at start
             (jobdir / name).touch()
-    streams = stream_entries(store, {n: jobdir / n for n in ("stdout", "stderr")})
+    streams = stream_entries(store, {n: jobdir / n for n in ("stdout", "stderr")},
+                             capture=meta.get("capture"))
 
     exit_code = meta.get("exitCode")
     sig_name = meta.get("signal")
@@ -434,6 +448,8 @@ def finalize_job(ws: Workspace, store: Store, job_id: str) -> tuple[str, dict[st
         timed_out=timed_out,
         streams=streams,
     )
+    if meta.get("outputLimited"):
+        manifest["result"]["outputLimited"] = True
     mid = store.put_manifest(manifest, kind="run")
     manifest["id"] = f"sha256:{mid}"
     digest, final_manifest = render_run_digest(store, ws, manifest, focus=meta.get("focus"))
@@ -618,6 +634,13 @@ def job_status(store: Store, job_id: str, *, tail: int | None = None) -> str:
         head_n, tail_n = 0, tail
     else:
         head_n, tail_n = 6, 18
+    over = [n for n in ("stdout", "stderr") if (jobdir / f"{n}.tail").exists()]
+    if over:
+        # Past the head the spool stops growing (ctx.capture): the counts
+        # and the "live tail" above describe the stored head only.
+        lines.append(f"capture: capped ({', '.join(over)}): the counts and excerpt cover "
+                     "the stored head; the rest is kept as a bounded tail and the "
+                     "middle is dropped (exact counts in the final digest)")
     excerpt = _spool_excerpt(jobdir / "stdout", head_n, tail_n)
     if excerpt:
         lines.append("stdout (live tail):")

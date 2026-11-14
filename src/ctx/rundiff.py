@@ -132,6 +132,16 @@ def run_diff(store: Store, ws: Workspace, ref_a_text: str, ref_b_text: str) -> s
 
     streams_a: dict[str, Any] = man_a["streams"]
     streams_b: dict[str, Any] = man_b["streams"]
+    for short, streams in ((a12, streams_a), (b12, streams_b)):
+        for name, meta in streams.items():
+            if isinstance(meta, dict) and isinstance(meta.get("capture"), dict):
+                # The diff numbers lines by position in what is stored; a
+                # capped stream is missing its middle, so those numbers and
+                # its template counts would not be the original stream's.
+                raise RetrievalError(
+                    f"run:{short}#{name} is a capped capture (its middle was not "
+                    "stored); ctx diff compares complete captures only. Compare "
+                    f"its stored head and tail with ctx get run:{short}#{name} --lines A:B")
     raw_scanned = sum(
         int(m.get("bytes", 0)) for m in [*streams_a.values(), *streams_b.values()]
     )

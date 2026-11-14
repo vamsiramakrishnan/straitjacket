@@ -144,6 +144,29 @@ A run has two products:
 
 The digest header contains the run handle. Use it for later retrieval, search, or diff.
 
+### Output that never stops
+
+At most `[store] max_capture_bytes` (64 MiB by default) of one command's output
+is stored: half for stdout and half for stderr, each kept as its first and its
+last quarter of the cap, cut at line breaks where one is near. The middle is
+dropped and counted, and the byte and line counts stay exact. The digest of
+such a run is `capped/v1`: it says `captured X of Y bytes`, which lines were
+kept and which were not stored, and shows the first and last lines under their
+real line numbers. `ctx get --lines`/`--bytes` and `ctx search` use the original
+stream's line numbers and byte offsets; a range wholly inside the dropped middle
+is refused, a range that runs into it stops at the edge and says so, and
+`--records`, `--json-pointer`, spans and `ctx diff` refuse a capped stream.
+
+Past the cap the command keeps running: its output is read and counted but not
+stored, until it exits or `--timeout` stops it, so a large build is never cut
+off at an arbitrary point. A command whose output passes 16 times the cap
+(1 GiB by default) is stopped: its process group is killed, the run reports
+`signal SIGKILL` and `outputLimited`, and the digest says why. Nothing an agent
+can use prints that much, and a generator reaches it in seconds rather than
+running until the timeout. Background jobs (`--bg`, `--bg-after`) follow the
+same rule. A background process the command leaves running (`server &`) keeps
+running; after a second its output is no longer read into the capture.
+
 For an embedding tool, `ctx run --json -- <command>` prints one
 `ctx.command-result/v1` object with the command's exit code or signal, timeout
 state and a full run reference. Complete small text streams remain separate;

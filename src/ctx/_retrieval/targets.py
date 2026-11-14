@@ -4,6 +4,7 @@ streams, blobs, and repo files) and how each kind is resolved."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from ctx import pathglob
 from ctx.refs import Ref
@@ -47,6 +48,9 @@ class SearchTarget:
 
     label: str  # e.g. run:ab12cd34ef56#stdout or repo path
     text: str
+    #: A capped run stream's ctx.capture.CapMap: ``text`` is the stored head
+    #: and tail, and line numbers are mapped back to the original stream.
+    capture: Any = None
 
     @property
     def n_lines(self) -> int:
@@ -107,7 +111,9 @@ def _resolve_run_targets(
         label = f"run:{short}#{name}"
         if glob and not _glob_match(label, glob):  # --glob was documented but never threaded into run: search, making it a silent no-op
             continue
-        targets.append(SearchTarget(label=label, text=text))
+        from ctx.capture import CapMap
+
+        targets.append(SearchTarget(label=label, text=text, capture=CapMap.of(meta)))
     return targets, skipped_binary
 
 

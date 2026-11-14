@@ -299,6 +299,19 @@ def _render_search(
     return result
 
 
+def _capped_row(row: RenderRow, cm) -> RenderRow:
+    """A hit in a capped run stream, renumbered to the original stream; its
+    context lines stop at the dropped middle instead of running across it."""
+    blob_line = row.line_no
+    before = tuple(ln for i, ln in enumerate(row.before)
+                   if cm.same_side(blob_line - len(row.before) + i, blob_line))
+    after = tuple(ln for i, ln in enumerate(row.after, start=1)
+                  if cm.same_side(blob_line + i, blob_line))
+    return RenderRow(target=row.target, line_no=cm.orig_line(blob_line), col_a=row.col_a,
+                     col_b=row.col_b, text=row.text, before=before, after=after,
+                     contextual=row.contextual)
+
+
 def _mint_search_blob(
     store: Store,
     ref_text: str,
@@ -501,6 +514,11 @@ def search(
             )
         )
 
+    capped = [t for t in targets if getattr(t, "capture", None) is not None]
+    if capped:
+        rows = [_capped_row(r, by_label[r.target].capture)
+                if getattr(by_label.get(r.target), "capture", None) is not None else r
+                for r in rows]
     total = len(matches)
     direct_note = ""
     scanned_targets = len(targets)
@@ -549,6 +567,11 @@ def search(
             f"  scanned: {fmt_int(considered)} targets · {fmt_int(scanned_lines)} lines"
             + (f" · {skipped_binary} binary skipped" if skipped_binary else "")
         )
+    for t in capped:
+        cm = t.capture
+        scanned += (f"\n  capped: {t.label} searched {fmt_int(cm.head_bytes + cm.tail_bytes)} "
+                    f"stored of {fmt_int(cm.total_bytes)} bytes; not stored or searched: "
+                    f"{cm.gap_text()}; line numbers are the original stream's")
     return _render_search(
         store, ws, ref, ref_text, patterns, rows,
         mode_all=mode_all,

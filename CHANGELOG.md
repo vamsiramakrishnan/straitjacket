@@ -6,6 +6,12 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- `ctx run` (and background jobs) store at most `[store] max_capture_bytes` (64 MiB)
+  of a command's output: each stream keeps its head and tail, the middle is dropped and
+  counted exactly, and the `capped/v1` digest says `captured X of Y bytes`. Retrieval
+  of a capped stream uses the original line numbers and refuses the dropped middle. A
+  command whose output passes 16 times the cap is stopped (`outputLimited`). A command
+  that never stopped printing used to fill the disk.
 - **BREAKING:** on Claude Code and Codex, shell commands are no longer rewritten or
   approved by default. If you upgrade, commands the hook used to approve silently now go
   through the host's own prompts, as they do without ctx. On Claude Code a hook `allow`

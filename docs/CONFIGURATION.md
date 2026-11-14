@@ -334,6 +334,7 @@ steering, so small sessions aren't taxed.
 |---|---|---|
 | `backend` | `"user-state"` | `user-state` \| `local`. |
 | `retention_days` | `30` | How long artifacts are kept before garbage collection is eligible. |
+| `max_capture_bytes` | `67108864` | Hard cap on the output one captured command stores (64 MiB; stdout and stderr get half each). Past it the stream keeps its first and last quarter of the cap, the middle is dropped and counted, and the digest says `captured X of Y bytes`. The command runs on until it exits or times out, unless its output passes 16 times the cap, which stops it. Values under 4096 are raised to 4096. See [CLI: output that never stops](CLI.md#output-that-never-stops). |
 
 The store lives outside the repo by default, under `~/.local/state/ctx` (or
 `$CTX_STATE_HOME` / `$XDG_STATE_HOME` if set). `local` selects
