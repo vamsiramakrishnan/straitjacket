@@ -375,6 +375,10 @@ class PickerPolicy:
     threshold: float = 0.5
     max_candidates: int = 40
     max_candidate_bytes: int = 600
+    #: connection, home file only: "" no proxy, "env" the environment's,
+    #: or a proxy URL; a CA bundle path ("" = the built-in trust store)
+    proxy: str = ""
+    ca_file: str = ""
     #: where the effective mode came from (shown by `ctx doctor`)
     source: str = "default"
     #: settings that were ignored, and why (shown by `ctx doctor`)
@@ -385,7 +389,7 @@ class PickerPolicy:
 #: an arbitrary secret as the value sent off the machine.
 PICKER_KEY_ENVS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "CTX_PICKER_API_KEY")
 _PICKER_KEYS = ("mode", "endpoint", "model", "api_key_env", "timeout_ms", "threshold",
-                "max_candidates", "max_candidate_bytes")
+                "max_candidates", "max_candidate_bytes", "proxy", "ca_file")
 #: What a workspace ctx.toml or an environment variable may do: only turn
 #: the picker off (mode = "local") or LOWER these limits. Both can be set by
 #: a repository (ctx.toml; a host's project settings can set the hook's
@@ -433,20 +437,70 @@ def user_config_path() -> Path | None:
     return Path(home) / ".config" / "ctx" / "config.toml" if home else None
 
 
-def _file_trusted(path: Path) -> str | None:
-    """None when ``path`` may be trusted, else why not (POSIX: owned by the
-    current user and not writable by group or others)."""
-    if not hasattr(os, "getuid"):
+def current_uid() -> int | None:
+    """The current user id (None where there is none). Tests monkeypatch
+    this, as they do :func:`account_home`."""
+    return os.getuid() if hasattr(os, "getuid") else None
+
+
+_USER_FILE_MAX = 65536
+
+
+def _stat_problem(st: os.stat_result) -> str | None:
+    uid = current_uid()
+    if uid is None:
         return None
-    try:
-        st = path.stat()
-    except OSError as e:
-        return f"cannot stat ({type(e).__name__})"
-    if st.st_uid != os.getuid():
+    if st.st_uid != uid:
         return "not owned by the current user"
     if st.st_mode & 0o022:
         return "writable by group or others"
     return None
+
+
+def file_trust_problem(path: str | Path) -> str | None:
+    """None when ``path`` may be trusted (POSIX: owned by the current user,
+    not writable by group or others), else why not."""
+    try:
+        st = os.stat(path)
+    except OSError as e:
+        return f"cannot stat ({type(e).__name__})"
+    return _stat_problem(st)
+
+
+def _read_trusted(path: Path) -> tuple[str | None, str | None]:
+    """(text, None) or (None, why): the file is opened once and the owner
+    and mode are checked on THAT descriptor (fstat) before it is read from,
+    so nothing can be swapped in between the check and the read."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as e:
+        return None, f"cannot open ({type(e).__name__})"
+    try:
+        import stat as _stat
+
+        st = os.fstat(fd)
+        if not _stat.S_ISREG(st.st_mode):
+            return None, "not a regular file"
+        why = _stat_problem(st)
+        if why:
+            return None, why
+        data = b""
+        while len(data) <= _USER_FILE_MAX:
+            chunk = os.read(fd, 16384)
+            if not chunk:
+                break
+            data += chunk
+        if len(data) > _USER_FILE_MAX:
+            return None, "too large"
+        return data.decode("utf-8"), None
+    except (OSError, UnicodeDecodeError) as e:
+        return None, f"unreadable ({type(e).__name__})"
+    finally:
+        os.close(fd)
+
+
+#: Values of CTX_PICKER_MODE / mode that mean off.
+_OFF_WORDS = ("local", "off", "0", "false", "no", "none", "disabled")
 
 
 def resolve_picker(ws_raw: Any, workspace_root: Path | None) -> PickerPolicy:
@@ -462,16 +516,16 @@ def resolve_picker(ws_raw: Any, workspace_root: Path | None) -> PickerPolicy:
     source = "default"
     notes: list[str] = []
     path = user_config_path()
-    if path is not None and path.is_file():
-        why = _file_trusted(path)
+    if path is not None and os.path.lexists(path):
+        text, why = _read_trusted(path)
         if why:
             notes.append(f"{path} ignored: {why}")
         else:
             import tomllib
 
             try:
-                user = tomllib.loads(path.read_text(encoding="utf-8")).get("picker")
-            except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+                user = tomllib.loads(text or "").get("picker")
+            except tomllib.TOMLDecodeError:
                 user = None
                 notes.append(f"{path} ignored: unreadable")
             if isinstance(user, dict):
@@ -491,10 +545,15 @@ def resolve_picker(ws_raw: Any, workspace_root: Path | None) -> PickerPolicy:
         nonlocal pol, source
         ignored = []
         for k, v in items.items():
-            if k == "mode" and isinstance(v, str) and v.strip().casefold() == "local":
+            word = v.strip().casefold() if isinstance(v, str) else None
+            if k == "mode" and word in _OFF_WORDS:
                 if pol.mode != "local":
                     pol = replace(pol, mode="local")
                     source += f"; disabled by {where}"
+            elif k == "mode" and word == "shadow" and pol.mode in ("shadow", "model"):
+                if pol.mode == "model":       # lowering model to shadow is allowed
+                    pol = replace(pol, mode="shadow")
+                    source += f"; lowered to shadow by {where}"
             elif k in _PICKER_LOWER:
                 lowered = _coerce_like(getattr(proto, k), v)
                 if lowered < getattr(pol, k):

@@ -49,12 +49,57 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise PickerError("redirect refused")
 
 
+def tls_context(ca_file: str = "") -> "ssl.SSLContext":
+    """A verifying TLS context that does NOT read ``SSL_CERT_FILE`` or
+    ``SSL_CERT_DIR``: the trust store is the interpreter's compiled-in
+    default (``ssl.get_default_verify_paths().openssl_cafile/_capath``), or
+    on Windows the system store, or ``ca_file`` when the account-home config
+    names one (checked like the config file itself). The environment can
+    therefore not substitute a CA for this connection."""
+    import ssl
+    import sys
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    if ca_file:
+        from ctx.config import file_trust_problem
+
+        why = file_trust_problem(ca_file)
+        if why:
+            raise PickerError(f"ca_file ignored: {why}")
+        ctx.load_verify_locations(cafile=ca_file)
+        return ctx
+    if sys.platform == "win32":  # pragma: no cover - system store, no env paths
+        ctx.load_default_certs()
+        return ctx
+    paths = ssl.get_default_verify_paths()
+    cafile = paths.openssl_cafile if os.path.isfile(paths.openssl_cafile or "") else None
+    capath = paths.openssl_capath if os.path.isdir(paths.openssl_capath or "") else None
+    if not cafile and not capath:
+        raise PickerError("no default trust store")
+    ctx.load_verify_locations(cafile=cafile, capath=capath)
+    return ctx
+
+
+def proxy_handler(proxy: str) -> "urllib.request.ProxyHandler":
+    """No proxy unless the account-home config opts in: ``proxy = "env"``
+    uses the environment's proxy variables, a URL names the proxy."""
+    if proxy == "env":
+        return urllib.request.ProxyHandler()
+    if proxy:
+        return urllib.request.ProxyHandler({"https": proxy, "http": proxy})
+    return urllib.request.ProxyHandler({})
+
+
 class DecisionClient:
     def __init__(self, policy: Any) -> None:
         self.endpoint = str(policy.endpoint)
         self.model = str(policy.model)
         self.key_env = str(policy.api_key_env)
         self.deadline = max(0.1, int(policy.timeout_ms) / 1000.0)
+        self.proxy = str(getattr(policy, "proxy", "") or "")
+        self.ca_file = str(getattr(policy, "ca_file", "") or "")
 
     def _request(self, body: bytes, key: str) -> dict[str, Any]:
         url = urllib.parse.urlsplit(self.endpoint)
@@ -64,9 +109,15 @@ class DecisionClient:
             raise PickerError("plain http allowed only to a loopback endpoint")
         # Never follow a redirect: urllib re-sends every header, the key
         # included, to wherever the Location points.
-        handlers: list[Any] = [_NoRedirect()]
-        if _loopback(url.hostname or ""):
-            handlers.append(urllib.request.ProxyHandler({}))
+        # Neither the proxy nor the trust store comes from the environment
+        # unless the account-home config says so (proxy = "env"/URL, ca_file).
+        handlers: list[Any] = [
+            _NoRedirect(),
+            urllib.request.ProxyHandler({}) if _loopback(url.hostname or "")
+            else proxy_handler(self.proxy),
+        ]
+        if url.scheme == "https":
+            handlers.append(urllib.request.HTTPSHandler(context=tls_context(self.ca_file)))
         opener = urllib.request.build_opener(*handlers)
         req = urllib.request.Request(
             self.endpoint, data=body, method="POST",

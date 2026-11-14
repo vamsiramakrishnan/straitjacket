@@ -1058,6 +1058,20 @@ def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def _safe_url(url: str) -> str:
+    """``url`` for display: userinfo masked, query and fragment dropped."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        u = urlsplit(url)
+    except ValueError:
+        return "<unparseable>"
+    netloc = u.netloc
+    if "@" in netloc:
+        netloc = "***@" + netloc.rsplit("@", 1)[1]
+    return urlunsplit((u.scheme, netloc, u.path, "", ""))
+
+
 def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str, bool, str]]:
     """The health checks themselves, as (name, ok, detail) rows.
 
@@ -1084,7 +1098,10 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         "evidence-map picker",
         True,
         f"mode={pk.mode} (from {pk.source})"
-        + (f" endpoint={pk.endpoint} key from ${pk.api_key_env}" if pk.mode != "local" else "")
+        + (f" endpoint={_safe_url(pk.endpoint)} key from ${pk.api_key_env}"
+           f" proxy={_safe_url(pk.proxy) if pk.proxy not in ('', 'env') else (pk.proxy or 'none')}"
+           f" ca_file={pk.ca_file or 'built-in trust store'}"
+           if pk.mode != "local" else "")
         + "".join(f"; {n}" for n in pk.notes),
     )
 
