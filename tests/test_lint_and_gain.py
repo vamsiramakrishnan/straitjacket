@@ -157,15 +157,15 @@ def test_failure_budget_factor_applied(ws_store, tmp_path, monkeypatch, capsys):
 
     ws, _ = ws_store
     (ws.root / "ctx.toml").write_text(
-        # evidence_map_bytes small too: the map's own allowance is added to
-        # the budget, and at its default both digests would fit uncut.
-        "version = 1\n[budgets]\ndigest_tokens = 60\nfailure_budget_factor = 3.0\n"
-        "evidence_map_bytes = 200\n",
+        "version = 1\n[budgets]\ndigest_tokens = 60\nfailure_budget_factor = 3.0\n",
         encoding="utf-8",
     )
     code = (
         "import sys\n"
-        "[print(f'ERROR: item {i} failed with code {i%7}') for i in range(4000)]\n"
+        # No error-like lines: a digest with an evidence map has one budget
+        # for success and failure (the map is the failure evidence), so the
+        # factor is measured on a digest without one.
+        "[print(f'item {i} processed with value {i%7}') for i in range(4000)]\n"
         "sys.exit(1)\n"
     )
     rc = main(["--workspace", str(ws.root), "run", "--", sys.executable, "-c", code])

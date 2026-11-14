@@ -76,7 +76,12 @@ def render_bounded_digest(ws, store, text: str, plan, continuation=None) -> str:
     if not plan.include_teaching:
         cap = 0  # include_teaching=False maps to suggestion cap 0
     resolver.record_plan_receipt(store.audit_dir if store is not None else None, plan)
-    return bounded(
+    from ctx.digest.evidence_map import deliver
+
+    # deliver() is bounded() for a digest without an evidence map; with one,
+    # the map is kept whole (the profile body gives way) and the delivered
+    # bytes are checked against the map's claims.
+    return deliver(
             filter_digest(text, cap),
             plan.token_budget,
             continuation,
@@ -102,12 +107,17 @@ def _emit_run_digest(ws, digest: str, manifest: dict, store=None, signature=None
     )
     from ctx.digest.evidence_map import budget_tokens
 
-    base += budget_tokens(ws, digest)
+    extra = budget_tokens(ws, digest)
     # Failure asymmetry rides through the resolver: a failing run's output
     # is evidence, not boilerplate. exitCode != 0 covers None too: timeouts
     # and signal deaths are failures (docs/LADDERS.md edge 4 — parity with
     # eval's treatment).
     outcome = "success" if manifest["result"]["exitCode"] == 0 else "failure"
+    if extra:
+        # A digest with an evidence map: digest_tokens for the profile body
+        # plus exactly the map's own bytes, success or failure alike (the
+        # map already carries the failure evidence).
+        outcome, base = "success", base + extra
     plan = _delivery_plan(
         ws, outcome=outcome, family="run", base_tokens=base, signature=signature
     )

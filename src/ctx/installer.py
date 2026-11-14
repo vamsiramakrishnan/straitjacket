@@ -58,7 +58,7 @@ retention_days = 30
 
 [redaction]
 enabled = true
-patterns = ["aws-access-key", "aws-secret-key", "private-key", "github-token", "gitlab-token", "slack-token", "stripe-key", "twilio-key", "sendgrid-key", "npm-token", "pypi-token", "huggingface-token", "anthropic-key", "jwt", "google-api-key", "generic-api-token"]  # fix: template pinned only 3 of 16 code-default patterns
+patterns = ["aws-access-key", "aws-secret-key", "private-key", "github-token", "gitlab-token", "slack-token", "stripe-key", "twilio-key", "sendgrid-key", "npm-token", "pypi-token", "huggingface-token", "anthropic-key", "jwt", "google-api-key", "generic-api-token", "url-credentials"]  # fix: template pinned only 3 of 16 code-default patterns
 """
 
 _CTXIGNORE_TEMPLATE = """\
@@ -915,18 +915,18 @@ def _render_claude_md(exe: str) -> str:
 ## Context harness (ctx / straitjacket)
 
 This workspace is harnessed by `{exe}`: noisy output comes back as a
-bounded, addressable digest — work *with* it, don't page around it.
+bounded, addressable digest; work with it, not around it.
 
 - Answer code questions with `ctx ask "<q>" --intent locate|impact` (where X
   is used; what breaks if it changes), not a search/read loop; add
-  `--symbol X` unless the question names one identifier.
-- Compose facts with `ctx q '<stage> | <stage>'` instead of piping
-  through grep/awk/jq: `refs X | group file | top 3 | get`.
+  `--symbol X` unless the question names an identifier.
+- Compose facts with `ctx q '<stage> | <stage>'`, not grep/awk/jq
+  pipes: `refs X | group file | top 3 | get`.
 - Capture noisy commands with `ctx run -- <cmd>`; pull bytes with `ctx get
-  <handle>`; cite handles, don't re-quote output.
+  <handle>`; cite handles, don't re-quote.
 - Digest excerpts are verbatim with real line numbers; "(exact)" counts are
-  exact; "all N distinct messages are above" means no others exist. Fetch
-  only what it lists as not shown.
+  exact; "every error-like line is one of these N messages" is literally
+  true (varies = collapsed values). Fetch only what is not shown.
 - Only for output captured by `ctx run`: `ctx ask --intent diagnose`,
   `ctx q 'fails last | in-changed'`, `ctx q 'records run:<id>#stdout'`.
 - For an existing file: grep, Read windows, or
@@ -1077,6 +1077,13 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         "policy loaded",
         True,
         f"guard={ws.config.guard.mode} digest_tokens={ws.config.budgets.digest_tokens}",
+    )
+    pk = ws.config.picker
+    check(
+        "evidence-map picker",
+        True,
+        f"mode={pk.mode} (from {pk.source})"
+        + (f" endpoint={pk.endpoint} key from ${pk.api_key_env}" if pk.mode != "local" else ""),
     )
 
     try:

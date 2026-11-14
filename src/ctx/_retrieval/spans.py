@@ -95,6 +95,10 @@ def _resolve_span(store: Store, ws: Workspace, ref_text: str, label: str, span_i
         out.append(_context_redacted(store, blob, a - 1, a - 1 + len(chunk), ws.config.redaction))
     elif span["kind"] == "messages":
         out.extend(_message_listing(store, ws, ref_text, blob, int(span["a"]), int(span["b"])))
+    elif span["kind"] == "messages_from":
+        # a = first line to map, b = first row of the page
+        out.extend(_message_listing(store, ws, ref_text, blob, int(span["b"]), 10**9,
+                                    start_line=int(span["a"])))
     else:  # pragma: no cover - registry only writes these kinds
         raise RetrievalError(f"unknown span kind {span['kind']!r}")
 
@@ -106,40 +110,55 @@ MESSAGE_PAGE_ROWS = 40
 
 
 def _message_listing(store: Store, ws: Workspace, ref_text: str, blob: str,
-                     a: int, b: int) -> list[str]:
+                     a: int, b: int, *, start_line: int = 1) -> list[str]:
     """Every distinct message of one stream (the evidence map's grouping),
     ordered by first occurrence, rows ``a``..``b`` of that order, a page at a
-    time. Exact: the header counts every message of the stream."""
-    from types import SimpleNamespace
-
-    from ctx.digest.base import MAX_PARSE_BYTES, StreamView
-    from ctx.digest.evidence_map import LIST_SAMPLE_CHARS, _shown_line, build
+    time. ``start_line`` > 1 maps the stream from that line on (the part a
+    digest's parse cap left out). Exact for the lines it says it read."""
+    from ctx.digest.base import MAX_PARSE_BYTES
+    from ctx.digest.evidence_map import LIST_SAMPLE_CHARS, _shown_line, _varies, build_streams, line_of
 
     path = store.blob_path(store.resolve_id(blob, kinds=("blob",)))
+    offset = 0
+    if start_line > 1:
+        idx = store.line_index(blob)
+        if start_line - 1 >= len(idx):
+            raise RetrievalError(f"line {start_line} is past the end of {ref_text}")
+        offset = int(idx[start_line - 1])
     with path.open("rb") as fh:
+        fh.seek(offset)
         data = fh.read(MAX_PARSE_BYTES + 1)
     whole = len(data) <= MAX_PARSE_BYTES
     text = data[:MAX_PARSE_BYTES].decode("utf-8", "replace")
-    view = StreamView("stdout", len(data), text.count("\n"), "text/plain", text, whole)
-    empty = StreamView("stderr", 0, 0, "text/plain", "", True)
-    emap = build(SimpleNamespace(stdout=view, stderr=empty, focus_terms=()))
+    total_lines = len(store.line_index(blob)) - 1 if not whole else 0
+    with redaction_scope(ws.config.redaction):
+        emap = build_streams([("stdout", text, whole, 0)], first_line=start_line)
     msgs = sorted(emap.messages, key=lambda m: m.first) if emap else []
     total = len(msgs)
     a = max(1, a)
     end = min(b, total, a + MESSAGE_PAGE_ROWS - 1)
-    scope = "" if whole else " in the parsed part"
-    out = [f"messages (exact{scope}): {fmt_int(total)} distinct · "
+    last_read = start_line + (len(emap.lines["stdout"]) if emap else text.count("\n")) - 1
+    scope = f"lines {start_line}-{last_read}"
+    if not whole:
+        scope += f" of {fmt_int(total_lines)}; later lines are not in this listing"
+    out = [f"messages (exact for {scope}): {fmt_int(total)} distinct · "
            f"{fmt_int(emap.signal_lines if emap else 0)} error-like lines · "
            f"rows {a}-{end} by first occurrence (×count · lines · first sample)"]
     fired: set[str] = set()
     with redaction_scope(ws.config.redaction):
         for m in msgs[a - 1:end]:
             span = (f"first L{m.first}  last L{m.last}" if m.count > 1 else f"L{m.first}")
-            sample = _shown_line(emap.lines["stdout"][m.first - 1].strip(), LIST_SAMPLE_CHARS, fired)
-            out.append(f"  ×{fmt_int(m.count)}  {span}  {sample}")
+            sample = _shown_line(line_of(emap, "stdout", m.first).strip(), LIST_SAMPLE_CHARS, fired)
+            out.append(f"  ×{fmt_int(m.count)}  {span}  {sample}{_varies(m, fired)}")
     if end < min(b, total):
-        sid = store.register_span(blob, "messages", a=end + 1, b=total)
+        if start_line > 1:
+            sid = store.register_span(blob, "messages_from", a=start_line, b=end + 1)
+        else:
+            sid = store.register_span(blob, "messages", a=end + 1, b=total)
         out.append(f"… +{fmt_int(min(b, total) - end)} more · next: ctx get {ref_text} --span {sid}")
+    if not whole:
+        sid = store.register_span(blob, "messages_from", a=last_read + 1, b=1)
+        out.append(f"next part: ctx get {ref_text} --span {sid}")
     return out
 
 

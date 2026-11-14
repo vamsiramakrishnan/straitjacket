@@ -583,6 +583,13 @@ class BuildProfile(Profile):
         if emap is not None:
             map_lines, map_next, r = emap
             total = ctx.stdout.lines + ctx.stderr.lines
+            # Two exact counts in one digest name what each counts: this one
+            # is lines shaped `<path>:<line>: <severity>`, the map's is
+            # error-like lines.
+            parsed = ctx.stdout.parsed_fully and ctx.stderr.parsed_fully
+            summary[1] = summary[1].replace(
+                "diagnostics (exact):",
+                "path:line: severity lines (exact" + ("" if parsed else " in the parsed part") + "):", 1)
             return "\n".join(
                 ctx.header_lines()
                 + summary

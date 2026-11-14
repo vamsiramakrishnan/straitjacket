@@ -361,15 +361,23 @@ def _legacy_emitted(ws, text: str, exit_code: int) -> str:
         if "output (complete):" in text
         else ws.config.budgets.digest_tokens
     )
-    # Documented delta: a digest carrying an evidence map gets the map's own
-    # byte allowance (ctx.digest.evidence_map.budget_tokens) on top.
-    from ctx.digest.evidence_map import budget_tokens
+    # Documented delta: a digest carrying an evidence map gets exactly the
+    # map's own bytes on top (ctx.digest.evidence_map.budget_tokens), no
+    # failure factor, and the map-first backstop (evidence_map.deliver).
+    from ctx.digest.evidence_map import budget_tokens, deliver
 
-    budget += budget_tokens(ws, text)
-    if exit_code != 0:
+    extra = budget_tokens(ws, text)
+    if extra:
+        budget += extra
+    elif exit_code != 0:
         budget = int(budget * ws.config.budgets.failure_budget_factor)
     eng = ws.config.engagement
     cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
+    if extra:
+        from ctx.commands.emit import _truncation_handle
+
+        return deliver(filter_digest(text, cap), budget,
+                       truncation_continuation=_truncation_handle(text)) + "\n"
     return bounded(filter_digest(text, cap), budget) + "\n"
 
 
@@ -388,6 +396,8 @@ def _with_truncation_handle(expected: str, digest: str) -> str:
     if "[ctx:truncated" not in expected:
         return expected
     handle = _truncation_handle(digest)
+    if handle is not None and expected.rstrip("\n").endswith(f"next: {handle}"):
+        return expected   # the map-first backstop already declared it
     return expected if handle is None else expected.rstrip("\n") + f"\nnext: {handle}\n"
 
 

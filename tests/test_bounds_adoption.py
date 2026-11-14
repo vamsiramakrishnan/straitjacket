@@ -90,7 +90,6 @@ ALLOWED: dict[str, str] = {
     ),
     "config.py": "clamps of [picker] numeric settings at load, not emission bounds",
     "digest/evidence_map.py": "1-indexed line arithmetic for excerpt windows and --lines suggestions",
-    "digest/picker.py": "1-indexed line arithmetic for a candidate's context window",
     "residence.py": (
         "cache-amortization retained-token estimate floor, not an emission bound"
     ),

@@ -26,7 +26,7 @@ Keep the transcript bounded and append-only: full payloads live in CTX artifacts
 4. Search the working repository with `ctx search repo: '<pattern>' --glob '<glob>'` rather than broad raw grep output. Bound the file set *before* an expensive scan: `ctx q 'corpus --ext py --changed | ...'` (or the `repo.files` plan op) selects the eligible files with a coverage receipt — select files, then scan.
 5. Read only exact evidence using `ctx get <ref> --lines A:B`, `--bytes`, `--records`, `--json-pointer`, `--symbol`, or `--span <token>` (span tokens appear in digests at omission points; resolving one is always bounded).
 6. Use `ctx stats <ref>` for schema, counts, heavy hitters, and structured summaries.
-7. Treat handles and coordinates as evidence citations; keep them in plans, findings, and checkpoints. Digest excerpts are verbatim with real line numbers, "(exact)" counts are exact, and "all N distinct messages are above" means no others exist: fetch only what a digest lists as not shown.
+7. Treat handles and coordinates as evidence citations; keep them in plans, findings, and checkpoints. Digest excerpts are verbatim with real line numbers, "(exact)" counts are exact, and "every error-like line is one of these N messages" is literally true (varies = collapsed values): fetch only what is not shown.
 8. Never re-run a command merely to recover output already stored under a handle.
 9. Never inspect the CTX backing-store path directly and never paste a complete blob into the conversation.
 10. Prefer one multi-pattern search over serial single-pattern searches.
@@ -47,8 +47,10 @@ Keep the transcript bounded and append-only: full payloads live in CTX artifacts
 13. Apply the solution ladder before writing any code — prefer in order:
     not needed at all, reuse what exists, a native platform/runtime feature,
     standard library, a one-liner, minimal new code. Be lazy about the
-    solution, never about reading. Reuse ranks above stdlib: hand-rolling
-    what the repo already exposes as a shared helper is the wrong move. The ladder does **not** apply to trust
+    solution, never about reading. Reuse ranks above stdlib deliberately:
+    in a codebase with its own vocabulary, hand-rolling with `hashlib` what
+    the repo already exposes as a shared helper is the wrong move even
+    though both are "simple". The ladder does **not** apply to trust
     boundaries, data loss, security, or accessibility — on those four,
     write the fuller version. Deliberately deferred improvements are
     declared (`ctx debt add "<note>" --ref repo:file:line`), never silently
@@ -138,14 +140,13 @@ Use native Antigravity reads only when the result is statically bounded and smal
 
 ## Surface — what this skill brings with it
 
-Three things, and they are not interchangeable. Reach for the narrowest one
-that answers the question.
+Three things, not interchangeable; reach for the narrowest that answers.
 
 **Skill (this file + `references/`).** Instructions and contracts only. Free to
 read, but not free to read *all of* — see progressive disclosure below.
 
-**CLI (`ctx`).** The execution surface; every verb bounded by construction.
-The verbs themselves are listed once, above, under *Verb index* — not twice.
+**CLI (`ctx`).** The execution surface; every verb bounded by construction
+(see *Verb index* above).
 
 **MCP servers.** Allowed: **`ctx-harness`** only (`ctx mcp --bounded-only`) —
 its tools are capped by construction, which is why retrieval through it is safe
@@ -169,8 +170,8 @@ This file is the whole contract for ordinary work. The references are loaded
 | split a task across harnesses/models | `references/harness-collaboration.md` |
 | choose between two models that both clear the tier | `references/model-catalog.md` |
 
-Loading a reference you do not need costs the context this skill exists to
-protect. If two would answer the question, read the more specific one.
+An unneeded reference costs the context this skill protects; if two would
+answer, read the more specific one.
 
 ## Degraded mode
 

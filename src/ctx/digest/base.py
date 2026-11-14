@@ -159,9 +159,12 @@ class DigestContext:
                 return None
             if a < 1 or b < a or b > stream.bytes:
                 return None
-        elif kind == "messages":
+        elif kind in ("messages", "messages_from"):
+            # messages: rows a..b; messages_from: map from line a, page row b
             a, b = kw.get("a"), kw.get("b")
-            if not isinstance(a, int) or not isinstance(b, int) or a < 1 or b < a:
+            if not isinstance(a, int) or not isinstance(b, int) or a < 1 or b < 1:
+                return None
+            if kind == "messages" and b < a:
                 return None
         blob = str(self.manifest["streams"][stream.name]["blob"])
         return self.store.register_span(blob, kind, **kw)
