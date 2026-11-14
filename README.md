@@ -109,8 +109,8 @@ provide retrieval addresses. Each digest of a large text output carries an
 evidence map: exact counts of every error-like line and distinct message, the
 top ones as verbatim excerpts with real line numbers, the rest listed, so what
 is not shown is still accounted for. By default there is no model call and no
-network access in the digest path; an opt-in picker, which only a user-level
-setting can enable (never a repository's `ctx.toml`), can ask a decision
+network access in the digest path; an opt-in picker, which only a file in
+the account's own home directory can enable, can ask a decision
 endpoint which messages to expand (see docs/CONFIGURATION.md for exactly what
 it sends).
 

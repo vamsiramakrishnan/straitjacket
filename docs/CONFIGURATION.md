@@ -94,11 +94,16 @@ first) is grouped into a distinct message:
 
 - timestamps, durations with a unit, long hex ids and memory addresses, uuids
   and pids/thread ids are masked always: they vary by nature;
-- every other token with a digit, a quote, `/`, `@` or `=` is a slot. A slot
-  that takes at most 8 values, some repeated, splits the message (`exit code
-  1` ×41 and `exit code 137` ×1 are two messages, and the second ranks as
-  rare); a slot with more values (ids, counters) stays collapsed, and the
-  message says so exactly: ``varies: `job-6` (1,232 distinct values)``.
+- every other token with a digit, a quote, `/`, `@` or `=` is a slot (a
+  quoted string, `msg="quota exceeded"`, is one token). A slot that takes at
+  most 8 values, some repeated, splits the message (`exit code 1` ×41 and
+  `exit code 137` ×1 are two messages, and the second ranks as rare). Other
+  slots stay collapsed into one message marked `varies`, which shows the
+  values: with at most 8 of them, every value with its count and first line
+  (`varies: 0041 ×1 L10 · 0042 ×1 L55 · 0043 ×1 L90`); with more, the count,
+  the values seen at most twice (rarest first, a few, with their lines) and
+  `all its lines: ctx get run:<id>#stdout --span <token>`, a bounded, paged
+  listing of every line of that message (the top one is also under `next:`).
 
 The map then states, exactly:
 
@@ -116,8 +121,10 @@ Ranking: `--focus` matches first, then higher signal tier, then rarer, then the
 later last occurrence, then the earlier first occurrence. Past the cap, one
 line gives the exact command that lists every message (`ctx get
 run:<id>#stdout --span <token>`). When nothing is left unlisted the digest
-says `every error-like line is one of these N messages` (adding `values marked
-varies are collapsed` when any are), and only then. When the stream was larger
+says `every error-like line is one of these N messages` (adding that a
+message marked varies stands for several values, shown on its line or listed
+by its command, when any is), and only then. A budget too small for the whole
+map leaves it out with one line, `evidence map omitted: budget`. When the stream was larger
 than the parse cap the accounting names the lines it covers, the sentence is
 never printed, and a command maps the rest. The numbers always add up: shown +
 listed + not listed = distinct messages.
@@ -129,24 +136,31 @@ listed + not listed = distinct messages.
 | `mode` | `"local"` | `local`: the deterministic rule above; nothing is sent anywhere and no network module is loaded (the choice is still recorded locally). `shadow`: the decision endpoint is asked too, both choices are recorded, the digest is the local one byte for byte. `model`: the endpoint's yes/no relevance scores choose the expanded excerpts. Anything else means `local`. |
 | `endpoint` | `https://generativelanguage.googleapis.com/v1beta/decisions` | The decisions endpoint (a compatible self-hosted server can be named; plain `http://` is accepted only for a loopback address). |
 | `model` | `"gemini-decision-1"` | Model name sent in the request body. |
-| `api_key_env` | `"GEMINI_API_KEY"` | NAME of the environment variable holding the key. The value is read at call time, sent only in the `x-goog-api-key` header, and never logged, stored or shown. |
+| `api_key_env` | `"GEMINI_API_KEY"` | NAME of the environment variable holding the key: one of `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `CTX_PICKER_API_KEY`. The value is read at call time, sent only in the `x-goog-api-key` header, and never logged, stored or shown. |
 | `timeout_ms` | `3000` | Hard deadline for the whole call. |
 | `threshold` | `0.5` | Minimum P(yes) for a candidate to be expanded by the model; free slots follow the local order. |
 | `max_candidates` | `40` | Most candidate messages sent per request (local order). |
 | `max_candidate_bytes` | `600` | Most bytes of one candidate excerpt. |
 
-**Where it can be turned on.** Only from outside the workspace: the
-user-level file `$XDG_CONFIG_HOME/ctx/config.toml` (default
-`~/.config/ctx/config.toml`, a `[picker]` table with any of the keys above) or
-the environment (`CTX_PICKER_MODE`, `CTX_PICKER_ENDPOINT`, `CTX_PICKER_MODEL`,
-`CTX_PICKER_API_KEY_ENV`, `CTX_PICKER_TIMEOUT_MS`, `CTX_PICKER_THRESHOLD`,
-`CTX_PICKER_MAX_CANDIDATES`, `CTX_PICKER_MAX_CANDIDATE_BYTES`; these win over
-the file). A workspace `ctx.toml` comes with the repository, so its `[picker]`
-may only turn the picker off (`mode = "local"`) or lower `max_candidates`,
-`max_candidate_bytes` and `timeout_ms`; anything else there (enabling it, an
-endpoint, a model, a key variable) is ignored and recorded once in
-`guard-failures.jsonl`. `ctx doctor` shows the effective mode and where it came
-from. Redirects are never followed (the key would travel with them).
+**Where it can be turned on.** Only one place can turn the picker on or set
+its endpoint, model and key variable: the file `.config/ctx/config.toml` in
+the account's home directory as the OS account database reports it
+(`pwd.getpwuid(os.getuid()).pw_dir`; on Windows, which has no `pwd`, the user
+profile folder from `SHGetFolderPathW`), never a directory found through
+`$HOME` or `$XDG_CONFIG_HOME`. The file is ignored (one record in
+`guard-failures.jsonl`) unless it is owned by the current user and not
+writable by group or others. `api_key_env` must be one of `GEMINI_API_KEY`,
+`GOOGLE_API_KEY`, `CTX_PICKER_API_KEY`; any other name keeps the picker local,
+so even a wrong file can never name an arbitrary secret. Environment
+variables and a workspace `ctx.toml` can be set by a repository (a host's
+project settings can set the hook's environment), so both may only turn the
+picker off (`CTX_PICKER_MODE=local`, or `mode = "local"` in `[picker]`) or
+lower `max_candidates`, `max_candidate_bytes` and `timeout_ms`
+(`CTX_PICKER_MAX_CANDIDATES`, `CTX_PICKER_MAX_CANDIDATE_BYTES`,
+`CTX_PICKER_TIMEOUT_MS`); anything else there is ignored and recorded once.
+`ctx doctor` shows the effective mode, the file it came from, and why any
+setting was ignored. Redirects are never followed (the key would travel with
+them).
 
 **What is sent** (only in `shadow` or `model` mode, only from a live delivery
 -- `ctx run` and the hook's output gate, never `ctx replay` or other
@@ -448,7 +462,7 @@ Advise mode records no token saving, because nothing was avoided.
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Enable secret redaction in model-visible output. |
-| `patterns` | full built-in set | Active redaction patterns. The set includes `url-credentials` (the `user:password@` part of a URL such as `postgres://admin:pw@host/db`). |
+| `patterns` | full built-in set | Active redaction patterns. The set includes `url-credentials` (the `user:password@` part of a URL such as `postgres://admin:pw@host/db`, the user possibly empty: `redis://:pw@host`). |
 
 A guard rail worth knowing: if `patterns` is set to something that isn't a list
 (a bare string typo, say), straitjacket rejects it and falls back to the full
