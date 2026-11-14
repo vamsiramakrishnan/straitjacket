@@ -77,10 +77,77 @@ ceiling is captured and shown as a bounded digest instead.
 | `failure_budget_factor` | `2.0` | Failing runs get this multiple of the standard digest budget — a failure carries the evidence you need. |
 | `digest_head_lines` | `5` | Head lines shown for a generic text flood. |
 | `digest_tail_lines` | `5` | Tail lines shown for a generic text flood. |
+| `evidence_map_bytes` | `1500` | Byte cap, measured after redaction, for a digest's evidence map: its verbatim excerpts plus its list of other distinct messages. The map's own accounting line rides outside the cap, and the emission budget grows by this allowance when a digest carries a map. |
 
 `max_inline_bytes` (input, native reads) and `max_tool_output_bytes` (output,
 tool results) are deliberately separate knobs — tune the flood you actually
 have.
+
+### The evidence map
+
+When command output is too large to show whole, the digests that summarise
+text-like output (`text/v1`, `build/v1`, `lint/v1`, `jsonl/v1`,
+`logtemplate/v1`; from `ctx run` and from the hook's output gate alike) carry
+an evidence map. Every *error-like line* (error words, failure counts, exit
+codes, `file:line` coordinates) is grouped into a distinct message by
+template: timestamps, numbers, hex ids, uuids, quoted values that carry a
+digit or path, and the tails of paths are masked, so 680 repeats of one
+harmless line are one message. The map then states, exactly:
+
+```
+evidence map (exact): 686 error-like lines · 6 distinct messages · 3 shown with context · 3 listed · 0 not listed
+```
+
+The top three messages are shown as verbatim excerpts (two lines either side,
+each line prefixed with its real line number, so `run:<id> L4514` cites it).
+Ranking is local and deterministic: `--focus` matches first, then higher
+signal tier, then rarer (a message seen once outranks one seen 680 times),
+then the later last occurrence, then the earlier first occurrence. The other
+messages are listed one per line (`×count  first L…  last L…  sample`); past
+the cap, one line gives the exact command that lists every message
+(`ctx get run:<id>#stdout --span <token>`). When nothing is left unlisted the
+digest says `all N distinct messages are above.`, and only then. The numbers
+always add up: shown + listed + not listed = distinct messages.
+
+## `[picker]` — who chooses which messages are expanded
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mode` | `"local"` | `local`: the deterministic rule above; nothing is sent anywhere and no network module is loaded. `shadow`: the decision endpoint is asked too, both choices are recorded, the digest is the local one byte for byte. `model`: the endpoint's yes/no relevance scores choose the expanded excerpts. Anything else means `local`. |
+| `endpoint` | `https://generativelanguage.googleapis.com/v1beta/decisions` | The decisions endpoint (a compatible self-hosted server can be named; plain `http://` is accepted only for a loopback address). |
+| `model` | `"gemini-decision-1"` | Model name sent in the request body. |
+| `api_key_env` | `"GEMINI_API_KEY"` | NAME of the environment variable holding the key. The value is read at call time, sent only in the `x-goog-api-key` header, and never logged, stored or shown. |
+| `timeout_ms` | `3000` | Hard deadline for the whole call. |
+| `threshold` | `0.5` | Minimum P(yes) for a candidate to be expanded by the model; free slots follow the local order. |
+| `max_candidates` | `40` | Most candidate messages sent per request (local order). |
+| `max_candidate_bytes` | `600` | Most bytes of one candidate excerpt. |
+
+**What is sent** (only in `shadow` or `model` mode, only from a live delivery
+-- `ctx run` and the hook's output gate, never `ctx replay` or other
+re-digests): an intent line (the user's last prompt when ctx has it, first 300
+characters, else the command line and `--focus`), the command, and each
+candidate's sample excerpt (its first occurrence with two lines either side),
+all redacted with the workspace's `[redaction]` patterns and capped in number
+and bytes. **What is not sent**: the output itself, anything else from the
+workspace, file contents, the key in any body. **The default sends nothing.**
+
+In `model` mode the expanded excerpts are labelled `picked by the question
+(p=…)` or `picked by the local rule`; the list of all other messages is
+unchanged, so the model's choice cannot hide anything. On a timeout, an HTTP
+or transport error, a missing key or a malformed answer the digest is exactly
+the local one and the failure is recorded once in
+`.ctx-session-reads/guard-failures.jsonl` (a category such as `timeout` or
+`http 403`, never the key or the payload). Each digest the picker ran for
+appends one record to `.ctx-session-reads/picker.jsonl` (handle, mode,
+candidates, local order, model order, scores, what was expanded, latency,
+tokens, error -- line references only, no text). `ctx replay --picker`
+reports per mode how many digests were followed by a `ctx get`/`ctx search`
+of the same handle (retrieval telemetry records the run handle it read) and,
+where the model answered, how often its top pick differed from the local one.
+
+A model-picked digest's run id also records the scores that chose it
+(`digest.picker` in the manifest): digest identity stays a pure function of
+the rendered bytes, and a local and a model rendering never share an id.
 
 ## `[guard]` — how commands are steered
 

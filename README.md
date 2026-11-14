@@ -105,7 +105,13 @@ original evidence.
 straitjacket retains those bytes and gives the prompt a smaller view. Typed
 profiles keep test identities, diagnostic locations, unusual log events, or
 JSON structure according to the output family. They declare omissions and
-provide retrieval addresses. There is no model call in the digest path.
+provide retrieval addresses. Each digest of a large text output carries an
+evidence map: exact counts of every error-like line and distinct message, the
+top ones as verbatim excerpts with real line numbers, the rest listed, so what
+is not shown is still accounted for. By default there is no model call and no
+network access in the digest path; an opt-in `[picker] mode` can ask a
+decision endpoint which messages to expand (see docs/CONFIGURATION.md for
+exactly what it sends).
 
 Stored `run:`, `blob:`, and `snapshot:` handles identify immutable content while
 retained. Live `repo:` addresses can carry a content anchor: reads verify the
