@@ -1,0 +1,129 @@
+tests/test_cache.py::test_roundtrip_0 PASSED
+tests/test_core.py::test_roundtrip_1 PASSED
+tests/test_cache.py::test_basic_2 FAILED (flaky)
+  retry 1/2 ...
+tests/test_cache.py::test_basic_2 PASSED (on retry)
+tests/test_ui.py::test_edge_3 PASSED
+tests/test_store.py::test_limits_4 SKIPPED (needs optional dependency)
+tests/test_core.py::test_limits_5 PASSED
+tests/test_cache.py::test_basic_6 PASSED
+tests/test_sched.py::test_limits_7 PASSED
+tests/conftest.py:84: UserWarning: fixture 'cache' is deprecated
+tests/test_sched.py::test_edge_9 PASSED
+tests/test_parser.py::test_limits_10 PASSED
+tests/test_ui.py::test_edge_11 PASSED
+tests/test_core.py::test_edge_12 PASSED
+tests/test_net.py::test_limits_13 SKIPPED (needs optional dependency)
+tests/test_sched.py::test_edge_14 PASSED
+tests/conftest.py:53: UserWarning: fixture 'auth' is deprecated
+tests/test_export.py::test_edge_16 PASSED
+tests/test_auth.py::test_roundtrip_17 PASSED
+tests/test_store.py::test_edge_18 PASSED
+tests/test_net.py::test_limits_19 PASSED
+tests/test_auth.py::test_limits_20 PASSED
+tests/test_render.py::test_limits_21 PASSED
+tests/test_sched.py::test_edge_22 PASSED
+tests/test_net.py::test_basic_23 PASSED
+tests/test_sched.py::test_edge_24 PASSED
+tests/test_store.py::test_basic_25 PASSED
+tests/test_sched.py::test_basic_26 PASSED
+tests/test_auth.py::test_roundtrip_27 PASSED
+tests/test_core.py::test_edge_28 PASSED
+tests/test_core.py::test_roundtrip_29 PASSED
+tests/test_auth.py::test_edge_30 PASSED
+tests/test_sched.py::test_limits_31 PASSED
+tests/test_render.py::test_roundtrip_32 PASSED
+tests/test_cache.py::test_roundtrip_33 PASSED
+tests/test_render.py::test_limits_34 PASSED
+tests/test_ui.py::test_roundtrip_35 PASSED
+tests/test_parser.py::test_limits_36 PASSED
+tests/test_export.py::test_basic_37 FAILED (flaky)
+  retry 1/2 ...
+tests/test_export.py::test_basic_37 PASSED (on retry)
+tests/test_render.py::test_roundtrip_38 PASSED
+tests/test_core.py::test_limits_39 PASSED
+tests/test_sched.py::test_roundtrip_40 PASSED
+tests/test_export.py::test_basic_41 PASSED
+tests/test_sched.py::test_limits_42 PASSED
+tests/test_net.py::test_roundtrip_43 PASSED
+tests/test_sched.py::test_edge_44 PASSED
+tests/test_net.py::test_basic_45 PASSED
+tests/test_auth.py::test_edge_46 SKIPPED (needs optional dependency)
+tests/test_core.py::test_basic_47 FAILED (flaky)
+  retry 1/2 ...
+tests/test_core.py::test_basic_47 PASSED (on retry)
+tests/test_sched.py::test_basic_48 PASSED
+tests/test_sched.py::test_edge_49 PASSED
+tests/test_ui.py::test_edge_50 PASSED
+tests/test_export.py::test_limits_51 SKIPPED (needs optional dependency)
+tests/test_export.py::test_edge_52 PASSED
+tests/test_sched.py::test_edge_53 PASSED
+tests/test_cache.py::test_edge_54 PASSED
+tests/test_store.py::test_limits_55 PASSED
+tests/test_net.py::test_roundtrip_56 PASSED
+tests/test_ui.py::test_basic_57 SKIPPED (needs optional dependency)
+tests/test_store.py::test_limits_58 PASSED
+tests/test_sched.py::test_roundtrip_59 PASSED
+tests/test_core.py::test_basic_60 PASSED
+tests/test_net.py::test_roundtrip_61 PASSED
+tests/test_cache.py::test_basic_62 PASSED
+tests/test_store.py::test_edge_63 PASSED
+tests/test_export.py::test_limits_4567 PASSED
+tests/conftest.py:46: UserWarning: fixture 'parser' is deprecated
+tests/test_auth.py::test_edge_4569 PASSED
+tests/test_ui.py::test_basic_4570 PASSED
+tests/test_core.py::test_edge_4571 PASSED
+tests/test_ui.py::test_limits_4572 PASSED
+tests/test_export.py::test_limits_4573 PASSED
+tests/test_net.py::test_limits_4574 PASSED
+tests/test_core.py::test_roundtrip_4575 PASSED
+tests/test_export.py::test_limits_4576 PASSED
+tests/test_render.py::test_limits_4577 PASSED
+tests/test_export.py::test_basic_4578 PASSED
+tests/test_ui.py::test_edge_4579 PASSED
+tests/conftest.py:56: UserWarning: fixture 'store' is deprecated
+tests/test_sched.py::test_limits_4581 PASSED
+tests/test_billing.py::test_invoice_total_rounding FAILED
+    assert round_cents(Decimal('10.005')) == Decimal('10.01')
+E   AssertionError: assert Decimal('10.00') == Decimal('10.01')
+E    +  where Decimal('10.00') = round_cents(Decimal('10.005'))
+tests/conftest.py:53: UserWarning: fixture 'ui' is deprecated
+tests/test_sched.py::test_limits_4583 PASSED
+tests/test_cache.py::test_edge_4584 PASSED
+tests/conftest.py:39: UserWarning: fixture 'ui' is deprecated
+tests/test_sched.py::test_basic_4586 SKIPPED (needs optional dependency)
+tests/test_render.py::test_edge_4587 PASSED
+tests/test_auth.py::test_limits_4588 PASSED
+tests/test_net.py::test_roundtrip_4589 PASSED
+tests/test_net.py::test_limits_4590 PASSED
+tests/test_net.py::test_edge_4591 PASSED
+tests/test_ui.py::test_roundtrip_4592 PASSED
+tests/conftest.py:67: UserWarning: fixture 'export' is deprecated
+tests/test_store.py::test_basic_4594 PASSED
+tests/test_core.py::test_roundtrip_4595 PASSED
+tests/test_cache.py::test_limits_4596 PASSED
+tests/test_store.py::test_roundtrip_7375 PASSED
+tests/test_parser.py::test_limits_7376 FAILED (flaky)
+  retry 1/2 ...
+tests/test_parser.py::test_limits_7376 PASSED (on retry)
+tests/test_net.py::test_limits_7377 PASSED
+tests/test_parser.py::test_basic_7378 PASSED
+tests/test_store.py::test_edge_7379 FAILED (flaky)
+  retry 1/2 ...
+tests/test_store.py::test_edge_7379 PASSED (on retry)
+tests/test_render.py::test_basic_7380 PASSED
+tests/test_store.py::test_edge_7381 PASSED
+tests/test_store.py::test_basic_7382 PASSED
+tests/test_cache.py::test_limits_7383 SKIPPED (needs optional dependency)
+tests/test_ui.py::test_basic_7384 PASSED
+tests/test_export.py::test_basic_7385 PASSED
+tests/test_net.py::test_roundtrip_7386 PASSED
+tests/test_sched.py::test_basic_7387 PASSED
+tests/test_parser.py::test_limits_7388 PASSED
+tests/test_parser.py::test_limits_7389 PASSED
+tests/test_render.py::test_roundtrip_7390 PASSED
+tests/test_cache.py::test_limits_7391 PASSED
+tests/test_store.py::test_basic_7392 PASSED
+tests/test_parser.py::test_edge_7393 PASSED
+tests/test_sched.py::test_limits_7394 PASSED
+tests/test_export.py::test_edge_7395 PASSED

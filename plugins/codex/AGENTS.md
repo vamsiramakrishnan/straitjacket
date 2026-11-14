@@ -1,20 +1,21 @@
 <!-- ctx-harness:start -->
 ## Context containment (straitjacket / ctx)
 
-This workspace is harnessed by **ctx** (straitjacket). Potentially unbounded
-command and file output is captured at the source and returned as a small,
-deterministic digest that keeps an exact retrieval address for every omitted
-byte. Work *with* it — don't try to defeat the containment by paging or
-pre-filtering; the digest already selects the load-bearing evidence.
+This workspace is harnessed by **ctx** (straitjacket). Unbounded command and
+file output comes back as a small deterministic digest with an exact
+retrieval address for every omitted byte. Work *with* it — don't page or
+pre-filter around it.
 
-- Run noisy commands normally. The harness routes floods (test suites, builds,
-  `grep`/`cat`/`git diff`, package and cloud commands) through `ctx run` and
-  returns a bounded digest. Small outputs pass through untouched.
+- Run noisy commands normally: floods (tests, builds, `grep`/`cat`/`git
+  diff`, package and cloud commands) come back as a bounded digest.
 - To pull exact omitted bytes, use the `ctx` MCP tool — `op:"get"`,
   `ref:"run:<id>#stdout"`, `selector:{"lines":"A:B"}` — or a `span:`/`--symbol`
   token printed in the digest. Retrieval is bounded; it cannot re-flood context.
-- Cite coordinates (`file:line`, `run:`/`span:` handles) instead of restating
-  file or tool output back into the conversation.
+- Cite coordinates (`file:line`, `run:`/`span:` handles), not restated output.
+- Digest excerpts are verbatim with real line numbers; "(exact)" counts are
+  exact; "every error-like line is one of these N messages" is true; a
+  "varies" message stands for several values, listed on its row or by its
+  command. Fetch only what is not shown.
 - Answer repository questions with `ctx ask "<q>" --intent <intent>` — one
   bounded evidence view instead of a search/read/search loop. Intents:
   `locate`/`impact`/`trace` use `--symbol X` unless the question contains one
@@ -31,5 +32,5 @@ pre-filtering; the digest already selects the load-bearing evidence.
 - For an existing file: grep, read windows, or
   `ctx search repo:<file> PATTERN`.
 - Bounded retrieval verbs: `ctx search`, `ctx get`, `ctx stats`, `ctx map`,
-  `ctx def`/`refs`/`impact`. One tool (`ctx`), operations by parameter.
+  `ctx def`/`refs`/`impact`.
 <!-- ctx-harness:end -->

@@ -1,0 +1,127 @@
+2025-02-11 09:00:00 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:01 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:02 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:00:03 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:04 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:05 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:06 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:07 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:00:08 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:09 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:10 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:11 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:12 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:13 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:14 Normal  Scheduled  pod/web-a1 assigned to node-3
+2025-02-11 09:00:15 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:16 Warning Unhealthy  pod/web-d4 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:00:17 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:00:18 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:00:19 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:20 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:21 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:22 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:23 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:24 Warning Unhealthy  pod/web-c3 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:00:25 Warning BackOff    pod/web-b2 restarting container (recovered after 1 restart)
+2025-02-11 09:00:26 Warning Unhealthy  pod/web-c3 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:00:27 Warning Unhealthy  pod/web-a1 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:00:28 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:29 Warning Unhealthy  pod/web-d4 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:00:30 Normal  Scheduled  pod/web-b2 assigned to node-1
+2025-02-11 09:00:31 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:00:32 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:33 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:34 Warning Unhealthy  pod/web-d4 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:00:35 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:36 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:37 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:38 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:39 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:40 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:41 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:42 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:43 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:44 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:45 Normal  Scheduled  pod/web-c3 assigned to node-8
+2025-02-11 09:00:46 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:47 Normal  Scheduled  pod/web-d4 assigned to node-4
+2025-02-11 09:00:48 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:49 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:50 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:00:51 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:00:52 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:53 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:54 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:00:55 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:00:56 Warning Unhealthy  pod/web-b2 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:00:57 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:58 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:00:59 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:01:00 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:01:01 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:01:02 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:01:03 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:01:04 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:01:05 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:01:06 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:01:07 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:01:08 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:01:09 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:07:17 Warning Unhealthy  pod/web-a1 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:07:18 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:07:19 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:07:20 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:07:21 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:07:22 Warning BackOff    pod/web-b2 restarting container (recovered after 1 restart)
+2025-02-11 09:07:23 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:07:24 Warning Unhealthy  pod/web-a1 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:07:25 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:07:26 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:07:27 Warning Unhealthy  pod/web-a1 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:07:28 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:07:29 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 09:07:30 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:07:31 Warning Unhealthy  pod/web-d4 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:07:31 Warning Failed     pod/worker-z9 container 'worker' terminated: reason=OOMKilled exitCode=137
+2025-02-11 09:07:31 Warning BackOff    pod/worker-z9 back-off restarting failed container; memory limit 256Mi
+2025-02-11 09:07:32 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:07:33 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:07:34 Normal  Scheduled  pod/web-b2 assigned to node-5
+2025-02-11 09:07:35 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:07:36 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:07:37 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:07:38 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:07:39 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 09:07:40 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 09:07:41 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:07:42 Warning Unhealthy  pod/web-c3 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:07:43 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:07:44 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 09:07:45 Warning Unhealthy  pod/web-a1 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 09:07:46 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 10:39:33 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 10:39:34 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 10:39:35 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 10:39:36 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 10:39:37 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 10:39:38 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 10:39:39 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 10:39:40 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 10:39:41 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 10:39:42 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 10:39:43 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 10:39:44 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 10:39:45 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 10:39:46 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 10:39:47 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 10:39:48 Warning BackOff    pod/web-d4 restarting container (recovered after 1 restart)
+2025-02-11 10:39:49 Warning Unhealthy  pod/web-b2 readiness probe failed: HTTP 503 (will retry)
+2025-02-11 10:39:50 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 10:39:51 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 10:39:52 Normal  Pulled     pod/web-c3 image already present
+2025-02-11 10:39:53 Normal  Pulled     pod/web-a1 image already present
+2025-02-11 10:39:54 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 10:39:55 Normal  Pulled     pod/web-d4 image already present
+2025-02-11 10:39:56 Normal  Pulled     pod/web-b2 image already present
+2025-02-11 10:39:57 Normal  Pulled     pod/web-c3 image already present

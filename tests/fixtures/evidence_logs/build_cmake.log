@@ -1,0 +1,129 @@
+[  0%] Building C object src/cache/cache_94.c.o
+src/auth/auth_103.c:214:11: warning: unused variable 'tmp9' [-Wunused-variable]
+src/store/store_326.c:260:14: warning: unused variable 'tmp7' [-Wunused-variable]
+[  0%] Building C object src/sched/sched_373.c.o
+[  0%] Building C object src/store/store_159.c.o
+[  0%] Building C object src/render/render_266.c.o
+[  0%] Building C object src/store/store_353.c.o
+src/cache/cache_364.c:80:20: warning: unused variable 'tmp4' [-Wunused-variable]
+[  0%] Building C object src/parser/parser_30.c.o
+[  0%] Building C object src/parser/parser_239.c.o
+[  0%] Building C object src/ui/ui_391.c.o
+[  0%] Building C object src/render/render_177.c.o
+[  0%] Building C object src/render/render_219.c.o
+src/export/export_110.c:213:10: warning: unused variable 'tmp4' [-Wunused-variable]
+[  0%] Building C object src/core/core_384.c.o
+src/core/core_133.c:168:16: warning: unused variable 'tmp2' [-Wunused-variable]
+[  0%] Building C object src/render/render_335.c.o
+make[2]: Entering directory '/work/app/build/store'
+[  0%] Building C object src/render/render_70.c.o
+src/cache/cache_305.c:77:11: warning: unused variable 'tmp7' [-Wunused-variable]
+[  0%] Building C object src/export/export_173.c.o
+[  0%] Building C object src/cache/cache_87.c.o
+src/ui/ui_170.c:38:6: warning: unused variable 'tmp3' [-Wunused-variable]
+[  0%] Building C object src/core/core_78.c.o
+[  0%] Building C object src/store/store_180.c.o
+[  0%] Building C object src/store/store_146.c.o
+[  0%] Building C object src/cache/cache_309.c.o
+[  0%] Building C object src/sched/sched_224.c.o
+src/parser/parser_103.c:159:12: warning: unused variable 'tmp5' [-Wunused-variable]
+[  0%] Building C object src/ui/ui_290.c.o
+[  0%] Building C object src/auth/auth_270.c.o
+[  0%] Building C object src/store/store_101.c.o
+src/ui/ui_264.c:168:14: warning: unused variable 'tmp1' [-Wunused-variable]
+[  0%] Building C object src/export/export_348.c.o
+[  0%] Building C object src/net/net_61.c.o
+src/sched/sched_65.c:112:5: error: implicit declaration of function 'helper_9'
+note: retrying with -std=gnu11 fallback header; recovered
+[  0%] Building C object src/ui/ui_121.c.o
+[  0%] Building C object src/ui/ui_83.c.o
+src/export/export_54.c:292:3: warning: unused variable 'tmp2' [-Wunused-variable]
+[  0%] Building C object src/sched/sched_93.c.o
+[  0%] Building C object src/render/render_1.c.o
+[  0%] Building C object src/core/core_94.c.o
+[  0%] Building C object src/export/export_345.c.o
+[  0%] Building C object src/store/store_297.c.o
+[  0%] Building C object src/store/store_237.c.o
+[  0%] Building C object src/render/render_140.c.o
+src/cache/cache_367.c:116:15: warning: unused variable 'tmp8' [-Wunused-variable]
+[  0%] Building C object src/parser/parser_305.c.o
+[  0%] Building C object src/store/store_83.c.o
+[  0%] Building C object src/store/store_386.c.o
+[  0%] Building C object src/cache/cache_352.c.o
+[  0%] Building C object src/render/render_346.c.o
+[  0%] Building C object src/store/store_386.c.o
+[  0%] Building C object src/core/core_110.c.o
+[  0%] Building C object src/sched/sched_255.c.o
+[  0%] Building C object src/core/core_221.c.o
+[  0%] Building C object src/sched/sched_175.c.o
+[  0%] Building C object src/auth/auth_342.c.o
+src/store/store_310.c:225:5: error: implicit declaration of function 'helper_3'
+note: retrying with -std=gnu11 fallback header; recovered
+src/ui/ui_13.c:162:11: warning: unused variable 'tmp8' [-Wunused-variable]
+src/ui/ui_186.c:227:18: warning: unused variable 'tmp6' [-Wunused-variable]
+[  0%] Building C object src/ui/ui_20.c.o
+[  0%] Building C object src/net/net_187.c.o
+[  0%] Building C object src/ui/ui_259.c.o
+[  0%] Building C object src/core/core_338.c.o
+[  0%] Building C object src/core/core_140.c.o
+src/render/render_279.c:75:9: warning: unused variable 'tmp2' [-Wunused-variable]
+src/parser/parser_53.c:141:16: error: implicit declaration of function 'helper_9'
+[ 38%] Building C object src/store/store_86.c.o
+src/store/store_88.c:207:7: error: implicit declaration of function 'helper_3'
+note: retrying with -std=gnu11 fallback header; recovered
+[ 38%] Building C object src/auth/auth_212.c.o
+[ 38%] Building C object src/ui/ui_163.c.o
+src/sched/sched_348.c:18:16: warning: unused variable 'tmp4' [-Wunused-variable]
+src/net/net_166.c:225:20: error: implicit declaration of function 'helper_9'
+note: retrying with -std=gnu11 fallback header; recovered
+[ 38%] Building C object src/parser/parser_354.c.o
+[ 38%] Building C object src/net/net_332.c.o
+[ 38%] Building C object src/core/core_375.c.o
+[ 38%] Building C object src/render/render_32.c.o
+[ 38%] Building C object src/store/store_282.c.o
+[ 38%] Building C object src/auth/auth_196.c.o
+src/core/core_248.c:44:3: warning: unused variable 'tmp1' [-Wunused-variable]
+/usr/bin/ld: libexport.a(pdf_writer.o): in function `emit_page':
+pdf_writer.c:(.text+0x1a4): undefined reference to `font_table_load'
+collect2: error: ld returned 1 exit status
+make[1]: *** [CMakeFiles/app.dir/build.make:412: app] Error 1
+[ 38%] Building C object src/net/net_197.c.o
+make[2]: Entering directory '/work/app/build/sched'
+[ 38%] Building C object src/ui/ui_90.c.o
+[ 38%] Building C object src/render/render_71.c.o
+src/render/render_121.c:75:7: warning: unused variable 'tmp4' [-Wunused-variable]
+[ 38%] Building C object src/cache/cache_322.c.o
+src/core/core_5.c:223:13: warning: unused variable 'tmp9' [-Wunused-variable]
+[ 38%] Building C object src/cache/cache_366.c.o
+[ 38%] Building C object src/export/export_109.c.o
+src/sched/sched_118.c:172:19: error: implicit declaration of function 'helper_5'
+note: retrying with -std=gnu11 fallback header; recovered
+[ 38%] Building C object src/core/core_73.c.o
+[ 38%] Building C object src/export/export_367.c.o
+[ 38%] Building C object src/parser/parser_294.c.o
+[ 38%] Building C object src/sched/sched_280.c.o
+[ 95%] Building C object src/ui/ui_176.c.o
+src/store/store_82.c:8:11: warning: unused variable 'tmp6' [-Wunused-variable]
+[ 95%] Building C object src/store/store_208.c.o
+[ 95%] Building C object src/store/store_166.c.o
+[ 95%] Building C object src/auth/auth_320.c.o
+[ 95%] Building C object src/net/net_283.c.o
+[ 95%] Building C object src/parser/parser_196.c.o
+[ 95%] Building C object src/sched/sched_127.c.o
+[ 95%] Building C object src/ui/ui_90.c.o
+[ 95%] Building C object src/parser/parser_71.c.o
+[ 95%] Building C object src/core/core_111.c.o
+[ 95%] Building C object src/parser/parser_211.c.o
+[ 95%] Building C object src/store/store_31.c.o
+src/auth/auth_232.c:255:3: warning: unused variable 'tmp4' [-Wunused-variable]
+[ 95%] Building C object src/cache/cache_271.c.o
+[ 95%] Building C object src/core/core_88.c.o
+[ 95%] Building C object src/cache/cache_26.c.o
+[ 95%] Building C object src/store/store_86.c.o
+[ 95%] Building C object src/net/net_268.c.o
+[ 96%] Building C object src/sched/sched_178.c.o
+[ 96%] Building C object src/store/store_196.c.o
+make[2]: Entering directory '/work/app/build/render'
+[ 96%] Building C object src/cache/cache_208.c.o
+[ 96%] Building C object src/net/net_63.c.o
+src/store/store_317.c:12:11: error: implicit declaration of function 'helper_7'

@@ -456,7 +456,8 @@ def _get(
                 f"span {selector.span} does not belong to {label}; use the reference "
                 "the digest printed with it")
         result = _resolve_span(store, ws, ref_text, label, selector.span)
-        record_telemetry(store, "get", len(data) if data else 0, len(encode_exact(result)))
+        record_telemetry(store, "get", len(data) if data else 0, len(encode_exact(result)),
+                         ref=ref_text)
         return result
 
     if selector.symbol is not None:
@@ -734,7 +735,7 @@ def _get(
         raw_len = fast_bytes[1]
     else:
         raw_len = len(data)
-    record_telemetry(store, "get", raw_len, len(encode_exact(result)))
+    record_telemetry(store, "get", raw_len, len(encode_exact(result)), ref=ref_text)
     return result
 
 

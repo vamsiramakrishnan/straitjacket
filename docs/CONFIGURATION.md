@@ -65,7 +65,7 @@ ceiling is captured and shown as a bounded digest instead.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `digest_tokens` | `480` | Token budget for a digest. |
+| `digest_tokens` | `480` | Token budget for a digest. A digest that carries an evidence map gets `digest_tokens` plus exactly the map's own bytes (at most `evidence_map_bytes` plus its accounting and closing lines, so at most about 480 + 450 tokens at the defaults), on success and failure alike; `failure_budget_factor` applies only to digests without a map. |
 | `result_tokens` | `1200` | Token budget for a single retrieval (`ctx get`). |
 | `turn_retrieval_tokens` | `2800` | Cumulative retrieval budget per turn. |
 | `max_inline_bytes` | `16384` | Native-read size (input side) above which a read is bounded rather than pasted whole. |
@@ -77,10 +77,155 @@ ceiling is captured and shown as a bounded digest instead.
 | `failure_budget_factor` | `2.0` | Failing runs get this multiple of the standard digest budget — a failure carries the evidence you need. |
 | `digest_head_lines` | `5` | Head lines shown for a generic text flood. |
 | `digest_tail_lines` | `5` | Tail lines shown for a generic text flood. |
+| `evidence_map_bytes` | `1500` | Byte cap, measured after redaction, for a digest's evidence map: its list of distinct messages plus its excerpts. Clamped to 400..8000. The map's accounting line and closing line ride outside the cap. When a digest is cut to fit its budget the profile summary above the map gives way, never the map; a map that cannot fit whole is left out, never cut. |
 
 `max_inline_bytes` (input, native reads) and `max_tool_output_bytes` (output,
 tool results) are deliberately separate knobs — tune the flood you actually
 have.
+
+### The evidence map
+
+When command output is too large to show whole, the digests that summarise
+text-like output (`text/v1`, `build/v1`, `lint/v1`, `jsonl/v1`,
+`logtemplate/v1`; from `ctx run`, the hook's output gate and the Claude Code
+failure hook alike) carry an evidence map. (A host that passes a failed
+command's output only cut short and keeps no copy -- Claude Code passes the
+first ~10,000 characters and nothing else -- gives ctx nothing to map: there
+the failure hook adds one line, once per session, saying how many characters
+the host passed and that `ctx run --passthrough --shell -- '<command>'`,
+if it is safe to run again, keeps all of it with a map.) Every *error-like line* (error
+words, failure counts, exit codes, `file:line` coordinates; ANSI colour removed
+first) is grouped into a distinct message:
+
+- timestamps, durations with a unit, long hex ids and memory addresses, uuids
+  and pids/thread ids are masked always: they vary by nature;
+- every other token with a digit, a quote, `/`, `@` or `=` is a slot (a
+  quoted string, `msg="quota exceeded"`, is one token). A slot that takes at
+  most 8 values, some repeated, splits the message (`exit code 1` ×41 and
+  `exit code 137` ×1 are two messages, and the second ranks as rare). Other
+  slots stay collapsed into one message marked `varies`, which shows the
+  values: with at most 8 of them, every value with its count and first line
+  (`varies: 0041 ×1 L10 · 0042 ×1 L55 · 0043 ×1 L90`); with more, the count,
+  the range when every value is a number (`numeric: min 7 · max 149999`),
+  and either the least frequent values (count ascending, then value, with
+  their first lines) or, when every value has the same count, that fact
+  (`50,001 distinct values, each ×1`). Two commands follow: `values: ctx get
+  run:<id>#stdout --span <token>` lists the distinct values with count and
+  first line, least frequent first, 100 per call (the top one is also under
+  `next:`); `all its lines: …` pages through every line of the message, each
+  page reading on from where the previous one ended.
+
+The map then states, exactly:
+
+```
+evidence map (exact): 686 error-like lines · 6 distinct messages · 3 shown with context · 3 listed · 0 not listed
+```
+
+The map adds only what the profile body above it does not already show. A
+message whose lines the body prints verbatim with their real line numbers
+(`logtemplate/v1`'s `exceptional:` section does this for rare lines) gets no
+excerpt and no row; the accounting counts it as `N shown above (L…)`, and the
+delivered text is checked to really contain those lines. When the body shows
+every error-like line the digest has no map at all.
+
+Space is spent on the list first: one row per message (`×count  first L…
+last L…  sample`), rarest first, as many as the cap holds. The top three
+messages are then shown as excerpts (verbatim except control characters, two
+lines either side, real line numbers, so `run:<id> L4514` cites it) only as far
+as that never pushes a message off the list. A line too long for the digest
+is windowed around its signal word and every cut is marked `… +N chars`.
+Ranking: `--focus` matches first, then higher signal tier, then rarer, then the
+later last occurrence, then the earlier first occurrence. Past the cap, one
+line gives the exact command that lists every message (`ctx get
+run:<id>#stdout --span <token>`). When nothing is left unlisted the digest
+says `every error-like line is one of these N messages` (adding that a
+message marked varies stands for several values, shown on its line or listed
+by its command, when any is), and only then. A budget too small for the whole
+map leaves it out with one line, `evidence map omitted: budget`. When the stream was larger
+than the parse cap the accounting names the lines it covers, the sentence is
+never printed, and a command maps the rest. The numbers always add up: shown +
+listed + not listed = distinct messages.
+
+## `[picker]` — who chooses which messages are expanded
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mode` | `"local"` | `local`: the deterministic rule above; nothing is sent anywhere and no network module is loaded (the choice is still recorded locally). `shadow`: the decision endpoint is asked too, both choices are recorded, the digest is the local one byte for byte. `model`: the endpoint's yes/no relevance scores choose the expanded excerpts. Anything else means `local`. |
+| `endpoint` | `https://generativelanguage.googleapis.com/v1beta/decisions` | The decisions endpoint (a compatible self-hosted server can be named; plain `http://` is accepted only for a loopback address). |
+| `model` | `"gemini-decision-1"` | Model name sent in the request body. |
+| `api_key_env` | `"GEMINI_API_KEY"` | NAME of the environment variable holding the key: one of `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `CTX_PICKER_API_KEY`. The value is read at call time, sent only in the `x-goog-api-key` header, and never logged, stored or shown. |
+| `timeout_ms` | `3000` | Hard deadline for the whole call. |
+| `threshold` | `0.5` | Minimum P(yes) for a candidate to be expanded by the model; free slots follow the local order. |
+| `max_candidates` | `40` | Most candidate messages sent per request (local order). |
+| `max_candidate_bytes` | `600` | Most bytes of one candidate excerpt. |
+| `proxy` | `""` | Home file only. `""`: no proxy; `"env"`: the environment's proxy variables; a URL: that proxy. |
+| `ca_file` | `""` | Home file only. A CA bundle to trust instead of the built-in store (owned by you, not group/world-writable). |
+
+**Where it can be turned on.** Only one place can turn the picker on or set
+its endpoint, model and key variable: the file `.config/ctx/config.toml` in
+the account's home directory as the OS account database reports it
+(`pwd.getpwuid(os.getuid()).pw_dir`; on Windows, which has no `pwd`, the user
+profile folder from `SHGetFolderPathW`), never a directory found through
+`$HOME` or `$XDG_CONFIG_HOME`. The file is ignored (one record in
+`guard-failures.jsonl`) unless it is owned by the current user and not
+writable by group or others. `api_key_env` must be one of `GEMINI_API_KEY`,
+`GOOGLE_API_KEY`, `CTX_PICKER_API_KEY`; any other name keeps the picker local,
+so even a wrong file can never name an arbitrary secret. Environment
+variables and a workspace `ctx.toml` can be set by a repository (a host's
+project settings can set the hook's environment), so both may only turn the
+picker off (`CTX_PICKER_MODE` set to `local`, `off`, `0`, `false`, `no`,
+`none` or `disabled`, any case; `shadow` there lowers a `model` file setting
+to shadow; or `mode = "local"` in the workspace `[picker]`) or
+lower `max_candidates`, `max_candidate_bytes` and `timeout_ms`
+(`CTX_PICKER_MAX_CANDIDATES`, `CTX_PICKER_MAX_CANDIDATE_BYTES`,
+`CTX_PICKER_TIMEOUT_MS`); anything else there is ignored and recorded once.
+`ctx doctor` shows the effective mode, the file it came from, and why any
+setting was ignored (the endpoint shown with any `user:password@` masked and
+no query string). The file is read through one open descriptor whose owner and
+mode are checked before it is read. Redirects are never followed (the key
+would travel with them).
+
+**Where it connects.** Only the home file decides that, too. By default the
+picker's connection ignores the environment's proxy variables (`HTTPS_PROXY`
+and friends) and its CA variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`): no proxy,
+and the interpreter's built-in trust store (the compiled-in OpenSSL default
+paths; the system store on Windows). The home file may opt in with
+`proxy = "env"` (use the environment's proxy settings), `proxy = "<url>"`, and
+`ca_file = "<path>"` (owned by the current user and not writable by group or
+others, like the config file). **A machine behind a mandatory proxy needs
+`proxy = "env"` (or the proxy's URL) in the home file**, and a TLS-inspecting
+proxy also needs its CA as `ca_file`; otherwise the picker fails open to the
+local choice. `ctx doctor` shows both.
+
+**What is sent** (only in `shadow` or `model` mode, only from a live delivery
+-- `ctx run` and the hook's output gate, never `ctx replay` or other
+re-digests): an intent line (the user's last prompt when ctx has it, first 300
+characters, else the command line and `--focus`), the command, and each
+candidate's sample excerpt (its first occurrence with two lines either side),
+built from the same sanitised lines the digest shows (colour removed,
+private-key body lines replaced, secrets including `scheme://user:password@`
+replaced) and capped in number and bytes. **What is not sent**: the output itself, anything else from the
+workspace, file contents, the key in any body. **The default sends nothing.**
+
+In `model` mode the expanded excerpts are labelled `picked by the question
+(p=…)` or `picked by the local rule`; the list of all other messages is
+unchanged, so the model's choice cannot hide anything. On a timeout, an HTTP
+or transport error, a missing key or a malformed answer the digest is exactly
+the local one and the failure is recorded once in
+`.ctx-session-reads/guard-failures.jsonl` (a category such as `timeout` or
+`http 403`, never the key or the payload). Each digest the picker ran for
+(local mode included, as the baseline; nothing is sent for it) appends one
+record to `.ctx-session-reads/picker.jsonl` (handle, mode,
+candidates, local order, model order, scores, what was expanded, latency,
+tokens, error -- line references only, no text). `ctx replay --picker`
+reports per mode how many digests were followed by a `ctx get`/`ctx search`
+of the same handle (each fetch counted once, for the latest digest of that
+handle before it) (retrieval telemetry records the run handle it read) and,
+where the model answered, how often its top pick differed from the local one.
+
+A model-picked digest's run id also records the scores that chose it
+(`digest.picker` in the manifest): digest identity stays a pure function of
+the rendered bytes, and a local and a model rendering never share an id.
 
 ## `[guard]` — how commands are steered
 
@@ -352,7 +497,7 @@ Advise mode records no token saving, because nothing was avoided.
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Enable secret redaction in model-visible output. |
-| `patterns` | full built-in set | Active redaction patterns. |
+| `patterns` | full built-in set | Active redaction patterns. The set includes `url-credentials` (the `user:password@` part of a URL such as `postgres://admin:pw@host/db`, the user possibly empty: `redis://:pw@host`). |
 
 A guard rail worth knowing: if `patterns` is set to something that isn't a list
 (a bare string typo, say), straitjacket rejects it and falls back to the full

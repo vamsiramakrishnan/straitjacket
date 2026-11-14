@@ -1,0 +1,128 @@
+2025-02-11 09:00:00 INFO  applied row batch 0 on items (4245 rows)
+2025-02-11 09:00:01 INFO  applied row batch 1 on users (2549 rows)
+2025-02-11 09:00:02 INFO  applied row batch 2 on users (1182 rows)
+2025-02-11 09:00:03 INFO  applied row batch 3 on orders (1918 rows)
+2025-02-11 09:00:04 INFO  applied row batch 4 on orders (3352 rows)
+2025-02-11 09:00:05 INFO  applied row batch 5 on events (2455 rows)
+2025-02-11 09:00:06 INFO  applied row batch 6 on events (839 rows)
+2025-02-11 09:00:07 INFO  applied row batch 7 on items (204 rows)
+2025-02-11 09:00:08 INFO  applied row batch 8 on items (1927 rows)
+2025-02-11 09:00:09 INFO  applied row batch 9 on events (1963 rows)
+2025-02-11 09:00:10 WARN  lock wait 793ms on events
+2025-02-11 09:00:11 INFO  applied row batch 11 on events (4029 rows)
+2025-02-11 09:00:12 INFO  applied row batch 12 on orders (542 rows)
+2025-02-11 09:00:13 ERROR deadlock detected on items, transaction rolled back
+2025-02-11 09:00:13 INFO  retrying batch 13: ok
+2025-02-11 09:00:14 INFO  applied row batch 14 on orders (1123 rows)
+2025-02-11 09:00:15 INFO  applied row batch 15 on orders (3431 rows)
+2025-02-11 09:00:16 INFO  applied row batch 16 on users (1916 rows)
+2025-02-11 09:00:17 INFO  applied row batch 17 on items (4714 rows)
+2025-02-11 09:00:18 INFO  applied row batch 18 on users (4474 rows)
+2025-02-11 09:00:19 INFO  applied row batch 19 on users (3734 rows)
+2025-02-11 09:00:20 INFO  applied row batch 20 on orders (2561 rows)
+2025-02-11 09:00:21 INFO  applied row batch 21 on items (2303 rows)
+2025-02-11 09:00:22 ERROR deadlock detected on items, transaction rolled back
+2025-02-11 09:00:22 INFO  retrying batch 22: ok
+2025-02-11 09:00:23 WARN  lock wait 760ms on events
+2025-02-11 09:00:24 WARN  lock wait 523ms on users
+2025-02-11 09:00:25 INFO  applied row batch 25 on events (4189 rows)
+2025-02-11 09:00:26 INFO  applied row batch 26 on orders (1973 rows)
+2025-02-11 09:00:27 INFO  applied row batch 27 on users (4378 rows)
+2025-02-11 09:00:28 INFO  applied row batch 28 on events (1789 rows)
+2025-02-11 09:00:29 ERROR deadlock detected on users, transaction rolled back
+2025-02-11 09:00:29 INFO  retrying batch 29: ok
+2025-02-11 09:00:30 WARN  lock wait 614ms on users
+2025-02-11 09:00:31 INFO  applied row batch 31 on items (1165 rows)
+2025-02-11 09:00:32 INFO  applied row batch 32 on events (450 rows)
+2025-02-11 09:00:33 INFO  applied row batch 33 on items (3744 rows)
+2025-02-11 09:00:34 INFO  applied row batch 34 on orders (4716 rows)
+2025-02-11 09:00:35 INFO  applied row batch 35 on orders (3280 rows)
+2025-02-11 09:00:36 INFO  applied row batch 36 on users (3776 rows)
+2025-02-11 09:00:37 ERROR deadlock detected on events, transaction rolled back
+2025-02-11 09:00:37 INFO  retrying batch 37: ok
+2025-02-11 09:00:38 INFO  applied row batch 38 on users (192 rows)
+2025-02-11 09:00:39 INFO  applied row batch 39 on items (1799 rows)
+2025-02-11 09:00:40 INFO  applied row batch 40 on orders (4782 rows)
+2025-02-11 09:00:41 INFO  applied row batch 41 on users (3201 rows)
+2025-02-11 09:00:42 INFO  applied row batch 42 on events (182 rows)
+2025-02-11 09:00:43 INFO  applied row batch 43 on events (4679 rows)
+2025-02-11 09:00:44 INFO  applied row batch 44 on orders (3134 rows)
+2025-02-11 09:00:45 INFO  applied row batch 45 on items (3294 rows)
+2025-02-11 09:00:46 INFO  applied row batch 46 on items (4447 rows)
+2025-02-11 09:00:47 WARN  lock wait 884ms on events
+2025-02-11 09:00:48 INFO  applied row batch 48 on events (4277 rows)
+2025-02-11 09:00:49 INFO  applied row batch 49 on users (2286 rows)
+2025-02-11 09:00:50 INFO  applied row batch 50 on users (1113 rows)
+2025-02-11 09:00:51 INFO  applied row batch 51 on events (1866 rows)
+2025-02-11 09:00:52 INFO  applied row batch 52 on orders (2263 rows)
+2025-02-11 09:00:53 ERROR deadlock detected on events, transaction rolled back
+2025-02-11 09:00:53 INFO  retrying batch 53: ok
+2025-02-11 09:00:54 INFO  applied row batch 54 on orders (138 rows)
+2025-02-11 09:00:55 WARN  lock wait 588ms on events
+2025-02-11 09:00:56 INFO  applied row batch 56 on orders (1338 rows)
+2025-02-11 09:00:57 INFO  applied row batch 57 on events (1811 rows)
+2025-02-11 09:00:58 INFO  applied row batch 58 on events (1487 rows)
+2025-02-11 09:00:59 INFO  applied row batch 59 on events (2701 rows)
+2025-02-11 09:01:00 INFO  applied row batch 60 on events (3936 rows)
+2025-02-11 09:01:01 INFO  applied row batch 61 on events (3302 rows)
+2025-02-11 09:01:02 INFO  applied row batch 62 on items (1674 rows)
+2025-02-11 09:01:03 WARN  lock wait 310ms on orders
+2025-02-11 09:01:04 INFO  applied row batch 64 on users (1607 rows)
+2025-02-11 10:09:38 WARN  lock wait 432ms on orders
+2025-02-11 10:09:39 INFO  applied row batch 4179 on events (2304 rows)
+2025-02-11 10:09:40 INFO  applied row batch 4180 on users (3520 rows)
+2025-02-11 10:09:41 WARN  lock wait 479ms on users
+2025-02-11 10:09:42 WARN  lock wait 233ms on orders
+2025-02-11 10:09:43 INFO  applied row batch 4183 on orders (2031 rows)
+2025-02-11 10:09:44 INFO  applied row batch 4184 on orders (884 rows)
+2025-02-11 10:09:45 INFO  applied row batch 4185 on orders (3708 rows)
+2025-02-11 10:09:46 WARN  lock wait 353ms on users
+2025-02-11 10:09:47 INFO  applied row batch 4187 on events (3080 rows)
+2025-02-11 10:09:48 INFO  applied row batch 4188 on events (3592 rows)
+2025-02-11 10:09:49 INFO  applied row batch 4189 on events (4152 rows)
+2025-02-11 10:09:50 INFO  applied row batch 4190 on events (1691 rows)
+2025-02-11 10:09:51 INFO  applied row batch 4191 on users (3433 rows)
+2025-02-11 10:09:52 WARN  lock wait 305ms on orders
+2025-02-11 10:09:52 ERROR migration 0042_add_unique_email failed
+ERROR:  could not create unique index "users_email_key"
+DETAIL:  Key (email)=(dup@example.com) is duplicated.
+2025-02-11 10:09:53 ERROR deadlock detected on orders, transaction rolled back
+2025-02-11 10:09:53 INFO  retrying batch 4193: ok
+2025-02-11 10:09:54 INFO  applied row batch 4194 on users (4556 rows)
+2025-02-11 10:09:55 INFO  applied row batch 4195 on items (2659 rows)
+2025-02-11 10:09:56 INFO  applied row batch 4196 on users (3859 rows)
+2025-02-11 10:09:57 INFO  applied row batch 4197 on orders (4919 rows)
+2025-02-11 10:09:58 WARN  lock wait 700ms on users
+2025-02-11 10:09:59 INFO  applied row batch 4199 on items (3059 rows)
+2025-02-11 10:10:00 INFO  applied row batch 4200 on events (2007 rows)
+2025-02-11 10:10:01 WARN  lock wait 299ms on events
+2025-02-11 10:10:02 INFO  applied row batch 4202 on events (1003 rows)
+2025-02-11 10:10:03 INFO  applied row batch 4203 on events (3028 rows)
+2025-02-11 10:10:04 WARN  lock wait 231ms on events
+2025-02-11 10:10:05 INFO  applied row batch 4205 on events (3000 rows)
+2025-02-11 10:10:06 INFO  applied row batch 4206 on orders (3866 rows)
+2025-02-11 11:18:10 INFO  applied row batch 8290 on items (3921 rows)
+2025-02-11 11:18:11 WARN  lock wait 649ms on items
+2025-02-11 11:18:12 WARN  lock wait 874ms on users
+2025-02-11 11:18:13 INFO  applied row batch 8293 on events (1183 rows)
+2025-02-11 11:18:14 ERROR deadlock detected on items, transaction rolled back
+2025-02-11 11:18:14 INFO  retrying batch 8294: ok
+2025-02-11 11:18:15 WARN  lock wait 376ms on users
+2025-02-11 11:18:16 INFO  applied row batch 8296 on orders (1662 rows)
+2025-02-11 11:18:17 INFO  applied row batch 8297 on orders (948 rows)
+2025-02-11 11:18:18 INFO  applied row batch 8298 on items (3991 rows)
+2025-02-11 11:18:19 INFO  applied row batch 8299 on events (2198 rows)
+2025-02-11 11:18:20 INFO  applied row batch 8300 on events (4650 rows)
+2025-02-11 11:18:21 INFO  applied row batch 8301 on orders (3329 rows)
+2025-02-11 11:18:22 INFO  applied row batch 8302 on events (741 rows)
+2025-02-11 11:18:23 ERROR deadlock detected on items, transaction rolled back
+2025-02-11 11:18:23 INFO  retrying batch 8303: ok
+2025-02-11 11:18:24 INFO  applied row batch 8304 on users (4088 rows)
+2025-02-11 11:18:25 INFO  applied row batch 8305 on users (469 rows)
+2025-02-11 11:18:26 INFO  applied row batch 8306 on items (2606 rows)
+2025-02-11 11:18:27 INFO  applied row batch 8307 on events (3599 rows)
+2025-02-11 11:18:28 INFO  applied row batch 8308 on orders (381 rows)
+2025-02-11 11:18:29 INFO  applied row batch 8309 on users (4185 rows)
+2025-02-11 11:18:30 WARN  lock wait 465ms on items
+2025-02-11 11:18:31 INFO  applied row batch 8311 on users (3704 rows)
+2025-02-11 11:18:32 INFO  applied row batch 8312 on events (1544 rows)

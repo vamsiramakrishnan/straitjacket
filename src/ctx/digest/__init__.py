@@ -247,6 +247,7 @@ def render_run_digest(
     contained: bool = True,
     producer: str | None = None,
     record_delivery: bool = True,
+    picker: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Produce the bounded deterministic digest for a captured invocation and
     republish the manifest with its final digest identity.
@@ -266,11 +267,18 @@ def render_run_digest(
     Like ``dense``, the plan selects among deterministic renderings; digest
     identity remains a pure function of the rendered bytes.
 
+    ``picker`` marks a live delivery (``ctx run``, the hook's output gate):
+    only there may ``[picker] mode = shadow|model`` consult the decision
+    endpoint for the evidence map. Every other caller (replay, jobs, plans,
+    intake) renders the local map, so re-digesting never sends anything.
+
     Returns (digest_text, final_manifest).
     """
     ctx = DigestContext.load(store, ws, manifest, focus=focus)
     ctx.dense = bool(dense)
     ctx.plan = plan
+    run = _picker_run(ws, ctx, focus) if picker else None
+    ctx.picker = run
     profile, reason = detect_profile(ctx)
 
     # Resolve automatic hints only for the generic selector. Structured profiles
@@ -281,7 +289,7 @@ def render_run_digest(
         focus = current_query()
         if focus:
             focused = DigestContext.load(store, ws, manifest, focus=focus)
-            focused.dense, focused.plan = ctx.dense, ctx.plan
+            focused.dense, focused.plan, focused.picker = ctx.dense, ctx.plan, ctx.picker
             ctx = focused
 
     # Clip helpers (textutil.clip_redacting) honour the workspace policy:
@@ -296,6 +304,11 @@ def render_run_digest(
     with redaction_scope(ws.config.redaction):
         body = _blank_private_key_fragments(ctx, body)
     body, redactions = sanitize_for_model(body, ws.config.redaction)
+    if ctx.evmap_fired:
+        # The evidence map replaced these before cutting its lines.
+        from ctx.textutil import shown_marker_names
+
+        redactions = sorted(set(redactions) | set(shown_marker_names(body, ctx.evmap_fired)))
     if redactions:
         body += "\nredaction: applied [" + ", ".join(redactions) + "]"
 
@@ -310,8 +323,15 @@ def render_run_digest(
         "focusHash": focus_hash(focus),
         "bytesHash": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
     }
+    if run is not None and run.model_used:
+        # The bytes already differ from the local rendering's; this names
+        # the recorded scores that chose them, so the run identity says the
+        # digest was model-picked and two scorings never share an id.
+        digest_meta["picker"] = f"model:{run.scores_hash}"
     final_id, final_manifest = update_manifest_digest(store, manifest, digest_meta)
     short = short_id(final_id)
+    if run is not None:
+        run.finish(f"run:{short}")
 
     header = f"[ctx run:{short} profile={profile_version}]"
     digest = header + "\n" + body.replace("run:PENDING", f"run:{short}")
@@ -339,6 +359,21 @@ def render_run_digest(
         ws, op, short, raw, len(digest.encode("utf-8")), producer
     )
     return digest, final_manifest
+
+
+def _picker_run(ws: Workspace, ctx: DigestContext, focus: str | None):
+    """A :class:`ctx.digest.picker.PickerRun` for a live delivery. In the
+    default local mode it only records the local choice (the baseline of
+    ``ctx replay --picker``); nothing is sent and no client is imported."""
+    policy = getattr(ws.config, "picker", None)
+    if policy is None:
+        return None
+    try:
+        from ctx.digest.picker import PickerRun
+
+        return PickerRun(policy, ws.root, ctx.command_line(), focus)
+    except Exception:
+        return None
 
 
 #: Only a capture that actually cost something is worth telling a peer about.
@@ -474,6 +509,7 @@ def digest_output(
     argv: list[str] | None = None,
     contained: bool = True,
     producer: str | None = None,
+    picker: bool = False,
 ) -> tuple[str, str]:
     """Digest an already-produced tool result (not a shell capture).
 
@@ -504,7 +540,8 @@ def digest_output(
     )
 
     digest, final = render_run_digest(store, ws, manifest, focus=None,
-                                      contained=contained, producer=producer)
+                                      contained=contained, producer=producer,
+                                      picker=picker)
     short = short_id(final.get("id", ""))
 
     from ctx.engagement import filter_digest, suggestion_cap
@@ -515,8 +552,14 @@ def digest_output(
         if "output (complete):" in digest
         else ws.config.budgets.digest_tokens
     )
-    if is_error:
+    from ctx.digest.evidence_map import budget_tokens, deliver
+
+    extra = budget_tokens(ws, digest)
+    if extra:
+        # digest_tokens plus exactly the map's bytes, failure or not.
+        budget += extra
+    elif is_error:
         budget = int(budget * ws.config.budgets.failure_budget_factor)
     eng = ws.config.engagement
     cap = suggestion_cap(ws.root, mode=eng.mode, lean_models=eng.lean_models)
-    return bounded(filter_digest(digest, cap), budget), short
+    return deliver(filter_digest(digest, cap), budget), short

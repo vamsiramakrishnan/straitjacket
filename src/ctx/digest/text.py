@@ -64,7 +64,50 @@ def _signal_rank(line: str) -> int:
 
     -1 benign trap · 0 no signal · 1 weak keyword · 2 coordinate-bearing ·
     3 decisive failure evidence. Higher wins; earliest line breaks ties.
+
+    On an ASCII line each regex runs only when a literal it cannot match
+    without is present (plain substring tests, several times cheaper than
+    the regexes on ordinary log lines); the answer is the same. Outside
+    ASCII, case folding can change lengths and letters, so every regex runs.
     """
+    if not line.isascii():
+        return _signal_rank_full(line)
+    low = line.lower()
+    if ("no " in low or "0 " in low or "zero " in low) and _BENIGN_RE.search(line):
+        return -1
+    rank = 0
+    if any(w in low for w in _WEAK_WORDS) and _WEAK_ERR_RE.search(line):
+        rank = 1
+    if _COORDINATE_GATE_RE.search(line) and _COORDINATE_RE.search(line):
+        rank = 2
+    if (
+        (any(w in line for w in _REAL_FAILURE_WORDS) and _REAL_FAILURES_RE.search(line))
+        or (("HTTP/" in line or "status" in line) and _HTTP_STATUS_RE.search(line))
+        or (("exit" in low or "code" in low) and _EXIT_CODE_RE.search(line))
+        or ((any(w in line for w in _STRONG_WORDS) or line.startswith("Error: "))
+            and _STRONG_ERR_RE.search(line))
+        or ("quota" in low and _QUOTA_RE.search(line))
+    ):
+        rank = 3
+    return rank
+
+
+# Stricter than _COORDINATE_HINT_RE and still necessary: every alternative of
+# _COORDINATE_RE but `file "` and `--> ` contains `.<ext>:<digit>`, so a
+# timestamp's `09:00:13` alone no longer runs the coordinate regex.
+_COORDINATE_GATE_RE = re.compile(r'\.\w+:\d|file "|--> ')
+# Literals each regex needs (see _signal_rank): case-folded for the
+# IGNORECASE patterns, exact for the case-sensitive ones.
+_WEAK_WORDS = ("error", "fail", "exception", "traceback", "fatal", "panic", "denied",
+               "refused", "timeout", "timed out", "cannot", "unable")
+_REAL_FAILURE_WORDS = ("fail", "error", "FAIL", "ERR!", "ERROR", "ELIFECYCLE",
+                       "OOMKilled", "connection refused")
+_STRONG_WORDS = ("FATAL", "CRITICAL", "Traceback", "Exception", "AssertionError",
+                 "PERMISSION", "ERR! ")
+
+
+def _signal_rank_full(line: str) -> int:
+    """:func:`_signal_rank` without the literal gates."""
     if _BENIGN_RE.search(line):
         return -1
     rank = 0
@@ -225,6 +268,17 @@ class TextProfile(Profile):
                     + self.next_lines(ctx, suggestions)
                 )
             spans = []
+        emap = None if (spans or binary) else self.evidence_map(ctx, above=lines + summary)
+        if emap is not None:
+            # Every error-like line accounted for: excerpts, a list, and the
+            # exact count of what is in neither (ctx.digest.evidence_map).
+            map_lines, map_next, r = emap
+            total = ctx.stdout.lines + ctx.stderr.lines
+            return "\n".join(
+                lines + map_lines
+                + self.coverage_lines(ctx, r.windows, max(0, total - r.excerpt_lines))
+                + self.next_lines(ctx, map_next)
+            )
         if spans:
             for stream, a, b, sample in spans:
                 summary.append(f"  focus {stream}:L{a}-L{b}: {sample}")

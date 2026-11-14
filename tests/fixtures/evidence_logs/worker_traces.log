@@ -1,0 +1,130 @@
+2025-02-11 09:00:00 WARN  job-0 deprecated call format_v1()
+2025-02-11 09:00:01 INFO  job-1 processed 341 records
+2025-02-11 09:00:02 INFO  job-2 processed 369 records
+2025-02-11 09:00:03 INFO  job-3 processed 6 records
+2025-02-11 09:00:04 WARN  job-4 deprecated call format_v1()
+2025-02-11 09:00:05 INFO  job-5 processed 489 records
+2025-02-11 09:00:06 ERROR job-6 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 36, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 09:00:06 INFO  job-6 retry succeeded
+2025-02-11 09:00:14 WARN  job-14 deprecated call format_v1()
+2025-02-11 09:00:15 INFO  job-15 processed 198 records
+2025-02-11 09:00:16 INFO  job-16 processed 242 records
+2025-02-11 09:00:17 WARN  job-17 deprecated call format_v1()
+2025-02-11 09:00:18 INFO  job-18 processed 421 records
+2025-02-11 09:00:19 INFO  job-19 processed 335 records
+2025-02-11 09:00:20 INFO  job-20 processed 419 records
+2025-02-11 09:00:21 ERROR job-21 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 48, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 09:00:21 INFO  job-21 retry succeeded
+2025-02-11 09:00:29 INFO  job-29 processed 196 records
+2025-02-11 09:00:30 ERROR job-30 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 71, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 09:00:30 INFO  job-30 retry succeeded
+2025-02-11 09:00:38 INFO  job-38 processed 485 records
+2025-02-11 09:00:39 INFO  job-39 processed 92 records
+2025-02-11 09:00:40 ERROR job-40 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 75, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 09:00:40 INFO  job-40 retry succeeded
+2025-02-11 09:00:48 ERROR job-48 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 39, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 09:00:48 INFO  job-48 retry succeeded
+2025-02-11 09:00:56 INFO  job-56 processed 211 records
+2025-02-11 09:00:57 INFO  job-57 processed 446 records
+2025-02-11 09:00:58 ERROR job-58 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 49, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 09:00:58 INFO  job-58 retry succeeded
+2025-02-11 09:01:06 WARN  job-66 deprecated call format_v1()
+2025-02-11 09:01:07 ERROR job-67 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 60, in run
+2025-02-11 12:45:55 INFO  job-13555 processed 13 records
+2025-02-11 12:45:56 ERROR job-13556 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 84, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 12:45:56 INFO  job-13556 retry succeeded
+2025-02-11 12:46:04 INFO  job-13564 processed 143 records
+2025-02-11 12:46:05 INFO  job-13565 processed 228 records
+2025-02-11 12:46:06 INFO  job-13566 processed 472 records
+2025-02-11 12:46:07 INFO  job-13567 processed 490 records
+2025-02-11 12:46:08 INFO  job-13568 processed 75 records
+2025-02-11 12:46:09 INFO  job-13569 processed 277 records
+2025-02-11 12:46:09 ERROR job-ledger unrecoverable: write failed
+Traceback (most recent call last):
+  File "/work/app/ledger.py", line 212, in commit
+    fh.write(blob)
+OSError: [Errno 28] No space left on device: '/work/app/data/ledger.db'
+2025-02-11 12:46:10 INFO  job-13570 processed 160 records
+2025-02-11 12:46:11 ERROR job-13571 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 74, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 12:46:11 INFO  job-13571 retry succeeded
+2025-02-11 12:46:19 ERROR job-13579 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 85, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 13:09:27 INFO  job-14967 retry succeeded
+2025-02-11 13:09:35 INFO  job-14975 processed 219 records
+2025-02-11 13:09:36 INFO  job-14976 processed 141 records
+2025-02-11 13:09:37 INFO  job-14977 processed 130 records
+2025-02-11 13:09:38 INFO  job-14978 processed 365 records
+2025-02-11 13:09:39 ERROR job-14979 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 77, in run
+    result = fetch(url, timeout=2)
+  File "/work/app/net.py", line 77, in fetch
+    return sock.recv(4096)
+TimeoutError: timed out
+2025-02-11 13:09:39 INFO  job-14979 retry succeeded
+2025-02-11 13:09:47 INFO  job-14987 processed 24 records
+2025-02-11 13:09:48 INFO  job-14988 processed 233 records
+2025-02-11 13:09:49 INFO  job-14989 processed 330 records
+2025-02-11 13:09:50 WARN  job-14990 deprecated call format_v1()
+2025-02-11 13:09:51 INFO  job-14991 processed 120 records
+2025-02-11 13:09:52 ERROR job-14992 handler raised TimeoutError (will retry)
+Traceback (most recent call last):
+  File "/work/app/worker.py", line 79, in run

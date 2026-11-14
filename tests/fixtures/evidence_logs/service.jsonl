@@ -1,0 +1,126 @@
+{"ts": 0, "level": "info", "svc": "cache", "msg": "request handled", "ms": 238}
+{"ts": 1, "level": "info", "svc": "export", "msg": "request handled", "ms": 222}
+{"ts": 2, "level": "info", "svc": "auth", "msg": "request handled", "ms": 76}
+{"ts": 3, "level": "info", "svc": "store", "msg": "request handled", "ms": 282}
+{"ts": 4, "level": "info", "svc": "parser", "msg": "request handled", "ms": 280}
+{"ts": 5, "level": "info", "svc": "net", "msg": "request handled", "ms": 173}
+{"ts": 6, "level": "warn", "svc": "net", "msg": "cache miss ratio high", "ms": 128}
+{"ts": 7, "level": "info", "svc": "render", "msg": "request handled", "ms": 95}
+{"ts": 8, "level": "info", "svc": "core", "msg": "request handled", "ms": 73}
+{"ts": 9, "level": "info", "svc": "cache", "msg": "request handled", "ms": 161}
+{"ts": 10, "level": "info", "svc": "ui", "msg": "request handled", "ms": 181}
+{"ts": 11, "level": "info", "svc": "export", "msg": "request handled", "ms": 272}
+{"ts": 12, "level": "info", "svc": "render", "msg": "request handled", "ms": 54}
+{"ts": 13, "level": "info", "svc": "net", "msg": "request handled", "ms": 290}
+{"ts": 14, "level": "info", "svc": "parser", "msg": "request handled", "ms": 21}
+{"ts": 15, "level": "info", "svc": "export", "msg": "request handled", "ms": 283}
+{"ts": 16, "level": "error", "svc": "auth", "msg": "downstream call failed, retried ok", "ms": 18}
+{"ts": 17, "level": "info", "svc": "sched", "msg": "request handled", "ms": 139}
+{"ts": 18, "level": "info", "svc": "core", "msg": "request handled", "ms": 143}
+{"ts": 19, "level": "info", "svc": "auth", "msg": "request handled", "ms": 124}
+{"ts": 20, "level": "info", "svc": "core", "msg": "request handled", "ms": 271}
+{"ts": 21, "level": "info", "svc": "render", "msg": "request handled", "ms": 170}
+{"ts": 22, "level": "info", "svc": "store", "msg": "request handled", "ms": 216}
+{"ts": 23, "level": "info", "svc": "render", "msg": "request handled", "ms": 230}
+{"ts": 24, "level": "info", "svc": "parser", "msg": "request handled", "ms": 254}
+{"ts": 25, "level": "info", "svc": "render", "msg": "request handled", "ms": 226}
+{"ts": 26, "level": "info", "svc": "ui", "msg": "request handled", "ms": 277}
+{"ts": 27, "level": "info", "svc": "sched", "msg": "request handled", "ms": 11}
+{"ts": 28, "level": "info", "svc": "store", "msg": "request handled", "ms": 298}
+{"ts": 29, "level": "info", "svc": "parser", "msg": "request handled", "ms": 90}
+{"ts": 30, "level": "info", "svc": "render", "msg": "request handled", "ms": 269}
+{"ts": 31, "level": "info", "svc": "sched", "msg": "request handled", "ms": 19}
+{"ts": 32, "level": "info", "svc": "sched", "msg": "request handled", "ms": 212}
+{"ts": 33, "level": "info", "svc": "core", "msg": "request handled", "ms": 116}
+{"ts": 34, "level": "info", "svc": "store", "msg": "request handled", "ms": 182}
+{"ts": 35, "level": "info", "svc": "auth", "msg": "request handled", "ms": 36}
+{"ts": 36, "level": "info", "svc": "export", "msg": "request handled", "ms": 186}
+{"ts": 37, "level": "info", "svc": "sched", "msg": "request handled", "ms": 217}
+{"ts": 38, "level": "info", "svc": "parser", "msg": "request handled", "ms": 22}
+{"ts": 39, "level": "info", "svc": "export", "msg": "request handled", "ms": 133}
+{"ts": 40, "level": "info", "svc": "export", "msg": "request handled", "ms": 223}
+{"ts": 41, "level": "info", "svc": "parser", "msg": "request handled", "ms": 206}
+{"ts": 42, "level": "info", "svc": "ui", "msg": "request handled", "ms": 44}
+{"ts": 43, "level": "info", "svc": "sched", "msg": "request handled", "ms": 274}
+{"ts": 44, "level": "warn", "svc": "sched", "msg": "cache miss ratio high", "ms": 115}
+{"ts": 45, "level": "info", "svc": "render", "msg": "request handled", "ms": 107}
+{"ts": 46, "level": "info", "svc": "cache", "msg": "request handled", "ms": 129}
+{"ts": 47, "level": "info", "svc": "core", "msg": "request handled", "ms": 63}
+{"ts": 48, "level": "info", "svc": "sched", "msg": "request handled", "ms": 280}
+{"ts": 49, "level": "info", "svc": "store", "msg": "request handled", "ms": 198}
+{"ts": 50, "level": "info", "svc": "export", "msg": "request handled", "ms": 136}
+{"ts": 51, "level": "warn", "svc": "sched", "msg": "cache miss ratio high", "ms": 85}
+{"ts": 52, "level": "info", "svc": "render", "msg": "request handled", "ms": 220}
+{"ts": 53, "level": "info", "svc": "ui", "msg": "request handled", "ms": 234}
+{"ts": 54, "level": "info", "svc": "parser", "msg": "request handled", "ms": 234}
+{"ts": 55, "level": "info", "svc": "net", "msg": "request handled", "ms": 290}
+{"ts": 56, "level": "info", "svc": "net", "msg": "request handled", "ms": 219}
+{"ts": 57, "level": "info", "svc": "sched", "msg": "request handled", "ms": 29}
+{"ts": 58, "level": "info", "svc": "core", "msg": "request handled", "ms": 167}
+{"ts": 59, "level": "info", "svc": "parser", "msg": "request handled", "ms": 235}
+{"ts": 60, "level": "info", "svc": "auth", "msg": "request handled", "ms": 94}
+{"ts": 61, "level": "info", "svc": "store", "msg": "request handled", "ms": 276}
+{"ts": 62, "level": "info", "svc": "parser", "msg": "request handled", "ms": 191}
+{"ts": 63, "level": "info", "svc": "store", "msg": "request handled", "ms": 277}
+{"ts": 64, "level": "info", "svc": "auth", "msg": "request handled", "ms": 5}
+{"ts": 65, "level": "info", "svc": "net", "msg": "request handled", "ms": 270}
+{"ts": 66, "level": "error", "svc": "export", "msg": "downstream call failed, retried ok", "ms": 229}
+{"ts": 67, "level": "info", "svc": "ui", "msg": "request handled", "ms": 204}
+{"ts": 68, "level": "info", "svc": "parser", "msg": "request handled", "ms": 94}
+{"ts": 69, "level": "info", "svc": "core", "msg": "request handled", "ms": 94}
+{"ts": 15999, "level": "info", "svc": "cache", "msg": "request handled", "ms": 118}
+{"ts": 16000, "level": "info", "svc": "ui", "msg": "request handled", "ms": 170}
+{"ts": 16001, "level": "info", "svc": "net", "msg": "request handled", "ms": 39}
+{"ts": 16002, "level": "info", "svc": "render", "msg": "request handled", "ms": 142}
+{"ts": 16003, "level": "info", "svc": "sched", "msg": "request handled", "ms": 295}
+{"ts": 16004, "level": "info", "svc": "store", "msg": "request handled", "ms": 100}
+{"ts": 16005, "level": "info", "svc": "render", "msg": "request handled", "ms": 152}
+{"ts": 16006, "level": "info", "svc": "cache", "msg": "request handled", "ms": 168}
+{"ts": 16007, "level": "info", "svc": "ui", "msg": "request handled", "ms": 209}
+{"ts": 16008, "level": "info", "svc": "store", "msg": "request handled", "ms": 34}
+{"ts": 16009, "level": "info", "svc": "net", "msg": "request handled", "ms": 239}
+{"ts": 16010, "level": "error", "svc": "render", "msg": "downstream call failed, retried ok", "ms": 136}
+{"ts": 16011, "level": "info", "svc": "core", "msg": "request handled", "ms": 224}
+{"ts": 16012, "level": "info", "svc": "ui", "msg": "request handled", "ms": 198}
+{"ts": 16013, "level": "info", "svc": "core", "msg": "request handled", "ms": 264}
+{"ts": 16013, "level": "fatal", "svc": "auth", "msg": "token signing key not found", "key_id": "k-2024-11", "action": "abort startup"}
+{"ts": 16014, "level": "info", "svc": "ui", "msg": "request handled", "ms": 75}
+{"ts": 16015, "level": "error", "svc": "export", "msg": "downstream call failed, retried ok", "ms": 61}
+{"ts": 16016, "level": "info", "svc": "cache", "msg": "request handled", "ms": 127}
+{"ts": 16017, "level": "info", "svc": "ui", "msg": "request handled", "ms": 300}
+{"ts": 16018, "level": "info", "svc": "export", "msg": "request handled", "ms": 300}
+{"ts": 16019, "level": "info", "svc": "net", "msg": "request handled", "ms": 201}
+{"ts": 16020, "level": "info", "svc": "export", "msg": "request handled", "ms": 263}
+{"ts": 16021, "level": "info", "svc": "net", "msg": "request handled", "ms": 4}
+{"ts": 16022, "level": "info", "svc": "parser", "msg": "request handled", "ms": 180}
+{"ts": 16023, "level": "info", "svc": "export", "msg": "request handled", "ms": 135}
+{"ts": 16024, "level": "warn", "svc": "ui", "msg": "cache miss ratio high", "ms": 15}
+{"ts": 16025, "level": "info", "svc": "export", "msg": "request handled", "ms": 219}
+{"ts": 16026, "level": "info", "svc": "sched", "msg": "request handled", "ms": 267}
+{"ts": 16027, "level": "info", "svc": "store", "msg": "request handled", "ms": 186}
+{"ts": 16028, "level": "info", "svc": "cache", "msg": "request handled", "ms": 28}
+{"ts": 19974, "level": "info", "svc": "sched", "msg": "request handled", "ms": 10}
+{"ts": 19975, "level": "info", "svc": "export", "msg": "request handled", "ms": 207}
+{"ts": 19976, "level": "info", "svc": "auth", "msg": "request handled", "ms": 142}
+{"ts": 19977, "level": "info", "svc": "net", "msg": "request handled", "ms": 53}
+{"ts": 19978, "level": "info", "svc": "parser", "msg": "request handled", "ms": 164}
+{"ts": 19979, "level": "info", "svc": "sched", "msg": "request handled", "ms": 59}
+{"ts": 19980, "level": "info", "svc": "core", "msg": "request handled", "ms": 189}
+{"ts": 19981, "level": "info", "svc": "store", "msg": "request handled", "ms": 288}
+{"ts": 19982, "level": "info", "svc": "net", "msg": "request handled", "ms": 87}
+{"ts": 19983, "level": "error", "svc": "store", "msg": "downstream call failed, retried ok", "ms": 129}
+{"ts": 19984, "level": "info", "svc": "export", "msg": "request handled", "ms": 183}
+{"ts": 19985, "level": "warn", "svc": "render", "msg": "cache miss ratio high", "ms": 262}
+{"ts": 19986, "level": "info", "svc": "core", "msg": "request handled", "ms": 64}
+{"ts": 19987, "level": "info", "svc": "ui", "msg": "request handled", "ms": 235}
+{"ts": 19988, "level": "info", "svc": "ui", "msg": "request handled", "ms": 253}
+{"ts": 19989, "level": "warn", "svc": "store", "msg": "cache miss ratio high", "ms": 217}
+{"ts": 19990, "level": "info", "svc": "parser", "msg": "request handled", "ms": 191}
+{"ts": 19991, "level": "info", "svc": "export", "msg": "request handled", "ms": 141}
+{"ts": 19992, "level": "info", "svc": "cache", "msg": "request handled", "ms": 200}
+{"ts": 19993, "level": "info", "svc": "cache", "msg": "request handled", "ms": 18}
+{"ts": 19994, "level": "info", "svc": "cache", "msg": "request handled", "ms": 168}
+{"ts": 19995, "level": "info", "svc": "parser", "msg": "request handled", "ms": 71}
+{"ts": 19996, "level": "warn", "svc": "parser", "msg": "cache miss ratio high", "ms": 16}
+{"ts": 19997, "level": "info", "svc": "parser", "msg": "request handled", "ms": 227}
+{"ts": 19998, "level": "info", "svc": "render", "msg": "request handled", "ms": 187}

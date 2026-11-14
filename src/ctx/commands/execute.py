@@ -150,7 +150,8 @@ def cmd_run(ws, ns) -> int:
     verbatim = passthrough and _passthrough_fits(ws, capture.manifest)
     digest, manifest = render_run_digest(
         store, ws, capture.manifest, focus=ns.focus, dense=dense,
-        contained=not verbatim, record_delivery=not verbatim, **render_kwargs
+        contained=not verbatim, record_delivery=not verbatim, picker=not verbatim,
+        **render_kwargs
     )
     # A digest that omitted content is an intervention (hypothesis: the model
     # uses the digest, not a re-run). Record it so the reflex arc can score

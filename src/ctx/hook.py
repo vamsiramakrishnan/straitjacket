@@ -5809,6 +5809,9 @@ def _emission_gate(payload: dict[str, Any], flavor: str, reserve: int = 0) -> st
             # watching `digest` wants a peer's expensive output, not an echo
             # of the flood it just produced itself.
             producer=_relay_subscriber(flavor, payload),
+            # A live delivery: [picker] mode shadow/model may consult the
+            # decision endpoint here (never by default).
+            picker=True,
         )
         if not isinstance(text, str) or not text.strip():
             raise ValueError("digest produced no text")
@@ -6172,11 +6175,13 @@ def main_post_tool_use_failure(flavor: str = "claude-code") -> int:
     Claude Code fires PostToolUse only for tools that succeeded; a failed
     tool -- an edit whose ``old_string`` matched nothing, a command that
     exited non-zero -- fires PostToolUseFailure instead, whose contract can
-    add context but cannot replace the result. So this stage only observes:
-    it records the edit outcome (the failure half of the edit ledger, which
+    add context but cannot replace the result. So this stage observes -- it
+    records the edit outcome (the failure half of the edit ledger, which
     PostToolUse alone can never see) and one coverage row with the failure
-    text's size, so failure output shows up as the ungoverned bytes it is.
-    Always writes ``{}``; every error is swallowed.
+    text's size, so failure output shows up as the ungoverned bytes it is --
+    and, for an over-budget shell failure, adds the stored output's digest
+    and evidence map as ``additionalContext`` (:func:`_failure_evidence`).
+    Writes ``{}`` otherwise; every error is swallowed.
     """
     payload: dict[str, Any] = {}
     try:
@@ -6199,9 +6204,121 @@ def main_post_tool_use_failure(flavor: str = "claude-code") -> int:
                            payload, kind, "observe", "failed", size, size)
     except Exception:
         pass
-    sys.stdout.write("{}\n")
+    context = None
+    try:
+        context = _failure_evidence(payload, flavor)
+    except Exception as exc:
+        try:
+            _note_guard_failure(_resolve_workspace_root(payload), op="post_failure",
+                                stage="evidence", exc=exc)
+        except Exception:
+            pass
+    if context:
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PostToolUseFailure", "additionalContext": context}},
+            sort_keys=True) + "\n")
+    else:
+        sys.stdout.write("{}\n")
     sys.stdout.flush()
     return 0
+
+
+#: The failure path digests at most this much of a host-saved output: the
+#: hook must stay fast, and a larger file is still addressable by the host.
+_FAILURE_FULL_MAX = 8 * 1024 * 1024
+
+
+def _failure_full_output(payload: dict[str, Any]) -> str | None:
+    """The full output Claude Code saved for this failed call, from the
+    HOST-PROVIDED location only (``tool_response.persistedOutputPath`` and
+    ``persistedOutputSize``, checked exactly as :func:`_host_full_output`
+    checks them) and at most ``_FAILURE_FULL_MAX`` bytes; never a path the
+    output text mentions."""
+    tr = payload.get("tool_response")
+    if not isinstance(tr, dict):
+        return None
+    size = tr.get("persistedOutputSize")
+    if not isinstance(size, int) or size > _FAILURE_FULL_MAX:
+        return None
+    return _host_full_output(payload, tr)
+
+
+def _failure_evidence(payload: dict[str, Any], flavor: str) -> str | None:
+    """Additional context for a failed shell command on Claude Code.
+
+    A command that exits non-zero reaches only PostToolUseFailure, which can
+    add context but not replace the output. When the failure text (or the
+    full output Claude Code saved, at the location the host provides) is
+    over the output budget, the output is stored like the gate stores it and its digest --
+    header with the ``run:`` handle, the evidence map, next steps -- is added.
+    A ``ctx run`` digest is already that, so it is left alone."""
+    if flavor != "claude-code":
+        return None
+    name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    if name != "Bash":
+        return None
+    text = str(payload.get("error") or "")
+    if "[ctx " in text and _ran_ctx(payload):
+        return None
+    ws_root = _resolve_workspace_root(payload)
+    if not ws_root:
+        return None
+    policy = _load_guard_policy(ws_root)
+    if str(policy.get("mode")) == "advisory":
+        return None
+    threshold = int(policy.get("max_tool_output_bytes", _MAX_TOOL_OUTPUT_BYTES_DEFAULT))
+    host_copy = _failure_full_output(payload)
+    full = host_copy or text
+    command = _tool_command(payload)
+    hint = None
+    if host_copy is None and _failure_text_cut(text) and command and not _ran_ctx(payload):
+        hint = _failure_cut_hint(ws_root, text, command)
+    if len(full.encode("utf-8", "replace")) <= threshold:
+        return hint
+    from ctx.digest import digest_output
+    from ctx.store import Store
+    from ctx.workspace import resolve_workspace
+
+    ws = resolve_workspace(ws_root)
+    store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+    digest, _short = digest_output(store, ws, name, full, "", is_error=True,
+                                   argv=_command_argv(command), contained=False,
+                                   producer=_relay_subscriber(flavor, payload), picker=True)
+    if "evidence map (exact" not in digest:
+        return hint
+    return ((hint + "\n" if hint else "")
+            + "[ctx] this failed command's output is stored; its digest and evidence map:\n"
+            + digest)
+
+
+#: A failure text at least this long that ends mid-line, with no host copy,
+#: was cut by the host (observed: Claude Code passes "Exit code N" plus the
+#: first ~10,000 characters and keeps nothing else).
+_FAILURE_CUT_MIN_BYTES = 8000
+_EXIT_PREFIX_RE = re.compile(r"\AExit code -?\d+\n")
+_FAILURE_CUT_LESSON = "failure output cut by the host"
+
+
+def _failure_text_cut(text: str) -> bool:
+    return (len(text.encode("utf-8", "replace")) >= _FAILURE_CUT_MIN_BYTES
+            and not text.endswith("\n"))
+
+
+def _failure_cut_hint(ws_root: str, text: str, command: str) -> str | None:
+    """One line, once per session (lesson decay): the host passed only the
+    first N characters, and `ctx run` would keep all of it -- an option, not
+    an instruction."""
+    try:
+        from ctx.engagement import note_taught
+
+        if not note_taught(ws_root, _FAILURE_CUT_LESSON):
+            return None
+    except Exception:
+        return None
+    shown = len(_EXIT_PREFIX_RE.sub("", text, count=1))
+    return (f"[ctx] The host passed only the first {shown:,} characters of this output. "
+            f"If it is safe to run again, `{_capture_command(command)}` keeps all of it, "
+            "with a map of every error-like line.")
 
 
 def _internal_error_setting(

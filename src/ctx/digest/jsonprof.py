@@ -181,6 +181,15 @@ class JsonLinesProfile(Profile):
             f"ctx search {rid} '<pattern>' --context 1",
             f"ctx get {rid}#stdout --records 1:20",
         ]
+        emap = self.evidence_map(ctx, above=summary)
+        if emap is not None:
+            map_lines, map_next, r = emap
+            total = ctx.stdout.lines + ctx.stderr.lines
+            return "\n".join(
+                ctx.header_lines() + summary + map_lines
+                + self.coverage_lines(ctx, r.windows or 1, max(0, total - r.excerpt_lines))
+                + self.next_lines(ctx, map_next + suggestions[1:])
+            )
         return "\n".join(
             ctx.header_lines() + summary + self.coverage_lines(ctx, shown or 1) + self.next_lines(ctx, suggestions)
         )
