@@ -111,6 +111,28 @@ def _resolve_span(store: Store, ws: Workspace, ref_text: str, label: str, span_i
 
 #: Rows one page of a ``messages`` span lists before handing out the next page.
 MESSAGE_PAGE_ROWS = 40
+#: Bytes of a page kept for everything that is not a row: the span header,
+#: the listing's own header, the continuation lines and a redaction note.
+_PAGE_FIXED_BYTES = 900
+
+
+def _page_room(ws: Workspace) -> int:
+    """Bytes the rows of one page may take so that ``_emit``'s budget never
+    cuts the page: a page is sized BEFORE its header is written, so the
+    header states exactly the rows delivered and the continuation starts at
+    the first row not delivered."""
+    from ctx import bounds
+
+    return max(200, bounds.budget_bytes(ws.config.budgets.result_tokens) - _PAGE_FIXED_BYTES)
+
+
+def _rows_that_fit(rows: list[str], room: int) -> int:
+    used = 0
+    for i, r in enumerate(rows):
+        used += len(r.encode("utf-8")) + 1
+        if used > room:
+            return max(1, i)          # always deliver at least one row
+    return len(rows)
 
 
 def _message_listing(store: Store, ws: Workspace, ref_text: str, blob: str,
@@ -141,19 +163,32 @@ def _message_listing(store: Store, ws: Workspace, ref_text: str, blob: str,
     total = len(msgs)
     a = max(1, a)
     end = min(b, total, a + MESSAGE_PAGE_ROWS - 1)
-    last_read = start_line + (len(emap.lines["stdout"]) if emap else text.count("\n")) - 1
+    if emap:
+        mapped = len(emap.lines["stdout"])
+    else:
+        # complete lines only when the cap cut a line (as build_streams does);
+        # one line longer than the cap still counts, so the next part advances
+        mapped = text.count("\n") if whole or text.endswith("\n") else max(1, text.count("\n"))
+    last_read = start_line + mapped - 1
     scope = f"lines {start_line}-{last_read}"
     if not whole:
         scope += f" of {fmt_int(total_lines)}; later lines are not in this listing"
-    out = [f"messages (exact for {scope}): {fmt_int(total)} distinct · "
-           f"{fmt_int(emap.signal_lines if emap else 0)} error-like lines · "
-           f"rows {a}-{end} by first occurrence (×count · lines · first sample)"]
+        if "\n" not in text:
+            scope += (f"; L{start_line} is longer than the cap: only its first part is "
+                      "mapped")
     fired: set[str] = set()
+    rows: list[str] = []
     with redaction_scope(ws.config.redaction):
         for m in msgs[a - 1:end]:
             span = (f"first L{m.first}  last L{m.last}" if m.count > 1 else f"L{m.first}")
             sample = _shown_line(line_of(emap, "stdout", m.first).strip(), LIST_SAMPLE_CHARS, fired)
-            out.append(f"  ×{fmt_int(m.count)}  {span}  {sample}{_varies(m, fired)}")
+            rows.append(f"  ×{fmt_int(m.count)}  {span}  {sample}{_varies(m, fired)}")
+    rows = rows[:_rows_that_fit(rows, _page_room(ws))] if rows else rows
+    end = a + len(rows) - 1
+    out = [f"messages (exact for {scope}): {fmt_int(total)} distinct · "
+           f"{fmt_int(emap.signal_lines if emap else 0)} error-like lines · "
+           f"rows {a}-{end} by first occurrence (×count · lines · first sample)"]
+    out.extend(rows)
     if end < min(b, total):
         if start_line > 1:
             sid = store.register_span(blob, "messages_from", a=start_line, b=end + 1)
@@ -236,17 +271,19 @@ def _message_lines(store: Store, ws: Workspace, ref_text: str, blob: str, spec_t
         extra += 1
         if after:
             break          # a later page only needs to know there is more
+    fired: set[str] = set()
+    with redaction_scope(ws.config.redaction):
+        rows = [f"L{n}: {_shown_line(line, EXCERPT_LINE_CHARS, fired)}" for n, line in page]
+    k = _rows_that_fit(rows, _page_room(ws)) if rows else 0
+    extra += len(page) - k
+    page, rows = page[:k], rows[:k]
     more = extra > 0
     if after:
         head = f"message lines from L{after + 1}: {len(page)} shown"
     else:
         head = (f"message lines (exact): {fmt_int(len(page) + extra)} · "
                 f"rows 1-{len(page)}")
-    out = [head]
-    fired: set[str] = set()
-    with redaction_scope(ws.config.redaction):
-        for n, line in page:
-            out.append(f"L{n}: {_shown_line(line, EXCERPT_LINE_CHARS, fired)}")
+    out = [head] + rows
     if more and page:
         nxt = dict(spec, after=page[-1][0])
         sid = store.register_span(blob, "message_lines", template=json.dumps(nxt, sort_keys=True))
@@ -276,12 +313,13 @@ def _message_values(store: Store, ws: Workspace, ref_text: str, blob: str, spec_
                 rec[0] += 1
     items = sorted(values.items(), key=value_order)
     page = items[start - 1:start - 1 + VALUES_PAGE]
-    out = [f"values (exact): {fmt_int(len(items))} distinct · rows {start}-{start + len(page) - 1}, "
-           f"least frequent first (value ×count first line)"]
     fired: set[str] = set()
     with redaction_scope(ws.config.redaction):
-        for val, (c, n) in page:
-            out.append(f"  {_shown_line(val, 80, fired)} ×{fmt_int(c)} L{n}")
+        rows = [f"  {_shown_line(val, 40, fired)} ×{fmt_int(c)} L{n}" for val, (c, n) in page]
+    k = _rows_that_fit(rows, _page_room(ws)) if rows else 0
+    page, rows = page[:k], rows[:k]
+    out = [f"values (exact): {fmt_int(len(items))} distinct · rows {start}-{start + len(page) - 1}, "
+           f"least frequent first (value ×count first line)"] + rows
     if start - 1 + len(page) < len(items):
         nxt = dict(spec, **{"from": start + len(page)})
         sid = store.register_span(blob, "message_values", template=json.dumps(nxt, sort_keys=True))

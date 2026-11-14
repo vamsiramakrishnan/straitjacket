@@ -751,3 +751,65 @@ def test_secret_before_inside_and_straddling_the_window(offset, where):
         line = filler + " ERROR boom " + "z" * 100 + " " + TOK + " " + "y" * 400
     out = E._shown_line(line, E.EXCERPT_LINE_CHARS, set())
     assert TOK not in out and "ghp_" not in out and "Q" * 4 not in out
+
+
+# ---------------------------------------------------------------- round 6: pages never cut by the budget
+def _walk(store, ws, first_ref, first_span, row_re):
+    from ctx.retrieval import Selector, get
+
+    seen, ref, span = [], first_ref, first_span
+    for _ in range(400):
+        out = get(store, ws, ref, Selector(span=span))
+        assert "[ctx:truncated" not in out, out[-300:]
+        hm = re.search(r"rows (\d+)-(\d+)", out)
+        rows = re.findall(row_re, out, re.M)
+        if hm:
+            a, b = int(hm.group(1)), int(hm.group(2))
+            assert b - a + 1 == len(rows), (a, b, len(rows))
+        seen.extend(rows)
+        nxt = re.search(r"next: ctx get (run:[0-9a-f]+#\w+) --span ([0-9a-f]+)", out)
+        if not nxt:
+            return seen
+        ref, span = nxt.group(1), nxt.group(2)
+    raise AssertionError("did not end")
+
+
+def test_the_message_listing_pages_deliver_what_they_claim(state_home, workspace_dir):
+    rows = [f"request {i} handled" for i in range(4000)]
+    names = [f"comp{chr(97 + j % 26)}{chr(97 + j // 26)}" for j in range(50)]
+    for j, name in enumerate(names):
+        rows[10 + j * 79] = f"ERROR {name} failed: " + "detail " * 30
+    digest, rid, ws, store = _digest(workspace_dir, _log(rows))
+    m = re.search(r"not listed: ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", digest)
+    assert m
+    seen = _walk(store, ws, m.group(1), m.group(2), r"^  ×\d+  L\d+  ERROR (comp[a-z]{2})")
+    assert sorted(seen) == sorted(names)
+
+
+def test_the_lines_and_values_pages_deliver_what_they_claim(state_home, workspace_dir):
+    rows = [f"ERROR request r{i}x failed after retry " + "w" * 120 for i in range(5000)]
+    digest, rid, ws, store = _digest(workspace_dir, _log(rows))
+    lines_cmd = re.search(r"all (?:its lines|lines of L\d+): ctx get (run:[0-9a-f]+#stdout) "
+                          r"--span ([0-9a-f]+)", digest)
+    values_cmd = re.search(r"values of L\d+: ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)",
+                           digest)
+    got = _walk(store, ws, lines_cmd.group(1), lines_cmd.group(2), r"^L(\d+): ERROR")
+    assert sorted(map(int, got)) == list(range(1, 5001))
+    vals = _walk(store, ws, values_cmd.group(1), values_cmd.group(2), r"^  (r\d+x) ×1 L\d+")
+    assert len(vals) == 5000 and len(set(vals)) == 5000
+
+
+@pytest.mark.parametrize("width", [20, 90, 200, 400])
+@pytest.mark.parametrize("budget", [300, 700, 1200])
+def test_fuzz_pages_against_row_length_and_budget(state_home, workspace_dir, width, budget):
+    (workspace_dir / "ctx.toml").write_text(
+        f"version = 1\n[budgets]\nresult_tokens = {budget}\n", encoding="utf-8")
+    rows = [f"request {i} handled" for i in range(2500)]
+    names = [f"unit{chr(97 + j % 26)}{chr(97 + j // 26)}" for j in range(60)]
+    for j, name in enumerate(names):
+        rows[5 + j * 40] = f"ERROR {name} broke " + "q" * width
+    digest, rid, ws, store = _digest(workspace_dir, _log(rows))
+    m = re.search(r"not listed: ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", digest)
+    assert m, digest
+    seen = _walk(store, ws, m.group(1), m.group(2), r"^  ×\d+  L\d+  ERROR (unit[a-z]{2})")
+    assert sorted(seen) == sorted(names)
