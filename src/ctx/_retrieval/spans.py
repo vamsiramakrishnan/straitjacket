@@ -97,6 +97,8 @@ def _resolve_span(store: Store, ws: Workspace, ref_text: str, label: str, span_i
         out.extend(_message_listing(store, ws, ref_text, blob, int(span["a"]), int(span["b"])))
     elif span["kind"] == "message_lines":
         out.extend(_message_lines(store, ws, ref_text, blob, str(span["template"] or "{}")))
+    elif span["kind"] == "message_values":
+        out.extend(_message_values(store, ws, ref_text, blob, str(span["template"] or "{}")))
     elif span["kind"] == "messages_from":
         # a = first line to map, b = first row of the page
         out.extend(_message_listing(store, ws, ref_text, blob, int(span["b"]), 10**9,
@@ -164,45 +166,126 @@ def _message_listing(store: Store, ws: Workspace, ref_text: str, blob: str,
     return out
 
 
+#: Bytes one step of a message scan reads (paged listings read only as far
+#: as their page needs, from the line the previous page ended on).
+_SCAN_CHUNK = 1 << 20
+#: Distinct values one page of a ``message_values`` span lists.
+VALUES_PAGE = 100
+
+
+def _message_hits(store: Store, blob: str, spec: dict, start_line: int = 1):
+    """Yield ``(line_number, line)`` for every line of the message ``spec``
+    (skeleton + split values), from ``start_line`` on, reading the blob in
+    chunks from that line's byte offset (bounded by the parse cap)."""
+    from ctx.digest.base import MAX_PARSE_BYTES
+    from ctx.digest.evidence_map import signal_rows, skeleton, strip_ansi
+
+    sk, fixed = spec.get("sk", ""), {int(k): v for k, v in (spec.get("fixed") or {}).items()}
+    idx = store.line_index(blob)
+    if start_line - 1 >= len(idx):
+        return
+    offset = int(idx[start_line - 1])
+    path = store.blob_path(store.resolve_id(blob, kinds=("blob",)))
+    line_no = start_line
+    read = 0
+    with path.open("rb") as fh:
+        fh.seek(offset)
+        rest = b""
+        while read < MAX_PARSE_BYTES:
+            chunk = fh.read(min(_SCAN_CHUNK, MAX_PARSE_BYTES - read))
+            read += len(chunk)
+            data = rest + chunk
+            if chunk and b"\n" in data:
+                cut = data.rfind(b"\n") + 1
+                data, rest = data[:cut], data[cut:]
+            elif chunk:
+                rest = data
+                continue
+            else:
+                rest = b""
+            if not data:
+                break
+            text = strip_ansi(data.decode("utf-8", "replace"))
+            lines = index_lines(text)
+            for n, _tier in signal_rows(text, lines):
+                got, vals = skeleton(lines[n - 1])
+                if got == sk and all(j < len(vals) and vals[j] == v for j, v in fixed.items()):
+                    yield line_no + n - 1, lines[n - 1]
+            line_no += data.count(b"\n")
+            if not chunk:
+                break
+
+
 def _message_lines(store: Store, ws: Workspace, ref_text: str, blob: str, spec_text: str) -> list[str]:
-    """Every line of one evidence-map message (same skeleton, same split
-    values), ``MESSAGE_PAGE_ROWS`` at a time from row ``from``."""
+    """Every line of one evidence-map message, ``MESSAGE_PAGE_ROWS`` at a
+    time. The first page counts them all; a later page starts reading at the
+    line the previous one ended on (``after``), so paging does not re-scan
+    the stream from the top."""
     import json
 
-    from ctx.digest.base import MAX_PARSE_BYTES
-    from ctx.digest.evidence_map import (
-        EXCERPT_LINE_CHARS, _shown_line, signal_rows, skeleton, strip_ansi)
+    from ctx.digest.evidence_map import EXCERPT_LINE_CHARS, _shown_line
 
     spec = json.loads(spec_text)
-    sk, fixed = spec.get("sk", ""), {int(k): v for k, v in (spec.get("fixed") or {}).items()}
-    start = max(1, int(spec.get("from", 1)))
-    path = store.blob_path(store.resolve_id(blob, kinds=("blob",)))
-    with path.open("rb") as fh:
-        data = fh.read(MAX_PARSE_BYTES + 1)
-    whole = len(data) <= MAX_PARSE_BYTES
-    text = strip_ansi(data[:MAX_PARSE_BYTES].decode("utf-8", "replace"))
-    lines = index_lines(text)
-    hits = []
-    for n, _tier in signal_rows(text, lines):
-        got, vals = skeleton(lines[n - 1])
-        if got == sk and all(j < len(vals) and vals[j] == v for j, v in fixed.items()):
-            hits.append(n)
-    page = hits[start - 1:start - 1 + MESSAGE_PAGE_ROWS]
-    scope = "" if whole else " in the parsed part"
-    out = [f"message lines (exact{scope}): {fmt_int(len(hits))} · rows {start}-"
-           f"{start + len(page) - 1}"]
+    after = max(0, int(spec.get("after", 0)))
+    page: list[tuple[int, str]] = []
+    extra = 0
+    for n, line in _message_hits(store, blob, spec, after + 1):
+        if len(page) < MESSAGE_PAGE_ROWS:
+            page.append((n, line))
+            continue
+        extra += 1
+        if after:
+            break          # a later page only needs to know there is more
+    more = extra > 0
+    if after:
+        head = f"message lines from L{after + 1}: {len(page)} shown"
+    else:
+        head = (f"message lines (exact): {fmt_int(len(page) + extra)} · "
+                f"rows 1-{len(page)}")
+    out = [head]
     fired: set[str] = set()
-    from ctx.textutil import PRIVATE_KEY_LINE, in_line_ranges, private_key_line_ranges
-
     with redaction_scope(ws.config.redaction):
-        keys = private_key_line_ranges(text)
-        for n in page:
-            shown = PRIVATE_KEY_LINE if in_line_ranges(n, keys) else lines[n - 1]
-            out.append(f"L{n}: {_shown_line(shown, EXCERPT_LINE_CHARS, fired)}")
-    if start - 1 + len(page) < len(hits):
-        nxt = dict(spec, **{"from": start + len(page)})
+        for n, line in page:
+            out.append(f"L{n}: {_shown_line(line, EXCERPT_LINE_CHARS, fired)}")
+    if more and page:
+        nxt = dict(spec, after=page[-1][0])
         sid = store.register_span(blob, "message_lines", template=json.dumps(nxt, sort_keys=True))
-        out.append(f"… +{fmt_int(len(hits) - start + 1 - len(page))} more · next: ctx get {ref_text} --span {sid}")
+        out.append(f"… more · next: ctx get {ref_text} --span {sid}")
+    return out
+
+
+def _message_values(store: Store, ws: Workspace, ref_text: str, blob: str, spec_text: str) -> list[str]:
+    """The distinct values of one collapsed slot of a message with count and
+    first line, least frequent first (numbers by value), ``VALUES_PAGE`` per
+    call from row ``from``."""
+    import json
+
+    from ctx.digest.evidence_map import _shown_line, skeleton, value_order
+
+    spec = json.loads(spec_text)
+    slot = int(spec.get("slot", 0))
+    start = max(1, int(spec.get("from", 1)))
+    values: dict[str, list[int]] = {}
+    for n, line in _message_hits(store, blob, spec, 1):
+        vals = skeleton(line)[1]
+        if slot < len(vals):
+            rec = values.get(vals[slot])
+            if rec is None:
+                values[vals[slot]] = [1, n]
+            else:
+                rec[0] += 1
+    items = sorted(values.items(), key=value_order)
+    page = items[start - 1:start - 1 + VALUES_PAGE]
+    out = [f"values (exact): {fmt_int(len(items))} distinct · rows {start}-{start + len(page) - 1}, "
+           f"least frequent first (value ×count first line)"]
+    fired: set[str] = set()
+    with redaction_scope(ws.config.redaction):
+        for val, (c, n) in page:
+            out.append(f"  {_shown_line(val, 80, fired)} ×{fmt_int(c)} L{n}")
+    if start - 1 + len(page) < len(items):
+        nxt = dict(spec, **{"from": start + len(page)})
+        sid = store.register_span(blob, "message_values", template=json.dumps(nxt, sort_keys=True))
+        out.append(f"… +{fmt_int(len(items) - start + 1 - len(page))} more · next: ctx get {ref_text} --span {sid}")
     return out
 
 

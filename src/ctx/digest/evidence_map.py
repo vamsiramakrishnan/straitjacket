@@ -149,7 +149,8 @@ _SLOT_RE = re.compile(r"[\d/'\"`@=]")
 #: values of one slot; a single quote opens a string only at a token start
 #: or after `=`, `:`, `(` or `[` (so "can't" stays a word).
 _TOKEN_RE = re.compile(
-    r"""[^\s"'`]*(?:"[^"\n]{0,200}"|`[^`\n]{0,200}`|(?:(?<=[=:(\[])|(?<!\S))'[^'\n]{0,200}')\S*"""
+    r"""[^\s"'`]*(?:"(?:[^"\\\n]|\\.){0,200}"|`(?:[^`\\\n]|\\.){0,200}`"""
+    r"""|(?:(?<=[=:(\[])|(?<!\S))'(?:[^'\\\n]|\\.){0,200}')\S*"""
     r"""|\S+""")
 _PLACEHOLDERS = ("<ts>", "<dur>", "<hex>", "<uuid>", "pid=<pid>", "pid:<pid>", "[<pid>]", "<pid>",
                  "<tid>")
@@ -441,29 +442,65 @@ def _value(v: str, fired: set[str]) -> str:
     return _shown_line(v, _VALUE_CHARS, fired)
 
 
+_NUM_STRIP = ",;:.)]}\"'"
+
+
+def num_value(v: str) -> float | None:
+    """The number a slot value is, ignoring surrounding punctuation, or None."""
+    t = v.strip(_NUM_STRIP).lstrip("([{\"'")
+    try:
+        return float(t) if t and t[-1].isdigit() else None
+    except ValueError:
+        return None
+
+
+def value_order(item: tuple[str, list[int]]) -> tuple:
+    """Least frequent first, then numeric values by number, then the rest by text."""
+    val, (count, _first) = item
+    n = num_value(val)
+    return (count, 0, n, "") if n is not None else (count, 1, 0.0, val)
+
+
+def _fmt_num(x: float) -> str:
+    return str(int(x)) if x == int(x) else repr(x)
+
+
 def _varies(m: Message, fired: set[str]) -> str:
-    """Every value of a few-valued collapsed slot with count and first line;
-    for a many-valued one, its count and its rarest values (seen once or
-    twice) with their lines. The command that lists the message's lines is
-    printed separately (:func:`_lines_cmd`)."""
+    """Every value of a few-valued collapsed slot with count and first line.
+    For a many-valued one: the count, the numeric range when every value is a
+    number, and the least frequent values (count ascending, then value) --
+    or, when every value has the same count, that fact instead. Commands
+    that list the values and the lines are printed separately."""
     if not m.varies:
         return ""
     bits = []
     for v in m.varies:
-        items = sorted(v.values.items(), key=lambda kv: kv[1][1])
         if v.distinct <= FEW_VALUES:
+            items = sorted(v.values.items(), key=lambda kv: kv[1][1])
             bits.append(" · ".join(f"{_value(val, fired)} ×{fmt_int(c)} L{n}" for val, (c, n) in items))
-        else:
-            rare = sorted((kv for kv in items if kv[1][0] <= 2), key=lambda kv: (kv[1][0], kv[1][1]))
-            text = f"{fmt_int(v.distinct)} distinct values"
-            if rare:
-                shown = rare[:RARE_VALUES_SHOWN]
-                text += "; seen at most twice: " + " · ".join(
-                    f"{_value(val, fired)} ×{c} L{n}" for val, (c, n) in shown)
-                if len(rare) > len(shown):
-                    text += f" (+{fmt_int(len(rare) - len(shown))} more)"
-            bits.append(text)
+            continue
+        counts = {c for c, _ in v.values.values()}
+        text = f"{fmt_int(v.distinct)} distinct values"
+        if len(counts) == 1:
+            text += f", each ×{fmt_int(next(iter(counts)))}"
+        nums = [num_value(x) for x in v.values]
+        if all(n is not None for n in nums):
+            text += f" (numeric: min {_fmt_num(min(nums))} · max {_fmt_num(max(nums))})"
+        if len(counts) > 1:
+            items = sorted(v.values.items(), key=value_order)
+            shown = items[:RARE_VALUES_SHOWN]
+            text += "; least frequent: " + " · ".join(
+                f"{_value(val, fired)} ×{fmt_int(c)} L{n}" for val, (c, n) in shown)
+            text += f" (+{fmt_int(len(items) - len(shown))} more)"
+        bits.append(text)
     return " · varies: " + "; ".join(bits)
+
+
+def _span_spec(m: Message, **extra: Any) -> str:
+    import json
+
+    return json.dumps({"sk": m.skel, "fixed": {str(k): v for k, v in sorted(m.fixed.items())},
+                       **extra}, sort_keys=True)
 
 
 def _lines_cmd(ctx: Any, m: Message, rid: str) -> str | None:
@@ -471,13 +508,25 @@ def _lines_cmd(ctx: Any, m: Message, rid: str) -> str | None:
     (a ``message_lines`` span over the stored stream)."""
     if not m.varies or not hasattr(ctx, "mint_span"):
         return None
-    import json
-
     view = ctx.stderr if m.stream == "stderr" else ctx.stdout
-    spec = json.dumps({"sk": m.skel, "fixed": {str(k): v for k, v in sorted(m.fixed.items())}},
-                      sort_keys=True)
-    sid = ctx.mint_span(view, "message_lines", template=spec)
+    sid = ctx.mint_span(view, "message_lines", template=_span_spec(m))
     return f"ctx get {rid}#{m.stream} --span {sid}" if sid else None
+
+
+def _values_cmds(ctx: Any, m: Message, rid: str) -> list[str]:
+    """For each many-valued collapsed slot: the command that lists its
+    distinct values with counts and first lines, least frequent first,
+    ``VALUES_PAGE`` per call (a ``message_values`` span)."""
+    if not hasattr(ctx, "mint_span"):
+        return []
+    view = ctx.stderr if m.stream == "stderr" else ctx.stdout
+    out = []
+    for v in m.varies:
+        if v.distinct > FEW_VALUES:
+            sid = ctx.mint_span(view, "message_values", template=_span_spec(m, slot=v.slot))
+            if sid:
+                out.append(f"ctx get {rid}#{m.stream} --span {sid}")
+    return out
 
 
 def _size(rows: list[str]) -> int:
@@ -509,6 +558,8 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
                  f"{_shown_line(line_of(emap, m.stream, m.first).strip(), LIST_SAMPLE_CHARS, fired)}"
                  f"{_varies(m, fired)}")
             if any(v.distinct > FEW_VALUES for v in m.varies):
+                for cmd in _values_cmds(ctx, m, rid):
+                    r += f" · its values: {cmd}"
                 cmd = _lines_cmd(ctx, m, rid)
                 if cmd:
                     r += f" · all its lines: {cmd}"
@@ -545,6 +596,8 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
                     bit = (f"L{m.first} recurs ×{fmt_int(m.count)}, last L{m.last}"
                            + _varies(m, fired).replace(" · varies:", ", varies:"))
                     if any(v.distinct > FEW_VALUES for v in m.varies):
+                        for cmd in _values_cmds(ctx, m, rid):
+                            cmds.append(f"    values of L{m.first}: {cmd}")
                         cmd = _lines_cmd(ctx, m, rid)
                         if cmd:
                             cmds.append(f"    all lines of L{m.first}: {cmd}")
@@ -607,9 +660,7 @@ def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDI
     top_varied = next((i for i in range(len(msgs)) if (i in shown or i in listed)
                        and any(v.distinct > FEW_VALUES for v in msgs[i].varies)), None)
     if top_varied is not None:
-        cmd = _lines_cmd(ctx, msgs[top_varied], rid)
-        if cmd:
-            suggestions.append(cmd)
+        suggestions.extend(_values_cmds(ctx, msgs[top_varied], rid)[:1])
     if listed:
         m = msgs[listed[0]]
         suggestions.append(

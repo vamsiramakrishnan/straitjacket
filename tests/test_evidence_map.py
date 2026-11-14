@@ -503,12 +503,13 @@ def test_many_valued_slot_shows_its_rare_values_and_a_command_that_lists_its_lin
     from ctx.retrieval import Selector, get
 
     digest, rid, ws, store = _digest(workspace_dir, _codes_log())
-    assert "varies: 500 distinct values; seen at most twice:" in digest
-    assert "137 ×1 L2982" in digest
+    assert ("varies: 500 distinct values (numeric: min 137 · max 1498); "
+            "least frequent: 137 ×1 L2982") in digest
     m = re.search(r"all (?:its lines|lines of L\d+): ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", digest)
     assert m
+    v = re.search(r"values of L\d+: (ctx get run:[0-9a-f]+#stdout --span [0-9a-f]+)", digest)
     nxt = digest.split("\nnext:\n", 1)[1]
-    assert f"ctx get {m.group(1)} --span {m.group(2)}" in nxt        # top collapsed in next:
+    assert v.group(1) in nxt                                          # top collapsed in next:
     out = get(store, ws, m.group(1), Selector(span=m.group(2)))
     assert "message lines (exact): 1,000" in out
     seen = set(re.findall(r"^L(\d+): ", out, re.M))
@@ -545,8 +546,8 @@ def test_the_8_9_boundary(n):
         for j in range(n):
             assert f"j{j:02d}x ×1 L{11 + j * 30}" in text
     else:
-        assert "varies: 9 distinct values; seen at most twice: j00x ×1 L11" in text
-        assert "(+6 more)" in text
+        assert "varies: 9 distinct values, each ×1" in text
+        assert "least frequent" not in text
 
 
 def test_a_quoted_string_is_one_value():
@@ -594,3 +595,58 @@ def test_url_credentials_with_an_empty_user_are_redacted():
     out, fired = redact("cache redis://:hunter2pass@cache:6379/0 up", tuple(REDACTION_PATTERNS))
     assert "hunter2pass" not in out and fired == ["url-credentials"]
     assert redact("see http://host:8080/x", tuple(REDACTION_PATTERNS))[1] == []
+
+
+# ---------------------------------------------------------------- round 4: what is unusual
+def test_least_frequent_values_come_first_with_no_cutoff_at_two():
+    rows = ["INFO ok"] * 1200
+    k = 0
+    for v in range(50):
+        for _ in range(20):
+            rows[k] = f"ERROR shard s{v:02d}x stalled"
+            k += 1
+    for t in range(3):
+        rows[1100 + t * 10] = "ERROR shard odd77 stalled"
+    ctx = _view_ctx(_log(rows))
+    text = "\n".join(E.render(ctx, E.build(ctx), cap_bytes=1500).lines)
+    assert "varies: 51 distinct values; least frequent: odd77 ×3 L1101" in text
+    assert "seen at most twice" not in text and "rarest" not in text
+
+
+def test_50001_unique_codes_expose_the_odd_one_on_the_row_and_in_one_call(
+        state_home, workspace_dir):
+    from ctx.retrieval import Selector, get
+
+    rows = [f"ERROR exit code {100000 + i}" for i in range(50000)]
+    rows.insert(31337, "ERROR exit code 7")
+    digest, rid, ws, store = _digest(workspace_dir, _log(rows))
+    assert "50,001 distinct values, each ×1 (numeric: min 7 · max 149999)" in digest
+    assert "least frequent" not in digest
+    m = re.search(r"values of L\d+: ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", digest)
+    assert m
+    out = get(store, ws, m.group(1), Selector(span=m.group(2)))
+    first = [ln for ln in out.splitlines() if ln.startswith("  ")][0]
+    assert first == "  7 ×1 L31338"
+    assert len([ln for ln in out.splitlines() if ln.startswith("  ")]) == 100
+
+
+def test_line_listing_pages_from_where_the_last_page_ended(state_home, workspace_dir):
+    from ctx.retrieval import Selector, get
+
+    rows = ["INFO ok"] * 3000
+    for j in range(100):
+        rows[5 + j * 29] = f"ERROR request r{j}x{j * 7} timed out"
+    digest, rid, ws, store = _digest(workspace_dir, _log(rows))
+    m = re.search(r"all (?:its lines|lines of L\d+): ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)",
+                  digest)
+    out = get(store, ws, m.group(1), Selector(span=m.group(2)))
+    assert "message lines (exact): 100 · rows 1-40" in out
+    nxt = re.search(r"next: ctx get (run:[0-9a-f]+#stdout) --span ([0-9a-f]+)", out)
+    page2 = get(store, ws, nxt.group(1), Selector(span=nxt.group(2)))
+    assert page2.splitlines()[1].startswith("message lines from L")
+    assert re.findall(r"^L(\d+): ", page2, re.M)[0] == str(6 + 40 * 29)
+
+
+def test_a_quoted_string_with_escaped_quotes_is_one_value():
+    assert E.skeleton(r'ERROR msg="quota \"exceeded\" 3" code 3')[1] == \
+        (r'msg="quota \"exceeded\" 3"', "3")
