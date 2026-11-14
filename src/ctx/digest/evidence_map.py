@@ -56,9 +56,6 @@ EXCERPT_LINE_CHARS = EVIDENCE_LINE_CHARS
 LIST_SAMPLE_CHARS = 110
 #: A slot with at most this many distinct values splits its group.
 FEW_VALUES = 8
-#: A secret is judged on at most this many leading characters of a line
-#: (constant cost per shown line, like ``redact_before_transform``).
-_REDACT_SCAN_CHARS = 4096
 MAP_VERSION = "evmap/v2"
 ACCOUNT_PREFIX = "evidence map (exact"
 
@@ -352,36 +349,39 @@ _SIGNAL_POS_RE = re.compile(
 _WINDOW_LEAD = 40
 
 
-def _redacted(text: str, fired: set[str]) -> str:
+def _shown_line(text: str, width: int, fired: set[str]) -> str:
+    """The part of ``text`` that is shown, with every secret in it replaced
+    by its marker, fitted to ``width``.
+
+    The window is chosen first (the whole line if it fits, else the head, or
+    a window around the first signal word when that lies further in), and
+    redaction is then judged on exactly that window -- with the bounded
+    context :func:`ctx.textutil.secret_hits` reads around it -- so a secret
+    anywhere in a multi-megabyte line is masked if any of it is shown, at a
+    cost linear in the window, not the line. Every cut is marked
+    ``… +N chars`` (never with N = 0)."""
     from ctx.textutil import mask_hits, secret_hits
 
-    end = min(len(text), _REDACT_SCAN_CHARS)
-    hits = secret_hits(text, 0, end)
+    n = len(text)
+    if n <= width:
+        a, end = 0, n
+    else:
+        m = _SIGNAL_POS_RE.search(text)
+        pos = m.start() if m else 0
+        a = max(0, pos - _WINDOW_LEAD)
+        if pos + 30 <= width or a == 0:
+            a = 0
+        end = min(n, a + width)
+    hits = secret_hits(text, a, end)
     if hits:
         fired.update(h.name for h in hits)
-        text = mask_hits(text, 0, end, hits) + text[end:]
-    return text
-
-
-def _shown_line(text: str, width: int, fired: set[str]) -> str:
-    """``text`` redacted (whole secrets replaced by their marker), then fitted
-    to ``width``: a line that is too long is windowed around the first signal
-    word and every cut is marked ``… +N chars``. Redaction happens before
-    the cut; the cuts themselves are redaction-aware."""
-    from ctx.textutil import tail_redacting
-
-    text = _redacted(text, fired)
-    if len(text) <= width:
-        return text
-    m = _SIGNAL_POS_RE.search(text)
-    pos = m.start() if m else 0
-    a = max(0, pos - _WINDOW_LEAD)
-    if pos + 30 <= width or a == 0:
-        return clip_redacting(text, width) + f" … +{len(text) - width} chars"
-    rest = tail_redacting(text, len(text) - a)
-    shown = clip_redacting(rest, width)
-    after = len(rest) - len(shown)
-    return f"… +{a} chars " + shown + (f" … +{after} chars" if after > 0 else "")
+        piece = mask_hits(text, a, end, hits)
+    else:
+        piece = text[a:end]
+    if len(piece) > width:              # a marker can be longer than its secret
+        piece = clip_redacting(piece, width)
+    return ((f"… +{a} chars " if a else "") + piece
+            + (f" … +{n - end} chars" if end < n else ""))
 
 
 def _windows(emap: EvidenceMap, picks: list[int], context: int) -> list[list[Any]]:

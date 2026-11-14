@@ -726,3 +726,28 @@ def test_map_supported_rejects_a_shown_above_line_that_is_not_there():
             "  every error-like line is one of these 2 messages.")
     assert not E.map_supported(text)
     assert E.map_supported(text.replace("(L9)", "(L5)"))
+
+
+# ---------------------------------------------------------------- round 6: redaction of the selected window
+TOK = "ghp_" + "Q" * 36
+
+
+def test_a_secret_far_into_a_long_line_is_masked_in_the_window():
+    from ctx.digest import picker
+
+    out = picker._redacted("x" * 5000 + " ERROR token " + TOK, 300)
+    assert TOK not in out and TOK[:8] not in out and "[ctx:redacted:github-token" in out
+
+
+@pytest.mark.parametrize("offset", [4_090, 4_096, 4_100, 100_000, 2_000_000])
+@pytest.mark.parametrize("where", ["before", "inside", "straddling"])
+def test_secret_before_inside_and_straddling_the_window(offset, where):
+    filler = "x" * offset
+    if where == "before":
+        line = TOK + " " + filler + " ERROR boom " + "y" * 400
+    elif where == "inside":
+        line = filler + " ERROR boom " + TOK + " " + "y" * 400
+    else:  # the window (160 wide, from 40 before ERROR) ends inside the token
+        line = filler + " ERROR boom " + "z" * 100 + " " + TOK + " " + "y" * 400
+    out = E._shown_line(line, E.EXCERPT_LINE_CHARS, set())
+    assert TOK not in out and "ghp_" not in out and "Q" * 4 not in out

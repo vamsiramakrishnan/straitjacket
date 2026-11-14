@@ -840,3 +840,24 @@ def test_no_cut_line_when_the_text_was_not_cut(state_home, workspace_dir, case):
     else:
         p = _real_failure_payload(workspace_dir, "ctx run -- ./ci.sh", _cut_text())
     assert _failure_hook(p) == {}
+
+
+# ---------------------------------------------------------------- round 6: long lines to the endpoint
+@pytest.mark.parametrize("offset", [4_096, 100_000, 2_000_000])
+def test_no_secret_from_a_long_line_reaches_the_request_digest_or_ledger(
+        state_home, workspace_dir, stub, monkeypatch, offset):
+    monkeypatch.setenv(KEY_ENV, KEY)
+    tok = "ghp_" + "R" * 36
+    rows = _log().splitlines()
+    rows[500] = "x" * offset + " ERROR rootcause marker token " + tok + " " + "y" * 300
+    rows[499] = "z" * offset + " context " + tok
+    _config(workspace_dir, "model", stub.url)
+    ws = make_ws(workspace_dir)
+    digest, _ = digest_output(make_store(ws), ws, "Bash", "\n".join(rows) + "\n",
+                              argv=["./ci.sh", "--token", tok], picker=True)
+    sent = json.dumps(stub.requests[-1]["doc"])
+    assert "rootcause" in sent
+    assert tok not in sent and "R" * 6 not in sent
+    assert tok not in digest and "R" * 6 not in digest
+    ledger = (workspace_dir / ".ctx-session-reads" / "picker.jsonl").read_text()
+    assert tok not in ledger and "R" * 6 not in ledger
